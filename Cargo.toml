@@ -1,0 +1,49 @@
+[workspace]
+resolver = "3"
+members = ["crates/core"]
+# crates/macros, crates/build, crates/plugins land in later milestones.
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["istmo contributors"]
+repository = "https://example.invalid/istmo"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Allow a small set of pedantic lints that are noise for this codebase.
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[workspace.dependencies]
+bincode = { version = "2", default-features = false, features = ["derive", "std"] }
+flume = { version = "0.11", default-features = false, features = ["async"] }
+oneshot = { version = "0.1", default-features = false, features = ["std", "async"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+pollster = "0.4"
+
+istmo-core = { path = "crates/core", version = "0.0.0" }
+
+[package]
+name = "istmo"
+version = "0.0.0"
+description = "Rust <-> mobile native interop framework (facade crate)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+istmo-core = { workspace = true }
+
+[lints]
+workspace = true
