@@ -5,8 +5,8 @@ use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::{
     Attribute, Expr, ExprLit, ExprPath, FnArg, GenericArgument, Ident, ItemTrait, Lit, LitStr,
-    MetaNameValue, PathArguments, ReturnType, Token, TraitItem, TraitItemFn, Type, TypePath,
-    parse2,
+    MetaNameValue, Path, PathArguments, ReturnType, Token, TraitItem, TraitItemFn, Type, TypePath,
+    parse_quote, parse_str, parse2,
 };
 
 #[allow(unreachable_pub)]
@@ -19,6 +19,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let type_name = trait_def.ident.clone();
     let vis = trait_def.vis.clone();
     let plugin_id = args.plugin_id.clone();
+    let root = &args.crate_path;
 
     let methods: Vec<&TraitItemFn> = trait_def
         .items
@@ -31,11 +32,11 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
 
     let method_impls = methods
         .iter()
-        .map(|m| expand_method(&plugin_id, m))
+        .map(|m| expand_method(&plugin_id, root, m))
         .collect::<syn::Result<Vec<_>>>()?;
 
     let stateless_ctors = if args.init.is_none() {
-        Some(expand_stateless_ctors(&type_name))
+        Some(expand_stateless_ctors(&type_name, root))
     } else {
         None
     };
@@ -43,12 +44,12 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let stateful_ctors = args
         .init
         .as_ref()
-        .map(|init_ty| expand_stateful_ctors(&type_name, &plugin_id, init_ty));
+        .map(|init_ty| expand_stateful_ctors(&type_name, &plugin_id, init_ty, root));
 
     let struct_def = quote! {
         #vis struct #type_name {
-            __runtime: ::std::sync::Arc<::istmo::Runtime>,
-            __instance_id: ::core::option::Option<::istmo::InstanceId>,
+            __runtime: ::std::sync::Arc<#root::Runtime>,
+            __instance_id: ::core::option::Option<#root::InstanceId>,
         }
 
         impl ::core::fmt::Debug for #type_name {
@@ -101,18 +102,18 @@ fn reject_unsupported_trait_shape(t: &ItemTrait) -> syn::Result<()> {
     Ok(())
 }
 
-fn expand_stateless_ctors(type_name: &Ident) -> TokenStream {
+fn expand_stateless_ctors(type_name: &Ident, root: &Path) -> TokenStream {
     quote! {
         impl #type_name {
-            pub fn acquire() -> ::core::result::Result<Self, ::istmo::IstmoError> {
+            pub fn acquire() -> ::core::result::Result<Self, #root::IstmoError> {
                 ::core::result::Result::Ok(Self {
-                    __runtime: ::istmo::Runtime::global()?,
+                    __runtime: #root::Runtime::global()?,
                     __instance_id: ::core::option::Option::None,
                 })
             }
 
             #[must_use]
-            pub fn from_runtime(rt: &::std::sync::Arc<::istmo::Runtime>) -> Self {
+            pub fn from_runtime(rt: &::std::sync::Arc<#root::Runtime>) -> Self {
                 Self {
                     __runtime: ::std::sync::Arc::clone(rt),
                     __instance_id: ::core::option::Option::None,
@@ -122,32 +123,37 @@ fn expand_stateless_ctors(type_name: &Ident) -> TokenStream {
     }
 }
 
-fn expand_stateful_ctors(type_name: &Ident, plugin_id: &LitStr, init_ty: &Type) -> TokenStream {
+fn expand_stateful_ctors(
+    type_name: &Ident,
+    plugin_id: &LitStr,
+    init_ty: &Type,
+    root: &Path,
+) -> TokenStream {
     quote! {
         impl #type_name {
             pub async fn acquire_with(
                 config: #init_ty,
-            ) -> ::core::result::Result<Self, ::istmo::IstmoError> {
-                let rt = ::istmo::Runtime::global()?;
+            ) -> ::core::result::Result<Self, #root::IstmoError> {
+                let rt = #root::Runtime::global()?;
                 Self::from_runtime_with(&rt, config).await
             }
 
             pub async fn from_runtime_with(
-                rt: &::std::sync::Arc<::istmo::Runtime>,
+                rt: &::std::sync::Arc<#root::Runtime>,
                 config: #init_ty,
-            ) -> ::core::result::Result<Self, ::istmo::IstmoError> {
-                let payload = ::istmo::codec::encode(&config)?;
+            ) -> ::core::result::Result<Self, #root::IstmoError> {
+                let payload = #root::codec::encode(&config)?;
                 let handle = rt.create_instance(#plugin_id, payload)?;
                 let bytes = match handle.await? {
                     ::core::result::Result::Ok(b) => b,
                     ::core::result::Result::Err(b) => {
                         return ::core::result::Result::Err(
-                            ::istmo::IstmoError::PluginError { bytes: b },
+                            #root::IstmoError::PluginError { bytes: b },
                         );
                     }
                 };
                 let (instance_id, _) =
-                    ::istmo::codec::decode::<::istmo::InstanceId>(&bytes)?;
+                    #root::codec::decode::<#root::InstanceId>(&bytes)?;
                 rt.register_instance(instance_id, #plugin_id);
                 ::core::result::Result::Ok(Self {
                     __runtime: ::std::sync::Arc::clone(rt),
@@ -161,6 +167,7 @@ fn expand_stateful_ctors(type_name: &Ident, plugin_id: &LitStr, init_ty: &Type) 
 struct PluginArgs {
     plugin_id: LitStr,
     init: Option<Type>,
+    crate_path: Path,
 }
 
 impl syn::parse::Parse for PluginArgs {
@@ -168,6 +175,7 @@ impl syn::parse::Parse for PluginArgs {
         let pairs = Punctuated::<MetaNameValue, Token![,]>::parse_terminated(input)?;
         let mut plugin_id: Option<LitStr> = None;
         let mut init: Option<Type> = None;
+        let mut crate_path: Option<Path> = None;
 
         for pair in pairs {
             let key = pair
@@ -182,10 +190,16 @@ impl syn::parse::Parse for PluginArgs {
                 "init" => {
                     init = Some(expect_type(&pair.value)?);
                 }
+                "crate" => {
+                    let path_str = expect_lit_str(&pair.value)?;
+                    crate_path = Some(parse_str::<Path>(&path_str.value()).map_err(|e| {
+                        syn::Error::new_spanned(&pair.value, format!("invalid `crate` path: {e}"))
+                    })?);
+                }
                 other => {
                     return Err(syn::Error::new_spanned(
                         &pair.path,
-                        format!("unknown argument `{other}`; expected `name` or `init`"),
+                        format!("unknown argument `{other}`; expected `name`, `init` or `crate`"),
                     ));
                 }
             }
@@ -199,6 +213,7 @@ impl syn::parse::Parse for PluginArgs {
                 )
             })?,
             init,
+            crate_path: crate_path.unwrap_or_else(|| parse_quote!(::istmo)),
         })
     }
 }
@@ -225,13 +240,27 @@ fn expect_type(expr: &Expr) -> syn::Result<Type> {
     }
 }
 
-fn expand_method(plugin_id: &LitStr, method: &TraitItemFn) -> syn::Result<TokenStream> {
+/// Everything the per-method expanders need beyond the return-type shape.
+struct MethodCtx<'a> {
+    plugin_id: &'a LitStr,
+    root: &'a Path,
+    name: &'a Ident,
+    method_name_str: LitStr,
+    arg_pats: Vec<TokenStream>,
+    payload_expr: TokenStream,
+}
+
+fn expand_method(
+    plugin_id: &LitStr,
+    root: &Path,
+    method: &TraitItemFn,
+) -> syn::Result<TokenStream> {
     let sig = &method.sig;
     let name = &sig.ident;
     let method_name_str = LitStr::new(&name.to_string(), name.span());
 
     let (arg_pats, arg_names) = extract_args(sig)?;
-    let payload_expr = build_payload_expr(&arg_names);
+    let payload_expr = build_payload_expr(root, &arg_names);
 
     let return_ty = match &sig.output {
         ReturnType::Default => Type::Verbatim(quote! { () }),
@@ -239,24 +268,25 @@ fn expand_method(plugin_id: &LitStr, method: &TraitItemFn) -> syn::Result<TokenS
     };
     let (ok_ty, err_ty) = extract_result(&return_ty);
 
+    let ctx = MethodCtx {
+        plugin_id,
+        root,
+        name,
+        method_name_str,
+        arg_pats,
+        payload_expr,
+    };
+
     if is_stream_method(&method.attrs) {
         Ok(expand_stream_method(
-            plugin_id,
-            name,
-            &method_name_str,
-            &arg_pats,
-            &payload_expr,
+            &ctx,
             ok_ty.as_ref().unwrap_or(&return_ty),
             err_ty.as_ref(),
         ))
     } else {
         expand_unary_method(
-            plugin_id,
-            name,
-            &method_name_str,
+            &ctx,
             sig.asyncness.is_some(),
-            &arg_pats,
-            &payload_expr,
             ok_ty.as_ref().unwrap_or(&return_ty),
         )
     }
@@ -291,11 +321,11 @@ fn extract_args(sig: &syn::Signature) -> syn::Result<(Vec<TokenStream>, Vec<Iden
     Ok((pats, names))
 }
 
-fn build_payload_expr(arg_names: &[Ident]) -> TokenStream {
+fn build_payload_expr(root: &Path, arg_names: &[Ident]) -> TokenStream {
     if arg_names.is_empty() {
-        quote! { ::istmo::codec::encode(&())? }
+        quote! { #root::codec::encode(&())? }
     } else {
-        quote! { ::istmo::codec::encode(&( #(#arg_names,)* ))? }
+        quote! { #root::codec::encode(&( #(#arg_names,)* ))? }
     }
 }
 
@@ -342,24 +372,28 @@ fn is_stream_method(attrs: &[Attribute]) -> bool {
 }
 
 fn expand_unary_method(
-    plugin_id: &LitStr,
-    name: &Ident,
-    method_name_str: &LitStr,
+    ctx: &MethodCtx<'_>,
     is_async: bool,
-    arg_pats: &[TokenStream],
-    payload_expr: &TokenStream,
     ok_ty: &Type,
 ) -> syn::Result<TokenStream> {
     if !is_async {
         return Err(syn::Error::new_spanned(
-            name,
+            ctx.name,
             "unary plugin methods must be `async fn`",
         ));
     }
+    let MethodCtx {
+        plugin_id,
+        root,
+        name,
+        method_name_str,
+        arg_pats,
+        payload_expr,
+    } = ctx;
     Ok(quote! {
         pub async fn #name(&self, #(#arg_pats),*) -> ::core::result::Result<
             #ok_ty,
-            ::istmo::IstmoError,
+            #root::IstmoError,
         > {
             let payload = #payload_expr;
             let handle = self.__runtime.call(
@@ -371,11 +405,11 @@ fn expand_unary_method(
             let response = handle.await?;
             match response {
                 ::core::result::Result::Ok(bytes) => {
-                    let (value, _) = ::istmo::codec::decode::<#ok_ty>(&bytes)?;
+                    let (value, _) = #root::codec::decode::<#ok_ty>(&bytes)?;
                     ::core::result::Result::Ok(value)
                 }
                 ::core::result::Result::Err(bytes) => {
-                    ::core::result::Result::Err(::istmo::IstmoError::PluginError { bytes })
+                    ::core::result::Result::Err(#root::IstmoError::PluginError { bytes })
                 }
             }
         }
@@ -383,19 +417,23 @@ fn expand_unary_method(
 }
 
 fn expand_stream_method(
-    plugin_id: &LitStr,
-    name: &Ident,
-    method_name_str: &LitStr,
-    arg_pats: &[TokenStream],
-    payload_expr: &TokenStream,
+    ctx: &MethodCtx<'_>,
     item_ty: &Type,
     err_ty: Option<&Type>,
 ) -> TokenStream {
+    let MethodCtx {
+        plugin_id,
+        root,
+        name,
+        method_name_str,
+        arg_pats,
+        payload_expr,
+    } = ctx;
     let err_ty_tokens = err_ty.map_or_else(|| quote! { () }, |t| quote! { #t });
     quote! {
         pub fn #name(&self, #(#arg_pats),*) -> ::core::result::Result<
-            ::istmo::TypedStream<#item_ty, #err_ty_tokens>,
-            ::istmo::IstmoError,
+            #root::TypedStream<#item_ty, #err_ty_tokens>,
+            #root::IstmoError,
         > {
             let payload = #payload_expr;
             let handle = self.__runtime.stream(
@@ -405,7 +443,7 @@ fn expand_stream_method(
                 payload,
                 0,
             )?;
-            ::core::result::Result::Ok(::istmo::TypedStream::new(handle))
+            ::core::result::Result::Ok(#root::TypedStream::new(handle))
         }
     }
 }
