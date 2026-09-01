@@ -40,9 +40,14 @@ android {
 }
 
 // Route the Gradle-managed rustJniLibs/ under $buildDir into the
-// standard JNI merge. Build artefacts NEVER live under src/. Pulled out
-// of the `android { }` block so `layout` resolves at Project scope.
-android.sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("rustJniLibs"))
+// standard JNI merge, REPLACING (not appending to) the default
+// `src/main/jniLibs/` source dir. Build artefacts NEVER live under
+// src/, and by dropping the default we make that a hard rule at the
+// AGP level — a stray .so under src/main/jniLibs/ can't accidentally
+// duplicate the Gradle-managed one.
+android.sourceSets["main"].jniLibs.setSrcDirs(
+    listOf(layout.buildDirectory.dir("rustJniLibs").get().asFile),
+)
 
 // ---- istmo cargo integration ---------------------------------------
 //
