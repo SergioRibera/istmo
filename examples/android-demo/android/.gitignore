@@ -1,0 +1,20 @@
+# Gradle / IDE artifacts
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.cxx/
+
+# Rust cross-compile output — lives at istmo/target/ via
+# `cargo { targetDirectory = "../../target" }`, already covered by the
+# workspace-level .gitignore, but reasserted here for clarity.
+rustJniLibs/
+
+# JNI libs staged by the mozilla plugin. cargoBuild regenerates on demand.
+app/src/main/jniLibs/
+
+# Gradle wrapper jar — not committed. `just` recipes rely on the system
+# gradle inside the docker image, so the wrapper isn't needed anyway.
+gradle/wrapper/gradle-wrapper.jar

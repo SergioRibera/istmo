@@ -2,56 +2,56 @@
 #
 # Docker image: sergioribera/rust-android:1.96-sdk-37.0.
 # * Ships Rust 1.96, Android SDK/NDK and Gradle 8.2.
-# * Cross-compiles to `aarch64-linux-android` out of the box — the NDK
-#   toolchain env vars are set in the image profile, so plain `cargo
-#   build --target aarch64-linux-android` links correctly. No cargo-ndk.
+# * Cross-compilation is handled by the mozilla `rust-android-gradle`
+#   plugin inside each demo's `android/app/build.gradle.kts` — the ABI
+#   list, Rust target and `.so` placement live there, not here.
 
 image := "sergioribera/rust-android:1.96-sdk-37.0"
 
-# ABI shipped by the demo. Extend `android/app/build.gradle.kts`'s
-# `abiFilters` and add matching cargo targets before adding more.
-abi := "arm64-v8a"
-rust_target := "aarch64-linux-android"
-
-# Mount the repo root at /src. Named volumes cache the Gradle download
-# tree and the cargo registry so repeat builds are fast.
+# Mount repo root at /src. Named volumes cache the Gradle download tree
+# and the cargo registry so repeat builds are fast.
 mount := "-v $(pwd):/src -v gradle-cache:/root/.gradle -v cargo-cache:/root/.cargo"
 
-# ---- Android demo ----------------------------------------------------
+# ---- Demo entry points ----------------------------------------------
+#
+# One alias per demo: `just <demo-name>` is the full flutter-run-style
+# workflow (build APK, install to device, launch main activity).
+#
+# The parameterised verbs below (`build`, `install`, `run`, `clean`)
+# take a demo name so partial workflows are still one-liners.
 
-# Full demo build: Rust cdylib -> jniLibs/<abi>/ -> debug APK.
-android-demo: android-demo-so android-demo-apk
+# `just android-demo` — build + install + launch the M2 echo demo.
+android-demo: (build "android-demo") (install "android-demo") (run "android-demo")
 
-# Cross-compile the cdylib and drop it under jniLibs so the APK picks
-# it up. Both steps run in the same container invocation to avoid two
-# cold container starts.
-android-demo-so:
+# ---- Parameterised recipes ------------------------------------------
+
+# Build the demo's APK inside the container. `gradle assembleDebug`
+# triggers `cargoBuild` first (wired in the demo's app/build.gradle.kts).
+build name:
     docker run --rm -it {{mount}} \
-        -w /src \
-        --entrypoint bash {{image}} \
-        -c 'cargo build --release --target {{rust_target}} -p istmo-android-demo && \
-            mkdir -p examples/android-demo/android/app/src/main/jniLibs/{{abi}} && \
-            cp target/{{rust_target}}/release/libistmo_android_demo.so \
-               examples/android-demo/android/app/src/main/jniLibs/{{abi}}/'
-
-# System Gradle (8.2) matches the AGP 8.2.2 pinned in
-# android/build.gradle.kts. --no-daemon: no long-lived JVM in the
-# ephemeral container.
-android-demo-apk:
-    docker run --rm -it {{mount}} \
-        -w /src/examples/android-demo/android \
+        -w /src/examples/{{name}}/android \
         --entrypoint bash {{image}} \
         -c 'gradle :app:assembleDebug --no-daemon'
 
-android-demo-clean:
+# Install the last-built debug APK on a connected device / emulator.
+install name:
+    adb install -r examples/{{name}}/android/app/build/outputs/apk/debug/app-debug.apk
+
+# Launch the demo's main activity. The (package, activity) mapping is
+# maintained here so `just run <demo>` works without parsing manifests.
+# Add a new arm when a new demo lands.
+run name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{name}}" in
+        android-demo) component="dev.istmo.demo/dev.istmo.demo.MainActivity" ;;
+        *) echo "just run: no launcher configured for '{{name}}'"; exit 1 ;;
+    esac
+    adb shell am start -n "$component"
+
+# Wipe Gradle output for the demo.
+clean name:
     docker run --rm -it {{mount}} \
-        -w /src/examples/android-demo/android \
+        -w /src/examples/{{name}}/android \
         --entrypoint bash {{image}} \
         -c 'gradle clean --no-daemon'
-
-# adb install the last debug APK. Requires an emulator/device visible to
-# the host adb.
-android-demo-install:
-    adb install -r examples/android-demo/android/app/build/outputs/apk/debug/app-debug.apk
-
-android-demo-run: android-demo android-demo-install

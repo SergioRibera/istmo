@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.mozilla.rust-android-gradle.rust-android")
 }
 
 android {
@@ -13,12 +14,8 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"
-
-        ndk {
-            // Extend as needed. arm64-v8a is the modern device baseline; add
-            // armeabi-v7a / x86_64 for emulator coverage.
-            abiFilters += listOf("arm64-v8a")
-        }
+        // No `ndk { abiFilters }` — the rust-android-gradle plugin drives
+        // ABI selection via its own `targets` list below.
     }
 
     compileOptions {
@@ -30,12 +27,32 @@ android {
         jvmTarget = "17"
     }
 
-    // The Rust cdylib is built out-of-band (see README) and copied into
-    // src/main/jniLibs/<abi>/ before running `assembleDebug`.
     packaging {
         jniLibs {
             useLegacyPackaging = false
         }
+    }
+}
+
+// rust-android-gradle plugin: compiles the cdylib crate at
+// examples/android-demo/ into per-ABI `.so` files under
+// app/build/rustJniLibs/<abi>/. AGP picks them up via the standard JNI
+// merge, so no manual `cp` is needed.
+cargo {
+    module = "../.."                    // from app/ -> examples/android-demo/
+    libname = "istmo_android_demo"
+    targets = listOf("arm64")
+    targetDirectory = "../../target"    // share istmo/target/ with regular cargo
+    profile = if (gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }) {
+        "release"
+    } else {
+        "debug"
+    }
+}
+
+tasks.whenTaskAdded {
+    if (name == "mergeDebugJniLibFolders" || name == "mergeReleaseJniLibFolders") {
+        dependsOn("cargoBuild")
     }
 }
 
