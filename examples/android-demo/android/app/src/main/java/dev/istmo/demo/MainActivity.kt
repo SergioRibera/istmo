@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.appcompat.app.AppCompatActivity
 import dev.istmo.runtime.IstmoRuntime
 import kotlinx.coroutines.CoroutineScope
@@ -14,10 +15,25 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), PermissionsHost {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val permissionsImpl = PermissionsImpl()
+    private var pendingPermissionResult: ((Map<String, Boolean>) -> Unit)? = null
     private var initialized = false
+
+    private val permissionsLauncher =
+        registerForActivityResult(RequestMultiplePermissions()) { results ->
+            pendingPermissionResult?.invoke(results)
+            pendingPermissionResult = null
+        }
+
+    override val activity get() = this
+
+    override fun request(permissions: List<String>, onResult: (Map<String, Boolean>) -> Unit) {
+        pendingPermissionResult = onResult
+        permissionsLauncher.launch(permissions.toTypedArray())
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -25,15 +41,18 @@ class MainActivity : AppCompatActivity() {
 
         if (!initialized) {
             IstmoRuntime.registerHandler("dev.istmo.demo.echo", EchoImpl())
+            IstmoRuntime.registerHandler("istmo.permissions", permissionsImpl)
             IstmoRuntime.start()
             initialized = true
         }
+        permissionsImpl.attach(this)
 
         DemoBridge.pushLifecycle(LifecycleState.Created.ordinal)
         handleIntent(intent)
         wireEchoSection()
         wireLifecycleSection()
         wireDeepLinksSection()
+        wirePermissionsSection()
     }
 
     override fun onStart() {
@@ -44,8 +63,6 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         DemoBridge.pushLifecycle(LifecycleState.Resumed.ordinal)
-        // Kick a passive poll so any deep-link that arrived while paused shows
-        // up in the UI without waiting for a button press.
         drainDeepLinks()
     }
 
@@ -61,10 +78,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         DemoBridge.pushLifecycle(LifecycleState.Destroyed.ordinal)
+        permissionsImpl.detach()
         scope.cancel()
         super.onDestroy()
-        // NB: the process-global istmo runtime intentionally outlives the
-        // Activity. `nativeShutdown` is left to the process's tear-down.
     }
 
     override fun onLowMemory() {
@@ -113,15 +129,40 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun wireDeepLinksSection() {
-        val output = findViewById<TextView>(R.id.deeplinkList)
         val refresh = findViewById<Button>(R.id.deeplinkRefresh)
         refresh.setOnClickListener {
-            drainDeepLinks(output)
+            drainDeepLinks()
         }
     }
 
-    private fun drainDeepLinks(target: TextView? = findViewById(R.id.deeplinkList)) {
-        val view = target ?: return
+    private fun wirePermissionsSection() {
+        val input = findViewById<EditText>(R.id.permissionInput)
+        val checkBtn = findViewById<Button>(R.id.permissionCheck)
+        val requestBtn = findViewById<Button>(R.id.permissionRequest)
+        val output = findViewById<TextView>(R.id.permissionOutput)
+
+        checkBtn.setOnClickListener {
+            val perm = input.text.toString()
+            scope.launch {
+                val ordinal = withContext(Dispatchers.IO) { DemoBridge.callCheckPermission(perm) }
+                output.text = "check($perm) -> ${statusName(ordinal)}"
+            }
+        }
+        requestBtn.setOnClickListener {
+            val perm = input.text.toString()
+            scope.launch {
+                val ordinal = withContext(Dispatchers.IO) { DemoBridge.callRequestPermission(perm) }
+                output.text = "request($perm) -> ${statusName(ordinal)}"
+            }
+        }
+    }
+
+    private fun statusName(ordinal: Int): String =
+        PermissionStatusValue.values().getOrNull(ordinal)?.name
+            ?: "error(ordinal=$ordinal)"
+
+    private fun drainDeepLinks() {
+        val view = findViewById<TextView>(R.id.deeplinkList) ?: return
         val links = generateSequence { DemoBridge.pollDeepLink() }.toList()
         if (links.isEmpty()) return
         val existing = view.text.toString()

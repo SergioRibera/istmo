@@ -21,4 +21,7 @@ object DemoBridge {
 
     external fun pushDeepLink(uri: String, source: String?)
     external fun pollDeepLink(): String?
+
+    external fun callCheckPermission(permission: String): Int
+    external fun callRequestPermission(permission: String): Int
 }

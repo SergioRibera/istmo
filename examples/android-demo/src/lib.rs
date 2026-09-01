@@ -17,7 +17,7 @@ pub use istmo_android::{
 
 use istmo::plugins::{
     AppLifecycle, DeepLink, DeepLinkStream, DeepLinks, LIFECYCLE_CHANNEL, LifecycleState,
-    LifecycleStream,
+    LifecycleStream, PermissionStatus, Permissions,
 };
 use istmo::{Runtime, codec};
 use jni::JNIEnv;
@@ -173,6 +173,72 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_pushDeepLink<'local>(
         return;
     };
     rt.publish_early_queue(istmo::plugins::DEEPLINKS_CHANNEL, 16, bytes);
+}
+
+// ---- Permissions -------------------------------------------------------------
+
+/// Kotlin: `external fun callCheckPermission(permission: String): Int`.
+///
+/// Blocks until the native `istmo.permissions` handler replies. Returns the
+/// [`PermissionStatus`] ordinal, or `-1` on transport failure.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_demo_DemoBridge_callCheckPermission<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    permission: JString<'local>,
+) -> jint {
+    let Ok(permission): Result<String, _> = env.get_string(&permission).map(Into::into) else {
+        return -1;
+    };
+    let Ok(rt) = Runtime::global() else {
+        return -1;
+    };
+    let plugin = Permissions::from_runtime(&rt);
+    match pollster::block_on(plugin.check(permission)) {
+        Ok(status) => permission_status_ordinal(status),
+        Err(err) => {
+            tracing::error!(?err, "callCheckPermission failed");
+            -1
+        }
+    }
+}
+
+/// Kotlin: `external fun callRequestPermission(permission: String): Int`.
+///
+/// Blocks until the user answers. Requests a single permission and returns
+/// the resulting [`PermissionStatus`] ordinal (or `-1` on transport failure).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_demo_DemoBridge_callRequestPermission<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    permission: JString<'local>,
+) -> jint {
+    let Ok(permission): Result<String, _> = env.get_string(&permission).map(Into::into) else {
+        return -1;
+    };
+    let Ok(rt) = Runtime::global() else {
+        return -1;
+    };
+    let plugin = Permissions::from_runtime(&rt);
+    match pollster::block_on(plugin.request(vec![permission])) {
+        Ok(outcomes) => outcomes
+            .first()
+            .map_or(-1, |o| permission_status_ordinal(o.status)),
+        Err(err) => {
+            tracing::error!(?err, "callRequestPermission failed");
+            -1
+        }
+    }
+}
+
+const fn permission_status_ordinal(status: PermissionStatus) -> jint {
+    match status {
+        PermissionStatus::Granted => 0,
+        PermissionStatus::Denied => 1,
+        PermissionStatus::PermanentlyDenied => 2,
+        PermissionStatus::NotDetermined => 3,
+        PermissionStatus::NotSupported => 4,
+    }
 }
 
 /// Kotlin: `external fun pollDeepLink(): String?` — non-blocking. Returns the
