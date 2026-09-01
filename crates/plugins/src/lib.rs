@@ -26,10 +26,11 @@ pub mod permissions;
 
 pub use crate::activity_results::{
     ACTIVITY_RESULTS_PLUGIN_ID, ActivityLaunchError, ActivityOutcome, ActivityResult,
-    ActivityResults, ExtraValue, IntentRequest,
+    ActivityResults, ActivityResultsClient, ActivityResultsHost, ExtraValue, IntentRequest,
 };
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
 pub use crate::lifecycle::{AppLifecycle, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream};
 pub use crate::permissions::{
-    PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions,
+    PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions, PermissionsClient,
+    PermissionsHost,
 };

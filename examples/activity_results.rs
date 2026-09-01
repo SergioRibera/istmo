@@ -6,7 +6,7 @@
 use std::thread;
 
 use istmo::plugins::{
-    ActivityLaunchError, ActivityOutcome, ActivityResult, ActivityResults, ExtraValue,
+    ActivityLaunchError, ActivityOutcome, ActivityResult, ActivityResultsClient, ExtraValue,
     IntentRequest,
 };
 use istmo::{Envelope, Frame, Runtime, codec};
@@ -24,7 +24,7 @@ fn main() {
         }
     });
 
-    let plugin = ActivityResults::from_runtime(&init.runtime).expect("declared");
+    let plugin = ActivityResultsClient::from_runtime(&init.runtime).expect("declared");
 
     let view = IntentRequest {
         action: "android.intent.action.VIEW".to_owned(),

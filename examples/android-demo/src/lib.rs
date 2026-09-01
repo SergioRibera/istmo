@@ -16,9 +16,9 @@ pub use istmo_android::{
 };
 
 use istmo::plugins::{
-    ActivityLaunchError, ActivityOutcome, ActivityResults, AppLifecycle, DeepLink, DeepLinkStream,
+    ActivityLaunchError, ActivityOutcome, ActivityResultsClient, AppLifecycle, DeepLink, DeepLinkStream,
     DeepLinks, IntentRequest, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream,
-    PermissionStatus, Permissions,
+    PermissionStatus, PermissionsClient,
 };
 use istmo::{Runtime, codec};
 use jni::JNIEnv;
@@ -26,6 +26,7 @@ use jni::objects::{JClass, JString};
 use jni::sys::{jint, jstring};
 
 #[istmo::plugin(name = "dev.istmo.demo.echo")]
+#[allow(dead_code)]
 trait Echo {
     async fn echo(&self, text: String) -> String;
 }
@@ -46,7 +47,7 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_callEcho<'local>(
     };
 
     let response = pollster::block_on(async {
-        let echo = Echo::acquire()?;
+        let echo = EchoClient::acquire()?;
         echo.echo(request).await
     });
 
@@ -194,7 +195,7 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_callCheckPermission<'local
     let Ok(rt) = Runtime::global() else {
         return -1;
     };
-    let plugin = Permissions::from_runtime(&rt).expect("declared");
+    let plugin = PermissionsClient::from_runtime(&rt).expect("declared");
     match pollster::block_on(plugin.check(permission)) {
         Ok(status) => permission_status_ordinal(status),
         Err(err) => {
@@ -220,7 +221,7 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_callRequestPermission<'loc
     let Ok(rt) = Runtime::global() else {
         return -1;
     };
-    let plugin = Permissions::from_runtime(&rt).expect("declared");
+    let plugin = PermissionsClient::from_runtime(&rt).expect("declared");
     match pollster::block_on(plugin.request(vec![permission])) {
         Ok(outcomes) => outcomes
             .first()
@@ -277,7 +278,7 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_callLaunchIntent<'local>(
     let Ok(rt) = Runtime::global() else {
         return jstring_from(&env, "TRANSPORT_ERROR");
     };
-    let plugin = ActivityResults::from_runtime(&rt).expect("declared");
+    let plugin = ActivityResultsClient::from_runtime(&rt).expect("declared");
     let text = match pollster::block_on(plugin.launch(request)) {
         Ok(result) => match result.outcome {
             ActivityOutcome::Ok => format!("OK: {}", result.data_uri.as_deref().unwrap_or("")),

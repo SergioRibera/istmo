@@ -1,42 +1,64 @@
 //! `#[istmo::plugin]` attribute macro implementation.
+//!
+//! Expands to three siblings per annotated trait:
+//! * the trait itself (kept verbatim),
+//! * `<Trait>Client` — struct owning `Arc<Runtime>`, generated method
+//!   wrappers, `Plugin` impl,
+//! * `<Trait>Host<Impl: Trait + Send + Sync + 'static>` — dispatcher used by
+//!   the `hosts:` side that implements `Dispatch` + `Plugin` and decodes
+//!   inbound Call frames into direct calls on the concrete `Impl`.
 
-use proc_macro2::TokenStream;
-use quote::quote;
+use proc_macro2::{Span, TokenStream};
+use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
     Attribute, Expr, ExprLit, ExprPath, FnArg, GenericArgument, Ident, ItemTrait, Lit, LitStr,
     MetaNameValue, Path, PathArguments, ReturnType, Token, TraitItem, TraitItemFn, Type, TypePath,
-    parse_quote, parse_str, parse2,
+    parse2, parse_quote, parse_str,
 };
 
-#[allow(unreachable_pub)]
+#[allow(unreachable_pub, clippy::too_many_lines)]
 pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let args: PluginArgs = parse2(attr)?;
-    let trait_def: ItemTrait = parse2(item)?;
+    let mut trait_def: ItemTrait = parse2(item)?;
 
     reject_unsupported_trait_shape(&trait_def)?;
 
-    let type_name = trait_def.ident.clone();
+    let trait_ident = trait_def.ident.clone();
     let vis = trait_def.vis.clone();
     let plugin_id = args.plugin_id.clone();
     let root = &args.crate_path;
+    let client_ident = format_ident!("{}Client", trait_ident);
+    let host_ident = format_ident!("{}Host", trait_ident);
 
-    let methods: Vec<&TraitItemFn> = trait_def
+    // Snapshot the original method signatures BEFORE we rewrite the trait for
+    // Send-ness — client/host codegen needs the async-fn shape.
+    let methods_source: Vec<TraitItemFn> = trait_def
         .items
         .iter()
         .filter_map(|item| match item {
-            TraitItem::Fn(f) => Some(f),
+            TraitItem::Fn(f) => Some(f.clone()),
             _ => None,
         })
         .collect();
+    let methods: Vec<&TraitItemFn> = methods_source.iter().collect();
 
-    let method_impls = methods
+    // Rewrite the trait so every `async fn` returns an `impl Future + Send`;
+    // native async-in-trait futures are not Send-by-default and the host
+    // dispatcher needs to spawn them on a background thread.
+    add_send_bound_to_async_methods(&mut trait_def);
+
+    let client_methods = methods
         .iter()
-        .map(|m| expand_method(&plugin_id, root, m))
+        .map(|m| expand_client_method(&plugin_id, root, m))
+        .collect::<syn::Result<Vec<_>>>()?;
+    let host_arms = methods
+        .iter()
+        .map(|m| expand_host_arm(root, m))
         .collect::<syn::Result<Vec<_>>>()?;
 
     let stateless_ctors = if args.init.is_none() {
-        Some(expand_stateless_ctors(&type_name, &plugin_id, root))
+        Some(expand_stateless_ctors(&client_ident, root))
     } else {
         None
     };
@@ -44,25 +66,29 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let stateful_ctors = args
         .init
         .as_ref()
-        .map(|init_ty| expand_stateful_ctors(&type_name, &plugin_id, init_ty, root));
+        .map(|init_ty| expand_stateful_ctors(&client_ident, &plugin_id, init_ty, root));
 
-    let struct_def = quote! {
-        #vis struct #type_name {
+    let client_struct = quote! {
+        #vis struct #client_ident {
             __runtime: ::std::sync::Arc<#root::Runtime>,
             __instance_id: ::core::option::Option<#root::InstanceId>,
         }
 
-        impl ::core::fmt::Debug for #type_name {
+        impl ::core::fmt::Debug for #client_ident {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                f.debug_struct(stringify!(#type_name))
+                f.debug_struct(stringify!(#client_ident))
                     .field("instance_id", &self.__instance_id)
                     .finish_non_exhaustive()
             }
         }
+
+        impl #root::Plugin for #client_ident {
+            const PLUGIN_ID: &'static str = #plugin_id;
+        }
     };
 
-    let drop_impl = quote! {
-        impl ::core::ops::Drop for #type_name {
+    let client_drop = quote! {
+        impl ::core::ops::Drop for #client_ident {
             fn drop(&mut self) {
                 if let ::core::option::Option::Some(id) = self.__instance_id {
                     let _ = self.__runtime.destroy_instance(id);
@@ -71,27 +97,119 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         }
     };
 
-    let plugin_impl = quote! {
-        impl #root::Plugin for #type_name {
+    let host_def = quote! {
+        #vis struct #host_ident<Impl>
+        where
+            Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
+        {
+            inner: Impl,
+        }
+
+        impl<Impl> #host_ident<Impl>
+        where
+            Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
+        {
+            pub const fn new(inner: Impl) -> Self {
+                Self { inner }
+            }
+
+            #[must_use]
+            pub const fn inner(&self) -> &Impl {
+                &self.inner
+            }
+
+            #[must_use]
+            pub fn into_inner(self) -> Impl {
+                self.inner
+            }
+        }
+
+        impl<Impl> ::core::fmt::Debug for #host_ident<Impl>
+        where
+            Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
+        {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                f.debug_struct(stringify!(#host_ident)).finish_non_exhaustive()
+            }
+        }
+
+        impl<Impl> #root::Plugin for #host_ident<Impl>
+        where
+            Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
+        {
             const PLUGIN_ID: &'static str = #plugin_id;
+        }
+
+        impl<Impl> #root::Dispatch for #host_ident<Impl>
+        where
+            Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
+        {
+            fn plugin_id(&self) -> &'static str {
+                #plugin_id
+            }
+
+            fn dispatch<'__istmo_a>(
+                &'__istmo_a self,
+                _instance_id: ::core::option::Option<#root::InstanceId>,
+                method: &'__istmo_a str,
+                payload: &'__istmo_a [u8],
+            ) -> #root::DispatchFuture<'__istmo_a> {
+                ::std::boxed::Box::pin(async move {
+                    match method {
+                        #(#host_arms)*
+                        other => ::core::result::Result::Err(
+                            #root::DispatchError::UnknownMethod(other.to_owned())
+                        ),
+                    }
+                })
+            }
         }
     };
 
     Ok(quote! {
-        #struct_def
+        #trait_def
 
-        #plugin_impl
+        #client_struct
 
         #stateless_ctors
 
         #stateful_ctors
 
-        impl #type_name {
-            #(#method_impls)*
+        impl #client_ident {
+            #(#client_methods)*
         }
 
-        #drop_impl
+        #client_drop
+
+        #host_def
     })
+}
+
+/// Desugar every `async fn foo(&self, ...) -> R` on the trait into
+/// `fn foo(&self, ...) -> impl Future<Output = R> + Send + '_`.
+///
+/// Native async trait methods do not carry a `Send` bound on the returned
+/// future, but the runtime spawns hosted dispatch tasks on a background
+/// thread — so the future needs to be `Send`. Users still write plain
+/// `async fn` in the trait declaration and in the impl block; the
+/// implementation continues to satisfy the desugared signature because
+/// `async fn` in an impl returns an anonymous `impl Future`.
+fn add_send_bound_to_async_methods(trait_def: &mut ItemTrait) {
+    for item in &mut trait_def.items {
+        let TraitItem::Fn(f) = item else { continue };
+        if f.sig.asyncness.is_none() {
+            continue;
+        }
+        f.sig.asyncness = None;
+        let return_ty = match &f.sig.output {
+            ReturnType::Default => quote! { () },
+            ReturnType::Type(_, t) => quote! { #t },
+        };
+        let new_output: syn::Type = parse_quote! {
+            impl ::core::future::Future<Output = #return_ty> + ::core::marker::Send + '_
+        };
+        f.sig.output = ReturnType::Type(<Token![->]>::default(), Box::new(new_output));
+    }
 }
 
 fn reject_unsupported_trait_shape(t: &ItemTrait) -> syn::Result<()> {
@@ -110,14 +228,13 @@ fn reject_unsupported_trait_shape(t: &ItemTrait) -> syn::Result<()> {
     Ok(())
 }
 
-fn expand_stateless_ctors(type_name: &Ident, plugin_id: &LitStr, root: &Path) -> TokenStream {
+fn expand_stateless_ctors(client_ident: &Ident, root: &Path) -> TokenStream {
     quote! {
-        impl #type_name {
-            pub const PLUGIN_ID: &'static str = #plugin_id;
-
+        impl #client_ident {
             pub fn acquire() -> ::core::result::Result<Self, #root::IstmoError> {
                 let rt = #root::Runtime::global()?;
-                rt.check_declared(Self::PLUGIN_ID)?;
+                <Self as #root::Plugin>::PLUGIN_ID;
+                rt.check_declared(<Self as #root::Plugin>::PLUGIN_ID)?;
                 ::core::result::Result::Ok(Self {
                     __runtime: rt,
                     __instance_id: ::core::option::Option::None,
@@ -127,7 +244,7 @@ fn expand_stateless_ctors(type_name: &Ident, plugin_id: &LitStr, root: &Path) ->
             pub fn from_runtime(
                 rt: &::std::sync::Arc<#root::Runtime>,
             ) -> ::core::result::Result<Self, #root::IstmoError> {
-                rt.check_declared(Self::PLUGIN_ID)?;
+                rt.check_declared(<Self as #root::Plugin>::PLUGIN_ID)?;
                 ::core::result::Result::Ok(Self {
                     __runtime: ::std::sync::Arc::clone(rt),
                     __instance_id: ::core::option::Option::None,
@@ -138,15 +255,13 @@ fn expand_stateless_ctors(type_name: &Ident, plugin_id: &LitStr, root: &Path) ->
 }
 
 fn expand_stateful_ctors(
-    type_name: &Ident,
+    client_ident: &Ident,
     plugin_id: &LitStr,
     init_ty: &Type,
     root: &Path,
 ) -> TokenStream {
     quote! {
-        impl #type_name {
-            pub const PLUGIN_ID: &'static str = #plugin_id;
-
+        impl #client_ident {
             pub async fn acquire_with(
                 config: #init_ty,
             ) -> ::core::result::Result<Self, #root::IstmoError> {
@@ -158,7 +273,7 @@ fn expand_stateful_ctors(
                 rt: &::std::sync::Arc<#root::Runtime>,
                 config: #init_ty,
             ) -> ::core::result::Result<Self, #root::IstmoError> {
-                rt.check_declared(Self::PLUGIN_ID)?;
+                rt.check_declared(<Self as #root::Plugin>::PLUGIN_ID)?;
                 let payload = #root::codec::encode(&config)?;
                 let handle = rt.create_instance(#plugin_id, payload)?;
                 let bytes = match handle.await? {
@@ -257,7 +372,7 @@ fn expect_type(expr: &Expr) -> syn::Result<Type> {
     }
 }
 
-/// Everything the per-method expanders need beyond the return-type shape.
+/// Everything the per-method client expanders need beyond the return-type shape.
 struct MethodCtx<'a> {
     plugin_id: &'a LitStr,
     root: &'a Path,
@@ -267,7 +382,7 @@ struct MethodCtx<'a> {
     payload_expr: TokenStream,
 }
 
-fn expand_method(
+fn expand_client_method(
     plugin_id: &LitStr,
     root: &Path,
     method: &TraitItemFn,
@@ -309,6 +424,98 @@ fn expand_method(
     }
 }
 
+fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream> {
+    let sig = &method.sig;
+    let name = &sig.ident;
+    let method_name_str = LitStr::new(&name.to_string(), name.span());
+
+    let (_, arg_names) = extract_args(sig)?;
+    let arg_tuple_type = arg_tuple_type(sig);
+    let decode = quote! {
+        let (args, _) = #root::codec::decode::<#arg_tuple_type>(payload)
+            .map_err(#root::DispatchError::Decode)?;
+    };
+    let destructure = destructure_arg_tuple(&arg_names);
+
+    if is_stream_method(&method.attrs) {
+        // Hosted streams aren't supported yet — codegen leaves an
+        // Unimplemented arm so the caller sees a typed error instead of a
+        // silent unknown-method or a panic.
+        let msg = format!("hosted stream method `{name}`");
+        let literal = LitStr::new(&msg, Span::call_site());
+        return Ok(quote! {
+            #method_name_str => ::core::result::Result::Err(
+                #root::DispatchError::Unimplemented(#literal)
+            ),
+        });
+    }
+
+    let return_ty = match &sig.output {
+        ReturnType::Default => Type::Verbatim(quote! { () }),
+        ReturnType::Type(_, t) => (**t).clone(),
+    };
+    let (ok_ty, err_ty) = extract_result(&return_ty);
+    let call_expr = quote! {
+        self.inner.#name(#(#arg_names),*).await
+    };
+
+    let body = if let (Some(_), Some(_)) = (ok_ty.as_ref(), err_ty.as_ref()) {
+        quote! {
+            match #call_expr {
+                ::core::result::Result::Ok(value) => {
+                    let bytes = #root::codec::encode(&value)
+                        .map_err(#root::DispatchError::Encode)?;
+                    ::core::result::Result::Ok(#root::Outcome::Ok(bytes))
+                }
+                ::core::result::Result::Err(err) => {
+                    let bytes = #root::codec::encode(&err)
+                        .map_err(#root::DispatchError::Encode)?;
+                    ::core::result::Result::Ok(#root::Outcome::DomainError(bytes))
+                }
+            }
+        }
+    } else {
+        quote! {
+            let value = #call_expr;
+            let bytes = #root::codec::encode(&value)
+                .map_err(#root::DispatchError::Encode)?;
+            ::core::result::Result::Ok(#root::Outcome::Ok(bytes))
+        }
+    };
+
+    Ok(quote! {
+        #method_name_str => {
+            #decode
+            #destructure
+            #body
+        }
+    })
+}
+
+fn arg_tuple_type(sig: &syn::Signature) -> TokenStream {
+    let types: Vec<_> = sig
+        .inputs
+        .iter()
+        .filter_map(|input| match input {
+            FnArg::Typed(pat_type) => Some(pat_type.ty.as_ref()),
+            FnArg::Receiver(_) => None,
+        })
+        .collect();
+    if types.is_empty() {
+        quote! { () }
+    } else {
+        quote! { ( #(#types,)* ) }
+    }
+}
+
+fn destructure_arg_tuple(arg_names: &[Ident]) -> TokenStream {
+    if arg_names.is_empty() {
+        quote! { let _ = args; }
+    } else {
+        quote! { let ( #(#arg_names,)* ) = args; }
+    }
+}
+
 fn extract_args(sig: &syn::Signature) -> syn::Result<(Vec<TokenStream>, Vec<Ident>)> {
     let mut pats = Vec::new();
     let mut names = Vec::new();
@@ -329,9 +536,8 @@ fn extract_args(sig: &syn::Signature) -> syn::Result<(Vec<TokenStream>, Vec<Iden
                 names.push(ident);
             }
             FnArg::Receiver(_) => {
-                // The first input should be `&self`; if we see a receiver
-                // past index 0 the trait is malformed. syn already rejects
-                // multiple receivers, so this branch is just defensive.
+                // Defensive: syn rejects multiple receivers, so past index 0
+                // this branch is unreachable in practice.
             }
         }
     }

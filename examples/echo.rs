@@ -32,7 +32,7 @@ fn main() {
         }
     });
 
-    let echo = Echo::from_runtime(&init.runtime).expect("declared");
+    let echo = EchoClient::from_runtime(&init.runtime).expect("declared");
     let reply = pollster::block_on(echo.ping("hello".to_owned())).expect("ping ok");
     println!("ping response: {reply}");
 

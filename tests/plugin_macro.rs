@@ -59,7 +59,7 @@ fn generated_client_round_trips_unary_calls() {
         }
     });
 
-    let echo = Echo::from_runtime(&rt).expect("declared");
+    let echo = EchoClient::from_runtime(&rt).expect("declared");
     assert_eq!(
         pollster::block_on(echo.ping("hi".to_owned())).unwrap(),
         "pong:hi",
@@ -92,7 +92,7 @@ fn generated_client_surfaces_domain_errors_as_plugin_error_bytes() {
             .unwrap();
     });
 
-    let echo = Echo::from_runtime(&rt).expect("declared");
+    let echo = EchoClient::from_runtime(&rt).expect("declared");
     let err = pollster::block_on(echo.ping("nope".to_owned())).expect_err("should fail");
     let bytes = match err {
         istmo::IstmoError::PluginError { bytes } => bytes,
@@ -141,7 +141,7 @@ fn generated_client_reads_stream_events() {
             .unwrap();
     });
 
-    let echo = Echo::from_runtime(&rt).expect("declared");
+    let echo = EchoClient::from_runtime(&rt).expect("declared");
     let stream = echo.ticks(3).expect("open");
     let mut collected = Vec::new();
     loop {

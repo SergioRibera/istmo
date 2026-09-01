@@ -3,7 +3,7 @@
 use std::thread;
 
 use istmo_core::{Envelope, Frame, Runtime, codec};
-use istmo_plugins::{PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions};
+use istmo_plugins::{PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions, PermissionsClient};
 
 #[test]
 fn check_round_trips_status() {
@@ -37,7 +37,7 @@ fn check_round_trips_status() {
             .unwrap();
     });
 
-    let plugin = Permissions::from_runtime(&rt).expect("declared");
+    let plugin = PermissionsClient::from_runtime(&rt).expect("declared");
     let status = pollster::block_on(plugin.check("android.permission.CAMERA".to_owned())).unwrap();
     assert_eq!(status, PermissionStatus::Granted);
     backend.join().unwrap();
@@ -79,7 +79,7 @@ fn request_returns_outcome_per_input() {
             .unwrap();
     });
 
-    let plugin = Permissions::from_runtime(&rt).expect("declared");
+    let plugin = PermissionsClient::from_runtime(&rt).expect("declared");
     let outcomes = pollster::block_on(plugin.request(vec![
         "android.permission.CAMERA".to_owned(),
         "android.permission.RECORD_AUDIO".to_owned(),
@@ -117,7 +117,7 @@ fn should_show_rationale_round_trips_bool() {
             .unwrap();
     });
 
-    let plugin = Permissions::from_runtime(&rt).expect("declared");
+    let plugin = PermissionsClient::from_runtime(&rt).expect("declared");
     let show =
         pollster::block_on(plugin.should_show_rationale("android.permission.CAMERA".to_owned()))
             .unwrap();

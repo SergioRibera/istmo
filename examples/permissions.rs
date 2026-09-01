@@ -4,7 +4,7 @@
 
 use std::thread;
 
-use istmo::plugins::{PermissionOutcome, PermissionStatus, Permissions};
+use istmo::plugins::{PermissionOutcome, PermissionStatus, PermissionsClient};
 use istmo::{Envelope, Frame, Runtime, codec};
 
 fn main() {
@@ -18,7 +18,7 @@ fn main() {
         }
     });
 
-    let plugin = Permissions::from_runtime(&init.runtime).expect("declared");
+    let plugin = PermissionsClient::from_runtime(&init.runtime).expect("declared");
 
     let camera = pollster::block_on(plugin.check("android.permission.CAMERA".to_owned()))
         .expect("check camera");
