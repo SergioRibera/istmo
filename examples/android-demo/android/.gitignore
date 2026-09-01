@@ -7,14 +7,11 @@ local.properties
 captures/
 .cxx/
 
-# Rust cross-compile output — lives at istmo/target/ via
-# `cargo { targetDirectory = "../../target" }`, already covered by the
-# workspace-level .gitignore, but reasserted here for clarity.
-rustJniLibs/
-
-# JNI libs staged by the mozilla plugin. cargoBuild regenerates on demand.
+# Build artefacts must NEVER live under src/. Legacy path from an earlier
+# justfile revision that copied .so files here directly — kept as a
+# safety net so a stale build doesn't accidentally ship with the APK.
 app/src/main/jniLibs/
 
-# Gradle wrapper jar — not committed. `just` recipes rely on the system
-# gradle inside the docker image, so the wrapper isn't needed anyway.
+# Gradle wrapper jar — not committed. `just` recipes use the system
+# gradle inside the docker image.
 gradle/wrapper/gradle-wrapper.jar
