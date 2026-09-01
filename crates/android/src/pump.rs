@@ -141,17 +141,25 @@ fn deliver(
             let method_j = env.new_string(&method)?;
             let payload_j = env.byte_array_from_slice(&payload)?;
             let instance_id_j = instance_id.map_or(0i64, |id| id.get() as i64);
-            call_static_void(env, class, methods.on_call, &[
-                JValue::Long(call_id.get() as i64).as_jni(),
-                JValue::Object(&JObject::from(plugin_id_j)).as_jni(),
-                JValue::Long(instance_id_j).as_jni(),
-                JValue::Object(&JObject::from(method_j)).as_jni(),
-                JValue::Object(&JObject::from(payload_j)).as_jni(),
-            ])
+            call_static_void(
+                env,
+                class,
+                methods.on_call,
+                &[
+                    JValue::Long(call_id.get() as i64).as_jni(),
+                    JValue::Object(&JObject::from(plugin_id_j)).as_jni(),
+                    JValue::Long(instance_id_j).as_jni(),
+                    JValue::Object(&JObject::from(method_j)).as_jni(),
+                    JValue::Object(&JObject::from(payload_j)).as_jni(),
+                ],
+            )
         }
-        Frame::Cancel { call_id } => call_static_void(env, class, methods.on_cancel, &[
-            JValue::Long(call_id.get() as i64).as_jni(),
-        ]),
+        Frame::Cancel { call_id } => call_static_void(
+            env,
+            class,
+            methods.on_cancel,
+            &[JValue::Long(call_id.get() as i64).as_jni()],
+        ),
         Frame::CreateInstance {
             call_id,
             plugin_id,
@@ -159,18 +167,23 @@ fn deliver(
         } => {
             let plugin_id_j = env.new_string(&plugin_id)?;
             let payload_j = env.byte_array_from_slice(&payload)?;
-            call_static_void(env, class, methods.on_create_instance, &[
-                JValue::Long(call_id.get() as i64).as_jni(),
-                JValue::Object(&JObject::from(plugin_id_j)).as_jni(),
-                JValue::Object(&JObject::from(payload_j)).as_jni(),
-            ])
-        }
-        Frame::DestroyInstance { instance_id } => {
-            call_static_void(env, class, methods.on_destroy_instance, &[JValue::Long(
-                instance_id.get() as i64,
+            call_static_void(
+                env,
+                class,
+                methods.on_create_instance,
+                &[
+                    JValue::Long(call_id.get() as i64).as_jni(),
+                    JValue::Object(&JObject::from(plugin_id_j)).as_jni(),
+                    JValue::Object(&JObject::from(payload_j)).as_jni(),
+                ],
             )
-            .as_jni()])
         }
+        Frame::DestroyInstance { instance_id } => call_static_void(
+            env,
+            class,
+            methods.on_destroy_instance,
+            &[JValue::Long(instance_id.get() as i64).as_jni()],
+        ),
         Frame::Respond { .. } | Frame::Event { .. } | Frame::StreamEnd { .. } => {
             tracing::warn!("pump received inbound-only frame variant; skipping");
             Ok(())
@@ -196,4 +209,3 @@ fn call_static_void(
     }
     Ok(())
 }
-
