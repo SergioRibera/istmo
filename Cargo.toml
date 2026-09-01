@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/build", "crates/macros"]
+members = [
+    "crates/core",
+    "crates/build",
+    "crates/macros",
+    "crates/android",
+    "examples/android-demo",
+]
 # crates/plugins lands in later milestones.
 
 [workspace.package]
@@ -25,7 +31,7 @@ missing_panics_doc = "allow"
 
 [workspace.dependencies]
 bincode = { version = "2", default-features = false, features = ["derive", "std"] }
-flume = { version = "0.11", default-features = false, features = ["async"] }
+flume = { version = "0.11", default-features = false, features = ["async", "select"] }
 oneshot = { version = "0.1", default-features = false, features = ["std", "async"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 pollster = "0.4"
@@ -39,10 +45,12 @@ syn = { version = "2", default-features = false, features = [
     "extra-traits",
     "clone-impls",
 ] }
+jni = { version = "0.21", default-features = false }
 
 istmo-core = { path = "crates/core", version = "0.0.0" }
 istmo-build = { path = "crates/build", version = "0.0.0" }
 istmo-macros = { path = "crates/macros", version = "0.0.0" }
+istmo-android = { path = "crates/android", version = "0.0.0" }
 
 [package]
 name = "istmo"
