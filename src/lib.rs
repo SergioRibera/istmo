@@ -9,6 +9,10 @@
 pub use istmo_core::*;
 pub use istmo_macros::{message, plugin, stream};
 
+/// Core plugins bundled with the framework (permissions, app lifecycle,
+/// deep links, activity results). See [`istmo_plugins`] for the full surface.
+pub use istmo_plugins as plugins;
+
 /// Re-exported [`bincode`] surface used by generated code. Not part of the
 /// stable public API — pinned exclusively for macro output.
 pub mod bincode {

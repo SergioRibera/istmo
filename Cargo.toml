@@ -5,9 +5,9 @@ members = [
     "crates/build",
     "crates/macros",
     "crates/android",
+    "crates/plugins",
     "examples/android-demo",
 ]
-# crates/plugins lands in later milestones.
 
 [workspace.package]
 edition = "2024"
@@ -51,6 +51,7 @@ istmo-core = { path = "crates/core", version = "0.0.0" }
 istmo-build = { path = "crates/build", version = "0.0.0" }
 istmo-macros = { path = "crates/macros", version = "0.0.0" }
 istmo-android = { path = "crates/android", version = "0.0.0" }
+istmo-plugins = { path = "crates/plugins", version = "0.0.0" }
 
 [package]
 name = "istmo"
@@ -65,6 +66,7 @@ repository.workspace = true
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
+istmo-plugins = { workspace = true }
 bincode = { workspace = true }
 
 [dev-dependencies]
