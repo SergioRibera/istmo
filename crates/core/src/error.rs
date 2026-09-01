@@ -35,6 +35,14 @@ pub enum IstmoError {
     /// the transport layer. Generated plugin glue decodes `bytes` into the
     /// concrete error type declared by the trait.
     PluginError { bytes: Vec<u8> },
+    /// A client tried to `acquire` a plugin that is not declared in this
+    /// process's `istmo::runtime!` `plugins:` list. Fail fast instead of
+    /// hanging on a call that no native side will ever answer.
+    PluginNotDeclared(&'static str),
+    /// `runtime!` glue validation determined that a declared `plugins:` entry
+    /// has no corresponding native binding. Surfaced from `nativeStart` when
+    /// contract metadata makes the check possible.
+    MissingNativePlugin(&'static str),
 }
 
 impl fmt::Display for IstmoError {
@@ -55,6 +63,12 @@ impl fmt::Display for IstmoError {
             Self::RoutingMismatch(kind) => write!(f, "routing mismatch: {kind}"),
             Self::PluginError { bytes } => {
                 write!(f, "plugin domain error ({} bytes)", bytes.len())
+            }
+            Self::PluginNotDeclared(id) => {
+                write!(f, "plugin `{id}` not declared in istmo::runtime!")
+            }
+            Self::MissingNativePlugin(id) => {
+                write!(f, "declared plugin `{id}` has no native binding")
             }
         }
     }
