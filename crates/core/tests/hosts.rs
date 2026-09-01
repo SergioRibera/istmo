@@ -169,5 +169,30 @@ fn declare_plugin_marks_ids_visible() {
     assert!(!rt.is_plugin_declared("istmo.other"));
 }
 
+#[test]
+fn check_declared_is_permissive_by_default() {
+    let init = Runtime::mock();
+    let rt: Arc<Runtime> = init.runtime;
+    // Enforcement off — anything passes even without declaration.
+    rt.check_declared("test.anything").expect("permissive");
+}
+
+#[test]
+fn check_declared_rejects_undeclared_when_enforcing() {
+    let init = Runtime::mock();
+    let rt: Arc<Runtime> = init.runtime;
+    rt.declare_plugin("test.declared");
+    rt.set_enforce_declarations(true);
+
+    rt.check_declared("test.declared").expect("declared ok");
+    let err = rt
+        .check_declared("test.other")
+        .expect_err("must reject undeclared");
+    assert!(
+        matches!(err, istmo_core::IstmoError::PluginNotDeclared("test.other")),
+        "expected PluginNotDeclared, got {err:?}",
+    );
+}
+
 // Compile-time check: `Dispatch` is object-safe.
 const _: fn(Arc<dyn Dispatch>) = |_| {};

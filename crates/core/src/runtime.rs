@@ -75,11 +75,16 @@ pub struct Runtime {
     main_thread: Arc<dyn MainThread>,
     next_id: AtomicU64,
     /// Declared plugin ids: those the process's client side is allowed to
-    /// `acquire()`. Populated by [`RuntimeInit::expects`] via the
-    /// `istmo::runtime!` macro.
+    /// `acquire()`. Populated by [`Self::declare_plugin`] via the
+    /// `istmo::runtime!` macro's `plugins:` list.
     declared_plugins: Mutex<HashSet<&'static str>>,
+    /// When true, [`Self::check_declared`] rejects ids missing from
+    /// [`Self::declared_plugins`]. Set by `istmo::runtime!` after all
+    /// plugins are declared. Mocks default to permissive so tests can
+    /// construct clients without a full declaration list.
+    enforce_declarations: std::sync::atomic::AtomicBool,
     /// Server-side dispatchers keyed by plugin id — populated by
-    /// [`RuntimeInit::host`].
+    /// [`Self::register_host`].
     hosts: Mutex<HashMap<&'static str, Arc<dyn Dispatch>>>,
     /// Set of hosted call ids that have been cancelled by an inbound Cancel
     /// frame. The dispatcher thread checks this before submitting its
@@ -332,6 +337,30 @@ impl Runtime {
         lock(&self.declared_plugins).contains(plugin_id)
     }
 
+    /// Turns strict declaration checking on. The `istmo::runtime!` macro
+    /// enables it after adding every `plugins:` entry so that late
+    /// `acquire()` calls for undeclared ids fail fast.
+    pub fn set_enforce_declarations(&self, enforce: bool) {
+        self.enforce_declarations
+            .store(enforce, Ordering::Relaxed);
+    }
+
+    /// Validates that `plugin_id` is declared for this process. When
+    /// enforcement is off (the default for mocks), always returns `Ok(())`.
+    ///
+    /// # Errors
+    /// Returns [`IstmoError::PluginNotDeclared`] when enforcement is on and
+    /// the id is missing from the declared set.
+    pub fn check_declared(&self, plugin_id: &'static str) -> Result<(), IstmoError> {
+        if !self.enforce_declarations.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        if lock(&self.declared_plugins).contains(plugin_id) {
+            return Ok(());
+        }
+        Err(IstmoError::PluginNotDeclared(plugin_id))
+    }
+
     fn cancel_hosted(&self, call_id: CallId) {
         lock(&self.cancelled_hosted).insert(call_id);
     }
@@ -432,6 +461,7 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         main_thread: config.main_thread,
         next_id: AtomicU64::new(1),
         declared_plugins: Mutex::new(HashSet::new()),
+        enforce_declarations: std::sync::atomic::AtomicBool::new(false),
         hosts: Mutex::new(HashMap::new()),
         cancelled_hosted: Mutex::new(HashSet::new()),
     });

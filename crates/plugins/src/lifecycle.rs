@@ -62,19 +62,26 @@ pub struct AppLifecycle {
 }
 
 impl AppLifecycle {
+    /// The wire plugin id this client attaches to.
+    pub const PLUGIN_ID: &'static str = "istmo.lifecycle";
+
     /// Attaches to the process-global runtime.
     pub fn acquire() -> Result<Self, IstmoError> {
         let rt = Runtime::global()?;
-        Ok(Self::from_runtime(&rt))
+        Self::from_runtime(&rt)
     }
 
     /// Attaches to a specific runtime instance. Used by tests and by
     /// multi-runtime edge cases.
-    #[must_use]
-    pub fn from_runtime(rt: &Arc<Runtime>) -> Self {
-        Self {
+    ///
+    /// # Errors
+    /// Returns [`IstmoError::PluginNotDeclared`] when the runtime enforces
+    /// declarations and this plugin id is missing from its `plugins:` list.
+    pub fn from_runtime(rt: &Arc<Runtime>) -> Result<Self, IstmoError> {
+        rt.check_declared(Self::PLUGIN_ID)?;
+        Ok(Self {
             slot: rt.early_events().latest_slot(LIFECYCLE_CHANNEL),
-        }
+        })
     }
 
     /// Returns the currently retained state, if any transition has been

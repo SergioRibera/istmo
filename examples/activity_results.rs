@@ -24,7 +24,7 @@ fn main() {
         }
     });
 
-    let plugin = ActivityResults::from_runtime(&init.runtime);
+    let plugin = ActivityResults::from_runtime(&init.runtime).expect("declared");
 
     let view = IntentRequest {
         action: "android.intent.action.VIEW".to_owned(),

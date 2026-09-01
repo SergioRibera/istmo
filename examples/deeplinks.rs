@@ -30,7 +30,7 @@ fn main() {
         },
     );
 
-    let plugin = DeepLinks::from_runtime(&rt);
+    let plugin = DeepLinks::from_runtime(&rt).expect("declared");
     let stream = plugin.stream();
 
     // Drain the pre-main buffer.

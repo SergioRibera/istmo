@@ -96,7 +96,7 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_pollLifecycle<'local>(
     let Ok(rt) = Runtime::global() else {
         return -1;
     };
-    let plugin = AppLifecycle::from_runtime(&rt);
+    let plugin = AppLifecycle::from_runtime(&rt).expect("declared");
     match plugin.current() {
         Ok(Some(state)) => lifecycle_ordinal(state),
         _ => -1,
@@ -113,7 +113,7 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_awaitLifecycleTransition<'
     let Ok(rt) = Runtime::global() else {
         return -1;
     };
-    let stream: LifecycleStream = AppLifecycle::from_runtime(&rt).stream();
+    let stream: LifecycleStream = AppLifecycle::from_runtime(&rt).expect("declared").stream();
     stream.recv().map_or(-1, lifecycle_ordinal)
 }
 
@@ -194,7 +194,7 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_callCheckPermission<'local
     let Ok(rt) = Runtime::global() else {
         return -1;
     };
-    let plugin = Permissions::from_runtime(&rt);
+    let plugin = Permissions::from_runtime(&rt).expect("declared");
     match pollster::block_on(plugin.check(permission)) {
         Ok(status) => permission_status_ordinal(status),
         Err(err) => {
@@ -220,7 +220,7 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_callRequestPermission<'loc
     let Ok(rt) = Runtime::global() else {
         return -1;
     };
-    let plugin = Permissions::from_runtime(&rt);
+    let plugin = Permissions::from_runtime(&rt).expect("declared");
     match pollster::block_on(plugin.request(vec![permission])) {
         Ok(outcomes) => outcomes
             .first()
@@ -277,7 +277,7 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_callLaunchIntent<'local>(
     let Ok(rt) = Runtime::global() else {
         return jstring_from(&env, "TRANSPORT_ERROR");
     };
-    let plugin = ActivityResults::from_runtime(&rt);
+    let plugin = ActivityResults::from_runtime(&rt).expect("declared");
     let text = match pollster::block_on(plugin.launch(request)) {
         Ok(result) => match result.outcome {
             ActivityOutcome::Ok => format!("OK: {}", result.data_uri.as_deref().unwrap_or("")),
@@ -319,7 +319,7 @@ pub extern "system" fn Java_dev_istmo_demo_DemoBridge_pollDeepLink<'local>(
     let Ok(rt) = Runtime::global() else {
         return std::ptr::null_mut();
     };
-    let stream: DeepLinkStream = DeepLinks::from_runtime(&rt).stream();
+    let stream: DeepLinkStream = DeepLinks::from_runtime(&rt).expect("declared").stream();
     match stream.try_recv() {
         Some(Ok(link)) => env
             .new_string(link.uri)

@@ -26,7 +26,7 @@ fn first_subscriber_drains_prelaunch_buffer_in_order() {
     publish(&rt, &cold);
     publish(&rt, &warm);
 
-    let plugin = DeepLinks::from_runtime(&rt);
+    let plugin = DeepLinks::from_runtime(&rt).expect("declared");
     let stream = plugin.stream();
     assert_eq!(stream.recv().unwrap(), cold);
     assert_eq!(stream.recv().unwrap(), warm);
@@ -37,7 +37,7 @@ fn live_links_after_subscription_reach_the_stream() {
     let init = Runtime::mock();
     let rt = init.runtime;
 
-    let plugin = DeepLinks::from_runtime(&rt);
+    let plugin = DeepLinks::from_runtime(&rt).expect("declared");
     let stream = plugin.stream();
     let live = DeepLink {
         uri: "istmo://open?tab=42".to_owned(),
@@ -60,7 +60,7 @@ fn second_subscriber_gets_no_backlog_only_live() {
     };
     publish(&rt, &first);
 
-    let plugin = DeepLinks::from_runtime(&rt);
+    let plugin = DeepLinks::from_runtime(&rt).expect("declared");
     let stream_a = plugin.stream();
     let stream_b = plugin.stream();
 

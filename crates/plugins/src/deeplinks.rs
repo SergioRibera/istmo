@@ -46,26 +46,38 @@ pub struct DeepLinks {
 }
 
 impl DeepLinks {
+    /// The wire plugin id this client attaches to.
+    pub const PLUGIN_ID: &'static str = "istmo.deeplinks";
+
     /// Attaches to the process-global runtime with the default queue capacity.
     pub fn acquire() -> Result<Self, IstmoError> {
         let rt = Runtime::global()?;
-        Ok(Self::from_runtime(&rt))
+        Self::from_runtime(&rt)
     }
 
     /// Attaches to a specific runtime with the default queue capacity.
-    #[must_use]
-    pub fn from_runtime(rt: &Arc<Runtime>) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`IstmoError::PluginNotDeclared`] when the runtime enforces
+    /// declarations and this plugin id is missing from its `plugins:` list.
+    pub fn from_runtime(rt: &Arc<Runtime>) -> Result<Self, IstmoError> {
         Self::from_runtime_with_capacity(rt, DEFAULT_DEEPLINKS_CAPACITY)
     }
 
     /// Attaches to a specific runtime with an explicit queue capacity. The
     /// capacity is only honoured on the first attach; subsequent attaches
     /// share the queue that was created for the channel.
-    #[must_use]
-    pub fn from_runtime_with_capacity(rt: &Arc<Runtime>, capacity: usize) -> Self {
-        Self {
+    ///
+    /// # Errors
+    /// Same as [`Self::from_runtime`].
+    pub fn from_runtime_with_capacity(
+        rt: &Arc<Runtime>,
+        capacity: usize,
+    ) -> Result<Self, IstmoError> {
+        rt.check_declared(Self::PLUGIN_ID)?;
+        Ok(Self {
             queue: rt.early_events().queue(DEEPLINKS_CHANNEL, capacity),
-        }
+        })
     }
 
     /// Subscribes to deep links. On first subscribe the pre-main buffer is

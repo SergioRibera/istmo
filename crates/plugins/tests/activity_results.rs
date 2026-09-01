@@ -56,7 +56,7 @@ fn launch_round_trips_ok_result() {
             .unwrap();
     });
 
-    let plugin = ActivityResults::from_runtime(&rt);
+    let plugin = ActivityResults::from_runtime(&rt).expect("declared");
     let result = pollster::block_on(plugin.launch(sample_request())).unwrap();
     assert_eq!(result.outcome, ActivityOutcome::Ok);
     assert_eq!(result.data_uri.as_deref(), Some("content://result"));
@@ -88,7 +88,7 @@ fn launch_surfaces_cancelled_outcome_without_erroring() {
             .unwrap();
     });
 
-    let plugin = ActivityResults::from_runtime(&rt);
+    let plugin = ActivityResults::from_runtime(&rt).expect("declared");
     let result = pollster::block_on(plugin.launch(sample_request())).unwrap();
     assert_eq!(result.outcome, ActivityOutcome::Cancelled);
     backend.join().unwrap();
@@ -116,7 +116,7 @@ fn launch_maps_domain_error_to_plugin_error_bytes() {
             .unwrap();
     });
 
-    let plugin = ActivityResults::from_runtime(&rt);
+    let plugin = ActivityResults::from_runtime(&rt).expect("declared");
     let err = pollster::block_on(plugin.launch(sample_request())).expect_err("should fail");
     let bytes = match err {
         istmo_core::IstmoError::PluginError { bytes } => bytes,

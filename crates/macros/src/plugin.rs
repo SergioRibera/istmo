@@ -36,7 +36,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         .collect::<syn::Result<Vec<_>>>()?;
 
     let stateless_ctors = if args.init.is_none() {
-        Some(expand_stateless_ctors(&type_name, root))
+        Some(expand_stateless_ctors(&type_name, &plugin_id, root))
     } else {
         None
     };
@@ -102,22 +102,28 @@ fn reject_unsupported_trait_shape(t: &ItemTrait) -> syn::Result<()> {
     Ok(())
 }
 
-fn expand_stateless_ctors(type_name: &Ident, root: &Path) -> TokenStream {
+fn expand_stateless_ctors(type_name: &Ident, plugin_id: &LitStr, root: &Path) -> TokenStream {
     quote! {
         impl #type_name {
+            pub const PLUGIN_ID: &'static str = #plugin_id;
+
             pub fn acquire() -> ::core::result::Result<Self, #root::IstmoError> {
+                let rt = #root::Runtime::global()?;
+                rt.check_declared(Self::PLUGIN_ID)?;
                 ::core::result::Result::Ok(Self {
-                    __runtime: #root::Runtime::global()?,
+                    __runtime: rt,
                     __instance_id: ::core::option::Option::None,
                 })
             }
 
-            #[must_use]
-            pub fn from_runtime(rt: &::std::sync::Arc<#root::Runtime>) -> Self {
-                Self {
+            pub fn from_runtime(
+                rt: &::std::sync::Arc<#root::Runtime>,
+            ) -> ::core::result::Result<Self, #root::IstmoError> {
+                rt.check_declared(Self::PLUGIN_ID)?;
+                ::core::result::Result::Ok(Self {
                     __runtime: ::std::sync::Arc::clone(rt),
                     __instance_id: ::core::option::Option::None,
-                }
+                })
             }
         }
     }
@@ -131,6 +137,8 @@ fn expand_stateful_ctors(
 ) -> TokenStream {
     quote! {
         impl #type_name {
+            pub const PLUGIN_ID: &'static str = #plugin_id;
+
             pub async fn acquire_with(
                 config: #init_ty,
             ) -> ::core::result::Result<Self, #root::IstmoError> {
@@ -142,6 +150,7 @@ fn expand_stateful_ctors(
                 rt: &::std::sync::Arc<#root::Runtime>,
                 config: #init_ty,
             ) -> ::core::result::Result<Self, #root::IstmoError> {
+                rt.check_declared(Self::PLUGIN_ID)?;
                 let payload = #root::codec::encode(&config)?;
                 let handle = rt.create_instance(#plugin_id, payload)?;
                 let bytes = match handle.await? {

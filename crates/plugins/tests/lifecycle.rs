@@ -17,7 +17,7 @@ fn late_subscriber_receives_retained_state_first() {
     publish(&rt, LifecycleState::Started);
     publish(&rt, LifecycleState::Resumed);
 
-    let plugin = AppLifecycle::from_runtime(&rt);
+    let plugin = AppLifecycle::from_runtime(&rt).expect("declared");
     assert_eq!(plugin.current().unwrap(), Some(LifecycleState::Resumed));
 
     let stream = plugin.stream();
@@ -32,7 +32,7 @@ fn subscriber_receives_configuration_and_low_memory_events() {
     let init = Runtime::mock();
     let rt = init.runtime;
 
-    let plugin = AppLifecycle::from_runtime(&rt);
+    let plugin = AppLifecycle::from_runtime(&rt).expect("declared");
     let stream = plugin.stream();
     publish(&rt, LifecycleState::LowMemory);
     assert_eq!(stream.recv().unwrap(), LifecycleState::LowMemory);
@@ -45,7 +45,7 @@ fn multiple_subscribers_observe_the_same_updates() {
     let init = Runtime::mock();
     let rt = init.runtime;
 
-    let plugin = AppLifecycle::from_runtime(&rt);
+    let plugin = AppLifecycle::from_runtime(&rt).expect("declared");
     let stream_a = plugin.stream();
     let stream_b = plugin.stream();
     publish(&rt, LifecycleState::Stopped);
@@ -57,6 +57,6 @@ fn multiple_subscribers_observe_the_same_updates() {
 fn current_is_none_before_any_publish() {
     let init = Runtime::mock();
     let rt = init.runtime;
-    let plugin = AppLifecycle::from_runtime(&rt);
+    let plugin = AppLifecycle::from_runtime(&rt).expect("declared");
     assert!(plugin.current().unwrap().is_none());
 }

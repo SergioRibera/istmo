@@ -18,7 +18,7 @@ fn main() {
     publish(&rt, LifecycleState::Started);
     publish(&rt, LifecycleState::Resumed);
 
-    let plugin = AppLifecycle::from_runtime(&rt);
+    let plugin = AppLifecycle::from_runtime(&rt).expect("declared");
     println!(
         "current on attach: {:?}",
         plugin.current().expect("current state"),

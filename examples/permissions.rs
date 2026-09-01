@@ -18,7 +18,7 @@ fn main() {
         }
     });
 
-    let plugin = Permissions::from_runtime(&init.runtime);
+    let plugin = Permissions::from_runtime(&init.runtime).expect("declared");
 
     let camera = pollster::block_on(plugin.check("android.permission.CAMERA".to_owned()))
         .expect("check camera");
