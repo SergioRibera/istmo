@@ -285,6 +285,27 @@ impl Runtime {
         }
     }
 
+    /// Publishes `payload` to the latest-value slot named `channel`, creating
+    /// the slot on first use.
+    ///
+    /// Intended for the platform backend to forward events whose consumer may
+    /// not have subscribed yet (application lifecycle transitions being the
+    /// canonical case). A late [`crate::early_events::LatestValueSlot::subscribe`]
+    /// caller immediately observes the last value published here.
+    pub fn publish_early_latest(&self, channel: &str, payload: Vec<u8>) {
+        self.early_events.latest_slot(channel).publish(payload);
+    }
+
+    /// Publishes `payload` to the pre-main queue named `channel`, creating the
+    /// queue with the given `capacity` on first use. When the queue already
+    /// exists, its previously-configured capacity is preserved.
+    ///
+    /// Intended for launch-intent-style events (deep links, launch push
+    /// notifications) that may be produced before the plugin subscribes.
+    pub fn publish_early_queue(&self, channel: &str, capacity: usize, payload: Vec<u8>) {
+        self.early_events.queue(channel, capacity).publish(payload);
+    }
+
     /// Cancels every in-flight call / stream. Intended for platform
     /// teardown (Activity destroyed, application terminating).
     pub fn shutdown(&self) {
