@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/core"]
-# crates/macros, crates/build, crates/plugins land in later milestones.
+members = ["crates/core", "crates/build", "crates/macros"]
+# crates/plugins lands in later milestones.
 
 [workspace.package]
 edition = "2024"
@@ -29,8 +29,20 @@ flume = { version = "0.11", default-features = false, features = ["async"] }
 oneshot = { version = "0.1", default-features = false, features = ["std", "async"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 pollster = "0.4"
+proc-macro2 = { version = "1", default-features = false }
+quote = { version = "1", default-features = false }
+syn = { version = "2", default-features = false, features = [
+    "parsing",
+    "printing",
+    "proc-macro",
+    "full",
+    "extra-traits",
+    "clone-impls",
+] }
 
 istmo-core = { path = "crates/core", version = "0.0.0" }
+istmo-build = { path = "crates/build", version = "0.0.0" }
+istmo-macros = { path = "crates/macros", version = "0.0.0" }
 
 [package]
 name = "istmo"
@@ -44,6 +56,11 @@ repository.workspace = true
 
 [dependencies]
 istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+bincode = { workspace = true }
+
+[dev-dependencies]
+pollster = { workspace = true }
 
 [lints]
 workspace = true

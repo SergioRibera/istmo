@@ -31,6 +31,10 @@ pub enum IstmoError {
     /// Attempted to route a frame to the wrong kind of receiver
     /// (e.g. a `Respond` frame landing on a stream id).
     RoutingMismatch(&'static str),
+    /// A plugin method returned a domain error whose payload is opaque to
+    /// the transport layer. Generated plugin glue decodes `bytes` into the
+    /// concrete error type declared by the trait.
+    PluginError { bytes: Vec<u8> },
 }
 
 impl fmt::Display for IstmoError {
@@ -49,6 +53,9 @@ impl fmt::Display for IstmoError {
                 "protocol version mismatch: expected {expected}, got {got}",
             ),
             Self::RoutingMismatch(kind) => write!(f, "routing mismatch: {kind}"),
+            Self::PluginError { bytes } => {
+                write!(f, "plugin domain error ({} bytes)", bytes.len())
+            }
         }
     }
 }

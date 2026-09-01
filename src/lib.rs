@@ -1,11 +1,17 @@
 //! Facade crate for the istmo framework.
 //!
-//! This crate re-exports the pieces application and plugin authors interact
-//! with, so consumers can depend on a single `istmo` crate without pinning
-//! the versions of every internal crate.
-//!
-//! At **M0** only the transport, protocol and per-process runtime from
-//! [`istmo_core`] are exposed. The `#[plugin]` macro, build.rs codegen and
-//! platform-specific backends land in later milestones.
+//! Application and plugin authors depend on this crate; it re-exports the
+//! runtime API from [`istmo_core`], the proc-macros from `istmo_macros` and
+//! a curated slice of [`bincode`] under the `bincode` sub-path so that
+//! generated glue can name `::istmo::bincode::Encode` without forcing users
+//! to add `bincode` to their own `Cargo.toml`.
 
 pub use istmo_core::*;
+pub use istmo_macros::{message, plugin, stream};
+
+/// Re-exported [`bincode`] surface used by generated code. Not part of the
+/// stable public API — pinned exclusively for macro output.
+pub mod bincode {
+    pub use ::bincode::error;
+    pub use ::bincode::{Decode, Encode, config, decode_from_slice, encode_to_vec};
+}

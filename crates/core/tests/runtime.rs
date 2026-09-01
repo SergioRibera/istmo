@@ -5,7 +5,7 @@ use std::sync::Arc;
 use flume::Receiver as FlumeReceiver;
 use istmo_core::{
     CallId, Envelope, Frame, InstanceId, IstmoError, PROTOCOL_VERSION, Runtime, StreamEndReason,
-    StreamId, StreamMessage,
+    StreamMessage,
 };
 
 fn mock() -> (Arc<Runtime>, FlumeReceiver<Envelope>) {
