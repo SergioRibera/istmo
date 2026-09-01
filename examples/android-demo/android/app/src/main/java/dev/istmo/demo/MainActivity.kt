@@ -15,10 +15,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class MainActivity : AppCompatActivity(), PermissionsHost {
+class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val permissionsImpl = PermissionsImpl()
+    private val activityResultsImpl = ActivityResultsImpl()
     private var pendingPermissionResult: ((Map<String, Boolean>) -> Unit)? = null
     private var initialized = false
 
@@ -42,10 +43,12 @@ class MainActivity : AppCompatActivity(), PermissionsHost {
         if (!initialized) {
             IstmoRuntime.registerHandler("dev.istmo.demo.echo", EchoImpl())
             IstmoRuntime.registerHandler("istmo.permissions", permissionsImpl)
+            IstmoRuntime.registerHandler("istmo.activity_results", activityResultsImpl)
             IstmoRuntime.start()
             initialized = true
         }
         permissionsImpl.attach(this)
+        activityResultsImpl.attach(this)
 
         DemoBridge.pushLifecycle(LifecycleState.Created.ordinal)
         handleIntent(intent)
@@ -53,6 +56,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost {
         wireLifecycleSection()
         wireDeepLinksSection()
         wirePermissionsSection()
+        wireActivityResultsSection()
     }
 
     override fun onStart() {
@@ -79,6 +83,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost {
     override fun onDestroy() {
         DemoBridge.pushLifecycle(LifecycleState.Destroyed.ordinal)
         permissionsImpl.detach()
+        activityResultsImpl.detach()
         scope.cancel()
         super.onDestroy()
     }
@@ -160,6 +165,21 @@ class MainActivity : AppCompatActivity(), PermissionsHost {
     private fun statusName(ordinal: Int): String =
         PermissionStatusValue.values().getOrNull(ordinal)?.name
             ?: "error(ordinal=$ordinal)"
+
+    private fun wireActivityResultsSection() {
+        val input = findViewById<EditText>(R.id.intentUri)
+        val launch = findViewById<Button>(R.id.launchIntent)
+        val output = findViewById<TextView>(R.id.intentOutput)
+        launch.setOnClickListener {
+            val uri = input.text.toString().ifBlank { null }
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    DemoBridge.callLaunchIntent(Intent.ACTION_VIEW, uri)
+                }
+                output.text = result
+            }
+        }
+    }
 
     private fun drainDeepLinks() {
         val view = findViewById<TextView>(R.id.deeplinkList) ?: return

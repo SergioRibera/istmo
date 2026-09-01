@@ -16,8 +16,9 @@ pub use istmo_android::{
 };
 
 use istmo::plugins::{
-    AppLifecycle, DeepLink, DeepLinkStream, DeepLinks, LIFECYCLE_CHANNEL, LifecycleState,
-    LifecycleStream, PermissionStatus, Permissions,
+    ActivityLaunchError, ActivityOutcome, ActivityResults, AppLifecycle, DeepLink, DeepLinkStream,
+    DeepLinks, IntentRequest, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream,
+    PermissionStatus, Permissions,
 };
 use istmo::{Runtime, codec};
 use jni::JNIEnv;
@@ -240,6 +241,67 @@ const fn permission_status_ordinal(status: PermissionStatus) -> jint {
         PermissionStatus::NotSupported => 4,
     }
 }
+
+// ---- Activity results --------------------------------------------------------
+
+/// Kotlin: `external fun callLaunchIntent(action: String, uri: String?): String`.
+///
+/// Constructs a minimal [`IntentRequest`] (action + optional URI, no extras)
+/// and awaits the [`ActivityResult`]. Returns a human-readable status line
+/// suitable for the demo UI: `"OK: <data_uri>"`, `"CANCELLED"`,
+/// `"CUSTOM: <code>"` or `"ERROR: <launch-error>"`. Transport failure
+/// returns `"TRANSPORT_ERROR"`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_demo_DemoBridge_callLaunchIntent<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    action: JString<'local>,
+    uri: JString<'local>,
+) -> jstring {
+    let Ok(action): Result<String, _> = env.get_string(&action).map(Into::into) else {
+        return std::ptr::null_mut();
+    };
+    let uri_opt = if uri.is_null() {
+        None
+    } else {
+        env.get_string(&uri).ok().map(Into::into)
+    };
+    let request = IntentRequest {
+        action,
+        uri: uri_opt,
+        component: None,
+        mime_type: None,
+        categories: vec![],
+        extras: vec![],
+    };
+    let Ok(rt) = Runtime::global() else {
+        return jstring_from(&env, "TRANSPORT_ERROR");
+    };
+    let plugin = ActivityResults::from_runtime(&rt);
+    let text = match pollster::block_on(plugin.launch(request)) {
+        Ok(result) => match result.outcome {
+            ActivityOutcome::Ok => format!("OK: {}", result.data_uri.as_deref().unwrap_or("")),
+            ActivityOutcome::Cancelled => "CANCELLED".to_owned(),
+            ActivityOutcome::Custom(code) => format!("CUSTOM: {code}"),
+        },
+        Err(istmo::IstmoError::PluginError { bytes }) => codec::decode::<ActivityLaunchError>(&bytes)
+            .map_or_else(
+                |_| "ERROR: undecodable".to_owned(),
+                |(err, _)| format!("ERROR: {err:?}"),
+            ),
+        Err(err) => {
+            tracing::error!(?err, "callLaunchIntent transport failure");
+            "TRANSPORT_ERROR".to_owned()
+        }
+    };
+    jstring_from(&env, &text)
+}
+
+fn jstring_from(env: &JNIEnv<'_>, text: &str) -> jstring {
+    env.new_string(text)
+        .map_or_else(|_| std::ptr::null_mut(), JString::into_raw)
+}
+
 
 /// Kotlin: `external fun pollDeepLink(): String?` — non-blocking. Returns the
 /// URI of the next queued/live link, or `null` if none is ready.

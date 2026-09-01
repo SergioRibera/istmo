@@ -24,4 +24,6 @@ object DemoBridge {
 
     external fun callCheckPermission(permission: String): Int
     external fun callRequestPermission(permission: String): Int
+
+    external fun callLaunchIntent(action: String, uri: String?): String
 }
