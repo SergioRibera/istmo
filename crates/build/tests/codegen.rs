@@ -135,3 +135,89 @@ fn mixed_with_init_swift_matches_golden() {
         &generate_swift(&mixed_with_init()),
     );
 }
+
+fn permissions() -> Contract {
+    Contract {
+        plugin_id: "istmo.permissions".to_owned(),
+        type_name: "Permissions".to_owned(),
+        methods: vec![
+            Method {
+                name: "check".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "permission".to_owned(),
+                    ty: TypeRef::String,
+                }],
+                returns: TypeRef::Named("PermissionStatus".to_owned()),
+                error: None,
+            },
+            Method {
+                name: "request".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "permissions".to_owned(),
+                    ty: TypeRef::Vec(Box::new(TypeRef::String)),
+                }],
+                returns: TypeRef::Vec(Box::new(TypeRef::Named("PermissionOutcome".to_owned()))),
+                error: None,
+            },
+            Method {
+                name: "should_show_rationale".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "permission".to_owned(),
+                    ty: TypeRef::String,
+                }],
+                returns: TypeRef::Bool,
+                error: None,
+            },
+        ],
+        init: None,
+    }
+}
+
+fn activity_results() -> Contract {
+    Contract {
+        plugin_id: "istmo.activity_results".to_owned(),
+        type_name: "ActivityResults".to_owned(),
+        methods: vec![Method {
+            name: "launch".to_owned(),
+            kind: MethodKind::Unary,
+            args: vec![Arg {
+                name: "request".to_owned(),
+                ty: TypeRef::Named("IntentRequest".to_owned()),
+            }],
+            returns: TypeRef::Named("ActivityResult".to_owned()),
+            error: Some(TypeRef::Named("ActivityLaunchError".to_owned())),
+        }],
+        init: None,
+    }
+}
+
+#[test]
+fn permissions_kotlin_matches_golden() {
+    assert_matches("permissions", "kt", &generate_kotlin(&permissions()));
+}
+
+#[test]
+fn permissions_swift_matches_golden() {
+    assert_matches("permissions", "swift", &generate_swift(&permissions()));
+}
+
+#[test]
+fn activity_results_kotlin_matches_golden() {
+    assert_matches(
+        "activity_results",
+        "kt",
+        &generate_kotlin(&activity_results()),
+    );
+}
+
+#[test]
+fn activity_results_swift_matches_golden() {
+    assert_matches(
+        "activity_results",
+        "swift",
+        &generate_swift(&activity_results()),
+    );
+}
