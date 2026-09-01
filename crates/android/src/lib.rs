@@ -20,6 +20,7 @@
 //! main thread yet. A `Handler`-backed [`istmo_core::MainThread`] will land
 //! alongside the first plugin that needs it (M3 lifecycle / permissions).
 
+pub mod entrypoint;
 pub mod error;
 
 mod jni_exports;
@@ -28,9 +29,10 @@ mod state;
 
 pub use error::AndroidRuntimeError;
 
-// Re-export the JNI trampolines so the downstream cdylib retains them even
-// under aggressive dead-code stripping. Users don't call these directly —
-// they exist so the `.so` exposes the symbols the JVM looks up.
+// Trampolines are declared with `#[unsafe(no_mangle)]` in [`jni_exports`]
+// which keeps them at the crate root. Downstream cdylibs consume them via
+// [`entrypoint`], which the `istmo::runtime!` macro re-exports verbatim so
+// user code never touches JNI-facing symbols directly.
 pub use jni_exports::{
     Java_dev_istmo_runtime_IstmoRuntime_nativeShutdown,
     Java_dev_istmo_runtime_IstmoRuntime_nativeStart,
