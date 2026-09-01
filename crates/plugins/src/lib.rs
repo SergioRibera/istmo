@@ -1,17 +1,33 @@
 //! Core plugins bundled with the istmo framework.
 //!
 //! Milestone M3 lands four capabilities that every mobile app needs and that
-//! every downstream plugin will lean on. This commit adds the [`deeplinks`]
-//! plugin alongside [`permissions`] and [`lifecycle`]; `activity_results`
-//! follows.
+//! every downstream plugin will lean on:
 //!
-//! The plugin id namespace used on the wire is `istmo.<name>`; native
-//! backends register handlers under those ids.
+//! * [`permissions`] — runtime permission checks and requests.
+//! * [`lifecycle`] — foreground / background / low-memory transitions,
+//!   surfaced through the runtime's [`LatestValueSlot`] so late subscribers
+//!   immediately observe the current state.
+//! * [`deeplinks`] — deep-link URIs, buffered through the runtime's
+//!   [`PreMainQueue`] so links delivered before the app is ready are not
+//!   dropped.
+//! * [`activity_results`] — launch an intent (`Intent`, `UIActivityViewController`)
+//!   and await its result.
+//!
+//! The plugin id namespace used on the wire is `istmo.<name>`; native backends
+//! register handlers under those ids.
+//!
+//! [`LatestValueSlot`]: istmo_core::early_events::LatestValueSlot
+//! [`PreMainQueue`]: istmo_core::early_events::PreMainQueue
 
+pub mod activity_results;
 pub mod deeplinks;
 pub mod lifecycle;
 pub mod permissions;
 
+pub use crate::activity_results::{
+    ACTIVITY_RESULTS_PLUGIN_ID, ActivityLaunchError, ActivityOutcome, ActivityResult,
+    ActivityResults, ExtraValue, IntentRequest,
+};
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
 pub use crate::lifecycle::{AppLifecycle, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream};
 pub use crate::permissions::{
