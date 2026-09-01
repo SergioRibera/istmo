@@ -16,19 +16,22 @@
 //! scenarios can bypass the global entirely via [`Runtime::mock`] plus
 //! explicit `Arc<Runtime>` passing.
 
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::task::{Context, Poll};
 
 use flume::{Receiver as FlumeReceiver, Sender as FlumeSender, bounded};
 
+use crate::dispatch::{Dispatch, Outcome};
 use crate::early_events::EarlyEventStore;
 use crate::error::IstmoError;
 use crate::main_thread::{InlineMainThread, MainThread};
 use crate::protocol::{CallId, Envelope, Frame, InstanceId, PROTOCOL_VERSION, StreamId};
 use crate::routing::{CallResult, InstanceEntry, RoutingTables, StreamMessage};
+use crate::sync::lock;
 
 /// Default bounded capacity of the outbound frame channel.
 pub const DEFAULT_OUTBOUND_CAPACITY: usize = 256;
@@ -71,6 +74,18 @@ pub struct Runtime {
     early_events: Arc<EarlyEventStore>,
     main_thread: Arc<dyn MainThread>,
     next_id: AtomicU64,
+    /// Declared plugin ids: those the process's client side is allowed to
+    /// `acquire()`. Populated by [`RuntimeInit::expects`] via the
+    /// `istmo::runtime!` macro.
+    declared_plugins: Mutex<HashSet<&'static str>>,
+    /// Server-side dispatchers keyed by plugin id — populated by
+    /// [`RuntimeInit::host`].
+    hosts: Mutex<HashMap<&'static str, Arc<dyn Dispatch>>>,
+    /// Set of hosted call ids that have been cancelled by an inbound Cancel
+    /// frame. The dispatcher thread checks this before submitting its
+    /// Respond frame so the response is dropped rather than raced with a
+    /// stale reply.
+    cancelled_hosted: Mutex<HashSet<CallId>>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -262,7 +277,7 @@ impl Runtime {
 
     /// Routes an inbound envelope. Called by the platform backend for each
     /// frame received from native.
-    pub fn dispatch_inbound(&self, envelope: Envelope) -> Result<(), IstmoError> {
+    pub fn dispatch_inbound(self: &Arc<Self>, envelope: Envelope) -> Result<(), IstmoError> {
         if envelope.version != PROTOCOL_VERSION {
             return Err(IstmoError::ProtocolVersionMismatch {
                 expected: PROTOCOL_VERSION,
@@ -275,13 +290,98 @@ impl Runtime {
             Frame::StreamEnd { stream_id, reason } => {
                 self.routing.deliver_stream_end(stream_id, reason)
             }
-            Frame::Call { .. }
-            | Frame::Cancel { .. }
-            | Frame::CreateInstance { .. }
-            | Frame::DestroyInstance { .. } => {
+            Frame::Call {
+                call_id,
+                plugin_id,
+                instance_id,
+                method,
+                payload,
+            } => {
+                self.dispatch_hosted_call(call_id, &plugin_id, instance_id, method, payload);
+                Ok(())
+            }
+            Frame::Cancel { call_id } => {
+                self.cancel_hosted(call_id);
+                Ok(())
+            }
+            Frame::CreateInstance { .. } | Frame::DestroyInstance { .. } => {
                 tracing::warn!("dropped inbound frame with outbound-only variant");
                 Ok(())
             }
+        }
+    }
+
+    /// Registers a hosted plugin dispatcher. Called by the `istmo::runtime!`
+    /// macro for every trait in the `hosts:` section.
+    pub fn register_host<D: Dispatch>(&self, dispatcher: D) {
+        let plugin_id = dispatcher.plugin_id();
+        lock(&self.hosts).insert(plugin_id, Arc::new(dispatcher));
+    }
+
+    /// Records that this process expects a plugin id on the client side.
+    /// `acquire`-style helpers fail with [`IstmoError::PluginNotDeclared`]
+    /// for ids not in this set.
+    pub fn declare_plugin(&self, plugin_id: &'static str) {
+        lock(&self.declared_plugins).insert(plugin_id);
+    }
+
+    /// Returns `true` when `plugin_id` was previously passed to
+    /// [`Self::declare_plugin`].
+    #[must_use]
+    pub fn is_plugin_declared(&self, plugin_id: &str) -> bool {
+        lock(&self.declared_plugins).contains(plugin_id)
+    }
+
+    fn cancel_hosted(&self, call_id: CallId) {
+        lock(&self.cancelled_hosted).insert(call_id);
+    }
+
+    fn dispatch_hosted_call(
+        self: &Arc<Self>,
+        call_id: CallId,
+        plugin_id: &str,
+        instance_id: Option<InstanceId>,
+        method: String,
+        payload: Vec<u8>,
+    ) {
+        let dispatcher = lock(&self.hosts).get(plugin_id).cloned();
+        let Some(dispatcher) = dispatcher else {
+            tracing::warn!(plugin_id = %plugin_id, "inbound Call for unregistered plugin");
+            self.send_respond(
+                call_id,
+                Err(encode_dispatch_error_string(&format!(
+                    "no host registered for `{plugin_id}`"
+                ))),
+            );
+            return;
+        };
+        let runtime = Arc::clone(self);
+        std::thread::spawn(move || {
+            let outcome = pollster::block_on(async {
+                dispatcher.dispatch(instance_id, &method, &payload).await
+            });
+            let mut cancelled = lock(&runtime.cancelled_hosted);
+            if cancelled.remove(&call_id) {
+                tracing::debug!(?call_id, "hosted call cancelled; discarding response");
+                return;
+            }
+            drop(cancelled);
+            let result: CallResult = match outcome {
+                Ok(Outcome::Ok(bytes)) => Ok(bytes),
+                Ok(Outcome::DomainError(bytes)) => Err(bytes),
+                Err(err) => {
+                    tracing::error!(?err, ?call_id, "hosted dispatch failed");
+                    Err(encode_dispatch_error_string(&err.to_string()))
+                }
+            };
+            runtime.send_respond(call_id, result);
+        });
+    }
+
+    fn send_respond(&self, call_id: CallId, result: CallResult) {
+        let envelope = Envelope::new(Frame::Respond { call_id, result });
+        if let Err(err) = self.outbound.send(envelope) {
+            tracing::warn!(?err, "failed to send Respond frame; outbound channel closed");
         }
     }
 
@@ -316,6 +416,13 @@ impl Runtime {
     }
 }
 
+/// Encodes a dispatch error as a bincode string so the client at least sees a
+/// human-readable domain error. This is a fallback for infrastructure failures
+/// (unknown method, decode failure); genuine domain errors use their own type.
+fn encode_dispatch_error_string(message: &str) -> Vec<u8> {
+    crate::codec::encode(&message.to_owned()).unwrap_or_default()
+}
+
 fn build(config: RuntimeConfig) -> RuntimeInit {
     let (outbound_tx, outbound_rx) = bounded(config.outbound_capacity);
     let runtime = Arc::new(Runtime {
@@ -324,6 +431,9 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         early_events: Arc::new(EarlyEventStore::new()),
         main_thread: config.main_thread,
         next_id: AtomicU64::new(1),
+        declared_plugins: Mutex::new(HashSet::new()),
+        hosts: Mutex::new(HashMap::new()),
+        cancelled_hosted: Mutex::new(HashSet::new()),
     });
     RuntimeInit {
         runtime,

@@ -40,7 +40,7 @@ fn main() {
     println!("2 + 3 = {sum}");
 }
 
-fn handle(rt: &Runtime, envelope: Envelope) {
+fn handle(rt: &std::sync::Arc<Runtime>, envelope: Envelope) {
     let Frame::Call {
         call_id,
         method,

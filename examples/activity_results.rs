@@ -58,7 +58,7 @@ fn main() {
     }
 }
 
-fn handle(rt: &Runtime, envelope: Envelope, launched: u32) {
+fn handle(rt: &std::sync::Arc<Runtime>, envelope: Envelope, launched: u32) {
     let Frame::Call {
         call_id,
         method,
