@@ -25,7 +25,7 @@ use std::task::{Context, Poll};
 
 use flume::{Receiver as FlumeReceiver, Sender as FlumeSender, bounded};
 
-use crate::dispatch::{Dispatch, Outcome};
+use crate::dispatch::{Dispatch, Outcome, Plugin};
 use crate::early_events::EarlyEventStore;
 use crate::error::IstmoError;
 use crate::main_thread::{InlineMainThread, MainThread};
@@ -60,10 +60,48 @@ impl RuntimeConfig {
 /// Bundle returned by [`Runtime::init`] or [`Runtime::mock`]: the runtime
 /// itself and the receiver end of the outbound channel that a platform
 /// backend must drain.
+///
+/// Supports a small builder API — [`Self::host`], [`Self::expects`] and
+/// [`Self::finish`] — so the `istmo::runtime!` macro and tests can write:
+/// `Runtime::mock().host(Hosted::new(MockX)).expects::<Perms>().finish()`.
 #[derive(Debug)]
 pub struct RuntimeInit {
     pub runtime: Arc<Runtime>,
     pub outbound: FlumeReceiver<Envelope>,
+}
+
+impl RuntimeInit {
+    /// Registers a hosted plugin dispatcher on the runtime and returns
+    /// `self` so the call chains.
+    #[must_use]
+    pub fn host<D>(self, dispatcher: D) -> Self
+    where
+        D: Dispatch,
+    {
+        self.runtime.register_host(dispatcher);
+        self
+    }
+
+    /// Declares that this process's client side will `acquire()` `T`.
+    /// Chains for use inside the `istmo::runtime!` `plugins:` list.
+    #[must_use]
+    pub fn expects<T>(self) -> Self
+    where
+        T: Plugin,
+    {
+        self.runtime.declare_plugin(T::PLUGIN_ID);
+        self
+    }
+
+    /// Turns on strict declaration enforcement. Call once after every
+    /// [`Self::expects`] entry has been registered — subsequent
+    /// `acquire()` calls for undeclared plugins fail fast with
+    /// [`IstmoError::PluginNotDeclared`].
+    #[must_use]
+    pub fn finish(self) -> Self {
+        self.runtime.set_enforce_declarations(true);
+        self
+    }
 }
 
 /// Process-scoped runtime. Never construct directly — use [`Runtime::init`]

@@ -71,8 +71,16 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         }
     };
 
+    let plugin_impl = quote! {
+        impl #root::Plugin for #type_name {
+            const PLUGIN_ID: &'static str = #plugin_id;
+        }
+    };
+
     Ok(quote! {
         #struct_def
+
+        #plugin_impl
 
         #stateless_ctors
 

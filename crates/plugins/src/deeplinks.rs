@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use flume::Receiver;
 use istmo_core::early_events::PreMainQueue;
-use istmo_core::{IstmoError, Runtime, codec};
+use istmo_core::{IstmoError, Plugin, Runtime, codec};
 use istmo_macros::message;
 
 /// Early-event channel key the runtime publishes deep links to.
@@ -45,10 +45,11 @@ pub struct DeepLinks {
     queue: Arc<PreMainQueue>,
 }
 
-impl DeepLinks {
-    /// The wire plugin id this client attaches to.
-    pub const PLUGIN_ID: &'static str = "istmo.deeplinks";
+impl Plugin for DeepLinks {
+    const PLUGIN_ID: &'static str = "istmo.deeplinks";
+}
 
+impl DeepLinks {
     /// Attaches to the process-global runtime with the default queue capacity.
     pub fn acquire() -> Result<Self, IstmoError> {
         let rt = Runtime::global()?;

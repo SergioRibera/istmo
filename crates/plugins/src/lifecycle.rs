@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use flume::Receiver;
 use istmo_core::early_events::LatestValueSlot;
-use istmo_core::{IstmoError, Runtime, codec};
+use istmo_core::{IstmoError, Plugin, Runtime, codec};
 use istmo_macros::message;
 
 /// Early-event channel key the runtime publishes lifecycle transitions to.
@@ -61,10 +61,11 @@ pub struct AppLifecycle {
     slot: Arc<LatestValueSlot>,
 }
 
-impl AppLifecycle {
-    /// The wire plugin id this client attaches to.
-    pub const PLUGIN_ID: &'static str = "istmo.lifecycle";
+impl Plugin for AppLifecycle {
+    const PLUGIN_ID: &'static str = "istmo.lifecycle";
+}
 
+impl AppLifecycle {
     /// Attaches to the process-global runtime.
     pub fn acquire() -> Result<Self, IstmoError> {
         let rt = Runtime::global()?;
