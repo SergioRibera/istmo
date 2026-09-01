@@ -8,6 +8,7 @@
 mod sync;
 
 pub mod codec;
+pub mod dispatch;
 pub mod early_events;
 pub mod error;
 pub mod main_thread;
@@ -17,6 +18,7 @@ pub mod routing;
 pub mod runtime;
 pub mod typed_stream;
 
+pub use crate::dispatch::{Dispatch, DispatchError, DispatchFuture, Outcome};
 pub use crate::error::{CodecError, IstmoError};
 pub use crate::main_thread::{InlineMainThread, MainThread, MockMainThread, Task};
 pub use crate::message::Message;
