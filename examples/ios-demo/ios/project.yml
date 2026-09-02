@@ -1,0 +1,68 @@
+# xcodegen spec for the istmo iOS demo app.
+#
+# Generate the .xcodeproj with:
+#
+#   cd examples/ios-demo/ios && xcodegen generate
+#
+# The .xcodeproj is not checked into the repo (see .gitignore). The
+# generated project is deterministic — regenerating produces the same
+# output, so day-to-day work is `xcodegen generate` once and then
+# `xcodebuild` / Xcode against the result.
+#
+# The `PreBuildScripts` phase invokes `build-rust.sh` before every Xcode
+# build, so cargo always runs before the linker looks for the staticlib.
+
+name: IstmoDemo
+
+options:
+  bundleIdPrefix: dev.istmo.demo
+  deploymentTarget:
+    iOS: 14.0
+  createIntermediateGroups: true
+  # Cargo build products land here; the linker consumes them from this
+  # path. The pre-build script writes libistmo_ios_demo.a into this dir.
+  defaultConfig: Debug
+
+packages:
+  IstmoRuntime:
+    path: IstmoRuntime
+
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+    IPHONEOS_DEPLOYMENT_TARGET: 14.0
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # Search path where the pre-build script drops the staticlib per
+    # PLATFORM_NAME + ARCHS combination.
+    LIBRARY_SEARCH_PATHS:
+      - $(inherited)
+      - $(PROJECT_DIR)/build/rust/$(PLATFORM_NAME)/$(CURRENT_ARCH)
+    OTHER_LDFLAGS:
+      - $(inherited)
+      - -listmo_ios_demo
+
+targets:
+  IstmoDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: IstmoDemo
+    info:
+      path: IstmoDemo/Info.plist
+    dependencies:
+      - package: IstmoRuntime
+        product: IstmoRuntime
+    preBuildScripts:
+      - name: cargo build istmo-ios-demo (staticlib per arch)
+        path: build-rust.sh
+        # Force re-run every build; cargo does its own incremental work.
+        runOnlyWhenInstalling: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.istmo.demo.IstmoDemo
+        TARGETED_DEVICE_FAMILY: "1"
+        # Xcode 15+ tightens sandboxing on Run Script phases. cargo
+        # touches paths outside DerivedData so we opt out — matches
+        # the android-demo `--no-daemon` posture (don't hide errors
+        # behind sandbox violations).
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
