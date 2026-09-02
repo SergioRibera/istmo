@@ -238,6 +238,17 @@ fn deliver(
                 ],
             )
         }
+        Frame::EarlyEvent { channel, .. } => {
+            // EarlyEvent is an inbound-only variant: native publishes into
+            // the Rust `EarlyEventStore`. Rust does not ship early events
+            // back out to native (Kotlin observes lifecycle/deep-link
+            // state through its own channels, not through the frame pump).
+            tracing::warn!(
+                channel = %channel,
+                "dropped outbound EarlyEvent frame; variant is inbound-only",
+            );
+            Ok(())
+        }
     }
 }
 
