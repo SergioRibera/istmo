@@ -153,5 +153,14 @@ fn deliver(callbacks: &IstmoIosCallbacks, frame: Frame) {
                 );
             }
         }
+        Frame::EarlyEvent { channel, .. } => {
+            // EarlyEvent is an inbound-only variant: Swift publishes into
+            // the Rust `EarlyEventStore` via `istmo_ios_submit_early_*`.
+            // Rust does not ship early events back out to Swift.
+            tracing::warn!(
+                channel = %channel,
+                "dropped outbound EarlyEvent frame; variant is inbound-only",
+            );
+        }
     }
 }

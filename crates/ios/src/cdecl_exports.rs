@@ -10,8 +10,8 @@ use std::slice;
 use std::sync::Arc;
 
 use istmo_core::{
-    CallId, Envelope, Frame, InstanceId, Runtime, RuntimeConfig, RuntimeInit, StreamEndReason,
-    StreamId,
+    CallId, EarlyEventKind, Envelope, Frame, InstanceId, Runtime, RuntimeConfig, RuntimeInit,
+    StreamEndReason, StreamId,
 };
 
 use crate::error::IosRuntimeError;
@@ -302,7 +302,11 @@ unsafe fn submit_early_latest(
 ) -> Result<(), IosRuntimeError> {
     let channel = unsafe { copy_utf8(channel_utf8, channel_len) }?;
     let bytes = unsafe { copy_bytes(payload, payload_len) };
-    Runtime::global()?.publish_early_latest(&channel, bytes);
+    Runtime::global()?.dispatch_inbound(Envelope::new(Frame::EarlyEvent {
+        channel,
+        kind: EarlyEventKind::Latest,
+        payload: bytes,
+    }))?;
     Ok(())
 }
 
@@ -334,7 +338,11 @@ unsafe fn submit_early_queue(
 ) -> Result<(), IosRuntimeError> {
     let channel = unsafe { copy_utf8(channel_utf8, channel_len) }?;
     let bytes = unsafe { copy_bytes(payload, payload_len) };
-    Runtime::global()?.publish_early_queue(&channel, capacity as usize, bytes);
+    Runtime::global()?.dispatch_inbound(Envelope::new(Frame::EarlyEvent {
+        channel,
+        kind: EarlyEventKind::Queue { capacity },
+        payload: bytes,
+    }))?;
     Ok(())
 }
 
