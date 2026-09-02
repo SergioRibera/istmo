@@ -21,7 +21,7 @@ use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
     Expr, ExprLit, FnArg, ItemTrait, Lit, LitStr, MetaNameValue, Path, ReturnType, Token,
-    TraitItem, TraitItemFn, parse2, parse_quote, parse_str,
+    TraitItem, TraitItemFn, parse_quote, parse_str, parse2,
 };
 
 #[allow(unreachable_pub, clippy::too_many_lines)]
@@ -203,9 +203,7 @@ fn classify_run_method(t: &ItemTrait) -> syn::Result<bool> {
             "`run` must be `async fn`",
         ));
     }
-    if run.sig.inputs.len() != 2
-        || !matches!(run.sig.inputs.first(), Some(FnArg::Receiver(_)))
-    {
+    if run.sig.inputs.len() != 2 || !matches!(run.sig.inputs.first(), Some(FnArg::Receiver(_))) {
         return Err(syn::Error::new_spanned(
             &run.sig,
             "`run` must take `&self` and a single `ctx: WorkerContext` argument",
@@ -222,10 +220,7 @@ fn is_result_type(ty: &syn::Type) -> bool {
     let syn::Type::Path(tp) = ty else {
         return false;
     };
-    tp.path
-        .segments
-        .last()
-        .is_some_and(|s| s.ident == "Result")
+    tp.path.segments.last().is_some_and(|s| s.ident == "Result")
 }
 
 fn add_send_bound_to_async_methods(trait_def: &mut ItemTrait) {
@@ -276,10 +271,7 @@ impl syn::parse::Parse for WorkerArgs {
                 "plugins" => {
                     let path_str = expect_lit_str(&pair.value)?;
                     plugins_path = Some(parse_str::<Path>(&path_str.value()).map_err(|e| {
-                        syn::Error::new_spanned(
-                            &pair.value,
-                            format!("invalid `plugins` path: {e}"),
-                        )
+                        syn::Error::new_spanned(&pair.value, format!("invalid `plugins` path: {e}"))
                     })?);
                 }
                 other => {

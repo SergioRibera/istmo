@@ -46,8 +46,16 @@ pub fn generate_swift_client(contract: &Contract) -> String {
         contract.type_name,
     );
     let _ = writeln!(out, "/// protocol via `IstmoRuntime.shared.call(...)`.");
-    let _ = writeln!(out, "public final class {}Client: {} {{", contract.type_name, contract.type_name);
-    let _ = writeln!(out, "    public static let PLUGIN_ID: String = \"{}\"", contract.plugin_id);
+    let _ = writeln!(
+        out,
+        "public final class {}Client: {} {{",
+        contract.type_name, contract.type_name
+    );
+    let _ = writeln!(
+        out,
+        "    public static let PLUGIN_ID: String = \"{}\"",
+        contract.plugin_id
+    );
     let _ = writeln!(out);
     let _ = writeln!(out, "    public init() {{}}");
     for method in &contract.methods {
@@ -61,7 +69,11 @@ pub fn generate_swift_client(contract: &Contract) -> String {
             out,
             "/// Swift-side view of a domain error decoded from `Frame::Respond {{ Err(bytes) }}`."
         );
-        let _ = writeln!(out, "public struct {}Exception: Error {{", contract.type_name);
+        let _ = writeln!(
+            out,
+            "public struct {}Exception: Error {{",
+            contract.type_name
+        );
         let _ = writeln!(out, "    public let payload: Data");
         let _ = writeln!(out, "    public let decoded: {error}?");
         let _ = writeln!(out, "}}");

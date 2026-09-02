@@ -82,8 +82,7 @@ fn runtime_macro_registers_host_dispatcher() {
             } = env.frame
             {
                 if cid == call_id {
-                    let (reply, _) =
-                        istmo::codec::decode::<String>(&bytes).expect("decode reply");
+                    let (reply, _) = istmo::codec::decode::<String>(&bytes).expect("decode reply");
                     assert_eq!(reply, "echo:bonjour");
                     return;
                 }

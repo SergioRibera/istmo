@@ -38,7 +38,11 @@ impl ServiceControl for MockControl {
         service_id: String,
         spec: NotificationSpec,
     ) -> Result<(), ServiceControlError> {
-        self.inner.lock().unwrap().foreground.push((service_id, spec));
+        self.inner
+            .lock()
+            .unwrap()
+            .foreground
+            .push((service_id, spec));
         Ok(())
     }
 
@@ -83,7 +87,11 @@ impl ServiceControl for MockControl {
         service_id: String,
         token: WakelockToken,
     ) -> Result<(), ServiceControlError> {
-        self.inner.lock().unwrap().released.push((service_id, token));
+        self.inner
+            .lock()
+            .unwrap()
+            .released
+            .push((service_id, token));
         Ok(())
     }
 
@@ -155,8 +163,14 @@ fn wakelock_acquire_returns_token_and_release_forwards_it() {
     });
 
     let snap = mock.snapshot();
-    assert_eq!(snap.wakelocks, vec![("myapp.sync".to_owned(), "network".to_owned())]);
-    assert_eq!(snap.released, vec![("myapp.sync".to_owned(), WakelockToken(1))]);
+    assert_eq!(
+        snap.wakelocks,
+        vec![("myapp.sync".to_owned(), "network".to_owned())]
+    );
+    assert_eq!(
+        snap.released,
+        vec![("myapp.sync".to_owned(), WakelockToken(1))]
+    );
 }
 
 #[test]

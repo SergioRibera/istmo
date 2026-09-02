@@ -14,7 +14,7 @@ use syn::punctuated::Punctuated;
 use syn::{
     Attribute, Expr, ExprLit, ExprPath, FnArg, GenericArgument, Ident, ItemTrait, Lit, LitStr,
     MetaNameValue, Path, PathArguments, ReturnType, Token, TraitItem, TraitItemFn, Type, TypePath,
-    parse2, parse_quote, parse_str,
+    parse_quote, parse_str, parse2,
 };
 
 #[allow(unreachable_pub, clippy::too_many_lines)]
@@ -639,11 +639,7 @@ fn expand_unary_method(
     })
 }
 
-fn expand_stream_method(
-    ctx: &MethodCtx<'_>,
-    item_ty: &Type,
-    err_ty: Option<&Type>,
-) -> TokenStream {
+fn expand_stream_method(ctx: &MethodCtx<'_>, item_ty: &Type, err_ty: Option<&Type>) -> TokenStream {
     let MethodCtx {
         plugin_id,
         root,

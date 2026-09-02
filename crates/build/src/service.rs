@@ -115,7 +115,11 @@ fn render_kotlin(contract: &ServiceContract) -> String {
     let _ = writeln!(out, "class {} : LifecycleService() {{", contract.class_name);
     let _ = writeln!(out);
     let _ = writeln!(out, "    companion object {{");
-    let _ = writeln!(out, "        const val PLUGIN_ID: String = \"{}\"", contract.plugin_id);
+    let _ = writeln!(
+        out,
+        "        const val PLUGIN_ID: String = \"{}\"",
+        contract.plugin_id
+    );
     let _ = writeln!(
         out,
         "        private const val LIBRARY_NAME: String = \"{}\"",
@@ -137,14 +141,8 @@ fn render_kotlin(contract: &ServiceContract) -> String {
         out,
         "    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {{",
     );
-    let _ = writeln!(
-        out,
-        "        super.onStartCommand(intent, flags, startId)"
-    );
-    let _ = writeln!(
-        out,
-        "        val payload = Bincode.writeString(PLUGIN_ID)"
-    );
+    let _ = writeln!(out, "        super.onStartCommand(intent, flags, startId)");
+    let _ = writeln!(out, "        val payload = Bincode.writeString(PLUGIN_ID)");
     let _ = writeln!(out, "        lifecycleScope.launch {{");
     let _ = writeln!(
         out,
@@ -155,10 +153,7 @@ fn render_kotlin(contract: &ServiceContract) -> String {
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
     let _ = writeln!(out, "    override fun onDestroy() {{");
-    let _ = writeln!(
-        out,
-        "        val payload = ByteArray(0)"
-    );
+    let _ = writeln!(out, "        val payload = ByteArray(0)");
     let _ = writeln!(out, "        lifecycleScope.launch {{");
     let _ = writeln!(
         out,

@@ -32,7 +32,8 @@ impl IosEntitlements {
 
     /// Adds or overwrites a boolean entitlement.
     pub fn add_bool(&mut self, key: impl Into<String>, value: bool) -> &mut Self {
-        self.entries.insert(key.into(), EntitlementValue::Bool(value));
+        self.entries
+            .insert(key.into(), EntitlementValue::Bool(value));
         self
     }
 
@@ -40,11 +41,7 @@ impl IosEntitlements {
     /// `com.apple.developer.pushkit.unrestricted-voip` as a boolean but Xcode
     /// serialises it as the string `"true"` — use [`Self::add_bool`] when in
     /// doubt.
-    pub fn add_string(
-        &mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-    ) -> &mut Self {
+    pub fn add_string(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         self.entries
             .insert(key.into(), EntitlementValue::String(value.into()));
         self

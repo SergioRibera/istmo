@@ -60,30 +60,41 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
 
     // `hosts:` entries are `Trait => Expr` where `Trait` is the plugin trait
     // name; the macro rewrites to `<Trait>Host::new(Expr)`.
-    let host_calls = hosts.iter().map(|HostEntry { trait_ident, impl_expr }| {
-        let host_ident = quote::format_ident!("{}Host", trait_ident);
-        quote! { .host(#host_ident::new(#impl_expr)) }
-    });
+    let host_calls = hosts.iter().map(
+        |HostEntry {
+             trait_ident,
+             impl_expr,
+         }| {
+            let host_ident = quote::format_ident!("{}Host", trait_ident);
+            quote! { .host(#host_ident::new(#impl_expr)) }
+        },
+    );
 
     // `services:` entries are `Trait => Expr` where `Trait` was annotated
     // with `#[istmo::service]`; the macro rewrites to
     // `<Trait>ServiceAdapter::new(Expr)`.
-    let service_calls = services
-        .iter()
-        .map(|HostEntry { trait_ident, impl_expr }| {
+    let service_calls = services.iter().map(
+        |HostEntry {
+             trait_ident,
+             impl_expr,
+         }| {
             let adapter_ident = quote::format_ident!("{}Adapter", trait_ident);
             quote! { .host(#adapter_ident::new(#impl_expr)) }
-        });
+        },
+    );
 
     // `workers:` entries are `Trait => Expr` where `Trait` was annotated
     // with `#[istmo::worker]`; the macro rewrites to
     // `<Trait>WorkerAdapter::new(Expr)`.
-    let worker_calls = workers
-        .iter()
-        .map(|HostEntry { trait_ident, impl_expr }| {
+    let worker_calls = workers.iter().map(
+        |HostEntry {
+             trait_ident,
+             impl_expr,
+         }| {
             let adapter_ident = quote::format_ident!("{}WorkerAdapter", trait_ident);
             quote! { .host(#adapter_ident::new(#impl_expr)) }
-        });
+        },
+    );
 
     Ok(quote! {
         #[cfg(target_os = "android")]

@@ -3,7 +3,9 @@
 use std::thread;
 
 use istmo_core::{Envelope, Frame, Runtime, codec};
-use istmo_plugins::{PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, PermissionsClient};
+use istmo_plugins::{
+    PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, PermissionsClient,
+};
 
 #[test]
 fn check_round_trips_status() {

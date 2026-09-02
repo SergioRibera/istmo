@@ -109,7 +109,10 @@ fn service_adapter_starts_and_stops_worker_thread() {
 fn adapter_reports_stable_plugin_id() {
     let sync = SyncImpl::default();
     let adapter = SyncServiceAdapter::new(sync);
-    assert_eq!(<SyncServiceAdapter<SyncImpl> as istmo::Plugin>::PLUGIN_ID, "myapp.sync");
+    assert_eq!(
+        <SyncServiceAdapter<SyncImpl> as istmo::Plugin>::PLUGIN_ID,
+        "myapp.sync"
+    );
     assert_eq!(adapter.plugin_id(), "myapp.sync");
     let _ = Outcome::Ok(Vec::new()); // silence unused re-export warning
 }

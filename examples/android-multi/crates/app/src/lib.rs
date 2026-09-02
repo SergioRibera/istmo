@@ -68,7 +68,9 @@ impl SyncService for SyncImpl {
             ongoing: true,
             foreground_service_type: Some(FOREGROUND_TYPE_DATA_SYNC),
         };
-        ctx.set_foreground(spec).await.map_err(|e| to_multi_error(&e))?;
+        ctx.set_foreground(spec)
+            .await
+            .map_err(|e| to_multi_error(&e))?;
 
         let mut ticks: u32 = 0;
         while !ctx.is_stopped() {

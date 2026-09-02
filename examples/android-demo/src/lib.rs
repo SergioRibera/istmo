@@ -110,13 +110,14 @@ impl Echo for EchoImpl {
             extras: vec![],
         };
         let result = plugin.launch(request).await.map_err(|err| match err {
-            IstmoError::PluginError { bytes } => istmo::codec::decode::<ActivityLaunchError>(&bytes)
-                .map_or_else(
+            IstmoError::PluginError { bytes } => {
+                istmo::codec::decode::<ActivityLaunchError>(&bytes).map_or_else(
                     |_| EchoError {
                         reason: "undecodable launch error".to_owned(),
                     },
                     |(decoded, _)| launch_error_to_echo(&decoded),
-                ),
+                )
+            }
             ref other => as_echo_error(other),
         })?;
         let data = result.data_uri.as_deref().unwrap_or("");

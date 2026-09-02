@@ -59,12 +59,19 @@ fn worker_adapter_runs_and_encodes_outcome() {
 
     // Adapter dispatches via `std::thread::spawn` — wait for outbound respond.
     let envelope = outbound.recv().expect("respond");
-    let Frame::Respond { call_id: rid, result } = envelope.frame else {
+    let Frame::Respond {
+        call_id: rid,
+        result,
+    } = envelope.frame
+    else {
         panic!("expected respond, got {:?}", envelope.frame);
     };
     assert_eq!(rid, call_id);
     let bytes = result.expect("ok");
     let (outcome, _) = codec::decode::<TaskOutcome>(&bytes).unwrap();
     assert_eq!(outcome, TaskOutcome::Retry);
-    assert_eq!(backup.inputs.lock().unwrap().as_slice(), [b"hello".to_vec()]);
+    assert_eq!(
+        backup.inputs.lock().unwrap().as_slice(),
+        [b"hello".to_vec()]
+    );
 }

@@ -231,12 +231,9 @@ impl ServiceContext {
     /// [`WakeLock::release`] explicitly.
     pub async fn acquire_wakelock(&self, tag: &str) -> Result<WakeLock, IstmoError> {
         let payload = codec::encode(&(self.service_id.clone(), tag.to_owned()))?;
-        let handle = self.runtime.call(
-            SERVICE_CONTROL_PLUGIN_ID,
-            None,
-            "acquire_wakelock",
-            payload,
-        )?;
+        let handle =
+            self.runtime
+                .call(SERVICE_CONTROL_PLUGIN_ID, None, "acquire_wakelock", payload)?;
         let bytes = decode_ok(handle.await?)?;
         let (token, _) = codec::decode::<WakelockToken>(&bytes)?;
         Ok(WakeLock {
@@ -343,7 +340,11 @@ impl Drop for WakeLock {
     }
 }
 
-async fn call_unit<T>(runtime: &Arc<Runtime>, method: &'static str, args: &T) -> Result<(), IstmoError>
+async fn call_unit<T>(
+    runtime: &Arc<Runtime>,
+    method: &'static str,
+    args: &T,
+) -> Result<(), IstmoError>
 where
     T: bincode::Encode + Sync,
 {

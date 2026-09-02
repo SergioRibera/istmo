@@ -73,7 +73,11 @@ pub fn generate_android_worker(contract: &WorkerContract) -> String {
     let _ = writeln!(out, "    : CoroutineWorker(context, params) {{");
     let _ = writeln!(out);
     let _ = writeln!(out, "    companion object {{");
-    let _ = writeln!(out, "        const val TASK_ID: String = \"{}\"", contract.task_id);
+    let _ = writeln!(
+        out,
+        "        const val TASK_ID: String = \"{}\"",
+        contract.task_id
+    );
     let _ = writeln!(
         out,
         "        private const val LIBRARY_NAME: String = \"{}\"",
@@ -88,16 +92,34 @@ pub fn generate_android_worker(contract: &WorkerContract) -> String {
     let _ = writeln!(out);
     let _ = writeln!(out, "    override suspend fun doWork(): Result {{");
     let _ = writeln!(out, "        IstmoRuntime.start()");
-    let _ = writeln!(out, "        val uniqueName = inputData.getString(\"istmo.unique_name\") ?: \"\"");
-    let _ = writeln!(out, "        val input = inputData.getByteArray(INPUT_KEY) ?: ByteArray(0)");
-    let _ = writeln!(out, "        val payload = ByteArrayOutputStream().apply {{");
+    let _ = writeln!(
+        out,
+        "        val uniqueName = inputData.getString(\"istmo.unique_name\") ?: \"\""
+    );
+    let _ = writeln!(
+        out,
+        "        val input = inputData.getByteArray(INPUT_KEY) ?: ByteArray(0)"
+    );
+    let _ = writeln!(
+        out,
+        "        val payload = ByteArrayOutputStream().apply {{"
+    );
     let _ = writeln!(out, "            Bincode.writeString(this, TASK_ID)");
     let _ = writeln!(out, "            Bincode.writeString(this, uniqueName)");
-    let _ = writeln!(out, "            Bincode.writeVarintU64(this, input.size.toLong())");
+    let _ = writeln!(
+        out,
+        "            Bincode.writeVarintU64(this, input.size.toLong())"
+    );
     let _ = writeln!(out, "            write(input)");
     let _ = writeln!(out, "        }}.toByteArray()");
-    let _ = writeln!(out, "        val response = IstmoRuntime.call(TASK_ID, \"run\", payload)");
-    let _ = writeln!(out, "        return when (Bincode.readEnumDiscriminant(response, 0).value) {{");
+    let _ = writeln!(
+        out,
+        "        val response = IstmoRuntime.call(TASK_ID, \"run\", payload)"
+    );
+    let _ = writeln!(
+        out,
+        "        return when (Bincode.readEnumDiscriminant(response, 0).value) {{"
+    );
     let _ = writeln!(out, "            0 -> Result.success()");
     let _ = writeln!(out, "            1 -> Result.retry()");
     let _ = writeln!(out, "            else -> Result.failure()");

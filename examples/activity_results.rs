@@ -12,10 +12,7 @@ use istmo::plugins::{
 pub struct MockActivityResults;
 
 impl ActivityResults for MockActivityResults {
-    async fn launch(
-        &self,
-        request: IntentRequest,
-    ) -> Result<ActivityResult, ActivityLaunchError> {
+    async fn launch(&self, request: IntentRequest) -> Result<ActivityResult, ActivityLaunchError> {
         match request.action.as_str() {
             "android.intent.action.VIEW" => Ok(ActivityResult {
                 outcome: ActivityOutcome::Ok,
@@ -61,8 +58,8 @@ fn main() {
     match pollster::block_on(plugin.launch(share)) {
         Ok(result) => println!("share result: {result:?}"),
         Err(istmo::IstmoError::PluginError { bytes }) => {
-            let (decoded, _) = istmo::codec::decode::<ActivityLaunchError>(&bytes)
-                .expect("decode launch err");
+            let (decoded, _) =
+                istmo::codec::decode::<ActivityLaunchError>(&bytes).expect("decode launch err");
             println!("share error: {decoded:?}");
         }
         Err(other) => println!("share transport error: {other}"),

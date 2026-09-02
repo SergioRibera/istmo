@@ -26,7 +26,10 @@ pub enum BackgroundKind {
     /// Short opportunistic refresh via `BGAppRefreshTaskRequest`.
     Refresh { interval_minutes: u32 },
     /// Heavier work via `BGProcessingTaskRequest`.
-    Processing { requires_power: bool, requires_network: bool },
+    Processing {
+        requires_power: bool,
+        requires_network: bool,
+    },
     /// Legitimate always-on background mode.
     Continuous(ContinuousMode),
 }
@@ -152,11 +155,21 @@ fn render_bg_task_shim(out: &mut String, contract: &IosBackgroundContract) {
     );
     let _ = writeln!(out, "/// `{}`.", contract.plugin_id);
     let _ = writeln!(out, "public enum {} {{", contract.class_name);
-    let _ = writeln!(out, "    public static let PLUGIN_ID: String = \"{}\"", contract.plugin_id);
+    let _ = writeln!(
+        out,
+        "    public static let PLUGIN_ID: String = \"{}\"",
+        contract.plugin_id
+    );
     let _ = writeln!(out, "    public static let TASK_ID: String = \"{task_id}\"");
     let _ = writeln!(out);
-    let _ = writeln!(out, "    /// Registers the {task_type} handler with the system scheduler.");
-    let _ = writeln!(out, "    /// Call once from `application(_:didFinishLaunchingWithOptions:)`.");
+    let _ = writeln!(
+        out,
+        "    /// Registers the {task_type} handler with the system scheduler."
+    );
+    let _ = writeln!(
+        out,
+        "    /// Call once from `application(_:didFinishLaunchingWithOptions:)`."
+    );
     let _ = writeln!(out, "    public static func register() {{");
     let _ = writeln!(
         out,
@@ -166,19 +179,37 @@ fn render_bg_task_shim(out: &mut String, contract: &IosBackgroundContract) {
     let _ = writeln!(out, "        }}");
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
-    let _ = writeln!(out, "    /// Submits a fresh scheduler request. Call after a successful");
-    let _ = writeln!(out, "    /// completion so the OS considers the app for its next slot.");
+    let _ = writeln!(
+        out,
+        "    /// Submits a fresh scheduler request. Call after a successful"
+    );
+    let _ = writeln!(
+        out,
+        "    /// completion so the OS considers the app for its next slot."
+    );
     let _ = writeln!(out, "    public static func schedule() {{");
     let _ = writeln!(out, "{submit_body}");
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
     let _ = writeln!(out, "    private static func handle(task: {task_type}) {{");
-    let _ = writeln!(out, "        // Forward to the Rust adapter registered under PLUGIN_ID.");
-    let _ = writeln!(out, "        // The adapter's `on_start` runs on a dedicated task; the");
-    let _ = writeln!(out, "        // `expirationHandler` cancels it cooperatively so the OS");
+    let _ = writeln!(
+        out,
+        "        // Forward to the Rust adapter registered under PLUGIN_ID."
+    );
+    let _ = writeln!(
+        out,
+        "        // The adapter's `on_start` runs on a dedicated task; the"
+    );
+    let _ = writeln!(
+        out,
+        "        // `expirationHandler` cancels it cooperatively so the OS"
+    );
     let _ = writeln!(out, "        // does not force-kill the process.");
     let _ = writeln!(out, "        task.expirationHandler = {{");
-    let _ = writeln!(out, "            IstmoRuntime.shared.cancel(pluginId: PLUGIN_ID)");
+    let _ = writeln!(
+        out,
+        "            IstmoRuntime.shared.cancel(pluginId: PLUGIN_ID)"
+    );
     let _ = writeln!(out, "        }}");
     let _ = writeln!(out, "        Task {{");
     let _ = writeln!(
@@ -201,22 +232,37 @@ fn render_continuous_shim(
         out,
         "/// Generated always-on background shim for istmo background plugin"
     );
-    let _ = writeln!(out, "/// `{}` (mode: {}).", contract.plugin_id, mode.info_plist_value());
+    let _ = writeln!(
+        out,
+        "/// `{}` (mode: {}).",
+        contract.plugin_id,
+        mode.info_plist_value()
+    );
     let _ = writeln!(out, "///");
     let _ = writeln!(
         out,
         "/// The plugin's Rust adapter is expected to be running for the entire"
     );
-    let _ = writeln!(out, "/// app lifetime; there is no scheduler to register with.");
+    let _ = writeln!(
+        out,
+        "/// app lifetime; there is no scheduler to register with."
+    );
     let _ = writeln!(out, "public enum {} {{", contract.class_name);
-    let _ = writeln!(out, "    public static let PLUGIN_ID: String = \"{}\"", contract.plugin_id);
+    let _ = writeln!(
+        out,
+        "    public static let PLUGIN_ID: String = \"{}\"",
+        contract.plugin_id
+    );
     let _ = writeln!(
         out,
         "    public static let BACKGROUND_MODE: String = \"{}\"",
         mode.info_plist_value()
     );
     let _ = writeln!(out);
-    let _ = writeln!(out, "    /// Call from `application(_:didFinishLaunchingWithOptions:)`.");
+    let _ = writeln!(
+        out,
+        "    /// Call from `application(_:didFinishLaunchingWithOptions:)`."
+    );
     let _ = writeln!(out, "    public static func start() {{");
     let _ = writeln!(out, "        Task {{");
     let _ = writeln!(
@@ -261,7 +307,10 @@ fn render_info_plist(contract: &IosBackgroundContract) -> String {
 #[must_use]
 pub fn required_entitlements(contract: &IosBackgroundContract) -> IosEntitlements {
     let mut ent = IosEntitlements::new();
-    if matches!(&contract.kind, BackgroundKind::Continuous(ContinuousMode::Voip)) {
+    if matches!(
+        &contract.kind,
+        BackgroundKind::Continuous(ContinuousMode::Voip)
+    ) {
         // VoIP calls specifically require the PushKit entitlement in
         // addition to the UIBackgroundModes entry.
         ent.add_string("com.apple.developer.pushkit.unrestricted-voip", "true");
