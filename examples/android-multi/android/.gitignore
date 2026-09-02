@@ -1,0 +1,15 @@
+# Gradle / IDE artifacts
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.cxx/
+
+# Build artefacts must NEVER live under src/. Legacy path safety net.
+app/src/main/jniLibs/
+
+# Gradle wrapper jar — not committed. `just` recipes use the system
+# gradle inside the docker image.
+gradle/wrapper/gradle-wrapper.jar

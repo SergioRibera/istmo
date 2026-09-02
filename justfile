@@ -25,6 +25,7 @@ mount := "-v $(pwd):/src -v gradle-cache:/root/.gradle -v cargo-cache:/root/.car
 # steps by name.
 
 android-demo: (build "android-demo") (install "android-demo") (run "android-demo")
+android-multi: (build "android-multi") (install "android-multi") (run "android-multi")
 
 # ---- Parameterised recipes ------------------------------------------
 
@@ -48,6 +49,7 @@ run name:
     set -euo pipefail
     case "{{name}}" in
         android-demo) component="dev.istmo.demo/dev.istmo.demo.MainActivity" ;;
+        android-multi) component="dev.istmo.multi/dev.istmo.multi.MainActivity" ;;
         *) echo "just run: no launcher configured for '{{name}}'"; exit 1 ;;
     esac
     adb shell am start -n "$component"

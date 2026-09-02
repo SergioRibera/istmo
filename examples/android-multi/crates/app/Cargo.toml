@@ -1,0 +1,31 @@
+[package]
+name = "istmo-android-multi-app"
+version = "0.0.0"
+description = "Multi-cdylib Android demo (app cdylib) — foreground service via #[istmo::service]."
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+istmo = { path = "../../../.." }
+bincode = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_safety_doc = "allow"
+redundant_pub_crate = "allow"
