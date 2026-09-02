@@ -137,7 +137,13 @@ object IstmoRuntime {
         jobs.remove(callId)?.cancel()
     }
 
+    // Contract-driven signatures below: parameter names + types must match
+    // what the Rust pump resolves via `get_static_method_id`. Params the demo
+    // does not consume are suppressed rather than renamed so a future demo
+    // that wants them keeps the same public callback shape.
+
     @JvmStatic
+    @Suppress("UNUSED_PARAMETER")
     fun onCreateInstance(callId: Long, pluginId: String, payload: ByteArray) {
         // Stateful plugins are not exercised by this demo. Reply with an
         // empty error so the client's `create_instance` future resolves.
@@ -145,6 +151,7 @@ object IstmoRuntime {
     }
 
     @JvmStatic
+    @Suppress("UNUSED_PARAMETER")
     fun onDestroyInstance(instanceId: Long) {
         // No-op: this demo never creates instances.
     }
@@ -160,12 +167,14 @@ object IstmoRuntime {
     }
 
     @JvmStatic
+    @Suppress("UNUSED_PARAMETER")
     fun onEvent(streamId: Long, payload: ByteArray) {
         // Streams initiated from Kotlin aren't yet supported by this demo.
         // Log and drop.
     }
 
     @JvmStatic
+    @Suppress("UNUSED_PARAMETER")
     fun onStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray) {
         // Same as onEvent — no Kotlin-side streams yet.
     }
