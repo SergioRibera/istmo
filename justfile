@@ -27,6 +27,84 @@ mount := "-v $(pwd):/src -v gradle-cache:/root/.gradle -v cargo-cache:/root/.car
 android-demo: (build "android-demo") (install "android-demo") (run "android-demo")
 android-multi: (build "android-multi") (install "android-multi") (run "android-multi")
 
+# ---- iOS demo (macOS-only) ------------------------------------------
+#
+# Uses Xcode + xcodegen + the standard Apple toolchain — no Docker,
+# because iOS toolchains do not run in Linux containers. Every recipe
+# below fails fast outside macOS.
+#
+# Prerequisites:
+#   * Xcode 15+ with an iOS 14+ simulator installed
+#   * `xcodegen` (brew install xcodegen)
+#   * `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`
+#
+# Simulator id is bound at recipe time via `xcrun simctl list`; override
+# by passing SIMULATOR_ID as an env var.
+
+ios_project_dir := "examples/ios-demo/ios"
+ios_scheme := "IstmoDemo"
+ios_bundle := "dev.istmo.demo.IstmoDemo"
+
+# One-shot: regenerate the .xcodeproj from project.yml. Run after any
+# change to project.yml, IstmoRuntime/Package.swift, or when a fresh
+# checkout does not yet have IstmoDemo.xcodeproj/.
+ios-bootstrap:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        echo "ios-bootstrap: macOS required"; exit 1
+    fi
+    cd {{ios_project_dir}} && xcodegen generate
+
+# Build the app for the arm64 simulator. Cargo runs from the Xcode
+# pre-build phase; a warm cache turns this into a link-only step.
+ios-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        echo "ios-build: macOS required"; exit 1
+    fi
+    cd {{ios_project_dir}}
+    xcodebuild -project IstmoDemo.xcodeproj \
+        -scheme {{ios_scheme}} \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination 'platform=iOS Simulator,name=iPhone 15' \
+        build
+
+# Install the built .app into the booted simulator + launch.
+ios-run: ios-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        echo "ios-run: macOS required"; exit 1
+    fi
+    sim_id="${SIMULATOR_ID:-$(xcrun simctl list devices booted -j | \
+        python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; \
+        print(next(x["udid"] for v in d.values() for x in v if x["state"]=="Booted"))')}"
+    app_path=$(find ~/Library/Developer/Xcode/DerivedData -type d -name '{{ios_scheme}}.app' -path '*Debug-iphonesimulator*' | head -n 1)
+    if [[ -z "${app_path}" ]]; then
+        echo "ios-run: could not locate built .app; run ios-build first"; exit 1
+    fi
+    xcrun simctl install "${sim_id}" "${app_path}"
+    xcrun simctl launch "${sim_id}" {{ios_bundle}}
+
+# Wipe cargo + Xcode build output for the iOS demo. Doesn't touch the
+# workspace-wide target/ dir; only the demo's staging area under
+# examples/ios-demo/ios/build/.
+ios-clean:
+    rm -rf {{ios_project_dir}}/build
+    rm -rf {{ios_project_dir}}/IstmoDemo.xcodeproj
+
+# Full "flutter run"-style: bootstrap (if needed) + build + install + launch.
+ios-demo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ ! -d "{{ios_project_dir}}/IstmoDemo.xcodeproj" ]]; then
+        just ios-bootstrap
+    fi
+    just ios-run
+
 # ---- Parameterised recipes ------------------------------------------
 
 # Build the demo's APK inside the container. Gradle drives cargo per
