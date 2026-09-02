@@ -32,9 +32,10 @@
 //!
 //! Both sections are optional and can appear in either order. On android the
 //! `pub use` block pins the five JNI trampolines so `--gc-sections` does not
-//! strip them out of the `.so`; on other targets the macro emits only the
-//! configuration function so `Runtime::mock()` / `cargo run` share the same
-//! wiring path.
+//! strip them out of the `.so`; on Apple mobile / wearable / TV / vision
+//! targets the same pattern re-exports the `istmo-ios` `@_cdecl` symbols.
+//! On other targets the macro emits only the configuration function so
+//! `Runtime::mock()` / `cargo run` share the same wiring path.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -88,6 +89,15 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
         #[cfg(target_os = "android")]
         #[allow(unused_imports)]
         pub use ::istmo::android::entrypoint::*;
+
+        #[cfg(any(
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "visionos",
+        ))]
+        #[allow(unused_imports)]
+        pub use ::istmo::ios::entrypoint::*;
 
         #[doc(hidden)]
         #[unsafe(no_mangle)]
