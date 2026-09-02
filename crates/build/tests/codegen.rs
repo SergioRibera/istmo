@@ -445,6 +445,60 @@ fn google_sign_in() -> Contract {
     }
 }
 
+fn notifications() -> Contract {
+    Contract {
+        plugin_id: "istmo.notifications".to_owned(),
+        type_name: "Notifications".to_owned(),
+        methods: vec![
+            Method {
+                name: "is_authorized".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![],
+                returns: TypeRef::Bool,
+                error: None,
+            },
+            Method {
+                name: "request_authorization".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![],
+                returns: TypeRef::Bool,
+                error: None,
+            },
+            Method {
+                name: "schedule".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "request".to_owned(),
+                    ty: TypeRef::Named("NotificationRequest".to_owned()),
+                }],
+                returns: TypeRef::Named("NotificationHandle".to_owned()),
+                error: Some(TypeRef::Named("NotificationError".to_owned())),
+            },
+            Method {
+                name: "cancel".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "id".to_owned(),
+                    ty: TypeRef::U32,
+                }],
+                returns: TypeRef::Unit,
+                error: Some(TypeRef::Named("NotificationError".to_owned())),
+            },
+        ],
+        init: None,
+    }
+}
+
+#[test]
+fn notifications_kotlin_matches_golden() {
+    assert_matches("notifications", "kt", &generate_kotlin(&notifications()));
+}
+
+#[test]
+fn notifications_swift_matches_golden() {
+    assert_matches("notifications", "swift", &generate_swift(&notifications()));
+}
+
 #[test]
 fn google_sign_in_kotlin_matches_golden() {
     assert_matches("google_sign_in", "kt", &generate_kotlin(&google_sign_in()));

@@ -23,6 +23,7 @@ pub mod activity_results;
 pub mod deeplinks;
 pub mod google_sign_in;
 pub mod lifecycle;
+pub mod notifications;
 pub mod permissions;
 pub mod service;
 pub mod worker;
@@ -37,6 +38,10 @@ pub use crate::google_sign_in::{
     SignInConfig, SignInConfigBuilder, SignInError, SignInHost, SignInMode,
 };
 pub use crate::lifecycle::{AppLifecycle, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream};
+pub use crate::notifications::{
+    NOTIFICATIONS_PLUGIN_ID, NotificationError, NotificationHandle, NotificationImportance,
+    NotificationRequest, Notifications, NotificationsClient, NotificationsHost,
+};
 pub use crate::permissions::{
     PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions, PermissionsClient,
     PermissionsHost,
