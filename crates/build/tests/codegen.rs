@@ -10,7 +10,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use istmo_build::{Arg, Contract, Method, MethodKind, TypeRef, generate_kotlin, generate_swift};
+use istmo_build::{
+    Arg, Contract, Method, MethodKind, ServiceContract, TypeRef, WorkerContract,
+    generate_android_service, generate_android_worker, generate_kotlin, generate_swift,
+};
 
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -220,4 +223,64 @@ fn activity_results_swift_matches_golden() {
         "swift",
         &generate_swift(&activity_results()),
     );
+}
+
+fn minimal_service() -> ServiceContract {
+    ServiceContract::new(
+        "myapp.sync",
+        "SyncService",
+        "com.example.myapp.sync",
+        "myapp_sync",
+    )
+}
+
+fn foreground_service() -> ServiceContract {
+    let mut c = ServiceContract::new(
+        "myapp.backup",
+        "BackupService",
+        "com.example.myapp.backup",
+        "myapp_backup",
+    );
+    c.foreground_service_type = Some("dataSync".to_owned());
+    c.exported = false;
+    c.permission = Some("com.example.myapp.BACKUP".to_owned());
+    c
+}
+
+#[test]
+fn minimal_service_kotlin_matches_golden() {
+    let out = generate_android_service(&minimal_service());
+    assert_matches("service_minimal", "kt", &out.kotlin);
+}
+
+#[test]
+fn minimal_service_manifest_matches_golden() {
+    let out = generate_android_service(&minimal_service());
+    assert_matches("service_minimal", "xml", &out.manifest_fragment);
+}
+
+#[test]
+fn foreground_service_kotlin_matches_golden() {
+    let out = generate_android_service(&foreground_service());
+    assert_matches("service_foreground", "kt", &out.kotlin);
+}
+
+#[test]
+fn foreground_service_manifest_matches_golden() {
+    let out = generate_android_service(&foreground_service());
+    assert_matches("service_foreground", "xml", &out.manifest_fragment);
+}
+
+fn backup_worker() -> WorkerContract {
+    WorkerContract::new(
+        "myapp.backup",
+        "BackupWorker",
+        "com.example.myapp.backup",
+        "myapp_backup",
+    )
+}
+
+#[test]
+fn backup_worker_kotlin_matches_golden() {
+    assert_matches("worker_backup", "kt", &generate_android_worker(&backup_worker()));
 }

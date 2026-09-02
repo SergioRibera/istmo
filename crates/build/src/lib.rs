@@ -10,8 +10,14 @@
 
 pub mod contract;
 pub mod kotlin;
+pub mod service;
 pub mod swift;
+pub mod worker;
 
 pub use crate::contract::{Arg, Contract, Method, MethodKind, TypeRef};
 pub use crate::kotlin::generate_kotlin;
+pub use crate::service::{
+    AndroidServiceArtifacts, ServiceContract, generate_android_service,
+};
 pub use crate::swift::generate_swift;
+pub use crate::worker::{WorkerContract, generate_android_worker};
