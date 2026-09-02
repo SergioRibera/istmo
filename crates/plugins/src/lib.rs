@@ -23,6 +23,8 @@ pub mod activity_results;
 pub mod deeplinks;
 pub mod lifecycle;
 pub mod permissions;
+pub mod service;
+pub mod worker;
 
 pub use crate::activity_results::{
     ACTIVITY_RESULTS_PLUGIN_ID, ActivityLaunchError, ActivityOutcome, ActivityResult,
@@ -34,3 +36,9 @@ pub use crate::permissions::{
     PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions, PermissionsClient,
     PermissionsHost,
 };
+pub use crate::service::{
+    NotificationSpec, SERVICE_CONTROL_PLUGIN_ID, ServiceContext, ServiceControl,
+    ServiceControlClient, ServiceControlError, ServiceControlHost, StopNotifier, WakeLock,
+    WakelockToken, stop_channel,
+};
+pub use crate::worker::{Constraints, NetworkKind, TaskOutcome, WorkerContext};
