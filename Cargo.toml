@@ -69,8 +69,12 @@ istmo-macros = { workspace = true }
 istmo-plugins = { workspace = true }
 bincode = { workspace = true }
 
+[target.'cfg(target_os = "android")'.dependencies]
+istmo-android = { workspace = true }
+
 [dev-dependencies]
 pollster = { workspace = true }
+flume = { workspace = true }
 
 [lints]
 workspace = true

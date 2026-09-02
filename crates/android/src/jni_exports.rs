@@ -7,7 +7,9 @@
 
 use std::sync::Arc;
 
-use istmo_core::{CallId, Envelope, Frame, Runtime, RuntimeConfig, StreamEndReason, StreamId};
+use istmo_core::{
+    CallId, Envelope, Frame, Runtime, RuntimeConfig, RuntimeInit, StreamEndReason, StreamId,
+};
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass};
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong};
@@ -15,6 +17,15 @@ use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong};
 use crate::error::AndroidRuntimeError;
 use crate::pump;
 use crate::state::{self, RuntimeState};
+
+// The `istmo::runtime!` macro is required to link the demo cdylib: it emits
+// `__istmo_configure_runtime` which nativeStart calls once, immediately after
+// the process runtime is installed, to declare plugin ids and register host
+// dispatchers. Missing symbol == user forgot to call `istmo::runtime!` — the
+// linker error is the intended signal.
+unsafe extern "Rust" {
+    safe fn __istmo_configure_runtime(init: RuntimeInit) -> RuntimeInit;
+}
 
 /// Kotlin: `external fun nativeStart(runtimeClass: Class<*>): Boolean`.
 #[unsafe(no_mangle)]
@@ -40,6 +51,7 @@ fn start<'local>(
     let class_ref = env.new_global_ref(runtime_class)?;
 
     let init = Runtime::init(RuntimeConfig::inline())?;
+    let init = __istmo_configure_runtime(init);
     let handles = pump::spawn(jvm, class_ref, init.outbound);
 
     state::install(RuntimeState {

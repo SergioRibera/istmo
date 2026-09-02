@@ -7,11 +7,17 @@
 //! to add `bincode` to their own `Cargo.toml`.
 
 pub use istmo_core::*;
-pub use istmo_macros::{message, plugin, stream};
+pub use istmo_macros::{message, plugin, runtime, stream};
 
 /// Core plugins bundled with the framework (permissions, app lifecycle,
 /// deep links, activity results). See [`istmo_plugins`] for the full surface.
 pub use istmo_plugins as plugins;
+
+/// Re-export of the android JNI transport. The `istmo::runtime!` macro emits
+/// `pub use ::istmo::android::entrypoint::*;` on android targets so users
+/// never touch JNI symbols directly.
+#[cfg(target_os = "android")]
+pub use istmo_android as android;
 
 /// Re-exported [`bincode`] surface used by generated code. Not part of the
 /// stable public API — pinned exclusively for macro output.

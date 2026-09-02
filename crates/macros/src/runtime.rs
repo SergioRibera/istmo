@@ -1,0 +1,134 @@
+//! `istmo::runtime!` function-like macro.
+//!
+//! Emits the single wiring point every process needs:
+//!
+//! ```ignore
+//! istmo::runtime!(
+//!     plugins: [Permissions, ActivityResults],
+//!     hosts:   [Echo => EchoImpl],
+//! );
+//! ```
+//!
+//! Expansion (schematically):
+//!
+//! ```ignore
+//! #[cfg(target_os = "android")]
+//! pub use ::istmo_android::entrypoint::*;
+//!
+//! #[unsafe(no_mangle)]
+//! pub fn __istmo_configure_runtime(init: ::istmo::RuntimeInit) -> ::istmo::RuntimeInit {
+//!     init
+//!         .expects::<::istmo::plugins::PermissionsClient>()
+//!         .expects::<::istmo::plugins::ActivityResultsClient>()
+//!         .host(EchoHost::new(EchoImpl))
+//!         .finish()
+//! }
+//! ```
+//!
+//! - `plugins: [T, ...]` — each `T` is a plugin trait name; the macro takes
+//!   `<T>Client` and calls `.expects::<TClient>()`.
+//! - `hosts: [T => Expr, ...]` — each `T` is a plugin trait name; the macro
+//!   takes `<T>Host` and calls `.host(THost::new(Expr))`.
+//!
+//! Both sections are optional and can appear in either order. On android the
+//! `pub use` block pins the five JNI trampolines so `--gc-sections` does not
+//! strip them out of the `.so`; on other targets the macro emits only the
+//! configuration function so `Runtime::mock()` / `cargo run` share the same
+//! wiring path.
+
+use proc_macro2::TokenStream;
+use quote::quote;
+use syn::punctuated::Punctuated;
+use syn::{Expr, Ident, Token, bracketed, parse::Parse, parse::ParseStream, parse2};
+
+#[allow(unreachable_pub)]
+pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
+    let RuntimeInput { plugins, hosts } = parse2::<RuntimeInput>(input)?;
+
+    let expects_calls = plugins.iter().map(|trait_ident| {
+        let client_ident = quote::format_ident!("{}Client", trait_ident);
+        quote! { .expects::<#client_ident>() }
+    });
+
+    let host_calls = hosts.iter().map(|HostEntry { trait_ident, impl_expr }| {
+        let host_ident = quote::format_ident!("{}Host", trait_ident);
+        quote! { .host(#host_ident::new(#impl_expr)) }
+    });
+
+    Ok(quote! {
+        #[cfg(target_os = "android")]
+        #[allow(unused_imports)]
+        pub use ::istmo::android::entrypoint::*;
+
+        #[doc(hidden)]
+        #[unsafe(no_mangle)]
+        pub fn __istmo_configure_runtime(
+            init: ::istmo::RuntimeInit,
+        ) -> ::istmo::RuntimeInit {
+            init
+                #(#expects_calls)*
+                #(#host_calls)*
+                .finish()
+        }
+    })
+}
+
+struct RuntimeInput {
+    plugins: Vec<Ident>,
+    hosts: Vec<HostEntry>,
+}
+
+struct HostEntry {
+    trait_ident: Ident,
+    impl_expr: Expr,
+}
+
+impl Parse for RuntimeInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut plugins = Vec::new();
+        let mut hosts = Vec::new();
+
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            match key.to_string().as_str() {
+                "plugins" => {
+                    let content;
+                    bracketed!(content in input);
+                    let list: Punctuated<Ident, Token![,]> =
+                        Punctuated::parse_terminated(&content)?;
+                    plugins.extend(list);
+                }
+                "hosts" => {
+                    let content;
+                    bracketed!(content in input);
+                    let list: Punctuated<HostEntry, Token![,]> =
+                        Punctuated::parse_terminated(&content)?;
+                    hosts.extend(list);
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("unknown section `{other}`; expected `plugins` or `hosts`"),
+                    ));
+                }
+            }
+            // trailing comma between sections is optional
+            let _: Option<Token![,]> = input.parse().ok();
+        }
+
+        Ok(Self { plugins, hosts })
+    }
+}
+
+impl Parse for HostEntry {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let trait_ident: Ident = input.parse()?;
+        input.parse::<Token![=>]>()?;
+        let impl_expr: Expr = input.parse()?;
+        Ok(Self {
+            trait_ident,
+            impl_expr,
+        })
+    }
+}

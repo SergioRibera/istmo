@@ -20,6 +20,7 @@ use proc_macro::TokenStream;
 
 mod message;
 mod plugin;
+mod runtime;
 
 /// Turn a trait declaration into an istmo plugin client. See `PLAN.md`
 /// for the design.
@@ -47,4 +48,18 @@ pub fn message(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn stream(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
+}
+
+/// Single wiring point for a cdylib / binary.
+///
+/// Declares the plugin ids the process consumes (`plugins:`) and the trait
+/// implementations it hosts (`hosts:`), and emits the
+/// `__istmo_configure_runtime` function that `nativeStart` invokes on
+/// android. See [`runtime`] source for the full expansion.
+#[proc_macro]
+pub fn runtime(input: TokenStream) -> TokenStream {
+    match runtime::expand(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.into_compile_error().into(),
+    }
 }
