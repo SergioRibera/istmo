@@ -18,11 +18,12 @@ import java.io.ByteArrayOutputStream
 
 /**
  * Demo Activity — every Rust ↔ Kotlin crossing goes through
- * [IstmoRuntime]. Echo is called via [EchoClient] (hand-written stand-in for
- * codegen). Lifecycle transitions and deep links get pushed as early
- * events. Permissions / ActivityResults registrations stay so a future
- * Rust host method can invoke them; the demo UI does not trigger them
- * yet because that path requires a Rust host method exposing the flow.
+ * [IstmoRuntime]. Each UI button invokes an [EchoClient] method whose Rust
+ * implementation internally consumes the corresponding client plugin
+ * (`PermissionsClient`, `ActivityResultsClient`, `AppLifecycle`,
+ * `DeepLinks`). Response then round-trips back through the frame protocol.
+ * Lifecycle transitions and deep links get pushed as early events on the
+ * way in.
  */
 class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
 
@@ -62,6 +63,9 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         LifecycleState.Created.publish()
         handleIntent(intent)
         wireEchoSection()
+        wirePermissionsSection()
+        wireActivitySection()
+        wireLifecycleSection()
         wireDeepLinksSection()
     }
 
@@ -101,19 +105,68 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         button.setOnClickListener {
             val text = input.text.toString()
             scope.launch {
-                output.text = try {
-                    EchoClient.echo(text)
-                } catch (e: EchoException) {
-                    "error: ${e.reason}"
-                } catch (t: Throwable) {
-                    "transport error: ${t.message}"
-                }
+                output.text = runCatchingEcho { EchoClient.echo(text) }
+            }
+        }
+    }
+
+    private fun wirePermissionsSection() {
+        val input = findViewById<EditText>(R.id.permissionInput)
+        val checkBtn = findViewById<Button>(R.id.permissionCheck)
+        val requestBtn = findViewById<Button>(R.id.permissionRequest)
+        val output = findViewById<TextView>(R.id.permissionOutput)
+
+        checkBtn.setOnClickListener {
+            val perm = input.text.toString()
+            scope.launch {
+                output.text = runCatchingEcho { EchoClient.checkPermission(perm) }
+            }
+        }
+        requestBtn.setOnClickListener {
+            val perm = input.text.toString()
+            scope.launch {
+                output.text = runCatchingEcho { EchoClient.requestPermission(perm) }
+            }
+        }
+    }
+
+    private fun wireActivitySection() {
+        val input = findViewById<EditText>(R.id.intentUri)
+        val launch = findViewById<Button>(R.id.launchIntent)
+        val output = findViewById<TextView>(R.id.intentOutput)
+        launch.setOnClickListener {
+            val url = input.text.toString().ifBlank { "https://example.com" }
+            scope.launch {
+                output.text = runCatchingEcho { EchoClient.openUrl(url) }
+            }
+        }
+    }
+
+    private fun wireLifecycleSection() {
+        val label = findViewById<TextView>(R.id.lifecycleState)
+        val refresh = findViewById<Button>(R.id.lifecycleRefresh)
+        refresh.setOnClickListener {
+            scope.launch {
+                label.text = runCatchingEcho { EchoClient.lifecycleSnapshot() }
             }
         }
     }
 
     private fun wireDeepLinksSection() {
-        findViewById<Button>(R.id.deeplinkRefresh).setOnClickListener { renderDeepLinks() }
+        val output = findViewById<TextView>(R.id.deeplinkList)
+        val refresh = findViewById<Button>(R.id.deeplinkRefresh)
+        refresh.setOnClickListener {
+            scope.launch {
+                try {
+                    val links = EchoClient.drainDeeplinks()
+                    output.text = if (links.isEmpty()) "(none drained)" else links.joinToString("\n")
+                } catch (e: EchoException) {
+                    output.text = "error: ${e.reason}"
+                } catch (t: Throwable) {
+                    output.text = "transport error: ${t.message}"
+                }
+            }
+        }
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -131,7 +184,8 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
 
     private fun renderDeepLinks() {
         val view = findViewById<TextView>(R.id.deeplinkList) ?: return
-        view.text = deeplinkHistory.joinToString("\n")
+        if (deeplinkHistory.isEmpty()) return
+        view.text = "arrived (before drain):\n" + deeplinkHistory.joinToString("\n")
     }
 
     /** Bincode-encode a `DeepLink { uri, source: Option<String>, received_at_ms: Option<u64> }`. */
@@ -141,5 +195,13 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         Bincode.writeOption(out, source) { sink, s -> Bincode.writeString(sink, s) }
         Bincode.writeOption(out, null as Long?) { sink, v -> Bincode.writeVarintU64(sink, v) }
         return out.toByteArray()
+    }
+
+    private inline fun runCatchingEcho(block: () -> String): String = try {
+        block()
+    } catch (e: EchoException) {
+        "error: ${e.reason}"
+    } catch (t: Throwable) {
+        "transport error: ${t.message}"
     }
 }

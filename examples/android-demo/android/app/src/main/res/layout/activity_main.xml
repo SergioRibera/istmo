@@ -9,11 +9,11 @@
         android:layout_height="wrap_content"
         android:padding="16dp">
 
-        <!-- Echo section — Kotlin → EchoClient → Frame::Call → EchoImpl on Rust -->
+        <!-- Echo — Kotlin → EchoClient → Frame::Call → EchoImpl.echo -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Echo (Rust host, Kotlin client)"
+            android:text="Echo"
             android:textStyle="bold"
             android:textSize="16sp" />
 
@@ -35,7 +35,6 @@
             android:id="@+id/output"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
             android:padding="8dp"
             android:textIsSelectable="true" />
 
@@ -45,11 +44,126 @@
             android:layout_marginVertical="16dp"
             android:background="#E0E0E0" />
 
-        <!-- Deep links — Kotlin observer submits early-event, Rust runtime buffers -->
+        <!-- Permissions — EchoClient.checkPermission / requestPermission →
+             EchoImpl uses PermissionsClient → PermissionsImpl (Android) -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Deep links"
+            android:text="Permissions (via Rust)"
+            android:textStyle="bold"
+            android:textSize="16sp" />
+
+        <EditText
+            android:id="@+id/permissionInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="android.permission.CAMERA"
+            android:inputType="text"
+            android:importantForAutofill="no" />
+
+        <LinearLayout
+            android:orientation="horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+            <Button
+                android:id="@+id/permissionCheck"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="Check" />
+            <Button
+                android:id="@+id/permissionRequest"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="Request" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/permissionOutput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:textIsSelectable="true" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="16dp"
+            android:background="#E0E0E0" />
+
+        <!-- Activity results — EchoClient.openUrl → EchoImpl uses
+             ActivityResultsClient → ActivityResultsImpl (startActivity) -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Activity result (VIEW intent via Rust)"
+            android:textStyle="bold"
+            android:textSize="16sp" />
+
+        <EditText
+            android:id="@+id/intentUri"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="https://example.com"
+            android:inputType="textUri"
+            android:importantForAutofill="no" />
+
+        <Button
+            android:id="@+id/launchIntent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Open URL" />
+
+        <TextView
+            android:id="@+id/intentOutput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:textIsSelectable="true" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="16dp"
+            android:background="#E0E0E0" />
+
+        <!-- Lifecycle — Kotlin observer publishes early events; Rust reads
+             via AppLifecycle.current() when EchoClient.lifecycleSnapshot()
+             fires -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Lifecycle snapshot (via Rust)"
+            android:textStyle="bold"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/lifecycleState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:text="(press to poll Rust)"
+            android:textIsSelectable="true" />
+
+        <Button
+            android:id="@+id/lifecycleRefresh"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Snapshot current state" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="16dp"
+            android:background="#E0E0E0" />
+
+        <!-- Deep links — Kotlin submits early events on intent arrival; Rust
+             drains via DeepLinks.stream() when EchoClient.drainDeeplinks() fires -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Deep links (Rust drain)"
             android:textStyle="bold"
             android:textSize="16sp" />
 
@@ -67,12 +181,12 @@
             android:padding="8dp"
             android:textIsSelectable="true"
             android:minLines="2"
-            android:hint="(no links yet)" />
+            android:hint="(no links drained)" />
 
         <Button
             android:id="@+id/deeplinkRefresh"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Refresh" />
+            android:text="Drain deep links via Rust" />
     </LinearLayout>
 </ScrollView>
