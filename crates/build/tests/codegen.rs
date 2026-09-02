@@ -11,8 +11,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use istmo_build::{
-    Arg, Contract, Method, MethodKind, ServiceContract, TypeRef, WorkerContract,
-    generate_android_service, generate_android_worker, generate_kotlin, generate_swift,
+    Arg, BackgroundKind, ContinuousMode, Contract, IosBackgroundContract, IosEntitlements, Method,
+    MethodKind, ServiceContract, TypeRef, WorkerContract, generate_android_service,
+    generate_android_worker, generate_ios_background, generate_kotlin, generate_swift,
+    generate_swift_client, required_entitlements,
 };
 
 fn golden_dir() -> PathBuf {
@@ -283,4 +285,115 @@ fn backup_worker() -> WorkerContract {
 #[test]
 fn backup_worker_kotlin_matches_golden() {
     assert_matches("worker_backup", "kt", &generate_android_worker(&backup_worker()));
+}
+
+// ---- iOS ---------------------------------------------------------------
+
+#[test]
+fn unary_only_swift_client_matches_golden() {
+    assert_matches(
+        "unary_only_client",
+        "swift",
+        &generate_swift_client(&unary_only()),
+    );
+}
+
+#[test]
+fn mixed_with_init_swift_client_matches_golden() {
+    assert_matches(
+        "mixed_with_init_client",
+        "swift",
+        &generate_swift_client(&mixed_with_init()),
+    );
+}
+
+fn refresh_background() -> IosBackgroundContract {
+    IosBackgroundContract {
+        plugin_id: "myapp.sync".to_owned(),
+        class_name: "SyncScheduler".to_owned(),
+        task_identifier: Some("com.example.myapp.sync".to_owned()),
+        kind: BackgroundKind::Refresh {
+            interval_minutes: 30,
+        },
+    }
+}
+
+fn processing_background() -> IosBackgroundContract {
+    IosBackgroundContract {
+        plugin_id: "myapp.reindex".to_owned(),
+        class_name: "ReindexJob".to_owned(),
+        task_identifier: Some("com.example.myapp.reindex".to_owned()),
+        kind: BackgroundKind::Processing {
+            requires_power: true,
+            requires_network: false,
+        },
+    }
+}
+
+fn continuous_voip_background() -> IosBackgroundContract {
+    IosBackgroundContract {
+        plugin_id: "myapp.voip".to_owned(),
+        class_name: "VoipHost".to_owned(),
+        task_identifier: None,
+        kind: BackgroundKind::Continuous(ContinuousMode::Voip),
+    }
+}
+
+#[test]
+fn ios_background_refresh_swift_matches_golden() {
+    let out = generate_ios_background(&refresh_background());
+    assert_matches("ios_background_refresh", "swift", &out.swift);
+}
+
+#[test]
+fn ios_background_refresh_plist_matches_golden() {
+    let out = generate_ios_background(&refresh_background());
+    assert_matches("ios_background_refresh", "plist", &out.info_plist_fragment);
+}
+
+#[test]
+fn ios_background_processing_swift_matches_golden() {
+    let out = generate_ios_background(&processing_background());
+    assert_matches("ios_background_processing", "swift", &out.swift);
+}
+
+#[test]
+fn ios_background_processing_plist_matches_golden() {
+    let out = generate_ios_background(&processing_background());
+    assert_matches(
+        "ios_background_processing",
+        "plist",
+        &out.info_plist_fragment,
+    );
+}
+
+#[test]
+fn ios_background_voip_swift_matches_golden() {
+    let out = generate_ios_background(&continuous_voip_background());
+    assert_matches("ios_background_voip", "swift", &out.swift);
+}
+
+#[test]
+fn ios_background_voip_plist_matches_golden() {
+    let out = generate_ios_background(&continuous_voip_background());
+    assert_matches("ios_background_voip", "plist", &out.info_plist_fragment);
+}
+
+#[test]
+fn ios_entitlements_voip_matches_golden() {
+    let ent = required_entitlements(&continuous_voip_background());
+    assert!(!ent.is_empty(), "voip mode should require pushkit entitlement");
+    assert_matches("ios_entitlements_voip", "plist", &ent.render());
+}
+
+#[test]
+fn ios_entitlements_merge_render() {
+    let mut ent = IosEntitlements::new();
+    ent.add_bool("com.apple.developer.healthkit", true)
+        .add_string_array(
+            "keychain-access-groups",
+            ["group.com.example.app", "group.com.example.shared"],
+        );
+    ent.merge(required_entitlements(&continuous_voip_background()));
+    assert_matches("ios_entitlements_merged", "plist", &ent.render());
 }

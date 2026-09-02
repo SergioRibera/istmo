@@ -1,8 +1,23 @@
 //! Swift `protocol` generator. Mirrors the Kotlin generator in shape.
+//!
+//! Two entry points:
+//!
+//! * [`generate_swift`] — the protocol declaration for a Swift-hosted plugin
+//!   (Rust consumer side): mirrors the Kotlin interface generator.
+//! * [`generate_swift_client`] — a Swift class that implements the same
+//!   protocol by shipping each call across the frame protocol via
+//!   `IstmoRuntime.shared.call(...)`. This is the Rust-hosted / Swift-consumer
+//!   direction — analogous to the hand-written `EchoClient.kt` today.
+//!
+//! The generated client references a `Bincode` helper module and an
+//! `IstmoRuntime` singleton that ship with the iOS runtime package. Only the
+//! primitive encoders / decoders needed by the demo are assumed to exist on
+//! the Swift side; adding new [`TypeRef`] variants requires the matching
+//! `Bincode` helper on Swift.
 
 use std::fmt::Write as _;
 
-use crate::contract::{Contract, Method, MethodKind};
+use crate::contract::{Contract, Method, MethodKind, TypeRef};
 
 /// Renders the Swift surface for `contract`.
 #[must_use]
@@ -14,6 +29,100 @@ pub fn generate_swift(contract: &Contract) -> String {
         write_factory(&mut out, contract, init);
     }
     out
+}
+
+/// Renders a Swift client class for a Rust-hosted plugin. The class conforms
+/// to the same protocol emitted by [`generate_swift`] and delegates every
+/// method to `IstmoRuntime.shared.call(...)`.
+#[must_use]
+pub fn generate_swift_client(contract: &Contract) -> String {
+    let mut out = String::new();
+    write_header(&mut out, contract);
+    let _ = writeln!(out, "import Foundation");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "/// Rust-hosted `{}` plugin. Ships each call across the frame",
+        contract.type_name,
+    );
+    let _ = writeln!(out, "/// protocol via `IstmoRuntime.shared.call(...)`.");
+    let _ = writeln!(out, "public final class {}Client: {} {{", contract.type_name, contract.type_name);
+    let _ = writeln!(out, "    public static let PLUGIN_ID: String = \"{}\"", contract.plugin_id);
+    let _ = writeln!(out);
+    let _ = writeln!(out, "    public init() {{}}");
+    for method in &contract.methods {
+        let _ = writeln!(out);
+        write_client_method(&mut out, method);
+    }
+    let _ = writeln!(out, "}}");
+    if let Some(error) = domain_error(contract) {
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "/// Swift-side view of a domain error decoded from `Frame::Respond {{ Err(bytes) }}`."
+        );
+        let _ = writeln!(out, "public struct {}Exception: Error {{", contract.type_name);
+        let _ = writeln!(out, "    public let payload: Data");
+        let _ = writeln!(out, "    public let decoded: {error}?");
+        let _ = writeln!(out, "}}");
+    }
+    out
+}
+
+fn write_client_method(out: &mut String, method: &Method) {
+    let args = format_args(method);
+    let encode_lines = method
+        .args
+        .iter()
+        .map(|arg| format!("        Bincode.encode(&payload, {})", arg.name))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let payload_init = if method.args.is_empty() {
+        "        let payload = Data()".to_owned()
+    } else {
+        format!("        var payload = Data()\n{encode_lines}")
+    };
+
+    match method.kind {
+        MethodKind::Unary => {
+            let ret = method.returns.to_swift();
+            let _ = writeln!(
+                out,
+                "    public func {}({args}) async throws -> {ret} {{",
+                method.name,
+            );
+            let _ = writeln!(out, "{payload_init}");
+            let _ = writeln!(
+                out,
+                "        let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: \"{}\", payload: payload)",
+                method.name,
+            );
+            let _ = writeln!(out, "        return try Bincode.decode(bytes) as {ret}");
+            let _ = writeln!(out, "    }}");
+        }
+        MethodKind::Stream => {
+            let ret = method.returns.to_swift();
+            let _ = writeln!(
+                out,
+                "    public func {}({args}) -> AsyncThrowingStream<{ret}, Error> {{",
+                method.name,
+            );
+            let _ = writeln!(out, "{payload_init}");
+            let _ = writeln!(
+                out,
+                "        return IstmoRuntime.shared.stream(pluginId: Self.PLUGIN_ID, method: \"{}\", payload: payload)",
+                method.name,
+            );
+            let _ = writeln!(out, "    }}");
+        }
+    }
+}
+
+fn domain_error(contract: &Contract) -> Option<String> {
+    contract
+        .methods
+        .iter()
+        .find_map(|m| m.error.as_ref().map(TypeRef::to_swift))
 }
 
 fn write_header(out: &mut String, contract: &Contract) {

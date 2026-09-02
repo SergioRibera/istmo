@@ -9,15 +9,22 @@
 //! together with the Android and iOS bindings in later milestones.
 
 pub mod contract;
+pub mod entitlements;
+pub mod ios;
 pub mod kotlin;
 pub mod service;
 pub mod swift;
 pub mod worker;
 
 pub use crate::contract::{Arg, Contract, Method, MethodKind, TypeRef};
+pub use crate::entitlements::{EntitlementValue, IosEntitlements};
+pub use crate::ios::{
+    BackgroundKind, ContinuousMode, IosBackgroundArtifacts, IosBackgroundContract,
+    generate_ios_background, required_entitlements,
+};
 pub use crate::kotlin::generate_kotlin;
 pub use crate::service::{
     AndroidServiceArtifacts, ServiceContract, generate_android_service,
 };
-pub use crate::swift::generate_swift;
+pub use crate::swift::{generate_swift, generate_swift_client};
 pub use crate::worker::{WorkerContract, generate_android_worker};
