@@ -366,10 +366,12 @@ impl Runtime {
     }
 
     /// Registers a hosted plugin dispatcher. Called by the `istmo::runtime!`
-    /// macro for every trait in the `hosts:` section.
-    pub fn register_host<D: Dispatch>(&self, dispatcher: D) {
+    /// macro for every trait in the `hosts:` or `services:` section.
+    pub fn register_host<D: Dispatch>(self: &Arc<Self>, dispatcher: D) {
         let plugin_id = dispatcher.plugin_id();
-        lock(&self.hosts).insert(plugin_id, Arc::new(dispatcher));
+        let dispatcher: Arc<dyn Dispatch> = Arc::new(dispatcher);
+        dispatcher.runtime_attached(Arc::downgrade(self));
+        lock(&self.hosts).insert(plugin_id, dispatcher);
     }
 
     /// Records that this process expects a plugin id on the client side.

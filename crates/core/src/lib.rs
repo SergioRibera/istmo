@@ -29,4 +29,12 @@ pub use crate::routing::{CallResult, InstanceEntry, RoutingTables, StreamMessage
 pub use crate::runtime::{
     CallHandle, DEFAULT_OUTBOUND_CAPACITY, Runtime, RuntimeConfig, RuntimeInit, StreamHandle,
 };
+
+/// Implementation-detail re-exports used by macro-generated code. Nothing
+/// here is part of the stable public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use pollster::block_on;
+    pub use tracing;
+}
 pub use crate::typed_stream::{StreamItem, TypedStream};

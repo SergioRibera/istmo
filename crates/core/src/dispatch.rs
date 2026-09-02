@@ -18,9 +18,11 @@
 use core::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Weak;
 
 use crate::error::CodecError;
 use crate::protocol::InstanceId;
+use crate::runtime::Runtime;
 
 /// Terminal outcome of a single hosted method call.
 ///
@@ -90,6 +92,17 @@ pub trait Plugin {
 pub trait Dispatch: Send + Sync + 'static {
     /// The wire plugin id this dispatcher handles.
     fn plugin_id(&self) -> &'static str;
+
+    /// Called once at registration time by
+    /// [`crate::runtime::Runtime::register_host`], handing the dispatcher a
+    /// weak reference to the runtime it lives in.
+    ///
+    /// Most dispatchers ignore this hook — the default is a no-op. Service
+    /// adapters use it to reach the runtime later, when spawning the
+    /// concrete service task on an inbound `on_start` call.
+    fn runtime_attached(&self, runtime: Weak<Runtime>) {
+        let _ = runtime;
+    }
 
     /// Handle a single Call frame. The runtime provides the instance id
     /// (`None` for stateless plugins), the method name and the argument
