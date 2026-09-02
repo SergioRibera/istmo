@@ -8,10 +8,11 @@
 use std::sync::Arc;
 
 use istmo_core::{
-    CallId, Envelope, Frame, Runtime, RuntimeConfig, RuntimeInit, StreamEndReason, StreamId,
+    CallId, Envelope, Frame, InstanceId, Runtime, RuntimeConfig, RuntimeInit, StreamEndReason,
+    StreamId,
 };
 use jni::JNIEnv;
-use jni::objects::{JByteArray, JClass};
+use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong};
 
 use crate::error::AndroidRuntimeError;
@@ -169,6 +170,62 @@ fn submit_stream_end<'local>(
     let envelope = Envelope::new(Frame::StreamEnd {
         stream_id: StreamId(stream_id as u64),
         reason,
+    });
+    Runtime::global()?.dispatch_inbound(envelope)?;
+    Ok(())
+}
+
+/// Kotlin: `external fun nativeSubmitCall(callId: Long, pluginId: String, instanceId: Long, method: String, payload: ByteArray)`.
+///
+/// Symmetric counterpart of the outbound Call pump: Kotlin uses it to invoke
+/// a Rust-hosted plugin (a trait declared in the process's `hosts:` section).
+/// `instanceId == 0` encodes `None`; any positive value is treated as the
+/// wire `InstanceId`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    call_id: jlong,
+    plugin_id: JString<'local>,
+    instance_id: jlong,
+    method: JString<'local>,
+    payload: JByteArray<'local>,
+) {
+    if let Err(err) = submit_call(
+        &mut env,
+        call_id,
+        &plugin_id,
+        instance_id,
+        &method,
+        &payload,
+    ) {
+        tracing::error!(?err, "istmo nativeSubmitCall failed");
+    }
+}
+
+#[allow(clippy::cast_sign_loss)]
+fn submit_call<'local>(
+    env: &mut JNIEnv<'local>,
+    call_id: jlong,
+    plugin_id: &JString<'local>,
+    instance_id: jlong,
+    method: &JString<'local>,
+    payload: &JByteArray<'local>,
+) -> Result<(), AndroidRuntimeError> {
+    let plugin_id: String = env.get_string(plugin_id)?.into();
+    let method: String = env.get_string(method)?.into();
+    let payload = env.convert_byte_array(payload)?;
+    let instance_id = if instance_id == 0 {
+        None
+    } else {
+        Some(InstanceId(instance_id as u64))
+    };
+    let envelope = Envelope::new(Frame::Call {
+        call_id: CallId(call_id as u64),
+        plugin_id,
+        instance_id,
+        method,
+        payload,
     });
     Runtime::global()?.dispatch_inbound(envelope)?;
     Ok(())

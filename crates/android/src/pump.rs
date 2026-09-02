@@ -93,14 +93,18 @@ enum PumpStep {
     Shutdown,
 }
 
-/// Cached ids for the four static methods the pump invokes on the Kotlin
-/// runtime class.
+/// Cached ids for every static method the pump invokes on the Kotlin runtime
+/// class. Outbound direction is Rust → Kotlin; the pump translates each
+/// [`Frame`] variant into a typed static-method call.
 #[allow(clippy::struct_field_names)]
 struct PumpMethods {
     on_call: jni::objects::JStaticMethodID,
     on_cancel: jni::objects::JStaticMethodID,
     on_create_instance: jni::objects::JStaticMethodID,
     on_destroy_instance: jni::objects::JStaticMethodID,
+    on_respond: jni::objects::JStaticMethodID,
+    on_event: jni::objects::JStaticMethodID,
+    on_stream_end: jni::objects::JStaticMethodID,
 }
 
 impl PumpMethods {
@@ -118,11 +122,14 @@ impl PumpMethods {
                 "(JLjava/lang/String;[B)V",
             )?,
             on_destroy_instance: env.get_static_method_id(class, "onDestroyInstance", "(J)V")?,
+            on_respond: env.get_static_method_id(class, "onRespond", "(JZ[B)V")?,
+            on_event: env.get_static_method_id(class, "onEvent", "(J[B)V")?,
+            on_stream_end: env.get_static_method_id(class, "onStreamEnd", "(JI[B)V")?,
         })
     }
 }
 
-#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::cast_possible_wrap, clippy::too_many_lines)]
 fn deliver(
     env: &mut JNIEnv<'_>,
     class: &GlobalRef,
@@ -184,9 +191,52 @@ fn deliver(
             methods.on_destroy_instance,
             &[JValue::Long(instance_id.get() as i64).as_jni()],
         ),
-        Frame::Respond { .. } | Frame::Event { .. } | Frame::StreamEnd { .. } => {
-            tracing::warn!("pump received inbound-only frame variant; skipping");
-            Ok(())
+        Frame::Respond { call_id, result } => {
+            let (ok, payload) = match result {
+                Ok(bytes) => (true, bytes),
+                Err(bytes) => (false, bytes),
+            };
+            let payload_j = env.byte_array_from_slice(&payload)?;
+            call_static_void(
+                env,
+                class,
+                methods.on_respond,
+                &[
+                    JValue::Long(call_id.get() as i64).as_jni(),
+                    JValue::Bool(u8::from(ok)).as_jni(),
+                    JValue::Object(&JObject::from(payload_j)).as_jni(),
+                ],
+            )
+        }
+        Frame::Event { stream_id, payload } => {
+            let payload_j = env.byte_array_from_slice(&payload)?;
+            call_static_void(
+                env,
+                class,
+                methods.on_event,
+                &[
+                    JValue::Long(stream_id.get() as i64).as_jni(),
+                    JValue::Object(&JObject::from(payload_j)).as_jni(),
+                ],
+            )
+        }
+        Frame::StreamEnd { stream_id, reason } => {
+            let (reason_tag, payload) = match reason {
+                istmo_core::StreamEndReason::Complete => (0i32, Vec::new()),
+                istmo_core::StreamEndReason::Cancelled => (1, Vec::new()),
+                istmo_core::StreamEndReason::Error(bytes) => (2, bytes),
+            };
+            let payload_j = env.byte_array_from_slice(&payload)?;
+            call_static_void(
+                env,
+                class,
+                methods.on_stream_end,
+                &[
+                    JValue::Long(stream_id.get() as i64).as_jni(),
+                    JValue::Int(reason_tag).as_jni(),
+                    JValue::Object(&JObject::from(payload_j)).as_jni(),
+                ],
+            )
         }
     }
 }
