@@ -9,11 +9,11 @@
         android:layout_height="wrap_content"
         android:padding="16dp">
 
-        <!-- Echo section (M2) -->
+        <!-- Echo section — Kotlin → EchoClient → Frame::Call → EchoImpl on Rust -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Echo"
+            android:text="Echo (Rust host, Kotlin client)"
             android:textStyle="bold"
             android:textSize="16sp" />
 
@@ -45,35 +45,7 @@
             android:layout_marginVertical="16dp"
             android:background="#E0E0E0" />
 
-        <!-- Lifecycle section (M3) -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Lifecycle"
-            android:textStyle="bold"
-            android:textSize="16sp" />
-
-        <TextView
-            android:id="@+id/lifecycleState"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="8dp"
-            android:text="current: (unknown)"
-            android:textIsSelectable="true" />
-
-        <Button
-            android:id="@+id/lifecycleRefresh"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Poll lifecycle state" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginVertical="16dp"
-            android:background="#E0E0E0" />
-
-        <!-- Deep links section (M3) -->
+        <!-- Deep links — Kotlin observer submits early-event, Rust runtime buffers -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -101,88 +73,6 @@
             android:id="@+id/deeplinkRefresh"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Poll deep links" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginVertical="16dp"
-            android:background="#E0E0E0" />
-
-        <!-- Permissions section (M3) -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Permissions"
-            android:textStyle="bold"
-            android:textSize="16sp" />
-
-        <EditText
-            android:id="@+id/permissionInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="android.permission.CAMERA"
-            android:inputType="text"
-            android:importantForAutofill="no" />
-
-        <LinearLayout
-            android:orientation="horizontal"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content">
-            <Button
-                android:id="@+id/permissionCheck"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="wrap_content"
-                android:text="Check" />
-            <Button
-                android:id="@+id/permissionRequest"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="wrap_content"
-                android:text="Request" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/permissionOutput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="8dp"
-            android:textIsSelectable="true" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginVertical="16dp"
-            android:background="#E0E0E0" />
-
-        <!-- Activity results section (M3) -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Activity results (VIEW intent)"
-            android:textStyle="bold"
-            android:textSize="16sp" />
-
-        <EditText
-            android:id="@+id/intentUri"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="https://example.com"
-            android:inputType="textUri"
-            android:importantForAutofill="no" />
-
-        <Button
-            android:id="@+id/launchIntent"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Launch VIEW intent" />
-
-        <TextView
-            android:id="@+id/intentOutput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="8dp"
-            android:textIsSelectable="true" />
+            android:text="Refresh" />
     </LinearLayout>
 </ScrollView>

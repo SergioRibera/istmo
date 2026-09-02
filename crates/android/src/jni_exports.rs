@@ -231,6 +231,68 @@ fn submit_call<'local>(
     Ok(())
 }
 
+/// Kotlin: `external fun nativeSubmitEarlyLatest(channel: String, payload: ByteArray)`.
+///
+/// Transitional helper: lifecycle-shaped early events (latest-value semantics)
+/// bypass the `Frame::…` protocol and go straight into the runtime's
+/// [`istmo_core::early_events::LatestValueSlot`]. The intent is to migrate to
+/// a dedicated `Frame::EarlyEvent` variant so every crossing is a frame, but
+/// that requires a wire-version bump. Documented in CLAUDE.md follow-ups.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLatest<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    channel: JString<'local>,
+    payload: JByteArray<'local>,
+) {
+    if let Err(err) = submit_early_latest(&mut env, &channel, &payload) {
+        tracing::error!(?err, "istmo nativeSubmitEarlyLatest failed");
+    }
+}
+
+fn submit_early_latest<'local>(
+    env: &mut JNIEnv<'local>,
+    channel: &JString<'local>,
+    payload: &JByteArray<'local>,
+) -> Result<(), AndroidRuntimeError> {
+    let channel: String = env.get_string(channel)?.into();
+    let bytes = env.convert_byte_array(payload)?;
+    Runtime::global()?.publish_early_latest(&channel, bytes);
+    Ok(())
+}
+
+/// Kotlin: `external fun nativeSubmitEarlyQueue(channel: String, capacity: Int, payload: ByteArray)`.
+///
+/// Companion to [`Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLatest`]
+/// for deep-link-shaped events (bounded FIFO buffered until a subscriber
+/// attaches). Same transitional rationale.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyQueue<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    channel: JString<'local>,
+    capacity: jint,
+    payload: JByteArray<'local>,
+) {
+    if let Err(err) = submit_early_queue(&mut env, &channel, capacity, &payload) {
+        tracing::error!(?err, "istmo nativeSubmitEarlyQueue failed");
+    }
+}
+
+#[allow(clippy::cast_sign_loss)]
+fn submit_early_queue<'local>(
+    env: &mut JNIEnv<'local>,
+    channel: &JString<'local>,
+    capacity: jint,
+    payload: &JByteArray<'local>,
+) -> Result<(), AndroidRuntimeError> {
+    let channel: String = env.get_string(channel)?.into();
+    let bytes = env.convert_byte_array(payload)?;
+    let capacity = if capacity <= 0 { 0 } else { capacity as usize };
+    Runtime::global()?.publish_early_queue(&channel, capacity, bytes);
+    Ok(())
+}
+
 /// Kotlin: `external fun nativeShutdown()`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeShutdown(
