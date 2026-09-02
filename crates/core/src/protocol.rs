@@ -10,7 +10,13 @@ use core::fmt;
 use bincode::{Decode, Encode};
 
 /// Current wire version of the envelope. Bumped on any breaking frame change.
-pub const PROTOCOL_VERSION: u16 = 1;
+///
+/// Version 2 added [`Frame::EarlyEvent`] so early-event publication crosses
+/// the same `dispatch_inbound` path as every other inbound frame. Bincode 2
+/// encodes enum discriminants as varint indexes in declaration order —
+/// adding a new terminal variant is a wire-breaking change for readers
+/// that don't know the discriminant.
+pub const PROTOCOL_VERSION: u16 = 2;
 
 macro_rules! id_newtype {
     ($(#[$attr:meta])* $name:ident, $short:literal) => {
@@ -80,6 +86,22 @@ pub enum StreamEndReason {
     Error(Vec<u8>),
 }
 
+/// Retention shape requested for an early-event publication.
+///
+/// Mirrors the two [`crate::early_events`] primitives:
+///
+/// * [`Self::Latest`] targets `LatestValueSlot` — value semantics; late
+///   subscribers observe the last-published bytes.
+/// * [`Self::Queue { capacity }`] targets `PreMainQueue` — bounded FIFO
+///   buffered until a subscriber attaches. Capacity is honoured only on
+///   the first publication for a given channel (matches
+///   `EarlyEventStore::queue`).
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub enum EarlyEventKind {
+    Latest,
+    Queue { capacity: u32 },
+}
+
 /// Versioned envelope wrapping a single [`Frame`].
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Envelope {
@@ -136,4 +158,13 @@ pub enum Frame {
     },
     /// Tear down a previously created instance. Fire-and-forget.
     DestroyInstance { instance_id: InstanceId },
+    /// Publish a payload to an early-event channel. Fire-and-forget from
+    /// the native side; the runtime routes it into the
+    /// [`crate::early_events::EarlyEventStore`] instead of into the
+    /// per-call routing tables.
+    EarlyEvent {
+        channel: String,
+        kind: EarlyEventKind,
+        payload: Vec<u8>,
+    },
 }

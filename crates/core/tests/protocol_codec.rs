@@ -2,8 +2,8 @@
 //! same value under the standard codec configuration.
 
 use istmo_core::{
-    CallId, CodecError, Envelope, Frame, InstanceId, PROTOCOL_VERSION, StreamEndReason, StreamId,
-    codec,
+    CallId, CodecError, EarlyEventKind, Envelope, Frame, InstanceId, PROTOCOL_VERSION,
+    StreamEndReason, StreamId, codec,
 };
 
 fn all_frames() -> Vec<Frame> {
@@ -54,6 +54,16 @@ fn all_frames() -> Vec<Frame> {
         },
         Frame::DestroyInstance {
             instance_id: InstanceId(9),
+        },
+        Frame::EarlyEvent {
+            channel: "istmo.lifecycle".to_owned(),
+            kind: EarlyEventKind::Latest,
+            payload: vec![0xa5],
+        },
+        Frame::EarlyEvent {
+            channel: "istmo.deeplinks".to_owned(),
+            kind: EarlyEventKind::Queue { capacity: 16 },
+            payload: b"scheme://foo".to_vec(),
         },
     ]
 }

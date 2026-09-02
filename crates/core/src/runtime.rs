@@ -29,7 +29,9 @@ use crate::dispatch::{Dispatch, Outcome, Plugin};
 use crate::early_events::EarlyEventStore;
 use crate::error::IstmoError;
 use crate::main_thread::{InlineMainThread, MainThread};
-use crate::protocol::{CallId, Envelope, Frame, InstanceId, PROTOCOL_VERSION, StreamId};
+use crate::protocol::{
+    CallId, EarlyEventKind, Envelope, Frame, InstanceId, PROTOCOL_VERSION, StreamId,
+};
 use crate::routing::{CallResult, InstanceEntry, RoutingTables, StreamMessage};
 use crate::sync::lock;
 
@@ -356,6 +358,19 @@ impl Runtime {
             }
             Frame::Cancel { call_id } => {
                 self.cancel_hosted(call_id);
+                Ok(())
+            }
+            Frame::EarlyEvent {
+                channel,
+                kind,
+                payload,
+            } => {
+                match kind {
+                    EarlyEventKind::Latest => self.publish_early_latest(&channel, payload),
+                    EarlyEventKind::Queue { capacity } => {
+                        self.publish_early_queue(&channel, capacity as usize, payload);
+                    }
+                }
                 Ok(())
             }
             Frame::CreateInstance { .. } | Frame::DestroyInstance { .. } => {

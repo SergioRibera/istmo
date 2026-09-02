@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use flume::Receiver as FlumeReceiver;
 use istmo_core::{
-    CallId, Envelope, Frame, InstanceId, IstmoError, PROTOCOL_VERSION, Runtime, StreamEndReason,
-    StreamMessage,
+    CallId, EarlyEventKind, Envelope, Frame, InstanceId, IstmoError, PROTOCOL_VERSION, Runtime,
+    StreamEndReason, StreamMessage,
 };
 
 fn mock() -> (Arc<Runtime>, FlumeReceiver<Envelope>) {
@@ -218,6 +218,45 @@ fn ids_are_monotonic_across_call_and_stream() {
     for _ in 0..3 {
         let _ = outbound.recv();
     }
+}
+
+#[test]
+fn dispatch_inbound_routes_early_event_latest_into_slot() {
+    let (rt, _outbound) = mock();
+    let rx = rt.early_events().latest_slot("istmo.lifecycle").subscribe();
+
+    rt.dispatch_inbound(Envelope::new(Frame::EarlyEvent {
+        channel: "istmo.lifecycle".to_owned(),
+        kind: EarlyEventKind::Latest,
+        payload: vec![7, 7, 7],
+    }))
+    .expect("dispatch");
+
+    assert_eq!(rx.recv().expect("recv"), vec![7, 7, 7]);
+}
+
+#[test]
+fn dispatch_inbound_routes_early_event_queue_into_queue() {
+    let (rt, _outbound) = mock();
+    // Two publishes before the first subscriber attaches. The queue must
+    // buffer them because it was created with capacity 4 on the first
+    // dispatch_inbound below (subsequent dispatches inherit the same queue).
+    rt.dispatch_inbound(Envelope::new(Frame::EarlyEvent {
+        channel: "istmo.deeplinks".to_owned(),
+        kind: EarlyEventKind::Queue { capacity: 4 },
+        payload: b"a".to_vec(),
+    }))
+    .expect("dispatch a");
+    rt.dispatch_inbound(Envelope::new(Frame::EarlyEvent {
+        channel: "istmo.deeplinks".to_owned(),
+        kind: EarlyEventKind::Queue { capacity: 4 },
+        payload: b"b".to_vec(),
+    }))
+    .expect("dispatch b");
+
+    let rx = rt.early_events().queue("istmo.deeplinks", 4).subscribe();
+    assert_eq!(rx.recv().expect("first"), b"a".to_vec());
+    assert_eq!(rx.recv().expect("second"), b"b".to_vec());
 }
 
 #[test]

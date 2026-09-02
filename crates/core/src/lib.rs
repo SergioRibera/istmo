@@ -23,7 +23,8 @@ pub use crate::error::{CodecError, IstmoError};
 pub use crate::main_thread::{InlineMainThread, MainThread, MockMainThread, Task};
 pub use crate::message::Message;
 pub use crate::protocol::{
-    CallId, Envelope, Frame, InstanceId, PROTOCOL_VERSION, StreamEndReason, StreamId,
+    CallId, EarlyEventKind, Envelope, Frame, InstanceId, PROTOCOL_VERSION, StreamEndReason,
+    StreamId,
 };
 pub use crate::routing::{CallResult, InstanceEntry, RoutingTables, StreamMessage};
 pub use crate::runtime::{
