@@ -1,4 +1,4 @@
-//! DeepLinks plugin: verifies pre-main queue drain and live propagation.
+//! `DeepLinks` plugin: verifies pre-main queue drain and live propagation.
 
 use istmo_core::{Runtime, codec};
 use istmo_plugins::{DEEPLINKS_CHANNEL, DeepLink, DeepLinks};

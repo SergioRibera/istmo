@@ -1,5 +1,7 @@
-//! AppLifecycle plugin: verifies late-subscriber replay and live updates via
-//! the runtime's LatestValueSlot.
+//! `AppLifecycle` plugin: verifies late-subscriber replay and live updates via
+//! the runtime's [`LatestValueSlot`].
+//!
+//! [`LatestValueSlot`]: istmo_core::early_events::LatestValueSlot
 
 use istmo_core::{Runtime, codec};
 use istmo_plugins::{AppLifecycle, LIFECYCLE_CHANNEL, LifecycleState};

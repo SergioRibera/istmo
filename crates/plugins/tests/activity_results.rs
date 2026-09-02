@@ -1,4 +1,4 @@
-//! ActivityResults plugin: round-trips success and typed launch errors.
+//! `ActivityResults` plugin: round-trips success and typed launch errors.
 
 use std::thread;
 
