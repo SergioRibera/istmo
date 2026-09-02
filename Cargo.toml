@@ -10,6 +10,7 @@ members = [
     "examples/android-demo",
     "examples/android-multi/crates/app",
     "examples/android-multi/crates/widget",
+    "examples/ios-demo",
 ]
 
 [workspace.package]
