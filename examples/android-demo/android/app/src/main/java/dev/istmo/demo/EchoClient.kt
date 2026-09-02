@@ -42,6 +42,19 @@ object EchoClient {
         return Bincode.readVec(response, 0, Bincode::readString).value
     }
 
+    /**
+     * Asks Rust to invoke Kotlin's `NotifierImpl.notify` `count` times in a
+     * row. Returns how many notifications actually landed (echoed back by
+     * Rust after every `notify` succeeded).
+     */
+    suspend fun spamNotify(count: UInt): UInt {
+        val out = ByteArrayOutputStream()
+        Bincode.writeVarintU64(out, count.toLong())
+        val response = callRaw("spam_notify", out.toByteArray())
+        val (value, _) = Bincode.readVarintU64(response, 0)
+        return value.toUInt()
+    }
+
     // ---- Internals ----
 
     private suspend fun callString(method: String, payload: ByteArray): String {

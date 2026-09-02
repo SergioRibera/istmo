@@ -30,9 +30,11 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val permissionsImpl = PermissionsImpl()
     private val activityResultsImpl = ActivityResultsImpl()
+    private val notifierImpl = NotifierImpl { msg -> appendNotifierLine(msg) }
     private var pendingPermissionResult: ((Map<String, Boolean>) -> Unit)? = null
     private var initialized = false
     private val deeplinkHistory = mutableListOf<String>()
+    private val notifierLog = mutableListOf<String>()
 
     private val permissionsLauncher =
         registerForActivityResult(RequestMultiplePermissions()) { results ->
@@ -54,6 +56,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         if (!initialized) {
             IstmoRuntime.registerHandler("istmo.permissions", permissionsImpl)
             IstmoRuntime.registerHandler("istmo.activity_results", activityResultsImpl)
+            IstmoRuntime.registerHandler("dev.istmo.demo.notifier", notifierImpl)
             IstmoRuntime.start()
             initialized = true
         }
@@ -67,6 +70,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         wireActivitySection()
         wireLifecycleSection()
         wireDeepLinksSection()
+        wireNotifierSection()
     }
 
     override fun onStart() { super.onStart(); LifecycleState.Started.publish() }
@@ -203,5 +207,38 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         "error: ${e.reason}"
     } catch (t: Throwable) {
         "transport error: ${t.message}"
+    }
+
+    // ---- Notifier: Rust → Mobile initiator ---------------------------------
+
+    private fun wireNotifierSection() {
+        val countInput = findViewById<EditText>(R.id.notifyCount)
+        val button = findViewById<Button>(R.id.notifyButton)
+        val output = findViewById<TextView>(R.id.notifyOutput)
+        val log = findViewById<TextView>(R.id.notifyLog)
+
+        button.setOnClickListener {
+            val count = countInput.text.toString().toUIntOrNull() ?: 3u
+            notifierLog.clear()
+            log.text = ""
+            scope.launch {
+                output.text = try {
+                    val fired = EchoClient.spamNotify(count)
+                    "fired $fired notifications (Rust → Mobile)"
+                } catch (e: EchoException) {
+                    "error: ${e.reason}"
+                } catch (t: Throwable) {
+                    "transport error: ${t.message}"
+                }
+            }
+        }
+    }
+
+    private fun appendNotifierLine(message: String) {
+        notifierLog += message
+        runOnUiThread {
+            findViewById<TextView>(R.id.notifyLog)?.text =
+                notifierLog.joinToString("\n")
+        }
     }
 }

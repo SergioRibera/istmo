@@ -188,5 +188,61 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Drain deep links via Rust" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="16dp"
+            android:background="#E0E0E0" />
+
+        <!-- Notifier — Rust-initiated calls into Kotlin. Kotlin invokes
+             EchoClient.spamNotify(N); Rust responds by firing N outbound
+             Frame::Call frames back to NotifierImpl, which appends to the
+             log below in real time. -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Notifier (Rust → Mobile)"
+            android:textStyle="bold"
+            android:textSize="16sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textStyle="italic"
+            android:textSize="12sp"
+            android:text="Rust triggers N outbound calls into Kotlin's NotifierImpl." />
+
+        <EditText
+            android:id="@+id/notifyCount"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="5"
+            android:inputType="number"
+            android:importantForAutofill="no" />
+
+        <Button
+            android:id="@+id/notifyButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Spam notifications from Rust" />
+
+        <TextView
+            android:id="@+id/notifyOutput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:textIsSelectable="true" />
+
+        <TextView
+            android:id="@+id/notifyLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:background="#F5F5F5"
+            android:fontFamily="monospace"
+            android:textIsSelectable="true"
+            android:minLines="3"
+            android:hint="(notifications appear here)" />
     </LinearLayout>
 </ScrollView>
