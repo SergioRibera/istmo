@@ -1,0 +1,33 @@
+[package]
+name = "istmo-ios"
+version = "0.0.0"
+description = "iOS/Apple @_cdecl transport for the istmo runtime."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+istmo-core = { workspace = true }
+bincode = { workspace = true }
+flume = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pollster = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+# Overrides workspace-wide forbid: FFI requires unsafe.
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_safety_doc = "allow"
+redundant_pub_crate = "allow"

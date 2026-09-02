@@ -5,6 +5,7 @@ members = [
     "crates/build",
     "crates/macros",
     "crates/android",
+    "crates/ios",
     "crates/plugins",
     "examples/android-demo",
     "examples/android-multi/crates/app",
@@ -53,6 +54,7 @@ istmo-core = { path = "crates/core", version = "0.0.0" }
 istmo-build = { path = "crates/build", version = "0.0.0" }
 istmo-macros = { path = "crates/macros", version = "0.0.0" }
 istmo-android = { path = "crates/android", version = "0.0.0" }
+istmo-ios = { path = "crates/ios", version = "0.0.0" }
 istmo-plugins = { path = "crates/plugins", version = "0.0.0" }
 
 [package]
@@ -73,6 +75,9 @@ bincode = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 istmo-android = { workspace = true }
+
+[target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))'.dependencies]
+istmo-ios = { workspace = true }
 
 [dev-dependencies]
 pollster = { workspace = true }
