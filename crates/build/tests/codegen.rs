@@ -11,10 +11,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use istmo_build::{
-    Arg, BackgroundKind, ContinuousMode, Contract, IosBackgroundContract, IosEntitlements, Method,
-    MethodKind, ServiceContract, TypeRef, WorkerContract, generate_android_service,
-    generate_android_worker, generate_ios_background, generate_kotlin, generate_swift,
-    generate_swift_client, required_entitlements,
+    Arg, BackgroundKind, ContinuousMode, Contract, GradleCoord, GradleDep, GradleScope,
+    IosBackgroundContract, IosEntitlements, Method, MethodKind, NativeDeps, ServiceContract,
+    SwiftPackageDep, TypeRef, WorkerContract, generate_android_service, generate_android_worker,
+    generate_ios_background, generate_kotlin, generate_swift, generate_swift_client,
+    required_entitlements,
 };
 
 fn golden_dir() -> PathBuf {
@@ -284,7 +285,11 @@ fn backup_worker() -> WorkerContract {
 
 #[test]
 fn backup_worker_kotlin_matches_golden() {
-    assert_matches("worker_backup", "kt", &generate_android_worker(&backup_worker()));
+    assert_matches(
+        "worker_backup",
+        "kt",
+        &generate_android_worker(&backup_worker()),
+    );
 }
 
 // ---- iOS ---------------------------------------------------------------
@@ -382,8 +387,148 @@ fn ios_background_voip_plist_matches_golden() {
 #[test]
 fn ios_entitlements_voip_matches_golden() {
     let ent = required_entitlements(&continuous_voip_background());
-    assert!(!ent.is_empty(), "voip mode should require pushkit entitlement");
+    assert!(
+        !ent.is_empty(),
+        "voip mode should require pushkit entitlement"
+    );
     assert_matches("ios_entitlements_voip", "plist", &ent.render());
+}
+
+fn google_sign_in() -> Contract {
+    Contract {
+        plugin_id: "istmo.google_sign_in".to_owned(),
+        type_name: "SignIn".to_owned(),
+        methods: vec![
+            Method {
+                name: "sign_in".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "mode".to_owned(),
+                    ty: TypeRef::Named("SignInMode".to_owned()),
+                }],
+                returns: TypeRef::Named("SignInAccount".to_owned()),
+                error: Some(TypeRef::Named("SignInError".to_owned())),
+            },
+            Method {
+                name: "silent_sign_in".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![],
+                returns: TypeRef::Option(Box::new(TypeRef::Named("SignInAccount".to_owned()))),
+                error: Some(TypeRef::Named("SignInError".to_owned())),
+            },
+            Method {
+                name: "refresh".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "credential".to_owned(),
+                    ty: TypeRef::Named("NativeHandleId".to_owned()),
+                }],
+                returns: TypeRef::Named("SignInAccount".to_owned()),
+                error: Some(TypeRef::Named("SignInError".to_owned())),
+            },
+            Method {
+                name: "sign_out".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![],
+                returns: TypeRef::Unit,
+                error: Some(TypeRef::Named("SignInError".to_owned())),
+            },
+            Method {
+                name: "revoke".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![],
+                returns: TypeRef::Unit,
+                error: Some(TypeRef::Named("SignInError".to_owned())),
+            },
+        ],
+        init: Some(TypeRef::Named("SignInConfig".to_owned())),
+    }
+}
+
+#[test]
+fn google_sign_in_kotlin_matches_golden() {
+    assert_matches("google_sign_in", "kt", &generate_kotlin(&google_sign_in()));
+}
+
+#[test]
+fn google_sign_in_swift_matches_golden() {
+    assert_matches(
+        "google_sign_in",
+        "swift",
+        &generate_swift(&google_sign_in()),
+    );
+}
+
+#[test]
+fn google_sign_in_swift_client_matches_golden() {
+    assert_matches(
+        "google_sign_in_client",
+        "swift",
+        &generate_swift_client(&google_sign_in()),
+    );
+}
+
+fn google_sign_in_deps() -> NativeDeps {
+    let mut d = NativeDeps::new();
+    d.add_gradle(&GradleDep::new(
+        GradleScope::Implementation,
+        GradleCoord::new("androidx.credentials", "credentials", "1.3.0"),
+    ))
+    .add_gradle(&GradleDep::new(
+        GradleScope::Implementation,
+        GradleCoord::new(
+            "androidx.credentials",
+            "credentials-play-services-auth",
+            "1.3.0",
+        ),
+    ))
+    .add_gradle(&GradleDep::new(
+        GradleScope::Implementation,
+        GradleCoord::new(
+            "com.google.android.libraries.identity.googleid",
+            "googleid",
+            "1.1.1",
+        ),
+    ))
+    .add_swift_package(&SwiftPackageDep {
+        url: "https://github.com/google/GoogleSignIn-iOS.git".to_owned(),
+        product: "GoogleSignIn".to_owned(),
+        from_version: "7.1.0".to_owned(),
+    });
+    d
+}
+
+#[test]
+fn google_sign_in_deps_gradle_matches_golden() {
+    assert_matches(
+        "google_sign_in_deps",
+        "gradle.kts",
+        &google_sign_in_deps().render_gradle(),
+    );
+}
+
+#[test]
+fn native_deps_merge_prefers_highest_version() {
+    let mut merged = google_sign_in_deps();
+    let mut other = NativeDeps::new();
+    other.add_gradle(&GradleDep::new(
+        GradleScope::Implementation,
+        GradleCoord::new("androidx.credentials", "credentials", "1.3.2"),
+    ));
+    merged.merge(other);
+    let entries: Vec<_> = merged.gradle_entries().collect();
+    let creds = entries
+        .iter()
+        .find(|e| e.coord.artifact == "credentials")
+        .expect("credentials entry");
+    assert_eq!(creds.coord.version, "1.3.2");
+    assert!(
+        merged
+            .conflicts()
+            .iter()
+            .any(|c| c.key.artifact == "credentials" && c.picked == "1.3.2"),
+        "conflict must be surfaced",
+    );
 }
 
 #[test]

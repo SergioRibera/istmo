@@ -21,6 +21,7 @@
 
 pub mod activity_results;
 pub mod deeplinks;
+pub mod google_sign_in;
 pub mod lifecycle;
 pub mod permissions;
 pub mod service;
@@ -31,6 +32,10 @@ pub use crate::activity_results::{
     ActivityResults, ActivityResultsClient, ActivityResultsHost, ExtraValue, IntentRequest,
 };
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
+pub use crate::google_sign_in::{
+    Credential, GOOGLE_SIGN_IN_PLUGIN_ID, OwnedSignInAccount, SignIn, SignInAccount, SignInClient,
+    SignInConfig, SignInConfigBuilder, SignInError, SignInHost, SignInMode,
+};
 pub use crate::lifecycle::{AppLifecycle, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream};
 pub use crate::permissions::{
     PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions, PermissionsClient,
