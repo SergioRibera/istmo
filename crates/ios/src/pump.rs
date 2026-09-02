@@ -162,5 +162,8 @@ fn deliver(callbacks: &IstmoIosCallbacks, frame: Frame) {
                 "dropped outbound EarlyEvent frame; variant is inbound-only",
             );
         }
+        Frame::ReleaseNativeHandle { handle_id } => unsafe {
+            (callbacks.on_release_native_handle)(callbacks.ctx, handle_id.get());
+        },
     }
 }

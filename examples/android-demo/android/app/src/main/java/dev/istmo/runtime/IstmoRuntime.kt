@@ -179,6 +179,13 @@ object IstmoRuntime {
         // Same as onEvent — no Kotlin-side streams yet.
     }
 
+    @JvmStatic
+    @Suppress("UNUSED_PARAMETER")
+    fun onReleaseNativeHandle(handleId: Long) {
+        // Demo does not register native handles; production apps free the
+        // object stored under handleId from their per-plugin registry here.
+    }
+
     // ---- Trampolines exported by istmo-android --------------------------
 
     external fun nativeStart(runtimeClass: Class<*>): Boolean

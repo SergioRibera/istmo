@@ -60,12 +60,8 @@ pub type OnRespondFn = unsafe extern "C" fn(
     payload_len: usize,
 );
 
-pub type OnEventFn = unsafe extern "C" fn(
-    ctx: *mut c_void,
-    stream_id: u64,
-    payload: *const u8,
-    payload_len: usize,
-);
+pub type OnEventFn =
+    unsafe extern "C" fn(ctx: *mut c_void, stream_id: u64, payload: *const u8, payload_len: usize);
 
 pub type OnStreamEndFn = unsafe extern "C" fn(
     ctx: *mut c_void,
@@ -74,6 +70,8 @@ pub type OnStreamEndFn = unsafe extern "C" fn(
     err_payload: *const u8,
     err_payload_len: usize,
 );
+
+pub type OnReleaseNativeHandleFn = unsafe extern "C" fn(ctx: *mut c_void, handle_id: u64);
 
 /// C ABI callback table Swift hands over at [`istmo_ios_start`].
 ///
@@ -92,6 +90,7 @@ pub struct IstmoIosCallbacks {
     pub on_respond: OnRespondFn,
     pub on_event: OnEventFn,
     pub on_stream_end: OnStreamEndFn,
+    pub on_release_native_handle: OnReleaseNativeHandleFn,
 }
 
 // SAFETY: `ctx` is opaque; the Swift side is responsible for keeping the
@@ -287,8 +286,7 @@ pub unsafe extern "C" fn istmo_ios_submit_early_latest(
     payload_len: usize,
 ) {
     // SAFETY: caller-guaranteed layout per the parameters' doc contracts.
-    let result =
-        unsafe { submit_early_latest(channel_utf8, channel_len, payload, payload_len) };
+    let result = unsafe { submit_early_latest(channel_utf8, channel_len, payload, payload_len) };
     if let Err(err) = result {
         tracing::error!(?err, "istmo_ios_submit_early_latest failed");
     }
@@ -321,9 +319,8 @@ pub unsafe extern "C" fn istmo_ios_submit_early_queue(
     payload_len: usize,
 ) {
     // SAFETY: caller-guaranteed layout per the parameters' doc contracts.
-    let result = unsafe {
-        submit_early_queue(channel_utf8, channel_len, capacity, payload, payload_len)
-    };
+    let result =
+        unsafe { submit_early_queue(channel_utf8, channel_len, capacity, payload, payload_len) };
     if let Err(err) = result {
         tracing::error!(?err, "istmo_ios_submit_early_queue failed");
     }

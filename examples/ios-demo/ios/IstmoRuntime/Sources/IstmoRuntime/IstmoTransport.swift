@@ -61,6 +61,9 @@ public struct IstmoIosCallbacks {
         UInt32,                    // reason: 0 Complete, 1 Cancelled, 2 Error
         UnsafePointer<UInt8>?, Int // err payload
     ) -> Void
+    public var on_release_native_handle: @convention(c) (
+        UnsafeMutableRawPointer?, UInt64
+    ) -> Void
 }
 
 // MARK: - Extern C symbols (Rust → Swift)

@@ -52,7 +52,8 @@ public final class IstmoRuntime {
                 on_destroy_instance: Trampolines.onDestroyInstance,
                 on_respond: Trampolines.onRespond,
                 on_event: Trampolines.onEvent,
-                on_stream_end: Trampolines.onStreamEnd
+                on_stream_end: Trampolines.onStreamEnd,
+                on_release_native_handle: Trampolines.onReleaseNativeHandle
             )
             let ok = istmo_ios_start(cb)
             guard ok else { throw IstmoRuntimeError.startFailed }
@@ -319,6 +320,15 @@ private enum Trampolines {
     ) -> Void = { ctx, streamId, reason, payloadPtr, payloadLen in
         guard let runtime = ctxRuntime(ctx) else { return }
         runtime.handleStreamEnd(streamId: streamId, reason: reason, errPayload: copyData(payloadPtr, payloadLen))
+    }
+
+    static let onReleaseNativeHandle: @convention(c) (
+        UnsafeMutableRawPointer?, UInt64
+    ) -> Void = { _, handleId in
+        // Demo runtime does not own any native handles yet. Real apps hop
+        // to the main queue and free the object stored under `handleId` in
+        // their per-plugin registry.
+        NSLog("IstmoRuntime: onReleaseNativeHandle handle_id=\(handleId) — no handle registry")
     }
 
     private static func ctxRuntime(_ ctx: UnsafeMutableRawPointer?) -> IstmoRuntime? {

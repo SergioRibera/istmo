@@ -49,9 +49,8 @@ impl Dispatch for EchoHost {
         Box::pin(async move {
             match method {
                 "echo" => {
-                    let ((msg,), _): ((String,), _) =
-                        bincode::decode_from_slice(payload, CODEC)
-                            .map_err(|e| DispatchError::Decode(istmo_core::CodecError::from(e)))?;
+                    let ((msg,), _): ((String,), _) = bincode::decode_from_slice(payload, CODEC)
+                        .map_err(|e| DispatchError::Decode(istmo_core::CodecError::from(e)))?;
                     let reply = format!("echo:{msg}");
                     let bytes = bincode::encode_to_vec(&reply, CODEC)
                         .map_err(|e| DispatchError::Encode(istmo_core::CodecError::from(e)))?;
@@ -105,6 +104,9 @@ enum Received {
     },
     DestroyInstance {
         instance_id: u64,
+    },
+    ReleaseNativeHandle {
+        handle_id: u64,
     },
 }
 
@@ -191,10 +193,10 @@ unsafe extern "C" fn on_event(
     payload_len: usize,
 ) {
     let payload = unsafe { copy_vec(payload, payload_len) };
-    sink().lock().unwrap().push(Received::Event {
-        stream_id,
-        payload,
-    });
+    sink()
+        .lock()
+        .unwrap()
+        .push(Received::Event { stream_id, payload });
 }
 
 unsafe extern "C" fn on_stream_end(
@@ -210,6 +212,13 @@ unsafe extern "C" fn on_stream_end(
         reason,
         payload,
     });
+}
+
+unsafe extern "C" fn on_release_native_handle(_ctx: *mut c_void, handle_id: u64) {
+    sink()
+        .lock()
+        .unwrap()
+        .push(Received::ReleaseNativeHandle { handle_id });
 }
 
 unsafe fn copy_str(ptr: *const u8, len: usize) -> String {
@@ -234,6 +243,7 @@ fn callbacks() -> IstmoIosCallbacks {
         on_respond,
         on_event,
         on_stream_end,
+        on_release_native_handle,
     }
 }
 
@@ -310,10 +320,7 @@ fn ios_transport_end_to_end() {
                 plugin_id,
                 method,
                 ..
-            } if *c == remote_call_id
-                && plugin_id == "test.ios.remote"
-                && method == "noop" =>
-            {
+            } if *c == remote_call_id && plugin_id == "test.ios.remote" && method == "noop" => {
                 Some(())
             }
             _ => None,
@@ -322,7 +329,12 @@ fn ios_transport_end_to_end() {
     // Now push the Respond back through the inbound path.
     let reply_bytes = bincode::encode_to_vec(String::from("pong"), CODEC).unwrap();
     unsafe {
-        istmo_ios_submit_response(remote_call_id, true, reply_bytes.as_ptr(), reply_bytes.len());
+        istmo_ios_submit_response(
+            remote_call_id,
+            true,
+            reply_bytes.as_ptr(),
+            reply_bytes.len(),
+        );
     }
     let result = handle.recv_blocking().expect("handle recv");
     let bytes = result.expect("ok");

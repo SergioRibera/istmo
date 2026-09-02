@@ -105,6 +105,7 @@ struct PumpMethods {
     on_respond: jni::objects::JStaticMethodID,
     on_event: jni::objects::JStaticMethodID,
     on_stream_end: jni::objects::JStaticMethodID,
+    on_release_native_handle: jni::objects::JStaticMethodID,
 }
 
 impl PumpMethods {
@@ -125,6 +126,11 @@ impl PumpMethods {
             on_respond: env.get_static_method_id(class, "onRespond", "(JZ[B)V")?,
             on_event: env.get_static_method_id(class, "onEvent", "(J[B)V")?,
             on_stream_end: env.get_static_method_id(class, "onStreamEnd", "(JI[B)V")?,
+            on_release_native_handle: env.get_static_method_id(
+                class,
+                "onReleaseNativeHandle",
+                "(J)V",
+            )?,
         })
     }
 }
@@ -249,6 +255,12 @@ fn deliver(
             );
             Ok(())
         }
+        Frame::ReleaseNativeHandle { handle_id } => call_static_void(
+            env,
+            class,
+            methods.on_release_native_handle,
+            &[JValue::Long(handle_id.get() as i64).as_jni()],
+        ),
     }
 }
 
