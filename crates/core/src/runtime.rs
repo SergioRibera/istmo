@@ -195,6 +195,11 @@ impl Runtime {
 
     /// Fires a unary `Call` and returns a [`CallHandle`] that resolves to the
     /// response.
+    ///
+    /// If the plugin is hosted on this same runtime (`hosts:` side of
+    /// `istmo::runtime!`), the Call is dispatched locally and never touches
+    /// the outbound channel — a same-runtime loop is a zero-wire-hop
+    /// round-trip. Otherwise the frame goes out via the platform pump.
     pub fn call(
         self: &Arc<Self>,
         plugin_id: impl Into<String>,
@@ -202,18 +207,24 @@ impl Runtime {
         method: impl Into<String>,
         payload: Vec<u8>,
     ) -> Result<CallHandle, IstmoError> {
+        let plugin_id = plugin_id.into();
         let call_id = CallId(self.next_id());
         let rx = self.routing.register_call(call_id);
+        let hosted = lock(&self.hosts).contains_key(plugin_id.as_str());
         let envelope = Envelope::new(Frame::Call {
             call_id,
-            plugin_id: plugin_id.into(),
+            plugin_id,
             instance_id,
             method: method.into(),
             payload,
         });
-        self.outbound
-            .send(envelope)
-            .map_err(|_| IstmoError::ChannelClosed)?;
+        if hosted {
+            self.dispatch_inbound(envelope)?;
+        } else {
+            self.outbound
+                .send(envelope)
+                .map_err(|_| IstmoError::ChannelClosed)?;
+        }
         Ok(CallHandle {
             call_id,
             receiver: Some(rx),
@@ -446,6 +457,16 @@ impl Runtime {
     }
 
     fn send_respond(&self, call_id: CallId, result: CallResult) {
+        // Local short-circuit: if a same-runtime caller is waiting on this
+        // call id, deliver the response into its routing entry without a
+        // wire round-trip. Otherwise the response is destined for a remote
+        // consumer (Kotlin / iOS) and goes out through the pump.
+        if self.routing.has_pending(call_id.get()) {
+            if let Err(err) = self.routing.deliver_response(call_id, result) {
+                tracing::warn!(?err, "local Respond delivery failed");
+            }
+            return;
+        }
         let envelope = Envelope::new(Frame::Respond { call_id, result });
         if let Err(err) = self.outbound.send(envelope) {
             tracing::warn!(?err, "failed to send Respond frame; outbound channel closed");

@@ -105,6 +105,13 @@ impl RoutingTables {
         lock(&self.inner).pending.remove(&id).is_some()
     }
 
+    /// Peeks whether a pending entry exists for `id` without removing it.
+    /// Used by same-runtime short-circuiting on `Respond` delivery.
+    #[must_use]
+    pub fn has_pending(&self, id: u64) -> bool {
+        lock(&self.inner).pending.contains_key(&id)
+    }
+
     /// Delivers a response to a previously registered call.
     pub fn deliver_response(&self, call_id: CallId, result: CallResult) -> Result<(), IstmoError> {
         let Some(entry) = lock(&self.inner).pending.remove(&call_id.get()) else {
