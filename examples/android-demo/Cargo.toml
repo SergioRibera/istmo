@@ -14,11 +14,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 istmo = { path = "../.." }
-istmo-android = { workspace = true }
 bincode = { workspace = true }
-jni = { workspace = true }
-pollster = { workspace = true }
-tracing = { workspace = true }
 
 [lints.rust]
 missing_debug_implementations = "warn"

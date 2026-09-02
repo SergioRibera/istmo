@@ -33,7 +33,7 @@ impl RuntimeEcho for EchoImpl {
 
 // The macro under test.
 istmo::runtime!(
-    plugins: [RuntimeAbsent],
+    plugins: [RuntimeAbsentClient],
     hosts:   [RuntimeEcho => EchoImpl],
 );
 
