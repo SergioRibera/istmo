@@ -7,7 +7,7 @@
 //! to add `bincode` to their own `Cargo.toml`.
 
 pub use istmo_core::*;
-pub use istmo_macros::{message, plugin, runtime, stream};
+pub use istmo_macros::{message, plugin, runtime, service, stream, worker};
 
 /// Core plugins bundled with the framework (permissions, app lifecycle,
 /// deep links, activity results). See [`istmo_plugins`] for the full surface.

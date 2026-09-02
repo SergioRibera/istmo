@@ -21,6 +21,8 @@ use proc_macro::TokenStream;
 mod message;
 mod plugin;
 mod runtime;
+mod service;
+mod worker;
 
 /// Turn a trait declaration into an istmo plugin client. See `PLAN.md`
 /// for the design.
@@ -48,6 +50,27 @@ pub fn message(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn stream(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
+}
+
+/// Turn a trait declaration (`on_start` + optional `on_stop`) into a service
+/// adapter. See [`service`] source for the design.
+#[proc_macro_attribute]
+pub fn service(attr: TokenStream, item: TokenStream) -> TokenStream {
+    match service::expand(attr.into(), item.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.into_compile_error().into(),
+    }
+}
+
+/// Turn a trait declaration with a single `async fn run(&self, ctx:
+/// WorkerContext) -> Result<TaskOutcome, _>` method into a WorkManager-shaped
+/// worker adapter. See [`worker`] source for the design.
+#[proc_macro_attribute]
+pub fn worker(attr: TokenStream, item: TokenStream) -> TokenStream {
+    match worker::expand(attr.into(), item.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.into_compile_error().into(),
+    }
 }
 
 /// Single wiring point for a cdylib / binary.
