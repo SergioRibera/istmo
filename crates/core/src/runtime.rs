@@ -30,7 +30,7 @@ use crate::early_events::EarlyEventStore;
 use crate::error::IstmoError;
 use crate::main_thread::{InlineMainThread, MainThread};
 use crate::protocol::{
-    CallId, EarlyEventKind, Envelope, Frame, InstanceId, PROTOCOL_VERSION, StreamId,
+    CallId, EarlyEventKind, Envelope, Frame, InstanceId, NativeHandleId, PROTOCOL_VERSION, StreamId,
 };
 use crate::routing::{CallResult, InstanceEntry, RoutingTables, StreamMessage};
 use crate::sync::lock;
@@ -309,6 +309,19 @@ impl Runtime {
             .map_err(|_| IstmoError::ChannelClosed)
     }
 
+    /// Emits [`Frame::ReleaseNativeHandle`] so the native side can free the
+    /// object backing `handle_id`. Fire-and-forget; the native side must
+    /// treat unknown ids as no-ops.
+    ///
+    /// Called by [`crate::native_handle::NativeHandle`] on drop; plugins
+    /// generally do not need to invoke it directly.
+    pub fn release_native_handle(&self, handle_id: NativeHandleId) -> Result<(), IstmoError> {
+        let envelope = Envelope::new(Frame::ReleaseNativeHandle { handle_id });
+        self.outbound
+            .send(envelope)
+            .map_err(|_| IstmoError::ChannelClosed)
+    }
+
     /// Cancels an in-flight call by removing its local receiver and sending
     /// a `Cancel` frame to the native side.
     pub fn cancel_call(&self, call_id: CallId) -> Result<(), IstmoError> {
@@ -373,7 +386,9 @@ impl Runtime {
                 }
                 Ok(())
             }
-            Frame::CreateInstance { .. } | Frame::DestroyInstance { .. } => {
+            Frame::CreateInstance { .. }
+            | Frame::DestroyInstance { .. }
+            | Frame::ReleaseNativeHandle { .. } => {
                 tracing::warn!("dropped inbound frame with outbound-only variant");
                 Ok(())
             }
@@ -407,8 +422,7 @@ impl Runtime {
     /// enables it after adding every `plugins:` entry so that late
     /// `acquire()` calls for undeclared ids fail fast.
     pub fn set_enforce_declarations(&self, enforce: bool) {
-        self.enforce_declarations
-            .store(enforce, Ordering::Relaxed);
+        self.enforce_declarations.store(enforce, Ordering::Relaxed);
     }
 
     /// Validates that `plugin_id` is declared for this process. When
@@ -486,7 +500,10 @@ impl Runtime {
         }
         let envelope = Envelope::new(Frame::Respond { call_id, result });
         if let Err(err) = self.outbound.send(envelope) {
-            tracing::warn!(?err, "failed to send Respond frame; outbound channel closed");
+            tracing::warn!(
+                ?err,
+                "failed to send Respond frame; outbound channel closed"
+            );
         }
     }
 

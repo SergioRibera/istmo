@@ -16,7 +16,12 @@ use bincode::{Decode, Encode};
 /// encodes enum discriminants as varint indexes in declaration order —
 /// adding a new terminal variant is a wire-breaking change for readers
 /// that don't know the discriminant.
-pub const PROTOCOL_VERSION: u16 = 2;
+///
+/// Version 3 added [`Frame::ReleaseNativeHandle`] so the Rust side can tell
+/// the native side that a [`crate::native_handle::NativeHandle`] is no longer
+/// referenced and its backing object can be freed. Outbound-only, matching
+/// the Rust-owned-lifetime model.
+pub const PROTOCOL_VERSION: u16 = 3;
 
 macro_rules! id_newtype {
     ($(#[$attr:meta])* $name:ident, $short:literal) => {
@@ -73,6 +78,15 @@ id_newtype!(
     /// Identifies a plugin instance created via `CreateInstance`.
     InstanceId,
     "instance"
+);
+id_newtype!(
+    /// Wire id of a native-side object referenced from Rust through a
+    /// [`crate::native_handle::NativeHandle`].
+    ///
+    /// The native side owns the underlying object; Rust holds only the id
+    /// plus a compile-time phantom type parameter.
+    NativeHandleId,
+    "native"
 );
 
 /// Reason attached to a [`Frame::StreamEnd`].
@@ -167,4 +181,9 @@ pub enum Frame {
         kind: EarlyEventKind,
         payload: Vec<u8>,
     },
+    /// Tell the native side to release the object backing
+    /// [`NativeHandleId`]. Outbound-only, fire-and-forget: the native side
+    /// must treat unknown ids as no-ops so a late release racing a shutdown
+    /// is harmless.
+    ReleaseNativeHandle { handle_id: NativeHandleId },
 }

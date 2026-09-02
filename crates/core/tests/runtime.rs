@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use flume::Receiver as FlumeReceiver;
 use istmo_core::{
-    CallId, EarlyEventKind, Envelope, Frame, InstanceId, IstmoError, PROTOCOL_VERSION, Runtime,
-    StreamEndReason, StreamMessage,
+    CallId, EarlyEventKind, Envelope, Frame, InstanceId, IstmoError, NativeHandle, NativeHandleId,
+    PROTOCOL_VERSION, Runtime, StreamEndReason, StreamMessage,
 };
 
 fn mock() -> (Arc<Runtime>, FlumeReceiver<Envelope>) {
@@ -257,6 +257,46 @@ fn dispatch_inbound_routes_early_event_queue_into_queue() {
     let rx = rt.early_events().queue("istmo.deeplinks", 4).subscribe();
     assert_eq!(rx.recv().expect("first"), b"a".to_vec());
     assert_eq!(rx.recv().expect("second"), b"b".to_vec());
+}
+
+/// Marker type used as the phantom parameter of the credential handle in
+/// the tests below. No value is ever constructed.
+struct GoogleCredential;
+
+#[test]
+fn release_native_handle_helper_emits_the_wire_frame() {
+    let (rt, outbound) = mock();
+    rt.release_native_handle(NativeHandleId(42))
+        .expect("release");
+    let env = outbound.recv().expect("frame");
+    match env.frame {
+        Frame::ReleaseNativeHandle { handle_id } => assert_eq!(handle_id, NativeHandleId(42)),
+        other => panic!("expected ReleaseNativeHandle, got {other:?}"),
+    }
+}
+
+#[test]
+fn dropping_a_native_handle_sends_release_frame() {
+    let (rt, outbound) = mock();
+    let handle: NativeHandle<GoogleCredential> = NativeHandle::adopt(&rt, NativeHandleId(7));
+    drop(handle);
+    let env = outbound.recv().expect("release frame");
+    match env.frame {
+        Frame::ReleaseNativeHandle { handle_id } => assert_eq!(handle_id, NativeHandleId(7)),
+        other => panic!("expected ReleaseNativeHandle, got {other:?}"),
+    }
+}
+
+#[test]
+fn into_id_suppresses_the_release_frame() {
+    let (rt, outbound) = mock();
+    let handle: NativeHandle<GoogleCredential> = NativeHandle::adopt(&rt, NativeHandleId(11));
+    let id = handle.into_id();
+    assert_eq!(id, NativeHandleId(11));
+    assert!(
+        outbound.try_recv().is_err(),
+        "into_id must not enqueue a release"
+    );
 }
 
 #[test]

@@ -2,8 +2,8 @@
 //! same value under the standard codec configuration.
 
 use istmo_core::{
-    CallId, CodecError, EarlyEventKind, Envelope, Frame, InstanceId, PROTOCOL_VERSION,
-    StreamEndReason, StreamId, codec,
+    CallId, CodecError, EarlyEventKind, Envelope, Frame, InstanceId, NativeHandleId,
+    PROTOCOL_VERSION, StreamEndReason, StreamId, codec,
 };
 
 fn all_frames() -> Vec<Frame> {
@@ -64,6 +64,9 @@ fn all_frames() -> Vec<Frame> {
             channel: "istmo.deeplinks".to_owned(),
             kind: EarlyEventKind::Queue { capacity: 16 },
             payload: b"scheme://foo".to_vec(),
+        },
+        Frame::ReleaseNativeHandle {
+            handle_id: NativeHandleId(999),
         },
     ]
 }

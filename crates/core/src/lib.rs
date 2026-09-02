@@ -13,6 +13,7 @@ pub mod early_events;
 pub mod error;
 pub mod main_thread;
 pub mod message;
+pub mod native_handle;
 pub mod protocol;
 pub mod routing;
 pub mod runtime;
@@ -22,9 +23,10 @@ pub use crate::dispatch::{Dispatch, DispatchError, DispatchFuture, Outcome, Plug
 pub use crate::error::{CodecError, IstmoError};
 pub use crate::main_thread::{InlineMainThread, MainThread, MockMainThread, Task};
 pub use crate::message::Message;
+pub use crate::native_handle::NativeHandle;
 pub use crate::protocol::{
-    CallId, EarlyEventKind, Envelope, Frame, InstanceId, PROTOCOL_VERSION, StreamEndReason,
-    StreamId,
+    CallId, EarlyEventKind, Envelope, Frame, InstanceId, NativeHandleId, PROTOCOL_VERSION,
+    StreamEndReason, StreamId,
 };
 pub use crate::routing::{CallResult, InstanceEntry, RoutingTables, StreamMessage};
 pub use crate::runtime::{
