@@ -26,6 +26,7 @@ pub mod google_sign_in;
 pub mod lifecycle;
 pub mod notifications;
 pub mod permissions;
+pub mod safe_area;
 pub mod service;
 pub mod worker;
 
@@ -51,6 +52,7 @@ pub use crate::permissions::{
     PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions, PermissionsClient,
     PermissionsHost,
 };
+pub use crate::safe_area::{EdgeInsets, SAFE_AREA_CHANNEL, SafeArea, SafeAreaInsets, SafeAreaStream};
 pub use crate::service::{
     NotificationSpec, SERVICE_CONTROL_PLUGIN_ID, ServiceContext, ServiceControl,
     ServiceControlClient, ServiceControlError, ServiceControlHost, StopNotifier, WakeLock,
