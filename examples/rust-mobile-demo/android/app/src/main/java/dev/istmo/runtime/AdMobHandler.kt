@@ -5,6 +5,7 @@ import android.util.Log
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.PopupWindow
 import com.google.android.gms.ads.AdError as GmsAdError
 import com.google.android.gms.ads.AdListener
 import com.google.android.gms.ads.AdRequest
@@ -54,7 +55,10 @@ class AdMobHandler(private val activity: Activity) : PluginHandler, HandleReleas
     private val configs = ConcurrentHashMap<Long, AdMobConfig>()
     private val interstitials = ConcurrentHashMap<Long, InterstitialAd>()
     private val rewardeds = ConcurrentHashMap<Long, RewardedAd>()
-    private val banners = ConcurrentHashMap<Long, AdView>()
+    /** Live banner state — the AdView plus the PopupWindow that composites
+     *  it above the wgpu surface. Both must be torn down together. */
+    private data class BannerEntry(val view: AdView, val popup: PopupWindow)
+    private val banners = ConcurrentHashMap<Long, BannerEntry>()
 
     @Volatile
     private var initialised = false
@@ -62,8 +66,8 @@ class AdMobHandler(private val activity: Activity) : PluginHandler, HandleReleas
     override fun releaseNativeHandle(handleId: Long) {
         interstitials.remove(handleId)
         rewardeds.remove(handleId)
-        banners.remove(handleId)?.let { view ->
-            activity.runOnUiThread { removeBannerView(view) }
+        banners.remove(handleId)?.let { entry ->
+            activity.runOnUiThread { tearDownBanner(entry) }
         }
     }
 
@@ -282,47 +286,85 @@ class AdMobHandler(private val activity: Activity) : PluginHandler, HandleReleas
                     Log.i(TAG, "banner impression recorded")
                 }
             }
-            attachBannerView(view, rect, paintedSizePx)
+            val popup = attachBannerAsPopup(view, rect, paintedSizePx)
             view.loadAd(AdRequest.Builder().build())
-            banners[handleId] = view
+            banners[handleId] = BannerEntry(view, popup)
         }
         return handleId
     }
 
     private suspend fun updateBanner(handleId: Long, rect: BannerRectData) {
-        val view = banners[handleId] ?: return
+        val entry = banners[handleId] ?: return
         withContext(Dispatchers.Main) {
-            // The SDK-chosen height dominates — reuse the current adSize
-            // rather than trusting Rust's rect.height, which is only a
-            // hint from the egui layout pass.
-            val painted = adSizePixels(view.adSize ?: AdSize.BANNER)
-            val params = FrameLayout.LayoutParams(painted.width, painted.height).apply {
-                leftMargin = rect.x
-                topMargin = rect.y
-                gravity = Gravity.TOP or Gravity.START
-            }
-            view.layoutParams = params
-            view.requestLayout()
+            // Reuse the AdView's actual size (SDK-chosen) — resizing the
+            // surface underneath a loaded banner voids the impression.
+            val painted = adSizePixels(entry.view.adSize ?: AdSize.BANNER)
+            entry.popup.update(rect.x, rect.y, painted.width, painted.height)
         }
     }
 
     private suspend fun hideBanner(handleId: Long) {
-        val view = banners.remove(handleId) ?: run {
+        val entry = banners.remove(handleId) ?: run {
             IstmoRuntime.forgetHandle(handleId)
             return
         }
         IstmoRuntime.forgetHandle(handleId)
-        withContext(Dispatchers.Main) { removeBannerView(view) }
+        withContext(Dispatchers.Main) { tearDownBanner(entry) }
     }
 
-    private fun attachBannerView(view: AdView, rect: BannerRectData, painted: PxSize) {
-        val root = activity.findViewById<ViewGroup>(android.R.id.content)
-        val params = FrameLayout.LayoutParams(painted.width, painted.height).apply {
-            leftMargin = rect.x
-            topMargin = rect.y
-            gravity = Gravity.TOP or Gravity.START
+    /**
+     * NativeActivity + wgpu draw straight to the window's own Surface
+     * every frame, overwriting anything the View hierarchy renders on
+     * top. Adding the AdView to `android.R.id.content` therefore
+     * produces an invisible banner even though the SDK reports it as
+     * loaded and impression-counted (the View did render — into a
+     * buffer wgpu overwrote on the next present).
+     *
+     * A `PopupWindow` sidesteps this by registering a new Window with
+     * `WindowManager`; SurfaceFlinger composites the popup as an
+     * independent layer above the app window, and wgpu cannot touch it.
+     *
+     * Non-focusable + `INPUT_METHOD_NOT_NEEDED` so the popup never
+     * steals key events, the IME, or the back button from the native
+     * app running underneath.
+     */
+    private fun attachBannerAsPopup(
+        view: AdView,
+        rect: BannerRectData,
+        painted: PxSize,
+    ): PopupWindow {
+        // Wrap in a plain FrameLayout — PopupWindow otherwise honours
+        // the AdView's own LayoutParams and can misfire the measure
+        // pass on first show.
+        val host = FrameLayout(activity)
+        host.addView(view, FrameLayout.LayoutParams(painted.width, painted.height))
+        val popup = PopupWindow(host, painted.width, painted.height, false).apply {
+            isClippingEnabled = false
+            inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
+            isTouchable = true
+            isFocusable = false
         }
-        root.addView(view, params)
+        val decor = activity.window.decorView
+        if (decor.windowToken != null) {
+            popup.showAtLocation(decor, Gravity.TOP or Gravity.START, rect.x, rect.y)
+        } else {
+            // Activity still laying out — defer to the main queue so
+            // WindowManager has a valid token when we attach.
+            decor.post {
+                popup.showAtLocation(decor, Gravity.TOP or Gravity.START, rect.x, rect.y)
+            }
+        }
+        return popup
+    }
+
+    private fun tearDownBanner(entry: BannerEntry) {
+        try {
+            entry.popup.dismiss()
+        } catch (t: Throwable) {
+            Log.w(TAG, "banner popup dismiss threw: ${t.message}")
+        }
+        (entry.view.parent as? ViewGroup)?.removeView(entry.view)
+        entry.view.destroy()
     }
 
     /**
@@ -348,12 +390,6 @@ class AdMobHandler(private val activity: Activity) : PluginHandler, HandleReleas
         val widthPx = if (size.width > 0) size.getWidthInPixels(activity) else 0
         val heightPx = if (size.height > 0) size.getHeightInPixels(activity) else 0
         return PxSize(widthPx, heightPx)
-    }
-
-    private fun removeBannerView(view: AdView) {
-        val parent = view.parent as? ViewGroup ?: return
-        parent.removeView(view)
-        view.destroy()
     }
 
     // ---- Wire encoding --------------------------------------------------
