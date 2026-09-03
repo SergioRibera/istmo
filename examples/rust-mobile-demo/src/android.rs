@@ -18,10 +18,14 @@ use std::sync::{Arc, Mutex};
 
 use android_activity::AndroidApp;
 use eframe::egui;
+use istmo::IstmoError;
 use istmo::plugins::{
-    NotificationImportance, NotificationRequest, NotificationsClient, PermissionsClient,
+    NotificationError, NotificationImportance, NotificationRequest, NotificationsClient,
+    PermissionsClient,
 };
-use istmo_plugins::google_sign_in::{OwnedSignInAccount, SignInClient, SignInConfig, SignInMode};
+use istmo_plugins::google_sign_in::{
+    OwnedSignInAccount, SignInClient, SignInConfig, SignInError, SignInMode,
+};
 
 /// OAuth server client id for the demo. Real apps embed the id issued by
 /// Google Cloud Console for the *backend* — the audience the id-token
@@ -146,6 +150,15 @@ async fn run_sign_in_flow(
         .map_err(|e| format!("permissions request: {e}"))?;
     log::info!("permission outcomes: {outcomes:?}");
 
+    if SERVER_CLIENT_ID.starts_with("REPLACE_") {
+        return Err(
+            "SERVER_CLIENT_ID is still the placeholder — edit src/android.rs, \
+             plug in the OAuth client id issued to your backend in Google Cloud Console, \
+             then rebuild."
+                .to_owned(),
+        );
+    }
+
     DemoApp::set_status(status, ctx, Status::Working("Signing in with Google…".to_owned()));
     let config = SignInConfig::builder(SERVER_CLIENT_ID)
         .scope("openid")
@@ -154,11 +167,11 @@ async fn run_sign_in_flow(
         .build();
     let client = SignInClient::acquire_with(config)
         .await
-        .map_err(|e| format!("sign_in acquire: {e}"))?;
+        .map_err(|e| format!("sign_in acquire: {}", render_sign_in_error(&e)))?;
     let account = client
         .sign_in_owned(SignInMode::Interactive)
         .await
-        .map_err(|e| format!("sign_in: {e}"))?;
+        .map_err(|e| format!("sign_in: {}", render_sign_in_error(&e)))?;
     log::info!("signed in as {} <{:?}>", account.id, account.email);
 
     DemoApp::set_status(status, ctx, Status::Working("Posting notification…".to_owned()));
@@ -166,12 +179,36 @@ async fn run_sign_in_flow(
     notifications
         .schedule(welcome_notification(&account))
         .await
-        .map_err(|e| format!("notifications: {e}"))?;
+        .map_err(|e| format!("notifications: {}", render_notification_error(&e)))?;
 
     Ok(format!(
         "Welcome, {}",
         account.display_name.as_deref().unwrap_or(&account.id),
     ))
+}
+
+/// Turn an `IstmoError::PluginError { bytes }` from the sign-in plugin into
+/// a human-readable string. Every other `IstmoError` variant falls back to
+/// its `Display` impl. Transport / infra errors are already actionable
+/// without extra decoding.
+fn render_sign_in_error(err: &IstmoError) -> String {
+    if let IstmoError::PluginError { bytes } = err {
+        return match istmo::codec::decode::<SignInError>(bytes) {
+            Ok((decoded, _)) => format!("{decoded}"),
+            Err(codec_err) => format!("undecodable domain error ({} bytes): {codec_err}", bytes.len()),
+        };
+    }
+    err.to_string()
+}
+
+fn render_notification_error(err: &IstmoError) -> String {
+    if let IstmoError::PluginError { bytes } = err {
+        return match istmo::codec::decode::<NotificationError>(bytes) {
+            Ok((decoded, _)) => format!("{decoded}"),
+            Err(codec_err) => format!("undecodable domain error ({} bytes): {codec_err}", bytes.len()),
+        };
+    }
+    err.to_string()
 }
 
 fn welcome_notification(account: &OwnedSignInAccount) -> NotificationRequest {
