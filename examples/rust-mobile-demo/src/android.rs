@@ -40,11 +40,16 @@ const SERVER_CLIENT_ID: &str =
 
 const POST_NOTIFICATIONS: &str = "android.permission.POST_NOTIFICATIONS";
 
-// AdMob test ad units — safe to hardcode; they always return test ads.
-const ADMOB_APP_ID: &str = "ca-app-pub-3940256099942544~3347511713";
-const INTERSTITIAL_UNIT: &str = "ca-app-pub-3940256099942544/1033173712";
+// AdMob production ad units. Keep in sync with the app id registered
+// under `com.google.android.gms.ads.APPLICATION_ID` in AndroidManifest.
+const ADMOB_APP_ID: &str = "ca-app-pub-1842517361828817~4357161875";
+const INTERSTITIAL_UNIT: &str = "ca-app-pub-1842517361828817/4741139402";
+const BANNER_UNIT: &str = "ca-app-pub-1842517361828817/1751908784";
+// Rewarded unit not provisioned yet — Google's canonical test rewarded
+// unit stays until a real one lands. Mixing prod app id + a test ad
+// unit id works (SDK does not enforce alignment) but keep an eye on
+// AdMob policy strikes if this ships to production.
 const REWARDED_UNIT: &str = "ca-app-pub-3940256099942544/5224354917";
-const BANNER_UNIT: &str = "ca-app-pub-3940256099942544/6300978111";
 
 /// NDK glue entry. `android-activity` provides the `ANativeActivity_onCreate`
 /// bridge and spawns this function on a dedicated thread.

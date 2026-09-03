@@ -12,11 +12,12 @@
         android:label="rust-mobile-demo"
         android:hasCode="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-        <!-- AdMob app id: Google's official test id. Replace with your
-             production id from https://apps.admob.com/ before shipping. -->
+        <!-- AdMob app id (production). Manifest metadata must match the
+             app id registered in apps.admob.com; the SDK crashes at
+             init if the two disagree. -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-3940256099942544~3347511713" />
+            android:value="ca-app-pub-1842517361828817~4357161875" />
         <!-- RustMobileActivity is a NativeActivity subclass that boots
              IstmoRuntime + registers the three plugin dispatchers before
              `android_main` fires. The `android.app.lib_name` metadata
