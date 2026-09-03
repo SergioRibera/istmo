@@ -19,9 +19,14 @@ use std::sync::{Arc, Mutex};
 use android_activity::AndroidApp;
 use eframe::egui;
 use istmo::IstmoError;
+use istmo::NativeHandle;
 use istmo::plugins::{
     NotificationError, NotificationImportance, NotificationRequest, NotificationsClient,
     PermissionsClient,
+};
+use istmo_plugins::admob::{
+    AdError, AdMobClient, AdMobConfig, Banner, BannerRect, BannerRequest, InterstitialOutcome,
+    RewardedOutcome,
 };
 use istmo_plugins::google_sign_in::{
     OwnedSignInAccount, SignInClient, SignInConfig, SignInError, SignInMode,
@@ -34,6 +39,12 @@ const SERVER_CLIENT_ID: &str =
     "848096709714-9le17umoe085dtcmrout03qdbcp8cpi7.apps.googleusercontent.com";
 
 const POST_NOTIFICATIONS: &str = "android.permission.POST_NOTIFICATIONS";
+
+// AdMob test ad units — safe to hardcode; they always return test ads.
+const ADMOB_APP_ID: &str = "ca-app-pub-3940256099942544~3347511713";
+const INTERSTITIAL_UNIT: &str = "ca-app-pub-3940256099942544/1033173712";
+const REWARDED_UNIT: &str = "ca-app-pub-3940256099942544/5224354917";
+const BANNER_UNIT: &str = "ca-app-pub-3940256099942544/6300978111";
 
 /// NDK glue entry. `android-activity` provides the `ANativeActivity_onCreate`
 /// bridge and spawns this function on a dedicated thread.
@@ -108,15 +119,47 @@ enum Status {
     Err(String),
 }
 
+/// Ephemeral ad message shown below the ad buttons — mirrors the sign-in
+/// `Status` but scoped to ad actions so a rewarded-completion label
+/// doesn't clobber the sign-in card headline.
+#[derive(Debug, Clone, Default)]
+enum AdStatus {
+    #[default]
+    Idle,
+    Working(String),
+    Ok(String),
+    Err(String),
+}
+
+/// Whether the banner overlay is currently visible. When `true`, the
+/// worker thread that opened it holds the handle alive (via the
+/// [`DemoApp::banner_shown`] flag) so we don't need to keep the Rust
+/// `NativeHandle<Banner>` in the App struct — the native side owns the
+/// view lifetime and we command hide/show via the plugin.
 struct DemoApp {
     status: Arc<Mutex<Status>>,
+    ad_status: Arc<Mutex<AdStatus>>,
+    /// Live banner handle. Present exactly when a banner is on-screen —
+    /// the handle owns the native `AdView`'s lifetime. Toggle path
+    /// takes it out to call `hide_banner_owned`.
+    banner: Arc<Mutex<Option<NativeHandle<Banner>>>>,
 }
 
 impl DemoApp {
     fn new() -> Self {
         Self {
             status: Arc::new(Mutex::new(Status::Idle)),
+            ad_status: Arc::new(Mutex::new(AdStatus::Idle)),
+            banner: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn set_ad_status(status: &Arc<Mutex<AdStatus>>, ctx: &egui::Context, next: AdStatus) {
+        {
+            let mut guard = status.lock().expect("ad status mutex");
+            *guard = next;
+        }
+        ctx.request_repaint();
     }
 
     fn set_status(status: &Arc<Mutex<Status>>, ctx: &egui::Context, next: Status) {
@@ -139,6 +182,101 @@ impl DemoApp {
             };
             Self::set_status(&status, &ctx, next);
         });
+    }
+
+    fn start_interstitial(&self, ctx: &egui::Context) {
+        let status = self.ad_status.clone();
+        let ctx = ctx.clone();
+        Self::set_ad_status(
+            &status,
+            &ctx,
+            AdStatus::Working("Loading interstitial…".into()),
+        );
+        std::thread::spawn(move || {
+            let outcome = pollster::block_on(run_interstitial_flow(&status, &ctx));
+            let next = match outcome {
+                Ok(msg) => AdStatus::Ok(msg),
+                Err(msg) => AdStatus::Err(msg),
+            };
+            Self::set_ad_status(&status, &ctx, next);
+        });
+    }
+
+    fn start_rewarded(&self, ctx: &egui::Context) {
+        let status = self.ad_status.clone();
+        let ctx = ctx.clone();
+        Self::set_ad_status(
+            &status,
+            &ctx,
+            AdStatus::Working("Loading rewarded ad…".into()),
+        );
+        std::thread::spawn(move || {
+            let outcome = pollster::block_on(run_rewarded_flow(&status, &ctx));
+            let next = match outcome {
+                Ok(msg) => AdStatus::Ok(msg),
+                Err(msg) => AdStatus::Err(msg),
+            };
+            Self::set_ad_status(&status, &ctx, next);
+        });
+    }
+
+    /// Toggle the banner overlay. When shown, we anchor it to the bottom
+    /// of the current window (`ctx.screen_rect()`). Coordinates are
+    /// physical pixels — `ctx.pixels_per_point()` translates from egui's
+    /// logical units.
+    fn start_toggle_banner(&self, ctx: &egui::Context) {
+        let held = self.banner.lock().expect("banner mutex").take();
+        let ad_status = self.ad_status.clone();
+        let banner_slot = self.banner.clone();
+        let ctx_clone = ctx.clone();
+
+        if let Some(handle) = held {
+            Self::set_ad_status(
+                &ad_status,
+                &ctx_clone,
+                AdStatus::Working("Hiding banner…".into()),
+            );
+            std::thread::spawn(move || {
+                let outcome = pollster::block_on(run_hide_banner(handle));
+                let next = match outcome {
+                    Ok(()) => AdStatus::Ok("Banner hidden.".into()),
+                    Err(msg) => AdStatus::Err(msg),
+                };
+                Self::set_ad_status(&ad_status, &ctx_clone, next);
+            });
+        } else {
+            // Anchor the banner at the bottom of the window, full width,
+            // ~50 dp tall. Convert egui's logical-point rect into
+            // physical pixels using the current pixels_per_point.
+            let px = ctx.pixels_per_point();
+            let screen = ctx.screen_rect();
+            let banner_h_px = (50.0 * px) as u32;
+            let width_px = (screen.width() * px) as u32;
+            let x_px = 0u32;
+            let y_px = ((screen.max.y * px) as u32).saturating_sub(banner_h_px);
+            let rect = BannerRect {
+                x: x_px,
+                y: y_px,
+                width: width_px,
+                height: banner_h_px,
+            };
+            Self::set_ad_status(
+                &ad_status,
+                &ctx_clone,
+                AdStatus::Working("Showing banner…".into()),
+            );
+            std::thread::spawn(move || {
+                let outcome = pollster::block_on(run_show_banner(rect));
+                let next = match outcome {
+                    Ok(handle) => {
+                        *banner_slot.lock().expect("banner mutex") = Some(handle);
+                        AdStatus::Ok("Banner visible.".into())
+                    }
+                    Err(msg) => AdStatus::Err(msg),
+                };
+                Self::set_ad_status(&ad_status, &ctx_clone, next);
+            });
+        }
     }
 
     fn start_sign_out(&self, ctx: &egui::Context) {
@@ -192,10 +330,8 @@ impl DemoApp {
         let busy = matches!(status, Status::Working(_));
         ui.vertical_centered(|ui| {
             ui.add_space(24.0);
-            let button = egui::Button::new(
-                egui::RichText::new("Sign in with Google").size(18.0),
-            )
-            .min_size(egui::vec2(240.0, 56.0));
+            let button = egui::Button::new(egui::RichText::new("Sign in with Google").size(18.0))
+                .min_size(egui::vec2(240.0, 56.0));
             if ui.add_enabled(!busy, button).clicked() {
                 self.start_sign_in(ctx);
             }
@@ -204,10 +340,8 @@ impl DemoApp {
             match status {
                 Status::Idle => {
                     ui.label(
-                        egui::RichText::new(
-                            "Tap to sign in and receive a welcome notification.",
-                        )
-                        .weak(),
+                        egui::RichText::new("Tap to sign in and receive a welcome notification.")
+                            .weak(),
                     );
                 }
                 Status::Working(msg) => {
@@ -224,12 +358,7 @@ impl DemoApp {
         });
     }
 
-    fn render_signed_in(
-        &self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        account: &AccountView,
-    ) {
+    fn render_signed_in(&self, ui: &mut egui::Ui, ctx: &egui::Context, account: &AccountView) {
         egui::Frame::group(ui.style())
             .fill(ui.visuals().extreme_bg_color)
             .inner_margin(egui::Margin::same(16.0))
@@ -257,6 +386,9 @@ impl DemoApp {
             });
 
         ui.add_space(16.0);
+        self.render_ads_panel(ui, ctx);
+
+        ui.add_space(16.0);
         ui.vertical_centered(|ui| {
             if ui
                 .add(
@@ -269,15 +401,70 @@ impl DemoApp {
             }
         });
     }
+
+    fn render_ads_panel(&self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let ad_snapshot = self.ad_status.lock().expect("ad status mutex").clone();
+        let busy = matches!(&ad_snapshot, AdStatus::Working(_));
+        let banner_shown = *self.banner_shown.lock().expect("banner mutex");
+
+        egui::Frame::group(ui.style())
+            .fill(ui.visuals().extreme_bg_color)
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                ui.heading("Ads");
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("AdMob · test units").weak());
+                ui.add_space(10.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    let interstitial =
+                        egui::Button::new("Show interstitial").min_size(egui::vec2(180.0, 40.0));
+                    if ui.add_enabled(!busy, interstitial).clicked() {
+                        self.start_interstitial(ctx);
+                    }
+
+                    let rewarded =
+                        egui::Button::new("Show rewarded").min_size(egui::vec2(180.0, 40.0));
+                    if ui.add_enabled(!busy, rewarded).clicked() {
+                        self.start_rewarded(ctx);
+                    }
+
+                    let banner_label = if banner_shown {
+                        "Hide banner"
+                    } else {
+                        "Show banner"
+                    };
+                    let banner = egui::Button::new(banner_label).min_size(egui::vec2(180.0, 40.0));
+                    if ui.add_enabled(!busy, banner).clicked() {
+                        self.start_toggle_banner(ctx);
+                    }
+                });
+
+                ui.add_space(10.0);
+                match &ad_snapshot {
+                    AdStatus::Idle => {
+                        ui.label(egui::RichText::new("Tap a button to try an ad.").weak());
+                    }
+                    AdStatus::Working(msg) => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(msg);
+                        });
+                    }
+                    AdStatus::Ok(msg) => {
+                        ui.label(egui::RichText::new(msg).strong());
+                    }
+                    AdStatus::Err(msg) => {
+                        ui.colored_label(egui::Color32::from_rgb(220, 90, 90), msg);
+                    }
+                }
+            });
+    }
 }
 
 fn field(ui: &mut egui::Ui, key: &str, value: &str) {
     ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(format!("{key}:"))
-                .strong()
-                .monospace(),
-        );
+        ui.label(egui::RichText::new(format!("{key}:")).strong().monospace());
         ui.add_space(4.0);
         ui.label(egui::RichText::new(value).monospace());
     });
@@ -340,13 +527,109 @@ async fn run_sign_in_flow(
         ctx,
         Status::Working("Posting notification…".to_owned()),
     );
-    let notifications = NotificationsClient::acquire().map_err(|e| format!("notifications: {e}"))?;
+    let notifications =
+        NotificationsClient::acquire().map_err(|e| format!("notifications: {e}"))?;
     notifications
         .schedule(welcome_notification(&account))
         .await
         .map_err(|e| format!("notifications: {}", render_notification_error(&e)))?;
 
     Ok(view)
+}
+
+async fn run_interstitial_flow(
+    status: &Arc<Mutex<AdStatus>>,
+    ctx: &egui::Context,
+) -> Result<String, String> {
+    let client = acquire_admob().await?;
+    DemoApp::set_ad_status(
+        status,
+        ctx,
+        AdStatus::Working("Showing interstitial…".into()),
+    );
+    let ad = client
+        .load_interstitial_owned(INTERSTITIAL_UNIT.to_owned())
+        .await
+        .map_err(|e| format!("load: {}", render_ad_error(&e)))?;
+    let outcome = client
+        .show_interstitial_owned(ad)
+        .await
+        .map_err(|e| format!("show: {}", render_ad_error(&e)))?;
+    Ok(match outcome {
+        InterstitialOutcome::Dismissed => "Interstitial dismissed by user.".to_owned(),
+        InterstitialOutcome::FailedToShow => "Interstitial failed to show.".to_owned(),
+    })
+}
+
+async fn run_rewarded_flow(
+    status: &Arc<Mutex<AdStatus>>,
+    ctx: &egui::Context,
+) -> Result<String, String> {
+    let client = acquire_admob().await?;
+    DemoApp::set_ad_status(
+        status,
+        ctx,
+        AdStatus::Working("Showing rewarded ad…".into()),
+    );
+    let ad = client
+        .load_rewarded_owned(REWARDED_UNIT.to_owned())
+        .await
+        .map_err(|e| format!("load: {}", render_ad_error(&e)))?;
+    let outcome: RewardedOutcome = client
+        .show_rewarded_owned(ad)
+        .await
+        .map_err(|e| format!("show: {}", render_ad_error(&e)))?;
+    Ok(if outcome.granted {
+        format!(
+            "Reward: {} × {}",
+            outcome.reward_amount, outcome.reward_type,
+        )
+    } else {
+        "Rewarded ad closed without reward.".to_owned()
+    })
+}
+
+async fn run_show_banner(rect: BannerRect) -> Result<NativeHandle<Banner>, String> {
+    let client = acquire_admob().await?;
+    client
+        .show_banner_owned(BannerRequest {
+            ad_unit_id: BANNER_UNIT.to_owned(),
+            rect,
+        })
+        .await
+        .map_err(|e| format!("show_banner: {}", render_ad_error(&e)))
+}
+
+async fn run_hide_banner(handle: NativeHandle<Banner>) -> Result<(), String> {
+    let client = acquire_admob().await?;
+    client
+        .hide_banner_owned(handle)
+        .await
+        .map_err(|e| format!("hide_banner: {}", render_ad_error(&e)))
+}
+
+async fn acquire_admob() -> Result<AdMobClient, String> {
+    let config = AdMobConfig {
+        app_id: ADMOB_APP_ID.to_owned(),
+        test_device_ids: vec![],
+        child_directed_treatment: false,
+    };
+    AdMobClient::acquire_with(config)
+        .await
+        .map_err(|e| format!("admob acquire: {}", render_ad_error(&e)))
+}
+
+fn render_ad_error(err: &IstmoError) -> String {
+    if let IstmoError::PluginError { bytes } = err {
+        return match istmo::codec::decode::<AdError>(bytes) {
+            Ok((decoded, _)) => format!("{decoded}"),
+            Err(codec_err) => format!(
+                "undecodable domain error ({} bytes): {codec_err}",
+                bytes.len(),
+            ),
+        };
+    }
+    err.to_string()
 }
 
 async fn run_sign_out_flow() -> Result<(), String> {
