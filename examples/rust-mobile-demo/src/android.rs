@@ -299,34 +299,67 @@ impl DemoApp {
     }
 }
 
+/// Vertical padding reserved above the header so the status bar does not
+/// overlap our content. NativeActivity + egui draw edge-to-edge; the
+/// Kotlin `WindowCompat.setDecorFitsSystemWindows(window, true)` helper
+/// mitigates it on some devices, but MIUI (and other OEMs) still shove
+/// content underneath the system bar. Reserving `28pt` matches the
+/// stock Android status bar height across most modern phones.
+const STATUS_BAR_INSET: f32 = 28.0;
+
+/// Horizontal padding reserved on both sides of the content column so
+/// cards do not clip against the left / right edges of the screen.
+const HORIZONTAL_INSET: f32 = 12.0;
+
 impl eframe::App for DemoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Snapshot state under the mutex, then render — never hold the
         // lock across egui calls.
         let snapshot = self.status.lock().expect("status mutex").clone();
 
-        egui::TopBottomPanel::top("hdr").show(ctx, |ui| {
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                ui.add_space(16.0);
-                ui.heading("istmo demo");
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("· Full Rust · egui").weak());
+        egui::TopBottomPanel::top("hdr")
+            .frame(
+                egui::Frame::default()
+                    .fill(ctx.style().visuals.panel_fill)
+                    .inner_margin(egui::Margin {
+                        left: HORIZONTAL_INSET,
+                        right: HORIZONTAL_INSET,
+                        top: STATUS_BAR_INSET + 8.0,
+                        bottom: 10.0,
+                    }),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("istmo demo");
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("· Full Rust · egui").weak());
+                });
             });
-            ui.add_space(12.0);
-        });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_space(16.0);
-            match &snapshot {
-                Status::SignedIn(account) => {
-                    self.render_signed_in(ui, ctx, account);
-                }
-                _ => {
-                    self.render_signed_out(ui, ctx, &snapshot);
-                }
-            }
-        });
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::default()
+                    .fill(ctx.style().visuals.panel_fill)
+                    .inner_margin(egui::Margin::symmetric(HORIZONTAL_INSET, 12.0)),
+            )
+            .show(ctx, |ui| {
+                // Cap content width to the panel width — every card
+                // inside reads `ui.available_width()` when rendering,
+                // and this bound prevents accidental horizontal
+                // overflow when a very long label (like an id-token)
+                // is dropped inside a `ui.horizontal` block.
+                ui.set_max_width(ui.available_width());
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match &snapshot {
+                        Status::SignedIn(account) => {
+                            self.render_signed_in(ui, ctx, account);
+                        }
+                        _ => {
+                            self.render_signed_out(ui, ctx, &snapshot);
+                        }
+                    });
+            });
     }
 }
 
@@ -364,17 +397,17 @@ impl DemoApp {
     }
 
     fn render_signed_in(&self, ui: &mut egui::Ui, ctx: &egui::Context, account: &AccountView) {
+        let card_width = ui.available_width();
         egui::Frame::group(ui.style())
             .fill(ui.visuals().extreme_bg_color)
-            .inner_margin(egui::Margin::same(16.0))
+            .inner_margin(egui::Margin::same(14.0))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let name = account
-                        .display_name
-                        .as_deref()
-                        .unwrap_or_else(|| account.email.as_deref().unwrap_or(&account.id));
-                    ui.heading(name);
-                });
+                ui.set_max_width(card_width);
+                let name = account
+                    .display_name
+                    .as_deref()
+                    .unwrap_or_else(|| account.email.as_deref().unwrap_or(&account.id));
+                ui.add(egui::Label::new(egui::RichText::new(name).heading()).truncate());
                 ui.add_space(8.0);
                 field(ui, "id", &account.id);
                 if let Some(email) = &account.email {
@@ -411,35 +444,37 @@ impl DemoApp {
         let ad_snapshot = self.ad_status.lock().expect("ad status mutex").clone();
         let busy = matches!(&ad_snapshot, AdStatus::Working(_));
         let banner_shown = self.banner.lock().expect("banner mutex").is_some();
+        let card_width = ui.available_width();
 
         egui::Frame::group(ui.style())
             .fill(ui.visuals().extreme_bg_color)
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
+                ui.set_max_width(card_width);
                 ui.heading("Ads");
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new("AdMob · test units").weak());
                 ui.add_space(10.0);
 
+                // Each button gets a fair share of the row minus the
+                // spacing between them. Below ~600pt wide (typical
+                // phone), that lands under the min_size (120), so
+                // horizontal_wrapped naturally splits into two rows.
+                let spacing = ui.spacing().item_spacing.x;
+                let btn_w = ((card_width - spacing * 2.0) / 3.0).max(120.0);
+                let btn_size = egui::vec2(btn_w, 40.0);
+
                 ui.horizontal_wrapped(|ui| {
-                    let interstitial =
-                        egui::Button::new("Show interstitial").min_size(egui::vec2(180.0, 40.0));
+                    let interstitial = egui::Button::new("Interstitial").min_size(btn_size);
                     if ui.add_enabled(!busy, interstitial).clicked() {
                         self.start_interstitial(ctx);
                     }
-
-                    let rewarded =
-                        egui::Button::new("Show rewarded").min_size(egui::vec2(180.0, 40.0));
+                    let rewarded = egui::Button::new("Rewarded").min_size(btn_size);
                     if ui.add_enabled(!busy, rewarded).clicked() {
                         self.start_rewarded(ctx);
                     }
-
-                    let banner_label = if banner_shown {
-                        "Hide banner"
-                    } else {
-                        "Show banner"
-                    };
-                    let banner = egui::Button::new(banner_label).min_size(egui::vec2(180.0, 40.0));
+                    let banner_label = if banner_shown { "Hide banner" } else { "Banner" };
+                    let banner = egui::Button::new(banner_label).min_size(btn_size);
                     if ui.add_enabled(!busy, banner).clicked() {
                         self.start_toggle_banner(ctx);
                     }
@@ -448,19 +483,30 @@ impl DemoApp {
                 ui.add_space(10.0);
                 match &ad_snapshot {
                     AdStatus::Idle => {
-                        ui.label(egui::RichText::new("Tap a button to try an ad.").weak());
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new("Tap a button to try an ad.").weak(),
+                            )
+                            .wrap(),
+                        );
                     }
                     AdStatus::Working(msg) => {
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            ui.label(msg);
+                            ui.add(egui::Label::new(msg).wrap());
                         });
                     }
                     AdStatus::Ok(msg) => {
-                        ui.label(egui::RichText::new(msg).strong());
+                        ui.add(egui::Label::new(egui::RichText::new(msg).strong()).wrap());
                     }
                     AdStatus::Err(msg) => {
-                        ui.colored_label(egui::Color32::from_rgb(220, 90, 90), msg);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(msg)
+                                    .color(egui::Color32::from_rgb(220, 90, 90)),
+                            )
+                            .wrap(),
+                        );
                     }
                 }
             });
@@ -469,9 +515,16 @@ impl DemoApp {
 
 fn field(ui: &mut egui::Ui, key: &str, value: &str) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(format!("{key}:")).strong().monospace());
+        ui.add(
+            egui::Label::new(egui::RichText::new(format!("{key}:")).strong().monospace())
+                .truncate(),
+        );
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(value).monospace());
+        // Truncate over wrap for long values (URLs, JWTs). Wrapping
+        // an id_token turns the card into ten lines of ugliness; a
+        // trailing ellipsis reads as "there is more, tap to copy in
+        // a future revision".
+        ui.add(egui::Label::new(egui::RichText::new(value).monospace()).truncate());
     });
     ui.add_space(2.0);
 }
@@ -616,7 +669,7 @@ async fn run_hide_banner(handle: NativeHandle<Banner>) -> Result<(), String> {
 async fn acquire_admob() -> Result<AdMobClient, String> {
     let config = AdMobConfig {
         app_id: ADMOB_APP_ID.to_owned(),
-        test_device_ids: vec![],
+        test_device_ids: vec!["2902b757-08af-4ae3-b03e-b7e8a0104645".to_owned()],
         child_directed_treatment: false,
     };
     AdMobClient::acquire_with(config)
