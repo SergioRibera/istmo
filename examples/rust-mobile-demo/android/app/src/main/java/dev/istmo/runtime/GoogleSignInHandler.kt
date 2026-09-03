@@ -9,7 +9,6 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
@@ -119,17 +118,39 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
     }
 
     /**
-     * Traditional "Sign in with Google" button flow via
-     * [GetSignInWithGoogleOption]. Always shows an account picker; does
-     * not require the user to have previously authorized this app.
-     * Preferred entry point for a UI button that reads "Sign in with
-     * Google".
+     * Interactive flow, following the two-step pattern documented by
+     * Google for `Credential Manager`:
+     *
+     * 1. Try `GetGoogleIdOption` with `filterByAuthorizedAccounts = true`
+     *    — the One Tap path for returning users. If the account has
+     *    already granted this app the requested scopes, the SDK skips
+     *    the picker entirely.
+     * 2. On `NoCredentialAvailable`, retry with
+     *    `filterByAuthorizedAccounts = false` — the sign-up path, which
+     *    surfaces the bottom sheet with every Google account on the
+     *    device.
+     *
+     * Both steps go through the bottom sheet directly. Deliberately
+     * avoiding `GetSignInWithGoogleOption` here because it starts a
+     * separate Activity that MIUI / other aggressive process managers
+     * kill mid-flow, surfacing as a bogus `TYPE_USER_CANCELED` even
+     * when the user did select an account.
      */
     private suspend fun withInteractiveGoogleFlow(config: SignInConfig): SignInAccount {
-        val builder = GetSignInWithGoogleOption.Builder(config.serverClientId)
-        config.nonce?.let { builder.setNonce(it) }
-        val option = builder.build()
-        return runRequest(option)
+        return try {
+            withGoogleIdOption(config, filterByAuthorizedAccounts = true)
+        } catch (e: PluginException) {
+            val payload = e.payload
+            if (payload.isNotEmpty() &&
+                Bincode.readEnumDiscriminant(payload, 0).value ==
+                Err.NoCredentialAvailable.ordinal
+            ) {
+                Log.i(TAG, "no authorized accounts → falling back to sign-up flow")
+                withGoogleIdOption(config, filterByAuthorizedAccounts = false)
+            } else {
+                throw e
+            }
+        }
     }
 
     /**
