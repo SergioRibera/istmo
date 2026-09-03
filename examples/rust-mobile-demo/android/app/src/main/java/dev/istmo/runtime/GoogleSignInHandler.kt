@@ -1,50 +1,63 @@
 package dev.istmo.runtime
 
 import android.app.Activity
+import android.content.Intent
 import android.util.Log
-import androidx.credentials.CredentialManager
-import androidx.credentials.CredentialOption
-import androidx.credentials.GetCredentialRequest
-import androidx.credentials.exceptions.GetCredentialCancellationException
-import androidx.credentials.exceptions.GetCredentialException
-import androidx.credentials.exceptions.NoCredentialException
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
+import com.google.android.gms.common.Scopes
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
+import com.google.android.gms.common.api.Scope
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 
 /**
- * Kotlin backend for the `istmo.google_sign_in` plugin.
+ * Kotlin backend for the `istmo.google_sign_in` plugin, backed by the
+ * legacy `GoogleSignInClient` (from `com.google.android.gms:play-services-auth`).
  *
- * Uses AndroidX Credential Manager + Google Identity Services. Wire trait:
- *  * `sign_in(SignInMode) -> Result<SignInAccount, SignInError>`
- *  * `silent_sign_in() -> Result<Option<SignInAccount>, SignInError>`
- *  * `refresh(NativeHandleId) -> Result<SignInAccount, SignInError>`
- *  * `sign_out() -> Result<(), SignInError>`
- *  * `revoke() -> Result<(), SignInError>`
+ * Legacy vs Credential Manager: the M6 spec pointed at Credential Manager
+ * for future-proofing, but on MIUI / other aggressive process managers
+ * every Credential-Manager path goes through a Play-Services-launched
+ * intermediate Activity that MIUI kills mid-flow, surfacing as a bogus
+ * `TYPE_USER_CANCELED` right after account selection. The legacy client
+ * launches the picker directly from the calling Activity via
+ * `startActivityForResult`, which MIUI leaves alone.
  *
- * Every returned account carries a `NativeHandleId` (u64) that resolves in
- * the [credentials] map to the concrete `GoogleIdTokenCredential`. Rust
- * releases the handle by sending `Frame::ReleaseNativeHandle`; the runtime
- * routes that into [IstmoRuntime.onReleaseNativeHandle], from which we
- * evict the entry.
- *
- * This handler is stateful — the trait is annotated with `init = SignInConfig`,
- * so [handleCreateInstance] parses the config and returns an instance id.
+ * Trait shape and wire encoding are unchanged — the swap is
+ * dispatcher-local.
  */
 class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
 
     companion object {
         const val PLUGIN_ID = "istmo.google_sign_in"
         private const val TAG = "istmo.signin"
+        /**
+         * Base request code for the sign-in `startActivityForResult` flow.
+         * Each concurrent request gets `base + n`; the demo only ever
+         * fires one, so `base` alone would be enough, but the counter
+         * keeps things obvious if a future refactor adds parallelism.
+         */
+        private const val REQUEST_CODE_BASE = 0xE00
     }
 
     private val nextInstanceId = AtomicLong(1)
     private val nextHandleId = AtomicLong(1)
+    private val nextRequestOffset = AtomicInteger(0)
     private val configs = ConcurrentHashMap<Long, SignInConfig>()
-    private val credentials = ConcurrentHashMap<Long, GoogleIdTokenCredential>()
-    private val manager: CredentialManager = CredentialManager.create(activity)
+    private val credentials = ConcurrentHashMap<Long, GoogleSignInAccount>()
+    private val pending = ConcurrentHashMap<Int, Continuation<SignInResult>>()
 
     override suspend fun handleCreateInstance(payload: ByteArray): ByteArray {
         val config = decodeConfig(payload)
@@ -67,15 +80,8 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
             "sign_in" -> {
                 val (mode, _) = Bincode.readEnumDiscriminant(payload, 0)
                 val account = when (mode) {
-                    // SignInMode::Interactive — use the classic "Sign in
-                    // with Google" button flow. Always shows an account
-                    // picker; independent of whether the user has
-                    // previously authorized this app.
-                    0 -> withInteractiveGoogleFlow(config)
-                    // SignInMode::SilentOnly — try the One Tap /
-                    // authorized-accounts path only. Fails fast with
-                    // NoCredentialAvailable if nothing is cached.
-                    1 -> withGoogleIdOption(config, filterByAuthorizedAccounts = true)
+                    0 -> interactiveSignIn(config)  // Interactive
+                    1 -> silentSignIn(config)       // SilentOnly
                     else -> throw PluginException(
                         encodeError(Err.Backend, "unknown SignInMode discriminant $mode"),
                     )
@@ -84,33 +90,26 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
             }
             "silent_sign_in" -> {
                 val account = try {
-                    withGoogleIdOption(config, filterByAuthorizedAccounts = true)
+                    silentSignIn(config)
                 } catch (e: PluginException) {
-                    val payloadBytes = e.payload
-                    if (payloadBytes.isNotEmpty() &&
-                        Bincode.readEnumDiscriminant(payloadBytes, 0).value == Err.NoCredentialAvailable.ordinal
-                    ) {
-                        return encodeOptionNone()
-                    }
+                    if (isNoCredential(e)) return encodeOptionNone()
                     throw e
                 }
                 encodeOptionSome(account)
             }
             "refresh" -> {
                 val (handleId, _) = Bincode.readVarintU64(payload, 0)
-                credentials.remove(handleId)  // discard the stale handle
-                encodeAccount(withGoogleIdOption(config, filterByAuthorizedAccounts = true))
+                credentials.remove(handleId)
+                encodeAccount(silentSignIn(config))
             }
             "sign_out" -> {
                 credentials.clear()
+                clientFor(config).signOut().await()
                 ByteArray(0)
             }
             "revoke" -> {
                 credentials.clear()
-                // Full OAuth revocation would require a backend call; the
-                // Credential Manager API does not expose a revoke primitive
-                // as of 1.3.x, so this is a local-state clear only. Real
-                // apps should call the backend's `/token/revoke` endpoint.
+                clientFor(config).revokeAccess().await()
                 ByteArray(0)
             }
             else -> error("unknown SignIn method: $method")
@@ -118,114 +117,108 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
     }
 
     /**
-     * Interactive flow, following the two-step pattern documented by
-     * Google for `Credential Manager`:
-     *
-     * 1. Try `GetGoogleIdOption` with `filterByAuthorizedAccounts = true`
-     *    — the One Tap path for returning users. If the account has
-     *    already granted this app the requested scopes, the SDK skips
-     *    the picker entirely.
-     * 2. On `NoCredentialAvailable`, retry with
-     *    `filterByAuthorizedAccounts = false` — the sign-up path, which
-     *    surfaces the bottom sheet with every Google account on the
-     *    device.
-     *
-     * Both steps go through the bottom sheet directly. Deliberately
-     * avoiding `GetSignInWithGoogleOption` here because it starts a
-     * separate Activity that MIUI / other aggressive process managers
-     * kill mid-flow, surfacing as a bogus `TYPE_USER_CANCELED` even
-     * when the user did select an account.
+     * Route from [RustMobileActivity.onActivityResult] into the suspended
+     * `startActivityForResult` continuation.
      */
-    private suspend fun withInteractiveGoogleFlow(config: SignInConfig): SignInAccount {
+    fun notifyActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        val cont = pending.remove(requestCode) ?: return
+        cont.resume(SignInResult(resultCode, data))
+    }
+
+    private suspend fun interactiveSignIn(config: SignInConfig): SignInAccount {
+        val client = clientFor(config)
+        // Try silent first — instantaneous when the user already granted
+        // this app the requested scopes.
+        try {
+            val silent = client.silentSignIn().await()
+            Log.i(TAG, "silent sign-in succeeded id=${silent.id}")
+            return toAccount(silent)
+        } catch (e: ApiException) {
+            Log.i(
+                TAG,
+                "silent sign-in unavailable (status=${e.statusCode} ${CommonStatusCodes.getStatusCodeString(e.statusCode)}) — launching picker",
+            )
+        }
+
+        val requestCode = REQUEST_CODE_BASE + (nextRequestOffset.getAndIncrement() and 0xFF)
+        val intent = client.signInIntent
+        val result: SignInResult = withContext(Dispatchers.Main) {
+            suspendCoroutine { cont ->
+                pending[requestCode] = cont
+                activity.startActivityForResult(intent, requestCode)
+            }
+        }
+        return resolveResult(result)
+    }
+
+    private suspend fun silentSignIn(config: SignInConfig): SignInAccount {
+        val client = clientFor(config)
         return try {
-            withGoogleIdOption(config, filterByAuthorizedAccounts = true)
-        } catch (e: PluginException) {
-            val payload = e.payload
-            if (payload.isNotEmpty() &&
-                Bincode.readEnumDiscriminant(payload, 0).value ==
-                Err.NoCredentialAvailable.ordinal
-            ) {
-                Log.i(TAG, "no authorized accounts → falling back to sign-up flow")
-                withGoogleIdOption(config, filterByAuthorizedAccounts = false)
-            } else {
-                throw e
-            }
-        }
-    }
-
-    /**
-     * One Tap / silent flow via [GetGoogleIdOption]. Depending on
-     * `filterByAuthorizedAccounts` returns cached-account credentials
-     * only (true) or falls back to a bottom-sheet sign-up flow (false).
-     * Used for silent restoration and for the token-refresh path.
-     */
-    private suspend fun withGoogleIdOption(
-        config: SignInConfig,
-        filterByAuthorizedAccounts: Boolean,
-    ): SignInAccount {
-        val builder = GetGoogleIdOption.Builder()
-            .setServerClientId(config.serverClientId)
-            .setFilterByAuthorizedAccounts(filterByAuthorizedAccounts)
-            .setAutoSelectEnabled(config.autoSelect)
-        config.nonce?.let { builder.setNonce(it) }
-        return runRequest(builder.build())
-    }
-
-    private suspend fun runRequest(option: CredentialOption): SignInAccount {
-        val request = GetCredentialRequest.Builder()
-            .addCredentialOption(option)
-            .build()
-        val response = try {
-            manager.getCredential(activity, request)
-        } catch (e: GetCredentialCancellationException) {
-            // Real user cancellation vs SDK-side-reported cancellation
-            // (e.g. OAuth consent-screen not published, wrong SHA-1
-            // resolved server-side, Play Services stale) both surface as
-            // this exception. Log everything so the actual reason lands
-            // in logcat; propagate the message as Backend so the UI
-            // shows it too until we tighten the diagnosis.
-            Log.w(TAG, "cancellation exception: type=${e.type} msg=${e.message}", e)
-            val msg = e.message.orEmpty()
-            if (msg.isEmpty() || msg.contains("user", ignoreCase = true) ||
-                msg.contains("cancel", ignoreCase = true)
-            ) {
-                throw PluginException(encodeError(Err.UserCancelled, null))
-            }
-            throw PluginException(
-                encodeError(Err.Backend, "cancellation: ${e.type} $msg"),
+            toAccount(client.silentSignIn().await())
+        } catch (e: ApiException) {
+            Log.w(
+                TAG,
+                "silent sign-in failed status=${e.statusCode} ${CommonStatusCodes.getStatusCodeString(e.statusCode)}",
+                e,
             )
-        } catch (e: NoCredentialException) {
-            Log.w(TAG, "no credential available: ${e.message}", e)
             throw PluginException(encodeError(Err.NoCredentialAvailable, null))
-        } catch (e: GetCredentialException) {
-            Log.e(TAG, "credential manager backend error: ${e.type} ${e.message}", e)
-            throw PluginException(
-                encodeError(
-                    Err.Backend,
-                    "${e.type}: ${e.message ?: e.javaClass.simpleName}",
-                ),
-            )
         }
-        val credential = response.credential
-        if (credential !is androidx.credentials.CustomCredential ||
-            credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-        ) {
-            Log.e(TAG, "non-google credential returned: type=${credential.type}")
-            throw PluginException(
-                encodeError(Err.Backend, "non-google credential type ${credential.type}"),
-            )
+    }
+
+    private fun resolveResult(result: SignInResult): SignInAccount {
+        val data = result.data
+        val task = GoogleSignIn.getSignedInAccountFromIntent(data)
+        return try {
+            val account = task.getResult(ApiException::class.java)
+                ?: throw PluginException(encodeError(Err.Backend, "empty sign-in result"))
+            Log.i(TAG, "picker sign-in succeeded id=${account.id} email=${account.email}")
+            toAccount(account)
+        } catch (e: ApiException) {
+            val code = e.statusCode
+            val label = CommonStatusCodes.getStatusCodeString(code)
+            Log.e(TAG, "picker sign-in failed status=$code $label", e)
+            val err = when (code) {
+                CommonStatusCodes.SIGN_IN_REQUIRED,
+                GoogleSignInStatusCodes.SIGN_IN_CANCELLED -> Err.UserCancelled
+                CommonStatusCodes.NETWORK_ERROR -> Err.Network
+                CommonStatusCodes.DEVELOPER_ERROR -> Err.InvalidConfiguration
+                else -> Err.Backend
+            }
+            val msg = if (err.hasPayload) "$label ($code)" else null
+            throw PluginException(encodeError(err, msg))
         }
-        val google = GoogleIdTokenCredential.createFrom(credential.data)
+    }
+
+    private fun clientFor(config: SignInConfig): GoogleSignInClient {
+        val builder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(config.serverClientId)
+            .requestEmail()
+            .requestProfile()
+        for (scope in config.scopes) {
+            // Skip the OIDC-standard scopes the DEFAULT_SIGN_IN + requestEmail + requestProfile
+            // already cover, otherwise Google logs a warning about duplicates.
+            when (scope) {
+                "openid", "email", "profile" -> continue
+                Scopes.EMAIL, Scopes.PROFILE, Scopes.OPEN_ID -> continue
+                else -> builder.requestScopes(Scope(scope))
+            }
+        }
+        if (!config.hostedDomain.isNullOrEmpty()) {
+            builder.setHostedDomain(config.hostedDomain)
+        }
+        return GoogleSignIn.getClient(activity, builder.build())
+    }
+
+    private fun toAccount(google: GoogleSignInAccount): SignInAccount {
         val handleId = nextHandleId.getAndIncrement()
         credentials[handleId] = google
-        Log.i(TAG, "signed in id=${google.id} display=${google.displayName}")
         return SignInAccount(
-            id = google.id,
-            email = google.id,
+            id = google.id ?: "",
+            email = google.email,
             displayName = google.displayName,
-            photoUrl = google.profilePictureUri?.toString(),
-            idToken = google.idToken,
-            grantedScopes = listOf("openid", "email", "profile"),
+            photoUrl = google.photoUrl?.toString(),
+            idToken = google.idToken ?: "",
+            grantedScopes = google.grantedScopes.map { it.scopeUri },
             credentialHandleId = handleId,
         )
     }
@@ -234,10 +227,18 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
         credentials.remove(handleId)
     }
 
+    private fun isNoCredential(e: PluginException): Boolean {
+        val bytes = e.payload
+        if (bytes.isEmpty()) return false
+        return Bincode.readEnumDiscriminant(bytes, 0).value ==
+            Err.NoCredentialAvailable.ordinal
+    }
+
     // ---- Bincode -------------------------------------------------------
 
     /**
-     * `SignInConfig` layout:
+     * `SignInConfig` wire layout — see the Rust plugin for the canonical
+     * definition:
      *   String serverClientId
      *   Vec<String> scopes
      *   Option<String> hostedDomain
@@ -255,7 +256,7 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
     }
 
     /**
-     * `SignInAccount` layout:
+     * `SignInAccount` wire layout:
      *   String id
      *   Option<String> email
      *   Option<String> displayName
@@ -329,4 +330,7 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
         val grantedScopes: List<String>,
         val credentialHandleId: Long,
     )
+
+    private data class SignInResult(val resultCode: Int, val data: Intent?)
 }
+

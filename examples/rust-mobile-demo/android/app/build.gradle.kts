@@ -168,10 +168,18 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // `Task<T>.await()` extension used by GoogleSignInHandler.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
 
-    // istmo.google_sign_in — Credential Manager + Play Services Auth +
-    // Google Identity Services.
-    implementation("androidx.credentials:credentials:1.3.0")
-    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
-    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+    // istmo.google_sign_in — Legacy Google Sign-In (play-services-auth).
+    //
+    // Chose the legacy client over Credential Manager because on MIUI
+    // (and other aggressive process managers) the Play-Services-launched
+    // Activity that both `GetSignInWithGoogleOption` and
+    // `GetGoogleIdOption` rely on gets killed mid-flow, surfacing as a
+    // bogus `TYPE_USER_CANCELED` right after the user selects an
+    // account. `GoogleSignInClient.signInIntent` starts the picker from
+    // the calling Activity directly (plain `startActivityForResult`),
+    // sidestepping the killer.
+    implementation("com.google.android.gms:play-services-auth:21.3.0")
 }

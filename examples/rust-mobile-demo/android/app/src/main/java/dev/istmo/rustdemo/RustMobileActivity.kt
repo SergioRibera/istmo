@@ -1,6 +1,7 @@
 package dev.istmo.rustdemo
 
 import android.app.NativeActivity
+import android.content.Intent
 import android.os.Bundle
 import dev.istmo.runtime.GoogleSignInHandler
 import dev.istmo.runtime.IstmoRuntime
@@ -31,6 +32,7 @@ import dev.istmo.runtime.PermissionsHandler
 class RustMobileActivity : NativeActivity() {
 
     private lateinit var permissions: PermissionsHandler
+    private lateinit var signIn: GoogleSignInHandler
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Register plugin dispatchers BEFORE super.onCreate() — the Rust
@@ -40,7 +42,8 @@ class RustMobileActivity : NativeActivity() {
         check(ok) { "IstmoRuntime.start() failed — pump did not initialise" }
 
         permissions = PermissionsHandler(this)
-        runtime.registerHandler(GoogleSignInHandler.PLUGIN_ID, GoogleSignInHandler(this))
+        signIn = GoogleSignInHandler(this)
+        runtime.registerHandler(GoogleSignInHandler.PLUGIN_ID, signIn)
         runtime.registerHandler(NotificationsHandler.PLUGIN_ID, NotificationsHandler(this))
         runtime.registerHandler(PermissionsHandler.PLUGIN_ID, permissions)
 
@@ -54,6 +57,12 @@ class RustMobileActivity : NativeActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissionsRequested, grantResults)
         permissions.notifyPermissionsResult(requestCode, permissionsRequested, grantResults)
+    }
+
+    @Deprecated("legacy GoogleSignInClient uses the pre-ActivityResult API")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        signIn.notifyActivityResult(requestCode, resultCode, data)
     }
 
     override fun onDestroy() {
