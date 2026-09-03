@@ -5,9 +5,9 @@
 //! * [`android_main`] — invoked by `android-activity` after the NDK glue
 //!   thread starts. Installs the tracing bridge, then hands the
 //!   `AndroidApp` to eframe with the `wgpu` backend.
-//! * [`DemoApp`] — `eframe::App` implementation. One button, one status
-//!   line, one worker thread (`std::thread::spawn`) that runs the plugin
-//!   chain via `pollster::block_on`.
+//! * [`DemoApp`] — `eframe::App` implementation. Sign-in / sign-out
+//!   button, account card with the fields Google returns, one worker
+//!   thread (`std::thread::spawn`) per action.
 //!
 //! Kotlin side is expected to have called `IstmoRuntime.start()` in its
 //! `MainActivity.onCreate` — the runtime is a `OnceLock` so double-init
@@ -30,7 +30,8 @@ use istmo_plugins::google_sign_in::{
 /// OAuth server client id for the demo. Real apps embed the id issued by
 /// Google Cloud Console for the *backend* — the audience the id-token
 /// must match. Kept as a placeholder here; replace before shipping.
-const SERVER_CLIENT_ID: &str = "REPLACE_WITH_YOUR_SERVER_CLIENT_ID.apps.googleusercontent.com";
+const SERVER_CLIENT_ID: &str =
+    "848096709714-9le17umoe085dtcmrout03qdbcp8cpi7.apps.googleusercontent.com";
 
 const POST_NOTIFICATIONS: &str = "android.permission.POST_NOTIFICATIONS";
 
@@ -65,21 +66,46 @@ pub fn android_main(app: AndroidApp) {
     }
 }
 
+/// UI-facing projection of `OwnedSignInAccount`. The Rust-side handle
+/// (`NativeHandle<Credential>`) is intentionally dropped once we build
+/// this — the native side keeps the credential registered under the
+/// original id until the next `sign_out`.
+#[derive(Debug, Clone)]
+struct AccountView {
+    id: String,
+    email: Option<String>,
+    display_name: Option<String>,
+    photo_url: Option<String>,
+    granted_scopes: Vec<String>,
+    id_token_preview: String,
+}
+
+impl From<&OwnedSignInAccount> for AccountView {
+    fn from(a: &OwnedSignInAccount) -> Self {
+        // Trim the JWT to a preview — the full token can be thousands of
+        // characters and belongs in a network call, not on screen.
+        let id_token_preview = if a.id_token.len() > 42 {
+            format!("{}…", &a.id_token[..42])
+        } else {
+            a.id_token.clone()
+        };
+        Self {
+            id: a.id.clone(),
+            email: a.email.clone(),
+            display_name: a.display_name.clone(),
+            photo_url: a.photo_url.clone(),
+            granted_scopes: a.granted_scopes.clone(),
+            id_token_preview,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Status {
     Idle,
     Working(String),
-    Ok(String),
+    SignedIn(Arc<AccountView>),
     Err(String),
-}
-
-impl Status {
-    fn label(&self) -> &str {
-        match self {
-            Self::Idle => "Tap to sign in and receive a welcome notification.",
-            Self::Working(msg) | Self::Ok(msg) | Self::Err(msg) => msg,
-        }
-    }
 }
 
 struct DemoApp {
@@ -100,49 +126,173 @@ impl DemoApp {
         }
         ctx.request_repaint();
     }
+
+    fn start_sign_in(&self, ctx: &egui::Context) {
+        let status = self.status.clone();
+        let ctx = ctx.clone();
+        Self::set_status(&status, &ctx, Status::Working("Requesting…".to_owned()));
+        std::thread::spawn(move || {
+            let outcome = pollster::block_on(run_sign_in_flow(&status, &ctx));
+            let next = match outcome {
+                Ok(account) => Status::SignedIn(Arc::new(account)),
+                Err(msg) => Status::Err(msg),
+            };
+            Self::set_status(&status, &ctx, next);
+        });
+    }
+
+    fn start_sign_out(&self, ctx: &egui::Context) {
+        let status = self.status.clone();
+        let ctx = ctx.clone();
+        Self::set_status(&status, &ctx, Status::Working("Signing out…".to_owned()));
+        std::thread::spawn(move || {
+            let outcome = pollster::block_on(run_sign_out_flow());
+            let next = match outcome {
+                Ok(()) => Status::Idle,
+                Err(msg) => Status::Err(msg),
+            };
+            Self::set_status(&status, &ctx, next);
+        });
+    }
 }
 
 impl eframe::App for DemoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let busy = matches!(&*self.status.lock().expect("status mutex"), Status::Working(_));
-        let label = self.status.lock().expect("status mutex").label().to_owned();
+        // Snapshot state under the mutex, then render — never hold the
+        // lock across egui calls.
+        let snapshot = self.status.lock().expect("status mutex").clone();
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(48.0);
+        egui::TopBottomPanel::top("hdr").show(ctx, |ui| {
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
                 ui.heading("istmo demo");
                 ui.add_space(8.0);
-                ui.label("Full Rust · egui · Google Sign-In · Notifications");
-                ui.add_space(48.0);
-
-                let button = egui::Button::new(egui::RichText::new("Sign in with Google").size(18.0))
-                    .min_size(egui::vec2(240.0, 56.0));
-                if ui.add_enabled(!busy, button).clicked() {
-                    let status = self.status.clone();
-                    let ctx = ctx.clone();
-                    Self::set_status(&status, &ctx, Status::Working("Requesting…".to_owned()));
-                    std::thread::spawn(move || {
-                        let outcome = pollster::block_on(run_sign_in_flow(&status, &ctx));
-                        let next = match outcome {
-                            Ok(msg) => Status::Ok(msg),
-                            Err(msg) => Status::Err(msg),
-                        };
-                        Self::set_status(&status, &ctx, next);
-                    });
-                }
-
-                ui.add_space(24.0);
-                ui.label(label);
+                ui.label(egui::RichText::new("· Full Rust · egui").weak());
             });
+            ui.add_space(12.0);
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.add_space(16.0);
+            match &snapshot {
+                Status::SignedIn(account) => {
+                    self.render_signed_in(ui, ctx, account);
+                }
+                _ => {
+                    self.render_signed_out(ui, ctx, &snapshot);
+                }
+            }
         });
     }
+}
+
+impl DemoApp {
+    fn render_signed_out(&self, ui: &mut egui::Ui, ctx: &egui::Context, status: &Status) {
+        let busy = matches!(status, Status::Working(_));
+        ui.vertical_centered(|ui| {
+            ui.add_space(24.0);
+            let button = egui::Button::new(
+                egui::RichText::new("Sign in with Google").size(18.0),
+            )
+            .min_size(egui::vec2(240.0, 56.0));
+            if ui.add_enabled(!busy, button).clicked() {
+                self.start_sign_in(ctx);
+            }
+
+            ui.add_space(16.0);
+            match status {
+                Status::Idle => {
+                    ui.label(
+                        egui::RichText::new(
+                            "Tap to sign in and receive a welcome notification.",
+                        )
+                        .weak(),
+                    );
+                }
+                Status::Working(msg) => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(msg);
+                    });
+                }
+                Status::Err(msg) => {
+                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), msg);
+                }
+                Status::SignedIn(_) => {}
+            }
+        });
+    }
+
+    fn render_signed_in(
+        &self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        account: &AccountView,
+    ) {
+        egui::Frame::group(ui.style())
+            .fill(ui.visuals().extreme_bg_color)
+            .inner_margin(egui::Margin::same(16.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let name = account
+                        .display_name
+                        .as_deref()
+                        .unwrap_or_else(|| account.email.as_deref().unwrap_or(&account.id));
+                    ui.heading(name);
+                });
+                ui.add_space(8.0);
+                field(ui, "id", &account.id);
+                if let Some(email) = &account.email {
+                    field(ui, "email", email);
+                }
+                if let Some(display) = &account.display_name {
+                    field(ui, "name", display);
+                }
+                if let Some(url) = &account.photo_url {
+                    field(ui, "avatar", url);
+                }
+                field(ui, "scopes", &account.granted_scopes.join(", "));
+                field(ui, "id_token", &account.id_token_preview);
+            });
+
+        ui.add_space(16.0);
+        ui.vertical_centered(|ui| {
+            if ui
+                .add(
+                    egui::Button::new(egui::RichText::new("Sign out").size(16.0))
+                        .min_size(egui::vec2(180.0, 44.0)),
+                )
+                .clicked()
+            {
+                self.start_sign_out(ctx);
+            }
+        });
+    }
+}
+
+fn field(ui: &mut egui::Ui, key: &str, value: &str) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("{key}:"))
+                .strong()
+                .monospace(),
+        );
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(value).monospace());
+    });
+    ui.add_space(2.0);
 }
 
 async fn run_sign_in_flow(
     status: &Arc<Mutex<Status>>,
     ctx: &egui::Context,
-) -> Result<String, String> {
-    DemoApp::set_status(status, ctx, Status::Working("Requesting notification permission…".to_owned()));
+) -> Result<AccountView, String> {
+    DemoApp::set_status(
+        status,
+        ctx,
+        Status::Working("Requesting notification permission…".to_owned()),
+    );
     let permissions = PermissionsClient::acquire().map_err(|e| format!("permissions: {e}"))?;
     let outcomes = permissions
         .request(vec![POST_NOTIFICATIONS.to_owned()])
@@ -159,7 +309,11 @@ async fn run_sign_in_flow(
         );
     }
 
-    DemoApp::set_status(status, ctx, Status::Working("Signing in with Google…".to_owned()));
+    DemoApp::set_status(
+        status,
+        ctx,
+        Status::Working("Signing in with Google…".to_owned()),
+    );
     let config = SignInConfig::builder(SERVER_CLIENT_ID)
         .scope("openid")
         .scope("email")
@@ -172,19 +326,44 @@ async fn run_sign_in_flow(
         .sign_in_owned(SignInMode::Interactive)
         .await
         .map_err(|e| format!("sign_in: {}", render_sign_in_error(&e)))?;
-    log::info!("signed in as {} <{:?}>", account.id, account.email);
+    log::info!(
+        "signed in id={} email={:?} display={:?} scopes={:?}",
+        account.id,
+        account.email,
+        account.display_name,
+        account.granted_scopes,
+    );
+    let view = AccountView::from(&account);
 
-    DemoApp::set_status(status, ctx, Status::Working("Posting notification…".to_owned()));
+    DemoApp::set_status(
+        status,
+        ctx,
+        Status::Working("Posting notification…".to_owned()),
+    );
     let notifications = NotificationsClient::acquire().map_err(|e| format!("notifications: {e}"))?;
     notifications
         .schedule(welcome_notification(&account))
         .await
         .map_err(|e| format!("notifications: {}", render_notification_error(&e)))?;
 
-    Ok(format!(
-        "Welcome, {}",
-        account.display_name.as_deref().unwrap_or(&account.id),
-    ))
+    Ok(view)
+}
+
+async fn run_sign_out_flow() -> Result<(), String> {
+    let config = SignInConfig::builder(SERVER_CLIENT_ID)
+        .scope("openid")
+        .scope("email")
+        .scope("profile")
+        .build();
+    let client = SignInClient::acquire_with(config)
+        .await
+        .map_err(|e| format!("sign_out acquire: {}", render_sign_in_error(&e)))?;
+    client
+        .sign_out()
+        .await
+        .map_err(|e| format!("sign_out: {}", render_sign_in_error(&e)))?;
+    log::info!("signed out");
+    Ok(())
 }
 
 /// Turn an `IstmoError::PluginError { bytes }` from the sign-in plugin into
@@ -195,7 +374,10 @@ fn render_sign_in_error(err: &IstmoError) -> String {
     if let IstmoError::PluginError { bytes } = err {
         return match istmo::codec::decode::<SignInError>(bytes) {
             Ok((decoded, _)) => format!("{decoded}"),
-            Err(codec_err) => format!("undecodable domain error ({} bytes): {codec_err}", bytes.len()),
+            Err(codec_err) => format!(
+                "undecodable domain error ({} bytes): {codec_err}",
+                bytes.len(),
+            ),
         };
     }
     err.to_string()
@@ -205,7 +387,10 @@ fn render_notification_error(err: &IstmoError) -> String {
     if let IstmoError::PluginError { bytes } = err {
         return match istmo::codec::decode::<NotificationError>(bytes) {
             Ok((decoded, _)) => format!("{decoded}"),
-            Err(codec_err) => format!("undecodable domain error ({} bytes): {codec_err}", bytes.len()),
+            Err(codec_err) => format!(
+                "undecodable domain error ({} bytes): {codec_err}",
+                bytes.len(),
+            ),
         };
     }
     err.to_string()
