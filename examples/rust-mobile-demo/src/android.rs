@@ -21,8 +21,8 @@ use eframe::egui;
 use istmo::IstmoError;
 use istmo::NativeHandle;
 use istmo::plugins::{
-    NotificationError, NotificationImportance, NotificationRequest, NotificationsClient,
-    PermissionsClient,
+    EdgeInsets, NotificationError, NotificationImportance, NotificationRequest,
+    NotificationsClient, PermissionsClient, SafeArea, SafeAreaInsets,
 };
 use istmo_plugins::admob::{
     AdError, AdMobClient, AdMobConfig, Banner, BannerRect, BannerRequest, InterstitialOutcome,
@@ -40,15 +40,19 @@ const SERVER_CLIENT_ID: &str =
 
 const POST_NOTIFICATIONS: &str = "android.permission.POST_NOTIFICATIONS";
 
-// AdMob production ad units. Keep in sync with the app id registered
-// under `com.google.android.gms.ads.APPLICATION_ID` in AndroidManifest.
+// AdMob app id (production) — the manifest metadata must match, and the
+// SDK crashes at init if it does not.
 const ADMOB_APP_ID: &str = "ca-app-pub-1842517361828817~4357161875";
-const INTERSTITIAL_UNIT: &str = "ca-app-pub-1842517361828817/4741139402";
-const BANNER_UNIT: &str = "ca-app-pub-1842517361828817/1751908784";
-// Rewarded unit not provisioned yet — Google's canonical test rewarded
-// unit stays until a real one lands. Mixing prod app id + a test ad
-// unit id works (SDK does not enforce alignment) but keep an eye on
-// AdMob policy strikes if this ships to production.
+
+// Ad units use Google's canonical *test* ids for now. Freshly-registered
+// production units routinely return `no fill` for hours or days while the
+// AdMob backend warms up, and mixing a test unit id with a production app
+// id is documented as supported. When the prod units start filling,
+// swap in:
+//   BANNER_UNIT:       "ca-app-pub-1842517361828817/1751908784"
+//   INTERSTITIAL_UNIT: "ca-app-pub-1842517361828817/4741139402"
+const INTERSTITIAL_UNIT: &str = "ca-app-pub-3940256099942544/1033173712";
+const BANNER_UNIT: &str = "ca-app-pub-3940256099942544/6300978111";
 const REWARDED_UNIT: &str = "ca-app-pub-3940256099942544/5224354917";
 
 /// NDK glue entry. `android-activity` provides the `ANativeActivity_onCreate`
@@ -148,6 +152,11 @@ struct DemoApp {
     /// the handle owns the native `AdView`'s lifetime. Toggle path
     /// takes it out to call `hide_banner_owned`.
     banner: Arc<Mutex<Option<NativeHandle<Banner>>>>,
+    /// Cached safe-area client. `None` until the runtime has been
+    /// initialised (first `update` call) so we never touch the runtime
+    /// from `DemoApp::new` — eframe constructs `DemoApp` before the
+    /// runtime pump has finished starting on some device timings.
+    safe_area: Option<SafeArea>,
 }
 
 impl DemoApp {
@@ -156,7 +165,37 @@ impl DemoApp {
             status: Arc::new(Mutex::new(Status::Idle)),
             ad_status: Arc::new(Mutex::new(AdStatus::Idle)),
             banner: Arc::new(Mutex::new(None)),
+            safe_area: None,
         }
+    }
+
+    /// Lazily attach the safe-area client and repaint whenever an inset
+    /// snapshot arrives. Attaching a stream subscription per frame is a
+    /// no-op after the first successful acquire; the stream lives inside
+    /// a worker thread that pings `ctx.request_repaint()` on every update
+    /// so keyboard show/hide instantly reflows the UI.
+    fn ensure_safe_area(&mut self, ctx: &egui::Context) -> Option<SafeAreaInsets> {
+        if self.safe_area.is_none() {
+            match SafeArea::acquire() {
+                Ok(sa) => {
+                    let stream = sa.stream();
+                    let ctx_clone = ctx.clone();
+                    std::thread::spawn(move || {
+                        // Pump every update as a repaint. A closed
+                        // channel returns Err — thread exits cleanly.
+                        while let Ok(_insets) = stream.recv() {
+                            ctx_clone.request_repaint();
+                        }
+                    });
+                    self.safe_area = Some(sa);
+                }
+                Err(err) => {
+                    log::debug!("safe_area not ready: {err}");
+                    return None;
+                }
+            }
+        }
+        self.safe_area.as_ref().and_then(|s| s.current().ok().flatten())
     }
 
     fn set_ad_status(status: &Arc<Mutex<AdStatus>>, ctx: &egui::Context, next: AdStatus) {
@@ -299,32 +338,52 @@ impl DemoApp {
     }
 }
 
-/// Vertical padding reserved above the header so the status bar does not
-/// overlap our content. NativeActivity + egui draw edge-to-edge; the
-/// Kotlin `WindowCompat.setDecorFitsSystemWindows(window, true)` helper
-/// mitigates it on some devices, but MIUI (and other OEMs) still shove
-/// content underneath the system bar. Reserving `28pt` matches the
-/// stock Android status bar height across most modern phones.
-const STATUS_BAR_INSET: f32 = 28.0;
+/// Fallback padding used before the platform has posted its first
+/// safe-area snapshot. Conservative values so nothing renders under the
+/// status bar in the frames between eframe boot and the first
+/// `WindowInsets` callback firing.
+const FALLBACK_TOP_INSET_PT: f32 = 24.0;
+const FALLBACK_BOTTOM_INSET_PT: f32 = 0.0;
 
 /// Horizontal padding reserved on both sides of the content column so
 /// cards do not clip against the left / right edges of the screen.
 const HORIZONTAL_INSET: f32 = 12.0;
+
+/// Convert the platform snapshot into an `egui::Margin`, or synthesise a
+/// fallback when the plugin has not published anything yet.
+fn safe_area_margin(insets: Option<SafeAreaInsets>) -> egui::Margin {
+    let padding: EdgeInsets = insets
+        .map(SafeAreaInsets::view_padding)
+        .unwrap_or(EdgeInsets {
+            top: FALLBACK_TOP_INSET_PT,
+            right: 0.0,
+            bottom: FALLBACK_BOTTOM_INSET_PT,
+            left: 0.0,
+        });
+    egui::Margin {
+        top: padding.top,
+        right: padding.right,
+        bottom: padding.bottom,
+        left: padding.left,
+    }
+}
 
 impl eframe::App for DemoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Snapshot state under the mutex, then render — never hold the
         // lock across egui calls.
         let snapshot = self.status.lock().expect("status mutex").clone();
+        let insets = self.ensure_safe_area(ctx);
+        let safe = safe_area_margin(insets);
 
         egui::TopBottomPanel::top("hdr")
             .frame(
                 egui::Frame::default()
                     .fill(ctx.style().visuals.panel_fill)
                     .inner_margin(egui::Margin {
-                        left: HORIZONTAL_INSET,
-                        right: HORIZONTAL_INSET,
-                        top: STATUS_BAR_INSET + 8.0,
+                        left: HORIZONTAL_INSET + safe.left,
+                        right: HORIZONTAL_INSET + safe.right,
+                        top: safe.top + 8.0,
                         bottom: 10.0,
                     }),
             )
@@ -340,15 +399,14 @@ impl eframe::App for DemoApp {
             .frame(
                 egui::Frame::default()
                     .fill(ctx.style().visuals.panel_fill)
-                    .inner_margin(egui::Margin::symmetric(HORIZONTAL_INSET, 12.0)),
+                    .inner_margin(egui::Margin {
+                        left: HORIZONTAL_INSET + safe.left,
+                        right: HORIZONTAL_INSET + safe.right,
+                        top: 12.0,
+                        bottom: 12.0 + safe.bottom,
+                    }),
             )
             .show(ctx, |ui| {
-                // Cap content width to the panel width — every card
-                // inside reads `ui.available_width()` when rendering,
-                // and this bound prevents accidental horizontal
-                // overflow when a very long label (like an id-token)
-                // is dropped inside a `ui.horizontal` block.
-                ui.set_max_width(ui.available_width());
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| match &snapshot {
@@ -397,31 +455,26 @@ impl DemoApp {
     }
 
     fn render_signed_in(&self, ui: &mut egui::Ui, ctx: &egui::Context, account: &AccountView) {
-        let card_width = ui.available_width();
-        egui::Frame::group(ui.style())
-            .fill(ui.visuals().extreme_bg_color)
-            .inner_margin(egui::Margin::same(14.0))
-            .show(ui, |ui| {
-                ui.set_max_width(card_width);
-                let name = account
-                    .display_name
-                    .as_deref()
-                    .unwrap_or_else(|| account.email.as_deref().unwrap_or(&account.id));
-                ui.add(egui::Label::new(egui::RichText::new(name).heading()).truncate());
-                ui.add_space(8.0);
-                field(ui, "id", &account.id);
-                if let Some(email) = &account.email {
-                    field(ui, "email", email);
-                }
-                if let Some(display) = &account.display_name {
-                    field(ui, "name", display);
-                }
-                if let Some(url) = &account.photo_url {
-                    field(ui, "avatar", url);
-                }
-                field(ui, "scopes", &account.granted_scopes.join(", "));
-                field(ui, "id_token", &account.id_token_preview);
-            });
+        card(ui, |ui| {
+            let name = account
+                .display_name
+                .as_deref()
+                .unwrap_or_else(|| account.email.as_deref().unwrap_or(&account.id));
+            ui.add(egui::Label::new(egui::RichText::new(name).heading()).truncate());
+            ui.add_space(8.0);
+            field(ui, "id", &account.id);
+            if let Some(email) = &account.email {
+                field(ui, "email", email);
+            }
+            if let Some(display) = &account.display_name {
+                field(ui, "name", display);
+            }
+            if let Some(url) = &account.photo_url {
+                field(ui, "avatar", url);
+            }
+            field(ui, "scopes", &account.granted_scopes.join(", "));
+            field(ui, "id_token", &account.id_token_preview);
+        });
 
         ui.add_space(16.0);
         self.render_ads_panel(ui, ctx);
@@ -444,86 +497,104 @@ impl DemoApp {
         let ad_snapshot = self.ad_status.lock().expect("ad status mutex").clone();
         let busy = matches!(&ad_snapshot, AdStatus::Working(_));
         let banner_shown = self.banner.lock().expect("banner mutex").is_some();
-        let card_width = ui.available_width();
 
-        egui::Frame::group(ui.style())
-            .fill(ui.visuals().extreme_bg_color)
-            .inner_margin(egui::Margin::same(12.0))
-            .show(ui, |ui| {
-                ui.set_max_width(card_width);
-                ui.heading("Ads");
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("AdMob · test units").weak());
-                ui.add_space(10.0);
+        card(ui, |ui| {
+            ui.heading("Ads");
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new("AdMob · test units").weak());
+            ui.add_space(10.0);
 
-                // Each button gets a fair share of the row minus the
-                // spacing between them. Below ~600pt wide (typical
-                // phone), that lands under the min_size (120), so
-                // horizontal_wrapped naturally splits into two rows.
-                let spacing = ui.spacing().item_spacing.x;
-                let btn_w = ((card_width - spacing * 2.0) / 3.0).max(120.0);
-                let btn_size = egui::vec2(btn_w, 40.0);
+            // Buttons share the row equally. `available_width` inside
+            // the card already accounts for `Frame::group`'s inner
+            // margin, so this is the *content* width — the true budget
+            // we're allowed to spend without overflowing.
+            let inner_width = ui.available_width();
+            let spacing = ui.spacing().item_spacing.x;
+            let per_btn = ((inner_width - spacing * 2.0) / 3.0).max(96.0);
+            let btn_size = egui::vec2(per_btn, 40.0);
 
-                ui.horizontal_wrapped(|ui| {
-                    let interstitial = egui::Button::new("Interstitial").min_size(btn_size);
-                    if ui.add_enabled(!busy, interstitial).clicked() {
-                        self.start_interstitial(ctx);
-                    }
-                    let rewarded = egui::Button::new("Rewarded").min_size(btn_size);
-                    if ui.add_enabled(!busy, rewarded).clicked() {
-                        self.start_rewarded(ctx);
-                    }
-                    let banner_label = if banner_shown { "Hide banner" } else { "Banner" };
-                    let banner = egui::Button::new(banner_label).min_size(btn_size);
-                    if ui.add_enabled(!busy, banner).clicked() {
-                        self.start_toggle_banner(ctx);
-                    }
-                });
-
-                ui.add_space(10.0);
-                match &ad_snapshot {
-                    AdStatus::Idle => {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new("Tap a button to try an ad.").weak(),
-                            )
-                            .wrap(),
-                        );
-                    }
-                    AdStatus::Working(msg) => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.add(egui::Label::new(msg).wrap());
-                        });
-                    }
-                    AdStatus::Ok(msg) => {
-                        ui.add(egui::Label::new(egui::RichText::new(msg).strong()).wrap());
-                    }
-                    AdStatus::Err(msg) => {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(msg)
-                                    .color(egui::Color32::from_rgb(220, 90, 90)),
-                            )
-                            .wrap(),
-                        );
-                    }
+            ui.horizontal_wrapped(|ui| {
+                let interstitial = egui::Button::new("Interstitial").min_size(btn_size);
+                if ui.add_enabled(!busy, interstitial).clicked() {
+                    self.start_interstitial(ctx);
+                }
+                let rewarded = egui::Button::new("Rewarded").min_size(btn_size);
+                if ui.add_enabled(!busy, rewarded).clicked() {
+                    self.start_rewarded(ctx);
+                }
+                let banner_label = if banner_shown { "Hide banner" } else { "Banner" };
+                let banner = egui::Button::new(banner_label).min_size(btn_size);
+                if ui.add_enabled(!busy, banner).clicked() {
+                    self.start_toggle_banner(ctx);
                 }
             });
+
+            ui.add_space(10.0);
+            match &ad_snapshot {
+                AdStatus::Idle => {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("Tap a button to try an ad.").weak(),
+                        )
+                        .wrap(),
+                    );
+                }
+                AdStatus::Working(msg) => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.add(egui::Label::new(msg).wrap());
+                    });
+                }
+                AdStatus::Ok(msg) => {
+                    ui.add(egui::Label::new(egui::RichText::new(msg).strong()).wrap());
+                }
+                AdStatus::Err(msg) => {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(msg)
+                                .color(egui::Color32::from_rgb(220, 90, 90)),
+                        )
+                        .wrap(),
+                    );
+                }
+            }
+        });
     }
 }
 
+/// Draw `contents` inside a rounded card that fills the caller's
+/// available width without spilling over. The trick is
+/// `allocate_ui_with_layout` — it reserves the exact caller width for
+/// the card, so `Frame::group` renders bounded, and the inner Ui the
+/// closure receives is naturally clipped to `outer - 2*inner_margin`.
+fn card(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+    let width = ui.available_width();
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 0.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            egui::Frame::group(ui.style())
+                .fill(ui.visuals().extreme_bg_color)
+                .inner_margin(egui::Margin::same(12.0))
+                .show(ui, contents);
+        },
+    );
+}
+
 fn field(ui: &mut egui::Ui, key: &str, value: &str) {
+    // Fixed-width key column so the value's truncation budget is
+    // stable — otherwise `ui.horizontal` lays them out greedily and
+    // egui's truncate math misbehaves on the first frame.
+    const KEY_COL_WIDTH: f32 = 78.0;
     ui.horizontal(|ui| {
-        ui.add(
-            egui::Label::new(egui::RichText::new(format!("{key}:")).strong().monospace())
-                .truncate(),
+        ui.add_sized(
+            egui::vec2(KEY_COL_WIDTH, 0.0),
+            egui::Label::new(egui::RichText::new(format!("{key}:")).strong().monospace()),
         );
-        ui.add_space(4.0);
-        // Truncate over wrap for long values (URLs, JWTs). Wrapping
-        // an id_token turns the card into ten lines of ugliness; a
-        // trailing ellipsis reads as "there is more, tap to copy in
-        // a future revision".
+        // Truncate over wrap for long values (URLs, JWTs). Wrapping an
+        // id_token turns the card into ten lines of ugliness; a trailing
+        // ellipsis reads as "there is more, tap to copy in a future
+        // revision".
         ui.add(egui::Label::new(egui::RichText::new(value).monospace()).truncate());
     });
     ui.add_space(2.0);

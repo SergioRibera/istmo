@@ -20,16 +20,18 @@
 //! (`android_main` is `cfg`-gated) so `cargo check --workspace` on a Linux
 //! dev host stays green without an NDK toolchain.
 
-use istmo::plugins::{NotificationsClient, PermissionsClient};
+use istmo::plugins::{NotificationsClient, PermissionsClient, SafeArea};
 use istmo_plugins::admob::AdMobClient;
 use istmo_plugins::google_sign_in::SignInClient;
 
-// Register the four plugins the demo consumes. `SignIn` and `AdMob`
-// both require `acquire_with(config)` (stateful) — the macro emits
-// `*::from_runtime_with` for each. Native side must ship dispatchers
-// for all four plugin ids.
+// Register the plugins the demo consumes. `SignIn` and `AdMob` both
+// require `acquire_with(config)` (stateful) — the macro emits
+// `*::from_runtime_with` for each. `SafeArea` is a hand-written
+// early-event client — declared here so `Runtime::check_declared` lets
+// the client attach. Native side must ship dispatchers / publishers
+// for every id in this list.
 istmo::runtime!(
-    plugins: [SignInClient, PermissionsClient, NotificationsClient, AdMobClient],
+    plugins: [SignInClient, PermissionsClient, NotificationsClient, AdMobClient, SafeArea],
 );
 
 #[cfg(target_os = "android")]

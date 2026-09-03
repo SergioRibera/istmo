@@ -46,6 +46,27 @@ object Bincode {
         return out.toByteArray()
     }
 
+    /**
+     * f32 is written as 4 IEEE 754 little-endian bytes. bincode 2's
+     * `standard()` config uses fixed-width encoding for floats — no
+     * varint applies to floating-point numbers.
+     */
+    fun writeF32(out: ByteArrayOutputStream, value: Float) {
+        val bits = java.lang.Float.floatToRawIntBits(value)
+        for (i in 0 until 4) {
+            out.write((bits shr (i * 8)) and 0xFF)
+        }
+    }
+
+    fun readF32(payload: ByteArray, offset: Int): Decoded<Float> {
+        require(offset + 4 <= payload.size) { "bincode f32: buffer underrun" }
+        var bits = 0
+        for (i in 0 until 4) {
+            bits = bits or ((payload[offset + i].toInt() and 0xFF) shl (i * 8))
+        }
+        return Decoded(java.lang.Float.intBitsToFloat(bits), offset + 4)
+    }
+
     fun readString(payload: ByteArray, offset: Int = 0): Decoded<String> {
         val (length, next) = readVarintU64(payload, offset)
         val end = next + length.toInt()

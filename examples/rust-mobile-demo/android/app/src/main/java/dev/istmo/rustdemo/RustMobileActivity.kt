@@ -2,9 +2,8 @@ package dev.istmo.rustdemo
 
 import android.app.NativeActivity
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
-import android.view.View
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -56,20 +55,48 @@ class RustMobileActivity : NativeActivity() {
 
         super.onCreate(savedInstanceState)
 
-        // Show system bars and reserve their space so the egui surface
-        // does not draw underneath the status bar. NativeActivity draws
-        // edge-to-edge by default on newer Android; opting out here
-        // matches "normal app" chrome.
-        WindowCompat.setDecorFitsSystemWindows(window, true)
+        // Edge-to-edge — the Rust side reads safe-area insets from the
+        // `istmo.safe_area` early-event channel (Flutter-style) and
+        // reserves its own padding. Decor no longer manages the fit;
+        // system bars stay translucent overlays above our surface.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             show(WindowInsetsCompat.Type.systemBars())
             isAppearanceLightStatusBars = false
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility =
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        installSafeAreaListener()
+    }
+
+    /**
+     * Subscribe to Android's `WindowInsets` and publish every update on
+     * the `istmo.safe_area` early-event channel in logical dp. This is
+     * the Flutter model: platform pushes safe-area geometry, framework
+     * (here egui) reads a snapshot each frame.
+     *
+     * We forward three inset groups separately so the Rust side can pick
+     * the ones it cares about — a full-bleed video player only respects
+     * cutouts, a conventional layout takes the union of system bars +
+     * cutout, an IME-aware field uses `view_padding` to lift above the
+     * keyboard.
+     */
+    private fun installSafeAreaListener() {
+        val density = resources.displayMetrics.density
+        val root = window.decorView
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            IstmoRuntime.publishSafeArea(
+                bars.top / density, bars.right / density, bars.bottom / density, bars.left / density,
+                ime.top / density, ime.right / density, ime.bottom / density, ime.left / density,
+                cutout.top / density, cutout.right / density, cutout.bottom / density, cutout.left / density,
+            )
+            insets
         }
+        // Force an initial dispatch — otherwise the callback only fires on
+        // the first inset *change*, and Rust would start with a `None`
+        // slot until the user rotates or opens the keyboard.
+        ViewCompat.requestApplyInsets(root)
     }
 
     override fun onRequestPermissionsResult(
