@@ -182,4 +182,8 @@ dependencies {
     // the calling Activity directly (plain `startActivityForResult`),
     // sidestepping the killer.
     implementation("com.google.android.gms:play-services-auth:21.3.0")
+
+    // istmo.admob — Google Mobile Ads SDK. Provides InterstitialAd,
+    // RewardedAd, AdView + the MobileAds initialiser.
+    implementation("com.google.android.gms:play-services-ads:23.6.0")
 }

@@ -21,15 +21,15 @@
 //! dev host stays green without an NDK toolchain.
 
 use istmo::plugins::{NotificationsClient, PermissionsClient};
+use istmo_plugins::admob::AdMobClient;
 use istmo_plugins::google_sign_in::SignInClient;
 
-// Register the three plugins the demo consumes. `SignIn` requires
-// `acquire_with(config)` — the macro emits `SignInClient::from_runtime_with`
-// but the plugin declaration in `plugins:` is the same shape as any other
-// client. Native side must ship dispatchers for all three plugin ids
-// (`istmo.google_sign_in`, `istmo.notifications`, `istmo.permissions`).
+// Register the four plugins the demo consumes. `SignIn` and `AdMob`
+// both require `acquire_with(config)` (stateful) — the macro emits
+// `*::from_runtime_with` for each. Native side must ship dispatchers
+// for all four plugin ids.
 istmo::runtime!(
-    plugins: [SignInClient, PermissionsClient, NotificationsClient],
+    plugins: [SignInClient, PermissionsClient, NotificationsClient, AdMobClient],
 );
 
 #[cfg(target_os = "android")]

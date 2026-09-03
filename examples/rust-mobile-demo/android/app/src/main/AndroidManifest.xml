@@ -1,15 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Sign-in needs internet; notifications need POST_NOTIFICATIONS on 13+. -->
+    <!-- Sign-in needs internet; notifications need POST_NOTIFICATIONS on 13+;
+         AdMob on Android 13+ needs AD_ID to read the advertising id. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
 
     <application
         android:allowBackup="false"
         android:label="rust-mobile-demo"
         android:hasCode="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <!-- AdMob app id: Google's official test id. Replace with your
+             production id from https://apps.admob.com/ before shipping. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-3940256099942544~3347511713" />
         <!-- RustMobileActivity is a NativeActivity subclass that boots
              IstmoRuntime + registers the three plugin dispatchers before
              `android_main` fires. The `android.app.lib_name` metadata
