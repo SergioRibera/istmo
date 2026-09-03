@@ -410,7 +410,7 @@ impl DemoApp {
     fn render_ads_panel(&self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let ad_snapshot = self.ad_status.lock().expect("ad status mutex").clone();
         let busy = matches!(&ad_snapshot, AdStatus::Working(_));
-        let banner_shown = *self.banner_shown.lock().expect("banner mutex");
+        let banner_shown = self.banner.lock().expect("banner mutex").is_some();
 
         egui::Frame::group(ui.style())
             .fill(ui.visuals().extreme_bg_color)
