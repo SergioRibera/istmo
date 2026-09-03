@@ -394,6 +394,102 @@ fn ios_entitlements_voip_matches_golden() {
     assert_matches("ios_entitlements_voip", "plist", &ent.render());
 }
 
+fn admob() -> Contract {
+    Contract {
+        plugin_id: "istmo.admob".to_owned(),
+        type_name: "AdMob".to_owned(),
+        methods: vec![
+            Method {
+                name: "load_interstitial".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "ad_unit_id".to_owned(),
+                    ty: TypeRef::String,
+                }],
+                returns: TypeRef::Named("NativeHandleId".to_owned()),
+                error: Some(TypeRef::Named("AdError".to_owned())),
+            },
+            Method {
+                name: "show_interstitial".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "ad".to_owned(),
+                    ty: TypeRef::Named("NativeHandleId".to_owned()),
+                }],
+                returns: TypeRef::Named("InterstitialOutcome".to_owned()),
+                error: Some(TypeRef::Named("AdError".to_owned())),
+            },
+            Method {
+                name: "load_rewarded".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "ad_unit_id".to_owned(),
+                    ty: TypeRef::String,
+                }],
+                returns: TypeRef::Named("NativeHandleId".to_owned()),
+                error: Some(TypeRef::Named("AdError".to_owned())),
+            },
+            Method {
+                name: "show_rewarded".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "ad".to_owned(),
+                    ty: TypeRef::Named("NativeHandleId".to_owned()),
+                }],
+                returns: TypeRef::Named("RewardedOutcome".to_owned()),
+                error: Some(TypeRef::Named("AdError".to_owned())),
+            },
+            Method {
+                name: "show_banner".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "request".to_owned(),
+                    ty: TypeRef::Named("BannerRequest".to_owned()),
+                }],
+                returns: TypeRef::Named("NativeHandleId".to_owned()),
+                error: Some(TypeRef::Named("AdError".to_owned())),
+            },
+            Method {
+                name: "update_banner".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![
+                    Arg {
+                        name: "banner".to_owned(),
+                        ty: TypeRef::Named("NativeHandleId".to_owned()),
+                    },
+                    Arg {
+                        name: "rect".to_owned(),
+                        ty: TypeRef::Named("BannerRect".to_owned()),
+                    },
+                ],
+                returns: TypeRef::Unit,
+                error: Some(TypeRef::Named("AdError".to_owned())),
+            },
+            Method {
+                name: "hide_banner".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "banner".to_owned(),
+                    ty: TypeRef::Named("NativeHandleId".to_owned()),
+                }],
+                returns: TypeRef::Unit,
+                error: Some(TypeRef::Named("AdError".to_owned())),
+            },
+        ],
+        init: Some(TypeRef::Named("AdMobConfig".to_owned())),
+    }
+}
+
+#[test]
+fn admob_kotlin_matches_golden() {
+    assert_matches("admob", "kt", &generate_kotlin(&admob()));
+}
+
+#[test]
+fn admob_swift_matches_golden() {
+    assert_matches("admob", "swift", &generate_swift(&admob()));
+}
+
 fn google_sign_in() -> Contract {
     Contract {
         plugin_id: "istmo.google_sign_in".to_owned(),

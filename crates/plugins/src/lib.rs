@@ -20,6 +20,7 @@
 //! [`PreMainQueue`]: istmo_core::early_events::PreMainQueue
 
 pub mod activity_results;
+pub mod admob;
 pub mod deeplinks;
 pub mod google_sign_in;
 pub mod lifecycle;
@@ -31,6 +32,10 @@ pub mod worker;
 pub use crate::activity_results::{
     ACTIVITY_RESULTS_PLUGIN_ID, ActivityLaunchError, ActivityOutcome, ActivityResult,
     ActivityResults, ActivityResultsClient, ActivityResultsHost, ExtraValue, IntentRequest,
+};
+pub use crate::admob::{
+    ADMOB_PLUGIN_ID, AdError, AdMob, AdMobClient, AdMobConfig, AdMobHost, Banner, BannerRect,
+    BannerRequest, Interstitial, InterstitialOutcome, Rewarded, RewardedOutcome,
 };
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
 pub use crate::google_sign_in::{
