@@ -1,12 +1,15 @@
 package dev.istmo.runtime
 
 import android.app.Activity
+import android.util.Log
 import androidx.credentials.CredentialManager
+import androidx.credentials.CredentialOption
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
@@ -35,6 +38,7 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
 
     companion object {
         const val PLUGIN_ID = "istmo.google_sign_in"
+        private const val TAG = "istmo.signin"
     }
 
     private val nextInstanceId = AtomicLong(1)
@@ -63,12 +67,25 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
         return when (method) {
             "sign_in" -> {
                 val (mode, _) = Bincode.readEnumDiscriminant(payload, 0)
-                val silent = mode == 1 // SignInMode: 0 = Interactive, 1 = SilentOnly
-                encodeAccount(getCredential(config, filterByAuthorizedAccounts = silent))
+                val account = when (mode) {
+                    // SignInMode::Interactive — use the classic "Sign in
+                    // with Google" button flow. Always shows an account
+                    // picker; independent of whether the user has
+                    // previously authorized this app.
+                    0 -> withInteractiveGoogleFlow(config)
+                    // SignInMode::SilentOnly — try the One Tap /
+                    // authorized-accounts path only. Fails fast with
+                    // NoCredentialAvailable if nothing is cached.
+                    1 -> withGoogleIdOption(config, filterByAuthorizedAccounts = true)
+                    else -> throw PluginException(
+                        encodeError(Err.Backend, "unknown SignInMode discriminant $mode"),
+                    )
+                }
+                encodeAccount(account)
             }
             "silent_sign_in" -> {
                 val account = try {
-                    getCredential(config, filterByAuthorizedAccounts = true)
+                    withGoogleIdOption(config, filterByAuthorizedAccounts = true)
                 } catch (e: PluginException) {
                     val payloadBytes = e.payload
                     if (payloadBytes.isNotEmpty() &&
@@ -83,7 +100,7 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
             "refresh" -> {
                 val (handleId, _) = Bincode.readVarintU64(payload, 0)
                 credentials.remove(handleId)  // discard the stale handle
-                encodeAccount(getCredential(config, filterByAuthorizedAccounts = true))
+                encodeAccount(withGoogleIdOption(config, filterByAuthorizedAccounts = true))
             }
             "sign_out" -> {
                 credentials.clear()
@@ -101,36 +118,72 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
         }
     }
 
-    private suspend fun getCredential(
+    /**
+     * Traditional "Sign in with Google" button flow via
+     * [GetSignInWithGoogleOption]. Always shows an account picker; does
+     * not require the user to have previously authorized this app.
+     * Preferred entry point for a UI button that reads "Sign in with
+     * Google".
+     */
+    private suspend fun withInteractiveGoogleFlow(config: SignInConfig): SignInAccount {
+        val builder = GetSignInWithGoogleOption.Builder(config.serverClientId)
+        config.nonce?.let { builder.setNonce(it) }
+        val option = builder.build()
+        return runRequest(option)
+    }
+
+    /**
+     * One Tap / silent flow via [GetGoogleIdOption]. Depending on
+     * `filterByAuthorizedAccounts` returns cached-account credentials
+     * only (true) or falls back to a bottom-sheet sign-up flow (false).
+     * Used for silent restoration and for the token-refresh path.
+     */
+    private suspend fun withGoogleIdOption(
         config: SignInConfig,
         filterByAuthorizedAccounts: Boolean,
     ): SignInAccount {
-        val optionBuilder = GetGoogleIdOption.Builder()
+        val builder = GetGoogleIdOption.Builder()
             .setServerClientId(config.serverClientId)
             .setFilterByAuthorizedAccounts(filterByAuthorizedAccounts)
             .setAutoSelectEnabled(config.autoSelect)
-        config.nonce?.let { optionBuilder.setNonce(it) }
+        config.nonce?.let { builder.setNonce(it) }
+        return runRequest(builder.build())
+    }
+
+    private suspend fun runRequest(option: CredentialOption): SignInAccount {
         val request = GetCredentialRequest.Builder()
-            .addCredentialOption(optionBuilder.build())
+            .addCredentialOption(option)
             .build()
         val response = try {
             manager.getCredential(activity, request)
         } catch (_: GetCredentialCancellationException) {
+            Log.d(TAG, "sign-in cancelled by user")
             throw PluginException(encodeError(Err.UserCancelled, null))
-        } catch (_: NoCredentialException) {
+        } catch (e: NoCredentialException) {
+            Log.w(TAG, "no credential available: ${e.message}", e)
             throw PluginException(encodeError(Err.NoCredentialAvailable, null))
         } catch (e: GetCredentialException) {
-            throw PluginException(encodeError(Err.Backend, e.message ?: e.javaClass.simpleName))
+            Log.e(TAG, "credential manager backend error: ${e.type} ${e.message}", e)
+            throw PluginException(
+                encodeError(
+                    Err.Backend,
+                    "${e.type}: ${e.message ?: e.javaClass.simpleName}",
+                ),
+            )
         }
         val credential = response.credential
         if (credential !is androidx.credentials.CustomCredential ||
             credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
         ) {
-            throw PluginException(encodeError(Err.Backend, "non-google credential returned"))
+            Log.e(TAG, "non-google credential returned: type=${credential.type}")
+            throw PluginException(
+                encodeError(Err.Backend, "non-google credential type ${credential.type}"),
+            )
         }
         val google = GoogleIdTokenCredential.createFrom(credential.data)
         val handleId = nextHandleId.getAndIncrement()
         credentials[handleId] = google
+        Log.i(TAG, "signed in id=${google.id} display=${google.displayName}")
         return SignInAccount(
             id = google.id,
             email = google.id,
