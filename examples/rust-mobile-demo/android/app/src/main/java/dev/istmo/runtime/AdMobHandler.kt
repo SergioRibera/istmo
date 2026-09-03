@@ -257,16 +257,32 @@ class AdMobHandler(private val activity: Activity) : PluginHandler, HandleReleas
         withContext(Dispatchers.Main) {
             val view = AdView(activity)
             view.adUnitId = adUnitId
-            // Anchored size — inline adaptive banners take the width and
-            // let the SDK pick the height. We honour the caller's rect
-            // by wrapping the view in fixed layout params instead.
-            view.setAdSize(AdSize(rect.width, rect.height))
+            val adSize = pickAdSize(rect)
+            view.setAdSize(adSize)
+            val paintedSizePx = adSizePixels(adSize)
+            Log.i(
+                TAG,
+                "banner request unit=$adUnitId rectPx=${rect.width}x${rect.height}@${rect.x},${rect.y} " +
+                    "-> adSize=${adSize.width}x${adSize.height}dp = ${paintedSizePx.width}x${paintedSizePx.height}px",
+            )
             view.adListener = object : AdListener() {
+                override fun onAdLoaded() {
+                    Log.i(TAG, "banner loaded ($adUnitId)")
+                }
+
                 override fun onAdFailedToLoad(err: LoadAdError) {
-                    Log.w(TAG, "banner failed to load: ${err.code} ${err.message}")
+                    Log.w(
+                        TAG,
+                        "banner failed to load: code=${err.code} domain=${err.domain} msg=${err.message} " +
+                            "cause=${err.cause?.message}",
+                    )
+                }
+
+                override fun onAdImpression() {
+                    Log.i(TAG, "banner impression recorded")
                 }
             }
-            attachBannerView(view, rect)
+            attachBannerView(view, rect, paintedSizePx)
             view.loadAd(AdRequest.Builder().build())
             banners[handleId] = view
         }
@@ -276,7 +292,11 @@ class AdMobHandler(private val activity: Activity) : PluginHandler, HandleReleas
     private suspend fun updateBanner(handleId: Long, rect: BannerRectData) {
         val view = banners[handleId] ?: return
         withContext(Dispatchers.Main) {
-            val params = FrameLayout.LayoutParams(rect.width, rect.height).apply {
+            // The SDK-chosen height dominates — reuse the current adSize
+            // rather than trusting Rust's rect.height, which is only a
+            // hint from the egui layout pass.
+            val painted = adSizePixels(view.adSize ?: AdSize.BANNER)
+            val params = FrameLayout.LayoutParams(painted.width, painted.height).apply {
                 leftMargin = rect.x
                 topMargin = rect.y
                 gravity = Gravity.TOP or Gravity.START
@@ -295,14 +315,39 @@ class AdMobHandler(private val activity: Activity) : PluginHandler, HandleReleas
         withContext(Dispatchers.Main) { removeBannerView(view) }
     }
 
-    private fun attachBannerView(view: AdView, rect: BannerRectData) {
+    private fun attachBannerView(view: AdView, rect: BannerRectData, painted: PxSize) {
         val root = activity.findViewById<ViewGroup>(android.R.id.content)
-        val params = FrameLayout.LayoutParams(rect.width, rect.height).apply {
+        val params = FrameLayout.LayoutParams(painted.width, painted.height).apply {
             leftMargin = rect.x
             topMargin = rect.y
             gravity = Gravity.TOP or Gravity.START
         }
         root.addView(view, params)
+    }
+
+    /**
+     * Pick a real AdMob banner size. `AdView.setAdSize(AdSize(w,h))` with
+     * arbitrary dimensions is a "custom size" that the standard banner
+     * inventory does not fill — even Google's own test banner unit
+     * (`.../6300978111`) only fills documented sizes (BANNER, adaptive,
+     * MEDIUM_RECTANGLE, …). Rust hands us pixels from the egui layout
+     * pass; we convert to dp and ask the SDK for an anchored adaptive
+     * banner sized to that width. Falls back to `AdSize.BANNER` if the
+     * requested width is too narrow to be adaptive-eligible.
+     */
+    private fun pickAdSize(rect: BannerRectData): AdSize {
+        val density = activity.resources.displayMetrics.density
+        val widthDp = (rect.width / density).toInt().coerceAtLeast(0)
+        if (widthDp < AdSize.BANNER.width) {
+            return AdSize.BANNER
+        }
+        return AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(activity, widthDp)
+    }
+
+    private fun adSizePixels(size: AdSize): PxSize {
+        val widthPx = if (size.width > 0) size.getWidthInPixels(activity) else 0
+        val heightPx = if (size.height > 0) size.getHeightInPixels(activity) else 0
+        return PxSize(widthPx, heightPx)
     }
 
     private fun removeBannerView(view: AdView) {
@@ -406,6 +451,8 @@ class AdMobHandler(private val activity: Activity) : PluginHandler, HandleReleas
         val width: Int,
         val height: Int,
     )
+
+    private data class PxSize(val width: Int, val height: Int)
 
     /** Mirrors Rust `istmo::plugins::InterstitialOutcome` variant order. */
     private enum class InterstitialOutcome {
