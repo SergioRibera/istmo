@@ -26,6 +26,7 @@ mount := "-v $(pwd):/src -v gradle-cache:/root/.gradle -v cargo-cache:/root/.car
 
 android-demo: (build "android-demo") (install "android-demo") (run "android-demo")
 android-multi: (build "android-multi") (install "android-multi") (run "android-multi")
+rust-mobile-demo: (build "rust-mobile-demo") (install "rust-mobile-demo") (run "rust-mobile-demo")
 
 # ---- iOS demo (macOS-only) ------------------------------------------
 #
@@ -128,6 +129,7 @@ run name:
     case "{{name}}" in
         android-demo) component="dev.istmo.demo/dev.istmo.demo.MainActivity" ;;
         android-multi) component="dev.istmo.multi/dev.istmo.multi.MainActivity" ;;
+        rust-mobile-demo) component="dev.istmo.rustdemo/dev.istmo.rustdemo.RustMobileActivity" ;;
         *) echo "just run: no launcher configured for '{{name}}'"; exit 1 ;;
     esac
     adb shell am start -n "$component"

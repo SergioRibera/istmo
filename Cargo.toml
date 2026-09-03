@@ -11,6 +11,7 @@ members = [
     "examples/android-multi/crates/app",
     "examples/android-multi/crates/widget",
     "examples/ios-demo",
+    "examples/rust-mobile-demo",
 ]
 
 [workspace.package]
