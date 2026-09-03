@@ -20,6 +20,31 @@ android {
         }
     }
 
+    // Pin the debug signing config so it always resolves to the
+    // developer's `~/.android/debug.keystore` — inside Docker that path
+    // is bind-mounted from the host via the `mount` variable in the
+    // workspace `justfile`. Without this explicit block AGP would fall
+    // back to creating a fresh keystore inside the container on first
+    // build, whose SHA-1 wouldn't match the one registered against the
+    // Google OAuth Android client id.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file(
+                System.getenv("ANDROID_DEBUG_KEYSTORE")
+                    ?: "${System.getProperty("user.home")}/.android/debug.keystore",
+            )
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

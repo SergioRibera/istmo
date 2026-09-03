@@ -14,8 +14,12 @@
 image := "sergioribera/rust-android:1.96-sdk-37.0"
 
 # Mount repo root at /src. Named volumes cache Gradle downloads + cargo
-# registry so repeat builds are fast.
-mount := "-v $(pwd):/src -v gradle-cache:/root/.gradle -v cargo-cache:/root/.cargo"
+# registry so repeat builds are fast. Host's ~/.android is bind-mounted
+# into /root/.android so AGP's default debug signing config uses the
+# SAME debug.keystore the developer sees on the host — critical for
+# Google Sign-In / Credential Manager, where the SHA-1 registered in
+# Google Cloud Console must match the SHA-1 that signed the APK.
+mount := "-v $(pwd):/src -v $HOME/.android:/root/.android -v gradle-cache:/root/.gradle -v cargo-cache:/root/.cargo"
 
 # ---- Demo entry points ----------------------------------------------
 #
@@ -149,3 +153,11 @@ reset-owned name paths:
         -w /src/examples/{{name}}/android \
         --entrypoint sh {{image}} \
         -c 'rm -rf {{paths}}'
+
+# Gen default keystore default
+# keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
+helper:
+    docker run --rm -v /home/s4rch/.android:/src \
+        -w /src \
+        --entrypoint sh {{image}} \
+        -c 'keytool -list -v -keystore /src/debug.keystore -alias androiddebugkey -storepass android -keypass android'
