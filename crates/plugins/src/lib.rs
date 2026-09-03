@@ -38,6 +38,10 @@ pub use crate::admob::{
     ADMOB_PLUGIN_ID, AdError, AdMob, AdMobClient, AdMobConfig, AdMobHost, Banner, BannerRect,
     BannerRequest, Interstitial, InterstitialOutcome, Rewarded, RewardedOutcome,
 };
+pub use crate::admob::slot::{
+    BannerSlot, BoxFuture as BannerSlotBoxFuture, SlotStatus, SlotTarget, SpawnFn as BannerSlotSpawnFn,
+    banner_rect_from_logical,
+};
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
 pub use crate::google_sign_in::{
     Credential, GOOGLE_SIGN_IN_PLUGIN_ID, OwnedSignInAccount, SignIn, SignInAccount, SignInClient,

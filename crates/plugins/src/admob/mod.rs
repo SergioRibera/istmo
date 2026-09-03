@@ -1,5 +1,11 @@
 //! Google Mobile Ads (`AdMob`) plugin.
 //!
+//! # Sub-modules
+//!
+//! * [`slot`] — UI-agnostic [`BannerSlot`](slot::BannerSlot) that any Rust
+//!   UI framework (egui, iced, slint, gpui, …) can drive with a
+//!   two-line adapter.
+//!
 //! Exposes the three ad formats worth being an istmo primitive:
 //!
 //! * **Interstitial** — full-screen ad shown between app screens. Load
@@ -28,6 +34,8 @@
 //! against a `NativeAdView` (Android) / `GADNativeAdView` (iOS); asking
 //! Rust to reimplement view-tracking would drift the impression counts
 //! and violate the terms of service.
+
+pub mod slot;
 
 use std::sync::Arc;
 
