@@ -14,19 +14,19 @@
 //! is a soft error, and having Kotlin start it first means the pump is
 //! draining before `android_main` fires.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use android_activity::AndroidApp;
 use eframe::egui;
 use istmo::IstmoError;
-use istmo::NativeHandle;
 use istmo::plugins::{
-    EdgeInsets, NotificationError, NotificationImportance, NotificationRequest,
-    NotificationsClient, PermissionsClient, SafeArea, SafeAreaInsets,
+    BannerSlot, EdgeInsets, NotificationError, NotificationImportance, NotificationRequest,
+    NotificationsClient, PermissionsClient, SafeArea, SafeAreaInsets, SlotTarget,
+    banner_rect_from_logical,
 };
 use istmo_plugins::admob::{
-    AdError, AdMobClient, AdMobConfig, Banner, BannerRect, BannerRequest, InterstitialOutcome,
-    RewardedOutcome,
+    AdError, AdMobClient, AdMobConfig, InterstitialOutcome, RewardedOutcome,
 };
 use istmo_plugins::google_sign_in::{
     OwnedSignInAccount, SignInClient, SignInConfig, SignInError, SignInMode,
@@ -140,23 +140,32 @@ enum AdStatus {
     Err(String),
 }
 
-/// Whether the banner overlay is currently visible. When `true`, the
-/// worker thread that opened it holds the handle alive (via the
-/// [`DemoApp::banner_shown`] flag) so we don't need to keep the Rust
-/// `NativeHandle<Banner>` in the App struct — the native side owns the
-/// view lifetime and we command hide/show via the plugin.
+/// Root eframe app state. Cheap to construct — every stateful client
+/// is `Option`-typed and lazily populated in `update()` so nothing
+/// touches the runtime before its pump has drained.
 struct DemoApp {
     status: Arc<Mutex<Status>>,
     ad_status: Arc<Mutex<AdStatus>>,
-    /// Live banner handle. Present exactly when a banner is on-screen —
-    /// the handle owns the native `AdView`'s lifetime. Toggle path
-    /// takes it out to call `hide_banner_owned`.
-    banner: Arc<Mutex<Option<NativeHandle<Banner>>>>,
+    /// Cached `AdMobClient`, shared across every `BannerSlot`. `None`
+    /// until the first frame kicks off `acquire_with`; the mutex is
+    /// held only briefly so per-frame reads are cheap.
+    admob: Arc<Mutex<Option<Arc<AdMobClient>>>>,
+    /// Latch preventing multiple concurrent `AdMobClient::acquire_with`
+    /// calls. First frame flips it to `true` and spawns the acquire;
+    /// subsequent frames observe `true` and skip.
+    admob_acquiring: Arc<AtomicBool>,
+    /// One slot per in-feed banner placement. Grown lazily as the feed
+    /// scrolls into new positions. Vec index matches the deterministic
+    /// slot index computed from the item's position.
+    banners: Vec<BannerSlot>,
     /// Cached safe-area client. `None` until the runtime has been
     /// initialised (first `update` call) so we never touch the runtime
     /// from `DemoApp::new` — eframe constructs `DemoApp` before the
     /// runtime pump has finished starting on some device timings.
     safe_area: Option<SafeArea>,
+    /// Static feed content. Built once so scroll geometry stays stable
+    /// across frames.
+    feed: Vec<FeedItem>,
 }
 
 impl DemoApp {
@@ -164,9 +173,57 @@ impl DemoApp {
         Self {
             status: Arc::new(Mutex::new(Status::Idle)),
             ad_status: Arc::new(Mutex::new(AdStatus::Idle)),
-            banner: Arc::new(Mutex::new(None)),
+            admob: Arc::new(Mutex::new(None)),
+            admob_acquiring: Arc::new(AtomicBool::new(false)),
+            banners: Vec::new(),
             safe_area: None,
+            feed: build_feed(60),
         }
+    }
+
+    /// Return a clone of the cached `AdMobClient`, kicking off the
+    /// `acquire_with` handshake in a worker if not started yet. First
+    /// few frames after sign-in return `None`; once the CreateInstance
+    /// round-trip lands, every subsequent frame gets the client.
+    fn ensure_admob(&self, ctx: &egui::Context) -> Option<Arc<AdMobClient>> {
+        {
+            let guard = self.admob.lock().expect("admob mutex");
+            if let Some(c) = guard.as_ref() {
+                return Some(c.clone());
+            }
+        }
+        // Flip the acquire latch; if it was already true, someone else
+        // is racing us. Otherwise spawn one attempt.
+        if self
+            .admob_acquiring
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return None;
+        }
+        let admob = self.admob.clone();
+        let latch = self.admob_acquiring.clone();
+        let ctx_clone = ctx.clone();
+        std::thread::spawn(move || {
+            let cfg = AdMobConfig {
+                app_id: ADMOB_APP_ID.to_owned(),
+                test_device_ids: vec!["2902b757-08af-4ae3-b03e-b7e8a0104645".to_owned()],
+                child_directed_treatment: false,
+            };
+            match pollster::block_on(AdMobClient::acquire_with(cfg)) {
+                Ok(client) => {
+                    let mut guard = admob.lock().expect("admob mutex");
+                    *guard = Some(Arc::new(client));
+                    ctx_clone.request_repaint();
+                }
+                Err(err) => {
+                    log::warn!("admob acquire failed: {err}");
+                    // Release the latch so a later frame may retry.
+                    latch.store(false, Ordering::SeqCst);
+                }
+            }
+        });
+        None
     }
 
     /// Lazily attach the safe-area client and repaint whenever an inset
@@ -262,65 +319,6 @@ impl DemoApp {
             };
             Self::set_ad_status(&status, &ctx, next);
         });
-    }
-
-    /// Toggle the banner overlay. When shown, we anchor it to the bottom
-    /// of the current window (`ctx.screen_rect()`). Coordinates are
-    /// physical pixels — `ctx.pixels_per_point()` translates from egui's
-    /// logical units.
-    fn start_toggle_banner(&self, ctx: &egui::Context) {
-        let held = self.banner.lock().expect("banner mutex").take();
-        let ad_status = self.ad_status.clone();
-        let banner_slot = self.banner.clone();
-        let ctx_clone = ctx.clone();
-
-        if let Some(handle) = held {
-            Self::set_ad_status(
-                &ad_status,
-                &ctx_clone,
-                AdStatus::Working("Hiding banner…".into()),
-            );
-            std::thread::spawn(move || {
-                let outcome = pollster::block_on(run_hide_banner(handle));
-                let next = match outcome {
-                    Ok(()) => AdStatus::Ok("Banner hidden.".into()),
-                    Err(msg) => AdStatus::Err(msg),
-                };
-                Self::set_ad_status(&ad_status, &ctx_clone, next);
-            });
-        } else {
-            // Anchor the banner at the bottom of the window, full width,
-            // ~50 dp tall. Convert egui's logical-point rect into
-            // physical pixels using the current pixels_per_point.
-            let px = ctx.pixels_per_point();
-            let screen = ctx.screen_rect();
-            let banner_h_px = (50.0 * px) as u32;
-            let width_px = (screen.width() * px) as u32;
-            let x_px = 0u32;
-            let y_px = ((screen.max.y * px) as u32).saturating_sub(banner_h_px);
-            let rect = BannerRect {
-                x: x_px,
-                y: y_px,
-                width: width_px,
-                height: banner_h_px,
-            };
-            Self::set_ad_status(
-                &ad_status,
-                &ctx_clone,
-                AdStatus::Working("Showing banner…".into()),
-            );
-            std::thread::spawn(move || {
-                let outcome = pollster::block_on(run_show_banner(rect));
-                let next = match outcome {
-                    Ok(handle) => {
-                        *banner_slot.lock().expect("banner mutex") = Some(handle);
-                        AdStatus::Ok("Banner visible.".into())
-                    }
-                    Err(msg) => AdStatus::Err(msg),
-                };
-                Self::set_ad_status(&ad_status, &ctx_clone, next);
-            });
-        }
     }
 
     fn start_sign_out(&self, ctx: &egui::Context) {
@@ -454,30 +452,41 @@ impl DemoApp {
         });
     }
 
-    fn render_signed_in(&self, ui: &mut egui::Ui, ctx: &egui::Context, account: &AccountView) {
-        card(ui, |ui| {
-            let name = account
-                .display_name
-                .as_deref()
-                .unwrap_or_else(|| account.email.as_deref().unwrap_or(&account.id));
-            ui.add(egui::Label::new(egui::RichText::new(name).heading()).truncate());
-            ui.add_space(8.0);
-            field(ui, "id", &account.id);
-            if let Some(email) = &account.email {
-                field(ui, "email", email);
-            }
-            if let Some(display) = &account.display_name {
-                field(ui, "name", display);
-            }
-            if let Some(url) = &account.photo_url {
-                field(ui, "avatar", url);
-            }
-            field(ui, "scopes", &account.granted_scopes.join(", "));
-            field(ui, "id_token", &account.id_token_preview);
-        });
+    fn render_signed_in(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, account: &AccountView) {
+        // Kick off admob acquire on first render; the client lands
+        // asynchronously and every slot picks it up on the next frame.
+        let admob = self.ensure_admob(ctx);
 
-        ui.add_space(16.0);
-        self.render_ads_panel(ui, ctx);
+        // Header — account card, at top of scroll.
+        card(ui, |ui| render_account(ui, account));
+        ui.add_space(12.0);
+
+        // Ads actions (interstitial / rewarded). Banner button gone —
+        // banners are now automatic, embedded in the feed below.
+        self.render_ads_actions_card(ui, ctx);
+        ui.add_space(12.0);
+
+        // Feed of random content with a banner every `BANNER_EVERY`
+        // items. Each banner is a `BannerSlot` bound to a specific
+        // position; as the user scrolls, the slot syncs its native
+        // `AdView` to the rectangle egui allocates, and hides the
+        // banner when scrolled off-screen.
+        const BANNER_EVERY: usize = 5;
+        let px = ctx.pixels_per_point();
+        let clip = ui.clip_rect();
+        let feed_len = self.feed.len();
+        for i in 0..feed_len {
+            {
+                let item = &self.feed[i];
+                card(ui, |ui| render_feed_item(ui, item));
+            }
+            ui.add_space(8.0);
+            if (i + 1) % BANNER_EVERY == 0 {
+                let banner_idx = i / BANNER_EVERY;
+                self.render_banner_row(ui, banner_idx, admob.as_ref(), clip, px);
+                ui.add_space(8.0);
+            }
+        }
 
         ui.add_space(16.0);
         ui.vertical_centered(|ui| {
@@ -491,26 +500,25 @@ impl DemoApp {
                 self.start_sign_out(ctx);
             }
         });
+        ui.add_space(24.0);
     }
 
-    fn render_ads_panel(&self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn render_ads_actions_card(&self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let ad_snapshot = self.ad_status.lock().expect("ad status mutex").clone();
         let busy = matches!(&ad_snapshot, AdStatus::Working(_));
-        let banner_shown = self.banner.lock().expect("banner mutex").is_some();
 
         card(ui, |ui| {
             ui.heading("Ads");
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("AdMob · test units").weak());
+            ui.label(
+                egui::RichText::new("Interstitial + rewarded · banners auto-appear in the feed")
+                    .weak(),
+            );
             ui.add_space(10.0);
 
-            // Buttons share the row equally. `available_width` inside
-            // the card already accounts for `Frame::group`'s inner
-            // margin, so this is the *content* width — the true budget
-            // we're allowed to spend without overflowing.
             let inner_width = ui.available_width();
             let spacing = ui.spacing().item_spacing.x;
-            let per_btn = ((inner_width - spacing * 2.0) / 3.0).max(96.0);
+            let per_btn = ((inner_width - spacing) / 2.0).max(96.0);
             let btn_size = egui::vec2(per_btn, 40.0);
 
             ui.horizontal_wrapped(|ui| {
@@ -522,11 +530,6 @@ impl DemoApp {
                 if ui.add_enabled(!busy, rewarded).clicked() {
                     self.start_rewarded(ctx);
                 }
-                let banner_label = if banner_shown { "Hide banner" } else { "Banner" };
-                let banner = egui::Button::new(banner_label).min_size(btn_size);
-                if ui.add_enabled(!busy, banner).clicked() {
-                    self.start_toggle_banner(ctx);
-                }
             });
 
             ui.add_space(10.0);
@@ -534,7 +537,8 @@ impl DemoApp {
                 AdStatus::Idle => {
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new("Tap a button to try an ad.").weak(),
+                            egui::RichText::new("Scroll down to see banners appear inline.")
+                                .weak(),
                         )
                         .wrap(),
                     );
@@ -560,6 +564,154 @@ impl DemoApp {
             }
         });
     }
+
+    /// Reserve a rect in the feed for banner `banner_idx` and sync the
+    /// matching [`BannerSlot`] to it. On scroll, the same allocated
+    /// rect moves; on scroll-out, the intersection with `clip` empties
+    /// and the slot receives [`SlotTarget::Hide`].
+    fn render_banner_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        banner_idx: usize,
+        admob: Option<&Arc<AdMobClient>>,
+        clip: egui::Rect,
+        px: f32,
+    ) {
+        // Reserve a fixed-height rectangle regardless of ad state so
+        // the feed's scroll geometry does not jitter when banners load
+        // asynchronously.
+        let width = ui.available_width();
+        let size = egui::vec2(width, 60.0);
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+
+        let visuals = ui.visuals().clone();
+        ui.painter().rect_filled(rect, 8.0, visuals.extreme_bg_color);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "· ad ·",
+            egui::TextStyle::Small.resolve(ui.style()),
+            visuals.weak_text_color(),
+        );
+
+        let Some(client) = admob else {
+            return;
+        };
+        while self.banners.len() <= banner_idx {
+            self.banners
+                .push(BannerSlot::new(BANNER_UNIT, client.clone()));
+        }
+
+        let target = if clip.intersects(rect) {
+            let br = banner_rect_from_logical(
+                rect.min.x,
+                rect.min.y,
+                rect.width(),
+                rect.height(),
+                px,
+            );
+            SlotTarget::Show(br)
+        } else {
+            SlotTarget::Hide
+        };
+        self.banners[banner_idx].sync(target);
+
+        if let Some(err) = self.banners[banner_idx].last_error() {
+            let text = format!("banner failed: {err}");
+            let font = egui::TextStyle::Small.resolve(ui.style());
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                text,
+                font,
+                egui::Color32::from_rgb(220, 90, 90),
+            );
+        }
+    }
+}
+
+fn render_account(ui: &mut egui::Ui, account: &AccountView) {
+    let name = account
+        .display_name
+        .as_deref()
+        .unwrap_or_else(|| account.email.as_deref().unwrap_or(&account.id));
+    ui.add(egui::Label::new(egui::RichText::new(name).heading()).truncate());
+    ui.add_space(8.0);
+    field(ui, "id", &account.id);
+    if let Some(email) = &account.email {
+        field(ui, "email", email);
+    }
+    if let Some(url) = &account.photo_url {
+        field(ui, "avatar", url);
+    }
+    field(ui, "scopes", &account.granted_scopes.join(", "));
+    field(ui, "id_token", &account.id_token_preview);
+}
+
+fn render_feed_item(ui: &mut egui::Ui, item: &FeedItem) {
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::Label::new(egui::RichText::new(&item.author).strong().monospace()).truncate(),
+        );
+        ui.add_space(6.0);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!("· {}m", item.minutes_ago))
+                    .weak()
+                    .monospace(),
+            )
+            .truncate(),
+        );
+    });
+    ui.add_space(4.0);
+    ui.add(egui::Label::new(egui::RichText::new(&item.title).size(15.0).strong()).wrap());
+    ui.add_space(4.0);
+    ui.add(egui::Label::new(&item.body).wrap());
+}
+
+#[derive(Debug, Clone)]
+struct FeedItem {
+    author: String,
+    minutes_ago: u32,
+    title: String,
+    body: String,
+}
+
+/// Deterministic feed content — same set every run, no rng. Good
+/// enough to prove the banner slot layout without shipping a
+/// content-generation library in a demo.
+fn build_feed(count: usize) -> Vec<FeedItem> {
+    const AUTHORS: [&str; 8] = [
+        "@sonia", "@mateo", "@brian", "@ana", "@leo", "@nina", "@omar", "@zoe",
+    ];
+    const TITLES: [&str; 8] = [
+        "istmo hits M6 — full-Rust mobile is real",
+        "wgpu on Android finally landed adaptive banners",
+        "why we replaced Flutter with 400 lines of Rust",
+        "shipping a workspace-scale Cargo build",
+        "no more `serde` on the wire — bincode 2 is enough",
+        "safe-area insets across every OEM",
+        "PopupWindow: the one Android trick nobody remembered",
+        "AdMob adaptive height without a layout jump",
+    ];
+    const BODIES: [&str; 8] = [
+        "One trait per plugin, one struct per host, and the frame protocol carries the rest.",
+        "Turns out `AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize` is a whole sentence.",
+        "The runtime crate is 900 lines. The client-side ergonomics come from macros.",
+        "NativeHandle<T> plus a drop cascade removes an entire class of leaks.",
+        "If your codec doesn't fit in Kotlin as a hundred lines, your codec is wrong.",
+        "Kotlin publishes `WindowInsetsCompat` deltas over an early-event channel.",
+        "SurfaceFlinger composites the popup as its own layer above the wgpu present.",
+        "Fixing the y-axis meant treating banners as first-class citizens in the feed.",
+    ];
+    (0..count)
+        .map(|i| FeedItem {
+            author: AUTHORS[i % AUTHORS.len()].to_owned(),
+            minutes_ago: (i as u32 * 11 % 240) + 1,
+            title: TITLES[(i * 3 + 1) % TITLES.len()].to_owned(),
+            body: BODIES[(i * 5 + 2) % BODIES.len()].to_owned(),
+        })
+        .collect()
 }
 
 /// Draw `contents` inside a rounded card that fills the caller's
@@ -716,25 +868,6 @@ async fn run_rewarded_flow(
     } else {
         "Rewarded ad closed without reward.".to_owned()
     })
-}
-
-async fn run_show_banner(rect: BannerRect) -> Result<NativeHandle<Banner>, String> {
-    let client = acquire_admob().await?;
-    client
-        .show_banner_owned(BannerRequest {
-            ad_unit_id: BANNER_UNIT.to_owned(),
-            rect,
-        })
-        .await
-        .map_err(|e| format!("show_banner: {}", render_ad_error(&e)))
-}
-
-async fn run_hide_banner(handle: NativeHandle<Banner>) -> Result<(), String> {
-    let client = acquire_admob().await?;
-    client
-        .hide_banner_owned(handle)
-        .await
-        .map_err(|e| format!("hide_banner: {}", render_ad_error(&e)))
 }
 
 async fn acquire_admob() -> Result<AdMobClient, String> {
