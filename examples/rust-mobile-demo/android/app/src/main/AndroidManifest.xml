@@ -9,7 +9,7 @@
         android:allowBackup="false"
         android:label="rust-mobile-demo"
         android:hasCode="true"
-        android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <!-- RustMobileActivity is a NativeActivity subclass that boots
              IstmoRuntime + registers the three plugin dispatchers before
              `android_main` fires. The `android.app.lib_name` metadata

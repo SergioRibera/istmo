@@ -2,7 +2,12 @@ package dev.istmo.rustdemo
 
 import android.app.NativeActivity
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.view.View
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import dev.istmo.runtime.GoogleSignInHandler
 import dev.istmo.runtime.IstmoRuntime
 import dev.istmo.runtime.NotificationsHandler
@@ -48,6 +53,21 @@ class RustMobileActivity : NativeActivity() {
         runtime.registerHandler(PermissionsHandler.PLUGIN_ID, permissions)
 
         super.onCreate(savedInstanceState)
+
+        // Show system bars and reserve their space so the egui surface
+        // does not draw underneath the status bar. NativeActivity draws
+        // edge-to-edge by default on newer Android; opting out here
+        // matches "normal app" chrome.
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            show(WindowInsetsCompat.Type.systemBars())
+            isAppearanceLightStatusBars = false
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        }
     }
 
     override fun onRequestPermissionsResult(
