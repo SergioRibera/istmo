@@ -38,6 +38,7 @@ import kotlinx.coroutines.withContext
  * Trait shape and wire encoding are unchanged — the swap is
  * dispatcher-local.
  */
+@Suppress("DEPRECATION") // legacy GoogleSignInClient — see MIUI note above.
 class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
 
     companion object {
