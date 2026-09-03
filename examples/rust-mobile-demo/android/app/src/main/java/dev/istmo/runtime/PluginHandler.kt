@@ -25,3 +25,14 @@ interface PluginHandler {
  * decode back into the plugin's own error enum.
  */
 class PluginException(val payload: ByteArray) : RuntimeException()
+
+/**
+ * Marker interface a [PluginHandler] implements when it owns native
+ * objects referenced from Rust through `NativeHandle<T>`. The runtime
+ * routes `Frame::ReleaseNativeHandle` frames to
+ * [releaseNativeHandle] on the plugin id that allocated the id via
+ * [IstmoRuntime.allocHandleId].
+ */
+interface HandleReleaser {
+    fun releaseNativeHandle(handleId: Long)
+}

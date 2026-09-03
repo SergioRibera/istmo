@@ -39,7 +39,7 @@ import kotlinx.coroutines.withContext
  * dispatcher-local.
  */
 @Suppress("DEPRECATION") // legacy GoogleSignInClient — see MIUI note above.
-class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
+class GoogleSignInHandler(private val activity: Activity) : PluginHandler, HandleReleaser {
 
     companion object {
         const val PLUGIN_ID = "istmo.google_sign_in"
@@ -54,11 +54,14 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
     }
 
     private val nextInstanceId = AtomicLong(1)
-    private val nextHandleId = AtomicLong(1)
     private val nextRequestOffset = AtomicInteger(0)
     private val configs = ConcurrentHashMap<Long, SignInConfig>()
     private val credentials = ConcurrentHashMap<Long, GoogleSignInAccount>()
     private val pending = ConcurrentHashMap<Int, Continuation<SignInResult>>()
+
+    override fun releaseNativeHandle(handleId: Long) {
+        credentials.remove(handleId)
+    }
 
     override suspend fun handleCreateInstance(payload: ByteArray): ByteArray {
         val config = decodeConfig(payload)
@@ -219,7 +222,7 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
     }
 
     private fun toAccount(google: GoogleSignInAccount): SignInAccount {
-        val handleId = nextHandleId.getAndIncrement()
+        val handleId = IstmoRuntime.allocHandleId(PLUGIN_ID)
         credentials[handleId] = google
         return SignInAccount(
             id = google.id ?: "",
@@ -230,10 +233,6 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
             grantedScopes = google.grantedScopes.map { it.scopeUri },
             credentialHandleId = handleId,
         )
-    }
-
-    fun releaseCredential(handleId: Long) {
-        credentials.remove(handleId)
     }
 
     private fun isNoCredential(e: PluginException): Boolean {

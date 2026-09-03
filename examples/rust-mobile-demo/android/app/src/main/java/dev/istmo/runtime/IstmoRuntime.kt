@@ -34,6 +34,15 @@ object IstmoRuntime {
     private val jobs = ConcurrentHashMap<Long, Job>()
     private val handlers = ConcurrentHashMap<String, PluginHandler>()
 
+    /**
+     * Central native-handle ownership map. Every Kotlin dispatcher that
+     * returns a `NativeHandleId` to Rust allocates it via [allocHandleId]
+     * so [onReleaseNativeHandle] can route the release back to the
+     * correct owner. The map is `handleId -> pluginId`.
+     */
+    private val handleOwners = ConcurrentHashMap<Long, String>()
+    private val nextGlobalHandleId = AtomicLong(1)
+
     /** Pending Kotlin-initiated calls awaiting a `Frame::Respond`. */
     private val outboundCalls = ConcurrentHashMap<Long, PendingCall>()
     private val nextCallId = AtomicLong(1)
@@ -45,6 +54,34 @@ object IstmoRuntime {
     /** Register a Kotlin backend for a plugin id (native-hosted plugins). */
     fun registerHandler(pluginId: String, handler: PluginHandler) {
         handlers[pluginId] = handler
+    }
+
+    /**
+     * Reserve a fresh `NativeHandleId` and record `pluginId` as the owner.
+     *
+     * Called by a Kotlin dispatcher every time it registers a new native
+     * object it wants Rust to track (a credential, an AdMob ad, a
+     * `Bitmap`, ...). [onReleaseNativeHandle] uses the recorded owner to
+     * route the release back into the dispatcher's own registry.
+     *
+     * Global counter — the ids are unique across every dispatcher, which
+     * makes the release routing deterministic (no collisions between
+     * two dispatchers reusing local counters starting at 1).
+     */
+    fun allocHandleId(pluginId: String): Long {
+        val id = nextGlobalHandleId.getAndIncrement()
+        handleOwners[id] = pluginId
+        return id
+    }
+
+    /**
+     * Forget the ownership entry for `handleId`. Dispatchers call this
+     * from their own release path (interstitial shown, credential freed)
+     * to avoid a redundant [HandleReleaser.releaseNativeHandle] callback
+     * when the eventual `Frame::ReleaseNativeHandle` arrives.
+     */
+    fun forgetHandle(handleId: Long) {
+        handleOwners.remove(handleId)
     }
 
     /** Initialise the process runtime. Idempotent — subsequent calls return `false`. */
@@ -169,11 +206,12 @@ object IstmoRuntime {
 
     @JvmStatic
     fun onReleaseNativeHandle(handleId: Long) {
-        // Route the release into the sign-in handler's credential registry.
-        // If a future plugin registers native handles too, dispatch on a
-        // small tag encoded in the high bits (all one registry for now).
-        (handlers[GoogleSignInHandler.PLUGIN_ID] as? GoogleSignInHandler)
-            ?.releaseCredential(handleId)
+        // Look up the recorded owner and dispatch. Unknown ids are a
+        // no-op — the release may race a same-thread dispatcher-side
+        // release (interstitial shown then dropped), in which case the
+        // owner entry has already been removed by `forgetHandle`.
+        val ownerId = handleOwners.remove(handleId) ?: return
+        (handlers[ownerId] as? HandleReleaser)?.releaseNativeHandle(handleId)
     }
 
     // ---- Trampolines exported by istmo-android --------------------------
