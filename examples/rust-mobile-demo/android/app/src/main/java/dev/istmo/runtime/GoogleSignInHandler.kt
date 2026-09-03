@@ -156,9 +156,23 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
             .build()
         val response = try {
             manager.getCredential(activity, request)
-        } catch (_: GetCredentialCancellationException) {
-            Log.d(TAG, "sign-in cancelled by user")
-            throw PluginException(encodeError(Err.UserCancelled, null))
+        } catch (e: GetCredentialCancellationException) {
+            // Real user cancellation vs SDK-side-reported cancellation
+            // (e.g. OAuth consent-screen not published, wrong SHA-1
+            // resolved server-side, Play Services stale) both surface as
+            // this exception. Log everything so the actual reason lands
+            // in logcat; propagate the message as Backend so the UI
+            // shows it too until we tighten the diagnosis.
+            Log.w(TAG, "cancellation exception: type=${e.type} msg=${e.message}", e)
+            val msg = e.message.orEmpty()
+            if (msg.isEmpty() || msg.contains("user", ignoreCase = true) ||
+                msg.contains("cancel", ignoreCase = true)
+            ) {
+                throw PluginException(encodeError(Err.UserCancelled, null))
+            }
+            throw PluginException(
+                encodeError(Err.Backend, "cancellation: ${e.type} $msg"),
+            )
         } catch (e: NoCredentialException) {
             Log.w(TAG, "no credential available: ${e.message}", e)
             throw PluginException(encodeError(Err.NoCredentialAvailable, null))
