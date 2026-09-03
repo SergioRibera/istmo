@@ -184,7 +184,15 @@ class GoogleSignInHandler(private val activity: Activity) : PluginHandler {
                 CommonStatusCodes.DEVELOPER_ERROR -> Err.InvalidConfiguration
                 else -> Err.Backend
             }
-            val msg = if (err.hasPayload) "$label ($code)" else null
+            val hint = when (code) {
+                CommonStatusCodes.DEVELOPER_ERROR ->
+                    " — Google Cloud Console: verify (a) an Android OAuth client with package " +
+                        "`${activity.packageName}` + SHA-1 of the APK signing keystore exists, " +
+                        "AND (b) the SERVER_CLIENT_ID Web client is in the SAME project. " +
+                        "Run `just helper` on the host to see the SHA-1."
+                else -> ""
+            }
+            val msg = if (err.hasPayload) "$label ($code)$hint" else null
             throw PluginException(encodeError(err, msg))
         }
     }
