@@ -40,6 +40,10 @@ IstmoRuntime.shared.registerHandler(
     NotificationsDispatcher.PLUGIN_ID,
     NotificationsDispatcher(backend: NotificationsBackendImpl(), codecs: NotificationsCodecsImpl())
 )
+IstmoRuntime.shared.registerHandler(
+    SignInDispatcher.PLUGIN_ID,
+    SignInDispatcher(factory: SignInFactoryImpl(), codecs: SignInCodecsImpl())
+)
 
 // SafeArea iOS publisher — deferred.
 //
