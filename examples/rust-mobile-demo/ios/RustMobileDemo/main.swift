@@ -36,8 +36,11 @@ IstmoRuntime.shared.registerHandler(
     PermissionsDispatcher.PLUGIN_ID,
     PermissionsDispatcher(backend: PermissionsBackendImpl(), codecs: PermissionsCodecsImpl())
 )
+IstmoRuntime.shared.registerHandler(
+    NotificationsDispatcher.PLUGIN_ID,
+    NotificationsDispatcher(backend: NotificationsBackendImpl(), codecs: NotificationsCodecsImpl())
+)
 
-// TODO C.4: register NotificationsDispatcher here.
-// TODO C.5: register SafeAreaBackend here (early events, not a dispatcher).
+// TODO C.5: publish SafeArea insets (uses early events, not a dispatcher).
 
 _ = istmo_run_ios()
