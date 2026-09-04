@@ -31,8 +31,28 @@ public final class IstmoRuntime {
     private var nextId: UInt64 = 1_000_000_000  // Swift-originated ids stay above Rust's range for debugging clarity.
     private var pending: [UInt64: CheckedContinuation<Data, Error>] = [:]
     private var streams: [UInt64: AsyncThrowingStream<Data, Error>.Continuation] = [:]
+    /// Swift-side plugin dispatchers keyed by wire plugin id. Populated
+    /// through `registerHandler`; consulted from `handleCall` /
+    /// `handleCreateInstance` when the Rust pump delivers an inbound call
+    /// for a Swift-hosted plugin.
+    private var handlers: [String: PluginHandler] = [:]
 
     private init() {}
+
+    // MARK: - Handler registry
+
+    /// Register a Swift-side dispatcher for a wire plugin id. Typical
+    /// call site is `main.swift` after `IstmoRuntime.shared.start()`:
+    ///
+    /// ```swift
+    /// IstmoRuntime.shared.registerHandler(
+    ///     PermissionsDispatcher.PLUGIN_ID,
+    ///     PermissionsDispatcher(backend: MyPermissions(), codecs: PermissionsCodecs())
+    /// )
+    /// ```
+    public func registerHandler(_ pluginId: String, _ handler: PluginHandler) {
+        queue.sync { self.handlers[pluginId] = handler }
+    }
 
     // MARK: - Lifecycle
 
@@ -253,12 +273,58 @@ public final class IstmoRuntime {
     }
 
     fileprivate func handleCall(callId: UInt64, pluginId: String, instanceId: UInt64, method: String, payload: Data) {
-        // Swift-hosted plugins (native implements a trait Rust consumes)
-        // would dispatch here. The M5 demo is Rust-hosted only, so we
-        // reply with a placeholder error rather than silently dropping —
-        // makes the missing-host case observable if a future test regresses.
-        NSLog("IstmoRuntime: unhandled onCall plugin=\(pluginId) method=\(method) — no Swift host registered")
-        istmo_ios_submit_response(callId, false, nil, 0)
+        let handler = queue.sync { self.handlers[pluginId] }
+        guard let handler = handler else {
+            NSLog("IstmoRuntime: onCall for unregistered plugin=\(pluginId)")
+            istmo_ios_submit_response(callId, false, nil, 0)
+            return
+        }
+        Task {
+            do {
+                let out = try await handler.handleCall(instanceId: instanceId, method: method, payload: payload)
+                Self.submitResponse(callId: callId, ok: true, payload: out)
+            } catch let e as PluginException {
+                Self.submitResponse(callId: callId, ok: false, payload: e.payload)
+            } catch {
+                NSLog("IstmoRuntime: handleCall failed plugin=\(pluginId) method=\(method): \(error)")
+                istmo_ios_submit_response(callId, false, nil, 0)
+            }
+        }
+    }
+
+    fileprivate func handleCreateInstance(callId: UInt64, pluginId: String, payload: Data) {
+        let handler = queue.sync { self.handlers[pluginId] }
+        guard let handler = handler else {
+            NSLog("IstmoRuntime: onCreateInstance for unregistered plugin=\(pluginId)")
+            istmo_ios_submit_response(callId, false, nil, 0)
+            return
+        }
+        Task {
+            do {
+                let out = try await handler.handleCreateInstance(payload: payload)
+                Self.submitResponse(callId: callId, ok: true, payload: out)
+            } catch let e as PluginException {
+                Self.submitResponse(callId: callId, ok: false, payload: e.payload)
+            } catch {
+                NSLog("IstmoRuntime: handleCreateInstance failed plugin=\(pluginId): \(error)")
+                istmo_ios_submit_response(callId, false, nil, 0)
+            }
+        }
+    }
+
+    /// Ship `payload` back to Rust via `istmo_ios_submit_response`.
+    /// Extracted to keep the two `handle*` methods short and consistent
+    /// about how empty payloads are represented on the wire (nil ptr +
+    /// zero length, matching the Rust decode fallback).
+    private static func submitResponse(callId: UInt64, ok: Bool, payload: Data) {
+        if payload.isEmpty {
+            istmo_ios_submit_response(callId, ok, nil, 0)
+        } else {
+            payload.withUnsafeBytes { raw in
+                let ptr = raw.bindMemory(to: UInt8.self).baseAddress
+                istmo_ios_submit_response(callId, ok, ptr, payload.count)
+            }
+        }
     }
 }
 
@@ -288,10 +354,11 @@ private enum Trampolines {
         UnsafeMutableRawPointer?, UInt64,
         UnsafePointer<UInt8>?, Int,
         UnsafePointer<UInt8>?, Int
-    ) -> Void = { _, callId, pidPtr, pidLen, _, _ in
+    ) -> Void = { ctx, callId, pidPtr, pidLen, payloadPtr, payloadLen in
+        guard let runtime = ctxRuntime(ctx) else { return }
         let pluginId = decodeUtf8(pidPtr, pidLen) ?? ""
-        NSLog("IstmoRuntime: onCreateInstance plugin=\(pluginId) call_id=\(callId) — no factory registered")
-        istmo_ios_submit_response(callId, false, nil, 0)
+        let payload = copyData(payloadPtr, payloadLen)
+        runtime.handleCreateInstance(callId: callId, pluginId: pluginId, payload: payload)
     }
 
     static let onDestroyInstance: @convention(c) (UnsafeMutableRawPointer?, UInt64) -> Void = { _, instanceId in

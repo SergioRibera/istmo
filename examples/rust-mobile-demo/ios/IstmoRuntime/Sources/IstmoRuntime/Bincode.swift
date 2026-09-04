@@ -1,16 +1,19 @@
 // Minimal port of the bincode 2 "standard" configuration (VarintEncoding +
 // LittleEndian) that the istmo wire format uses.
 //
-// Only the shapes the M5 demo actually needs are covered:
+// Covers every shape the plugin dispatcher codegen emits:
 //
-// * varint u64 / i64 / u32 / i32 (zigzag for signed, unsigned varint for
-//   unsigned)
-// * varint-length-prefixed String (UTF-8)
-// * varint-length-prefixed Data
-// * Bool as a single byte (0/1)
+// * varint u8/u16/u32/u64 and i8/i16/i32/i64 (zigzag + varint for signed).
+// * varint-length-prefixed String / Data.
+// * Bool as a single byte.
+// * f32 / f64 as fixed-width IEEE 754 little-endian (bincode 2 keeps
+//   floats fixed-width under `VarintEncoding`).
+// * Vec / Option combinators with cursor-carrying closures.
 //
-// Extend per plugin as the surface grows. See
-// https://docs.rs/bincode/2/bincode/config/ for the reference config.
+// Extend per new type as plugin surfaces grow. The generator picks the
+// helper it needs from this file; anything the generator names must exist
+// here or the Swift compiler surfaces a clear error at the codegen output
+// site.
 
 import Foundation
 
@@ -26,8 +29,12 @@ public enum Bincode {
         out.append(value)
     }
 
+    public static func writeI8(_ out: inout Data, _ value: Int8) {
+        out.append(UInt8(bitPattern: value))
+    }
+
     /// Bincode 2 "standard" varint encoding for unsigned integers:
-    /// values < 251 fit in one byte; larger values are tagged 251/252/253/254
+    /// values < 251 fit in one byte; larger values are tagged 251/252/253
     /// followed by 2/4/8 little-endian bytes. See `varint::encode_u64` in
     /// the bincode source.
     public static func writeVarintU64(_ out: inout Data, _ value: UInt64) {
@@ -57,6 +64,14 @@ public enum Bincode {
         writeVarintI64(&out, Int64(value))
     }
 
+    public static func writeF32(_ out: inout Data, _ value: Float) {
+        appendLE(&out, value.bitPattern)
+    }
+
+    public static func writeF64(_ out: inout Data, _ value: Double) {
+        appendLE(&out, value.bitPattern)
+    }
+
     public static func writeString(_ out: inout Data, _ value: String) {
         let bytes = Array(value.utf8)
         writeVarintU64(&out, UInt64(bytes.count))
@@ -68,8 +83,39 @@ public enum Bincode {
         out.append(value)
     }
 
-    /// Overload sugar so generated `Bincode.encode(&payload, x)` calls line
-    /// up with the shapes the demo covers. Add overloads per new type.
+    /// Length-prefixed `Vec<T>`. `writer` runs per element and advances
+    /// the buffer via inout. `T` is inferred from the closure signature.
+    public static func writeVec<T>(
+        _ out: inout Data,
+        _ items: [T],
+        _ writer: (inout Data, T) -> Void
+    ) {
+        writeVarintU64(&out, UInt64(items.count))
+        for item in items {
+            writer(&out, item)
+        }
+    }
+
+    /// One-tag-then-value `Option<T>` encoding.
+    public static func writeOption<T>(
+        _ out: inout Data,
+        _ value: T?,
+        _ writer: (inout Data, T) -> Void
+    ) {
+        if let v = value {
+            out.append(1)
+            writer(&out, v)
+        } else {
+            out.append(0)
+        }
+    }
+
+    // MARK: - Client encode(&payload, value) overloads
+    //
+    // The client generator emits `Bincode.encode(&payload, arg)` per
+    // argument; adding a new arg type in a contract means adding a
+    // matching overload here.
+
     public static func encode(_ out: inout Data, _ value: String) {
         writeString(&out, value)
     }
@@ -139,6 +185,16 @@ public enum Bincode {
         Int32(try readVarintI64(&c))
     }
 
+    public static func readF32(_ c: inout Cursor) throws -> Float {
+        let bits = try readLE(&c, UInt32.self)
+        return Float(bitPattern: bits)
+    }
+
+    public static func readF64(_ c: inout Cursor) throws -> Double {
+        let bits = try readLE(&c, UInt64.self)
+        return Double(bitPattern: bits)
+    }
+
     public static func readString(_ c: inout Cursor) throws -> String {
         let len = Int(try readVarintU64(&c))
         guard c.remaining >= len else { throw DecodeError.unexpectedEnd }
@@ -158,8 +214,33 @@ public enum Bincode {
         return slice
     }
 
-    /// Sugar mirroring the `Bincode.decode(bytes) as T` shape the generator
-    /// emits. Currently supports `String`; extend per new type.
+    public static func readVec<T>(
+        _ c: inout Cursor,
+        _ reader: (inout Cursor) throws -> T
+    ) throws -> [T] {
+        let len = Int(try readVarintU64(&c))
+        var out: [T] = []
+        out.reserveCapacity(len)
+        for _ in 0 ..< len {
+            out.append(try reader(&c))
+        }
+        return out
+    }
+
+    public static func readOption<T>(
+        _ c: inout Cursor,
+        _ reader: (inout Cursor) throws -> T
+    ) throws -> T? {
+        let tag = try readU8(&c)
+        switch tag {
+        case 0: return nil
+        case 1: return try reader(&c)
+        default: throw DecodeError.invalidTag(tag)
+        }
+    }
+
+    /// Sugar mirroring the `Bincode.decode(bytes) as T` shape the client
+    /// generator emits. Currently supports `String`; extend per new type.
     public static func decode(_ bytes: Data) throws -> String {
         var c = Cursor(bytes)
         return try readString(&c)
