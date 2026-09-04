@@ -8,9 +8,19 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# `codegen` exposes a `pub mod contract` module with `Contract` builders
+# for every bundled plugin, so a downstream `build.rs` can emit the
+# Kotlin / Swift host dispatchers without duplicating the trait shape.
+# Off by default because it pulls `istmo-build`, which is a build-time
+# concern the runtime side does not need.
+codegen = ["dep:istmo-build"]
+
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
+istmo-build = { workspace = true, optional = true }
 bincode = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }

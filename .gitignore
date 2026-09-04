@@ -18,3 +18,5 @@ examples/rust-mobile-demo/ios/build/
 examples/rust-mobile-demo/ios/IstmoRuntime/.build/
 examples/rust-mobile-demo/ios/**/*.xcuserdata/
 examples/rust-mobile-demo/ios/**/xcshareddata/
+# build.rs-emitted Swift dispatchers — regenerated on every cargo build.
+examples/rust-mobile-demo/ios/RustMobileDemo/Plugins/*/Generated/
