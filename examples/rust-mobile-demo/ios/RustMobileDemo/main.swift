@@ -41,6 +41,17 @@ IstmoRuntime.shared.registerHandler(
     NotificationsDispatcher(backend: NotificationsBackendImpl(), codecs: NotificationsCodecsImpl())
 )
 
-// TODO C.5: publish SafeArea insets (uses early events, not a dispatcher).
+// SafeArea iOS publisher — deferred.
+//
+// Android publishes `SafeAreaInsets` from `WindowInsetsCompat` callbacks;
+// the iOS equivalent would tie into `UIWindow.safeAreaInsets` + keyboard
+// notifications. Because winit owns the `UIWindow` in a full-Rust app,
+// the cleanest path is a winit-side hook, not a Swift-side publisher.
+// Until then, the demo falls back to `FALLBACK_TOP_INSET_PT = 24.0` on
+// iOS (see `src/app.rs::safe_area_margin`) — enough to clear the status
+// bar on a phone but not device-precise.
+
+// TODO C.6: register AdMob + Google Sign-In dispatchers (SDK-heavy, own
+// commits — see follow-up).
 
 _ = istmo_run_ios()
