@@ -44,6 +44,10 @@ IstmoRuntime.shared.registerHandler(
     SignInDispatcher.PLUGIN_ID,
     SignInDispatcher(factory: SignInFactoryImpl(), codecs: SignInCodecsImpl())
 )
+IstmoRuntime.shared.registerHandler(
+    AdMobDispatcher.PLUGIN_ID,
+    AdMobDispatcher(factory: AdMobFactoryImpl(), codecs: AdMobCodecsImpl())
+)
 
 // SafeArea iOS publisher — deferred.
 //
@@ -55,7 +59,5 @@ IstmoRuntime.shared.registerHandler(
 // iOS (see `src/app.rs::safe_area_margin`) — enough to clear the status
 // bar on a phone but not device-precise.
 
-// TODO C.6: register AdMob + Google Sign-In dispatchers (SDK-heavy, own
-// commits — see follow-up).
 
 _ = istmo_run_ios()
