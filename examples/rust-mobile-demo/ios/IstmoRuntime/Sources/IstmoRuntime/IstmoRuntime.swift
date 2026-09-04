@@ -37,7 +37,40 @@ public final class IstmoRuntime {
     /// for a Swift-hosted plugin.
     private var handlers: [String: PluginHandler] = [:]
 
+    /// `NativeHandleId -> pluginId` map. Every dispatcher that hands a
+    /// native id back to Rust calls [`allocHandleId(pluginId:)`] first;
+    /// when Rust eventually drops the `NativeHandle<T>`, the resulting
+    /// `Frame::ReleaseNativeHandle` finds the owner here and routes the
+    /// release to that plugin's [`HandleReleaser`].
+    private var handleOwners: [UInt64: String] = [:]
+    private var nextGlobalHandleId: UInt64 = 1
+
     private init() {}
+
+    // MARK: - Native handle registry
+
+    /// Reserve a fresh `NativeHandleId` and record `pluginId` as the
+    /// owner. Called by any dispatcher that returns a native id to Rust
+    /// (Google Sign-In credential, AdMob ad, ...).
+    ///
+    /// Ids are globally unique across dispatchers so the release routing
+    /// is deterministic — two plugins can never collide on the same id.
+    public func allocHandleId(pluginId: String) -> UInt64 {
+        queue.sync {
+            let id = self.nextGlobalHandleId
+            self.nextGlobalHandleId += 1
+            self.handleOwners[id] = pluginId
+            return id
+        }
+    }
+
+    /// Forget the ownership entry for `handleId`. Dispatchers call this
+    /// from their own release path (interstitial shown, credential freed)
+    /// to avoid a redundant [`HandleReleaser.releaseNativeHandle`]
+    /// callback when the eventual `Frame::ReleaseNativeHandle` arrives.
+    public func forgetHandle(_ handleId: UInt64) {
+        queue.sync { _ = self.handleOwners.removeValue(forKey: handleId) }
+    }
 
     // MARK: - Handler registry
 
@@ -312,6 +345,20 @@ public final class IstmoRuntime {
         }
     }
 
+    /// Route an inbound `Frame::ReleaseNativeHandle` to the dispatcher
+    /// that allocated the id. Unknown ids are dropped silently — a stale
+    /// release racing a dispatcher's own `forgetHandle` is expected and
+    /// non-fatal on both sides of the wire.
+    fileprivate func handleReleaseNativeHandle(handleId: UInt64) {
+        let owner = queue.sync { self.handleOwners.removeValue(forKey: handleId) }
+        guard let ownerId = owner, let handler = queue.sync({ self.handlers[ownerId] }) else {
+            return
+        }
+        if let releaser = handler as? HandleReleaser {
+            releaser.releaseNativeHandle(handleId)
+        }
+    }
+
     /// Ship `payload` back to Rust via `istmo_ios_submit_response`.
     /// Extracted to keep the two `handle*` methods short and consistent
     /// about how empty payloads are represented on the wire (nil ptr +
@@ -391,11 +438,9 @@ private enum Trampolines {
 
     static let onReleaseNativeHandle: @convention(c) (
         UnsafeMutableRawPointer?, UInt64
-    ) -> Void = { _, handleId in
-        // Demo runtime does not own any native handles yet. Real apps hop
-        // to the main queue and free the object stored under `handleId` in
-        // their per-plugin registry.
-        NSLog("IstmoRuntime: onReleaseNativeHandle handle_id=\(handleId) — no handle registry")
+    ) -> Void = { ctx, handleId in
+        guard let runtime = ctxRuntime(ctx) else { return }
+        runtime.handleReleaseNativeHandle(handleId: handleId)
     }
 
     private static func ctxRuntime(_ ctx: UnsafeMutableRawPointer?) -> IstmoRuntime? {

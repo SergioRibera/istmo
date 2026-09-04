@@ -27,6 +27,15 @@ options:
 packages:
   IstmoRuntime:
     path: IstmoRuntime
+  # Google Sign-In SDK. Version pinned to match the Android side's
+  # `credentials` release cadence (crates/plugins/src/google_sign_in.rs).
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: 7.1.0
+  # Google Mobile Ads (AdMob) SDK.
+  GoogleMobileAds:
+    url: https://github.com/googleads/swift-package-manager-google-mobile-ads-ios
+    from: 11.0.0
 
 settings:
   base:
@@ -53,6 +62,10 @@ targets:
     dependencies:
       - package: IstmoRuntime
         product: IstmoRuntime
+      - package: GoogleSignIn
+        product: GoogleSignIn
+      - package: GoogleMobileAds
+        product: GoogleMobileAds
     preBuildScripts:
       - name: cargo build rust-mobile-demo (staticlib per arch)
         path: build-rust.sh

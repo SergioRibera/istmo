@@ -38,5 +38,28 @@
     <!-- Notification permission gate + local notification support. -->
     <key>NSUserNotificationUsageDescription</key>
     <string>Notifies you when the sign-in flow completes.</string>
+
+    <!-- AdMob app id. Must match the value in `src/app.rs::ADMOB_APP_ID`;
+         the SDK crashes at init if the two disagree. -->
+    <key>GADApplicationIdentifier</key>
+    <string>ca-app-pub-1842517361828817~4357161875</string>
+
+    <!-- Google Sign-In iOS client id + URL scheme. Replace with the iOS
+         client id issued by Google Cloud Console for
+         `dev.istmo.rustmobile.RustMobileDemo` before shipping; the SDK
+         refuses to sign in with a mismatched bundle id. -->
+    <key>GIDClientID</key>
+    <string>REPLACE_WITH_IOS_CLIENT_ID.apps.googleusercontent.com</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>com.googleusercontent.apps.REPLACE_WITH_IOS_CLIENT_ID</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

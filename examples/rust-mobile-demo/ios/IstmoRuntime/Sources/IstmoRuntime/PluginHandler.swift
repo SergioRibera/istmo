@@ -41,3 +41,15 @@ public enum PluginRuntimeError: Error {
     case unknownInstance(UInt64)
     case notStateful(plugin: String)
 }
+
+/// Marker protocol a [`PluginHandler`] implements when it owns native
+/// objects Rust references through `NativeHandle<T>`. The runtime routes
+/// inbound `Frame::ReleaseNativeHandle` frames to [`releaseNativeHandle`]
+/// on the plugin id that allocated the id via
+/// [`IstmoRuntime.allocHandleId(pluginId:)`].
+///
+/// Mirrors Android's `HandleReleaser` interface — the wire schema is
+/// symmetric across transports.
+public protocol HandleReleaser: AnyObject {
+    func releaseNativeHandle(_ handleId: UInt64)
+}
