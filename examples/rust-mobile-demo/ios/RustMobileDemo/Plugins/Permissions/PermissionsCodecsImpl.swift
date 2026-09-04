@@ -1,0 +1,39 @@
+// Codec impl for the `Permissions` plugin's `Named` types.
+//
+// Every entry mirrors the bincode 2 "standard" encoding used by
+// `istmo::plugins::permissions`:
+//
+// * `PermissionStatus` — u32 varint discriminant.
+// * `PermissionOutcome` — `String` + `PermissionStatus`, in that order,
+//   no field prefix.
+
+import Foundation
+import IstmoRuntime
+
+public final class PermissionsCodecsImpl: PermissionsCodecs {
+
+    public init() {}
+
+    public func readPermissionStatus(_ c: inout Bincode.Cursor) throws -> PermissionStatus {
+        let disc = try Bincode.readVarintU32(&c)
+        guard let value = PermissionStatus(rawValue: disc) else {
+            throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
+        }
+        return value
+    }
+
+    public func writePermissionStatus(_ out: inout Data, _ value: PermissionStatus) {
+        Bincode.writeVarintU32(&out, value.rawValue)
+    }
+
+    public func readPermissionOutcome(_ c: inout Bincode.Cursor) throws -> PermissionOutcome {
+        let permission = try Bincode.readString(&c)
+        let status = try readPermissionStatus(&c)
+        return PermissionOutcome(permission: permission, status: status)
+    }
+
+    public func writePermissionOutcome(_ out: inout Data, _ value: PermissionOutcome) {
+        Bincode.writeString(&out, value.permission)
+        writePermissionStatus(&out, value.status)
+    }
+}

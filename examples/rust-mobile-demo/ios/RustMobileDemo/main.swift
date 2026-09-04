@@ -28,8 +28,16 @@ do {
     fatalError("IstmoRuntime.start() failed: \(error)")
 }
 
-// TODO: register Swift-side plugin backends here once C.3+ ship.
-// e.g. IstmoRuntime.shared.registerHandler(PermissionsDispatcher.PLUGIN_ID,
-//                                          PermissionsDispatcher(backend: ..., codecs: ...))
+// Register Swift plugin backends before Rust starts the event loop. Once
+// `istmo_run_ios` fires, the pump can deliver inbound `Frame::Call`
+// frames at any time — a plugin id missing from the registry surfaces as
+// a `PluginError` on the Rust side.
+IstmoRuntime.shared.registerHandler(
+    PermissionsDispatcher.PLUGIN_ID,
+    PermissionsDispatcher(backend: PermissionsBackendImpl(), codecs: PermissionsCodecsImpl())
+)
+
+// TODO C.4: register NotificationsDispatcher here.
+// TODO C.5: register SafeAreaBackend here (early events, not a dispatcher).
 
 _ = istmo_run_ios()
