@@ -1,0 +1,65 @@
+# xcodegen spec for the full-Rust mobile demo (iOS side).
+#
+# Generate the .xcodeproj with:
+#
+#   cd examples/rust-mobile-demo/ios && xcodegen generate
+#
+# The .xcodeproj is not checked into the repo (see .gitignore). Regenerating
+# is deterministic — the day-to-day flow is `xcodegen generate` once and
+# then `xcodebuild` / Xcode against the result.
+#
+# The `preBuildScripts` phase runs `build-rust.sh` before every Xcode build
+# so cargo produces `librust_mobile_demo.a` before the linker looks for it.
+#
+# The demo owns the whole event loop through winit + eframe on the Rust
+# side; the Swift shell reduces to a `main.swift` that starts the transport
+# and hands control to Rust via `istmo_run_ios`.
+
+name: RustMobileDemo
+
+options:
+  bundleIdPrefix: dev.istmo.rustmobile
+  deploymentTarget:
+    iOS: 14.0
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+packages:
+  IstmoRuntime:
+    path: IstmoRuntime
+
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+    IPHONEOS_DEPLOYMENT_TARGET: 14.0
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # The staticlib the build-rust pre-build phase drops per PLATFORM_NAME +
+    # ARCHS combination.
+    LIBRARY_SEARCH_PATHS:
+      - $(inherited)
+      - $(PROJECT_DIR)/build/rust/$(PLATFORM_NAME)/$(CURRENT_ARCH)
+    OTHER_LDFLAGS:
+      - $(inherited)
+      - -lrust_mobile_demo
+
+targets:
+  RustMobileDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: RustMobileDemo
+    info:
+      path: RustMobileDemo/Info.plist
+    dependencies:
+      - package: IstmoRuntime
+        product: IstmoRuntime
+    preBuildScripts:
+      - name: cargo build rust-mobile-demo (staticlib per arch)
+        path: build-rust.sh
+        # Force re-run every build; cargo does its own incremental work.
+        runOnlyWhenInstalling: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.istmo.rustmobile.RustMobileDemo
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO

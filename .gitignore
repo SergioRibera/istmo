@@ -11,3 +11,10 @@ examples/ios-demo/ios/build/
 examples/ios-demo/ios/IstmoRuntime/.build/
 examples/ios-demo/ios/**/*.xcuserdata/
 examples/ios-demo/ios/**/xcshareddata/
+
+# rust-mobile-demo: xcodegen output + Xcode / cargo build products
+examples/rust-mobile-demo/ios/RustMobileDemo.xcodeproj/
+examples/rust-mobile-demo/ios/build/
+examples/rust-mobile-demo/ios/IstmoRuntime/.build/
+examples/rust-mobile-demo/ios/**/*.xcuserdata/
+examples/rust-mobile-demo/ios/**/xcshareddata/

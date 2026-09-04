@@ -110,6 +110,66 @@ ios-demo:
     fi
     just ios-run
 
+# ---- rust-mobile-demo iOS (macOS-only) ------------------------------
+#
+# Parallels the ios-demo recipes above but points at the full-Rust demo's
+# iOS build system. Same tooling requirements (Xcode 15+, xcodegen,
+# `rustup target add aarch64-apple-ios{,-sim}`).
+
+rmd_ios_project_dir := "examples/rust-mobile-demo/ios"
+rmd_ios_scheme := "RustMobileDemo"
+rmd_ios_bundle := "dev.istmo.rustmobile.RustMobileDemo"
+
+rust-mobile-ios-bootstrap:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        echo "rust-mobile-ios-bootstrap: macOS required"; exit 1
+    fi
+    cd {{rmd_ios_project_dir}} && xcodegen generate
+
+rust-mobile-ios-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        echo "rust-mobile-ios-build: macOS required"; exit 1
+    fi
+    cd {{rmd_ios_project_dir}}
+    xcodebuild -project RustMobileDemo.xcodeproj \
+        -scheme {{rmd_ios_scheme}} \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination 'platform=iOS Simulator,name=iPhone 15' \
+        build
+
+rust-mobile-ios-run: rust-mobile-ios-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        echo "rust-mobile-ios-run: macOS required"; exit 1
+    fi
+    sim_id="${SIMULATOR_ID:-$(xcrun simctl list devices booted -j | \
+        python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; \
+        print(next(x["udid"] for v in d.values() for x in v if x["state"]=="Booted"))')}"
+    app_path=$(find ~/Library/Developer/Xcode/DerivedData -type d -name '{{rmd_ios_scheme}}.app' -path '*Debug-iphonesimulator*' | head -n 1)
+    if [[ -z "${app_path}" ]]; then
+        echo "rust-mobile-ios-run: could not locate built .app; run rust-mobile-ios-build first"; exit 1
+    fi
+    xcrun simctl install "${sim_id}" "${app_path}"
+    xcrun simctl launch "${sim_id}" {{rmd_ios_bundle}}
+
+rust-mobile-ios-clean:
+    rm -rf {{rmd_ios_project_dir}}/build
+    rm -rf {{rmd_ios_project_dir}}/RustMobileDemo.xcodeproj
+
+rust-mobile-ios:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ ! -d "{{rmd_ios_project_dir}}/RustMobileDemo.xcodeproj" ]]; then
+        just rust-mobile-ios-bootstrap
+    fi
+    just rust-mobile-ios-run
+
 # ---- Parameterised recipes ------------------------------------------
 
 # Build the demo's APK inside the container. Gradle drives cargo per
