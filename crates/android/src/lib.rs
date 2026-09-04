@@ -20,6 +20,8 @@
 //! main thread yet. A `Handler`-backed [`istmo_core::MainThread`] will land
 //! alongside the first plugin that needs it (M3 lifecycle / permissions).
 
+#[cfg(target_os = "android")]
+pub mod app;
 pub mod entrypoint;
 pub mod error;
 
@@ -27,6 +29,10 @@ mod jni_exports;
 mod pump;
 mod state;
 
+#[cfg(target_os = "android")]
+pub use android_activity;
+#[cfg(target_os = "android")]
+pub use app::{android_app, set_android_app};
 pub use error::AndroidRuntimeError;
 
 // Trampolines are declared with `#[unsafe(no_mangle)]` in [`jni_exports`]

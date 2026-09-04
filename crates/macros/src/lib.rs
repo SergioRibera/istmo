@@ -19,6 +19,7 @@
 use proc_macro::TokenStream;
 
 mod message;
+mod mobile_app;
 mod plugin;
 mod runtime;
 mod service;
@@ -68,6 +69,22 @@ pub fn service(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn worker(attr: TokenStream, item: TokenStream) -> TokenStream {
     match worker::expand(attr.into(), item.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.into_compile_error().into(),
+    }
+}
+
+/// Turn an app factory fn into cross-platform mobile entry points.
+///
+/// The annotated function is preserved verbatim; the macro adds
+/// `android_main`, `istmo_run_ios` and (for desktop) `main` symbols that
+/// delegate to the `istmo::mobile` crate. User code stays
+/// `#[cfg(target_os = ...)]`-free.
+///
+/// Requires the `mobile` cargo feature on the `istmo` facade crate.
+#[proc_macro_attribute]
+pub fn mobile_app(attr: TokenStream, item: TokenStream) -> TokenStream {
+    match mobile_app::expand(attr.into(), item.into()) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.into_compile_error().into(),
     }

@@ -15,6 +15,13 @@ flume = { workspace = true }
 tracing = { workspace = true }
 jni = { workspace = true }
 
+# `android-activity` pulls `ndk-sys`, which refuses to compile off-android.
+# Target-gate it so `cargo check --workspace` on a Linux dev host still
+# works — the empty `pub mod app` on non-android targets keeps the facade's
+# `pub use istmo_android as android` re-export a valid path.
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+
 [lints.rust]
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
