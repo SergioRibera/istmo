@@ -14,8 +14,8 @@ use istmo_build::{
     Arg, BackgroundKind, ContinuousMode, Contract, GradleCoord, GradleDep, GradleScope,
     IosBackgroundContract, IosEntitlements, Method, MethodKind, NativeDeps, ServiceContract,
     SwiftPackageDep, TypeRef, WorkerContract, generate_android_service, generate_android_worker,
-    generate_ios_background, generate_kotlin, generate_swift, generate_swift_client,
-    required_entitlements,
+    generate_ios_background, generate_kotlin, generate_kotlin_host, generate_swift,
+    generate_swift_client, generate_swift_host, required_entitlements,
 };
 
 fn golden_dir() -> PathBuf {
@@ -678,6 +678,62 @@ fn native_deps_merge_prefers_highest_version() {
             .iter()
             .any(|c| c.key.artifact == "credentials" && c.picked == "1.3.2"),
         "conflict must be surfaced",
+    );
+}
+
+// ---- Host dispatchers (Kotlin + Swift native-hosted plugin surface) -----
+
+#[test]
+fn permissions_kotlin_host_matches_golden() {
+    assert_matches(
+        "permissions_host",
+        "kt",
+        &generate_kotlin_host(&permissions()),
+    );
+}
+
+#[test]
+fn permissions_swift_host_matches_golden() {
+    assert_matches(
+        "permissions_host",
+        "swift",
+        &generate_swift_host(&permissions()),
+    );
+}
+
+#[test]
+fn notifications_kotlin_host_matches_golden() {
+    assert_matches(
+        "notifications_host",
+        "kt",
+        &generate_kotlin_host(&notifications()),
+    );
+}
+
+#[test]
+fn notifications_swift_host_matches_golden() {
+    assert_matches(
+        "notifications_host",
+        "swift",
+        &generate_swift_host(&notifications()),
+    );
+}
+
+#[test]
+fn google_sign_in_kotlin_host_matches_golden() {
+    assert_matches(
+        "google_sign_in_host",
+        "kt",
+        &generate_kotlin_host(&google_sign_in()),
+    );
+}
+
+#[test]
+fn google_sign_in_swift_host_matches_golden() {
+    assert_matches(
+        "google_sign_in_host",
+        "swift",
+        &generate_swift_host(&google_sign_in()),
     );
 }
 

@@ -12,9 +12,11 @@ pub mod contract;
 pub mod entitlements;
 pub mod ios;
 pub mod kotlin;
+pub mod kotlin_host;
 pub mod native_deps;
 pub mod service;
 pub mod swift;
+pub mod swift_host;
 pub mod worker;
 
 pub use crate::contract::{Arg, Contract, Method, MethodKind, TypeRef};
@@ -24,9 +26,11 @@ pub use crate::ios::{
     generate_ios_background, required_entitlements,
 };
 pub use crate::kotlin::generate_kotlin;
+pub use crate::kotlin_host::generate_kotlin_host;
 pub use crate::native_deps::{
     GradleCoord, GradleDep, GradleKey, GradleScope, NativeDeps, SwiftPackageDep, VersionConflict,
 };
 pub use crate::service::{AndroidServiceArtifacts, ServiceContract, generate_android_service};
 pub use crate::swift::{generate_swift, generate_swift_client};
+pub use crate::swift_host::generate_swift_host;
 pub use crate::worker::{WorkerContract, generate_android_worker};
