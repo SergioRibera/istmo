@@ -1,23 +1,24 @@
-//! Android entry point + egui view for the full-Rust demo.
+//! egui view + platform entry point for the full-Rust demo.
 //!
 //! Layout:
 //!
-//! * [`android_main`] — invoked by `android-activity` after the NDK glue
-//!   thread starts. Installs the tracing bridge, then hands the
-//!   `AndroidApp` to eframe with the `wgpu` backend.
+//! * [`main`] — the app entry point, marked with `#[istmo::mobile_app]`.
+//!   The macro emits `android_main` (Android) and `istmo_run_ios` (iOS
+//!   family) trampolines that call this function. The body sets up the
+//!   eframe boot and stays symmetric across targets.
 //! * [`DemoApp`] — `eframe::App` implementation. Sign-in / sign-out
 //!   button, account card with the fields Google returns, one worker
 //!   thread (`std::thread::spawn`) per action.
 //!
-//! Kotlin side is expected to have called `IstmoRuntime.start()` in its
-//! `MainActivity.onCreate` — the runtime is a `OnceLock` so double-init
-//! is a soft error, and having Kotlin start it first means the pump is
-//! draining before `android_main` fires.
+//! The native side (Kotlin `IstmoRuntime.start()` / Swift
+//! `IstmoRuntime.shared.start()`) is expected to boot the transport pump
+//! before firing the Rust entry point — the runtime is a `OnceLock` so
+//! second inits are a soft error, and having the native shell start it
+//! first means the pump is draining before `main` runs.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use android_activity::AndroidApp;
 use eframe::egui;
 use istmo::IstmoError;
 use istmo::plugins::{
@@ -55,26 +56,36 @@ const INTERSTITIAL_UNIT: &str = "ca-app-pub-3940256099942544/1033173712";
 const BANNER_UNIT: &str = "ca-app-pub-3940256099942544/6300978111";
 const REWARDED_UNIT: &str = "ca-app-pub-3940256099942544/5224354917";
 
-/// NDK glue entry. `android-activity` provides the `ANativeActivity_onCreate`
-/// bridge and spawns this function on a dedicated thread.
+/// App entry point. `#[istmo::mobile_app]` emits the target-specific
+/// trampoline symbols (`android_main` on Android, `istmo_run_ios` on iOS
+/// family) that call this function after the transport pump has started.
 ///
-/// # Panics
-/// Panics if the `wgpu` surface cannot be created — that indicates a
-/// misconfigured device (no Vulkan support), which is not something the app
-/// can recover from.
-#[unsafe(no_mangle)]
-pub fn android_main(app: AndroidApp) {
+/// The body wires eframe boot; retrieving the `AndroidApp` handle on
+/// Android goes through `istmo::mobile::android_app()` — the macro
+/// stored it before invoking us.
+#[istmo::mobile_app]
+pub fn main() {
+    #[cfg(target_os = "android")]
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
-    log::info!("rust-mobile-demo android_main starting");
+    log::info!("rust-mobile-demo entry point running");
+
+    #[cfg(target_os = "android")]
+    let event_loop_builder: Option<Box<dyn FnOnce(&mut winit::event_loop::EventLoopBuilder<_>) + Send>> = {
+        let app = istmo::android::android_app()
+            .expect("android_main should have stashed the AndroidApp handle before entering main");
+        Some(Box::new(move |builder| {
+            use winit::platform::android::EventLoopBuilderExtAndroid;
+            builder.with_android_app(app);
+        }))
+    };
+    #[cfg(not(target_os = "android"))]
+    let event_loop_builder = None;
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        event_loop_builder: Some(Box::new(move |builder| {
-            use winit::platform::android::EventLoopBuilderExtAndroid;
-            builder.with_android_app(app);
-        })),
+        event_loop_builder,
         ..Default::default()
     };
     if let Err(err) = eframe::run_native(

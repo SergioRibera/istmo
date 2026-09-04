@@ -10,7 +10,10 @@ authors.workspace = true
 repository.workspace = true
 
 [lib]
-crate-type = ["cdylib"]
+# `cdylib` for android (`.so` loaded by the Kotlin runtime), `staticlib`
+# for iOS (linked into the app executable). Both artefacts fall out of the
+# same source; the target-specific build system picks the right one.
+crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 istmo = { path = "../.." }
@@ -19,12 +22,19 @@ log = "0.4"
 pollster = { workspace = true }
 bincode = { workspace = true }
 
+# The demo picks eframe + wgpu as its UI stack; istmo itself is
+# UI-agnostic, so these live in the demo's own Cargo.toml, not in the
+# framework crates.
 [target.'cfg(target_os = "android")'.dependencies]
 eframe = { version = "0.29", default-features = false, features = ["wgpu", "default_fonts"] }
 egui = { version = "0.29", default-features = false }
 winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
-android-activity = { version = "0.6", features = ["native-activity"] }
 android_logger = "0.14"
+
+[target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))'.dependencies]
+eframe = { version = "0.29", default-features = false, features = ["wgpu", "default_fonts"] }
+egui = { version = "0.29", default-features = false }
+winit = { version = "0.30", default-features = false }
 
 [lints.rust]
 missing_debug_implementations = "warn"
