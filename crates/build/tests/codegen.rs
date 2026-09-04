@@ -738,6 +738,16 @@ fn google_sign_in_swift_host_matches_golden() {
 }
 
 #[test]
+fn admob_kotlin_host_matches_golden() {
+    assert_matches("admob_host", "kt", &generate_kotlin_host(&admob()));
+}
+
+#[test]
+fn admob_swift_host_matches_golden() {
+    assert_matches("admob_host", "swift", &generate_swift_host(&admob()));
+}
+
+#[test]
 fn ios_entitlements_merge_render() {
     let mut ent = IosEntitlements::new();
     ent.add_bool("com.apple.developer.healthkit", true)
