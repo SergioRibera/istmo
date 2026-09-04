@@ -157,7 +157,7 @@ reset-owned name paths:
 # Gen default keystore default
 # keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
 helper:
-    docker run --rm -v /home/s4rch/.android:/src \
+    docker run --rm {{mount}} \
         -w /src \
         --entrypoint sh {{image}} \
-        -c 'keytool -list -v -keystore /src/debug.keystore -alias androiddebugkey -storepass android -keypass android'
+        -c 'keytool -list -v -keystore /root/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android'

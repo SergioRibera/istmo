@@ -1,3 +1,8 @@
+// `significant_drop_tightening` fires on `let mut guard = mutex.lock();`
+// scopes that already release the guard at their block end, which is
+// exactly the RAII pattern we want. Not a real footgun here.
+#![allow(clippy::significant_drop_tightening)]
+
 //! UI-agnostic banner slot.
 //!
 //! A `BannerSlot` glues an `AdMobClient` to a rectangle that some UI
@@ -104,6 +109,14 @@ impl std::fmt::Debug for BannerSlot {
 struct SlotInner {
     state: SlotState,
     last_error: Option<AdError>,
+    /// Latest rect the UI wants — set by `sync()` whenever a new rect
+    /// arrives during `Live`. The updater loop consumes it after its
+    /// current native update finishes. `None` means "no work pending".
+    pending_rect: Option<BannerRect>,
+    /// `true` while an `update_banner` task is spawned; prevents
+    /// spawning parallel updaters on fast scroll. The updater clears
+    /// this itself when it exits because `pending_rect` is empty.
+    updater_running: bool,
 }
 
 enum SlotState {
@@ -131,6 +144,8 @@ impl BannerSlot {
             inner: Arc::new(Mutex::new(SlotInner {
                 state: SlotState::Idle,
                 last_error: None,
+                pending_rect: None,
+                updater_running: false,
             })),
             spawn: default_spawn(),
         }
@@ -172,7 +187,16 @@ impl BannerSlot {
                 if let SlotState::Live { rect: current, .. } = &mut guard.state {
                     *current = rect;
                 }
-                self.spawn_update(handle_id, rect);
+                // Coalesce: park the latest rect and only spawn an
+                // updater if none is running. On fast scroll (many
+                // rects per second), intermediate values are dropped —
+                // the updater always converges to the newest position
+                // instead of queueing every step behind slow JNI hops.
+                guard.pending_rect = Some(rect);
+                if !guard.updater_running {
+                    guard.updater_running = true;
+                    self.spawn_updater_loop(handle_id);
+                }
             }
             (SlotState::Live { .. }, SlotTarget::Hide) => {
                 if let SlotState::Live { handle, .. } =
@@ -181,9 +205,15 @@ impl BannerSlot {
                     self.spawn_hide(handle);
                 }
             }
-            // Loading / Hiding / (Idle+Hide) → no-op. Loading finishes
-            // asynchronously; the next `sync` call after completion will
-            // reconcile whatever target the UI wants then.
+            (SlotState::Loading, SlotTarget::Show(rect)) => {
+                // Show already in flight — park the latest rect so the
+                // load-completion handler can apply it immediately
+                // without a visible jump on the first paint.
+                guard.pending_rect = Some(rect);
+            }
+            // Hiding / (Idle+Hide) → no-op. Hide completes
+            // asynchronously; a later `sync(Show)` will re-enter Idle
+            // and load a fresh banner.
             _ => {}
         }
     }
@@ -220,6 +250,8 @@ impl BannerSlot {
         let inner = self.inner.clone();
         let client = self.client.clone();
         let ad_unit = self.ad_unit.to_string();
+        let after_show_spawn = self.spawn.clone();
+        let after_show_client = self.client.clone();
         let fut: BoxFuture = Box::pin(async move {
             let result = client
                 .show_banner_owned(BannerRequest {
@@ -227,38 +259,49 @@ impl BannerSlot {
                     rect,
                 })
                 .await;
-            let mut guard = inner.lock().expect("slot mutex");
-            match result {
-                Ok(handle) => {
-                    guard.last_error = None;
-                    guard.state = SlotState::Live { handle, rect };
+            let (needs_updater, handle_id) = {
+                let mut guard = inner.lock().expect("slot mutex");
+                match result {
+                    Ok(handle) => {
+                        let handle_id = handle.id();
+                        guard.last_error = None;
+                        guard.state = SlotState::Live { handle, rect };
+                        // Was the UI already scrolling while we loaded?
+                        // Stale rect sits in `pending_rect`. Kick the
+                        // updater so the first paint lands at the
+                        // correct position — no post-load jump.
+                        let spawn_it = guard.pending_rect.is_some() && !guard.updater_running;
+                        if spawn_it {
+                            guard.updater_running = true;
+                        }
+                        (spawn_it, handle_id)
+                    }
+                    Err(err) => {
+                        guard.last_error = Some(classify(&err));
+                        guard.state = SlotState::Idle;
+                        guard.pending_rect = None;
+                        (false, istmo_core::NativeHandleId(0))
+                    }
                 }
-                Err(err) => {
-                    guard.last_error = Some(classify(&err));
-                    guard.state = SlotState::Idle;
-                }
+            };
+            if needs_updater {
+                let fut: BoxFuture =
+                    Box::pin(run_updater_loop(inner, after_show_client, handle_id));
+                (after_show_spawn)(fut);
             }
         });
         (self.spawn)(fut);
     }
 
-    fn spawn_update(&self, handle_id: istmo_core::NativeHandleId, rect: BannerRect) {
-        let inner = self.inner.clone();
-        let client = self.client.clone();
-        let runtime = self.client.runtime().clone();
-        let fut: BoxFuture = Box::pin(async move {
-            let borrowed = NativeHandle::<Banner>::adopt(&runtime, handle_id);
-            let outcome = client.update_banner_owned(&borrowed, rect).await;
-            // Never fire ReleaseNativeHandle for this borrowed handle —
-            // the slot still owns the real one under Live { handle, .. }.
-            let _ = borrowed.into_id();
-            let mut guard = inner.lock().expect("slot mutex");
-            if let Err(err) = outcome {
-                guard.last_error = Some(classify(&err));
-            } else {
-                guard.last_error = None;
-            }
-        });
+    /// Kick off the updater coroutine. Caller must have already set
+    /// `updater_running = true` under the mutex to claim the slot;
+    /// [`run_updater_loop`] clears it on exit.
+    fn spawn_updater_loop(&self, handle_id: istmo_core::NativeHandleId) {
+        let fut: BoxFuture = Box::pin(run_updater_loop(
+            self.inner.clone(),
+            self.client.clone(),
+            handle_id,
+        ));
         (self.spawn)(fut);
     }
 
@@ -304,6 +347,45 @@ pub fn banner_rect_from_logical(x: f32, y: f32, w: f32, h: f32, scale: f32) -> B
         y: (clamp(y) * scale) as u32,
         width: (clamp(w) * scale) as u32,
         height: (clamp(h) * scale) as u32,
+    }
+}
+
+/// The coalescing update loop. Drains `pending_rect` one call at a
+/// time; on fast scroll, intermediate rects set by `sync()` while a
+/// call is in flight are silently overwritten. Latest rect always
+/// wins. Exits when `pending_rect` is None on entry, releasing the
+/// `updater_running` claim so a later scroll can spawn a fresh loop.
+async fn run_updater_loop(
+    inner: Arc<Mutex<SlotInner>>,
+    client: Arc<AdMobClient>,
+    handle_id: istmo_core::NativeHandleId,
+) {
+    let runtime = client.runtime().clone();
+    loop {
+        let rect = {
+            let mut guard = inner.lock().expect("slot mutex");
+            let Some(r) = guard.pending_rect.take() else {
+                guard.updater_running = false;
+                return;
+            };
+            r
+        };
+        // Borrow-adopt for this call only. `into_id` suppresses the
+        // drop-cascade release — the real handle stays alive inside
+        // `SlotState::Live { handle, .. }`.
+        let borrowed = NativeHandle::<Banner>::adopt(&runtime, handle_id);
+        let outcome = client.update_banner_owned(&borrowed, rect).await;
+        let _ = borrowed.into_id();
+        let mut guard = inner.lock().expect("slot mutex");
+        if let Err(err) = outcome {
+            guard.last_error = Some(classify(&err));
+            // Persistent error → stop looping to avoid busy-spin against
+            // a broken banner. UI can reset by dropping the slot.
+            guard.pending_rect = None;
+            guard.updater_running = false;
+            return;
+        }
+        guard.last_error = None;
     }
 }
 

@@ -366,6 +366,108 @@ fn multiple_slots_can_share_the_same_client_arc() {
 }
 
 #[test]
+fn rapid_rect_changes_coalesce_to_the_latest_via_one_updater_task() {
+    // Simulate a fast scroll: sync() fires four different rects in a
+    // row while the first update_banner is in flight. The coalescing
+    // updater loop should:
+    //   * spawn exactly ONE update task
+    //   * skip the intermediate rects
+    //   * end with the LATEST rect on the wire
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let outbound = init.outbound.clone();
+
+    // Block the update handler until we've signalled it via a channel.
+    // While it's blocked, we shove more rects into the slot; when
+    // released it drains only the latest.
+    let (release_tx, release_rx) = flume::bounded::<()>(1);
+
+    let backend_rt = rt.clone();
+    let backend_outbound = outbound.clone();
+    let backend = thread::spawn(move || {
+        spawn_create_instance(&backend_rt, &backend_outbound, InstanceId(1));
+
+        // Show
+        let env = backend_outbound.recv().unwrap();
+        let show_call = match env.frame {
+            Frame::Call { call_id, .. } => call_id,
+            other => panic!("expected show, got {other:?}"),
+        };
+        backend_rt
+            .dispatch_inbound(Envelope::new(Frame::Respond {
+                call_id: show_call,
+                result: Ok(codec::encode(&NativeHandleId(1)).unwrap()),
+            }))
+            .unwrap();
+
+        // First update — do NOT respond until release_rx fires.
+        let first = backend_outbound.recv().unwrap();
+        let first_call = match &first.frame {
+            Frame::Call { call_id, method, payload, .. } => {
+                assert_eq!(method, "update_banner");
+                let ((_, r), _) = codec::decode::<(NativeHandleId, BannerRect)>(payload).unwrap();
+                assert_eq!(r.x, 10, "first update rect");
+                *call_id
+            }
+            other => panic!("expected first update, got {other:?}"),
+        };
+        // Hold the caller until the test has queued more rects.
+        release_rx.recv().unwrap();
+        backend_rt
+            .dispatch_inbound(Envelope::new(Frame::Respond {
+                call_id: first_call,
+                result: Ok(vec![]),
+            }))
+            .unwrap();
+
+        // The coalesced next call should carry the LATEST rect only.
+        let next = backend_outbound.recv().unwrap();
+        match next.frame {
+            Frame::Call { method, payload, call_id, .. } => {
+                assert_eq!(method, "update_banner");
+                let ((_, r), _) = codec::decode::<(NativeHandleId, BannerRect)>(&payload).unwrap();
+                assert_eq!(r.x, 40, "coalesced update should carry latest rect only");
+                backend_rt
+                    .dispatch_inbound(Envelope::new(Frame::Respond {
+                        call_id,
+                        result: Ok(vec![]),
+                    }))
+                    .unwrap();
+            }
+            other => panic!("expected coalesced update, got {other:?}"),
+        }
+    });
+
+    let client = build_client(&rt);
+    // Use a REAL thread-per-future spawn so the update task actually
+    // parks on the mutex when the backend delays its response. The
+    // `sync_spawn` foreground executor would deadlock.
+    let slot = BannerSlot::new("u", client);
+    slot.sync(SlotTarget::Show(BannerRect { x: 0, y: 0, width: 320, height: 50 }));
+    // Poll until Live — the backend answers show_banner immediately.
+    while slot.status() != SlotStatus::Live {
+        thread::sleep(std::time::Duration::from_millis(2));
+    }
+
+    // Fire the first update; the backend blocks on it until release_tx.
+    slot.sync(SlotTarget::Show(BannerRect { x: 10, y: 0, width: 320, height: 50 }));
+    // Wait for the first update Call to leave the outbound.
+    thread::sleep(std::time::Duration::from_millis(50));
+
+    // Now spam intermediate rects — they should coalesce into the last.
+    slot.sync(SlotTarget::Show(BannerRect { x: 20, y: 0, width: 320, height: 50 }));
+    slot.sync(SlotTarget::Show(BannerRect { x: 30, y: 0, width: 320, height: 50 }));
+    slot.sync(SlotTarget::Show(BannerRect { x: 40, y: 0, width: 320, height: 50 }));
+
+    // Release the backend — it will send its second update, which must
+    // carry rect x=40 (the newest), never x=20 or x=30.
+    release_tx.send(()).unwrap();
+    backend.join().unwrap();
+
+    assert_eq!(slot.status(), SlotStatus::Live);
+}
+
+#[test]
 fn injected_spawn_is_the_only_executor_used() {
     // Prove the spawn abstraction actually receives every scheduled
     // future — a bug where the slot cheated and spawned an OS thread
