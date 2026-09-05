@@ -67,8 +67,7 @@ class NotificationsDispatcher(
                     codecs.writeNotificationHandle(out, result)
                     out.toByteArray()
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as NotificationError
+                    val err = e.error as? NotificationError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeNotificationError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -82,8 +81,7 @@ class NotificationsDispatcher(
                     backend.cancel(id)
                     ByteArray(0)
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as NotificationError
+                    val err = e.error as? NotificationError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeNotificationError(errOut, err)
                     throw PluginException(errOut.toByteArray())

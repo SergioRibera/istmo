@@ -93,8 +93,7 @@ class SignInDispatcher(
                     codecs.writeSignInAccount(out, result)
                     out.toByteArray()
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as SignInError
+                    val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeSignInError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -107,8 +106,7 @@ class SignInDispatcher(
                     Bincode.writeOption(out, result) { s, v -> codecs.writeSignInAccount(s, v) }
                     out.toByteArray()
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as SignInError
+                    val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeSignInError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -124,8 +122,7 @@ class SignInDispatcher(
                     codecs.writeSignInAccount(out, result)
                     out.toByteArray()
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as SignInError
+                    val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeSignInError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -136,8 +133,7 @@ class SignInDispatcher(
                     backend.sign_out()
                     ByteArray(0)
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as SignInError
+                    val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeSignInError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -148,8 +144,7 @@ class SignInDispatcher(
                     backend.revoke()
                     ByteArray(0)
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as SignInError
+                    val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeSignInError(errOut, err)
                     throw PluginException(errOut.toByteArray())

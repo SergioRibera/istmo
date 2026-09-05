@@ -105,8 +105,7 @@ class AdMobDispatcher(
                     codecs.writeNativeHandleId(out, result)
                     out.toByteArray()
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as AdError
+                    val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -122,8 +121,7 @@ class AdMobDispatcher(
                     codecs.writeInterstitialOutcome(out, result)
                     out.toByteArray()
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as AdError
+                    val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -139,8 +137,7 @@ class AdMobDispatcher(
                     codecs.writeNativeHandleId(out, result)
                     out.toByteArray()
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as AdError
+                    val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -156,8 +153,7 @@ class AdMobDispatcher(
                     codecs.writeRewardedOutcome(out, result)
                     out.toByteArray()
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as AdError
+                    val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -173,8 +169,7 @@ class AdMobDispatcher(
                     codecs.writeNativeHandleId(out, result)
                     out.toByteArray()
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as AdError
+                    val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -190,8 +185,7 @@ class AdMobDispatcher(
                     backend.update_banner(banner, rect)
                     ByteArray(0)
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as AdError
+                    val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
                     throw PluginException(errOut.toByteArray())
@@ -205,8 +199,7 @@ class AdMobDispatcher(
                     backend.hide_banner(banner)
                     ByteArray(0)
                 } catch (e: BackendException<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val err = e.error as AdError
+                    val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
                     throw PluginException(errOut.toByteArray())

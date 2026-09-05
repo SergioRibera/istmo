@@ -363,8 +363,13 @@ fn write_method_arm(out: &mut String, method: &Method) {
     if has_error {
         let err_ty = method.error.as_ref().unwrap().to_kotlin();
         let _ = writeln!(out, "                }} catch (e: BackendException<*>) {{");
-        let _ = writeln!(out, "                    @Suppress(\"UNCHECKED_CAST\")");
-        let _ = writeln!(out, "                    val err = e.error as {err_ty}");
+        // Safe cast rather than `as` — if the backend accidentally
+        // threw a `BackendException<WrongType>`, rethrow so the higher
+        // frames see the mismatch instead of a `ClassCastException`.
+        let _ = writeln!(
+            out,
+            "                    val err = e.error as? {err_ty} ?: throw e",
+        );
         let _ = writeln!(out, "                    val errOut = ByteArrayOutputStream()");
         write_write_expr(out, "                    ", method.error.as_ref().unwrap(), "err", "errOut");
         let _ = writeln!(out, "                    throw PluginException(errOut.toByteArray())");
