@@ -64,7 +64,7 @@ interface AdMobFactory {
 class AdMobDispatcher(
     private val factory: AdMobFactory,
     private val codecs: AdMobCodecs,
-) : PluginHandler {
+) : PluginHandler, HandleReleaser {
 
     companion object {
         const val PLUGIN_ID = "istmo.admob"
@@ -72,6 +72,12 @@ class AdMobDispatcher(
 
     private val instances = java.util.concurrent.ConcurrentHashMap<Long, AdMobBackend>()
     private val nextInstanceId = java.util.concurrent.atomic.AtomicLong(1)
+
+    override fun releaseNativeHandle(handleId: Long) {
+        for (backend in instances.values) {
+            (backend as? HandleReleaser)?.releaseNativeHandle(handleId)
+        }
+    }
 
     override suspend fun handleCreateInstance(payload: ByteArray): ByteArray {
         var cursor = 0

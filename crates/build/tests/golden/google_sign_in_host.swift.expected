@@ -41,7 +41,7 @@ public protocol SignInFactory {
     func create(config: SignInConfig) async throws -> SignInBackend
 }
 
-public final class SignInDispatcher: PluginHandler {
+public final class SignInDispatcher: PluginHandler, HandleReleaser {
     public static let PLUGIN_ID: String = "istmo.google_sign_in"
 
     private let factory: SignInFactory
@@ -49,6 +49,15 @@ public final class SignInDispatcher: PluginHandler {
     private var instances: [UInt64: SignInBackend] = [:]
     private var nextInstanceId: UInt64 = 1
     private let lock = NSLock()
+
+    public func releaseNativeHandle(_ handleId: UInt64) {
+        lock.lock()
+        let snapshot = Array(instances.values)
+        lock.unlock()
+        for backend in snapshot {
+            (backend as? HandleReleaser)?.releaseNativeHandle(handleId)
+        }
+    }
 
     public init(factory: SignInFactory, codecs: SignInCodecs) {
         self.factory = factory

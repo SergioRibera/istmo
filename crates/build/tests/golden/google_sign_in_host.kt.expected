@@ -52,7 +52,7 @@ interface SignInFactory {
 class SignInDispatcher(
     private val factory: SignInFactory,
     private val codecs: SignInCodecs,
-) : PluginHandler {
+) : PluginHandler, HandleReleaser {
 
     companion object {
         const val PLUGIN_ID = "istmo.google_sign_in"
@@ -60,6 +60,12 @@ class SignInDispatcher(
 
     private val instances = java.util.concurrent.ConcurrentHashMap<Long, SignInBackend>()
     private val nextInstanceId = java.util.concurrent.atomic.AtomicLong(1)
+
+    override fun releaseNativeHandle(handleId: Long) {
+        for (backend in instances.values) {
+            (backend as? HandleReleaser)?.releaseNativeHandle(handleId)
+        }
+    }
 
     override suspend fun handleCreateInstance(payload: ByteArray): ByteArray {
         var cursor = 0

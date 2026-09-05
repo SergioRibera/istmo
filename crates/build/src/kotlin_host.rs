@@ -176,6 +176,15 @@ fn collect_named(ty: &TypeRef, out: &mut BTreeSet<String>) {
     }
 }
 
+/// `true` when any signature references `NativeHandleId` — dispatcher
+/// grows a `HandleReleaser` implementation forwarding to each backend
+/// that opts in.
+fn uses_native_handles(contract: &Contract) -> bool {
+    collect_named_types(contract)
+        .iter()
+        .any(|n| n == "NativeHandleId")
+}
+
 fn write_dispatcher_class(out: &mut String, contract: &Contract) {
     let name = &contract.type_name;
     let _ = writeln!(
@@ -193,13 +202,18 @@ fn write_dispatcher_class(out: &mut String, contract: &Contract) {
 
 fn write_stateless_dispatcher(out: &mut String, contract: &Contract) {
     let name = &contract.type_name;
+    let bases = if uses_native_handles(contract) {
+        "PluginHandler, HandleReleaser"
+    } else {
+        "PluginHandler"
+    };
     let _ = writeln!(
         out,
         "class {name}Dispatcher(",
     );
     let _ = writeln!(out, "    private val backend: {name}Backend,");
     let _ = writeln!(out, "    private val codecs: {name}Codecs,");
-    let _ = writeln!(out, ") : PluginHandler {{");
+    let _ = writeln!(out, ") : {bases} {{");
     let _ = writeln!(out);
     let _ = writeln!(out, "    companion object {{");
     let _ = writeln!(
@@ -209,6 +223,15 @@ fn write_stateless_dispatcher(out: &mut String, contract: &Contract) {
     );
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
+    if uses_native_handles(contract) {
+        let _ = writeln!(out, "    override fun releaseNativeHandle(handleId: Long) {{");
+        let _ = writeln!(
+            out,
+            "        (backend as? HandleReleaser)?.releaseNativeHandle(handleId)",
+        );
+        let _ = writeln!(out, "    }}");
+        let _ = writeln!(out);
+    }
     write_handle_call(out, contract, /*stateful=*/ false);
     let _ = writeln!(out, "}}");
 }
@@ -226,10 +249,15 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
     );
     let _ = writeln!(out, "}}");
     let _ = writeln!(out);
+    let bases = if uses_native_handles(contract) {
+        "PluginHandler, HandleReleaser"
+    } else {
+        "PluginHandler"
+    };
     let _ = writeln!(out, "class {name}Dispatcher(");
     let _ = writeln!(out, "    private val factory: {name}Factory,");
     let _ = writeln!(out, "    private val codecs: {name}Codecs,");
-    let _ = writeln!(out, ") : PluginHandler {{");
+    let _ = writeln!(out, ") : {bases} {{");
     let _ = writeln!(out);
     let _ = writeln!(out, "    companion object {{");
     let _ = writeln!(
@@ -244,6 +272,17 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
         "    private val instances = java.util.concurrent.ConcurrentHashMap<Long, {name}Backend>()",
     );
     let _ = writeln!(out, "    private val nextInstanceId = java.util.concurrent.atomic.AtomicLong(1)");
+    if uses_native_handles(contract) {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "    override fun releaseNativeHandle(handleId: Long) {{");
+        let _ = writeln!(out, "        for (backend in instances.values) {{");
+        let _ = writeln!(
+            out,
+            "            (backend as? HandleReleaser)?.releaseNativeHandle(handleId)",
+        );
+        let _ = writeln!(out, "        }}");
+        let _ = writeln!(out, "    }}");
+    }
     let _ = writeln!(out);
     let _ = writeln!(
         out,

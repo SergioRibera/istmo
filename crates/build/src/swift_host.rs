@@ -159,6 +159,15 @@ fn collect_named(ty: &TypeRef, out: &mut BTreeSet<String>) {
     }
 }
 
+/// Returns `true` when any signature in the contract references
+/// `NativeHandleId` — signal that the dispatcher should also conform to
+/// `HandleReleaser` and forward `releaseNativeHandle` to backends.
+fn uses_native_handles(contract: &Contract) -> bool {
+    collect_named_types(contract)
+        .iter()
+        .any(|n| n == "NativeHandleId")
+}
+
 fn write_dispatcher_class(out: &mut String, contract: &Contract) {
     let name = &contract.type_name;
     let _ = writeln!(
@@ -176,7 +185,15 @@ fn write_dispatcher_class(out: &mut String, contract: &Contract) {
 
 fn write_stateless_dispatcher(out: &mut String, contract: &Contract) {
     let name = &contract.type_name;
-    let _ = writeln!(out, "public final class {name}Dispatcher: PluginHandler {{");
+    let releaser = if uses_native_handles(contract) {
+        ", HandleReleaser"
+    } else {
+        ""
+    };
+    let _ = writeln!(
+        out,
+        "public final class {name}Dispatcher: PluginHandler{releaser} {{",
+    );
     let _ = writeln!(
         out,
         "    public static let PLUGIN_ID: String = \"{}\"",
@@ -194,6 +211,18 @@ fn write_stateless_dispatcher(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "        self.codecs = codecs");
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
+    if uses_native_handles(contract) {
+        let _ = writeln!(
+            out,
+            "    public func releaseNativeHandle(_ handleId: UInt64) {{",
+        );
+        let _ = writeln!(
+            out,
+            "        (backend as? HandleReleaser)?.releaseNativeHandle(handleId)",
+        );
+        let _ = writeln!(out, "    }}");
+        let _ = writeln!(out);
+    }
     write_handle_call(out, contract, /*stateful=*/ false);
     let _ = writeln!(out, "}}");
 }
@@ -211,7 +240,15 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
     );
     let _ = writeln!(out, "}}");
     let _ = writeln!(out);
-    let _ = writeln!(out, "public final class {name}Dispatcher: PluginHandler {{");
+    let releaser = if uses_native_handles(contract) {
+        ", HandleReleaser"
+    } else {
+        ""
+    };
+    let _ = writeln!(
+        out,
+        "public final class {name}Dispatcher: PluginHandler{releaser} {{",
+    );
     let _ = writeln!(
         out,
         "    public static let PLUGIN_ID: String = \"{}\"",
@@ -224,6 +261,23 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "    private var nextInstanceId: UInt64 = 1");
     let _ = writeln!(out, "    private let lock = NSLock()");
     let _ = writeln!(out);
+    if uses_native_handles(contract) {
+        let _ = writeln!(
+            out,
+            "    public func releaseNativeHandle(_ handleId: UInt64) {{",
+        );
+        let _ = writeln!(out, "        lock.lock()");
+        let _ = writeln!(out, "        let snapshot = Array(instances.values)");
+        let _ = writeln!(out, "        lock.unlock()");
+        let _ = writeln!(out, "        for backend in snapshot {{");
+        let _ = writeln!(
+            out,
+            "            (backend as? HandleReleaser)?.releaseNativeHandle(handleId)",
+        );
+        let _ = writeln!(out, "        }}");
+        let _ = writeln!(out, "    }}");
+        let _ = writeln!(out);
+    }
     let _ = writeln!(
         out,
         "    public init(factory: {name}Factory, codecs: {name}Codecs) {{",
