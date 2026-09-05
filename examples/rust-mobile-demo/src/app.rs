@@ -26,6 +26,12 @@ use istmo::plugins::{
     NotificationsClient, PermissionsClient, SafeArea, SafeAreaInsets, SlotTarget,
     banner_rect_from_logical,
 };
+#[cfg(any(
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "visionos",
+))]
+use istmo::plugins::safe_area::SafeAreaPublisher;
 use istmo_plugins::admob::{
     AdError, AdMobClient, AdMobConfig, InterstitialOutcome, RewardedOutcome,
 };
@@ -178,6 +184,16 @@ struct DemoApp {
     /// from `DemoApp::new` — eframe constructs `DemoApp` before the
     /// runtime pump has finished starting on some device timings.
     safe_area: Option<SafeArea>,
+    /// iOS-only Rust-side publisher. Ticked each frame from
+    /// `App::update` — reads `UIWindow.safeAreaInsets` via objc2 and
+    /// republishes on `SAFE_AREA_CHANNEL`. Android keeps the Kotlin
+    /// `WindowInsets` path, so no publisher lives here on that target.
+    #[cfg(any(
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos",
+    ))]
+    safe_area_publisher: Option<SafeAreaPublisher>,
     /// Static feed content. Built once so scroll geometry stays stable
     /// across frames.
     feed: Vec<FeedItem>,
@@ -192,6 +208,12 @@ impl DemoApp {
             admob_acquiring: Arc::new(AtomicBool::new(false)),
             banners: Vec::new(),
             safe_area: None,
+            #[cfg(any(
+                target_os = "ios",
+                target_os = "tvos",
+                target_os = "visionos",
+            ))]
+            safe_area_publisher: None,
             feed: build_feed(60),
         }
     }
@@ -383,6 +405,27 @@ fn safe_area_margin(insets: Option<SafeAreaInsets>) -> egui::Margin {
 
 impl eframe::App for DemoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // iOS: pump the Rust-side safe-area publisher once per frame
+        // so `SafeArea::current()` sees the latest `UIWindow`
+        // `safeAreaInsets`. Lazy-install because eframe constructs
+        // `DemoApp` before the runtime pump is guaranteed drained.
+        #[cfg(any(
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos",
+        ))]
+        {
+            if self.safe_area_publisher.is_none() {
+                if let Ok(rt) = istmo::Runtime::global() {
+                    if let Ok(p) = SafeAreaPublisher::install(&rt) {
+                        self.safe_area_publisher = Some(p);
+                    }
+                }
+            }
+            if let Some(publisher) = self.safe_area_publisher.as_mut() {
+                publisher.tick();
+            }
+        }
         // Snapshot state under the mutex, then render — never hold the
         // lock across egui calls.
         let snapshot = self.status.lock().expect("status mutex").clone();

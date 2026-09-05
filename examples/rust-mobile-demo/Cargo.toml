@@ -34,16 +34,20 @@ istmo-build = { workspace = true }
 # The demo picks eframe + wgpu as its UI stack; istmo itself is
 # UI-agnostic, so these live in the demo's own Cargo.toml, not in the
 # framework crates.
+# eframe / egui / winit bumped to the latest published minor. eframe
+# 0.36 exposes the `RawWindowHandle` via `CreationContext` — needed for
+# `SafeAreaPublisher::install`.
 [target.'cfg(target_os = "android")'.dependencies]
-eframe = { version = "0.29", default-features = false, features = ["wgpu", "default_fonts"] }
-egui = { version = "0.29", default-features = false }
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts", "android-native-activity"] }
+egui = { version = "0.36", default-features = false }
 winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
 android_logger = "0.14"
 
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))'.dependencies]
-eframe = { version = "0.29", default-features = false, features = ["wgpu", "default_fonts"] }
-egui = { version = "0.29", default-features = false }
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts"] }
+egui = { version = "0.36", default-features = false }
 winit = { version = "0.30", default-features = false }
+istmo-plugins = { workspace = true, features = ["winit-publisher"] }
 
 [lints.rust]
 missing_debug_implementations = "warn"

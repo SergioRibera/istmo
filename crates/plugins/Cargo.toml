@@ -10,11 +10,13 @@ repository.workspace = true
 
 [features]
 default = []
-# Rust-side publisher for the safe-area plugin: takes a `winit`-owned
-# window handle and drives `Runtime::publish_early_latest` directly, so
-# consumers do not need a Kotlin / Swift publisher. iOS uses objc2 to
-# read `UIWindow.safeAreaInsets`; other targets stay a no-op today.
-winit-publisher = ["dep:raw-window-handle"]
+# Rust-side publisher for the safe-area plugin. iOS walks
+# `UIApplication.sharedApplication.keyWindow` via objc2 and reads
+# `safeAreaInsets` per tick, driving `Runtime::publish_early_latest`
+# directly so consumers do not need a Kotlin / Swift publisher.
+# Non-Apple targets get an inert publisher (Android's Kotlin path still
+# owns `WindowInsets` today).
+winit-publisher = []
 
 [dependencies]
 istmo-core = { workspace = true }
@@ -23,12 +25,9 @@ bincode = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
 tracing = { workspace = true }
-raw-window-handle = { version = "0.6", optional = true }
 
 # `objc2` refuses to compile off Apple, so scope the dep to iOS-family
-# targets. The publisher module's body is gated on the same cfg so
-# non-Apple builds with `--features winit-publisher` still succeed with
-# a no-op publisher.
+# targets. The publisher module's body is gated on the same cfg.
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies]
 objc2 = "0.6"
 
