@@ -15,6 +15,7 @@ pub mod kotlin;
 pub mod kotlin_host;
 pub mod kotlin_types;
 pub mod native_deps;
+pub mod rust;
 pub mod service;
 pub mod swift;
 pub mod swift_host;
@@ -35,6 +36,7 @@ pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
 pub use crate::native_deps::{
     GradleCoord, GradleDep, GradleKey, GradleScope, NativeDeps, SwiftPackageDep, VersionConflict,
 };
+pub use crate::rust::generate_rust_types;
 pub use crate::service::{AndroidServiceArtifacts, ServiceContract, generate_android_service};
 pub use crate::swift::{generate_swift, generate_swift_client};
 pub use crate::swift_host::generate_swift_host;

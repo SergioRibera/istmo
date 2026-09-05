@@ -16,8 +16,8 @@ use istmo_build::{
     NativeDeps, ServiceContract, StructDef, SwiftPackageDep, TypeDef, TypeRef, WorkerContract,
     generate_android_service, generate_android_worker, generate_ios_background,
     generate_kotlin, generate_kotlin_codecs, generate_kotlin_host, generate_kotlin_types,
-    generate_swift, generate_swift_client, generate_swift_codecs, generate_swift_host,
-    generate_swift_types, required_entitlements,
+    generate_rust_types, generate_swift, generate_swift_client, generate_swift_codecs,
+    generate_swift_host, generate_swift_types, required_entitlements,
 };
 
 fn golden_dir() -> PathBuf {
@@ -749,6 +749,15 @@ fn permissions_swift_codecs_matches_golden() {
         "permissions_codecs",
         "swift",
         &generate_swift_codecs(&permissions_with_types()),
+    );
+}
+
+#[test]
+fn permissions_rust_types_matches_golden() {
+    assert_matches(
+        "permissions_types",
+        "rs",
+        &generate_rust_types(&permissions_with_types()),
     );
 }
 
