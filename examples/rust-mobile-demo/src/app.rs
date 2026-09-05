@@ -71,7 +71,7 @@ const REWARDED_UNIT: &str = "ca-app-pub-3940256099942544/5224354917";
 /// Android goes through `istmo::mobile::android_app()` — the macro
 /// stored it before invoking us.
 #[istmo::mobile_app]
-pub fn main() {
+pub(crate) fn main() {
     #[cfg(target_os = "android")]
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),

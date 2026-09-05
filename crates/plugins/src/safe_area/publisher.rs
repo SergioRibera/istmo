@@ -138,7 +138,7 @@ mod android {
 
     use super::{EdgeInsets, SafeAreaInsets};
 
-    pub fn read_window_insets() -> Option<SafeAreaInsets> {
+    pub(super) fn read_window_insets() -> Option<SafeAreaInsets> {
         let ctx = ndk_context::android_context();
         // SAFETY: `ndk_context::android_context()` returns valid
         // pointers once `android-activity` has run, which is before any
@@ -305,7 +305,7 @@ mod ios {
     /// Read insets from the current key window; `None` when no window
     /// is attached yet (very early in the process lifetime, before the
     /// first frame renders).
-    pub fn read_key_window_insets() -> Option<SafeAreaInsets> {
+    pub(super) fn read_key_window_insets() -> Option<SafeAreaInsets> {
         let view_addr = key_window_view_addr()?;
         // SAFETY: `view_addr` came from a message send on a live
         // `UIWindow` — the returned view is retained by the window,
