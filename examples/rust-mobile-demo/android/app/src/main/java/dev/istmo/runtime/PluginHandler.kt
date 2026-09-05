@@ -1,6 +1,14 @@
 package dev.istmo.runtime
 
 /**
+ * Wire alias for the `NativeHandleId` newtype in `istmo-core`. On the
+ * Kotlin side we treat it as a plain `Long`; on the wire it is a single
+ * u64 varint. Codegen dispatchers name the alias directly so the
+ * generated signatures stay 1:1 with the Rust source.
+ */
+typealias NativeHandleId = Long
+
+/**
  * Backend contract implemented by Kotlin plugins.
  *
  * `payload` is the bincode-encoded tuple of method arguments; the returned
@@ -25,6 +33,20 @@ interface PluginHandler {
  * decode back into the plugin's own error enum.
  */
 class PluginException(val payload: ByteArray) : RuntimeException()
+
+/**
+ * Codegen-friendly exception the generated dispatchers catch.
+ *
+ * Backends throw `BackendException(typedError)` to surface a domain
+ * error; the dispatcher catches, encodes the typed value via the plugin's
+ * `<T>Codecs.write<Error>` helper, and rethrows as a [PluginException]
+ * carrying the encoded bytes.
+ *
+ * Cleaner than making every backend hand-encode + throw `PluginException`
+ * directly — the encode step lives in the codec impl, not scattered
+ * across the backend.
+ */
+class BackendException<E : Any>(val error: E) : RuntimeException()
 
 /**
  * Marker interface a [PluginHandler] implements when it owns native

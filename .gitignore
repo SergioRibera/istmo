@@ -18,5 +18,9 @@ examples/rust-mobile-demo/ios/build/
 examples/rust-mobile-demo/ios/IstmoRuntime/.build/
 examples/rust-mobile-demo/ios/**/*.xcuserdata/
 examples/rust-mobile-demo/ios/**/xcshareddata/
-# build.rs-emitted Swift dispatchers — regenerated on every cargo build.
+# build.rs-emitted host dispatchers — regenerated on every cargo build.
 examples/rust-mobile-demo/ios/RustMobileDemo/Plugins/*/Generated/
+examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/AdMobDispatcher.kt
+examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/PermissionsDispatcher.kt
+examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/NotificationsDispatcher.kt
+examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/SignInDispatcher.kt

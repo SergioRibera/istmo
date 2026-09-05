@@ -26,7 +26,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use istmo_build::{Contract, generate_swift_host};
+use istmo_build::{Contract, generate_kotlin_host, generate_swift_host};
 use istmo_plugins::contract as plugin_contract;
 
 fn main() {
@@ -34,31 +34,57 @@ fn main() {
     // is the crate root regardless of who invoked cargo (Gradle, Xcode
     // pre-build script, plain `cargo build --workspace`).
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let plugins_dir = root.join("ios/RustMobileDemo/Plugins");
+    let ios_dir = root.join("ios/RustMobileDemo/Plugins");
+    let kotlin_generated_dir = root.join("android/app/src/main/java/dev/istmo/runtime");
 
     for spec in dispatchers() {
-        let dest_dir = plugins_dir.join(spec.dir_name).join("Generated");
-        let dest = dest_dir.join(format!("{}Dispatcher.swift", spec.contract.type_name));
-        let generated = generate_swift_host(&spec.contract);
-        if let Err(err) = write_if_changed(&dest, &generated) {
+        let ios_dest = ios_dir
+            .join(spec.dir_name)
+            .join("Generated")
+            .join(format!("{}Dispatcher.swift", spec.contract.type_name));
+        let ios_source = generate_swift_host(&spec.contract);
+        if let Err(err) = write_if_changed(&ios_dest, &ios_source) {
             println!(
                 "cargo:warning=rust-mobile-demo build.rs: failed to write {}: {err}",
-                dest.display()
+                ios_dest.display()
+            );
+        }
+
+        // Kotlin generation is scoped per plugin — hand-written handlers
+        // still cover Permissions / Notifications / GoogleSignIn in this
+        // demo. AdMob is the first plugin migrated to the codegen
+        // dispatcher pattern on Android; others follow.
+        if !spec.emit_kotlin {
+            continue;
+        }
+        let kt_dest =
+            kotlin_generated_dir.join(format!("{}Dispatcher.kt", spec.contract.type_name));
+        let kt_source = kotlin_source_with_package(&generate_kotlin_host(&spec.contract));
+        if let Err(err) = write_if_changed(&kt_dest, &kt_source) {
+            println!(
+                "cargo:warning=rust-mobile-demo build.rs: failed to write {}: {err}",
+                kt_dest.display()
             );
         }
     }
 
-    // Only rerun when the codegen sources change. The Rust plugin traits
-    // themselves live under `crates/plugins`, so watch that dir plus the
-    // generator crate.
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../crates/plugins/src");
     println!("cargo:rerun-if-changed=../../crates/build/src");
 }
 
+/// The Kotlin generator emits imports but no `package` header. Prepend
+/// `package dev.istmo.runtime` so the dispatcher sits alongside
+/// `PluginHandler`, `HandleReleaser`, `BackendException`, `Bincode` — the
+/// class does not need explicit imports for its siblings.
+fn kotlin_source_with_package(body: &str) -> String {
+    format!("package dev.istmo.runtime\n\n{body}")
+}
+
 struct DispatcherSpec {
     dir_name: &'static str,
     contract: Contract,
+    emit_kotlin: bool,
 }
 
 fn dispatchers() -> Vec<DispatcherSpec> {
@@ -66,18 +92,22 @@ fn dispatchers() -> Vec<DispatcherSpec> {
         DispatcherSpec {
             dir_name: "Permissions",
             contract: plugin_contract::permissions(),
+            emit_kotlin: false,
         },
         DispatcherSpec {
             dir_name: "Notifications",
             contract: plugin_contract::notifications(),
+            emit_kotlin: false,
         },
         DispatcherSpec {
             dir_name: "SignIn",
             contract: plugin_contract::google_sign_in(),
+            emit_kotlin: false,
         },
         DispatcherSpec {
             dir_name: "AdMob",
             contract: plugin_contract::admob(),
+            emit_kotlin: true,
         },
     ]
 }

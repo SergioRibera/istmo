@@ -7,7 +7,9 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import dev.istmo.runtime.AdMobHandler
+import dev.istmo.runtime.AdMobCodecsImpl
+import dev.istmo.runtime.AdMobDispatcher
+import dev.istmo.runtime.AdMobFactoryImpl
 import dev.istmo.runtime.GoogleSignInHandler
 import dev.istmo.runtime.IstmoRuntime
 import dev.istmo.runtime.NotificationsHandler
@@ -51,7 +53,10 @@ class RustMobileActivity : NativeActivity() {
         runtime.registerHandler(GoogleSignInHandler.PLUGIN_ID, signIn)
         runtime.registerHandler(NotificationsHandler.PLUGIN_ID, NotificationsHandler(this))
         runtime.registerHandler(PermissionsHandler.PLUGIN_ID, permissions)
-        runtime.registerHandler(AdMobHandler.PLUGIN_ID, AdMobHandler(this))
+        runtime.registerHandler(
+            AdMobDispatcher.PLUGIN_ID,
+            AdMobDispatcher(AdMobFactoryImpl(this), AdMobCodecsImpl()),
+        )
 
         super.onCreate(savedInstanceState)
 
