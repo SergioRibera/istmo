@@ -92,17 +92,17 @@ fn dispatchers() -> Vec<DispatcherSpec> {
         DispatcherSpec {
             dir_name: "Permissions",
             contract: plugin_contract::permissions(),
-            emit_kotlin: false,
+            emit_kotlin: true,
         },
         DispatcherSpec {
             dir_name: "Notifications",
             contract: plugin_contract::notifications(),
-            emit_kotlin: false,
+            emit_kotlin: true,
         },
         DispatcherSpec {
             dir_name: "SignIn",
             contract: plugin_contract::google_sign_in(),
-            emit_kotlin: false,
+            emit_kotlin: true,
         },
         DispatcherSpec {
             dir_name: "AdMob",

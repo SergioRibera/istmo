@@ -10,36 +10,40 @@ import androidx.core.view.WindowInsetsControllerCompat
 import dev.istmo.runtime.AdMobCodecsImpl
 import dev.istmo.runtime.AdMobDispatcher
 import dev.istmo.runtime.AdMobFactoryImpl
-import dev.istmo.runtime.GoogleSignInHandler
 import dev.istmo.runtime.IstmoRuntime
-import dev.istmo.runtime.NotificationsHandler
-import dev.istmo.runtime.PermissionsHandler
+import dev.istmo.runtime.NotificationsBackendImpl
+import dev.istmo.runtime.NotificationsCodecsImpl
+import dev.istmo.runtime.NotificationsDispatcher
+import dev.istmo.runtime.PermissionsBackendImpl
+import dev.istmo.runtime.PermissionsCodecsImpl
+import dev.istmo.runtime.PermissionsDispatcher
+import dev.istmo.runtime.SignInCodecsImpl
+import dev.istmo.runtime.SignInDispatcher
+import dev.istmo.runtime.SignInFactoryImpl
 
 /**
  * NativeActivity subclass that boots the istmo runtime and registers the
- * three plugin dispatchers the Rust cdylib consumes, all *before* the
- * native activity's onCreate runs `android_main`.
+ * plugin dispatchers the Rust cdylib consumes, all *before* the native
+ * activity's onCreate runs `android_main`.
  *
  * `<meta-data android:name="android.app.lib_name" android:value="rust_mobile_demo"/>`
  * in the manifest tells NativeActivity which cdylib to load. We separately
  * call `IstmoRuntime.start()`, which:
  *
  *  1. Loads the same library via `System.loadLibrary` (idempotent).
- *  2. Runs `nativeStart` — which invokes `__istmo_configure_runtime`
- *     emitted by `istmo::runtime!` in the Rust cdylib, initialising the
- *     process-global `Runtime`.
+ *  2. Runs `nativeStart` — invokes `__istmo_configure_runtime` emitted by
+ *     `istmo::runtime!` in the Rust cdylib, initialising the process
+ *     `Runtime`.
  *  3. Spawns the pump thread that drains outbound frames.
  *
- * The Rust `android_main` (in `src/android.rs`) then fires on the NDK
- * glue thread and starts eframe. Every plugin call `SignInClient::…` /
- * `PermissionsClient::…` / `NotificationsClient::…` issues an outbound
- * `Frame::Call`; the pump hands it to `IstmoRuntime.onCall` which routes
- * to the dispatcher registered under the matching plugin id.
+ * Each plugin follows the codegen dispatcher pattern:
+ * `<T>Dispatcher(factoryOrBackend, codecs)` — the dispatcher owns wire
+ * encode / decode, the backend owns the SDK-specific logic.
  */
 class RustMobileActivity : NativeActivity() {
 
-    private lateinit var permissions: PermissionsHandler
-    private lateinit var signIn: GoogleSignInHandler
+    private lateinit var permissionsBackend: PermissionsBackendImpl
+    private lateinit var signInFactory: SignInFactoryImpl
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Register plugin dispatchers BEFORE super.onCreate() — the Rust
@@ -48,11 +52,21 @@ class RustMobileActivity : NativeActivity() {
         val ok = runtime.start()
         check(ok) { "IstmoRuntime.start() failed — pump did not initialise" }
 
-        permissions = PermissionsHandler(this)
-        signIn = GoogleSignInHandler(this)
-        runtime.registerHandler(GoogleSignInHandler.PLUGIN_ID, signIn)
-        runtime.registerHandler(NotificationsHandler.PLUGIN_ID, NotificationsHandler(this))
-        runtime.registerHandler(PermissionsHandler.PLUGIN_ID, permissions)
+        permissionsBackend = PermissionsBackendImpl(this)
+        signInFactory = SignInFactoryImpl(this)
+
+        runtime.registerHandler(
+            PermissionsDispatcher.PLUGIN_ID,
+            PermissionsDispatcher(permissionsBackend, PermissionsCodecsImpl()),
+        )
+        runtime.registerHandler(
+            NotificationsDispatcher.PLUGIN_ID,
+            NotificationsDispatcher(NotificationsBackendImpl(this), NotificationsCodecsImpl()),
+        )
+        runtime.registerHandler(
+            SignInDispatcher.PLUGIN_ID,
+            SignInDispatcher(signInFactory, SignInCodecsImpl()),
+        )
         runtime.registerHandler(
             AdMobDispatcher.PLUGIN_ID,
             AdMobDispatcher(AdMobFactoryImpl(this), AdMobCodecsImpl()),
@@ -74,15 +88,9 @@ class RustMobileActivity : NativeActivity() {
 
     /**
      * Subscribe to Android's `WindowInsets` and publish every update on
-     * the `istmo.safe_area` early-event channel in logical dp. This is
-     * the Flutter model: platform pushes safe-area geometry, framework
-     * (here egui) reads a snapshot each frame.
-     *
-     * We forward three inset groups separately so the Rust side can pick
-     * the ones it cares about — a full-bleed video player only respects
-     * cutouts, a conventional layout takes the union of system bars +
-     * cutout, an IME-aware field uses `view_padding` to lift above the
-     * keyboard.
+     * the `istmo.safe_area` early-event channel in logical dp. Flutter
+     * model — platform pushes safe-area geometry, framework (egui) reads
+     * a snapshot each frame.
      */
     private fun installSafeAreaListener() {
         val density = resources.displayMetrics.density
@@ -110,13 +118,13 @@ class RustMobileActivity : NativeActivity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissionsRequested, grantResults)
-        permissions.notifyPermissionsResult(requestCode, permissionsRequested, grantResults)
+        permissionsBackend.notifyPermissionsResult(requestCode, permissionsRequested, grantResults)
     }
 
     @Deprecated("legacy GoogleSignInClient uses the pre-ActivityResult API")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        signIn.notifyActivityResult(requestCode, resultCode, data)
+        signInFactory.rememberLastBackend()?.notifyActivityResult(requestCode, resultCode, data)
     }
 
     override fun onDestroy() {
