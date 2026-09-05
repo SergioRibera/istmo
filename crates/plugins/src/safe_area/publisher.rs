@@ -20,6 +20,16 @@ use std::sync::{Arc, Weak};
 
 use istmo_core::{IstmoError, Runtime, codec};
 
+// `EdgeInsets` referenced by the `ios::` / `android::` sub-modules
+// via their own `use super::…` imports — `super` there resolves to
+// this publisher module, so the type has to be in scope here.
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "visionos",
+))]
+use super::EdgeInsets;
 use super::{SAFE_AREA_CHANNEL, SafeAreaInsets};
 
 const PLUGIN_ID: &str = "istmo.safe_area";

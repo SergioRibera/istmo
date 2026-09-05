@@ -48,5 +48,21 @@ istmo-plugins-schema = { workspace = true }
 
 [dev-dependencies]
 
-[lints]
-workspace = true
+# Override the workspace-wide `unsafe_code = "forbid"` so the safe-area
+# publisher can invoke objc2 / JNI FFI directly — both are inherently
+# unsafe. Every callsite still uses an explicit `unsafe {}` block with a
+# `# SAFETY` note; the crate-level relax just permits the block to
+# exist.
+[lints.rust]
+unsafe_code = "allow"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_safety_doc = "allow"
+redundant_pub_crate = "allow"
