@@ -88,7 +88,7 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
         guard let entry = entry else { throw AdError.unknownAd }
         let presenter = await Self.rootViewController()
         guard let presenter = presenter else {
-            throw AdError.internalError("no root view controller for interstitial present")
+            throw AdError.`internal`("no root view controller for interstitial present")
         }
         let coordinator = InterstitialCoordinator()
         entry.fullScreenContentDelegate = coordinator
@@ -130,7 +130,7 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
         guard let entry = entry else { throw AdError.unknownAd }
         let presenter = await Self.rootViewController()
         guard let presenter = presenter else {
-            throw AdError.internalError("no root view controller for rewarded present")
+            throw AdError.`internal`("no root view controller for rewarded present")
         }
         let coordinator = RewardedCoordinator()
         entry.fullScreenContentDelegate = coordinator
@@ -160,7 +160,7 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
         let id = IstmoRuntime.shared.allocHandleId(pluginId: AdMobDispatcher.PLUGIN_ID)
         return try await MainActor.run { [weak self] in
             guard let self = self, let root = Self.rootViewControllerNow() else {
-                throw AdError.internalError("no root view controller for banner attach")
+                throw AdError.`internal`("no root view controller for banner attach")
             }
             let scale = UIScreen.main.scale
             let frame = CGRect(
@@ -241,13 +241,13 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
             case 1: return .invalidRequest(nserror.localizedDescription)   // GADErrorInvalidRequest
             case 2: return .network(nserror.localizedDescription)          // GADErrorNoFillOrInternal
             case 3: return .noFill
-            default: return .internalError(nserror.localizedDescription)
+            default: return .`internal`(nserror.localizedDescription)
             }
         }
         if nserror.domain == NSURLErrorDomain {
             return .network(nserror.localizedDescription)
         }
-        return .internalError(nserror.localizedDescription)
+        return .`internal`(nserror.localizedDescription)
     }
 
     @MainActor

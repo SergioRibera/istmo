@@ -1,18 +1,21 @@
 //! `Contract` builders for every bundled plugin.
 //!
 //! Downstream `build.rs` scripts consume these to emit Kotlin / Swift
-//! host dispatchers via [`istmo_build::generate_kotlin_host`] /
-//! [`istmo_build::generate_swift_host`] without duplicating the trait
-//! shape at the demo's own build layer.
+//! host dispatchers, types, and codecs via `istmo-build`'s generators
+//! without duplicating trait shape or wire encoding at the demo's own
+//! build layer.
 //!
 //! Only compiled behind the `codegen` cargo feature — off by default so
 //! runtime consumers of `istmo-plugins` do not pull `istmo-build`.
 //!
 //! Each builder must stay in lockstep with the matching `#[istmo::plugin]`
-//! trait declaration; the golden test suite in `istmo-build` covers the
-//! generated output byte-for-byte and catches drift.
+//! trait declaration and `#[message]` type declarations. The golden test
+//! suite in `istmo-build` covers the generated output byte-for-byte and
+//! catches drift.
 
-use istmo_build::{Arg, Contract, Method, MethodKind, TypeRef};
+use istmo_build::{
+    Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
+};
 
 fn named(name: &str) -> TypeRef {
     TypeRef::Named(name.to_owned())
@@ -24,6 +27,41 @@ fn vec(inner: TypeRef) -> TypeRef {
 
 fn opt(inner: TypeRef) -> TypeRef {
     TypeRef::Option(Box::new(inner))
+}
+
+fn field(name: &str, ty: TypeRef) -> Field {
+    Field {
+        name: name.to_owned(),
+        ty,
+    }
+}
+
+fn unit_variant(name: &str) -> EnumVariant {
+    EnumVariant {
+        name: name.to_owned(),
+        payload: Vec::new(),
+    }
+}
+
+fn payload_variant(name: &str, payload: TypeRef) -> EnumVariant {
+    EnumVariant {
+        name: name.to_owned(),
+        payload: vec![payload],
+    }
+}
+
+fn enum_of(name: &str, variants: Vec<EnumVariant>) -> TypeDef {
+    TypeDef::Enum(EnumDef {
+        name: name.to_owned(),
+        variants,
+    })
+}
+
+fn struct_of(name: &str, fields: Vec<Field>) -> TypeDef {
+    TypeDef::Struct(StructDef {
+        name: name.to_owned(),
+        fields,
+    })
 }
 
 #[must_use]
@@ -64,6 +102,25 @@ pub fn permissions() -> Contract {
             },
         ],
         init: None,
+        types: vec![
+            enum_of(
+                "PermissionStatus",
+                vec![
+                    unit_variant("Granted"),
+                    unit_variant("Denied"),
+                    unit_variant("PermanentlyDenied"),
+                    unit_variant("NotDetermined"),
+                    unit_variant("NotSupported"),
+                ],
+            ),
+            struct_of(
+                "PermissionOutcome",
+                vec![
+                    field("permission", TypeRef::String),
+                    field("status", named("PermissionStatus")),
+                ],
+            ),
+        ],
     }
 }
 
@@ -109,6 +166,37 @@ pub fn notifications() -> Contract {
             },
         ],
         init: None,
+        types: vec![
+            enum_of(
+                "NotificationImportance",
+                vec![
+                    unit_variant("Min"),
+                    unit_variant("Low"),
+                    unit_variant("Default"),
+                    unit_variant("High"),
+                ],
+            ),
+            struct_of(
+                "NotificationRequest",
+                vec![
+                    field("title", TypeRef::String),
+                    field("body", TypeRef::String),
+                    field("channelId", TypeRef::String),
+                    field("importance", named("NotificationImportance")),
+                    field("delaySeconds", opt(TypeRef::U32)),
+                    field("tag", opt(TypeRef::String)),
+                ],
+            ),
+            struct_of("NotificationHandle", vec![field("id", TypeRef::U32)]),
+            enum_of(
+                "NotificationError",
+                vec![
+                    unit_variant("PermissionDenied"),
+                    payload_variant("InvalidChannel", TypeRef::String),
+                    payload_variant("Scheduler", TypeRef::String),
+                ],
+            ),
+        ],
     }
 }
 
@@ -161,6 +249,45 @@ pub fn google_sign_in() -> Contract {
             },
         ],
         init: Some(named("SignInConfig")),
+        types: vec![
+            enum_of(
+                "SignInMode",
+                vec![unit_variant("Interactive"), unit_variant("SilentOnly")],
+            ),
+            struct_of(
+                "SignInConfig",
+                vec![
+                    field("serverClientId", TypeRef::String),
+                    field("scopes", vec(TypeRef::String)),
+                    field("hostedDomain", opt(TypeRef::String)),
+                    field("nonce", opt(TypeRef::String)),
+                    field("autoSelect", TypeRef::Bool),
+                ],
+            ),
+            struct_of(
+                "SignInAccount",
+                vec![
+                    field("id", TypeRef::String),
+                    field("email", opt(TypeRef::String)),
+                    field("displayName", opt(TypeRef::String)),
+                    field("photoUrl", opt(TypeRef::String)),
+                    field("idToken", TypeRef::String),
+                    field("grantedScopes", vec(TypeRef::String)),
+                    field("credential", named("NativeHandleId")),
+                ],
+            ),
+            enum_of(
+                "SignInError",
+                vec![
+                    unit_variant("UserCancelled"),
+                    unit_variant("NoCredentialAvailable"),
+                    unit_variant("Reauthenticate"),
+                    payload_variant("InvalidConfiguration", TypeRef::String),
+                    payload_variant("Network", TypeRef::String),
+                    payload_variant("Backend", TypeRef::String),
+                ],
+            ),
+        ],
     }
 }
 
@@ -248,5 +375,54 @@ pub fn admob() -> Contract {
             },
         ],
         init: Some(named("AdMobConfig")),
+        types: vec![
+            struct_of(
+                "AdMobConfig",
+                vec![
+                    field("appId", TypeRef::String),
+                    field("testDeviceIds", vec(TypeRef::String)),
+                    field("childDirectedTreatment", TypeRef::Bool),
+                ],
+            ),
+            struct_of(
+                "BannerRect",
+                vec![
+                    field("x", TypeRef::U32),
+                    field("y", TypeRef::U32),
+                    field("width", TypeRef::U32),
+                    field("height", TypeRef::U32),
+                ],
+            ),
+            struct_of(
+                "BannerRequest",
+                vec![
+                    field("adUnitId", TypeRef::String),
+                    field("rect", named("BannerRect")),
+                ],
+            ),
+            enum_of(
+                "InterstitialOutcome",
+                vec![unit_variant("Dismissed"), unit_variant("FailedToShow")],
+            ),
+            struct_of(
+                "RewardedOutcome",
+                vec![
+                    field("granted", TypeRef::Bool),
+                    field("rewardType", TypeRef::String),
+                    field("rewardAmount", TypeRef::U32),
+                ],
+            ),
+            enum_of(
+                "AdError",
+                vec![
+                    unit_variant("NotInitialized"),
+                    unit_variant("NoFill"),
+                    payload_variant("Network", TypeRef::String),
+                    payload_variant("InvalidRequest", TypeRef::String),
+                    unit_variant("UnknownAd"),
+                    payload_variant("Internal", TypeRef::String),
+                ],
+            ),
+        ],
     }
 }

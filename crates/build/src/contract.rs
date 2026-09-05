@@ -14,6 +14,63 @@ pub struct Contract {
     /// Type carried by `CreateInstance` when the plugin uses `acquire_with`.
     /// `None` for stateless plugins.
     pub init: Option<TypeRef>,
+    /// Definitions for every `Named` type referenced from `methods` /
+    /// `init`. Consumed by the Kotlin / Swift type + codec generators to
+    /// emit data classes / structs / enums plus their bincode wire codecs
+    /// so downstream demos do not hand-write them.
+    ///
+    /// Types that the wire treats as opaque (typealias-only shapes like
+    /// `NativeHandleId`) are omitted — the generator emits `typealias`
+    /// declarations for those separately, from a small built-in list.
+    pub types: Vec<TypeDef>,
+}
+
+/// A named type used somewhere in the contract's method signatures.
+///
+/// Enum variants without a payload become primitive enums; variants with
+/// a payload become sealed classes (Kotlin) or associated-value enums
+/// (Swift). Struct definitions become `data class` / `struct`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeDef {
+    Struct(StructDef),
+    Enum(EnumDef),
+}
+
+impl TypeDef {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Struct(s) => &s.name,
+            Self::Enum(e) => &e.name,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<Field>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Field {
+    pub name: String,
+    pub ty: TypeRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<EnumVariant>,
+}
+
+/// Enum variant. `payload` empty → unit variant; single entry → tuple
+/// variant; multiple entries not yet supported (would need a real named
+/// or positional shape choice).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumVariant {
+    pub name: String,
+    pub payload: Vec<TypeRef>,
 }
 
 /// One method exposed by the plugin.

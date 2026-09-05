@@ -26,7 +26,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use istmo_build::{Contract, generate_kotlin_host, generate_swift_host};
+use istmo_build::{
+    Contract, generate_kotlin_codecs, generate_kotlin_host, generate_kotlin_types,
+    generate_swift_codecs, generate_swift_host, generate_swift_types,
+};
 use istmo_plugins::contract as plugin_contract;
 
 fn main() {
@@ -38,39 +41,51 @@ fn main() {
     let kotlin_generated_dir = root.join("android/app/src/main/java/dev/istmo/runtime");
 
     for spec in dispatchers() {
-        let ios_dest = ios_dir
-            .join(spec.dir_name)
-            .join("Generated")
-            .join(format!("{}Dispatcher.swift", spec.contract.type_name));
-        let ios_source = generate_swift_host(&spec.contract);
-        if let Err(err) = write_if_changed(&ios_dest, &ios_source) {
-            println!(
-                "cargo:warning=rust-mobile-demo build.rs: failed to write {}: {err}",
-                ios_dest.display()
-            );
-        }
+        // ---- iOS: dispatcher + types + codecs -----------------------
+        let ios_generated = ios_dir.join(spec.dir_name).join("Generated");
+        emit(
+            &ios_generated.join(format!("{}Dispatcher.swift", spec.contract.type_name)),
+            &generate_swift_host(&spec.contract),
+        );
+        emit(
+            &ios_generated.join(format!("{}Types.swift", spec.contract.type_name)),
+            &generate_swift_types(&spec.contract),
+        );
+        emit(
+            &ios_generated.join(format!("{}CodecsImpl.swift", spec.contract.type_name)),
+            &generate_swift_codecs(&spec.contract),
+        );
 
-        // Kotlin generation is scoped per plugin — hand-written handlers
-        // still cover Permissions / Notifications / GoogleSignIn in this
-        // demo. AdMob is the first plugin migrated to the codegen
-        // dispatcher pattern on Android; others follow.
+        // ---- Android: dispatcher + types + codecs -------------------
         if !spec.emit_kotlin {
             continue;
         }
-        let kt_dest =
-            kotlin_generated_dir.join(format!("{}Dispatcher.kt", spec.contract.type_name));
-        let kt_source = kotlin_source_with_package(&generate_kotlin_host(&spec.contract));
-        if let Err(err) = write_if_changed(&kt_dest, &kt_source) {
-            println!(
-                "cargo:warning=rust-mobile-demo build.rs: failed to write {}: {err}",
-                kt_dest.display()
-            );
-        }
+        emit(
+            &kotlin_generated_dir.join(format!("{}Dispatcher.kt", spec.contract.type_name)),
+            &kotlin_source_with_package(&generate_kotlin_host(&spec.contract)),
+        );
+        emit(
+            &kotlin_generated_dir.join(format!("{}Types.kt", spec.contract.type_name)),
+            &kotlin_source_with_package(&generate_kotlin_types(&spec.contract)),
+        );
+        emit(
+            &kotlin_generated_dir.join(format!("{}CodecsImpl.kt", spec.contract.type_name)),
+            &kotlin_source_with_package(&generate_kotlin_codecs(&spec.contract)),
+        );
     }
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../crates/plugins/src");
     println!("cargo:rerun-if-changed=../../crates/build/src");
+}
+
+fn emit(dest: &Path, source: &str) {
+    if let Err(err) = write_if_changed(dest, source) {
+        println!(
+            "cargo:warning=rust-mobile-demo build.rs: failed to write {}: {err}",
+            dest.display()
+        );
+    }
 }
 
 /// The Kotlin generator emits imports but no `package` header. Prepend

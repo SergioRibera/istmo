@@ -11,11 +11,13 @@ use std::fs;
 use std::path::PathBuf;
 
 use istmo_build::{
-    Arg, BackgroundKind, ContinuousMode, Contract, GradleCoord, GradleDep, GradleScope,
-    IosBackgroundContract, IosEntitlements, Method, MethodKind, NativeDeps, ServiceContract,
-    SwiftPackageDep, TypeRef, WorkerContract, generate_android_service, generate_android_worker,
-    generate_ios_background, generate_kotlin, generate_kotlin_host, generate_swift,
-    generate_swift_client, generate_swift_host, required_entitlements,
+    Arg, BackgroundKind, ContinuousMode, Contract, EnumDef, EnumVariant, Field, GradleCoord,
+    GradleDep, GradleScope, IosBackgroundContract, IosEntitlements, Method, MethodKind,
+    NativeDeps, ServiceContract, StructDef, SwiftPackageDep, TypeDef, TypeRef, WorkerContract,
+    generate_android_service, generate_android_worker, generate_ios_background,
+    generate_kotlin, generate_kotlin_codecs, generate_kotlin_host, generate_kotlin_types,
+    generate_swift, generate_swift_client, generate_swift_codecs, generate_swift_host,
+    generate_swift_types, required_entitlements,
 };
 
 fn golden_dir() -> PathBuf {
@@ -71,6 +73,7 @@ fn unary_only() -> Contract {
             },
         ],
         init: None,
+        types: vec![],
     }
 }
 
@@ -111,6 +114,7 @@ fn mixed_with_init() -> Contract {
             },
         ],
         init: Some(TypeRef::Named("WatchConfig".to_owned())),
+        types: vec![],
     }
 }
 
@@ -179,6 +183,7 @@ fn permissions() -> Contract {
             },
         ],
         init: None,
+        types: vec![],
     }
 }
 
@@ -197,6 +202,7 @@ fn activity_results() -> Contract {
             error: Some(TypeRef::Named("ActivityLaunchError".to_owned())),
         }],
         init: None,
+        types: vec![],
     }
 }
 
@@ -477,6 +483,7 @@ fn admob() -> Contract {
             },
         ],
         init: Some(TypeRef::Named("AdMobConfig".to_owned())),
+        types: vec![],
     }
 }
 
@@ -538,6 +545,7 @@ fn google_sign_in() -> Contract {
             },
         ],
         init: Some(TypeRef::Named("SignInConfig".to_owned())),
+        types: vec![],
     }
 }
 
@@ -582,6 +590,7 @@ fn notifications() -> Contract {
             },
         ],
         init: None,
+        types: vec![],
     }
 }
 
@@ -678,6 +687,68 @@ fn native_deps_merge_prefers_highest_version() {
             .iter()
             .any(|c| c.key.artifact == "credentials" && c.picked == "1.3.2"),
         "conflict must be surfaced",
+    );
+}
+
+// ---- Type + codec generation (types + codecs for `Named` types) --------
+
+fn permissions_with_types() -> Contract {
+    let mut c = permissions();
+    c.types = vec![
+        TypeDef::Enum(EnumDef {
+            name: "PermissionStatus".to_owned(),
+            variants: vec![
+                EnumVariant { name: "Granted".to_owned(), payload: vec![] },
+                EnumVariant { name: "Denied".to_owned(), payload: vec![] },
+                EnumVariant { name: "PermanentlyDenied".to_owned(), payload: vec![] },
+                EnumVariant { name: "NotDetermined".to_owned(), payload: vec![] },
+                EnumVariant { name: "NotSupported".to_owned(), payload: vec![] },
+            ],
+        }),
+        TypeDef::Struct(StructDef {
+            name: "PermissionOutcome".to_owned(),
+            fields: vec![
+                Field { name: "permission".to_owned(), ty: TypeRef::String },
+                Field { name: "status".to_owned(), ty: TypeRef::Named("PermissionStatus".to_owned()) },
+            ],
+        }),
+    ];
+    c
+}
+
+#[test]
+fn permissions_kotlin_types_matches_golden() {
+    assert_matches(
+        "permissions_types",
+        "kt",
+        &generate_kotlin_types(&permissions_with_types()),
+    );
+}
+
+#[test]
+fn permissions_kotlin_codecs_matches_golden() {
+    assert_matches(
+        "permissions_codecs",
+        "kt",
+        &generate_kotlin_codecs(&permissions_with_types()),
+    );
+}
+
+#[test]
+fn permissions_swift_types_matches_golden() {
+    assert_matches(
+        "permissions_types",
+        "swift",
+        &generate_swift_types(&permissions_with_types()),
+    );
+}
+
+#[test]
+fn permissions_swift_codecs_matches_golden() {
+    assert_matches(
+        "permissions_codecs",
+        "swift",
+        &generate_swift_codecs(&permissions_with_types()),
     );
 }
 
