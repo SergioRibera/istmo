@@ -3,7 +3,6 @@ package dev.istmo.rustdemo
 import android.app.NativeActivity
 import android.content.Intent
 import android.os.Bundle
-import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -76,40 +75,14 @@ class RustMobileActivity : NativeActivity() {
 
         // Edge-to-edge — the Rust side reads safe-area insets from the
         // `istmo.safe_area` early-event channel (Flutter-style) and
-        // reserves its own padding. Decor no longer manages the fit;
-        // system bars stay translucent overlays above our surface.
+        // reserves its own padding. Publishing happens Rust-side now
+        // via `SafeAreaPublisher::tick()` (JNI → `WindowInsetsCompat`)
+        // so this Activity only needs to configure the window flags.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             show(WindowInsetsCompat.Type.systemBars())
             isAppearanceLightStatusBars = false
         }
-        installSafeAreaListener()
-    }
-
-    /**
-     * Subscribe to Android's `WindowInsets` and publish every update on
-     * the `istmo.safe_area` early-event channel in logical dp. Flutter
-     * model — platform pushes safe-area geometry, framework (egui) reads
-     * a snapshot each frame.
-     */
-    private fun installSafeAreaListener() {
-        val density = resources.displayMetrics.density
-        val root = window.decorView
-        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
-            IstmoRuntime.publishSafeArea(
-                bars.top / density, bars.right / density, bars.bottom / density, bars.left / density,
-                ime.top / density, ime.right / density, ime.bottom / density, ime.left / density,
-                cutout.top / density, cutout.right / density, cutout.bottom / density, cutout.left / density,
-            )
-            insets
-        }
-        // Force an initial dispatch — otherwise the callback only fires on
-        // the first inset *change*, and Rust would start with a `None`
-        // slot until the user rotates or opens the keyboard.
-        ViewCompat.requestApplyInsets(root)
     }
 
     override fun onRequestPermissionsResult(

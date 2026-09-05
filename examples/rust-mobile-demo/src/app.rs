@@ -27,6 +27,7 @@ use istmo::plugins::{
     banner_rect_from_logical,
 };
 #[cfg(any(
+    target_os = "android",
     target_os = "ios",
     target_os = "tvos",
     target_os = "visionos",
@@ -184,11 +185,12 @@ struct DemoApp {
     /// from `DemoApp::new` — eframe constructs `DemoApp` before the
     /// runtime pump has finished starting on some device timings.
     safe_area: Option<SafeArea>,
-    /// iOS-only Rust-side publisher. Ticked each frame from
-    /// `App::update` — reads `UIWindow.safeAreaInsets` via objc2 and
-    /// republishes on `SAFE_AREA_CHANNEL`. Android keeps the Kotlin
-    /// `WindowInsets` path, so no publisher lives here on that target.
+    /// Rust-side publisher for `istmo.safe_area`. Ticked each frame
+    /// from `App::update`; iOS reads `UIWindow.safeAreaInsets` via
+    /// objc2, Android reads `WindowInsetsCompat` via JNI — same wire
+    /// schema on both.
     #[cfg(any(
+        target_os = "android",
         target_os = "ios",
         target_os = "tvos",
         target_os = "visionos",
@@ -209,6 +211,7 @@ impl DemoApp {
             banners: Vec::new(),
             safe_area: None,
             #[cfg(any(
+                target_os = "android",
                 target_os = "ios",
                 target_os = "tvos",
                 target_os = "visionos",
@@ -405,11 +408,15 @@ fn safe_area_margin(insets: Option<SafeAreaInsets>) -> egui::Margin {
 
 impl eframe::App for DemoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // iOS: pump the Rust-side safe-area publisher once per frame
-        // so `SafeArea::current()` sees the latest `UIWindow`
-        // `safeAreaInsets`. Lazy-install because eframe constructs
-        // `DemoApp` before the runtime pump is guaranteed drained.
+        // Pump the Rust-side safe-area publisher once per frame so
+        // `SafeArea::current()` sees the latest platform insets. Both
+        // Android (JNI → `WindowInsetsCompat`) and iOS (objc2 →
+        // `UIWindow.safeAreaInsets`) land here — the Kotlin
+        // `installSafeAreaListener` path is gone. Lazy-install because
+        // eframe constructs `DemoApp` before the runtime pump is
+        // guaranteed drained.
         #[cfg(any(
+            target_os = "android",
             target_os = "ios",
             target_os = "tvos",
             target_os = "visionos",

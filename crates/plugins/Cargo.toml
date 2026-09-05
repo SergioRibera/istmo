@@ -31,6 +31,13 @@ tracing = { workspace = true }
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies]
 objc2 = "0.6"
 
+# Android publisher reaches the current Activity via `ndk-context` (set
+# by `android-activity` on process start) and reads WindowInsets via
+# JNI calls into `androidx.core.view.WindowInsetsCompat`.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true }
+ndk-context = "0.1"
+
 # `build.rs` regenerates the `#[message]` type declarations from the
 # canonical `Contract` builders in `istmo-plugins-schema`. Both crates
 # are build-time only from `istmo-plugins`' perspective — nothing ships

@@ -29,7 +29,6 @@ object IstmoRuntime {
 
     private const val LIBRARY_NAME = "rust_mobile_demo"
     private const val NO_INSTANCE_ID = 0L
-    private const val SAFE_AREA_CHANNEL = "istmo.safe_area"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val jobs = ConcurrentHashMap<Long, Job>()
@@ -119,38 +118,6 @@ object IstmoRuntime {
     /** Convenience for stateless plugins (no instance id). */
     suspend fun call(pluginId: String, method: String, payload: ByteArray): ByteArray =
         call(pluginId, NO_INSTANCE_ID, method, payload)
-
-    /**
-     * Publish a `SafeAreaInsets` snapshot on the `istmo.safe_area`
-     * early-event channel. Every f32 field is written in bincode's
-     * standard fixed-width encoding — 4 IEEE-754 LE bytes each — so the
-     * wire size is a constant 48 bytes (12 fields × 3 sub-rects).
-     *
-     * Field order matches the Rust `SafeAreaInsets` struct declaration:
-     * `system_bars` (top, right, bottom, left), then `ime`, then
-     * `display_cutout`. Drift here silently produces garbage insets in
-     * Rust.
-     */
-    fun publishSafeArea(
-        systemBarTop: Float, systemBarRight: Float, systemBarBottom: Float, systemBarLeft: Float,
-        imeTop: Float, imeRight: Float, imeBottom: Float, imeLeft: Float,
-        cutoutTop: Float, cutoutRight: Float, cutoutBottom: Float, cutoutLeft: Float,
-    ) {
-        val out = java.io.ByteArrayOutputStream(48)
-        Bincode.writeF32(out, systemBarTop)
-        Bincode.writeF32(out, systemBarRight)
-        Bincode.writeF32(out, systemBarBottom)
-        Bincode.writeF32(out, systemBarLeft)
-        Bincode.writeF32(out, imeTop)
-        Bincode.writeF32(out, imeRight)
-        Bincode.writeF32(out, imeBottom)
-        Bincode.writeF32(out, imeLeft)
-        Bincode.writeF32(out, cutoutTop)
-        Bincode.writeF32(out, cutoutRight)
-        Bincode.writeF32(out, cutoutBottom)
-        Bincode.writeF32(out, cutoutLeft)
-        nativeSubmitEarlyLatest(SAFE_AREA_CHANNEL, out.toByteArray())
-    }
 
     // ---- Callbacks from the Rust pump thread ----------------------------
 
