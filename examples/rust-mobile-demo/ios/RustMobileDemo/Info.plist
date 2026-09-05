@@ -39,6 +39,23 @@
     <key>NSUserNotificationUsageDescription</key>
     <string>Notifies you when the sign-in flow completes.</string>
 
+    <!-- Usage descriptions for every permission the demo can map. The
+         OS refuses to prompt if the matching key is absent, and App
+         Review rejects binaries that link the framework without an
+         explanation string. -->
+    <key>NSCameraUsageDescription</key>
+    <string>Demo camera permission — used to demonstrate the camera authorisation prompt.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Demo microphone permission — used to demonstrate the microphone authorisation prompt.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Demo location permission — used to demonstrate the location authorisation prompt.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Demo photo library permission — used to demonstrate the photo library authorisation prompt.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>Demo contacts permission — used to demonstrate the contacts authorisation prompt.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Demo calendar permission — used to demonstrate the calendar authorisation prompt.</string>
+
     <!-- AdMob app id. Must match the value in `src/app.rs::ADMOB_APP_ID`;
          the SDK crashes at init if the two disagree. -->
     <key>GADApplicationIdentifier</key>
