@@ -427,11 +427,11 @@ fn read_expr(ty: &TypeRef, bytes: &str, cursor: &str) -> String {
         TypeRef::Bool => format!("Bincode.readBool({bytes}, {cursor})"),
         TypeRef::U8 | TypeRef::U16 | TypeRef::U32 | TypeRef::U64 => {
             let cast = kt_int_cast(ty);
-            format!("Bincode.readVarintU64({bytes}, {cursor}).let {{ Bincode.Decoded(it.first{cast}, it.second) }}")
+            format!("Bincode.readVarintU64({bytes}, {cursor}).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}")
         }
         TypeRef::I8 | TypeRef::I16 | TypeRef::I32 | TypeRef::I64 => {
             let cast = kt_int_cast(ty);
-            format!("Bincode.readVarintI64({bytes}, {cursor}).let {{ Bincode.Decoded(it.first{cast}, it.second) }}")
+            format!("Bincode.readVarintI64({bytes}, {cursor}).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}")
         }
         TypeRef::F32 => format!("Bincode.readF32({bytes}, {cursor})"),
         TypeRef::F64 => format!("Bincode.readF64({bytes}, {cursor})"),

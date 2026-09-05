@@ -77,7 +77,7 @@ class NotificationsDispatcher(
             "cancel" -> {
                 try {
                     var cursor = 0
-                    val d_id = Bincode.readVarintU64(payload, cursor).let { Bincode.Decoded(it.first.toUInt(), it.second) }; cursor = d_id.consumed
+                    val d_id = Bincode.readVarintU64(payload, cursor).let { Bincode.Decoded(it.value.toUInt(), it.consumed) }; cursor = d_id.consumed
                     val id = d_id.value
                     backend.cancel(id)
                     ByteArray(0)
