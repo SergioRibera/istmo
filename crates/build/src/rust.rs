@@ -37,8 +37,8 @@ pub fn generate_rust_types(contract: &Contract) -> String {
     for ty in &contract.types {
         let _ = writeln!(out);
         match ty {
-            TypeDef::Struct(s) => write_struct(&mut out, s),
-            TypeDef::Enum(e) => write_enum(&mut out, e),
+            TypeDef::Struct(s) => write_struct(&mut out, s, &contract.types),
+            TypeDef::Enum(e) => write_enum(&mut out, e, &contract.types),
         }
     }
     out
@@ -49,9 +49,10 @@ fn write_header(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "// plugin id: {}", contract.plugin_id);
 }
 
-fn write_struct(out: &mut String, s: &StructDef) {
+fn write_struct(out: &mut String, s: &StructDef, all: &[TypeDef]) {
+    let derives = suggest_derives(&TypeDef::Struct(s.clone()), all);
     let _ = writeln!(out, "#[::istmo_macros::message(bincode = \"::bincode\")]");
-    let _ = writeln!(out, "#[derive(Debug, Clone, PartialEq)]");
+    let _ = writeln!(out, "#[derive({})]", derives.join(", "));
     let _ = writeln!(out, "pub struct {} {{", s.name);
     for f in &s.fields {
         let _ = writeln!(out, "    pub {}: {},", to_rust_field(&f.name), rust_ty(&f.ty));
@@ -59,21 +60,110 @@ fn write_struct(out: &mut String, s: &StructDef) {
     let _ = writeln!(out, "}}");
 }
 
-fn write_enum(out: &mut String, e: &EnumDef) {
+fn write_enum(out: &mut String, e: &EnumDef, all: &[TypeDef]) {
+    let derives = suggest_derives(&TypeDef::Enum(e.clone()), all);
     let _ = writeln!(out, "#[::istmo_macros::message(bincode = \"::bincode\")]");
-    let _ = writeln!(out, "#[derive(Debug, Clone, PartialEq)]");
+    let _ = writeln!(out, "#[derive({})]", derives.join(", "));
     let _ = writeln!(out, "pub enum {} {{", e.name);
     for v in &e.variants {
         if v.payload.is_empty() {
             let _ = writeln!(out, "    {},", v.name);
         } else {
-            // Payload is currently one `TypeRef`; the tuple form drops
-            // straight into Rust's `Variant(T)` syntax.
             let ty = rust_ty(&v.payload[0]);
             let _ = writeln!(out, "    {}({ty}),", v.name);
         }
     }
     let _ = writeln!(out, "}}");
+}
+
+/// Pick idiomatic derives for `ty`. Every emitted type gets
+/// `Debug + Clone + PartialEq`; the extras are conditional:
+///
+/// * `Eq` — no floating-point anywhere in the recursive shape.
+/// * `Hash` — Eq + no interior mutability + all fields hashable.
+/// * `Copy` — every field is `Copy` (primitives, `Copy` named types).
+///
+/// Recursion respects the contract's own type list via [`resolve_named`].
+fn suggest_derives(ty: &TypeDef, all: &[TypeDef]) -> Vec<&'static str> {
+    let mut out = vec!["Debug", "Clone", "PartialEq"];
+    if is_eq(ty, all) {
+        out.push("Eq");
+    }
+    if is_hash(ty, all) {
+        out.push("Hash");
+    }
+    if is_copy(ty, all) {
+        out.push("Copy");
+    }
+    out
+}
+
+fn is_eq(ty: &TypeDef, all: &[TypeDef]) -> bool {
+    match ty {
+        TypeDef::Struct(s) => s.fields.iter().all(|f| ty_is_eq(&f.ty, all)),
+        TypeDef::Enum(e) => e
+            .variants
+            .iter()
+            .all(|v| v.payload.iter().all(|p| ty_is_eq(p, all))),
+    }
+}
+
+fn is_copy(ty: &TypeDef, all: &[TypeDef]) -> bool {
+    match ty {
+        TypeDef::Struct(s) => s.fields.iter().all(|f| ty_is_copy(&f.ty, all)),
+        TypeDef::Enum(e) => e.variants.iter().all(|v| v.payload.is_empty()),
+    }
+}
+
+fn is_hash(ty: &TypeDef, all: &[TypeDef]) -> bool {
+    if !is_eq(ty, all) {
+        return false;
+    }
+    match ty {
+        TypeDef::Struct(s) => s.fields.iter().all(|f| ty_is_hash(&f.ty, all)),
+        TypeDef::Enum(e) => e
+            .variants
+            .iter()
+            .all(|v| v.payload.iter().all(|p| ty_is_hash(p, all))),
+    }
+}
+
+fn ty_is_eq(ty: &TypeRef, all: &[TypeDef]) -> bool {
+    match ty {
+        TypeRef::F32 | TypeRef::F64 => false,
+        TypeRef::Vec(inner) | TypeRef::Option(inner) => ty_is_eq(inner, all),
+        TypeRef::Named(name) => resolve_named(name, all)
+            .is_some_and(|def| is_eq(&def, all))
+            || name == "NativeHandleId",
+        _ => true,
+    }
+}
+
+fn ty_is_copy(ty: &TypeRef, all: &[TypeDef]) -> bool {
+    match ty {
+        // String, Vec, Option, Bytes are never `Copy` on Rust.
+        TypeRef::String | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Option(_) => false,
+        TypeRef::Named(name) => resolve_named(name, all)
+            .is_some_and(|def| is_copy(&def, all))
+            || name == "NativeHandleId",
+        _ => true,
+    }
+}
+
+fn ty_is_hash(ty: &TypeRef, all: &[TypeDef]) -> bool {
+    match ty {
+        TypeRef::F32 | TypeRef::F64 => false,
+        TypeRef::Bytes => false, // Vec<u8> is Hash, but the caller usually treats bytes as opaque
+        TypeRef::Vec(inner) | TypeRef::Option(inner) => ty_is_hash(inner, all),
+        TypeRef::Named(name) => resolve_named(name, all)
+            .is_some_and(|def| is_hash(&def, all))
+            || name == "NativeHandleId",
+        _ => true,
+    }
+}
+
+fn resolve_named(name: &str, all: &[TypeDef]) -> Option<TypeDef> {
+    all.iter().find(|d| d.name() == name).cloned()
 }
 
 fn rust_ty(ty: &TypeRef) -> String {

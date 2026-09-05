@@ -15,79 +15,15 @@
 //! permission themselves via the [`crate::permissions`] plugin — both paths
 //! trigger the same OS prompt.
 
-use istmo_macros::{message, plugin};
+use istmo_macros::plugin;
 
 /// Wire identifier of the notifications plugin.
 pub const NOTIFICATIONS_PLUGIN_ID: &str = "istmo.notifications";
 
-/// Android notification-channel importance level. Maps to the constants on
-/// `NotificationManagerCompat.IMPORTANCE_*`. iOS ignores the value — the OS
-/// enforces interruption levels via user settings.
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NotificationImportance {
-    /// No sound, no visual interruption.
-    Min,
-    /// Silent, but visible in the shade.
-    Low,
-    /// Silent unless the channel has been elevated by the user.
-    Default,
-    /// Heads-up, sound, badge — reserved for time-sensitive events.
-    High,
-}
-
-/// Payload for [`Notifications::schedule`].
-///
-/// `delay_seconds` requests a delayed post — 0 or omitted means "now".
-/// `tag` is an optional deduplication key: subsequent posts with the same
-/// `tag` replace the previous notification instead of stacking. On Android
-/// the tag doubles as the second argument to `NotificationManager.notify`;
-/// on iOS it maps to `UNNotificationRequest.identifier`.
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NotificationRequest {
-    pub title: String,
-    pub body: String,
-    /// Android notification channel id. Ignored on iOS. The channel is
-    /// created on first use — the native side calls
-    /// `NotificationManagerCompat.createNotificationChannel` under the
-    /// covers when a fresh id shows up.
-    pub channel_id: String,
-    pub importance: NotificationImportance,
-    /// Delay in seconds before posting. `None` or `Some(0)` posts
-    /// immediately.
-    pub delay_seconds: Option<u32>,
-    /// Deduplication tag; `None` means the platform allocates a fresh id
-    /// for every post.
-    pub tag: Option<String>,
-}
-
-/// Handle to a scheduled notification, used by
-/// [`Notifications::cancel`] to dismiss it.
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NotificationHandle {
-    /// Platform id: Android `notificationId`, iOS `UNNotificationRequest`
-    /// identifier hash. Distinct namespace from
-    /// [`istmo_core::NativeHandleId`] — this id round-trips through the
-    /// wire without RAII cleanup.
-    pub id: u32,
-}
-
-/// Reasons a notification could not be posted.
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NotificationError {
-    /// The OS blocks notifications from this app.
-    PermissionDenied,
-    /// The channel id could not be created (Android policy denies it, or
-    /// the process lacks the channel-management permission on very old
-    /// OEM builds).
-    InvalidChannel(String),
-    /// Free-form scheduler failure. Reserved for platform errors the
-    /// backend cannot classify.
-    Scheduler(String),
-}
+// `NotificationImportance`, `NotificationRequest`, `NotificationHandle`
+// and `NotificationError` are generated from the canonical `Contract`
+// builder in `istmo-plugins-schema` via `build.rs`.
+include!(concat!(env!("OUT_DIR"), "/notifications_types.rs"));
 
 impl std::fmt::Display for NotificationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

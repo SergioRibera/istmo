@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use istmo_core::{IstmoError, NativeHandle, NativeHandleId, Runtime};
-use istmo_macros::{message, plugin};
+use istmo_macros::plugin;
 
 /// Wire identifier of the sign-in plugin.
 pub const GOOGLE_SIGN_IN_PLUGIN_ID: &str = "istmo.google_sign_in";
@@ -42,34 +42,10 @@ pub const GOOGLE_SIGN_IN_PLUGIN_ID: &str = "istmo.google_sign_in";
 #[derive(Debug)]
 pub enum Credential {}
 
-/// Configuration handed to the native factory on [`SignInClient::acquire_with`].
-///
-/// `server_client_id` is required; every other field has a defaulting story
-/// via [`SignInConfig::builder`]. The rationale for a small struct rather
-/// than a fully-optional configuration DSL: sign-in setup is almost always
-/// captured once at app startup, so the friction of naming every argument is
-/// well-worth the readability at the call site.
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SignInConfig {
-    /// OAuth 2.0 client id registered for the *backend* — the identifier the
-    /// id-token audience must match. Required.
-    pub server_client_id: String,
-    /// OAuth scopes to request beyond the default `openid profile email`.
-    /// Order is preserved so the platform prompt shows them in the same
-    /// sequence the caller listed.
-    pub scopes: Vec<String>,
-    /// `GSuite` domain restriction, e.g. `example.com`. `None` = no hosted
-    /// domain restriction.
-    pub hosted_domain: Option<String>,
-    /// A cryptographically random nonce the caller expects back in the
-    /// id-token's `nonce` claim. Recommended for replay-attack prevention;
-    /// see Google's docs on ID Token verification.
-    pub nonce: Option<String>,
-    /// Whether the platform is allowed to auto-select the last-used account
-    /// without user interaction (Android Credential Manager `autoSelect`).
-    pub auto_select: bool,
-}
+// `SignInMode`, `SignInConfig`, `SignInAccount`, `SignInError` are
+// generated from the canonical `Contract` builder in
+// `istmo-plugins-schema` via `build.rs`.
+include!(concat!(env!("OUT_DIR"), "/google_sign_in_types.rs"));
 
 impl SignInConfig {
     /// Fluent builder starting from a required server client id.
@@ -123,52 +99,6 @@ impl SignInConfigBuilder {
     }
 }
 
-/// UX shape requested at [`SignIn::sign_in`] time.
-///
-/// The plugin exposes a single `sign_in` method that both Android's
-/// `CredentialManager.getCredential(...)` and iOS's `ASAuthorization`
-/// implementations can service. `Interactive` shows the account picker;
-/// `SilentOnly` fails fast with [`SignInError::NoCredentialAvailable`] when
-/// no cached credential exists.
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SignInMode {
-    /// Prompt the user if no credential can be resolved silently. This is
-    /// the default for a normal sign-in button tap.
-    Interactive,
-    /// Never prompt — return `NoCredentialAvailable` if a fresh interactive
-    /// flow would be required. Used for app-startup restoration.
-    SilentOnly,
-}
-
-/// Wire-side view of a signed-in Google account.
-///
-/// `credential` is the numeric id under which the native side has parked the
-/// concrete platform credential object. Client wrappers adopt it via
-/// [`NativeHandle::adopt`] on the caller's runtime; see
-/// [`SignInClient::sign_in`].
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SignInAccount {
-    /// Google account id (the `sub` claim on the id-token).
-    pub id: String,
-    /// Email address, when the user granted the `email` scope.
-    pub email: Option<String>,
-    /// Display name, when the user granted the `profile` scope.
-    pub display_name: Option<String>,
-    /// Signed URL of the user's profile picture. `None` when the user has no
-    /// picture or the `profile` scope was denied.
-    pub photo_url: Option<String>,
-    /// Signed id-token in JWT form. The caller verifies the signature and
-    /// audience server-side; the plugin does not enforce it.
-    pub id_token: String,
-    /// Scopes actually granted, which may be a subset of the ones requested.
-    pub granted_scopes: Vec<String>,
-    /// Native handle id pointing at the platform-specific credential object.
-    /// See [`Credential`].
-    pub credential: NativeHandleId,
-}
-
 /// Rust-owned counterpart of [`SignInAccount`]: same data, but `credential`
 /// is an owned [`NativeHandle<Credential>`] that releases the native object
 /// on drop.
@@ -187,39 +117,6 @@ pub struct OwnedSignInAccount {
     pub id_token: String,
     pub granted_scopes: Vec<String>,
     pub credential: NativeHandle<Credential>,
-}
-
-/// Reasons a sign-in attempt could fail on the domain side.
-///
-/// `Backend` is the free-form escape hatch for anything the platform
-/// surfaces that we did not translate into a typed variant — should be rare
-/// once a real backend exists; kept so plugin adoption is not blocked on
-/// exhaustive taxonomy work.
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SignInError {
-    /// The user closed / cancelled the account picker (Android
-    /// `NoCredentialException` with `TYPE_USER_CANCELED`, iOS
-    /// `ASAuthorizationError.canceled`).
-    UserCancelled,
-    /// No credential was available and the request was
-    /// [`SignInMode::SilentOnly`], or Credential Manager reported no
-    /// available accounts under interactive mode.
-    NoCredentialAvailable,
-    /// Refreshing the id-token requires user interaction that
-    /// [`SignInMode::SilentOnly`] disallows.
-    Reauthenticate,
-    /// The requested configuration is invalid or missing platform setup
-    /// (wrong `server_client_id`, unsigned SHA-1 mismatch, no
-    /// GoogleService-Info.plist).
-    InvalidConfiguration(String),
-    /// Network failure (no connectivity, timeout, backend 5xx during token
-    /// exchange).
-    Network(String),
-    /// Free-form platform message. Reserved for the long tail of exceptions
-    /// the backend cannot classify — keep populating typed variants as they
-    /// stabilise.
-    Backend(String),
 }
 
 impl std::fmt::Display for SignInError {

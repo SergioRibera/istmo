@@ -28,7 +28,7 @@ bincode = { workspace = true }
 # definitions. `codegen` exposes `istmo_plugins::contract::*` builders;
 # `istmo-build` renders them into Swift source.
 [build-dependencies]
-istmo-plugins = { workspace = true, features = ["codegen"] }
+istmo-plugins-schema = { workspace = true }
 istmo-build = { workspace = true }
 
 # The demo picks eframe + wgpu as its UI stack; istmo itself is

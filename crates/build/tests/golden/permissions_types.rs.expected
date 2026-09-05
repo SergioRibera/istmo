@@ -2,7 +2,7 @@
 // plugin id: istmo.permissions
 
 #[::istmo_macros::message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum PermissionStatus {
     Granted,
     Denied,
@@ -12,7 +12,7 @@ pub enum PermissionStatus {
 }
 
 #[::istmo_macros::message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PermissionOutcome {
     pub permission: String,
     pub status: PermissionStatus,

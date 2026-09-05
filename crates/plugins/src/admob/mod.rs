@@ -40,7 +40,7 @@ pub mod slot;
 use std::sync::Arc;
 
 use istmo_core::{IstmoError, NativeHandle, NativeHandleId, Runtime};
-use istmo_macros::{message, plugin};
+use istmo_macros::plugin;
 
 /// Wire identifier of the `AdMob` plugin.
 pub const ADMOB_PLUGIN_ID: &str = "istmo.admob";
@@ -60,99 +60,10 @@ pub enum Rewarded {}
 #[derive(Debug)]
 pub enum Banner {}
 
-/// Configuration handed to the native factory on
-/// [`AdMobClient::acquire_with`].
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdMobConfig {
-    /// `AdMob` application id (`ca-app-pub-XXXX~YYYY`). Real apps embed
-    /// their production id; test builds should use Google's canonical
-    /// test app id `ca-app-pub-3940256099942544~3347511713` on Android.
-    pub app_id: String,
-    /// AAID / IDFA values Google recognises as test devices — required
-    /// for deterministic test-ad delivery in Debug builds. Production
-    /// builds should ship this empty.
-    pub test_device_ids: Vec<String>,
-    /// When `true` the SDK is initialised with
-    /// `MobileAds.setRequestConfiguration(setTagForChildDirectedTreatment(TRUE))`.
-    /// Set from the caller's own age-gate flow; the plugin does not
-    /// enforce a default.
-    pub child_directed_treatment: bool,
-}
-
-/// Rectangle (in physical pixels, top-left origin) for a banner overlay.
-///
-/// The banner is docked over the Rust-driven UI window; Rust picks the
-/// coordinates. On Android the plugin uses `ViewGroup.addView` on the
-/// activity's content root, so the same coordinate system egui uses for
-/// its own layout applies directly.
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BannerRect {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
-}
-
-/// Request payload for [`AdMob::show_banner`].
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BannerRequest {
-    /// Banner ad unit id (`ca-app-pub-XXXX/YYYY`). Google's canonical
-    /// test banner id is `ca-app-pub-3940256099942544/6300978111`.
-    pub ad_unit_id: String,
-    pub rect: BannerRect,
-}
-
-/// Terminal outcome of [`AdMob::show_interstitial`].
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InterstitialOutcome {
-    /// User closed the ad after viewing.
-    Dismissed,
-    /// Platform failed to present the ad (SDK not initialised, ad
-    /// expired, video codec missing, ...).
-    FailedToShow,
-}
-
-/// Terminal outcome of [`AdMob::show_rewarded`].
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RewardedOutcome {
-    /// `true` when the SDK reported the reward event before the ad was
-    /// dismissed; `false` when the user closed early or the SDK never
-    /// fired the reward.
-    pub granted: bool,
-    /// Reward `type` string configured on the ad unit in `AdMob`
-    /// (`coins`, `lives`, ...).
-    pub reward_type: String,
-    /// Reward amount configured on the ad unit.
-    pub reward_amount: u32,
-}
-
-/// Domain errors returned by the `AdMob` plugin. Transport-level failures
-/// still land as [`IstmoError`] variants.
-#[message(bincode = "::bincode")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AdError {
-    /// Mobile Ads SDK was never initialised, or the app id in the
-    /// config was rejected.
-    NotInitialized,
-    /// Ad request completed but the network returned no fill.
-    NoFill,
-    /// The load / show call failed with a network error.
-    Network(String),
-    /// The request was malformed (invalid ad unit id, missing manifest
-    /// entry, ...).
-    InvalidRequest(String),
-    /// Unknown handle id (already released, already shown once,
-    /// consumed by another call).
-    UnknownAd,
-    /// Free-form platform error. Reserved for the long tail of
-    /// exceptions the backend cannot classify.
-    Internal(String),
-}
+// `AdMobConfig`, `BannerRect`, `BannerRequest`, `InterstitialOutcome`,
+// `RewardedOutcome`, `AdError` are generated from the canonical
+// `Contract` builder in `istmo-plugins-schema` via `build.rs`.
+include!(concat!(env!("OUT_DIR"), "/admob_types.rs"));
 
 impl std::fmt::Display for AdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

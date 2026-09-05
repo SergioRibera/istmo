@@ -30,7 +30,7 @@ use istmo_build::{
     Contract, generate_kotlin_codecs, generate_kotlin_host, generate_kotlin_types,
     generate_swift_codecs, generate_swift_host, generate_swift_types,
 };
-use istmo_plugins::contract as plugin_contract;
+use istmo_plugins_schema as plugin_contract;
 
 fn main() {
     // Anchor everything at the demo's own directory. `CARGO_MANIFEST_DIR`

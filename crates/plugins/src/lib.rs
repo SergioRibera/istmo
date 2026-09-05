@@ -21,8 +21,6 @@
 
 pub mod activity_results;
 pub mod admob;
-#[cfg(feature = "codegen")]
-pub mod contract;
 pub mod deeplinks;
 pub mod google_sign_in;
 pub mod lifecycle;
