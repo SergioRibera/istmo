@@ -26,6 +26,12 @@
 //!
 //! [`LatestValueSlot`]: istmo_core::early_events::LatestValueSlot
 
+#[cfg(feature = "winit-publisher")]
+pub mod publisher;
+
+#[cfg(feature = "winit-publisher")]
+pub use publisher::SafeAreaPublisher;
+
 use std::sync::Arc;
 
 use flume::Receiver;
