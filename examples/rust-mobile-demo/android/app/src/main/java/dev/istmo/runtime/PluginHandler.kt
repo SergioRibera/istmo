@@ -38,15 +38,16 @@ class PluginException(val payload: ByteArray) : RuntimeException()
  * Codegen-friendly exception the generated dispatchers catch.
  *
  * Backends throw `BackendException(typedError)` to surface a domain
- * error; the dispatcher catches, encodes the typed value via the plugin's
- * `<T>Codecs.write<Error>` helper, and rethrows as a [PluginException]
- * carrying the encoded bytes.
+ * error; the dispatcher catches, safe-casts `error` to the plugin's
+ * concrete error type, encodes via `<T>Codecs.write<Error>` and rethrows
+ * as a [PluginException] carrying the encoded bytes.
  *
- * Cleaner than making every backend hand-encode + throw `PluginException`
- * directly — the encode step lives in the codec impl, not scattered
- * across the backend.
+ * The class is *not* generic — Kotlin/JVM forbids type parameters on
+ * `Throwable` subclasses because exception dispatch happens through
+ * the type-erased JVM class hierarchy. `error` is `Any`; the
+ * dispatcher's safe cast handles the wrong-type case with a rethrow.
  */
-class BackendException<E : Any>(val error: E) : RuntimeException()
+class BackendException(val error: Any) : RuntimeException()
 
 /**
  * Marker interface a [PluginHandler] implements when it owns native

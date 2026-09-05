@@ -7,25 +7,25 @@ import java.io.ByteArrayOutputStream
 /// impl with the SDK-specific logic; the dispatcher below handles
 /// wire encode/decode.
 interface AdMobBackend {
-     // Throw BackendException<AdError> for domain errors.
+     // Throw BackendException(AdError) for domain errors.
     suspend fun load_interstitial(ad_unit_id: String): NativeHandleId
 
-     // Throw BackendException<AdError> for domain errors.
+     // Throw BackendException(AdError) for domain errors.
     suspend fun show_interstitial(ad: NativeHandleId): InterstitialOutcome
 
-     // Throw BackendException<AdError> for domain errors.
+     // Throw BackendException(AdError) for domain errors.
     suspend fun load_rewarded(ad_unit_id: String): NativeHandleId
 
-     // Throw BackendException<AdError> for domain errors.
+     // Throw BackendException(AdError) for domain errors.
     suspend fun show_rewarded(ad: NativeHandleId): RewardedOutcome
 
-     // Throw BackendException<AdError> for domain errors.
+     // Throw BackendException(AdError) for domain errors.
     suspend fun show_banner(request: BannerRequest): NativeHandleId
 
-     // Throw BackendException<AdError> for domain errors.
+     // Throw BackendException(AdError) for domain errors.
     suspend fun update_banner(banner: NativeHandleId, rect: BannerRect): Unit
 
-     // Throw BackendException<AdError> for domain errors.
+     // Throw BackendException(AdError) for domain errors.
     suspend fun hide_banner(banner: NativeHandleId): Unit
 }
 
@@ -104,7 +104,7 @@ class AdMobDispatcher(
                     val out = ByteArrayOutputStream()
                     codecs.writeNativeHandleId(out, result)
                     out.toByteArray()
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
@@ -120,7 +120,7 @@ class AdMobDispatcher(
                     val out = ByteArrayOutputStream()
                     codecs.writeInterstitialOutcome(out, result)
                     out.toByteArray()
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
@@ -136,7 +136,7 @@ class AdMobDispatcher(
                     val out = ByteArrayOutputStream()
                     codecs.writeNativeHandleId(out, result)
                     out.toByteArray()
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
@@ -152,7 +152,7 @@ class AdMobDispatcher(
                     val out = ByteArrayOutputStream()
                     codecs.writeRewardedOutcome(out, result)
                     out.toByteArray()
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
@@ -168,7 +168,7 @@ class AdMobDispatcher(
                     val out = ByteArrayOutputStream()
                     codecs.writeNativeHandleId(out, result)
                     out.toByteArray()
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
@@ -184,7 +184,7 @@ class AdMobDispatcher(
                     val rect = d_rect.value
                     backend.update_banner(banner, rect)
                     ByteArray(0)
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)
@@ -198,7 +198,7 @@ class AdMobDispatcher(
                     val banner = d_banner.value
                     backend.hide_banner(banner)
                     ByteArray(0)
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeAdError(errOut, err)

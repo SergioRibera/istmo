@@ -7,19 +7,19 @@ import java.io.ByteArrayOutputStream
 /// impl with the SDK-specific logic; the dispatcher below handles
 /// wire encode/decode.
 interface SignInBackend {
-     // Throw BackendException<SignInError> for domain errors.
+     // Throw BackendException(SignInError) for domain errors.
     suspend fun sign_in(mode: SignInMode): SignInAccount
 
-     // Throw BackendException<SignInError> for domain errors.
+     // Throw BackendException(SignInError) for domain errors.
     suspend fun silent_sign_in(): SignInAccount?
 
-     // Throw BackendException<SignInError> for domain errors.
+     // Throw BackendException(SignInError) for domain errors.
     suspend fun refresh(credential: NativeHandleId): SignInAccount
 
-     // Throw BackendException<SignInError> for domain errors.
+     // Throw BackendException(SignInError) for domain errors.
     suspend fun sign_out(): Unit
 
-     // Throw BackendException<SignInError> for domain errors.
+     // Throw BackendException(SignInError) for domain errors.
     suspend fun revoke(): Unit
 }
 
@@ -92,7 +92,7 @@ class SignInDispatcher(
                     val out = ByteArrayOutputStream()
                     codecs.writeSignInAccount(out, result)
                     out.toByteArray()
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeSignInError(errOut, err)
@@ -105,7 +105,7 @@ class SignInDispatcher(
                     val out = ByteArrayOutputStream()
                     Bincode.writeOption(out, result) { s, v -> codecs.writeSignInAccount(s, v) }
                     out.toByteArray()
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeSignInError(errOut, err)
@@ -121,7 +121,7 @@ class SignInDispatcher(
                     val out = ByteArrayOutputStream()
                     codecs.writeSignInAccount(out, result)
                     out.toByteArray()
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeSignInError(errOut, err)
@@ -132,7 +132,7 @@ class SignInDispatcher(
                 try {
                     backend.sign_out()
                     ByteArray(0)
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeSignInError(errOut, err)
@@ -143,7 +143,7 @@ class SignInDispatcher(
                 try {
                     backend.revoke()
                     ByteArray(0)
-                } catch (e: BackendException<*>) {
+                } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
                     codecs.writeSignInError(errOut, err)

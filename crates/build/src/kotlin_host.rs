@@ -79,7 +79,7 @@ fn write_backend_method(out: &mut String, method: &Method) {
         .as_ref()
         .map(|e| {
             format!(
-                "  // Throw BackendException<{}> for domain errors.",
+                "  // Throw BackendException({}) for domain errors.",
                 e.to_kotlin()
             )
         })
@@ -115,7 +115,7 @@ fn format_backend_args(method: &Method) -> String {
 }
 
 fn write_codecs_interface(out: &mut String, contract: &Contract) {
-    let types = collect_named_types(contract);
+    let types = collect_codec_types(contract);
     let _ = writeln!(
         out,
         "/// Reader / writer per `Named` type referenced by the `{}` contract.",
@@ -145,6 +145,24 @@ fn write_codecs_interface(out: &mut String, contract: &Contract) {
         }
     }
     let _ = writeln!(out, "}}");
+}
+
+/// Every named type the codec impl must be prepared to read / write.
+///
+/// Includes:
+/// * Named types referenced directly by method signatures (args,
+///   returns, error, init) — [`collect_named_types`].
+/// * Every type declared in [`Contract::types`] — the type + codec
+///   generators emit read/write pairs for these regardless of whether
+///   they appear in a signature (nested struct fields, enum payloads).
+///
+/// Deduplicated + sorted for deterministic output.
+fn collect_codec_types(contract: &Contract) -> Vec<String> {
+    let mut set: BTreeSet<String> = collect_named_types(contract).into_iter().collect();
+    for def in &contract.types {
+        set.insert(def.name().to_owned());
+    }
+    set.into_iter().collect()
 }
 
 /// Returns every unique `Named` type name referenced by the contract's
@@ -362,10 +380,11 @@ fn write_method_arm(out: &mut String, method: &Method) {
     }
     if has_error {
         let err_ty = method.error.as_ref().unwrap().to_kotlin();
-        let _ = writeln!(out, "                }} catch (e: BackendException<*>) {{");
-        // Safe cast rather than `as` — if the backend accidentally
-        // threw a `BackendException<WrongType>`, rethrow so the higher
-        // frames see the mismatch instead of a `ClassCastException`.
+        let _ = writeln!(out, "                }} catch (e: BackendException) {{");
+        // Safe cast — if the backend accidentally threw a
+        // `BackendException` with a wrong-type payload, rethrow so
+        // higher frames see the mismatch instead of a
+        // `ClassCastException`.
         let _ = writeln!(
             out,
             "                    val err = e.error as? {err_ty} ?: throw e",

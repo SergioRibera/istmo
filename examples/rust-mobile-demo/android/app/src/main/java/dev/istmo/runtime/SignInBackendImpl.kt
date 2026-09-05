@@ -66,7 +66,7 @@ class SignInBackendImpl(private val activity: Activity, private val config: Sign
     override suspend fun silent_sign_in(): SignInAccount? {
         return try {
             silentSignIn()
-        } catch (e: BackendException<*>) {
+        } catch (e: BackendException) {
             if (e.error === SignInError.NoCredentialAvailable) null else throw e
         }
     }

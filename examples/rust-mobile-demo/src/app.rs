@@ -71,8 +71,11 @@ pub fn main() {
     );
     log::info!("rust-mobile-demo entry point running");
 
+    // eframe 0.29 expects a `Box<dyn FnOnce(&mut EventLoopBuilder<UserEvent>)>`
+    // — no `Send` bound. Match its shape exactly or the compile fails
+    // with `expected trait FnOnce(...), found FnOnce(...) + Send`.
     #[cfg(target_os = "android")]
-    let event_loop_builder: Option<Box<dyn FnOnce(&mut winit::event_loop::EventLoopBuilder<_>) + Send>> = {
+    let event_loop_builder: Option<Box<dyn FnOnce(&mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>)>> = {
         let app = istmo::android::android_app()
             .expect("android_main should have stashed the AndroidApp handle before entering main");
         Some(Box::new(move |builder| {
@@ -81,7 +84,8 @@ pub fn main() {
         }))
     };
     #[cfg(not(target_os = "android"))]
-    let event_loop_builder = None;
+    let event_loop_builder: Option<Box<dyn FnOnce(&mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>)>> =
+        None;
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,

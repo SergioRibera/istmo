@@ -82,7 +82,7 @@ class AdMobBackendImpl(private val activity: Activity) : AdMobBackend, HandleRel
                     )
                 }
             }
-        } catch (e: BackendException<*>) {
+        } catch (e: BackendException) {
             throw e
         }
         val handleId = IstmoRuntime.allocHandleId(AdMobDispatcher.PLUGIN_ID)

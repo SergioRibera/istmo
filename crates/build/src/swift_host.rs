@@ -109,7 +109,7 @@ fn swift_return(ty: &TypeRef) -> String {
 }
 
 fn write_codecs_protocol(out: &mut String, contract: &Contract) {
-    let types = collect_named_types(contract);
+    let types = collect_codec_types(contract);
     let _ = writeln!(
         out,
         "/// Reader / writer per `Named` type referenced by the `{}` contract.",
@@ -130,6 +130,15 @@ fn write_codecs_protocol(out: &mut String, contract: &Contract) {
         }
     }
     let _ = writeln!(out, "}}");
+}
+
+/// See kotlin_host::collect_codec_types — same logic.
+fn collect_codec_types(contract: &Contract) -> Vec<String> {
+    let mut set: BTreeSet<String> = collect_named_types(contract).into_iter().collect();
+    for def in &contract.types {
+        set.insert(def.name().to_owned());
+    }
+    set.into_iter().collect()
 }
 
 fn collect_named_types(contract: &Contract) -> Vec<String> {
