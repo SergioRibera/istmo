@@ -116,18 +116,22 @@ mod android {
     //!
     //! Flow per tick:
     //!
-    //! 1. `ndk_context::android_context()` — set by `android-activity`
-    //!    at process start — yields the `JavaVM` and current activity
-    //!    `jobject`.
-    //! 2. Attach the current thread as a JNI daemon.
-    //! 3. Read `activity.getWindow().getDecorView().getRootWindowInsets()`.
-    //! 4. Extract the three inset groups (`systemBars()`, `ime()`,
-    //!    `displayCutout()`) via `WindowInsetsCompat.toWindowInsetsCompat(...)`.
+    //! 1. `istmo_android::android_app()` — set by `#[istmo::mobile_app]`
+    //!    at process start — yields the `AndroidApp` handle.
+    //! 2. `AndroidApp::vm_as_ptr()` gives the `JavaVM`.
+    //!    `istmo_android::android_activity_object()` reads the Activity
+    //!    `jobject` out of the `ANativeActivity` struct.
+    //! 3. Attach the current thread as a JNI daemon.
+    //! 4. `activity.getWindow().getDecorView().getRootWindowInsets()` →
+    //!    `WindowInsetsCompat.toWindowInsetsCompat(...)` → typed accessors.
     //! 5. Divide by `displayMetrics.density` so the returned values are
     //!    in logical dp — same shape the Kotlin publisher shipped.
     //!
     //! Returns `None` on any JNI failure — the caller keeps the last
-    //! published snapshot rather than crashing.
+    //! published snapshot rather than crashing. `ndk-context` intentionally
+    //! **not** used here: `android-activity` sets its stored context to
+    //! the process `Application`, so calling `getWindow()` on it throws
+    //! `java.lang.NoSuchMethodError`.
     //!
     //! `WindowInsetsCompat` requires `androidx.core:core` on the app's
     //! Gradle classpath. Every istmo demo already pulls it in.
@@ -139,13 +143,18 @@ mod android {
     use super::{EdgeInsets, SafeAreaInsets};
 
     pub(super) fn read_window_insets() -> Option<SafeAreaInsets> {
-        let ctx = ndk_context::android_context();
-        // SAFETY: `ndk_context::android_context()` returns valid
-        // pointers once `android-activity` has run, which is before any
-        // istmo plugin call can fire.
-        let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.ok()?;
-        let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let app = istmo_android::android_app()?;
+        let activity_obj = istmo_android::android_activity_object()?;
+        let vm_ptr = app.vm_as_ptr();
+        if vm_ptr.is_null() {
+            return None;
+        }
+        // SAFETY: `AndroidApp` keeps the `JavaVM` + Activity alive for
+        // the process lifetime; `vm_as_ptr()` is the raw pointer the
+        // JNI runtime handed the NDK glue and stays valid.
+        let vm = unsafe { JavaVM::from_raw(vm_ptr.cast()) }.ok()?;
         let mut env = vm.attach_current_thread_as_daemon().ok()?;
+        let activity = unsafe { JObject::from_raw(activity_obj.cast()) };
 
         let density = display_density(&mut env, &activity)?;
         let decor = decor_view(&mut env, &activity)?;

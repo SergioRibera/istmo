@@ -32,7 +32,7 @@ mod state;
 #[cfg(target_os = "android")]
 pub use android_activity;
 #[cfg(target_os = "android")]
-pub use app::{android_app, set_android_app};
+pub use app::{android_activity_object, android_app, set_android_app};
 pub use error::AndroidRuntimeError;
 
 // Trampolines are declared with `#[unsafe(no_mangle)]` in [`jni_exports`]
