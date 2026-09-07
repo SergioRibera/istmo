@@ -9,6 +9,7 @@
 //! together with the Android and iOS bindings in later milestones.
 
 pub mod contract;
+pub mod desktop;
 pub mod entitlements;
 pub mod ios;
 pub mod kotlin;
@@ -24,6 +25,11 @@ pub mod worker;
 
 pub use crate::contract::{
     Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
+};
+pub use crate::desktop::{
+    DesktopAppContract, DesktopServiceContract, RestartPolicy, ServiceScope, StartType,
+    WindowsServiceArtifacts, generate_desktop_entry, generate_launchd_plist, generate_systemd_unit,
+    generate_windows_service,
 };
 pub use crate::entitlements::{EntitlementValue, IosEntitlements};
 pub use crate::ios::{
