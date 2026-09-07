@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use flume::{Receiver, Sender, bounded};
-use istmo_core::{IstmoError, Runtime, codec};
+use istmo_core::{CancelToken, IstmoError, Runtime, codec};
 use istmo_macros::{message, plugin};
 
 /// Wire identifier of the service-control plugin.
@@ -167,19 +167,36 @@ pub struct ServiceContext {
     service_id: String,
     stop_rx: Receiver<()>,
     stopped_flag: AtomicBool,
+    cancel: CancelToken,
 }
 
 impl ServiceContext {
     /// Construct a context. Intended for the codegen layer and tests; user
     /// code receives ready-made contexts via `on_start`.
     #[must_use]
-    pub const fn new(runtime: Arc<Runtime>, service_id: String, stop_rx: Receiver<()>) -> Self {
+    pub const fn new(
+        runtime: Arc<Runtime>,
+        service_id: String,
+        stop_rx: Receiver<()>,
+        cancel: CancelToken,
+    ) -> Self {
         Self {
             runtime,
             service_id,
             stop_rx,
             stopped_flag: AtomicBool::new(false),
+            cancel,
         }
+    }
+
+    /// Cooperative cancellation token tied to the `on_start` dispatch call.
+    /// Trips when the runtime receives an inbound
+    /// [`istmo_core::Frame::Cancel`] for the service's start call; see
+    /// [`Self::is_stopped`] / [`Self::stopped`] for the merged view against
+    /// the platform stop channel.
+    #[must_use]
+    pub const fn cancel_token(&self) -> &CancelToken {
+        &self.cancel
     }
 
     /// The service identifier this context was created for.
@@ -250,23 +267,28 @@ impl ServiceContext {
     }
 
     /// Await the platform's stop signal. Resolves once the adapter observes
-    /// an on-stop call from the platform, or when the notifier is dropped
-    /// (which also indicates teardown). Subsequent calls resolve immediately.
+    /// an on-stop call from the platform, when the notifier is dropped
+    /// (which also indicates teardown), or when the cancellation token trips.
+    /// Subsequent calls resolve immediately.
     pub async fn stopped(&self) {
-        if self.stopped_flag.load(Ordering::Acquire) {
+        if self.is_stopped() {
             return;
         }
         let _ = self.stop_rx.recv_async().await;
         self.stopped_flag.store(true, Ordering::Release);
     }
 
-    /// Non-blocking probe: `true` once the platform has signalled stop.
+    /// Non-blocking probe: `true` once the platform has signalled stop or the
+    /// cancellation token has been tripped.
     #[must_use]
     pub fn is_stopped(&self) -> bool {
         if self.stopped_flag.load(Ordering::Acquire) {
             return true;
         }
-        if self.stop_rx.is_disconnected() || !self.stop_rx.is_empty() {
+        if self.cancel.is_cancelled()
+            || self.stop_rx.is_disconnected()
+            || !self.stop_rx.is_empty()
+        {
             self.stopped_flag.store(true, Ordering::Release);
             return true;
         }

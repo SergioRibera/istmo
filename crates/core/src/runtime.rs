@@ -25,7 +25,7 @@ use std::task::{Context, Poll};
 
 use flume::{Receiver as FlumeReceiver, Sender as FlumeSender, bounded};
 
-use crate::dispatch::{Dispatch, Outcome, Plugin};
+use crate::dispatch::{CancelToken, Dispatch, Outcome, Plugin};
 use crate::early_events::EarlyEventStore;
 use crate::error::IstmoError;
 use crate::main_thread::{InlineMainThread, MainThread};
@@ -126,11 +126,15 @@ pub struct Runtime {
     /// Server-side dispatchers keyed by plugin id — populated by
     /// [`Self::register_host`].
     hosts: Mutex<HashMap<&'static str, Arc<dyn Dispatch>>>,
-    /// Set of hosted call ids that have been cancelled by an inbound Cancel
-    /// frame. The dispatcher thread checks this before submitting its
-    /// Respond frame so the response is dropped rather than raced with a
-    /// stale reply.
-    cancelled_hosted: Mutex<HashSet<CallId>>,
+    /// In-flight hosted calls keyed by call id, mapping to their cooperative
+    /// [`CancelToken`]. Populated by [`Self::dispatch_hosted_call`] before it
+    /// spawns the worker thread; [`Self::cancel_hosted`] either trips an
+    /// existing token or inserts a pre-cancelled one so an inbound
+    /// [`Frame::Cancel`] that races the dispatch entry is not lost.
+    /// The dispatcher thread also consults the token's flag before submitting
+    /// its Respond frame so a cancelled response is dropped rather than raced
+    /// with a stale reply.
+    cancelled_hosted: Mutex<HashMap<CallId, CancelToken>>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -442,7 +446,11 @@ impl Runtime {
     }
 
     fn cancel_hosted(&self, call_id: CallId) {
-        lock(&self.cancelled_hosted).insert(call_id);
+        let token = lock(&self.cancelled_hosted)
+            .entry(call_id)
+            .or_default()
+            .clone();
+        token.cancel();
     }
 
     fn dispatch_hosted_call(
@@ -464,17 +472,25 @@ impl Runtime {
             );
             return;
         };
+        let cancel = lock(&self.cancelled_hosted)
+            .entry(call_id)
+            .or_default()
+            .clone();
         let runtime = Arc::clone(self);
         std::thread::spawn(move || {
             let outcome = pollster::block_on(async {
-                dispatcher.dispatch(instance_id, &method, &payload).await
+                dispatcher
+                    .dispatch(instance_id, &method, &payload, cancel)
+                    .await
             });
-            let mut cancelled = lock(&runtime.cancelled_hosted);
-            if cancelled.remove(&call_id) {
+            let cancelled = {
+                let mut map = lock(&runtime.cancelled_hosted);
+                map.remove(&call_id).is_some_and(|t| t.is_cancelled())
+            };
+            if cancelled {
                 tracing::debug!(?call_id, "hosted call cancelled; discarding response");
                 return;
             }
-            drop(cancelled);
             let result: CallResult = match outcome {
                 Ok(Outcome::Ok(bytes)) => Ok(bytes),
                 Ok(Outcome::DomainError(bytes)) => Err(bytes),
@@ -556,7 +572,7 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         declared_plugins: Mutex::new(HashSet::new()),
         enforce_declarations: std::sync::atomic::AtomicBool::new(false),
         hosts: Mutex::new(HashMap::new()),
-        cancelled_hosted: Mutex::new(HashSet::new()),
+        cancelled_hosted: Mutex::new(HashMap::new()),
     });
     RuntimeInit {
         runtime,

@@ -18,11 +18,88 @@
 use core::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::Weak;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::CodecError;
 use crate::protocol::InstanceId;
 use crate::runtime::Runtime;
+use crate::sync::lock;
+
+/// Cooperative cancellation token handed to a hosted dispatcher on every
+/// [`Dispatch::dispatch`] invocation.
+///
+/// The runtime trips the token when it observes an inbound
+/// [`crate::protocol::Frame::Cancel`] for the call. Impls either poll
+/// [`Self::is_cancelled`] between logical steps or `await` [`Self::cancelled`]
+/// alongside their real work and bail early — the response is discarded
+/// whether they observe the token or not, so cooperative checking is a
+/// latency / resource optimisation, not a correctness requirement.
+///
+/// The token also carries an async wake path (internally backed by a flume
+/// channel whose sender is dropped on cancel) so adapters can bridge cancel
+/// signals into other primitives without polling in a hot loop.
+#[derive(Clone, Debug)]
+pub struct CancelToken {
+    inner: Arc<CancelInner>,
+}
+
+#[derive(Debug)]
+struct CancelInner {
+    flag: AtomicBool,
+    /// Present until [`CancelToken::cancel`] runs, then taken and dropped so
+    /// every clone of `rx` disconnects and wakes.
+    tx: Mutex<Option<flume::Sender<()>>>,
+    rx: flume::Receiver<()>,
+}
+
+impl Default for CancelToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CancelToken {
+    /// Construct a fresh, not-yet-cancelled token.
+    #[must_use]
+    pub fn new() -> Self {
+        let (tx, rx) = flume::bounded(1);
+        Self {
+            inner: Arc::new(CancelInner {
+                flag: AtomicBool::new(false),
+                tx: Mutex::new(Some(tx)),
+                rx,
+            }),
+        }
+    }
+
+    /// `true` once the runtime has observed the corresponding
+    /// [`crate::protocol::Frame::Cancel`].
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.inner.flag.load(Ordering::Acquire)
+    }
+
+    /// Trip the token. Public so adapters that layer another cancellation
+    /// primitive on top can propagate the signal. Idempotent — subsequent
+    /// calls are no-ops.
+    pub fn cancel(&self) {
+        self.inner.flag.store(true, Ordering::Release);
+        drop(lock(&self.inner.tx).take());
+    }
+
+    /// Async wait for cancellation. Resolves immediately if the token is
+    /// already tripped; otherwise resolves the first time [`Self::cancel`]
+    /// runs (which drops the internal sender and disconnects the receiver).
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        let _ = self.inner.rx.recv_async().await;
+    }
+}
 
 /// Terminal outcome of a single hosted method call.
 ///
@@ -105,13 +182,21 @@ pub trait Dispatch: Send + Sync + 'static {
     }
 
     /// Handle a single Call frame. The runtime provides the instance id
-    /// (`None` for stateless plugins), the method name and the argument
-    /// payload bytes; the dispatcher decodes the arguments, invokes the
+    /// (`None` for stateless plugins), the method name, the argument payload
+    /// bytes and a [`CancelToken`] the caller can poll for cooperative
+    /// cancellation; the dispatcher decodes the arguments, invokes the
     /// concrete impl and returns an [`Outcome`].
+    ///
+    /// `cancel` trips when the runtime observes an inbound
+    /// [`crate::protocol::Frame::Cancel`] for this call. Impls that hold long
+    /// futures should poll [`CancelToken::is_cancelled`] between logical steps
+    /// and short-circuit; the runtime discards the response either way, so
+    /// checking is an optimisation.
     fn dispatch<'a>(
         &'a self,
         instance_id: Option<InstanceId>,
         method: &'a str,
         payload: &'a [u8],
+        cancel: CancelToken,
     ) -> DispatchFuture<'a>;
 }

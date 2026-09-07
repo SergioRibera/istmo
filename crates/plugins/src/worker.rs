@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use istmo_core::Runtime;
+use istmo_core::{CancelToken, Runtime};
 use istmo_macros::message;
 
 /// Network requirement expressed at schedule time.
@@ -71,6 +71,7 @@ pub struct WorkerContext {
     task_id: String,
     unique_name: String,
     input: Vec<u8>,
+    cancel: CancelToken,
 }
 
 impl WorkerContext {
@@ -81,13 +82,32 @@ impl WorkerContext {
         task_id: String,
         unique_name: String,
         input: Vec<u8>,
+        cancel: CancelToken,
     ) -> Self {
         Self {
             runtime,
             task_id,
             unique_name,
             input,
+            cancel,
         }
+    }
+
+    /// Cooperative cancellation token for this run. Trips when the platform
+    /// side (`WorkManager` `stop()` on Android, `BGTask.expirationHandler` on
+    /// iOS) issues a `Frame::Cancel` for the `run` call. Impls should poll
+    /// [`CancelToken::is_cancelled`] between logical steps and return
+    /// [`TaskOutcome::Retry`] (or similar) to yield the slot cleanly.
+    #[must_use]
+    pub const fn cancel_token(&self) -> &CancelToken {
+        &self.cancel
+    }
+
+    /// Non-blocking probe on the cancellation token — equivalent to
+    /// `self.cancel_token().is_cancelled()`.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
     }
 
     /// Wire task id (matches the annotated trait's `name`).

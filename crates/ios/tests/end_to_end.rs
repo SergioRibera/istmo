@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use bincode::config::Configuration;
 use istmo_core::{
-    Dispatch, DispatchError, DispatchFuture, InstanceId, Outcome, Plugin, RuntimeInit,
+    CancelToken, Dispatch, DispatchError, DispatchFuture, InstanceId, Outcome, Plugin, RuntimeInit,
 };
 use istmo_ios::{
     IstmoIosCallbacks, istmo_ios_shutdown, istmo_ios_start, istmo_ios_submit_call,
@@ -45,6 +45,7 @@ impl Dispatch for EchoHost {
         _instance_id: Option<InstanceId>,
         method: &'a str,
         payload: &'a [u8],
+        _cancel: CancelToken,
     ) -> DispatchFuture<'a> {
         Box::pin(async move {
             match method {

@@ -19,7 +19,9 @@ pub mod routing;
 pub mod runtime;
 pub mod typed_stream;
 
-pub use crate::dispatch::{Dispatch, DispatchError, DispatchFuture, Outcome, Plugin};
+pub use crate::dispatch::{
+    CancelToken, Dispatch, DispatchError, DispatchFuture, Outcome, Plugin,
+};
 pub use crate::error::{CodecError, IstmoError};
 pub use crate::main_thread::{InlineMainThread, MainThread, MockMainThread, Task};
 pub use crate::message::Message;

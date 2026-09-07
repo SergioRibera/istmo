@@ -80,6 +80,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         #[doc(hidden)]
         struct #state_ident {
             notifier: #plugins::StopNotifier,
+            cancel: #core::CancelToken,
             thread: ::core::option::Option<::std::thread::JoinHandle<()>>,
         }
 
@@ -138,6 +139,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                 _instance_id: ::core::option::Option<#core::InstanceId>,
                 method: &'__istmo_a str,
                 payload: &'__istmo_a [u8],
+                cancel: #core::CancelToken,
             ) -> #core::DispatchFuture<'__istmo_a> {
                 ::std::boxed::Box::pin(async move {
                     match method {
@@ -156,7 +158,17 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                                 runtime,
                                 service_id.clone(),
                                 stop_rx,
+                                cancel.clone(),
                             );
+                            // Bridge Frame::Cancel → stop notifier so a
+                            // running service impl that is `.await`ing
+                            // `ctx.stopped()` wakes without polling.
+                            let notifier_for_watch = notifier.clone();
+                            let cancel_for_watch = cancel.clone();
+                            ::std::thread::spawn(move || {
+                                #core::__private::block_on(cancel_for_watch.cancelled());
+                                notifier_for_watch.signal();
+                            });
                             let inner = ::std::sync::Arc::clone(&self.__inner);
                             let service_id_for_thread = service_id.clone();
                             let handle = ::std::thread::spawn(move || {
@@ -166,12 +178,16 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                                 let mut guard = self.__state.lock().unwrap_or_else(|p| p.into_inner());
                                 if let ::core::option::Option::Some(mut prev) = guard.take() {
                                     prev.notifier.signal();
+                                    // Wake any lingering bridge thread from
+                                    // the previous invocation.
+                                    prev.cancel.cancel();
                                     if let ::core::option::Option::Some(h) = prev.thread.take() {
                                         let _ = h.join();
                                     }
                                 }
                                 *guard = ::core::option::Option::Some(#state_ident {
                                     notifier,
+                                    cancel: cancel.clone(),
                                     thread: ::core::option::Option::Some(handle),
                                 });
                             }
@@ -188,6 +204,9 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                             };
                             if let ::core::option::Option::Some(mut state) = state {
                                 state.notifier.signal();
+                                // Also trip the cancel token so the bridge
+                                // thread wakes up and exits.
+                                state.cancel.cancel();
                                 if let ::core::option::Option::Some(h) = state.thread.take() {
                                     let _ = h.join();
                                 }

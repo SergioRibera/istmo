@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use istmo_core::Runtime;
+use istmo_core::{CancelToken, Runtime};
 use istmo_plugins::{
     NotificationSpec, ServiceContext, ServiceControl, ServiceControlError, ServiceControlHost,
     WakelockToken, stop_channel,
@@ -124,7 +124,7 @@ fn runtime_with_mock() -> (Arc<Runtime>, MockControl) {
 fn set_foreground_reaches_host() {
     let (rt, mock) = runtime_with_mock();
     let (_notifier, stop_rx) = stop_channel();
-    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx);
+    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx, CancelToken::new());
 
     pollster::block_on(ctx.set_foreground(spec())).unwrap();
 
@@ -138,7 +138,7 @@ fn set_foreground_reaches_host() {
 fn update_and_stop_foreground_reach_host() {
     let (rt, mock) = runtime_with_mock();
     let (_notifier, stop_rx) = stop_channel();
-    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx);
+    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx, CancelToken::new());
 
     pollster::block_on(async {
         ctx.update_notification(spec()).await.unwrap();
@@ -154,7 +154,7 @@ fn update_and_stop_foreground_reach_host() {
 fn wakelock_acquire_returns_token_and_release_forwards_it() {
     let (rt, mock) = runtime_with_mock();
     let (_notifier, stop_rx) = stop_channel();
-    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx);
+    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx, CancelToken::new());
 
     pollster::block_on(async {
         let lock = ctx.acquire_wakelock("network").await.unwrap();
@@ -177,7 +177,7 @@ fn wakelock_acquire_returns_token_and_release_forwards_it() {
 fn stop_signal_wakes_stopped_future() {
     let (rt, _mock) = runtime_with_mock();
     let (notifier, stop_rx) = stop_channel();
-    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx);
+    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx, CancelToken::new());
 
     assert!(!ctx.is_stopped());
     notifier.signal();
@@ -186,10 +186,23 @@ fn stop_signal_wakes_stopped_future() {
 }
 
 #[test]
+fn cancel_token_trips_is_stopped_and_wakes_stopped_future() {
+    let (rt, _mock) = runtime_with_mock();
+    let (_notifier, stop_rx) = stop_channel();
+    let cancel = CancelToken::new();
+    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx, cancel.clone());
+
+    assert!(!ctx.is_stopped());
+    cancel.cancel();
+    assert!(ctx.is_stopped(), "cancel token trip should surface as stopped");
+    pollster::block_on(ctx.stopped());
+}
+
+#[test]
 fn stop_self_reaches_host() {
     let (rt, mock) = runtime_with_mock();
     let (_notifier, stop_rx) = stop_channel();
-    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx);
+    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx, CancelToken::new());
 
     pollster::block_on(ctx.stop_self()).unwrap();
     let snap = mock.snapshot();

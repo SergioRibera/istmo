@@ -125,6 +125,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                 _instance_id: ::core::option::Option<#core::InstanceId>,
                 method: &'__istmo_a str,
                 payload: &'__istmo_a [u8],
+                cancel: #core::CancelToken,
             ) -> #core::DispatchFuture<'__istmo_a> {
                 ::std::boxed::Box::pin(async move {
                     match method {
@@ -147,6 +148,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                                 task_id,
                                 unique_name,
                                 input,
+                                cancel,
                             );
                             #run_dispatch_body
                         }
