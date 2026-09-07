@@ -11,13 +11,15 @@ use std::fs;
 use std::path::PathBuf;
 
 use istmo_build::{
-    Arg, BackgroundKind, ContinuousMode, Contract, EnumDef, EnumVariant, Field, GradleCoord,
-    GradleDep, GradleScope, IosBackgroundContract, IosEntitlements, Method, MethodKind,
-    NativeDeps, ServiceContract, StructDef, SwiftPackageDep, TypeDef, TypeRef, WorkerContract,
-    generate_android_service, generate_android_worker, generate_ios_background,
-    generate_kotlin, generate_kotlin_codecs, generate_kotlin_host, generate_kotlin_types,
-    generate_rust_types, generate_swift, generate_swift_client, generate_swift_codecs,
-    generate_swift_host, generate_swift_types, required_entitlements,
+    Arg, BackgroundKind, ContinuousMode, Contract, DesktopAppContract, DesktopServiceContract,
+    EnumDef, EnumVariant, Field, GradleCoord, GradleDep, GradleScope, IosBackgroundContract,
+    IosEntitlements, Method, MethodKind, NativeDeps, RestartPolicy, ServiceContract, ServiceScope,
+    StartType, StructDef, SwiftPackageDep, TypeDef, TypeRef, WorkerContract,
+    generate_android_service, generate_android_worker, generate_desktop_entry,
+    generate_ios_background, generate_kotlin, generate_kotlin_codecs, generate_kotlin_host,
+    generate_kotlin_types, generate_launchd_plist, generate_rust_types, generate_swift,
+    generate_swift_client, generate_swift_codecs, generate_swift_host, generate_swift_types,
+    generate_systemd_unit, generate_windows_service, required_entitlements,
 };
 
 fn golden_dir() -> PathBuf {
@@ -837,4 +839,129 @@ fn ios_entitlements_merge_render() {
         );
     ent.merge(required_entitlements(&continuous_voip_background()));
     assert_matches("ios_entitlements_merged", "plist", &ent.render());
+}
+
+// ---- Desktop -----------------------------------------------------------
+
+fn user_sync_service() -> DesktopServiceContract {
+    let mut c = DesktopServiceContract::new(
+        "myapp-sync",
+        "MyApp background sync",
+        "/usr/local/bin/myapp-sync",
+    );
+    c.label = "com.example.myapp.sync".to_owned();
+    c.restart = RestartPolicy::OnFailure;
+    c.start_type = StartType::Auto;
+    c.scope = ServiceScope::User;
+    c.env = vec![
+        ("RUST_LOG".to_owned(), "info".to_owned()),
+        ("MYAPP_ENDPOINT".to_owned(), "https://api.example.com".to_owned()),
+    ];
+    c.args = vec!["--headless".to_owned(), "--config=/etc/myapp/sync.toml".to_owned()];
+    c
+}
+
+fn system_daemon_service() -> DesktopServiceContract {
+    let mut c = DesktopServiceContract::new(
+        "myapp-indexer",
+        "MyApp system-wide indexer",
+        "/usr/bin/myapp-indexer",
+    );
+    c.label = "com.example.myapp.indexer".to_owned();
+    c.restart = RestartPolicy::Always;
+    c.start_type = StartType::Auto;
+    c.scope = ServiceScope::System;
+    c.user = Some("myapp".to_owned());
+    c.group = Some("myapp".to_owned());
+    c.working_directory = Some("/var/lib/myapp".to_owned());
+    c.after = vec!["network-online.target".to_owned()];
+    c.stop_timeout_seconds = 60;
+    c.windows_dependencies = vec!["Tcpip".to_owned(), "Dnscache".to_owned()];
+    c.windows_display_name = Some("MyApp Indexer".to_owned());
+    c
+}
+
+#[test]
+fn systemd_user_unit_matches_golden() {
+    assert_matches(
+        "desktop_user_sync_systemd",
+        "service",
+        &generate_systemd_unit(&user_sync_service()),
+    );
+}
+
+#[test]
+fn systemd_system_unit_matches_golden() {
+    assert_matches(
+        "desktop_system_daemon_systemd",
+        "service",
+        &generate_systemd_unit(&system_daemon_service()),
+    );
+}
+
+#[test]
+fn launchd_user_plist_matches_golden() {
+    assert_matches(
+        "desktop_user_sync_launchd",
+        "plist",
+        &generate_launchd_plist(&user_sync_service()),
+    );
+}
+
+#[test]
+fn launchd_system_plist_matches_golden() {
+    assert_matches(
+        "desktop_system_daemon_launchd",
+        "plist",
+        &generate_launchd_plist(&system_daemon_service()),
+    );
+}
+
+#[test]
+fn windows_user_install_script_matches_golden() {
+    let out = generate_windows_service(&user_sync_service());
+    assert_matches(
+        "desktop_user_sync_windows_install",
+        "ps1",
+        &out.install_script,
+    );
+}
+
+#[test]
+fn windows_user_uninstall_script_matches_golden() {
+    let out = generate_windows_service(&user_sync_service());
+    assert_matches(
+        "desktop_user_sync_windows_uninstall",
+        "ps1",
+        &out.uninstall_script,
+    );
+}
+
+#[test]
+fn windows_system_install_script_matches_golden() {
+    let out = generate_windows_service(&system_daemon_service());
+    assert_matches(
+        "desktop_system_daemon_windows_install",
+        "ps1",
+        &out.install_script,
+    );
+}
+
+fn gui_app_entry() -> DesktopAppContract {
+    let mut c = DesktopAppContract::new("MyApp", "/usr/bin/myapp %U");
+    c.comment = "Fast local-first workspace".to_owned();
+    c.icon = Some("myapp".to_owned());
+    c.categories = vec!["Utility".to_owned(), "Office".to_owned()];
+    c.mime_types = vec!["x-scheme-handler/myapp".to_owned()];
+    c.keywords = vec!["notes".to_owned(), "sync".to_owned()];
+    c
+}
+
+#[test]
+fn xdg_desktop_entry_matches_golden() {
+    assert_matches(
+        "desktop_app_myapp",
+        "desktop",
+        &generate_desktop_entry(&gui_app_entry()),
+    );
 }
