@@ -167,54 +167,80 @@ impl BannerSlot {
     /// call every frame — a no-op when the current state already
     /// matches.
     pub fn sync(&self, target: SlotTarget) {
-        let mut guard = self.inner.lock().expect("slot mutex");
-        match (&guard.state, target) {
-            (SlotState::Idle, SlotTarget::Show(rect)) => {
-                guard.state = SlotState::Loading;
-                self.spawn_show(rect);
-            }
-            (SlotState::Live { rect: current, .. }, SlotTarget::Show(rect))
-                if *current == rect =>
-            {
-                // Rect matches — nothing to do. Common per-frame path.
-            }
-            (SlotState::Live { handle, .. }, SlotTarget::Show(rect)) => {
-                // Move only — mutate the rect in place. Never replace
-                // the handle: dropping the old one would fire
-                // `ReleaseNativeHandle` even though the native banner
-                // is still alive.
-                let handle_id = handle.id();
-                if let SlotState::Live { rect: current, .. } = &mut guard.state {
-                    *current = rect;
+        // Compute the transition under the lock, then release before
+        // invoking `spawn`. The injected `SpawnFn` may run the future
+        // inline (e.g. tests using a foreground executor); holding the
+        // guard across spawn would deadlock when the future re-locks
+        // `inner` — `std::sync::Mutex` is not reentrant.
+        enum Action {
+            None,
+            Show(BannerRect),
+            Updater(istmo_core::NativeHandleId),
+            Hide(NativeHandle<Banner>),
+        }
+        let action = {
+            let mut guard = self.inner.lock().expect("slot mutex");
+            match (&guard.state, target) {
+                (SlotState::Idle, SlotTarget::Show(rect)) => {
+                    guard.state = SlotState::Loading;
+                    Action::Show(rect)
                 }
-                // Coalesce: park the latest rect and only spawn an
-                // updater if none is running. On fast scroll (many
-                // rects per second), intermediate values are dropped —
-                // the updater always converges to the newest position
-                // instead of queueing every step behind slow JNI hops.
-                guard.pending_rect = Some(rect);
-                if !guard.updater_running {
-                    guard.updater_running = true;
-                    self.spawn_updater_loop(handle_id);
-                }
-            }
-            (SlotState::Live { .. }, SlotTarget::Hide) => {
-                if let SlotState::Live { handle, .. } =
-                    std::mem::replace(&mut guard.state, SlotState::Hiding)
+                (SlotState::Live { rect: current, .. }, SlotTarget::Show(rect))
+                    if *current == rect =>
                 {
-                    self.spawn_hide(handle);
+                    // Rect matches — nothing to do. Common per-frame path.
+                    Action::None
                 }
+                (SlotState::Live { handle, .. }, SlotTarget::Show(rect)) => {
+                    // Move only — mutate the rect in place. Never replace
+                    // the handle: dropping the old one would fire
+                    // `ReleaseNativeHandle` even though the native banner
+                    // is still alive.
+                    let handle_id = handle.id();
+                    if let SlotState::Live { rect: current, .. } = &mut guard.state {
+                        *current = rect;
+                    }
+                    // Coalesce: park the latest rect and only spawn an
+                    // updater if none is running. On fast scroll (many
+                    // rects per second), intermediate values are dropped
+                    // — the updater always converges to the newest
+                    // position instead of queueing every step behind
+                    // slow JNI hops.
+                    guard.pending_rect = Some(rect);
+                    if guard.updater_running {
+                        Action::None
+                    } else {
+                        guard.updater_running = true;
+                        Action::Updater(handle_id)
+                    }
+                }
+                (SlotState::Live { .. }, SlotTarget::Hide) => {
+                    if let SlotState::Live { handle, .. } =
+                        std::mem::replace(&mut guard.state, SlotState::Hiding)
+                    {
+                        Action::Hide(handle)
+                    } else {
+                        Action::None
+                    }
+                }
+                (SlotState::Loading, SlotTarget::Show(rect)) => {
+                    // Show already in flight — park the latest rect so
+                    // the load-completion handler can apply it
+                    // immediately without a visible jump on first paint.
+                    guard.pending_rect = Some(rect);
+                    Action::None
+                }
+                // Hiding / (Idle+Hide) → no-op. Hide completes
+                // asynchronously; a later `sync(Show)` will re-enter
+                // Idle and load a fresh banner.
+                _ => Action::None,
             }
-            (SlotState::Loading, SlotTarget::Show(rect)) => {
-                // Show already in flight — park the latest rect so the
-                // load-completion handler can apply it immediately
-                // without a visible jump on the first paint.
-                guard.pending_rect = Some(rect);
-            }
-            // Hiding / (Idle+Hide) → no-op. Hide completes
-            // asynchronously; a later `sync(Show)` will re-enter Idle
-            // and load a fresh banner.
-            _ => {}
+        };
+        match action {
+            Action::None => {}
+            Action::Show(rect) => self.spawn_show(rect),
+            Action::Updater(handle_id) => self.spawn_updater_loop(handle_id),
+            Action::Hide(handle) => self.spawn_hide(handle),
         }
     }
 
