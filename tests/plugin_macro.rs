@@ -3,9 +3,11 @@
 //! Each test spins up a mock backend on a background thread that services
 //! whatever frames the generated client emits, then exercises the client.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-use istmo::{Envelope, Frame, Runtime, StreamEndReason, StreamItem, codec};
+use istmo::{CallId, CancelToken, Envelope, Frame, Runtime, StreamEndReason, StreamItem, codec};
 
 #[istmo::message]
 #[derive(Debug, PartialEq, Eq)]
@@ -106,6 +108,119 @@ fn generated_client_surfaces_domain_errors_as_plugin_error_bytes() {
         }
     );
     backend.join().unwrap();
+}
+
+// ---- Cancellation-aware trait DSL ---------------------------------------
+
+/// Trait exercising the DSL: `cancel: CancelToken` is stripped from the
+/// wire signature (client method + payload tuple) and gets filled by the
+/// runtime on the host side.
+#[istmo::plugin(name = "com.example.slow")]
+pub trait Slow {
+    async fn wait(&self, delay_ms: u32, cancel: CancelToken) -> u32;
+}
+
+/// Host impl that parks on the cancel token instead of the delay when the
+/// runtime trips it. Records both branches so the test can assert.
+#[derive(Debug, Default)]
+struct SlowImpl {
+    cancelled: Arc<AtomicBool>,
+    started: Arc<AtomicBool>,
+}
+
+impl Slow for SlowImpl {
+    async fn wait(&self, _delay_ms: u32, cancel: CancelToken) -> u32 {
+        self.started.store(true, Ordering::SeqCst);
+        cancel.cancelled().await;
+        self.cancelled.store(true, Ordering::SeqCst);
+        // The host respond frame is dropped by the runtime once the cancel
+        // flag is set — no test asserts on the return value.
+        0
+    }
+}
+
+#[test]
+fn cancel_token_arg_is_stripped_from_wire_and_client_signature() {
+    // Wire payload for `wait(delay_ms)` must decode as `(u32,)` — proves
+    // the CancelToken arg is not part of the encoded tuple.
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let outbound = init.outbound;
+
+    let backend_rt = rt.clone();
+    let backend = thread::spawn(move || {
+        let envelope = outbound.recv().expect("call frame");
+        let Frame::Call {
+            call_id,
+            method,
+            payload,
+            ..
+        } = envelope.frame
+        else {
+            panic!("expected call");
+        };
+        assert_eq!(method, "wait");
+        // If the cancel token had leaked into the payload, this decode
+        // would either fail or leave trailing bytes.
+        let ((delay_ms,), consumed) = codec::decode::<(u32,)>(&payload).unwrap();
+        assert_eq!(delay_ms, 42);
+        assert_eq!(consumed, payload.len(), "payload has no trailing cancel arg");
+        backend_rt
+            .dispatch_inbound(Envelope::new(Frame::Respond {
+                call_id,
+                result: Ok(codec::encode(&99_u32).unwrap()),
+            }))
+            .unwrap();
+    });
+
+    let slow = SlowClient::from_runtime(&rt).expect("declared");
+    // Client's `wait` takes only `delay_ms` — no CancelToken parameter.
+    assert_eq!(pollster::block_on(slow.wait(42)).unwrap(), 99);
+    backend.join().unwrap();
+}
+
+#[test]
+fn host_dispatcher_forwards_runtime_cancel_to_trait_impl() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+
+    let inner = SlowImpl::default();
+    let started = inner.started.clone();
+    let cancelled = inner.cancelled.clone();
+    rt.register_host(SlowHost::new(inner));
+
+    let call_id = CallId(9001);
+    rt.dispatch_inbound(Envelope::new(Frame::Call {
+        call_id,
+        plugin_id: "com.example.slow".to_owned(),
+        instance_id: None,
+        method: "wait".to_owned(),
+        payload: codec::encode(&(100_u32,)).unwrap(),
+    }))
+    .unwrap();
+
+    // Spin until the host thread has entered the impl body.
+    for _ in 0..1_000 {
+        if started.load(Ordering::SeqCst) {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(started.load(Ordering::SeqCst), "impl never entered");
+
+    rt.dispatch_inbound(Envelope::new(Frame::Cancel { call_id }))
+        .unwrap();
+
+    for _ in 0..1_000 {
+        if cancelled.load(Ordering::SeqCst) {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        cancelled.load(Ordering::SeqCst),
+        "cancel token forwarded to impl never tripped",
+    );
 }
 
 #[test]

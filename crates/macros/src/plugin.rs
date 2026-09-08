@@ -153,7 +153,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                 _instance_id: ::core::option::Option<#root::InstanceId>,
                 method: &'__istmo_a str,
                 payload: &'__istmo_a [u8],
-                _cancel: #root::CancelToken,
+                cancel: #root::CancelToken,
             ) -> #root::DispatchFuture<'__istmo_a> {
                 ::std::boxed::Box::pin(async move {
                     match method {
@@ -383,6 +383,45 @@ struct MethodCtx<'a> {
     payload_expr: TokenStream,
 }
 
+/// One decoded trait method argument, tagged with whether it participates
+/// in the wire payload or is filled from runtime state (currently only
+/// `CancelToken`).
+#[derive(Clone)]
+struct WireArg {
+    ident: Ident,
+    ty: Type,
+    role: ArgRole,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArgRole {
+    Wire,
+    Cancel,
+}
+
+fn arg_role(ty: &Type) -> ArgRole {
+    if is_cancel_token(ty) {
+        ArgRole::Cancel
+    } else {
+        ArgRole::Wire
+    }
+}
+
+/// Loose match on the type's last path segment. Any type whose leaf name
+/// is `CancelToken` counts — `CancelToken`, `istmo::CancelToken`,
+/// `istmo_core::CancelToken`, etc. Aliasing to a differently-named type
+/// (`type MyCancel = CancelToken;`) would break detection, but the trait
+/// DSL is deliberately conservative here: the token is not `Encode` /
+/// `Decode` anyway, so misclassifying it as a wire arg would fail
+/// downstream loudly.
+fn is_cancel_token(ty: &Type) -> bool {
+    let Type::Path(tp) = ty else { return false };
+    tp.path
+        .segments
+        .last()
+        .is_some_and(|s| s.ident == "CancelToken")
+}
+
 fn expand_client_method(
     plugin_id: &LitStr,
     root: &Path,
@@ -392,7 +431,22 @@ fn expand_client_method(
     let name = &sig.ident;
     let method_name_str = LitStr::new(&name.to_string(), name.span());
 
-    let (arg_pats, arg_names) = extract_args(sig)?;
+    let all_args = extract_wire_args(sig)?;
+    // Client omits Cancel args from its own signature — drop-cancel on
+    // the returned future already fires `Frame::Cancel` for the caller.
+    let wire_args: Vec<&WireArg> = all_args
+        .iter()
+        .filter(|a| a.role == ArgRole::Wire)
+        .collect();
+    let arg_pats: Vec<TokenStream> = wire_args
+        .iter()
+        .map(|a| {
+            let n = &a.ident;
+            let t = &a.ty;
+            quote! { #n: #t }
+        })
+        .collect();
+    let arg_names: Vec<Ident> = wire_args.iter().map(|a| a.ident.clone()).collect();
     let payload_expr = build_payload_expr(root, &arg_names);
 
     let return_ty = match &sig.output {
@@ -430,13 +484,30 @@ fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream
     let name = &sig.ident;
     let method_name_str = LitStr::new(&name.to_string(), name.span());
 
-    let (_, arg_names) = extract_args(sig)?;
-    let arg_tuple_type = arg_tuple_type(sig);
+    let all_args = extract_wire_args(sig)?;
+    let wire_arg_names: Vec<Ident> = all_args
+        .iter()
+        .filter(|a| a.role == ArgRole::Wire)
+        .map(|a| a.ident.clone())
+        .collect();
+    let arg_tuple_type = wire_arg_tuple_type(&all_args);
     let decode = quote! {
         let (args, _) = #root::codec::decode::<#arg_tuple_type>(payload)
             .map_err(#root::DispatchError::Decode)?;
     };
-    let destructure = destructure_arg_tuple(&arg_names);
+    let destructure = destructure_arg_tuple(&wire_arg_names);
+    // Pass wire args + the runtime-provided cancel token in the exact
+    // slot the trait declares. Rebinding to the arg's own name lets us
+    // interleave them with wire args by position.
+    let cancel_bindings: Vec<TokenStream> = all_args
+        .iter()
+        .filter(|a| a.role == ArgRole::Cancel)
+        .map(|a| {
+            let n = &a.ident;
+            quote! { let #n = cancel.clone(); }
+        })
+        .collect();
+    let call_args: Vec<Ident> = all_args.iter().map(|a| a.ident.clone()).collect();
 
     if is_stream_method(&method.attrs) {
         // Hosted streams aren't supported yet — codegen leaves an
@@ -457,7 +528,10 @@ fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream
     };
     let (ok_ty, err_ty) = extract_result(&return_ty);
     let call_expr = quote! {
-        self.inner.#name(#(#arg_names),*).await
+        {
+            #(#cancel_bindings)*
+            self.inner.#name(#(#call_args),*).await
+        }
     };
 
     let body = if let (Some(_), Some(_)) = (ok_ty.as_ref(), err_ty.as_ref()) {
@@ -493,14 +567,11 @@ fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream
     })
 }
 
-fn arg_tuple_type(sig: &syn::Signature) -> TokenStream {
-    let types: Vec<_> = sig
-        .inputs
+fn wire_arg_tuple_type(args: &[WireArg]) -> TokenStream {
+    let types: Vec<&Type> = args
         .iter()
-        .filter_map(|input| match input {
-            FnArg::Typed(pat_type) => Some(pat_type.ty.as_ref()),
-            FnArg::Receiver(_) => None,
-        })
+        .filter(|a| a.role == ArgRole::Wire)
+        .map(|a| &a.ty)
         .collect();
     if types.is_empty() {
         quote! { () }
@@ -517,9 +588,8 @@ fn destructure_arg_tuple(arg_names: &[Ident]) -> TokenStream {
     }
 }
 
-fn extract_args(sig: &syn::Signature) -> syn::Result<(Vec<TokenStream>, Vec<Ident>)> {
-    let mut pats = Vec::new();
-    let mut names = Vec::new();
+fn extract_wire_args(sig: &syn::Signature) -> syn::Result<Vec<WireArg>> {
+    let mut args = Vec::new();
     for input in sig.inputs.iter().skip(1) {
         match input {
             FnArg::Typed(pat_type) => {
@@ -532,9 +602,9 @@ fn extract_args(sig: &syn::Signature) -> syn::Result<(Vec<TokenStream>, Vec<Iden
                         ));
                     }
                 };
-                let ty = &pat_type.ty;
-                pats.push(quote! { #ident: #ty });
-                names.push(ident);
+                let ty = (*pat_type.ty).clone();
+                let role = arg_role(&ty);
+                args.push(WireArg { ident, ty, role });
             }
             FnArg::Receiver(_) => {
                 // Defensive: syn rejects multiple receivers, so past index 0
@@ -542,7 +612,7 @@ fn extract_args(sig: &syn::Signature) -> syn::Result<(Vec<TokenStream>, Vec<Iden
             }
         }
     }
-    Ok((pats, names))
+    Ok(args)
 }
 
 fn build_payload_expr(root: &Path, arg_names: &[Ident]) -> TokenStream {
