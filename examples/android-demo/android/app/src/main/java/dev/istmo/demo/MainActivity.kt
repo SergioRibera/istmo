@@ -7,6 +7,10 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.appcompat.app.AppCompatActivity
+import dev.istmo.demo.gen.EchoClient
+import dev.istmo.demo.gen.EchoCodecsImpl
+import dev.istmo.demo.gen.EchoException
+import dev.istmo.demo.gen.NotifierDispatcher
 import dev.istmo.runtime.Bincode
 import dev.istmo.runtime.IstmoRuntime
 import kotlinx.coroutines.CoroutineScope
@@ -30,7 +34,9 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val permissionsImpl = PermissionsImpl()
     private val activityResultsImpl = ActivityResultsImpl()
-    private val notifierImpl = NotifierImpl { msg -> appendNotifierLine(msg) }
+    private val echoClient = EchoClient(EchoCodecsImpl())
+    private val notifierBackend = NotifierBackendImpl { msg -> appendNotifierLine(msg) }
+    private val notifierDispatcher = NotifierDispatcher(notifierBackend, NotifierCodecsAdapter())
     private var pendingPermissionResult: ((Map<String, Boolean>) -> Unit)? = null
     private var initialized = false
     private val deeplinkHistory = mutableListOf<String>()
@@ -56,7 +62,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         if (!initialized) {
             IstmoRuntime.registerHandler("istmo.permissions", permissionsImpl)
             IstmoRuntime.registerHandler("istmo.activity_results", activityResultsImpl)
-            IstmoRuntime.registerHandler("dev.istmo.demo.notifier", notifierImpl)
+            IstmoRuntime.registerHandler(NotifierDispatcher.PLUGIN_ID, notifierDispatcher)
             IstmoRuntime.start()
             initialized = true
         }
@@ -109,7 +115,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         button.setOnClickListener {
             val text = input.text.toString()
             scope.launch {
-                output.text = runCatchingEcho { EchoClient.echo(text) }
+                output.text = runCatchingEcho { echoClient.echo(text) }
             }
         }
     }
@@ -123,13 +129,13 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         checkBtn.setOnClickListener {
             val perm = input.text.toString()
             scope.launch {
-                output.text = runCatchingEcho { EchoClient.checkPermission(perm) }
+                output.text = runCatchingEcho { echoClient.checkPermission(perm) }
             }
         }
         requestBtn.setOnClickListener {
             val perm = input.text.toString()
             scope.launch {
-                output.text = runCatchingEcho { EchoClient.requestPermission(perm) }
+                output.text = runCatchingEcho { echoClient.requestPermission(perm) }
             }
         }
     }
@@ -141,7 +147,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         launch.setOnClickListener {
             val url = input.text.toString().ifBlank { "https://example.com" }
             scope.launch {
-                output.text = runCatchingEcho { EchoClient.openUrl(url) }
+                output.text = runCatchingEcho { echoClient.openUrl(url) }
             }
         }
     }
@@ -151,7 +157,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         val refresh = findViewById<Button>(R.id.lifecycleRefresh)
         refresh.setOnClickListener {
             scope.launch {
-                label.text = runCatchingEcho { EchoClient.lifecycleSnapshot() }
+                label.text = runCatchingEcho { echoClient.lifecycleSnapshot() }
             }
         }
     }
@@ -162,10 +168,10 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         refresh.setOnClickListener {
             scope.launch {
                 try {
-                    val links = EchoClient.drainDeeplinks()
+                    val links = echoClient.drainDeeplinks()
                     output.text = if (links.isEmpty()) "(none drained)" else links.joinToString("\n")
                 } catch (e: EchoException) {
-                    output.text = "error: ${e.reason}"
+                    output.text = "error: ${e.decoded?.reason ?: "unknown"}"
                 } catch (t: Throwable) {
                     output.text = "transport error: ${t.message}"
                 }
@@ -204,7 +210,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
     private inline fun runCatchingEcho(block: () -> String): String = try {
         block()
     } catch (e: EchoException) {
-        "error: ${e.reason}"
+        "error: ${e.decoded?.reason ?: "unknown"}"
     } catch (t: Throwable) {
         "transport error: ${t.message}"
     }
@@ -223,10 +229,10 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
             log.text = ""
             scope.launch {
                 output.text = try {
-                    val fired = EchoClient.spamNotify(count)
+                    val fired = echoClient.spamNotify(count)
                     "fired $fired notifications (Rust → Mobile)"
                 } catch (e: EchoException) {
-                    "error: ${e.reason}"
+                    "error: ${e.decoded?.reason ?: "unknown"}"
                 } catch (t: Throwable) {
                     "transport error: ${t.message}"
                 }

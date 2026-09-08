@@ -24,3 +24,8 @@ examples/rust-mobile-demo/ios/RustMobileDemo/Plugins/*/Generated/
 examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/*Dispatcher.kt
 examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/*Types.kt
 examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/*CodecsImpl.kt
+
+# android-demo / android-multi: build.rs writes generated Kotlin under
+# each demo's `gen/` subpackage. Regenerated on every cargo build.
+examples/android-demo/android/app/src/main/java/dev/istmo/demo/gen/
+examples/android-multi/android/app/src/main/java/dev/istmo/multi/gen/
