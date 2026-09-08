@@ -46,6 +46,27 @@ object Bincode {
         return out.toByteArray()
     }
 
+    /**
+     * f32 is written as 4 IEEE 754 little-endian bytes. bincode 2's
+     * `standard()` config uses fixed-width encoding for floats — no
+     * varint applies to floating-point numbers.
+     */
+    fun writeF32(out: ByteArrayOutputStream, value: Float) {
+        val bits = java.lang.Float.floatToRawIntBits(value)
+        for (i in 0 until 4) {
+            out.write((bits shr (i * 8)) and 0xFF)
+        }
+    }
+
+    fun readF32(payload: ByteArray, offset: Int): Decoded<Float> {
+        require(offset + 4 <= payload.size) { "bincode f32: buffer underrun" }
+        var bits = 0
+        for (i in 0 until 4) {
+            bits = bits or ((payload[offset + i].toInt() and 0xFF) shl (i * 8))
+        }
+        return Decoded(java.lang.Float.intBitsToFloat(bits), offset + 4)
+    }
+
     fun readString(payload: ByteArray, offset: Int = 0): Decoded<String> {
         val (length, next) = readVarintU64(payload, offset)
         val end = next + length.toInt()
@@ -127,8 +148,8 @@ object Bincode {
     }
 
     fun readEnumDiscriminant(payload: ByteArray, offset: Int): Decoded<Int> {
-        val (value, next) = readVarintU64(payload, offset)
-        return Decoded(value.toInt(), next)
+        val v = readVarintU64(payload, offset)
+        return Decoded(v.value.toInt(), v.consumed)
     }
 
     // ---- Varints ----
@@ -152,14 +173,14 @@ object Bincode {
         }
     }
 
-    fun readVarintU64(payload: ByteArray, offset: Int): Pair<Long, Int> {
+    fun readVarintU64(payload: ByteArray, offset: Int): Decoded<Long> {
         require(offset < payload.size) { "bincode varint: buffer underrun" }
         val first = payload[offset].toInt() and 0xFF
         return when {
-            first <= 250 -> first.toLong() to (offset + 1)
-            first == 0xFB -> readLittleEndian(payload, offset + 1, 2) to (offset + 3)
-            first == 0xFC -> readLittleEndian(payload, offset + 1, 4) to (offset + 5)
-            first == 0xFD -> readLittleEndian(payload, offset + 1, 8) to (offset + 9)
+            first <= 250 -> Decoded(first.toLong(), offset + 1)
+            first == 0xFB -> Decoded(readLittleEndian(payload, offset + 1, 2), offset + 3)
+            first == 0xFC -> Decoded(readLittleEndian(payload, offset + 1, 4), offset + 5)
+            first == 0xFD -> Decoded(readLittleEndian(payload, offset + 1, 8), offset + 9)
             else -> error("invalid bincode varint prefix: 0x${first.toString(16)}")
         }
     }
@@ -170,10 +191,10 @@ object Bincode {
         writeVarintU64(out, zig)
     }
 
-    fun readVarintI64(payload: ByteArray, offset: Int): Pair<Long, Int> {
-        val (zig, next) = readVarintU64(payload, offset)
-        val value = (zig ushr 1) xor -(zig and 1L)
-        return value to next
+    fun readVarintI64(payload: ByteArray, offset: Int): Decoded<Long> {
+        val zig = readVarintU64(payload, offset)
+        val value = (zig.value ushr 1) xor -(zig.value and 1L)
+        return Decoded(value, zig.consumed)
     }
 
     private fun writeLittleEndian(out: ByteArrayOutputStream, value: Long, bytes: Int) {

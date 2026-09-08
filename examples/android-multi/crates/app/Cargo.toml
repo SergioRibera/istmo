@@ -16,6 +16,10 @@ crate-type = ["cdylib"]
 istmo = { path = "../../../.." }
 bincode = { workspace = true }
 
+[build-dependencies]
+istmo-build = { workspace = true }
+istmo-plugins-schema = { workspace = true }
+
 [lints.rust]
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"

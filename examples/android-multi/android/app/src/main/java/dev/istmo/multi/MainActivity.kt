@@ -10,6 +10,11 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import dev.istmo.multi.gen.AppControlClient
+import dev.istmo.multi.gen.AppControlCodecsImpl
+import dev.istmo.multi.gen.AppControlException
+import dev.istmo.multi.gen.ServiceControlCodecsImpl
+import dev.istmo.multi.gen.ServiceControlDispatcher
 import dev.istmo.runtime.IstmoRuntime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +38,8 @@ class MainActivity : AppCompatActivity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var initialized = false
 
+    private val appControl by lazy { AppControlClient(AppControlCodecsImpl()) }
+
     private val notificationPermissionLauncher =
         registerForActivityResult(RequestPermission()) { /* result ignored */ }
 
@@ -41,8 +48,11 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         if (!initialized) {
-            val controlImpl = ServiceControlImpl(applicationContext)
-            IstmoRuntime.registerHandler(ServiceControlImpl.PLUGIN_ID, controlImpl)
+            val dispatcher = ServiceControlDispatcher(
+                ServiceControlBackendImpl(applicationContext),
+                ServiceControlCodecsImpl(),
+            )
+            IstmoRuntime.registerHandler(ServiceControlDispatcher.PLUGIN_ID, dispatcher)
             IstmoRuntime.start()
             initialized = true
         }
@@ -74,9 +84,9 @@ class MainActivity : AppCompatActivity() {
         button.setOnClickListener {
             scope.launch {
                 output.text = try {
-                    AppControlClient.ping()
-                } catch (e: AppException) {
-                    "error: ${e.reason}"
+                    appControl.ping()
+                } catch (e: AppControlException) {
+                    "error: ${e.decoded?.reason ?: "unknown"}"
                 } catch (t: Throwable) {
                     "transport error: ${t.message}"
                 }
