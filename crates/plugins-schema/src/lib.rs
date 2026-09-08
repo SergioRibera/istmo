@@ -200,6 +200,134 @@ pub fn notifications() -> Contract {
     }
 }
 
+/// Contract for `istmo.service_control` — the platform-hosted plugin that
+/// [`istmo_plugins::ServiceContext`] shells its foreground-notification /
+/// wakelock / stop-self helpers into.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn service_control() -> Contract {
+    Contract {
+        plugin_id: "istmo.service_control".to_owned(),
+        type_name: "ServiceControl".to_owned(),
+        methods: vec![
+            Method {
+                name: "start_foreground".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![
+                    Arg {
+                        name: "service_id".to_owned(),
+                        ty: TypeRef::String,
+                    },
+                    Arg {
+                        name: "spec".to_owned(),
+                        ty: named("NotificationSpec"),
+                    },
+                ],
+                returns: TypeRef::Unit,
+                error: Some(named("ServiceControlError")),
+            },
+            Method {
+                name: "update_notification".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![
+                    Arg {
+                        name: "service_id".to_owned(),
+                        ty: TypeRef::String,
+                    },
+                    Arg {
+                        name: "spec".to_owned(),
+                        ty: named("NotificationSpec"),
+                    },
+                ],
+                returns: TypeRef::Unit,
+                error: Some(named("ServiceControlError")),
+            },
+            Method {
+                name: "stop_foreground".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![
+                    Arg {
+                        name: "service_id".to_owned(),
+                        ty: TypeRef::String,
+                    },
+                    Arg {
+                        name: "remove_notification".to_owned(),
+                        ty: TypeRef::Bool,
+                    },
+                ],
+                returns: TypeRef::Unit,
+                error: Some(named("ServiceControlError")),
+            },
+            Method {
+                name: "acquire_wakelock".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![
+                    Arg {
+                        name: "service_id".to_owned(),
+                        ty: TypeRef::String,
+                    },
+                    Arg {
+                        name: "tag".to_owned(),
+                        ty: TypeRef::String,
+                    },
+                ],
+                returns: named("WakelockToken"),
+                error: Some(named("ServiceControlError")),
+            },
+            Method {
+                name: "release_wakelock".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![
+                    Arg {
+                        name: "service_id".to_owned(),
+                        ty: TypeRef::String,
+                    },
+                    Arg {
+                        name: "token".to_owned(),
+                        ty: named("WakelockToken"),
+                    },
+                ],
+                returns: TypeRef::Unit,
+                error: Some(named("ServiceControlError")),
+            },
+            Method {
+                name: "stop_self".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "service_id".to_owned(),
+                    ty: TypeRef::String,
+                }],
+                returns: TypeRef::Unit,
+                error: Some(named("ServiceControlError")),
+            },
+        ],
+        init: None,
+        types: vec![
+            struct_of(
+                "NotificationSpec",
+                vec![
+                    field("channelId", TypeRef::String),
+                    field("notificationId", TypeRef::I32),
+                    field("title", TypeRef::String),
+                    field("body", TypeRef::String),
+                    field("smallIcon", opt(TypeRef::String)),
+                    field("ongoing", TypeRef::Bool),
+                    field("foregroundServiceType", opt(TypeRef::U32)),
+                ],
+            ),
+            struct_of("WakelockToken", vec![field("token", TypeRef::U64)]),
+            enum_of(
+                "ServiceControlError",
+                vec![
+                    payload_variant("UnknownService", TypeRef::String),
+                    payload_variant("WakelockDenied", TypeRef::String),
+                    payload_variant("Platform", TypeRef::String),
+                ],
+            ),
+        ],
+    }
+}
+
 #[must_use]
 pub fn google_sign_in() -> Contract {
     Contract {
