@@ -14,7 +14,7 @@
 //!
 //! `NativeHandleId` is treated as an opaque `UInt64` typealias — the
 //! generator emits `readNativeHandleId` / `writeNativeHandleId` mapping
-//! to a plain UInt64 varint but does not emit the typealias; the demo's
+//! to a plain `UInt64` varint but does not emit the typealias; the demo's
 //! runtime declares that in `PluginHandler.swift` alongside the
 //! `HandleReleaser` protocol.
 
@@ -101,9 +101,8 @@ fn write_enum(out: &mut String, e: &EnumDef) {
         let _ = writeln!(out, "public enum {}: UInt32 {{", e.name);
         for (i, v) in e.variants.iter().enumerate() {
             let case_name = to_swift_case(&v.name);
-            let _ = writeln!(out, "    case {} = {}", case_name, i);
+            let _ = writeln!(out, "    case {case_name} = {i}");
         }
-        let _ = writeln!(out, "}}");
     } else {
         // Errors conform to `Error` so the codegen dispatcher's `catch
         // let err as <T>` arm compiles.
@@ -122,8 +121,8 @@ fn write_enum(out: &mut String, e: &EnumDef) {
                 let _ = writeln!(out, "    case {case_name}({ty})");
             }
         }
-        let _ = writeln!(out, "}}");
     }
+    let _ = writeln!(out, "}}");
 }
 
 fn is_error_shape(name: &str) -> bool {
@@ -331,14 +330,11 @@ fn write_native_handle_codec(out: &mut String) {
 // ---- Field read/write helpers -------------------------------------------
 
 fn write_read_field(out: &mut String, indent: &str, binding: &str, ty: &TypeRef) {
-    match ty {
-        TypeRef::Named(name) => {
-            let _ = writeln!(out, "{indent}let {binding} = try read{name}(&c)");
-        }
-        _ => {
-            let expr = read_expr(ty);
-            let _ = writeln!(out, "{indent}let {binding} = {expr}");
-        }
+    if let TypeRef::Named(name) = ty {
+        let _ = writeln!(out, "{indent}let {binding} = try read{name}(&c)");
+    } else {
+        let expr = read_expr(ty);
+        let _ = writeln!(out, "{indent}let {binding} = {expr}");
     }
 }
 

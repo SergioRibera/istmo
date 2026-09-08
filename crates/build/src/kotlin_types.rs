@@ -87,7 +87,6 @@ fn write_enum(out: &mut String, e: &EnumDef) {
             let comma = if i + 1 == e.variants.len() { "" } else { "," };
             let _ = writeln!(out, "    {}{}", v.name, comma);
         }
-        let _ = writeln!(out, "}}");
     } else {
         let _ = writeln!(out, "sealed class {} {{", e.name);
         for v in &e.variants {
@@ -105,8 +104,8 @@ fn write_enum(out: &mut String, e: &EnumDef) {
                 );
             }
         }
-        let _ = writeln!(out, "}}");
     }
+    let _ = writeln!(out, "}}");
 }
 
 // ---- Codec impls --------------------------------------------------------
@@ -164,7 +163,6 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
                     e.name, v.name,
                 );
             } else {
-                let ty = v.payload[0].to_kotlin();
                 let _ = writeln!(out, "            {i} -> {{");
                 write_read_bindings_for(out, "                ", "inner", &v.payload[0]);
                 let _ = writeln!(
@@ -172,7 +170,6 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
                     "                Bincode.Decoded({}.{}(inner) as {}, cursor)",
                     e.name, v.name, e.name,
                 );
-                let _ = drop(ty);
                 let _ = writeln!(out, "            }}");
             }
         }
@@ -255,22 +252,17 @@ fn write_read_field(out: &mut String, indent: &str, field_name: &str, ty: &TypeR
 }
 
 fn write_read_bindings_for(out: &mut String, indent: &str, binding: &str, ty: &TypeRef) {
-    match ty {
-        TypeRef::Named(name) => {
-            let _ = writeln!(
-                out,
-                "{indent}val d_{binding} = read{name}(bytes, cursor)",
-            );
-            let _ = writeln!(out, "{indent}cursor = d_{binding}.consumed");
-            let _ = writeln!(out, "{indent}val {binding} = d_{binding}.value");
-        }
-        _ => {
-            let expr = read_expr(ty);
-            let _ = writeln!(out, "{indent}val d_{binding} = {expr}");
-            let _ = writeln!(out, "{indent}cursor = d_{binding}.consumed");
-            let _ = writeln!(out, "{indent}val {binding} = d_{binding}.value");
-        }
+    if let TypeRef::Named(name) = ty {
+        let _ = writeln!(
+            out,
+            "{indent}val d_{binding} = read{name}(bytes, cursor)",
+        );
+    } else {
+        let expr = read_expr(ty);
+        let _ = writeln!(out, "{indent}val d_{binding} = {expr}");
     }
+    let _ = writeln!(out, "{indent}cursor = d_{binding}.consumed");
+    let _ = writeln!(out, "{indent}val {binding} = d_{binding}.value");
 }
 
 fn read_expr(ty: &TypeRef) -> String {
@@ -411,7 +403,7 @@ fn write_lambda(ty: &TypeRef) -> String {
     }
 }
 
-fn kt_int_cast(ty: &TypeRef) -> &'static str {
+const fn kt_int_cast(ty: &TypeRef) -> &'static str {
     match ty {
         TypeRef::U8 => ".toUByte()",
         TypeRef::U16 => ".toUShort()",

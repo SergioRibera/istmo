@@ -132,7 +132,7 @@ fn write_codecs_protocol(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "}}");
 }
 
-/// See kotlin_host::collect_codec_types — same logic.
+/// See `kotlin_host::collect_codec_types` — same logic.
 fn collect_codec_types(contract: &Contract) -> Vec<String> {
     let mut set: BTreeSet<String> = collect_named_types(contract).into_iter().collect();
     for def in &contract.types {
@@ -341,8 +341,7 @@ fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
     let _ = writeln!(out, "        default:");
     let _ = writeln!(
         out,
-        "            throw PluginRuntimeError.unknownMethod(plugin: \"{}\", method: method)",
-        name,
+        "            throw PluginRuntimeError.unknownMethod(plugin: \"{name}\", method: method)",
     );
     let _ = writeln!(out, "        }}");
     let _ = writeln!(out, "    }}");
@@ -367,25 +366,22 @@ fn write_method_arm(out: &mut String, method: &Method) {
         .map(|a| format!("{}: {}", a.name, a.name))
         .collect::<Vec<_>>()
         .join(", ");
-    match method.returns {
-        TypeRef::Unit => {
-            let _ = writeln!(
-                out,
-                "{indent}try await backend.{}({call_args})",
-                method.name,
-            );
-            let _ = writeln!(out, "{indent}return Data()");
-        }
-        _ => {
-            let _ = writeln!(
-                out,
-                "{indent}let result = try await backend.{}({call_args})",
-                method.name,
-            );
-            let _ = writeln!(out, "{indent}var out = Data()");
-            write_write_expr(out, indent, &method.returns, "result", "out");
-            let _ = writeln!(out, "{indent}return out");
-        }
+    if matches!(method.returns, TypeRef::Unit) {
+        let _ = writeln!(
+            out,
+            "{indent}try await backend.{}({call_args})",
+            method.name,
+        );
+        let _ = writeln!(out, "{indent}return Data()");
+    } else {
+        let _ = writeln!(
+            out,
+            "{indent}let result = try await backend.{}({call_args})",
+            method.name,
+        );
+        let _ = writeln!(out, "{indent}var out = Data()");
+        write_write_expr(out, indent, &method.returns, "result", "out");
+        let _ = writeln!(out, "{indent}return out");
     }
     if has_error {
         let err_ty = method.error.as_ref().unwrap().to_swift();
@@ -398,12 +394,11 @@ fn write_method_arm(out: &mut String, method: &Method) {
 }
 
 fn write_read_expr(out: &mut String, indent: &str, ty: &TypeRef, binding: &str) {
-    match ty {
-        TypeRef::Named(_) => write_read_named(out, indent, ty, binding),
-        _ => {
-            let call = read_call(ty);
-            let _ = writeln!(out, "{indent}let {binding} = {call}");
-        }
+    if let TypeRef::Named(_) = ty {
+        write_read_named(out, indent, ty, binding);
+    } else {
+        let call = read_call(ty);
+        let _ = writeln!(out, "{indent}let {binding} = {call}");
     }
 }
 

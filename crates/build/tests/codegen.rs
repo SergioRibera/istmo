@@ -849,7 +849,7 @@ fn user_sync_service() -> DesktopServiceContract {
         "MyApp background sync",
         "/usr/local/bin/myapp-sync",
     );
-    c.label = "com.example.myapp.sync".to_owned();
+    "com.example.myapp.sync".clone_into(&mut c.label);
     c.restart = RestartPolicy::OnFailure;
     c.start_type = StartType::Auto;
     c.scope = ServiceScope::User;
@@ -867,7 +867,7 @@ fn system_daemon_service() -> DesktopServiceContract {
         "MyApp system-wide indexer",
         "/usr/bin/myapp-indexer",
     );
-    c.label = "com.example.myapp.indexer".to_owned();
+    "com.example.myapp.indexer".clone_into(&mut c.label);
     c.restart = RestartPolicy::Always;
     c.start_type = StartType::Auto;
     c.scope = ServiceScope::System;
@@ -949,7 +949,7 @@ fn windows_system_install_script_matches_golden() {
 
 fn gui_app_entry() -> DesktopAppContract {
     let mut c = DesktopAppContract::new("MyApp", "/usr/bin/myapp %U");
-    c.comment = "Fast local-first workspace".to_owned();
+    "Fast local-first workspace".clone_into(&mut c.comment);
     c.icon = Some("myapp".to_owned());
     c.categories = vec!["Utility".to_owned(), "Office".to_owned()];
     c.mime_types = vec!["x-scheme-handler/myapp".to_owned()];

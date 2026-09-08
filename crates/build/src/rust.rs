@@ -152,8 +152,8 @@ fn ty_is_copy(ty: &TypeRef, all: &[TypeDef]) -> bool {
 
 fn ty_is_hash(ty: &TypeRef, all: &[TypeDef]) -> bool {
     match ty {
-        TypeRef::F32 | TypeRef::F64 => false,
-        TypeRef::Bytes => false, // Vec<u8> is Hash, but the caller usually treats bytes as opaque
+        // Vec<u8> is Hash, but the caller usually treats bytes as opaque.
+        TypeRef::F32 | TypeRef::F64 | TypeRef::Bytes => false,
         TypeRef::Vec(inner) | TypeRef::Option(inner) => ty_is_hash(inner, all),
         TypeRef::Named(name) => resolve_named(name, all)
             .is_some_and(|def| is_hash(&def, all))

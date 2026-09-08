@@ -358,25 +358,22 @@ fn write_method_arm(out: &mut String, method: &Method) {
         arg_names.push(arg.name.clone());
     }
     let call_args = arg_names.join(", ");
-    match method.returns {
-        TypeRef::Unit => {
-            let _ = writeln!(
-                out,
-                "{indent}backend.{}({call_args})",
-                method.name,
-            );
-            let _ = writeln!(out, "{indent}ByteArray(0)");
-        }
-        _ => {
-            let _ = writeln!(
-                out,
-                "{indent}val result = backend.{}({call_args})",
-                method.name,
-            );
-            let _ = writeln!(out, "{indent}val out = ByteArrayOutputStream()");
-            write_write_expr(out, indent, &method.returns, "result", "out");
-            let _ = writeln!(out, "{indent}out.toByteArray()");
-        }
+    if matches!(method.returns, TypeRef::Unit) {
+        let _ = writeln!(
+            out,
+            "{indent}backend.{}({call_args})",
+            method.name,
+        );
+        let _ = writeln!(out, "{indent}ByteArray(0)");
+    } else {
+        let _ = writeln!(
+            out,
+            "{indent}val result = backend.{}({call_args})",
+            method.name,
+        );
+        let _ = writeln!(out, "{indent}val out = ByteArrayOutputStream()");
+        write_write_expr(out, indent, &method.returns, "result", "out");
+        let _ = writeln!(out, "{indent}out.toByteArray()");
     }
     if has_error {
         let err_ty = method.error.as_ref().unwrap().to_kotlin();
@@ -400,16 +397,15 @@ fn write_method_arm(out: &mut String, method: &Method) {
 /// Emit a `val <binding> = ...; cursor = ...` snippet decoding `ty` at
 /// `cursor` from `payload`.
 fn write_read_expr(out: &mut String, indent: &str, ty: &TypeRef, binding: &str) {
-    match ty {
-        TypeRef::Named(_) => write_read_named(out, indent, ty, binding),
-        _ => {
-            let reader = read_call(ty);
-            let _ = writeln!(
-                out,
-                "{indent}val d_{binding} = {reader}; cursor = d_{binding}.consumed",
-            );
-            let _ = writeln!(out, "{indent}val {binding} = d_{binding}.value");
-        }
+    if let TypeRef::Named(_) = ty {
+        write_read_named(out, indent, ty, binding);
+    } else {
+        let reader = read_call(ty);
+        let _ = writeln!(
+            out,
+            "{indent}val d_{binding} = {reader}; cursor = d_{binding}.consumed",
+        );
+        let _ = writeln!(out, "{indent}val {binding} = d_{binding}.value");
     }
 }
 
@@ -428,7 +424,7 @@ fn write_read_named(out: &mut String, indent: &str, ty: &TypeRef, binding: &str)
 /// bincode 2 varint u64 always fits in a signed Long via bit-cast; the
 /// helper picks the idiomatic `.toX()` extension so the surface type
 /// matches the declared trait argument.
-fn kt_int_cast(ty: &TypeRef) -> &'static str {
+const fn kt_int_cast(ty: &TypeRef) -> &'static str {
     match ty {
         TypeRef::U8 => ".toUByte()",
         TypeRef::U16 => ".toUShort()",
@@ -437,7 +433,6 @@ fn kt_int_cast(ty: &TypeRef) -> &'static str {
         TypeRef::I8 => ".toByte()",
         TypeRef::I16 => ".toShort()",
         TypeRef::I32 => ".toInt()",
-        TypeRef::I64 => "",
         _ => "",
     }
 }

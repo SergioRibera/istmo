@@ -292,6 +292,7 @@ pub fn google_sign_in() -> Contract {
 }
 
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn admob() -> Contract {
     Contract {
         plugin_id: "istmo.admob".to_owned(),
