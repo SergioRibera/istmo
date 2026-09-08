@@ -11,6 +11,7 @@
 pub mod contract;
 pub mod desktop;
 pub mod entitlements;
+pub mod handover;
 pub mod ios;
 pub mod kotlin;
 pub mod kotlin_client;
@@ -33,6 +34,11 @@ pub use crate::desktop::{
     generate_windows_service,
 };
 pub use crate::entitlements::{EntitlementValue, IosEntitlements};
+pub use crate::handover::{
+    CONTRACT_KEY, HandoverError, NATIVE_DEPS_KEY, collect_dep_contracts, collect_dep_native_deps,
+    deserialize_contract, deserialize_native_deps, emit_contract, emit_native_deps,
+    serialize_contract, serialize_native_deps,
+};
 pub use crate::ios::{
     BackgroundKind, ContinuousMode, IosBackgroundArtifacts, IosBackgroundContract,
     generate_ios_background, required_entitlements,

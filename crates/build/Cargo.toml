@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+bincode = { workspace = true }
 
 [lints]
 workspace = true

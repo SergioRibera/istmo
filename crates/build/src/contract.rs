@@ -1,9 +1,11 @@
 //! Plugin contract data model shared by macros and code generators.
 
+use bincode::{Decode, Encode};
+
 /// Complete description of a plugin trait, sufficient to generate the client
 /// wrapper on the Rust side and the interface / protocol declarations on the
 /// native side.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Contract {
     /// Dotted plugin identifier used on the wire, e.g. `"com.example.echo"`.
     pub plugin_id: String,
@@ -30,7 +32,7 @@ pub struct Contract {
 /// Enum variants without a payload become primitive enums; variants with
 /// a payload become sealed classes (Kotlin) or associated-value enums
 /// (Swift). Struct definitions become `data class` / `struct`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum TypeDef {
     Struct(StructDef),
     Enum(EnumDef),
@@ -46,19 +48,19 @@ impl TypeDef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<Field>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Field {
     pub name: String,
     pub ty: TypeRef,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct EnumDef {
     pub name: String,
     pub variants: Vec<EnumVariant>,
@@ -67,14 +69,14 @@ pub struct EnumDef {
 /// Enum variant. `payload` empty → unit variant; single entry → tuple
 /// variant; multiple entries not yet supported (would need a real named
 /// or positional shape choice).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct EnumVariant {
     pub name: String,
     pub payload: Vec<TypeRef>,
 }
 
 /// One method exposed by the plugin.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Method {
     /// Method identifier as it appears in the trait.
     pub name: String,
@@ -91,14 +93,14 @@ pub struct Method {
 }
 
 /// Whether a method is unary (single response) or a stream (many events).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum MethodKind {
     Unary,
     Stream,
 }
 
 /// A named method argument.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Arg {
     pub name: String,
     pub ty: TypeRef,
@@ -114,7 +116,7 @@ pub struct Arg {
 /// generated module's companion source.
 ///
 /// [`Named`]: TypeRef::Named
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum TypeRef {
     Unit,
     Bool,

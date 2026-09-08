@@ -22,8 +22,10 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use bincode::{Decode, Encode};
+
 /// Scope a Gradle dependency is added under.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub enum GradleScope {
     /// `implementation` — main sources.
     Implementation,
@@ -53,7 +55,7 @@ impl GradleScope {
 /// numeric-when-possible ordering. That gets `1.2.10` above `1.2.9`, which
 /// naïve string comparison does not, and covers what real Android artefact
 /// versions actually look like without pulling in a full semver crate.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub struct GradleCoord {
     pub group: String,
     pub artifact: String,
@@ -93,14 +95,14 @@ impl GradleCoord {
 }
 
 /// Group + artifact pair — the identity used to dedupe versions on merge.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub struct GradleKey {
     pub group: String,
     pub artifact: String,
 }
 
 /// One entry in [`NativeDeps::gradle`]: a coordinate at a specific scope.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct GradleDep {
     pub scope: GradleScope,
     pub coord: GradleCoord,
@@ -114,7 +116,7 @@ impl GradleDep {
 }
 
 /// A Swift package product a plugin needs to link against.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub struct SwiftPackageDep {
     /// Package URL (e.g. `https://github.com/google/GoogleSignIn-iOS.git`).
     pub url: String,
@@ -126,7 +128,7 @@ pub struct SwiftPackageDep {
 
 /// Warning emitted by [`NativeDeps::merge`] when two contributors disagreed
 /// on a coordinate's version.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct VersionConflict {
     pub key: GradleKey,
     pub picked: String,
@@ -139,7 +141,7 @@ pub struct VersionConflict {
 /// [`Self::add_gradle`] / [`Self::add_swift_package`], and combined across
 /// plugins via [`Self::merge`]. The renderers ([`Self::render_gradle`]) then
 /// produce fragments ready to splice into a real Gradle build.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode)]
 pub struct NativeDeps {
     /// Keyed by `(scope, group, artifact)` so different scopes of the same
     /// artefact (rare, but legal) stay distinct while merges dedupe on
