@@ -326,6 +326,64 @@ impl Runtime {
             .map_err(|_| IstmoError::ChannelClosed)
     }
 
+    /// Fire-and-forget one-way invocation. Local hosts dispatch on a
+    /// worker thread and the outcome is dropped; remote receivers see a
+    /// [`Frame::Notify`] on the wire and must treat unknown methods as
+    /// no-ops.
+    ///
+    /// Intended for `Drop`-time release paths (wakelocks, native handles
+    /// that need domain-specific teardown, one-way state signals) where
+    /// blocking on a reply would either deadlock or spawn a helper thread
+    /// just to discard the response.
+    pub fn notify(
+        self: &Arc<Self>,
+        plugin_id: impl Into<String>,
+        instance_id: Option<InstanceId>,
+        method: impl Into<String>,
+        payload: Vec<u8>,
+    ) -> Result<(), IstmoError> {
+        let plugin_id = plugin_id.into();
+        let method = method.into();
+        if lock(&self.hosts).contains_key(plugin_id.as_str()) {
+            self.dispatch_notify(&plugin_id, instance_id, method, payload);
+            return Ok(());
+        }
+        let envelope = Envelope::new(Frame::Notify {
+            plugin_id,
+            instance_id,
+            method,
+            payload,
+        });
+        self.outbound
+            .send(envelope)
+            .map_err(|_| IstmoError::ChannelClosed)
+    }
+
+    fn dispatch_notify(
+        self: &Arc<Self>,
+        plugin_id: &str,
+        instance_id: Option<InstanceId>,
+        method: String,
+        payload: Vec<u8>,
+    ) {
+        let dispatcher = lock(&self.hosts).get(plugin_id).cloned();
+        let Some(dispatcher) = dispatcher else {
+            tracing::warn!(plugin_id = %plugin_id, "inbound Notify for unregistered plugin");
+            return;
+        };
+        std::thread::spawn(move || {
+            let cancel = crate::dispatch::CancelToken::new();
+            let outcome = pollster::block_on(async {
+                dispatcher
+                    .dispatch(instance_id, &method, &payload, cancel)
+                    .await
+            });
+            if let Err(err) = outcome {
+                tracing::warn!(?err, method = %method, "notify dispatch failed");
+            }
+        });
+    }
+
     /// Cancels an in-flight call by removing its local receiver and sending
     /// a `Cancel` frame to the native side.
     pub fn cancel_call(&self, call_id: CallId) -> Result<(), IstmoError> {
@@ -388,6 +446,15 @@ impl Runtime {
                         self.publish_early_queue(&channel, capacity as usize, payload);
                     }
                 }
+                Ok(())
+            }
+            Frame::Notify {
+                plugin_id,
+                instance_id,
+                method,
+                payload,
+            } => {
+                self.dispatch_notify(&plugin_id, instance_id, method, payload);
                 Ok(())
             }
             Frame::CreateInstance { .. }
@@ -491,16 +558,68 @@ impl Runtime {
                 tracing::debug!(?call_id, "hosted call cancelled; discarding response");
                 return;
             }
-            let result: CallResult = match outcome {
-                Ok(Outcome::Ok(bytes)) => Ok(bytes),
-                Ok(Outcome::DomainError(bytes)) => Err(bytes),
+            match outcome {
+                Ok(Outcome::Ok(bytes)) => runtime.send_respond(call_id, Ok(bytes)),
+                Ok(Outcome::DomainError(bytes)) => runtime.send_respond(call_id, Err(bytes)),
+                Ok(Outcome::StreamOpened(receiver)) => {
+                    runtime.spawn_stream_pump(StreamId(call_id.get()), receiver);
+                }
                 Err(err) => {
                     tracing::error!(?err, ?call_id, "hosted dispatch failed");
-                    Err(encode_dispatch_error_string(&err.to_string()))
+                    runtime.send_respond(
+                        call_id,
+                        Err(encode_dispatch_error_string(&err.to_string())),
+                    );
                 }
-            };
-            runtime.send_respond(call_id, result);
+            }
         });
+    }
+
+    /// Drain `receiver` on a background thread, emitting a
+    /// [`Frame::Event`] per item and a `StreamEnd { Complete }` when the
+    /// sender disconnects. Uses local short-circuit when a same-runtime
+    /// caller is waiting on `stream_id`.
+    fn spawn_stream_pump(self: &Arc<Self>, stream_id: StreamId, receiver: flume::Receiver<Vec<u8>>) {
+        let runtime = Arc::clone(self);
+        std::thread::spawn(move || {
+            while let Ok(bytes) = receiver.recv() {
+                runtime.send_event(stream_id, bytes);
+            }
+            runtime.send_stream_end(stream_id, crate::protocol::StreamEndReason::Complete);
+        });
+    }
+
+    fn send_event(self: &Arc<Self>, stream_id: StreamId, payload: Vec<u8>) {
+        if self.routing.has_pending(stream_id.get()) {
+            if let Err(err) = self.routing.deliver_event(stream_id, payload) {
+                tracing::warn!(?err, "local Event delivery failed");
+            }
+            return;
+        }
+        let envelope = Envelope::new(Frame::Event { stream_id, payload });
+        if let Err(err) = self.outbound.send(envelope) {
+            tracing::warn!(?err, "failed to send Event frame; outbound channel closed");
+        }
+    }
+
+    fn send_stream_end(
+        self: &Arc<Self>,
+        stream_id: StreamId,
+        reason: crate::protocol::StreamEndReason,
+    ) {
+        if self.routing.has_pending(stream_id.get()) {
+            if let Err(err) = self.routing.deliver_stream_end(stream_id, reason) {
+                tracing::warn!(?err, "local StreamEnd delivery failed");
+            }
+            return;
+        }
+        let envelope = Envelope::new(Frame::StreamEnd { stream_id, reason });
+        if let Err(err) = self.outbound.send(envelope) {
+            tracing::warn!(
+                ?err,
+                "failed to send StreamEnd frame; outbound channel closed"
+            );
+        }
     }
 
     fn send_respond(&self, call_id: CallId, result: CallResult) {

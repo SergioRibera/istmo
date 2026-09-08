@@ -223,6 +223,72 @@ fn host_dispatcher_forwards_runtime_cancel_to_trait_impl() {
     );
 }
 
+// ---- Hosted streams -----------------------------------------------------
+
+#[istmo::plugin(name = "com.example.ticker")]
+pub trait Ticker {
+    #[istmo::stream]
+    fn count_up(&self, to: u32) -> u32;
+}
+
+#[derive(Default)]
+struct TickerImpl;
+
+impl Ticker for TickerImpl {
+    fn count_up(&self, to: u32) -> flume::Receiver<u32> {
+        let (tx, rx) = flume::unbounded();
+        std::thread::spawn(move || {
+            for i in 0..to {
+                if tx.send(i).is_err() {
+                    return;
+                }
+            }
+        });
+        rx
+    }
+}
+
+#[test]
+fn hosted_stream_pumps_events_and_closes_with_stream_end() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let outbound = init.outbound;
+
+    rt.register_host(TickerHost::new(TickerImpl));
+
+    let call_id = CallId(4242);
+    rt.dispatch_inbound(Envelope::new(Frame::Call {
+        call_id,
+        plugin_id: "com.example.ticker".to_owned(),
+        instance_id: None,
+        method: "count_up".to_owned(),
+        payload: codec::encode(&(3_u32,)).unwrap(),
+    }))
+    .unwrap();
+
+    let mut events = Vec::new();
+    let mut ended = false;
+    while !ended {
+        let envelope = outbound
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("stream frames");
+        match envelope.frame {
+            Frame::Event { stream_id, payload } => {
+                assert_eq!(stream_id.get(), call_id.get());
+                let (item, _) = codec::decode::<u32>(&payload).unwrap();
+                events.push(item);
+            }
+            Frame::StreamEnd { stream_id, reason } => {
+                assert_eq!(stream_id.get(), call_id.get());
+                assert_eq!(reason, StreamEndReason::Complete);
+                ended = true;
+            }
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+    assert_eq!(events, vec![0, 1, 2]);
+}
+
 #[test]
 fn generated_client_reads_stream_events() {
     let init = Runtime::mock();

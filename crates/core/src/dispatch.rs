@@ -103,15 +103,37 @@ impl CancelToken {
 
 /// Terminal outcome of a single hosted method call.
 ///
-/// The transport turns this into `Frame::Respond { result: Ok / Err }`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The transport turns this into `Frame::Respond { result: Ok / Err }`
+/// for unary methods; for [`Self::StreamOpened`] the runtime pumps
+/// [`crate::protocol::Frame::Event`] frames from the attached receiver
+/// and emits a [`crate::protocol::Frame::StreamEnd`] when it disconnects.
+#[derive(Debug, Clone)]
 pub enum Outcome {
     /// The method returned a successful value; the bytes are the encoded `T`.
     Ok(Vec<u8>),
     /// The trait signature was `Result<T, E>` and the method returned `Err`;
     /// the bytes are the encoded `E`.
     DomainError(Vec<u8>),
+    /// The method is a stream; each element received on the receiver
+    /// (bytes already encoded on the host side) is forwarded to the
+    /// caller as a `Frame::Event`. When the sender is dropped the
+    /// runtime emits `Frame::StreamEnd { Complete }`.
+    StreamOpened(flume::Receiver<Vec<u8>>),
 }
+
+impl PartialEq for Outcome {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Ok(a), Self::Ok(b)) | (Self::DomainError(a), Self::DomainError(b)) => a == b,
+            // `flume::Receiver` has no meaningful equality — a stream
+            // outcome only compares equal to itself when the tests take
+            // that shortcut; the runtime never uses this comparison.
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Outcome {}
 
 /// Failures the dispatch layer surfaces to the runtime. Never a panic path.
 #[derive(Debug)]

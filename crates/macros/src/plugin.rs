@@ -8,7 +8,7 @@
 //!   the `hosts:` side that implements `Dispatch` + `Plugin` and decodes
 //!   inbound Call frames into direct calls on the concrete `Impl`.
 
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
@@ -198,6 +198,23 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
 fn add_send_bound_to_async_methods(trait_def: &mut ItemTrait) {
     for item in &mut trait_def.items {
         let TraitItem::Fn(f) = item else { continue };
+        if is_stream_method(&f.attrs) {
+            // Stream methods declare the ITEM type in their return
+            // position (`-> u32` = `Stream<Item = u32>`). Rewrite it to
+            // `flume::Receiver<T>` so host impls can return one channel
+            // per invocation; the client codegen still reads the raw T
+            // as the stream item type because it consults the
+            // pre-rewrite snapshot.
+            let item_ty = match &f.sig.output {
+                ReturnType::Default => quote! { () },
+                ReturnType::Type(_, t) => quote! { #t },
+            };
+            let new_output: syn::Type = parse_quote! {
+                ::flume::Receiver<#item_ty>
+            };
+            f.sig.output = ReturnType::Type(<Token![->]>::default(), Box::new(new_output));
+            continue;
+        }
         if f.sig.asyncness.is_none() {
             continue;
         }
@@ -479,6 +496,7 @@ fn expand_client_method(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream> {
     let sig = &method.sig;
     let name = &sig.ident;
@@ -510,15 +528,45 @@ fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream
     let call_args: Vec<Ident> = all_args.iter().map(|a| a.ident.clone()).collect();
 
     if is_stream_method(&method.attrs) {
-        // Hosted streams aren't supported yet — codegen leaves an
-        // Unimplemented arm so the caller sees a typed error instead of a
-        // silent unknown-method or a panic.
-        let msg = format!("hosted stream method `{name}`");
-        let literal = LitStr::new(&msg, Span::call_site());
+        // Call the impl to get a `flume::Receiver<T>`, spawn an encoder
+        // thread that turns each item into wire bytes, and hand the
+        // encoded receiver to the runtime as `Outcome::StreamOpened`.
+        // The runtime pumps `Frame::Event` per byte block and closes
+        // with `StreamEnd { Complete }` when the encoder receiver
+        // disconnects.
+        let item_ty = match &sig.output {
+            ReturnType::Default => Type::Verbatim(quote! { () }),
+            ReturnType::Type(_, t) => (**t).clone(),
+        };
         return Ok(quote! {
-            #method_name_str => ::core::result::Result::Err(
-                #root::DispatchError::Unimplemented(#literal)
-            ),
+            #method_name_str => {
+                #decode
+                #destructure
+                let __istmo_source: ::flume::Receiver<#item_ty> = {
+                    #(#cancel_bindings)*
+                    self.inner.#name(#(#call_args),*)
+                };
+                let (__istmo_etx, __istmo_erx) = ::flume::unbounded::<::std::vec::Vec<u8>>();
+                ::std::thread::spawn(move || {
+                    while let ::core::result::Result::Ok(item) = __istmo_source.recv() {
+                        match #root::codec::encode(&item) {
+                            ::core::result::Result::Ok(bytes) => {
+                                if __istmo_etx.send(bytes).is_err() {
+                                    break;
+                                }
+                            }
+                            ::core::result::Result::Err(err) => {
+                                #root::__private::tracing::error!(
+                                    ?err,
+                                    "hosted stream encode failed",
+                                );
+                                break;
+                            }
+                        }
+                    }
+                });
+                ::core::result::Result::Ok(#root::Outcome::StreamOpened(__istmo_erx))
+            }
         });
     }
 
