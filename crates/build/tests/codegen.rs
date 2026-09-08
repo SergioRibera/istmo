@@ -16,10 +16,10 @@ use istmo_build::{
     IosEntitlements, Method, MethodKind, NativeDeps, RestartPolicy, ServiceContract, ServiceScope,
     StartType, StructDef, SwiftPackageDep, TypeDef, TypeRef, WorkerContract,
     generate_android_service, generate_android_worker, generate_desktop_entry,
-    generate_ios_background, generate_kotlin, generate_kotlin_codecs, generate_kotlin_host,
-    generate_kotlin_types, generate_launchd_plist, generate_rust_types, generate_swift,
-    generate_swift_client, generate_swift_codecs, generate_swift_host, generate_swift_types,
-    generate_systemd_unit, generate_windows_service, required_entitlements,
+    generate_ios_background, generate_kotlin, generate_kotlin_client, generate_kotlin_codecs,
+    generate_kotlin_host, generate_kotlin_types, generate_launchd_plist, generate_rust_types,
+    generate_swift, generate_swift_client, generate_swift_codecs, generate_swift_host,
+    generate_swift_types, generate_systemd_unit, generate_windows_service, required_entitlements,
 };
 
 fn golden_dir() -> PathBuf {
@@ -131,6 +131,15 @@ fn unary_only_swift_matches_golden() {
 }
 
 #[test]
+fn unary_only_kotlin_client_matches_golden() {
+    assert_matches(
+        "unary_only_client",
+        "kt",
+        &generate_kotlin_client(&unary_only()),
+    );
+}
+
+#[test]
 fn mixed_with_init_kotlin_matches_golden() {
     assert_matches(
         "mixed_with_init",
@@ -145,6 +154,15 @@ fn mixed_with_init_swift_matches_golden() {
         "mixed_with_init",
         "swift",
         &generate_swift(&mixed_with_init()),
+    );
+}
+
+#[test]
+fn mixed_with_init_kotlin_client_matches_golden() {
+    assert_matches(
+        "mixed_with_init_client",
+        "kt",
+        &generate_kotlin_client(&mixed_with_init()),
     );
 }
 
@@ -626,6 +644,15 @@ fn google_sign_in_swift_client_matches_golden() {
         "google_sign_in_client",
         "swift",
         &generate_swift_client(&google_sign_in()),
+    );
+}
+
+#[test]
+fn google_sign_in_kotlin_client_matches_golden() {
+    assert_matches(
+        "google_sign_in_client",
+        "kt",
+        &generate_kotlin_client(&google_sign_in()),
     );
 }
 

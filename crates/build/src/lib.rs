@@ -13,6 +13,7 @@ pub mod desktop;
 pub mod entitlements;
 pub mod ios;
 pub mod kotlin;
+pub mod kotlin_client;
 pub mod kotlin_host;
 pub mod kotlin_types;
 pub mod native_deps;
@@ -37,6 +38,7 @@ pub use crate::ios::{
     generate_ios_background, required_entitlements,
 };
 pub use crate::kotlin::generate_kotlin;
+pub use crate::kotlin_client::generate_kotlin_client;
 pub use crate::kotlin_host::generate_kotlin_host;
 pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
 pub use crate::native_deps::{
