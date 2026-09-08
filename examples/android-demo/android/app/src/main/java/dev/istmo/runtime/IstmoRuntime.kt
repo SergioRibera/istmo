@@ -137,6 +137,19 @@ object IstmoRuntime {
         jobs.remove(callId)?.cancel()
     }
 
+    @JvmStatic
+    fun onNotify(
+        pluginId: String,
+        instanceId: Long,
+        method: String,
+        payload: ByteArray,
+    ) {
+        val handler = handlers[pluginId] ?: return
+        scope.launch {
+            runCatching { handler.handleCall(instanceId, method, payload) }
+        }
+    }
+
     // Contract-driven signatures below: parameter names + types must match
     // what the Rust pump resolves via `get_static_method_id`. Params the demo
     // does not consume are suppressed rather than renamed so a future demo
@@ -191,6 +204,12 @@ object IstmoRuntime {
     external fun nativeStart(runtimeClass: Class<*>): Boolean
     external fun nativeSubmitCall(
         callId: Long,
+        pluginId: String,
+        instanceId: Long,
+        method: String,
+        payload: ByteArray,
+    )
+    external fun nativeSubmitNotify(
         pluginId: String,
         instanceId: Long,
         method: String,

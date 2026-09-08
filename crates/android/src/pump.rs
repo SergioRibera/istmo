@@ -106,6 +106,7 @@ struct PumpMethods {
     on_event: jni::objects::JStaticMethodID,
     on_stream_end: jni::objects::JStaticMethodID,
     on_release_native_handle: jni::objects::JStaticMethodID,
+    on_notify: jni::objects::JStaticMethodID,
 }
 
 impl PumpMethods {
@@ -130,6 +131,11 @@ impl PumpMethods {
                 class,
                 "onReleaseNativeHandle",
                 "(J)V",
+            )?,
+            on_notify: env.get_static_method_id(
+                class,
+                "onNotify",
+                "(Ljava/lang/String;JLjava/lang/String;[B)V",
             )?,
         })
     }
@@ -261,6 +267,28 @@ fn deliver(
             methods.on_release_native_handle,
             &[JValue::Long(handle_id.get() as i64).as_jni()],
         ),
+        Frame::Notify {
+            plugin_id,
+            instance_id,
+            method,
+            payload,
+        } => {
+            let plugin_id_j = env.new_string(&plugin_id)?;
+            let method_j = env.new_string(&method)?;
+            let payload_j = env.byte_array_from_slice(&payload)?;
+            let instance_id_j = instance_id.map_or(0i64, |id| id.get() as i64);
+            call_static_void(
+                env,
+                class,
+                methods.on_notify,
+                &[
+                    JValue::Object(&JObject::from(plugin_id_j)).as_jni(),
+                    JValue::Long(instance_id_j).as_jni(),
+                    JValue::Object(&JObject::from(method_j)).as_jni(),
+                    JValue::Object(&JObject::from(payload_j)).as_jni(),
+                ],
+            )
+        }
     }
 }
 

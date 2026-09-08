@@ -161,6 +161,110 @@ fn inbound_cancel_before_completion_drops_the_response() {
 }
 
 #[test]
+fn runtime_notify_local_short_circuits_to_registered_host() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let outbound = init.outbound;
+    let dispatcher = Arc::new(EchoDispatch::new());
+    rt.register_host(ArcHostAdapter(dispatcher.clone()));
+
+    rt.notify(EchoDispatch::PLUGIN_ID, None, "release", vec![1, 2, 3])
+        .unwrap();
+
+    // Wait for the dispatch thread to run — call counter is the observable.
+    for _ in 0..1_000 {
+        if dispatcher.calls.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(dispatcher.calls.load(Ordering::SeqCst), 1);
+    // Fire-and-forget — no Respond ever sent, no Notify frame emitted
+    // (short-circuited to local dispatch).
+    assert!(
+        outbound.try_recv().is_err(),
+        "notify to local host must not touch the outbound channel",
+    );
+}
+
+#[test]
+fn runtime_notify_without_local_host_emits_outbound_notify_frame() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let outbound = init.outbound;
+
+    rt.notify("unregistered.plugin", None, "release", vec![9, 9, 9])
+        .unwrap();
+
+    let envelope = outbound
+        .recv_timeout(Duration::from_secs(1))
+        .expect("Notify frame");
+    match envelope.frame {
+        Frame::Notify {
+            plugin_id,
+            instance_id,
+            method,
+            payload,
+        } => {
+            assert_eq!(plugin_id, "unregistered.plugin");
+            assert!(instance_id.is_none());
+            assert_eq!(method, "release");
+            assert_eq!(payload, vec![9, 9, 9]);
+        }
+        other => panic!("expected Notify, got {other:?}"),
+    }
+}
+
+#[test]
+fn inbound_notify_routes_to_registered_host_without_response() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let outbound = init.outbound;
+    let dispatcher = Arc::new(EchoDispatch::new());
+    rt.register_host(ArcHostAdapter(dispatcher.clone()));
+
+    rt.dispatch_inbound(Envelope::new(Frame::Notify {
+        plugin_id: EchoDispatch::PLUGIN_ID.to_owned(),
+        instance_id: None,
+        method: "release".to_owned(),
+        payload: codec::encode(&()).unwrap(),
+    }))
+    .unwrap();
+
+    for _ in 0..1_000 {
+        if dispatcher.calls.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(dispatcher.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        outbound.try_recv().is_err(),
+        "inbound Notify must never emit a Respond",
+    );
+}
+
+/// Adapter so both direct `EchoDispatch` and shared-Arc variants satisfy
+/// `Dispatch` (which needs `'static` self).
+struct ArcHostAdapter(Arc<EchoDispatch>);
+
+impl Dispatch for ArcHostAdapter {
+    fn plugin_id(&self) -> &'static str {
+        EchoDispatch::PLUGIN_ID
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        instance_id: Option<InstanceId>,
+        method: &'a str,
+        payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        self.0.dispatch(instance_id, method, payload, cancel)
+    }
+}
+
+#[test]
 fn declare_plugin_marks_ids_visible() {
     let init = Runtime::mock();
     let rt: Arc<Runtime> = init.runtime;

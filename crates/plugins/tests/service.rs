@@ -174,6 +174,35 @@ fn wakelock_acquire_returns_token_and_release_forwards_it() {
 }
 
 #[test]
+fn wakelock_drop_forwards_release_via_notify_no_response_needed() {
+    let (rt, mock) = runtime_with_mock();
+    let (_notifier, stop_rx) = stop_channel();
+    let ctx = ServiceContext::new(rt, "myapp.sync".to_owned(), stop_rx, CancelToken::new());
+
+    pollster::block_on(async {
+        let lock = ctx.acquire_wakelock("bg-refresh").await.unwrap();
+        assert_eq!(lock.token(), WakelockToken(1));
+        // No explicit .release(); dropping is enough now that the release
+        // path is fire-and-forget via `Runtime::notify`.
+        drop(lock);
+    });
+
+    // Notify dispatch runs on a spawned thread — spin until it lands.
+    for _ in 0..1_000 {
+        if !mock.snapshot().released.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let snap = mock.snapshot();
+    assert_eq!(
+        snap.released,
+        vec![("myapp.sync".to_owned(), WakelockToken(1))],
+        "drop should notify the host with the wakelock token",
+    );
+}
+
+#[test]
 fn stop_signal_wakes_stopped_future() {
     let (rt, _mock) = runtime_with_mock();
     let (notifier, stop_rx) = stop_channel();

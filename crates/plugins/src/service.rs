@@ -332,33 +332,18 @@ impl Drop for WakeLock {
             return;
         };
         let service_id = mem::take(&mut self.service_id);
-        let token = self.token;
-        std::thread::spawn(move || {
-            let payload = match codec::encode(&(service_id, token)) {
-                Ok(p) => p,
-                Err(err) => {
-                    tracing::warn!(?err, "wakelock release: encode failed");
-                    return;
-                }
-            };
-            let handle =
-                match runtime.call(SERVICE_CONTROL_PLUGIN_ID, None, "release_wakelock", payload) {
-                    Ok(h) => h,
-                    Err(err) => {
-                        tracing::warn!(?err, "wakelock release: submit failed");
-                        return;
-                    }
-                };
-            match handle.recv_blocking() {
-                Ok(Ok(_)) => {}
-                Ok(Err(bytes)) => {
-                    tracing::warn!(bytes = bytes.len(), "wakelock release: domain error");
-                }
-                Err(err) => {
-                    tracing::warn!(?err, "wakelock release: transport error");
-                }
+        let payload = match codec::encode(&(service_id, self.token)) {
+            Ok(p) => p,
+            Err(err) => {
+                tracing::warn!(?err, "wakelock release: encode failed");
+                return;
             }
-        });
+        };
+        if let Err(err) =
+            runtime.notify(SERVICE_CONTROL_PLUGIN_ID, None, "release_wakelock", payload)
+        {
+            tracing::warn!(?err, "wakelock release: notify submit failed");
+        }
     }
 }
 

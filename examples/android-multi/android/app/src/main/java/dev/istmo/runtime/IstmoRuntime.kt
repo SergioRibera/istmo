@@ -146,6 +146,19 @@ object IstmoRuntime {
     }
 
     @JvmStatic
+    fun onNotify(
+        pluginId: String,
+        instanceId: Long,
+        method: String,
+        payload: ByteArray,
+    ) {
+        val handler = handlers[pluginId] ?: return
+        scope.launch {
+            runCatching { handler.handleCall(instanceId, method, payload) }
+        }
+    }
+
+    @JvmStatic
     @Suppress("UNUSED_PARAMETER")
     fun onCreateInstance(callId: Long, pluginId: String, payload: ByteArray) {
         // No stateful plugins in this demo.
@@ -192,6 +205,12 @@ object IstmoRuntime {
     external fun nativeStart(runtimeClass: Class<*>): Boolean
     external fun nativeSubmitCall(
         callId: Long,
+        pluginId: String,
+        instanceId: Long,
+        method: String,
+        payload: ByteArray,
+    )
+    external fun nativeSubmitNotify(
         pluginId: String,
         instanceId: Long,
         method: String,

@@ -187,6 +187,24 @@ object IstmoRuntime {
         jobs.remove(callId)?.cancel()
     }
 
+    /**
+     * Fire-and-forget counterpart of [onCall]: dispatches to the registered
+     * handler and discards the outcome. No `Frame::Respond` is emitted; the
+     * Rust runtime does not track a `call_id` for these.
+     */
+    @JvmStatic
+    fun onNotify(
+        pluginId: String,
+        instanceId: Long,
+        method: String,
+        payload: ByteArray,
+    ) {
+        val handler = handlers[pluginId] ?: return
+        scope.launch {
+            runCatching { handler.handleCall(instanceId, method, payload) }
+        }
+    }
+
     @JvmStatic
     fun onCreateInstance(callId: Long, pluginId: String, payload: ByteArray) {
         val handler = handlers[pluginId]
@@ -252,6 +270,12 @@ object IstmoRuntime {
     external fun nativeStart(runtimeClass: Class<*>): Boolean
     external fun nativeSubmitCall(
         callId: Long,
+        pluginId: String,
+        instanceId: Long,
+        method: String,
+        payload: ByteArray,
+    )
+    external fun nativeSubmitNotify(
         pluginId: String,
         instanceId: Long,
         method: String,

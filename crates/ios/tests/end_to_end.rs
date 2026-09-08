@@ -109,6 +109,12 @@ enum Received {
     ReleaseNativeHandle {
         handle_id: u64,
     },
+    Notify {
+        plugin_id: String,
+        instance_id: u64,
+        method: String,
+        payload: Vec<u8>,
+    },
 }
 
 type ReceivedSink = Arc<Mutex<Vec<Received>>>;
@@ -222,6 +228,28 @@ unsafe extern "C" fn on_release_native_handle(_ctx: *mut c_void, handle_id: u64)
         .push(Received::ReleaseNativeHandle { handle_id });
 }
 
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn on_notify(
+    _ctx: *mut c_void,
+    plugin_id_utf8: *const u8,
+    plugin_id_len: usize,
+    instance_id: u64,
+    method_utf8: *const u8,
+    method_len: usize,
+    payload: *const u8,
+    payload_len: usize,
+) {
+    let plugin_id = unsafe { copy_str(plugin_id_utf8, plugin_id_len) };
+    let method = unsafe { copy_str(method_utf8, method_len) };
+    let payload = unsafe { copy_vec(payload, payload_len) };
+    sink().lock().unwrap().push(Received::Notify {
+        plugin_id,
+        instance_id,
+        method,
+        payload,
+    });
+}
+
 unsafe fn copy_str(ptr: *const u8, len: usize) -> String {
     String::from_utf8(unsafe { copy_vec(ptr, len) }).expect("valid utf-8 from pump")
 }
@@ -245,6 +273,7 @@ fn callbacks() -> IstmoIosCallbacks {
         on_event,
         on_stream_end,
         on_release_native_handle,
+        on_notify,
     }
 }
 

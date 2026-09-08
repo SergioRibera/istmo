@@ -21,7 +21,13 @@ use bincode::{Decode, Encode};
 /// the native side that a [`crate::native_handle::NativeHandle`] is no longer
 /// referenced and its backing object can be freed. Outbound-only, matching
 /// the Rust-owned-lifetime model.
-pub const PROTOCOL_VERSION: u16 = 3;
+///
+/// Version 4 added [`Frame::Notify`] — fire-and-forget one-way call. No
+/// `call_id`, no [`Frame::Respond`] expected. Used for releasing
+/// service-side resources (wakelocks, foreground-notification handles)
+/// from `Drop` paths that must not block on a reply. Native side treats
+/// unknown methods as no-ops for symmetry with `ReleaseNativeHandle`.
+pub const PROTOCOL_VERSION: u16 = 4;
 
 macro_rules! id_newtype {
     ($(#[$attr:meta])* $name:ident, $short:literal) => {
@@ -186,4 +192,14 @@ pub enum Frame {
     /// must treat unknown ids as no-ops so a late release racing a shutdown
     /// is harmless.
     ReleaseNativeHandle { handle_id: NativeHandleId },
+    /// Fire-and-forget invocation. No `call_id`, no `Respond` expected —
+    /// the receiver dispatches like a Call and discards the outcome.
+    /// Used for `Drop`-time release paths and other one-way signals
+    /// where blocking on a reply is not acceptable.
+    Notify {
+        plugin_id: String,
+        instance_id: Option<InstanceId>,
+        method: String,
+        payload: Vec<u8>,
+    },
 }

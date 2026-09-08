@@ -68,6 +68,18 @@ fn all_frames() -> Vec<Frame> {
         Frame::ReleaseNativeHandle {
             handle_id: NativeHandleId(999),
         },
+        Frame::Notify {
+            plugin_id: "com.example.notify".to_owned(),
+            instance_id: None,
+            method: "release".to_owned(),
+            payload: vec![0xde, 0xad, 0xbe, 0xef],
+        },
+        Frame::Notify {
+            plugin_id: "com.example.notify".to_owned(),
+            instance_id: Some(InstanceId(7)),
+            method: "instance_release".to_owned(),
+            payload: vec![],
+        },
     ]
 }
 

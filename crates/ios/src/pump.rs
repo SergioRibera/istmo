@@ -67,7 +67,7 @@ enum PumpStep {
     Shutdown,
 }
 
-#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::cast_possible_wrap, clippy::too_many_lines)]
 fn deliver(callbacks: &IstmoIosCallbacks, frame: Frame) {
     match frame {
         Frame::Call {
@@ -164,6 +164,23 @@ fn deliver(callbacks: &IstmoIosCallbacks, frame: Frame) {
         }
         Frame::ReleaseNativeHandle { handle_id } => unsafe {
             (callbacks.on_release_native_handle)(callbacks.ctx, handle_id.get());
+        },
+        Frame::Notify {
+            plugin_id,
+            instance_id,
+            method,
+            payload,
+        } => unsafe {
+            (callbacks.on_notify)(
+                callbacks.ctx,
+                plugin_id.as_ptr(),
+                plugin_id.len(),
+                instance_id.map_or(0, istmo_core::InstanceId::get),
+                method.as_ptr(),
+                method.len(),
+                payload.as_ptr(),
+                payload.len(),
+            );
         },
     }
 }

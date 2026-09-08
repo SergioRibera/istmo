@@ -73,6 +73,17 @@ pub type OnStreamEndFn = unsafe extern "C" fn(
 
 pub type OnReleaseNativeHandleFn = unsafe extern "C" fn(ctx: *mut c_void, handle_id: u64);
 
+pub type OnNotifyFn = unsafe extern "C" fn(
+    ctx: *mut c_void,
+    plugin_id_utf8: *const u8,
+    plugin_id_len: usize,
+    instance_id: u64,
+    method_utf8: *const u8,
+    method_len: usize,
+    payload: *const u8,
+    payload_len: usize,
+);
+
 /// C ABI callback table Swift hands over at [`istmo_ios_start`].
 ///
 /// Every field is required — passing a null function pointer is UB and the
@@ -91,6 +102,7 @@ pub struct IstmoIosCallbacks {
     pub on_event: OnEventFn,
     pub on_stream_end: OnStreamEndFn,
     pub on_release_native_handle: OnReleaseNativeHandleFn,
+    pub on_notify: OnNotifyFn,
 }
 
 // SAFETY: `ctx` is opaque; the Swift side is responsible for keeping the
@@ -242,6 +254,65 @@ pub unsafe extern "C" fn istmo_ios_submit_call(
     if let Err(err) = result {
         tracing::error!(?err, "istmo_ios_submit_call failed");
     }
+}
+
+/// Swift: `istmo_ios_submit_notify(pluginId, len, instanceId, method, len,
+/// payload, len)`. Fire-and-forget counterpart of
+/// [`istmo_ios_submit_call`] — no reply expected.
+///
+/// # Safety
+/// Every pointer must reference at least the accompanying length of
+/// readable memory (or be null when the length is zero).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn istmo_ios_submit_notify(
+    plugin_id_utf8: *const u8,
+    plugin_id_len: usize,
+    instance_id: u64,
+    method_utf8: *const u8,
+    method_len: usize,
+    payload: *const u8,
+    payload_len: usize,
+) {
+    let result = unsafe {
+        submit_notify(
+            plugin_id_utf8,
+            plugin_id_len,
+            instance_id,
+            method_utf8,
+            method_len,
+            payload,
+            payload_len,
+        )
+    };
+    if let Err(err) = result {
+        tracing::error!(?err, "istmo_ios_submit_notify failed");
+    }
+}
+
+unsafe fn submit_notify(
+    plugin_id_utf8: *const u8,
+    plugin_id_len: usize,
+    instance_id: u64,
+    method_utf8: *const u8,
+    method_len: usize,
+    payload: *const u8,
+    payload_len: usize,
+) -> Result<(), IosRuntimeError> {
+    let plugin_id = unsafe { copy_utf8(plugin_id_utf8, plugin_id_len) }?;
+    let method = unsafe { copy_utf8(method_utf8, method_len) }?;
+    let payload = unsafe { copy_bytes(payload, payload_len) };
+    let instance_id = if instance_id == 0 {
+        None
+    } else {
+        Some(InstanceId(instance_id))
+    };
+    Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Notify {
+        plugin_id,
+        instance_id,
+        method,
+        payload,
+    }))?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

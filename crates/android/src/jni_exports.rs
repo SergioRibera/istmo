@@ -231,6 +231,51 @@ fn submit_call<'local>(
     Ok(())
 }
 
+/// Kotlin: `external fun nativeSubmitNotify(pluginId: String, instanceId: Long, method: String, payload: ByteArray)`.
+///
+/// Fire-and-forget counterpart of
+/// [`Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall`]. `instanceId
+/// == 0` encodes `None`; the runtime dispatches the hosted call on a
+/// worker thread and discards the outcome.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitNotify<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    plugin_id: JString<'local>,
+    instance_id: jlong,
+    method: JString<'local>,
+    payload: JByteArray<'local>,
+) {
+    if let Err(err) = submit_notify(&mut env, &plugin_id, instance_id, &method, &payload) {
+        tracing::error!(?err, "istmo nativeSubmitNotify failed");
+    }
+}
+
+#[allow(clippy::cast_sign_loss)]
+fn submit_notify<'local>(
+    env: &mut JNIEnv<'local>,
+    plugin_id: &JString<'local>,
+    instance_id: jlong,
+    method: &JString<'local>,
+    payload: &JByteArray<'local>,
+) -> Result<(), AndroidRuntimeError> {
+    let plugin_id: String = env.get_string(plugin_id)?.into();
+    let method: String = env.get_string(method)?.into();
+    let payload = env.convert_byte_array(payload)?;
+    let instance_id = if instance_id == 0 {
+        None
+    } else {
+        Some(InstanceId(instance_id as u64))
+    };
+    Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Notify {
+        plugin_id,
+        instance_id,
+        method,
+        payload,
+    }))?;
+    Ok(())
+}
+
 /// Kotlin: `external fun nativeSubmitEarlyLatest(channel: String, payload: ByteArray)`.
 ///
 /// Typed JNI wrapper around [`Frame::EarlyEvent`]. The pump-facing surface
