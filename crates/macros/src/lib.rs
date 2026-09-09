@@ -53,7 +53,6 @@ pub fn stream(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
-
 /// Turn a trait declaration (`on_start` + optional `on_stop`) into a service
 /// adapter. See [`service`] source for the design.
 #[proc_macro_attribute]

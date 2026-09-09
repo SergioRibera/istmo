@@ -55,7 +55,12 @@ fn write_struct(out: &mut String, s: &StructDef, all: &[TypeDef]) {
     let _ = writeln!(out, "#[derive({})]", derives.join(", "));
     let _ = writeln!(out, "pub struct {} {{", s.name);
     for f in &s.fields {
-        let _ = writeln!(out, "    pub {}: {},", to_rust_field(&f.name), rust_ty(&f.ty));
+        let _ = writeln!(
+            out,
+            "    pub {}: {},",
+            to_rust_field(&f.name),
+            rust_ty(&f.ty)
+        );
     }
     let _ = writeln!(out, "}}");
 }
@@ -132,9 +137,9 @@ fn ty_is_eq(ty: &TypeRef, all: &[TypeDef]) -> bool {
     match ty {
         TypeRef::F32 | TypeRef::F64 => false,
         TypeRef::Vec(inner) | TypeRef::Option(inner) => ty_is_eq(inner, all),
-        TypeRef::Named(name) => resolve_named(name, all)
-            .is_some_and(|def| is_eq(&def, all))
-            || name == "NativeHandleId",
+        TypeRef::Named(name) => {
+            resolve_named(name, all).is_some_and(|def| is_eq(&def, all)) || name == "NativeHandleId"
+        }
         _ => true,
     }
 }
@@ -143,9 +148,10 @@ fn ty_is_copy(ty: &TypeRef, all: &[TypeDef]) -> bool {
     match ty {
         // String, Vec, Option, Bytes are never `Copy` on Rust.
         TypeRef::String | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Option(_) => false,
-        TypeRef::Named(name) => resolve_named(name, all)
-            .is_some_and(|def| is_copy(&def, all))
-            || name == "NativeHandleId",
+        TypeRef::Named(name) => {
+            resolve_named(name, all).is_some_and(|def| is_copy(&def, all))
+                || name == "NativeHandleId"
+        }
         _ => true,
     }
 }
@@ -155,9 +161,10 @@ fn ty_is_hash(ty: &TypeRef, all: &[TypeDef]) -> bool {
         // Vec<u8> is Hash, but the caller usually treats bytes as opaque.
         TypeRef::F32 | TypeRef::F64 | TypeRef::Bytes => false,
         TypeRef::Vec(inner) | TypeRef::Option(inner) => ty_is_hash(inner, all),
-        TypeRef::Named(name) => resolve_named(name, all)
-            .is_some_and(|def| is_hash(&def, all))
-            || name == "NativeHandleId",
+        TypeRef::Named(name) => {
+            resolve_named(name, all).is_some_and(|def| is_hash(&def, all))
+                || name == "NativeHandleId"
+        }
         _ => true,
     }
 }

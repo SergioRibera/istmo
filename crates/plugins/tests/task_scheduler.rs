@@ -160,7 +160,10 @@ fn cancel_by_tag_and_unique_name_reach_the_host_in_order() {
     });
 
     let snap = mock.snapshot();
-    assert_eq!(snap.cancelled_tag, vec!["sync".to_owned(), "premium".to_owned()]);
+    assert_eq!(
+        snap.cancelled_tag,
+        vec!["sync".to_owned(), "premium".to_owned()]
+    );
     assert_eq!(snap.cancelled_unique, vec!["nightly".to_owned()]);
 }
 

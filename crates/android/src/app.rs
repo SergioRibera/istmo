@@ -65,10 +65,6 @@ pub fn android_activity_object() -> Option<*mut std::ffi::c_void> {
     unsafe {
         let clazz_ptr = (ptr as *mut *mut c_void).add(3);
         let clazz = *clazz_ptr;
-        if clazz.is_null() {
-            None
-        } else {
-            Some(clazz)
-        }
+        if clazz.is_null() { None } else { Some(clazz) }
     }
 }

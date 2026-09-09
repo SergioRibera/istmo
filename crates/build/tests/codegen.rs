@@ -727,18 +727,39 @@ fn permissions_with_types() -> Contract {
         TypeDef::Enum(EnumDef {
             name: "PermissionStatus".to_owned(),
             variants: vec![
-                EnumVariant { name: "Granted".to_owned(), payload: vec![] },
-                EnumVariant { name: "Denied".to_owned(), payload: vec![] },
-                EnumVariant { name: "PermanentlyDenied".to_owned(), payload: vec![] },
-                EnumVariant { name: "NotDetermined".to_owned(), payload: vec![] },
-                EnumVariant { name: "NotSupported".to_owned(), payload: vec![] },
+                EnumVariant {
+                    name: "Granted".to_owned(),
+                    payload: vec![],
+                },
+                EnumVariant {
+                    name: "Denied".to_owned(),
+                    payload: vec![],
+                },
+                EnumVariant {
+                    name: "PermanentlyDenied".to_owned(),
+                    payload: vec![],
+                },
+                EnumVariant {
+                    name: "NotDetermined".to_owned(),
+                    payload: vec![],
+                },
+                EnumVariant {
+                    name: "NotSupported".to_owned(),
+                    payload: vec![],
+                },
             ],
         }),
         TypeDef::Struct(StructDef {
             name: "PermissionOutcome".to_owned(),
             fields: vec![
-                Field { name: "permission".to_owned(), ty: TypeRef::String },
-                Field { name: "status".to_owned(), ty: TypeRef::Named("PermissionStatus".to_owned()) },
+                Field {
+                    name: "permission".to_owned(),
+                    ty: TypeRef::String,
+                },
+                Field {
+                    name: "status".to_owned(),
+                    ty: TypeRef::Named("PermissionStatus".to_owned()),
+                },
             ],
         }),
     ];
@@ -882,9 +903,15 @@ fn user_sync_service() -> DesktopServiceContract {
     c.scope = ServiceScope::User;
     c.env = vec![
         ("RUST_LOG".to_owned(), "info".to_owned()),
-        ("MYAPP_ENDPOINT".to_owned(), "https://api.example.com".to_owned()),
+        (
+            "MYAPP_ENDPOINT".to_owned(),
+            "https://api.example.com".to_owned(),
+        ),
     ];
-    c.args = vec!["--headless".to_owned(), "--config=/etc/myapp/sync.toml".to_owned()];
+    c.args = vec![
+        "--headless".to_owned(),
+        "--config=/etc/myapp/sync.toml".to_owned(),
+    ];
     c
 }
 

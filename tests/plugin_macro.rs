@@ -164,7 +164,11 @@ fn cancel_token_arg_is_stripped_from_wire_and_client_signature() {
         // would either fail or leave trailing bytes.
         let ((delay_ms,), consumed) = codec::decode::<(u32,)>(&payload).unwrap();
         assert_eq!(delay_ms, 42);
-        assert_eq!(consumed, payload.len(), "payload has no trailing cancel arg");
+        assert_eq!(
+            consumed,
+            payload.len(),
+            "payload has no trailing cancel arg"
+        );
         backend_rt
             .dispatch_inbound(Envelope::new(Frame::Respond {
                 call_id,

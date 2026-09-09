@@ -391,13 +391,19 @@ fn write_write_field(out: &mut String, indent: &str, binding: &str, ty: &TypeRef
             );
         }
         TypeRef::U16 | TypeRef::U32 => {
-            let _ = writeln!(out, "{indent}Bincode.writeVarintU32(&{buf}, UInt32({binding}))");
+            let _ = writeln!(
+                out,
+                "{indent}Bincode.writeVarintU32(&{buf}, UInt32({binding}))"
+            );
         }
         TypeRef::U64 => {
             let _ = writeln!(out, "{indent}Bincode.writeVarintU64(&{buf}, {binding})");
         }
         TypeRef::I16 | TypeRef::I32 => {
-            let _ = writeln!(out, "{indent}Bincode.writeVarintI32(&{buf}, Int32({binding}))");
+            let _ = writeln!(
+                out,
+                "{indent}Bincode.writeVarintI32(&{buf}, Int32({binding}))"
+            );
         }
         TypeRef::I64 => {
             let _ = writeln!(out, "{indent}Bincode.writeVarintI64(&{buf}, {binding})");

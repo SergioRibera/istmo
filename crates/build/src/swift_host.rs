@@ -57,7 +57,11 @@ fn write_backend_protocol(out: &mut String, contract: &Contract) {
         "/// impl with the SDK-specific logic; the dispatcher below handles",
     );
     let _ = writeln!(out, "/// wire encode/decode.");
-    let _ = writeln!(out, "public protocol {}Backend: AnyObject {{", contract.type_name);
+    let _ = writeln!(
+        out,
+        "public protocol {}Backend: AnyObject {{",
+        contract.type_name
+    );
     for method in &contract.methods {
         write_backend_method(out, method);
     }
@@ -125,7 +129,10 @@ fn write_codecs_protocol(out: &mut String, contract: &Contract) {
         let _ = writeln!(out, "    // No named types in this contract.");
     } else {
         for ty in &types {
-            let _ = writeln!(out, "    func read{ty}(_ c: inout Bincode.Cursor) throws -> {ty}");
+            let _ = writeln!(
+                out,
+                "    func read{ty}(_ c: inout Bincode.Cursor) throws -> {ty}"
+            );
             let _ = writeln!(out, "    func write{ty}(_ out: inout Data, _ value: {ty})");
         }
     }
@@ -183,7 +190,10 @@ fn write_dispatcher_class(out: &mut String, contract: &Contract) {
         out,
         "/// Decodes wire calls, invokes `{name}Backend`, encodes the response.",
     );
-    let _ = writeln!(out, "/// Register with `IstmoRuntime.shared.registerHandler(PLUGIN_ID, dispatcher)`.");
+    let _ = writeln!(
+        out,
+        "/// Register with `IstmoRuntime.shared.registerHandler(PLUGIN_ID, dispatcher)`."
+    );
 
     if contract.init.is_some() {
         write_stateful_dispatcher(out, contract);
@@ -266,7 +276,10 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
     let _ = writeln!(out);
     let _ = writeln!(out, "    private let factory: {name}Factory");
     let _ = writeln!(out, "    private let codecs: {name}Codecs");
-    let _ = writeln!(out, "    private var instances: [UInt64: {name}Backend] = [:]");
+    let _ = writeln!(
+        out,
+        "    private var instances: [UInt64: {name}Backend] = [:]"
+    );
     let _ = writeln!(out, "    private var nextInstanceId: UInt64 = 1");
     let _ = writeln!(out, "    private let lock = NSLock()");
     let _ = writeln!(out);
@@ -301,7 +314,10 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
     );
     let _ = writeln!(out, "        var c = Bincode.Cursor(payload)");
     write_read_named(out, "        ", init, "config");
-    let _ = writeln!(out, "        let backend = try await factory.create(config: config)");
+    let _ = writeln!(
+        out,
+        "        let backend = try await factory.create(config: config)"
+    );
     let _ = writeln!(out, "        lock.lock()");
     let _ = writeln!(out, "        let id = nextInstanceId");
     let _ = writeln!(out, "        nextInstanceId += 1");
@@ -353,7 +369,11 @@ fn write_method_arm(out: &mut String, method: &Method) {
     if has_error {
         let _ = writeln!(out, "            do {{");
     }
-    let indent = if has_error { "                " } else { "            " };
+    let indent = if has_error {
+        "                "
+    } else {
+        "            "
+    };
     if !method.args.is_empty() {
         let _ = writeln!(out, "{indent}var c = Bincode.Cursor(payload)");
     }
@@ -387,8 +407,17 @@ fn write_method_arm(out: &mut String, method: &Method) {
         let err_ty = method.error.as_ref().unwrap().to_swift();
         let _ = writeln!(out, "            }} catch let err as {err_ty} {{");
         let _ = writeln!(out, "                var errOut = Data()");
-        write_write_expr(out, "                ", method.error.as_ref().unwrap(), "err", "errOut");
-        let _ = writeln!(out, "                throw PluginException(payload: errOut)");
+        write_write_expr(
+            out,
+            "                ",
+            method.error.as_ref().unwrap(),
+            "err",
+            "errOut",
+        );
+        let _ = writeln!(
+            out,
+            "                throw PluginException(payload: errOut)"
+        );
         let _ = writeln!(out, "            }}");
     }
 }
@@ -459,16 +488,25 @@ fn write_write_expr(out: &mut String, indent: &str, ty: &TypeRef, binding: &str,
             let _ = writeln!(out, "{indent}Bincode.writeU8(&{buf}, {binding})");
         }
         TypeRef::I8 => {
-            let _ = writeln!(out, "{indent}Bincode.writeU8(&{buf}, UInt8(bitPattern: {binding}))");
+            let _ = writeln!(
+                out,
+                "{indent}Bincode.writeU8(&{buf}, UInt8(bitPattern: {binding}))"
+            );
         }
         TypeRef::U16 | TypeRef::U32 => {
-            let _ = writeln!(out, "{indent}Bincode.writeVarintU32(&{buf}, UInt32({binding}))");
+            let _ = writeln!(
+                out,
+                "{indent}Bincode.writeVarintU32(&{buf}, UInt32({binding}))"
+            );
         }
         TypeRef::U64 => {
             let _ = writeln!(out, "{indent}Bincode.writeVarintU64(&{buf}, {binding})");
         }
         TypeRef::I16 | TypeRef::I32 => {
-            let _ = writeln!(out, "{indent}Bincode.writeVarintI32(&{buf}, Int32({binding}))");
+            let _ = writeln!(
+                out,
+                "{indent}Bincode.writeVarintI32(&{buf}, Int32({binding}))"
+            );
         }
         TypeRef::I64 => {
             let _ = writeln!(out, "{indent}Bincode.writeVarintI64(&{buf}, {binding})");

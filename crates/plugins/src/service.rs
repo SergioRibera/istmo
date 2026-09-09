@@ -285,9 +285,7 @@ impl ServiceContext {
         if self.stopped_flag.load(Ordering::Acquire) {
             return true;
         }
-        if self.cancel.is_cancelled()
-            || self.stop_rx.is_disconnected()
-            || !self.stop_rx.is_empty()
+        if self.cancel.is_cancelled() || self.stop_rx.is_disconnected() || !self.stop_rx.is_empty()
         {
             self.stopped_flag.store(true, Ordering::Release);
             return true;

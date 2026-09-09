@@ -21,11 +21,6 @@ use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 use istmo::IstmoError;
-use istmo::plugins::{
-    BannerSlot, EdgeInsets, NotificationError, NotificationImportance, NotificationRequest,
-    NotificationsClient, PermissionsClient, SafeArea, SafeAreaInsets, SlotTarget,
-    banner_rect_from_logical,
-};
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -33,6 +28,11 @@ use istmo::plugins::{
     target_os = "visionos",
 ))]
 use istmo::plugins::safe_area::SafeAreaPublisher;
+use istmo::plugins::{
+    BannerSlot, EdgeInsets, NotificationError, NotificationImportance, NotificationRequest,
+    NotificationsClient, PermissionsClient, SafeArea, SafeAreaInsets, SlotTarget,
+    banner_rect_from_logical,
+};
 use istmo_plugins::admob::{
     AdError, AdMobClient, AdMobConfig, InterstitialOutcome, RewardedOutcome,
 };
@@ -82,7 +82,9 @@ pub(crate) fn main() {
     // — no `Send` bound. Match its shape exactly or the compile fails
     // with `expected trait FnOnce(...), found FnOnce(...) + Send`.
     #[cfg(target_os = "android")]
-    let event_loop_builder: Option<Box<dyn FnOnce(&mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>)>> = {
+    let event_loop_builder: Option<
+        Box<dyn FnOnce(&mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>)>,
+    > = {
         let app = istmo::android::android_app()
             .expect("android_main should have stashed the AndroidApp handle before entering main");
         Some(Box::new(move |builder| {
@@ -91,8 +93,9 @@ pub(crate) fn main() {
         }))
     };
     #[cfg(not(target_os = "android"))]
-    let event_loop_builder: Option<Box<dyn FnOnce(&mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>)>> =
-        None;
+    let event_loop_builder: Option<
+        Box<dyn FnOnce(&mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>)>,
+    > = None;
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
@@ -292,7 +295,9 @@ impl DemoApp {
                 }
             }
         }
-        self.safe_area.as_ref().and_then(|s| s.current().ok().flatten())
+        self.safe_area
+            .as_ref()
+            .and_then(|s| s.current().ok().flatten())
     }
 
     fn set_ad_status(status: &Arc<Mutex<AdStatus>>, ctx: &egui::Context, next: AdStatus) {
@@ -602,8 +607,7 @@ impl DemoApp {
                 AdStatus::Idle => {
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new("Scroll down to see banners appear inline.")
-                                .weak(),
+                            egui::RichText::new("Scroll down to see banners appear inline.").weak(),
                         )
                         .wrap(),
                     );
@@ -620,8 +624,7 @@ impl DemoApp {
                 AdStatus::Err(msg) => {
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(msg)
-                                .color(egui::Color32::from_rgb(220, 90, 90)),
+                            egui::RichText::new(msg).color(egui::Color32::from_rgb(220, 90, 90)),
                         )
                         .wrap(),
                     );
@@ -650,7 +653,8 @@ impl DemoApp {
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
 
         let visuals = ui.visuals().clone();
-        ui.painter().rect_filled(rect, 8.0, visuals.extreme_bg_color);
+        ui.painter()
+            .rect_filled(rect, 8.0, visuals.extreme_bg_color);
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -668,13 +672,8 @@ impl DemoApp {
         }
 
         let target = if clip.intersects(rect) {
-            let br = banner_rect_from_logical(
-                rect.min.x,
-                rect.min.y,
-                rect.width(),
-                rect.height(),
-                px,
-            );
+            let br =
+                banner_rect_from_logical(rect.min.x, rect.min.y, rect.width(), rect.height(), px);
             SlotTarget::Show(br)
         } else {
             SlotTarget::Hide
@@ -715,9 +714,7 @@ fn render_account(ui: &mut egui::Ui, account: &AccountView) {
 
 fn render_feed_item(ui: &mut egui::Ui, item: &FeedItem) {
     ui.horizontal(|ui| {
-        ui.add(
-            egui::Label::new(egui::RichText::new(&item.author).strong().monospace()).truncate(),
-        );
+        ui.add(egui::Label::new(egui::RichText::new(&item.author).strong().monospace()).truncate());
         ui.add_space(6.0);
         ui.add(
             egui::Label::new(

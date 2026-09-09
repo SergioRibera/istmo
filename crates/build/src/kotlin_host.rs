@@ -105,11 +105,7 @@ fn write_backend_method(out: &mut String, method: &Method) {
             if !throws.is_empty() {
                 let _ = writeln!(out, "   {throws}");
             }
-            let _ = writeln!(
-                out,
-                "    suspend fun {}({args}): {ret}",
-                method.name,
-            );
+            let _ = writeln!(out, "    suspend fun {}({args}): {ret}", method.name);
         }
         MethodKind::Stream => {
             let _ = writeln!(
@@ -157,7 +153,10 @@ fn write_codecs_interface(out: &mut String, contract: &Contract) {
                 out,
                 "    fun read{ty}(bytes: ByteArray, offset: Int): Bincode.Decoded<{ty}>",
             );
-            let _ = writeln!(out, "    fun write{ty}(out: ByteArrayOutputStream, value: {ty})");
+            let _ = writeln!(
+                out,
+                "    fun write{ty}(out: ByteArrayOutputStream, value: {ty})"
+            );
         }
     }
     let _ = writeln!(out, "}}");
@@ -225,7 +224,10 @@ fn write_dispatcher_class(out: &mut String, contract: &Contract) {
         out,
         "/// Decodes wire calls, invokes `{name}Backend`, encodes the response.",
     );
-    let _ = writeln!(out, "/// Register with `IstmoRuntime.registerHandler(PLUGIN_ID, dispatcher)`.");
+    let _ = writeln!(
+        out,
+        "/// Register with `IstmoRuntime.registerHandler(PLUGIN_ID, dispatcher)`."
+    );
 
     if contract.init.is_some() {
         write_stateful_dispatcher(out, contract);
@@ -241,10 +243,7 @@ fn write_stateless_dispatcher(out: &mut String, contract: &Contract) {
     } else {
         "PluginHandler"
     };
-    let _ = writeln!(
-        out,
-        "class {name}Dispatcher(",
-    );
+    let _ = writeln!(out, "class {name}Dispatcher(");
     let _ = writeln!(out, "    private val backend: {name}Backend,");
     let _ = writeln!(out, "    private val codecs: {name}Codecs,");
     let _ = writeln!(out, ") : {bases} {{");
@@ -258,7 +257,10 @@ fn write_stateless_dispatcher(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
     if uses_native_handles(contract) {
-        let _ = writeln!(out, "    override fun releaseNativeHandle(handleId: Long) {{");
+        let _ = writeln!(
+            out,
+            "    override fun releaseNativeHandle(handleId: Long) {{"
+        );
         let _ = writeln!(
             out,
             "        (backend as? HandleReleaser)?.releaseNativeHandle(handleId)",
@@ -305,10 +307,16 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
         out,
         "    private val instances = java.util.concurrent.ConcurrentHashMap<Long, {name}Backend>()",
     );
-    let _ = writeln!(out, "    private val nextInstanceId = java.util.concurrent.atomic.AtomicLong(1)");
+    let _ = writeln!(
+        out,
+        "    private val nextInstanceId = java.util.concurrent.atomic.AtomicLong(1)"
+    );
     if uses_native_handles(contract) {
         let _ = writeln!(out);
-        let _ = writeln!(out, "    override fun releaseNativeHandle(handleId: Long) {{");
+        let _ = writeln!(
+            out,
+            "    override fun releaseNativeHandle(handleId: Long) {{"
+        );
         let _ = writeln!(out, "        for (backend in instances.values) {{");
         let _ = writeln!(
             out,
@@ -344,7 +352,10 @@ fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
     );
     if stateful {
         let _ = writeln!(out, "        val backend = instances[instanceId]");
-        let _ = writeln!(out, "            ?: error(\"{name}: unknown instance $instanceId\")");
+        let _ = writeln!(
+            out,
+            "            ?: error(\"{name}: unknown instance $instanceId\")"
+        );
     }
     let _ = writeln!(out, "        return when (method) {{");
     for method in &contract.methods {
@@ -364,7 +375,11 @@ fn write_method_arm(out: &mut String, method: &Method) {
     if has_error {
         let _ = writeln!(out, "                try {{");
     }
-    let indent = if has_error { "                    " } else { "                " };
+    let indent = if has_error {
+        "                    "
+    } else {
+        "                "
+    };
     if !method.args.is_empty() {
         let _ = writeln!(out, "{indent}var cursor = 0");
     }
@@ -375,11 +390,7 @@ fn write_method_arm(out: &mut String, method: &Method) {
     }
     let call_args = arg_names.join(", ");
     if matches!(method.returns, TypeRef::Unit) {
-        let _ = writeln!(
-            out,
-            "{indent}backend.{}({call_args})",
-            method.name,
-        );
+        let _ = writeln!(out, "{indent}backend.{}({call_args})", method.name);
         let _ = writeln!(out, "{indent}ByteArray(0)");
     } else {
         let _ = writeln!(
@@ -402,9 +413,21 @@ fn write_method_arm(out: &mut String, method: &Method) {
             out,
             "                    val err = e.error as? {err_ty} ?: throw e",
         );
-        let _ = writeln!(out, "                    val errOut = ByteArrayOutputStream()");
-        write_write_expr(out, "                    ", method.error.as_ref().unwrap(), "err", "errOut");
-        let _ = writeln!(out, "                    throw PluginException(errOut.toByteArray())");
+        let _ = writeln!(
+            out,
+            "                    val errOut = ByteArrayOutputStream()"
+        );
+        write_write_expr(
+            out,
+            "                    ",
+            method.error.as_ref().unwrap(),
+            "err",
+            "errOut",
+        );
+        let _ = writeln!(
+            out,
+            "                    throw PluginException(errOut.toByteArray())"
+        );
         let _ = writeln!(out, "                }}");
     }
     let _ = writeln!(out, "            }}");
@@ -462,11 +485,15 @@ fn read_expr(ty: &TypeRef, bytes: &str, cursor: &str) -> String {
         TypeRef::Bool => format!("Bincode.readBool({bytes}, {cursor})"),
         TypeRef::U8 | TypeRef::U16 | TypeRef::U32 | TypeRef::U64 => {
             let cast = kt_int_cast(ty);
-            format!("Bincode.readVarintU64({bytes}, {cursor}).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}")
+            format!(
+                "Bincode.readVarintU64({bytes}, {cursor}).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}"
+            )
         }
         TypeRef::I8 | TypeRef::I16 | TypeRef::I32 | TypeRef::I64 => {
             let cast = kt_int_cast(ty);
-            format!("Bincode.readVarintI64({bytes}, {cursor}).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}")
+            format!(
+                "Bincode.readVarintI64({bytes}, {cursor}).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}"
+            )
         }
         TypeRef::F32 => format!("Bincode.readF32({bytes}, {cursor})"),
         TypeRef::F64 => format!("Bincode.readF64({bytes}, {cursor})"),

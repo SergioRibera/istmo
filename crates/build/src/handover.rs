@@ -122,8 +122,8 @@ pub fn serialize_native_deps(deps: &NativeDeps) -> Result<String, HandoverError>
 /// Reverse of [`serialize_native_deps`].
 pub fn deserialize_native_deps(hex: &str) -> Result<NativeDeps, HandoverError> {
     let bytes = hex_decode(hex)?;
-    let (deps, _) =
-        bincode::decode_from_slice::<NativeDeps, _>(&bytes, CODEC).map_err(HandoverError::Decode)?;
+    let (deps, _) = bincode::decode_from_slice::<NativeDeps, _>(&bytes, CODEC)
+        .map_err(HandoverError::Decode)?;
     Ok(deps)
 }
 
@@ -188,9 +188,7 @@ pub fn collect_dep_native_deps() -> NativeDeps {
                 out.merge(deps);
             }
             Err(err) => {
-                println!(
-                    "cargo::warning=istmo handover decode failed for {var}: {err}",
-                );
+                println!("cargo::warning=istmo handover decode failed for {var}: {err}");
             }
         }
     }

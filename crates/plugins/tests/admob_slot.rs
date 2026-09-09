@@ -34,7 +34,9 @@ fn spawn_create_instance(
 ) {
     let env = outbound.recv().expect("create envelope");
     let call_id = match env.frame {
-        Frame::CreateInstance { call_id, plugin_id, .. } => {
+        Frame::CreateInstance {
+            call_id, plugin_id, ..
+        } => {
             assert_eq!(plugin_id, ADMOB_PLUGIN_ID);
             call_id
         }
@@ -65,7 +67,8 @@ fn slot_starts_idle_and_reports_no_error() {
 
     // Answer the CreateInstance so from_runtime_with can complete.
     let backend_rt = rt.clone();
-    let backend = thread::spawn(move || spawn_create_instance(&backend_rt, &outbound, InstanceId(1)));
+    let backend =
+        thread::spawn(move || spawn_create_instance(&backend_rt, &outbound, InstanceId(1)));
     let client = build_client(&rt);
     backend.join().unwrap();
 
@@ -88,16 +91,28 @@ fn show_triggers_show_banner_call_and_transitions_to_live() {
         // Answer show_banner with handle 42
         let env = backend_outbound.recv().expect("show");
         let (call_id, req) = match env.frame {
-            Frame::Call { call_id, method, payload, .. } => {
+            Frame::Call {
+                call_id,
+                method,
+                payload,
+                ..
+            } => {
                 assert_eq!(method, "show_banner");
-                let ((r,), _) =
-                    codec::decode::<(istmo_plugins::BannerRequest,)>(&payload).unwrap();
+                let ((r,), _) = codec::decode::<(istmo_plugins::BannerRequest,)>(&payload).unwrap();
                 (call_id, r)
             }
             other => panic!("expected show Call, got {other:?}"),
         };
         assert_eq!(req.ad_unit_id, "ad-unit");
-        assert_eq!(req.rect, BannerRect { x: 10, y: 20, width: 320, height: 50 });
+        assert_eq!(
+            req.rect,
+            BannerRect {
+                x: 10,
+                y: 20,
+                width: 320,
+                height: 50
+            }
+        );
         backend_rt
             .dispatch_inbound(Envelope::new(Frame::Respond {
                 call_id,
@@ -108,7 +123,12 @@ fn show_triggers_show_banner_call_and_transitions_to_live() {
 
     let client = build_client(&rt);
     let slot = BannerSlot::new("ad-unit", client).with_spawn(sync_spawn());
-    slot.sync(SlotTarget::Show(BannerRect { x: 10, y: 20, width: 320, height: 50 }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 10,
+        y: 20,
+        width: 320,
+        height: 50,
+    }));
     backend.join().unwrap();
 
     assert_eq!(slot.status(), SlotStatus::Live);
@@ -142,14 +162,22 @@ fn syncing_the_same_rect_twice_produces_a_single_show_call() {
 
     let client = build_client(&rt);
     let slot = BannerSlot::new("u", client).with_spawn(sync_spawn());
-    let rect = BannerRect { x: 0, y: 0, width: 320, height: 50 };
+    let rect = BannerRect {
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 50,
+    };
     slot.sync(SlotTarget::Show(rect));
     slot.sync(SlotTarget::Show(rect));
     slot.sync(SlotTarget::Show(rect));
     backend.join().unwrap();
 
     // No further outbound frames.
-    assert!(outbound.try_recv().is_err(), "expected no follow-up call, got one");
+    assert!(
+        outbound.try_recv().is_err(),
+        "expected no follow-up call, got one"
+    );
 }
 
 #[test]
@@ -166,7 +194,9 @@ fn changing_rect_after_live_triggers_update_banner_without_reload() {
         // show_banner
         let env = backend_outbound.recv().unwrap();
         let show_call = match env.frame {
-            Frame::Call { call_id, method, .. } => {
+            Frame::Call {
+                call_id, method, ..
+            } => {
                 assert_eq!(method, "show_banner");
                 call_id
             }
@@ -182,7 +212,12 @@ fn changing_rect_after_live_triggers_update_banner_without_reload() {
         // update_banner
         let env = backend_outbound.recv().unwrap();
         let (call_id, handle_arg, rect_arg) = match env.frame {
-            Frame::Call { call_id, method, payload, .. } => {
+            Frame::Call {
+                call_id,
+                method,
+                payload,
+                ..
+            } => {
                 assert_eq!(method, "update_banner");
                 let ((h, r), _) = codec::decode::<(NativeHandleId, BannerRect)>(&payload).unwrap();
                 (call_id, h, r)
@@ -190,7 +225,15 @@ fn changing_rect_after_live_triggers_update_banner_without_reload() {
             other => panic!("expected update, got {other:?}"),
         };
         assert_eq!(handle_arg, NativeHandleId(7));
-        assert_eq!(rect_arg, BannerRect { x: 100, y: 200, width: 320, height: 50 });
+        assert_eq!(
+            rect_arg,
+            BannerRect {
+                x: 100,
+                y: 200,
+                width: 320,
+                height: 50
+            }
+        );
         backend_rt
             .dispatch_inbound(Envelope::new(Frame::Respond {
                 call_id,
@@ -201,8 +244,18 @@ fn changing_rect_after_live_triggers_update_banner_without_reload() {
 
     let client = build_client(&rt);
     let slot = BannerSlot::new("u", client).with_spawn(sync_spawn());
-    slot.sync(SlotTarget::Show(BannerRect { x: 0, y: 0, width: 320, height: 50 }));
-    slot.sync(SlotTarget::Show(BannerRect { x: 100, y: 200, width: 320, height: 50 }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 50,
+    }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 100,
+        y: 200,
+        width: 320,
+        height: 50,
+    }));
     backend.join().unwrap();
 
     // Still Live — update did not tear down.
@@ -235,7 +288,12 @@ fn hide_after_live_calls_hide_banner_and_returns_to_idle() {
 
         let env = backend_outbound.recv().unwrap();
         let (hide_call, handle_arg) = match env.frame {
-            Frame::Call { call_id, method, payload, .. } => {
+            Frame::Call {
+                call_id,
+                method,
+                payload,
+                ..
+            } => {
                 assert_eq!(method, "hide_banner");
                 let ((h,), _) = codec::decode::<(NativeHandleId,)>(&payload).unwrap();
                 (call_id, h)
@@ -253,7 +311,12 @@ fn hide_after_live_calls_hide_banner_and_returns_to_idle() {
 
     let client = build_client(&rt);
     let slot = BannerSlot::new("u", client).with_spawn(sync_spawn());
-    slot.sync(SlotTarget::Show(BannerRect { x: 0, y: 0, width: 320, height: 50 }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 50,
+    }));
     assert_eq!(slot.status(), SlotStatus::Live);
     slot.sync(SlotTarget::Hide);
     backend.join().unwrap();
@@ -271,7 +334,8 @@ fn hide_while_idle_is_a_noop() {
     let outbound = init.outbound.clone();
 
     let backend_rt = rt.clone();
-    let backend = thread::spawn(move || spawn_create_instance(&backend_rt, &outbound, InstanceId(1)));
+    let backend =
+        thread::spawn(move || spawn_create_instance(&backend_rt, &outbound, InstanceId(1)));
     let client = build_client(&rt);
     backend.join().unwrap();
 
@@ -308,23 +372,48 @@ fn show_domain_error_records_typed_ad_error() {
 
     let client = build_client(&rt);
     let slot = BannerSlot::new("u", client).with_spawn(sync_spawn());
-    slot.sync(SlotTarget::Show(BannerRect { x: 0, y: 0, width: 320, height: 50 }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 50,
+    }));
     backend.join().unwrap();
 
-    assert_eq!(slot.status(), SlotStatus::Idle, "failed show → back to Idle");
+    assert_eq!(
+        slot.status(),
+        SlotStatus::Idle,
+        "failed show → back to Idle"
+    );
     assert_eq!(slot.last_error(), Some(istmo_plugins::AdError::NoFill));
 }
 
 #[test]
 fn rect_helper_converts_logical_units_via_scale_and_clamps_negatives() {
     let r = banner_rect_from_logical(10.0, 20.0, 320.0, 50.0, 2.5);
-    assert_eq!(r, BannerRect { x: 25, y: 50, width: 800, height: 125 });
+    assert_eq!(
+        r,
+        BannerRect {
+            x: 25,
+            y: 50,
+            width: 800,
+            height: 125
+        }
+    );
 
     // Negative coordinates clamp to zero — a UI computing a rect
     // partially off the top of the screen should not send negative
     // pixel values.
     let clipped = banner_rect_from_logical(-4.0, -10.0, 100.0, 50.0, 3.0);
-    assert_eq!(clipped, BannerRect { x: 0, y: 0, width: 300, height: 150 });
+    assert_eq!(
+        clipped,
+        BannerRect {
+            x: 0,
+            y: 0,
+            width: 300,
+            height: 150
+        }
+    );
 }
 
 #[test]
@@ -357,8 +446,18 @@ fn multiple_slots_can_share_the_same_client_arc() {
     let client = build_client(&rt);
     let slot_a = BannerSlot::new("a", client.clone()).with_spawn(sync_spawn());
     let slot_b = BannerSlot::new("b", client).with_spawn(sync_spawn());
-    slot_a.sync(SlotTarget::Show(BannerRect { x: 0, y: 0, width: 320, height: 50 }));
-    slot_b.sync(SlotTarget::Show(BannerRect { x: 0, y: 800, width: 320, height: 50 }));
+    slot_a.sync(SlotTarget::Show(BannerRect {
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 50,
+    }));
+    slot_b.sync(SlotTarget::Show(BannerRect {
+        x: 0,
+        y: 800,
+        width: 320,
+        height: 50,
+    }));
     backend.join().unwrap();
 
     assert_eq!(slot_a.status(), SlotStatus::Live);
@@ -366,6 +465,7 @@ fn multiple_slots_can_share_the_same_client_arc() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rapid_rect_changes_coalesce_to_the_latest_via_one_updater_task() {
     // Simulate a fast scroll: sync() fires four different rects in a
     // row while the first update_banner is in flight. The coalescing
@@ -403,7 +503,12 @@ fn rapid_rect_changes_coalesce_to_the_latest_via_one_updater_task() {
         // First update — do NOT respond until release_rx fires.
         let first = backend_outbound.recv().unwrap();
         let first_call = match &first.frame {
-            Frame::Call { call_id, method, payload, .. } => {
+            Frame::Call {
+                call_id,
+                method,
+                payload,
+                ..
+            } => {
                 assert_eq!(method, "update_banner");
                 let ((_, r), _) = codec::decode::<(NativeHandleId, BannerRect)>(payload).unwrap();
                 assert_eq!(r.x, 10, "first update rect");
@@ -423,7 +528,12 @@ fn rapid_rect_changes_coalesce_to_the_latest_via_one_updater_task() {
         // The coalesced next call should carry the LATEST rect only.
         let next = backend_outbound.recv().unwrap();
         match next.frame {
-            Frame::Call { method, payload, call_id, .. } => {
+            Frame::Call {
+                method,
+                payload,
+                call_id,
+                ..
+            } => {
                 assert_eq!(method, "update_banner");
                 let ((_, r), _) = codec::decode::<(NativeHandleId, BannerRect)>(&payload).unwrap();
                 assert_eq!(r.x, 40, "coalesced update should carry latest rect only");
@@ -443,21 +553,46 @@ fn rapid_rect_changes_coalesce_to_the_latest_via_one_updater_task() {
     // parks on the mutex when the backend delays its response. The
     // `sync_spawn` foreground executor would deadlock.
     let slot = BannerSlot::new("u", client);
-    slot.sync(SlotTarget::Show(BannerRect { x: 0, y: 0, width: 320, height: 50 }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 50,
+    }));
     // Poll until Live — the backend answers show_banner immediately.
     while slot.status() != SlotStatus::Live {
         thread::sleep(std::time::Duration::from_millis(2));
     }
 
     // Fire the first update; the backend blocks on it until release_tx.
-    slot.sync(SlotTarget::Show(BannerRect { x: 10, y: 0, width: 320, height: 50 }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 10,
+        y: 0,
+        width: 320,
+        height: 50,
+    }));
     // Wait for the first update Call to leave the outbound.
     thread::sleep(std::time::Duration::from_millis(50));
 
     // Now spam intermediate rects — they should coalesce into the last.
-    slot.sync(SlotTarget::Show(BannerRect { x: 20, y: 0, width: 320, height: 50 }));
-    slot.sync(SlotTarget::Show(BannerRect { x: 30, y: 0, width: 320, height: 50 }));
-    slot.sync(SlotTarget::Show(BannerRect { x: 40, y: 0, width: 320, height: 50 }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 20,
+        y: 0,
+        width: 320,
+        height: 50,
+    }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 30,
+        y: 0,
+        width: 320,
+        height: 50,
+    }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 40,
+        y: 0,
+        width: 320,
+        height: 50,
+    }));
 
     // Release the backend — it will send its second update, which must
     // carry rect x=40 (the newest), never x=20 or x=30.
@@ -501,7 +636,12 @@ fn injected_spawn_is_the_only_executor_used() {
         *counter_clone.lock().unwrap() += 1;
         pollster::block_on(fut);
     });
-    slot.sync(SlotTarget::Show(BannerRect { x: 0, y: 0, width: 320, height: 50 }));
+    slot.sync(SlotTarget::Show(BannerRect {
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 50,
+    }));
     backend.join().unwrap();
 
     assert_eq!(*counter.lock().unwrap(), 1, "exactly one spawn per action");

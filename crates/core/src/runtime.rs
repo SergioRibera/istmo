@@ -414,10 +414,7 @@ impl Runtime {
     /// # Errors
     /// Returns [`IstmoError::ProtocolVersionMismatch`] on version drift,
     /// otherwise the codec error surfaces through [`IstmoError::Codec`].
-    pub fn inject_wire_envelope(
-        self: &Arc<Self>,
-        bytes: &[u8],
-    ) -> Result<(), IstmoError> {
+    pub fn inject_wire_envelope(self: &Arc<Self>, bytes: &[u8]) -> Result<(), IstmoError> {
         let envelope = Envelope::from_wire_bytes(bytes)?;
         self.dispatch_inbound(envelope)
     }
@@ -582,10 +579,8 @@ impl Runtime {
                 }
                 Err(err) => {
                     tracing::error!(?err, ?call_id, "hosted dispatch failed");
-                    runtime.send_respond(
-                        call_id,
-                        Err(encode_dispatch_error_string(&err.to_string())),
-                    );
+                    runtime
+                        .send_respond(call_id, Err(encode_dispatch_error_string(&err.to_string())));
                 }
             }
         });
@@ -595,7 +590,11 @@ impl Runtime {
     /// [`Frame::Event`] per item and a `StreamEnd { Complete }` when the
     /// sender disconnects. Uses local short-circuit when a same-runtime
     /// caller is waiting on `stream_id`.
-    fn spawn_stream_pump(self: &Arc<Self>, stream_id: StreamId, receiver: flume::Receiver<Vec<u8>>) {
+    fn spawn_stream_pump(
+        self: &Arc<Self>,
+        stream_id: StreamId,
+        receiver: flume::Receiver<Vec<u8>>,
+    ) {
         let runtime = Arc::clone(self);
         std::thread::spawn(move || {
             while let Ok(bytes) = receiver.recv() {

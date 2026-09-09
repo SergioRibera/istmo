@@ -64,10 +64,7 @@ pub fn generate_kotlin_client(contract: &Contract) -> String {
             out,
             "/// Kotlin-side view of a domain error decoded from `Frame::Respond {{ Err(bytes) }}`.",
         );
-        let _ = writeln!(
-            out,
-            "class {name}Exception(",
-        );
+        let _ = writeln!(out, "class {name}Exception(");
         let _ = writeln!(out, "    val payload: ByteArray,");
         let _ = writeln!(out, "    val decoded: {err_ty}?,");
         let _ = writeln!(out, ") : RuntimeException()");
@@ -255,11 +252,15 @@ fn read_expr(ty: &TypeRef, bytes: &str, cursor: &str) -> String {
         TypeRef::Bool => format!("Bincode.readBool({bytes}, {cursor})"),
         TypeRef::U8 | TypeRef::U16 | TypeRef::U32 | TypeRef::U64 => {
             let cast = kt_int_cast(ty);
-            format!("Bincode.readVarintU64({bytes}, {cursor}).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}")
+            format!(
+                "Bincode.readVarintU64({bytes}, {cursor}).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}"
+            )
         }
         TypeRef::I8 | TypeRef::I16 | TypeRef::I32 | TypeRef::I64 => {
             let cast = kt_int_cast(ty);
-            format!("Bincode.readVarintI64({bytes}, {cursor}).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}")
+            format!(
+                "Bincode.readVarintI64({bytes}, {cursor}).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}"
+            )
         }
         TypeRef::F32 => format!("Bincode.readF32({bytes}, {cursor})"),
         TypeRef::F64 => format!("Bincode.readF64({bytes}, {cursor})"),

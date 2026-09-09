@@ -35,13 +35,13 @@ pub use crate::activity_results::{
     ACTIVITY_RESULTS_PLUGIN_ID, ActivityLaunchError, ActivityOutcome, ActivityResult,
     ActivityResults, ActivityResultsClient, ActivityResultsHost, ExtraValue, IntentRequest,
 };
+pub use crate::admob::slot::{
+    BannerSlot, BoxFuture as BannerSlotBoxFuture, SlotStatus, SlotTarget,
+    SpawnFn as BannerSlotSpawnFn, banner_rect_from_logical,
+};
 pub use crate::admob::{
     ADMOB_PLUGIN_ID, AdError, AdMob, AdMobClient, AdMobConfig, AdMobHost, Banner, BannerRect,
     BannerRequest, Interstitial, InterstitialOutcome, Rewarded, RewardedOutcome,
-};
-pub use crate::admob::slot::{
-    BannerSlot, BoxFuture as BannerSlotBoxFuture, SlotStatus, SlotTarget, SpawnFn as BannerSlotSpawnFn,
-    banner_rect_from_logical,
 };
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
 pub use crate::google_sign_in::{
@@ -57,7 +57,9 @@ pub use crate::permissions::{
     PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions, PermissionsClient,
     PermissionsHost,
 };
-pub use crate::safe_area::{EdgeInsets, SAFE_AREA_CHANNEL, SafeArea, SafeAreaInsets, SafeAreaStream};
+pub use crate::safe_area::{
+    EdgeInsets, SAFE_AREA_CHANNEL, SafeArea, SafeAreaInsets, SafeAreaStream,
+};
 pub use crate::service::{
     NotificationSpec, SERVICE_CONTROL_PLUGIN_ID, ServiceContext, ServiceControl,
     ServiceControlClient, ServiceControlError, ServiceControlHost, StopNotifier, WakeLock,

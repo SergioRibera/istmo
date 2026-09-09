@@ -95,9 +95,9 @@ struct MobileAppArgs;
 impl Parse for MobileAppArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         if !input.is_empty() {
-            return Err(input.error(
-                "`#[istmo::mobile_app]` does not take arguments in this version",
-            ));
+            return Err(
+                input.error("`#[istmo::mobile_app]` does not take arguments in this version")
+            );
         }
         Ok(Self)
     }

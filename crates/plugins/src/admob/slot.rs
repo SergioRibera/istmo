@@ -426,15 +426,12 @@ fn default_spawn() -> SpawnFn {
 /// wire error's Display representation.
 fn classify(err: &IstmoError) -> AdError {
     match err {
-        IstmoError::PluginError { bytes } => {
-            match istmo_core::codec::decode::<AdError>(bytes) {
-                Ok((decoded, _)) => decoded,
-                Err(_) => AdError::Internal(format!(
-                    "undecodable domain error ({} bytes)",
-                    bytes.len(),
-                )),
+        IstmoError::PluginError { bytes } => match istmo_core::codec::decode::<AdError>(bytes) {
+            Ok((decoded, _)) => decoded,
+            Err(_) => {
+                AdError::Internal(format!("undecodable domain error ({} bytes)", bytes.len()))
             }
-        }
+        },
         other => AdError::Internal(other.to_string()),
     }
 }

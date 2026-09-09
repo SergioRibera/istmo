@@ -240,7 +240,12 @@ fn app_to_remote_call_and_response_flow_over_bridge_bytes() {
 
     // ---- Reverse direction: :remote calls the app-hosted plugin ------
     let handle = remote
-        .call(AppHost::PLUGIN_ID, None, "notify", codec::encode(&()).unwrap())
+        .call(
+            AppHost::PLUGIN_ID,
+            None,
+            "notify",
+            codec::encode(&()).unwrap(),
+        )
         .expect("open reverse call");
     let response = pollster::block_on(handle).expect("remote-side call handle");
     let bytes = match response {

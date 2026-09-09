@@ -33,9 +33,7 @@ fn main() {
     let gen_dir = root
         .join("../../android/app/src/main/java/dev/istmo/multi/gen")
         .canonicalize()
-        .unwrap_or_else(|_| {
-            root.join("../../android/app/src/main/java/dev/istmo/multi/gen")
-        });
+        .unwrap_or_else(|_| root.join("../../android/app/src/main/java/dev/istmo/multi/gen"));
 
     // ---- Rust-hosted plugins (Kotlin calls Rust) --------------------
     emit_client_bundle(&gen_dir, "dev.istmo.multi.gen", &app_control_contract());

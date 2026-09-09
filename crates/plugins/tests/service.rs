@@ -223,7 +223,10 @@ fn cancel_token_trips_is_stopped_and_wakes_stopped_future() {
 
     assert!(!ctx.is_stopped());
     cancel.cancel();
-    assert!(ctx.is_stopped(), "cancel token trip should surface as stopped");
+    assert!(
+        ctx.is_stopped(),
+        "cancel token trip should surface as stopped"
+    );
     pollster::block_on(ctx.stopped());
 }
 

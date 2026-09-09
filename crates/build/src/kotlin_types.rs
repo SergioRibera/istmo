@@ -127,7 +127,11 @@ fn write_struct_codec(out: &mut String, s: &StructDef) {
         .map(|f| format!("{} = {}", f.name, f.name))
         .collect::<Vec<_>>()
         .join(", ");
-    let _ = writeln!(out, "        return Bincode.Decoded({}({}), cursor)", s.name, field_list);
+    let _ = writeln!(
+        out,
+        "        return Bincode.Decoded({}({}), cursor)",
+        s.name, field_list
+    );
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
     // write
@@ -152,7 +156,10 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
     );
     if has_payload {
         let _ = writeln!(out, "        var cursor = offset");
-        let _ = writeln!(out, "        val disc = Bincode.readVarintU64(bytes, cursor)");
+        let _ = writeln!(
+            out,
+            "        val disc = Bincode.readVarintU64(bytes, cursor)"
+        );
         let _ = writeln!(out, "        cursor = disc.consumed");
         let _ = writeln!(out, "        return when (disc.value.toInt()) {{");
         for (i, v) in e.variants.iter().enumerate() {
@@ -212,7 +219,10 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
                 );
             } else {
                 let _ = writeln!(out, "            is {}.{} -> {{", e.name, v.name);
-                let _ = writeln!(out, "                Bincode.writeEnumDiscriminant(out, {i})");
+                let _ = writeln!(
+                    out,
+                    "                Bincode.writeEnumDiscriminant(out, {i})"
+                );
                 write_write_field(out, "                ", "value.value", &v.payload[0]);
                 let _ = writeln!(out, "            }}");
             }
@@ -253,10 +263,7 @@ fn write_read_field(out: &mut String, indent: &str, field_name: &str, ty: &TypeR
 
 fn write_read_bindings_for(out: &mut String, indent: &str, binding: &str, ty: &TypeRef) {
     if let TypeRef::Named(name) = ty {
-        let _ = writeln!(
-            out,
-            "{indent}val d_{binding} = read{name}(bytes, cursor)",
-        );
+        let _ = writeln!(out, "{indent}val d_{binding} = read{name}(bytes, cursor)");
     } else {
         let expr = read_expr(ty);
         let _ = writeln!(out, "{indent}val d_{binding} = {expr}");
@@ -270,11 +277,15 @@ fn read_expr(ty: &TypeRef) -> String {
         TypeRef::Bool => "Bincode.readBool(bytes, cursor)".to_owned(),
         TypeRef::U8 | TypeRef::U16 | TypeRef::U32 | TypeRef::U64 => {
             let cast = kt_int_cast(ty);
-            format!("Bincode.readVarintU64(bytes, cursor).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}")
+            format!(
+                "Bincode.readVarintU64(bytes, cursor).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}"
+            )
         }
         TypeRef::I8 | TypeRef::I16 | TypeRef::I32 | TypeRef::I64 => {
             let cast = kt_int_cast(ty);
-            format!("Bincode.readVarintI64(bytes, cursor).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}")
+            format!(
+                "Bincode.readVarintI64(bytes, cursor).let {{ Bincode.Decoded(it.value{cast}, it.consumed) }}"
+            )
         }
         TypeRef::F32 => "Bincode.readF32(bytes, cursor)".to_owned(),
         TypeRef::F64 => "Bincode.readF64(bytes, cursor)".to_owned(),

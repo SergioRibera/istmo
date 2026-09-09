@@ -235,7 +235,9 @@ fn update_banner_forwards_new_rect_via_typed_call() {
         // show_banner → returns id 42
         let env = backend_outbound.recv().expect("show_banner");
         let show_call = match env.frame {
-            Frame::Call { call_id, method, .. } => {
+            Frame::Call {
+                call_id, method, ..
+            } => {
                 assert_eq!(method, "show_banner");
                 call_id
             }
@@ -281,19 +283,31 @@ fn update_banner_forwards_new_rect_via_typed_call() {
     let client = pollster::block_on(AdMobClient::from_runtime_with(&rt, cfg())).unwrap();
     let banner = pollster::block_on(client.show_banner_owned(BannerRequest {
         ad_unit_id: "unit".to_owned(),
-        rect: BannerRect { x: 0, y: 0, width: 320, height: 50 },
+        rect: BannerRect {
+            x: 0,
+            y: 0,
+            width: 320,
+            height: 50,
+        },
     }))
     .unwrap();
     pollster::block_on(client.update_banner_owned(
         &banner,
-        BannerRect { x: 12, y: 400, width: 320, height: 100 },
+        BannerRect {
+            x: 12,
+            y: 400,
+            width: 320,
+            height: 100,
+        },
     ))
     .expect("update");
     backend.join().unwrap();
     // Handle still alive → dropping it now still triggers release. Prove it.
     drop(banner);
     let release = outbound.recv().expect("release after update+drop");
-    assert!(matches!(release.frame, Frame::ReleaseNativeHandle { handle_id } if handle_id == NativeHandleId(42)));
+    assert!(
+        matches!(release.frame, Frame::ReleaseNativeHandle { handle_id } if handle_id == NativeHandleId(42))
+    );
 }
 
 #[test]
@@ -350,7 +364,12 @@ fn hide_banner_consumes_handle_and_suppresses_release_frame() {
     let client = pollster::block_on(AdMobClient::from_runtime_with(&rt, cfg())).unwrap();
     let banner = pollster::block_on(client.show_banner_owned(BannerRequest {
         ad_unit_id: "unit".to_owned(),
-        rect: BannerRect { x: 0, y: 800, width: 320, height: 50 },
+        rect: BannerRect {
+            x: 0,
+            y: 800,
+            width: 320,
+            height: 50,
+        },
     }))
     .unwrap();
     pollster::block_on(client.hide_banner_owned(banner)).expect("hide");
@@ -358,7 +377,10 @@ fn hide_banner_consumes_handle_and_suppresses_release_frame() {
 
     // No further outbound frames — hide consumed the handle, no
     // ReleaseNativeHandle should appear.
-    assert!(outbound.try_recv().is_err(), "unexpected outbound after hide");
+    assert!(
+        outbound.try_recv().is_err(),
+        "unexpected outbound after hide"
+    );
 }
 
 #[test]

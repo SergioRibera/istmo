@@ -178,7 +178,12 @@ pub fn generate_systemd_unit(contract: &DesktopServiceContract) -> String {
         let _ = writeln!(out, "WorkingDirectory={wd}");
     }
     for (k, v) in &contract.env {
-        let _ = writeln!(out, "Environment=\"{k}={v}\"", k = k, v = escape_double_quote(v));
+        let _ = writeln!(
+            out,
+            "Environment=\"{k}={v}\"",
+            k = k,
+            v = escape_double_quote(v)
+        );
     }
     if contract.scope == ServiceScope::System {
         if let Some(user) = &contract.user {
@@ -228,7 +233,11 @@ pub fn generate_launchd_plist(contract: &DesktopServiceContract) -> String {
     let _ = writeln!(out, "    <string>{}</string>", xml_escape(&contract.label));
     let _ = writeln!(out, "    <key>ProgramArguments</key>");
     let _ = writeln!(out, "    <array>");
-    let _ = writeln!(out, "        <string>{}</string>", xml_escape(&contract.exec_path));
+    let _ = writeln!(
+        out,
+        "        <string>{}</string>",
+        xml_escape(&contract.exec_path)
+    );
     for arg in &contract.args {
         let _ = writeln!(out, "        <string>{}</string>", xml_escape(arg));
     }
@@ -259,10 +268,12 @@ pub fn generate_launchd_plist(contract: &DesktopServiceContract) -> String {
     let run_at_load = matches!(contract.start_type, StartType::Auto);
     let _ = writeln!(out, "    <key>RunAtLoad</key>");
     let _ = writeln!(out, "    <{}/>", if run_at_load { "true" } else { "false" });
-    let keep_alive = contract.launchd_keep_alive.unwrap_or(match contract.restart {
-        RestartPolicy::Always => true,
-        RestartPolicy::Never | RestartPolicy::OnFailure => false,
-    });
+    let keep_alive = contract
+        .launchd_keep_alive
+        .unwrap_or(match contract.restart {
+            RestartPolicy::Always => true,
+            RestartPolicy::Never | RestartPolicy::OnFailure => false,
+        });
     if keep_alive || matches!(contract.restart, RestartPolicy::OnFailure) {
         let _ = writeln!(out, "    <key>KeepAlive</key>");
         if matches!(contract.restart, RestartPolicy::OnFailure) {
@@ -276,7 +287,11 @@ pub fn generate_launchd_plist(contract: &DesktopServiceContract) -> String {
         }
     }
     let _ = writeln!(out, "    <key>ExitTimeOut</key>");
-    let _ = writeln!(out, "    <integer>{}</integer>", contract.stop_timeout_seconds);
+    let _ = writeln!(
+        out,
+        "    <integer>{}</integer>",
+        contract.stop_timeout_seconds
+    );
     let _ = writeln!(out, "</dict>");
     let _ = writeln!(out, "</plist>");
     out
