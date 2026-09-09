@@ -406,6 +406,22 @@ impl Runtime {
             .map_err(|_| IstmoError::ChannelClosed)
     }
 
+    /// Decodes a bincoded envelope and dispatches it. Convenience for
+    /// cross-process bridges (`:remote` AIDL/Binder shuttles) that
+    /// receive raw bytes over the transport and want to hand them
+    /// straight to the runtime without unwrapping the codec manually.
+    ///
+    /// # Errors
+    /// Returns [`IstmoError::ProtocolVersionMismatch`] on version drift,
+    /// otherwise the codec error surfaces through [`IstmoError::Codec`].
+    pub fn inject_wire_envelope(
+        self: &Arc<Self>,
+        bytes: &[u8],
+    ) -> Result<(), IstmoError> {
+        let envelope = Envelope::from_wire_bytes(bytes)?;
+        self.dispatch_inbound(envelope)
+    }
+
     /// Routes an inbound envelope. Called by the platform backend for each
     /// frame received from native.
     pub fn dispatch_inbound(self: &Arc<Self>, envelope: Envelope) -> Result<(), IstmoError> {

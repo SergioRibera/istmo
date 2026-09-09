@@ -216,6 +216,58 @@ fn runtime_notify_without_local_host_emits_outbound_notify_frame() {
 }
 
 #[test]
+fn inject_wire_envelope_bridges_bincoded_bytes_into_dispatch() {
+    // Simulates the receive side of an AIDL/Binder `:remote` bridge:
+    // one process serialises an Envelope, ships the raw bytes, the
+    // other process feeds them straight into `inject_wire_envelope`.
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let outbound = init.outbound;
+    rt.register_host(EchoDispatch::new());
+
+    let call_id = CallId(1234);
+    let envelope = Envelope::new(Frame::Call {
+        call_id,
+        plugin_id: EchoDispatch::PLUGIN_ID.to_owned(),
+        instance_id: None,
+        method: "cross_process".to_owned(),
+        payload: codec::encode(&()).unwrap(),
+    });
+    let wire = envelope.to_wire_bytes().expect("encode");
+
+    rt.inject_wire_envelope(&wire).expect("inject bytes");
+
+    let respond = wait_for_respond(&outbound, call_id);
+    match respond {
+        Frame::Respond { result, .. } => {
+            assert!(result.is_ok(), "cross-process echo should succeed");
+        }
+        other => panic!("expected Respond, got {other:?}"),
+    }
+}
+
+#[test]
+fn inject_wire_envelope_rejects_stale_protocol_version() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+
+    // Craft an envelope with a hand-forged old version.
+    let stale = Envelope {
+        version: istmo_core::PROTOCOL_VERSION - 1,
+        frame: Frame::Cancel { call_id: CallId(1) },
+    };
+    let bytes = codec::encode(&stale).unwrap();
+
+    let err = rt
+        .inject_wire_envelope(&bytes)
+        .expect_err("stale envelope should reject");
+    assert!(matches!(
+        err,
+        istmo_core::IstmoError::ProtocolVersionMismatch { .. },
+    ));
+}
+
+#[test]
 fn inbound_notify_routes_to_registered_host_without_response() {
     let init = Runtime::mock();
     let rt = init.runtime;

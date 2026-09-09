@@ -106,6 +106,34 @@ fn corrupted_bytes_produce_a_decode_error() {
 }
 
 #[test]
+fn to_wire_bytes_round_trips_via_from_wire_bytes() {
+    for frame in all_frames() {
+        let env = Envelope::new(frame.clone());
+        let bytes = env.to_wire_bytes().expect("encode");
+        let back = Envelope::from_wire_bytes(&bytes).expect("decode");
+        assert_eq!(back, env, "wire round-trip mismatch for {frame:?}");
+    }
+}
+
+#[test]
+fn from_wire_bytes_rejects_stale_protocol_version() {
+    // Hand-craft an envelope with a fake older version.
+    let stale = Envelope {
+        version: PROTOCOL_VERSION - 1,
+        frame: Frame::Cancel { call_id: CallId(1) },
+    };
+    let bytes = codec::encode(&stale).expect("encode stale");
+    let err = Envelope::from_wire_bytes(&bytes).expect_err("stale version should reject");
+    match err {
+        istmo_core::IstmoError::ProtocolVersionMismatch { expected, got } => {
+            assert_eq!(expected, PROTOCOL_VERSION);
+            assert_eq!(got, PROTOCOL_VERSION - 1);
+        }
+        other => panic!("expected ProtocolVersionMismatch, got {other:?}"),
+    }
+}
+
+#[test]
 fn extra_trailing_bytes_are_reported_by_the_consumed_count() {
     let env = Envelope::new(Frame::Cancel { call_id: CallId(1) });
     let mut bytes = codec::encode(&env).expect("encode");

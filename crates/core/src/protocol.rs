@@ -138,6 +138,32 @@ impl Envelope {
             frame,
         }
     }
+
+    /// Bincode-encode this envelope into the exact byte shape the wire
+    /// pump ships. Convenience wrapper over
+    /// [`crate::codec::encode`] so cross-process bridges do not need
+    /// to reach into the codec module directly.
+    pub fn to_wire_bytes(&self) -> Result<Vec<u8>, crate::error::CodecError> {
+        crate::codec::encode(self)
+    }
+
+    /// Reverse of [`Self::to_wire_bytes`]: decode a bincoded envelope
+    /// and verify its version matches [`PROTOCOL_VERSION`].
+    ///
+    /// # Errors
+    /// Returns [`crate::error::IstmoError::ProtocolVersionMismatch`] when
+    /// the decoded envelope declares a different version; codec errors
+    /// bubble up untouched.
+    pub fn from_wire_bytes(bytes: &[u8]) -> Result<Self, crate::error::IstmoError> {
+        let (envelope, _) = crate::codec::decode::<Self>(bytes)?;
+        if envelope.version != PROTOCOL_VERSION {
+            return Err(crate::error::IstmoError::ProtocolVersionMismatch {
+                expected: PROTOCOL_VERSION,
+                got: envelope.version,
+            });
+        }
+        Ok(envelope)
+    }
 }
 
 /// The complete set of wire frames exchanged between Rust and the native side.
