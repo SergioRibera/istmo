@@ -199,6 +199,25 @@ object IstmoRuntime {
         // object stored under handleId from their per-plugin registry here.
     }
 
+    /**
+     * Sink for `:remote`-bridge envelope bytes. Rust classifies every outbound
+     * frame; envelopes for plugins registered via
+     * `Runtime::declare_remote_plugin` land here instead of the typed
+     * `onCall` / `onRespond` / … callbacks. Install a bridge that forwards
+     * to the peer process (see `docs/remote-bridge/`); the demo leaves it
+     * `null`, so remote envelopes drop with a log line.
+     */
+    @JvmField
+    var remoteEnvelopeSink: ((ByteArray) -> Unit)? = null
+
+    @JvmStatic
+    fun onRemoteEnvelope(bytes: ByteArray) {
+        val sink = remoteEnvelopeSink
+        if (sink != null) {
+            sink(bytes)
+        }
+    }
+
     // ---- Trampolines exported by istmo-android --------------------------
 
     external fun nativeStart(runtimeClass: Class<*>): Boolean
@@ -220,6 +239,8 @@ object IstmoRuntime {
     external fun nativeSubmitStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray?)
     external fun nativeSubmitEarlyLatest(channel: String, payload: ByteArray)
     external fun nativeSubmitEarlyQueue(channel: String, capacity: Int, payload: ByteArray)
+    /** Receive-side of a `:remote` bridge — bytes shipped over Binder. */
+    external fun nativeInjectEnvelope(bytes: ByteArray)
     external fun nativeShutdown()
 
     private val EMPTY_PAYLOAD = ByteArray(0)

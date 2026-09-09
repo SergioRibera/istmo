@@ -29,26 +29,33 @@ pub(crate) struct PumpHandles {
     pub(crate) join: JoinHandle<()>,
 }
 
+/// Sender half of the remote-envelope byte channel; the runtime's remote
+/// sink pushes into it, the pump thread drains it and forwards bytes via
+/// `onRemoteEnvelope`.
+pub(crate) type RemoteEnvelopeSender = flume::Sender<Vec<u8>>;
+
 pub(crate) fn spawn(
     jvm: Arc<JavaVM>,
     runtime_class: GlobalRef,
     outbound: FlumeReceiver<Envelope>,
-) -> PumpHandles {
+) -> (PumpHandles, RemoteEnvelopeSender) {
     let (shutdown_tx, shutdown_rx) = unbounded::<()>();
+    let (remote_tx, remote_rx) = unbounded::<Vec<u8>>();
     let join = thread::Builder::new()
         .name("istmo-android-pump".to_owned())
-        .spawn(move || pump_loop(&jvm, &runtime_class, &outbound, &shutdown_rx))
+        .spawn(move || pump_loop(&jvm, &runtime_class, &outbound, &remote_rx, &shutdown_rx))
         .expect("spawn istmo pump thread");
-    PumpHandles {
-        shutdown: shutdown_tx,
-        join,
-    }
+    (
+        PumpHandles { shutdown: shutdown_tx, join },
+        remote_tx,
+    )
 }
 
 fn pump_loop(
     jvm: &Arc<JavaVM>,
     runtime_class: &GlobalRef,
     outbound: &FlumeReceiver<Envelope>,
+    remote: &FlumeReceiver<Vec<u8>>,
     shutdown: &FlumeReceiver<()>,
 ) {
     let mut env = match jvm.attach_current_thread_as_daemon() {
@@ -73,16 +80,25 @@ fn pump_loop(
             .recv(outbound, |envelope| {
                 envelope.map_or(PumpStep::Shutdown, PumpStep::Deliver)
             })
+            .recv(remote, |bytes| {
+                bytes.map_or(PumpStep::Shutdown, PumpStep::DeliverRemote)
+            })
             .wait();
 
-        let envelope = match step {
+        match step {
             PumpStep::Shutdown => break,
-            PumpStep::Deliver(env) => env,
-        };
-
-        if let Err(err) = deliver(&mut env, runtime_class, &methods, envelope.frame) {
-            tracing::error!(?err, "istmo pump deliver failure");
-            let _ = env.exception_clear();
+            PumpStep::Deliver(envelope) => {
+                if let Err(err) = deliver(&mut env, runtime_class, &methods, envelope.frame) {
+                    tracing::error!(?err, "istmo pump deliver failure");
+                    let _ = env.exception_clear();
+                }
+            }
+            PumpStep::DeliverRemote(bytes) => {
+                if let Err(err) = deliver_remote(&mut env, runtime_class, &methods, &bytes) {
+                    tracing::error!(?err, "istmo pump deliver_remote failure");
+                    let _ = env.exception_clear();
+                }
+            }
         }
     }
     tracing::info!("istmo pump thread exiting");
@@ -90,7 +106,23 @@ fn pump_loop(
 
 enum PumpStep {
     Deliver(Envelope),
+    DeliverRemote(Vec<u8>),
     Shutdown,
+}
+
+fn deliver_remote(
+    env: &mut JNIEnv<'_>,
+    class: &GlobalRef,
+    methods: &PumpMethods,
+    bytes: &[u8],
+) -> Result<(), jni::errors::Error> {
+    let payload_j = env.byte_array_from_slice(bytes)?;
+    call_static_void(
+        env,
+        class,
+        methods.on_remote_envelope,
+        &[JValue::Object(&JObject::from(payload_j)).as_jni()],
+    )
 }
 
 /// Cached ids for every static method the pump invokes on the Kotlin runtime
@@ -107,6 +139,7 @@ struct PumpMethods {
     on_stream_end: jni::objects::JStaticMethodID,
     on_release_native_handle: jni::objects::JStaticMethodID,
     on_notify: jni::objects::JStaticMethodID,
+    on_remote_envelope: jni::objects::JStaticMethodID,
 }
 
 impl PumpMethods {
@@ -137,6 +170,7 @@ impl PumpMethods {
                 "onNotify",
                 "(Ljava/lang/String;JLjava/lang/String;[B)V",
             )?,
+            on_remote_envelope: env.get_static_method_id(class, "onRemoteEnvelope", "([B)V")?,
         })
     }
 }

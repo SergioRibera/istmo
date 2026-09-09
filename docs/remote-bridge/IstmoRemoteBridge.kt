@@ -10,14 +10,16 @@
 //
 // Wiring (per-process):
 //
-// 1. Declare a `Service` that runs in the target process (main app on
+// 1. On the Rust side, `runtime.declare_remote_plugin(pluginId)` for every
+//    trait that lives in the peer process. Every outbound frame that
+//    references such a plugin id is then classified by the Rust runtime
+//    and delivered as bytes to `IstmoRuntime.onRemoteEnvelope(bytes)`
+//    instead of the typed `onCall` / `onRespond` / … callbacks.
+// 2. Declare a `Service` that runs in the target process (main app on
 //    the app-side stub, `:remote` on the remote-side stub).
-// 2. On startup, each side binds to the OTHER side's service. Once the
-//    Binder is available, each caches a `IIstmoBridge` proxy.
-// 3. When Rust submits an outbound envelope destined for a remote-hosted
-//    plugin, the pump serialises the Envelope via
-//    `Envelope::to_wire_bytes` (Rust-side) and hands the bytes to
-//    `remoteBridge.submitEnvelope(bytes)`.
+// 3. On startup, each side binds to the OTHER side's service. Once the
+//    Binder is available, each caches an `IIstmoBridge` proxy AND assigns
+//    `IstmoRuntime.remoteEnvelopeSink = { bytes -> bridge.submit(bytes) }`.
 // 4. `submitEnvelope` on the receiving side calls
 //    `IstmoRuntime.nativeInjectEnvelope(bytes)` which forwards to
 //    `Runtime::inject_wire_envelope`.
@@ -104,42 +106,10 @@ class IstmoRemoteBridgeClient(
 }
 
 /**
- * Router installed into `IstmoRuntime.onCall` on the app-process side.
- * When the plugin id is in `remotePlugins`, the router rebuilds the
- * Frame::Call as an Envelope, bincode-encodes it via
- * `nativeEncodeCall(...)`, and ships the bytes over the bridge instead
- * of dispatching locally.
- *
- * The `nativeEncode*` helpers must be added to `istmo-android` — see
- * CLAUDE.md "`:remote` process bridge" section for the JNI shape.
+ * Wires the bridge into `IstmoRuntime.remoteEnvelopeSink`. Call once on
+ * startup, after the peer service has bound. Rust classifies every
+ * outbound frame — no Kotlin-side plugin-id set is needed here.
  */
-object RemotePluginRouter {
-    private val remotePlugins = mutableSetOf<String>()
-    private var bridge: IstmoRemoteBridgeClient? = null
-
-    fun install(bridgeClient: IstmoRemoteBridgeClient, pluginIds: Collection<String>) {
-        bridge = bridgeClient
-        remotePlugins.clear()
-        remotePlugins.addAll(pluginIds)
-    }
-
-    fun isRemote(pluginId: String): Boolean = remotePlugins.contains(pluginId)
-
-    /**
-     * Called by `IstmoRuntime.onCall` before local dispatch. Returns
-     * `true` when the call was forwarded, `false` when the caller must
-     * fall through to local handling.
-     */
-    fun tryForwardCall(
-        callId: Long,
-        pluginId: String,
-        instanceId: Long,
-        method: String,
-        payload: ByteArray,
-    ): Boolean {
-        if (!isRemote(pluginId)) return false
-        val bridge = bridge ?: return false
-        val envelope = IstmoRuntime.nativeEncodeCall(callId, pluginId, instanceId, method, payload)
-        return bridge.submit(envelope)
-    }
+fun installRemoteBridge(bridge: IstmoRemoteBridgeClient) {
+    IstmoRuntime.remoteEnvelopeSink = { bytes -> bridge.submit(bytes) }
 }

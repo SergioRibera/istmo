@@ -200,6 +200,22 @@ object IstmoRuntime {
         // stored under handleId from their per-plugin table here.
     }
 
+    /**
+     * Sink for `:remote`-bridge envelope bytes. See
+     * `docs/remote-bridge/` for the reference wiring; the demo leaves it
+     * `null` and drops any remote envelope with a log line.
+     */
+    @JvmField
+    var remoteEnvelopeSink: ((ByteArray) -> Unit)? = null
+
+    @JvmStatic
+    fun onRemoteEnvelope(bytes: ByteArray) {
+        val sink = remoteEnvelopeSink
+        if (sink != null) {
+            sink(bytes)
+        }
+    }
+
     // ---- Trampolines exported by istmo-android --------------------------
 
     external fun nativeStart(runtimeClass: Class<*>): Boolean
@@ -221,6 +237,8 @@ object IstmoRuntime {
     external fun nativeSubmitStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray?)
     external fun nativeSubmitEarlyLatest(channel: String, payload: ByteArray)
     external fun nativeSubmitEarlyQueue(channel: String, capacity: Int, payload: ByteArray)
+    /** Receive-side of a `:remote` bridge — bytes shipped over Binder. */
+    external fun nativeInjectEnvelope(bytes: ByteArray)
     external fun nativeShutdown()
 
     private val EMPTY_PAYLOAD = ByteArray(0)

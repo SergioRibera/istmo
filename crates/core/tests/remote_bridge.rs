@@ -273,3 +273,135 @@ fn app_to_remote_call_and_response_flow_over_bridge_bytes() {
     let snapshot = forwarded.lock().unwrap().clone();
     panic!("expected all three forwards to land; saw {snapshot:?}");
 }
+
+/// The runtime's built-in remote-envelope sink steers outbound frames for
+/// declared-remote plugins into the sink and leaves everything else on the
+/// typed outbound channel. Also verifies follow-up Cancel routing lookups
+/// their originating call id in `remote_calls`.
+#[test]
+fn declare_remote_plugin_routes_matching_outbound_through_sink() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let typed_outbound = init.outbound;
+
+    // Two plugins — one declared remote, one strictly local.
+    let remote_id = "test.remote.compute";
+    let local_id = "test.local.echo";
+    rt.declare_remote_plugin(remote_id);
+
+    let sink_bytes: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink_bytes_cb = Arc::clone(&sink_bytes);
+    rt.install_remote_envelope_sink(Arc::new(move |bytes: Vec<u8>| {
+        sink_bytes_cb.lock().unwrap().push(bytes);
+    }));
+
+    // ---- Remote plugin: Call must go to sink, not typed outbound ----
+    let handle = rt
+        .call(remote_id, None, "compute", codec::encode(&()).unwrap())
+        .expect("open call");
+    // No frame on the typed outbound channel.
+    assert!(
+        typed_outbound.try_recv().is_err(),
+        "remote call must not appear on typed outbound",
+    );
+    // One envelope in the sink.
+    let sink_snapshot = sink_bytes.lock().unwrap().clone();
+    assert_eq!(sink_snapshot.len(), 1, "sink got one envelope");
+    let sink_env = Envelope::from_wire_bytes(&sink_snapshot[0]).expect("decode sink envelope");
+    match &sink_env.frame {
+        Frame::Call { plugin_id, method, .. } => {
+            assert_eq!(plugin_id, remote_id);
+            assert_eq!(method, "compute");
+        }
+        other => panic!("expected Call in sink, got {other:?}"),
+    }
+
+    // Drop the handle — that emits a Cancel that must also travel through
+    // the sink because `remote_calls` remembers the call id.
+    drop(handle);
+    // Wait briefly for the drop-cancel to fire.
+    for _ in 0..100 {
+        if sink_bytes.lock().unwrap().len() >= 2 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    let sink_snapshot = sink_bytes.lock().unwrap().clone();
+    assert_eq!(sink_snapshot.len(), 2, "cancel should reach the sink");
+    let cancel_env = Envelope::from_wire_bytes(&sink_snapshot[1]).expect("decode cancel");
+    assert!(matches!(cancel_env.frame, Frame::Cancel { .. }));
+    assert!(
+        typed_outbound.try_recv().is_err(),
+        "cancel must not reach typed outbound either",
+    );
+
+    // ---- Local plugin: Call must NOT go to the sink ----
+    let _handle = rt
+        .call(local_id, None, "echo", codec::encode(&()).unwrap())
+        .expect("open local call");
+    let env = typed_outbound.try_recv().expect("local call on typed outbound");
+    match env.frame {
+        Frame::Call { plugin_id, .. } => assert_eq!(plugin_id, local_id),
+        other => panic!("expected Call for local plugin, got {other:?}"),
+    }
+    // Sink still holds only the two remote entries.
+    assert_eq!(sink_bytes.lock().unwrap().len(), 2);
+}
+
+/// Bridge receive-side records inbound Call `call_id` via `mark_call_remote`
+/// so the hosted dispatcher's Respond routes back through the sink instead
+/// of leaking to the typed outbound.
+#[test]
+fn mark_call_remote_routes_hosted_respond_through_sink() {
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let typed_outbound = init.outbound;
+    rt.register_host(RemoteHost::new());
+
+    let sink_bytes: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink_bytes_cb = Arc::clone(&sink_bytes);
+    rt.install_remote_envelope_sink(Arc::new(move |bytes: Vec<u8>| {
+        sink_bytes_cb.lock().unwrap().push(bytes);
+    }));
+
+    // Simulate a bridge-received Call: mark the call id remote FIRST, then
+    // inject the envelope.
+    let call_id = istmo_core::CallId(4242);
+    rt.mark_call_remote(call_id);
+    let payload = codec::encode(&()).unwrap();
+    let inbound = Envelope::new(Frame::Call {
+        call_id,
+        plugin_id: RemoteHost::PLUGIN_ID.to_owned(),
+        instance_id: None,
+        method: "hello".to_owned(),
+        payload,
+    });
+    rt.dispatch_inbound(inbound).expect("inbound accepted");
+
+    // Wait for the hosted dispatcher to emit its Respond into the sink.
+    for _ in 0..500 {
+        if !sink_bytes.lock().unwrap().is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    let sink_snapshot = sink_bytes.lock().unwrap().clone();
+    assert_eq!(sink_snapshot.len(), 1, "response should reach the sink");
+    let respond_env = Envelope::from_wire_bytes(&sink_snapshot[0]).expect("decode respond");
+    match respond_env.frame {
+        Frame::Respond {
+            call_id: got_id,
+            result,
+        } => {
+            assert_eq!(got_id, call_id);
+            let bytes = result.expect("Ok response");
+            let echoed = String::from_utf8(bytes).expect("utf-8 echo");
+            assert!(echoed.starts_with("hello:"), "got {echoed:?}");
+        }
+        other => panic!("expected Respond, got {other:?}"),
+    }
+    assert!(
+        typed_outbound.try_recv().is_err(),
+        "respond must not reach typed outbound",
+    );
+}

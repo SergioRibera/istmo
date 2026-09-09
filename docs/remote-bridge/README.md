@@ -29,23 +29,20 @@ flume channels that stand in for AIDL.
    the app side. Both point to `IstmoRemoteBridgeService`.
 2. On startup, each side creates an `IstmoRemoteBridgeClient` targeted
    at the OTHER process's Service class name and calls `bind()`.
-3. App process installs `RemotePluginRouter` with the set of plugin ids
-   the `:remote` cdylib hosts.
-4. App-process `IstmoRuntime.onCall` consults `RemotePluginRouter`
-   before local dispatch — matching ids are forwarded, misses fall
-   through to `handlers[pluginId]`.
+3. Rust-side (both processes): call
+   `runtime.declare_remote_plugin(pluginId)` for every trait that lives
+   in the peer process. The classifier now steers matching outbound
+   frames to the sink instead of the typed pump.
+4. Kotlin-side: assign the bridge to
+   `IstmoRuntime.remoteEnvelopeSink = { bytes -> bridge.submit(bytes) }`
+   (or call `installRemoteBridge(bridge)`).
 5. `:remote`-side `IstmoRuntime` receives envelopes via
    `nativeInjectEnvelope`; local hosts fire; responses hop back via the
    reverse bridge.
 
 ## Still missing (follow-ups)
 
-- `IstmoRuntime.nativeInjectEnvelope(bytes)` JNI export in
-  `istmo-android`.
-- `IstmoRuntime.nativeEncodeCall(...)` companion so Kotlin can
-  serialise the `onCall` args back into an Envelope. Alternatively add
-  an outbound "envelope bytes" callback on the pump that hands raw
-  bytes instead of typed args.
 - `istmo::runtime!` macro `remote: [...]` section that populates the
   Rust-side declared set + emits a Kotlin-side helper listing the ids
-  for `RemotePluginRouter.install(...)`.
+  (today the plugin author calls `runtime.declare_remote_plugin(id)`
+  manually — the macro sugar is the last piece).

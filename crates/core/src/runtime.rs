@@ -106,6 +106,21 @@ impl RuntimeInit {
     }
 }
 
+/// Callback that receives a fully-encoded [`Envelope`] destined for a
+/// `:remote` peer.
+///
+/// Installed by the platform backend via
+/// [`Runtime::install_remote_envelope_sink`]; every outbound frame whose
+/// target (plugin id, call id, stream id or instance id) matches a
+/// [`Runtime::declare_remote_plugin`] entry is delivered here instead of
+/// travelling through the typed pump.
+///
+/// The callback is invoked on whichever thread the frame is emitted from
+/// (dispatcher worker, foreground app code, …); implementations that need
+/// to hop threads (e.g. Binder must be called from a specific thread) are
+/// expected to do so internally.
+pub type RemoteEnvelopeSink = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
+
 /// Process-scoped runtime. Never construct directly — use [`Runtime::init`]
 /// or [`Runtime::mock`].
 pub struct Runtime {
@@ -135,6 +150,27 @@ pub struct Runtime {
     /// its Respond frame so a cancelled response is dropped rather than raced
     /// with a stale reply.
     cancelled_hosted: Mutex<HashMap<CallId, CancelToken>>,
+    /// Plugin ids whose traffic crosses a `:remote` bridge instead of the
+    /// typed outbound pump. Symmetric — both peers of the bridge declare
+    /// the same set. See [`Self::declare_remote_plugin`].
+    remote_plugins: Mutex<HashSet<String>>,
+    /// Call ids whose owning plugin is remote. Populated when a
+    /// [`Frame::Call`] / [`Frame::CreateInstance`] is issued or dispatched
+    /// for a remote plugin; consulted by outbound [`Frame::Respond`] /
+    /// [`Frame::Cancel`] classification (which carry only a call id).
+    remote_calls: Mutex<HashSet<CallId>>,
+    /// Stream ids whose parent Call was remote. Same shape as
+    /// [`Self::remote_calls`] but for [`Frame::Event`] / [`Frame::StreamEnd`]
+    /// frames.
+    remote_streams: Mutex<HashSet<StreamId>>,
+    /// Instance ids whose plugin is remote. Populated on
+    /// [`Frame::CreateInstance`] response routing; consulted by
+    /// [`Frame::DestroyInstance`] classification.
+    remote_instances: Mutex<HashSet<InstanceId>>,
+    /// Encoded-envelope sink installed by the platform backend. `None` when
+    /// no bridge is wired; every outbound frame then travels through the
+    /// typed pump regardless of whether its target is declared remote.
+    remote_sink: Mutex<Option<RemoteEnvelopeSink>>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -227,9 +263,7 @@ impl Runtime {
         if hosted {
             self.dispatch_inbound(envelope)?;
         } else {
-            self.outbound
-                .send(envelope)
-                .map_err(|_| IstmoError::ChannelClosed)?;
+            self.send_outbound(envelope)?;
         }
         Ok(CallHandle {
             call_id,
@@ -259,9 +293,7 @@ impl Runtime {
             method: method.into(),
             payload,
         });
-        self.outbound
-            .send(envelope)
-            .map_err(|_| IstmoError::ChannelClosed)?;
+        self.send_outbound(envelope)?;
         Ok(StreamHandle {
             stream_id,
             receiver: rx,
@@ -284,9 +316,7 @@ impl Runtime {
             plugin_id: plugin_id.into(),
             payload,
         });
-        self.outbound
-            .send(envelope)
-            .map_err(|_| IstmoError::ChannelClosed)?;
+        self.send_outbound(envelope)?;
         Ok(CallHandle {
             call_id,
             receiver: Some(rx),
@@ -308,9 +338,7 @@ impl Runtime {
     pub fn destroy_instance(&self, instance_id: InstanceId) -> Result<(), IstmoError> {
         self.routing.remove_instance(instance_id);
         let envelope = Envelope::new(Frame::DestroyInstance { instance_id });
-        self.outbound
-            .send(envelope)
-            .map_err(|_| IstmoError::ChannelClosed)
+        self.send_outbound(envelope)
     }
 
     /// Emits [`Frame::ReleaseNativeHandle`] so the native side can free the
@@ -321,9 +349,7 @@ impl Runtime {
     /// generally do not need to invoke it directly.
     pub fn release_native_handle(&self, handle_id: NativeHandleId) -> Result<(), IstmoError> {
         let envelope = Envelope::new(Frame::ReleaseNativeHandle { handle_id });
-        self.outbound
-            .send(envelope)
-            .map_err(|_| IstmoError::ChannelClosed)
+        self.send_outbound(envelope)
     }
 
     /// Fire-and-forget one-way invocation. Local hosts dispatch on a
@@ -354,9 +380,7 @@ impl Runtime {
             method,
             payload,
         });
-        self.outbound
-            .send(envelope)
-            .map_err(|_| IstmoError::ChannelClosed)
+        self.send_outbound(envelope)
     }
 
     fn dispatch_notify(
@@ -389,9 +413,7 @@ impl Runtime {
     pub fn cancel_call(&self, call_id: CallId) -> Result<(), IstmoError> {
         self.routing.remove_pending(call_id.get());
         let envelope = Envelope::new(Frame::Cancel { call_id });
-        self.outbound
-            .send(envelope)
-            .map_err(|_| IstmoError::ChannelClosed)
+        self.send_outbound(envelope)
     }
 
     /// Cancels an open stream. Streams share the numeric id with the
@@ -401,9 +423,7 @@ impl Runtime {
         let envelope = Envelope::new(Frame::Cancel {
             call_id: CallId(stream_id.get()),
         });
-        self.outbound
-            .send(envelope)
-            .map_err(|_| IstmoError::ChannelClosed)
+        self.send_outbound(envelope)
     }
 
     /// Decodes a bincoded envelope and dispatches it. Convenience for
@@ -509,6 +529,136 @@ impl Runtime {
         self.enforce_declarations.store(enforce, Ordering::Relaxed);
     }
 
+    /// Marks `plugin_id` as living behind a `:remote` bridge. Both peers of
+    /// the bridge declare the same set so that outbound frames referencing
+    /// the id ([`Frame::Call`], [`Frame::CreateInstance`], [`Frame::Notify`]
+    /// plus their follow-up [`Frame::Respond`] / [`Frame::Cancel`] /
+    /// [`Frame::Event`] / [`Frame::StreamEnd`] frames) are steered through
+    /// [`Self::install_remote_envelope_sink`] instead of the typed pump.
+    ///
+    /// Idempotent — re-declaring the same id is a no-op.
+    pub fn declare_remote_plugin(&self, plugin_id: impl Into<String>) {
+        lock(&self.remote_plugins).insert(plugin_id.into());
+    }
+
+    /// Returns `true` when `plugin_id` was previously passed to
+    /// [`Self::declare_remote_plugin`].
+    #[must_use]
+    pub fn is_remote_plugin(&self, plugin_id: &str) -> bool {
+        lock(&self.remote_plugins).contains(plugin_id)
+    }
+
+    /// Installs the encoded-envelope sink invoked for frames destined for a
+    /// declared-remote plugin. Overwrites any previous sink.
+    pub fn install_remote_envelope_sink(&self, sink: RemoteEnvelopeSink) {
+        *lock(&self.remote_sink) = Some(sink);
+    }
+
+    /// Routes an outbound envelope through either the remote-bridge sink
+    /// (when the frame's target is a declared remote plugin) or the local
+    /// typed pump. Every outbound emission in the runtime funnels through
+    /// this method — do NOT push to [`Self::outbound`] directly.
+    fn send_outbound(&self, envelope: Envelope) -> Result<(), IstmoError> {
+        let sink = lock(&self.remote_sink).clone();
+        if sink.is_some() && self.classify_and_track(&envelope.frame) {
+            let bytes = envelope.to_wire_bytes()?;
+            // `sink` re-fetched above is a Clone of Arc<dyn Fn>; call it
+            // outside the mutex guard so the callback can freely call back
+            // into runtime methods without deadlocking.
+            if let Some(sink) = sink {
+                sink(bytes);
+                return Ok(());
+            }
+        }
+        self.outbound
+            .send(envelope)
+            .map_err(|_| IstmoError::ChannelClosed)
+    }
+
+    /// Returns `true` when `frame` targets a `:remote`-declared plugin, and
+    /// updates the runtime's per-id tracking sets so follow-up frames route
+    /// consistently:
+    ///
+    /// * [`Frame::Call`] / [`Frame::CreateInstance`] with a matching plugin
+    ///   id → record `call_id`.
+    /// * [`Frame::Cancel`] / [`Frame::Respond`] → consult `remote_calls`,
+    ///   remove on Respond (a Respond terminates the call from the runtime's
+    ///   bookkeeping point of view).
+    /// * [`Frame::Event`] / [`Frame::StreamEnd`] → consult `remote_streams`,
+    ///   remove on `StreamEnd`.
+    /// * [`Frame::DestroyInstance`] → consult `remote_instances`, remove
+    ///   after check.
+    /// * [`Frame::Notify`] / [`Frame::EarlyEvent`] → plugin-id classification
+    ///   only.
+    /// * [`Frame::ReleaseNativeHandle`] → always local for now (handles
+    ///   rarely cross the bridge; add tracking when a real case surfaces).
+    fn classify_and_track(&self, frame: &Frame) -> bool {
+        match frame {
+            Frame::Call {
+                call_id, plugin_id, ..
+            } => {
+                if lock(&self.remote_plugins).contains(plugin_id) {
+                    lock(&self.remote_calls).insert(*call_id);
+                    lock(&self.remote_streams).insert(StreamId(call_id.get()));
+                    true
+                } else {
+                    false
+                }
+            }
+            Frame::CreateInstance {
+                call_id, plugin_id, ..
+            } => {
+                if lock(&self.remote_plugins).contains(plugin_id) {
+                    lock(&self.remote_calls).insert(*call_id);
+                    true
+                } else {
+                    false
+                }
+            }
+            Frame::Notify { plugin_id, .. } => lock(&self.remote_plugins).contains(plugin_id),
+            Frame::Respond { call_id, .. } => {
+                let mut remote_calls = lock(&self.remote_calls);
+                remote_calls.remove(call_id)
+            }
+            Frame::Cancel { call_id } => {
+                let hit = lock(&self.remote_calls).contains(call_id);
+                if hit {
+                    lock(&self.remote_calls).remove(call_id);
+                    lock(&self.remote_streams).remove(&StreamId(call_id.get()));
+                }
+                hit
+            }
+            Frame::Event { stream_id, .. } => lock(&self.remote_streams).contains(stream_id),
+            Frame::StreamEnd { stream_id, .. } => {
+                let mut remote_streams = lock(&self.remote_streams);
+                remote_streams.remove(stream_id)
+            }
+            Frame::DestroyInstance { instance_id } => {
+                let mut remote_instances = lock(&self.remote_instances);
+                remote_instances.remove(instance_id)
+            }
+            Frame::EarlyEvent { .. } | Frame::ReleaseNativeHandle { .. } => false,
+        }
+    }
+
+    /// Records `instance_id` as living inside a remote process. Called from
+    /// the client-side glue after a [`Frame::CreateInstance`] response
+    /// resolves and [`Self::register_instance`] is invoked, so that a later
+    /// [`Frame::DestroyInstance`] frame is routed through the bridge.
+    pub fn mark_instance_remote(&self, instance_id: InstanceId) {
+        lock(&self.remote_instances).insert(instance_id);
+    }
+
+    /// Records `call_id` as originating from a remote bridge. Called from
+    /// the receive-side of a `:remote` bridge just before
+    /// [`Self::inject_wire_envelope`] delivers the frame, so that the
+    /// eventual [`Frame::Respond`] / [`Frame::StreamEnd`] emitted by a
+    /// locally-hosted dispatcher travels back through the sink.
+    pub fn mark_call_remote(&self, call_id: CallId) {
+        lock(&self.remote_calls).insert(call_id);
+        lock(&self.remote_streams).insert(StreamId(call_id.get()));
+    }
+
     /// Validates that `plugin_id` is declared for this process. When
     /// enforcement is off (the default for mocks), always returns `Ok(())`.
     ///
@@ -612,7 +762,7 @@ impl Runtime {
             return;
         }
         let envelope = Envelope::new(Frame::Event { stream_id, payload });
-        if let Err(err) = self.outbound.send(envelope) {
+        if let Err(err) = self.send_outbound(envelope) {
             tracing::warn!(?err, "failed to send Event frame; outbound channel closed");
         }
     }
@@ -629,7 +779,7 @@ impl Runtime {
             return;
         }
         let envelope = Envelope::new(Frame::StreamEnd { stream_id, reason });
-        if let Err(err) = self.outbound.send(envelope) {
+        if let Err(err) = self.send_outbound(envelope) {
             tracing::warn!(
                 ?err,
                 "failed to send StreamEnd frame; outbound channel closed"
@@ -649,7 +799,7 @@ impl Runtime {
             return;
         }
         let envelope = Envelope::new(Frame::Respond { call_id, result });
-        if let Err(err) = self.outbound.send(envelope) {
+        if let Err(err) = self.send_outbound(envelope) {
             tracing::warn!(
                 ?err,
                 "failed to send Respond frame; outbound channel closed"
@@ -707,6 +857,11 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         enforce_declarations: std::sync::atomic::AtomicBool::new(false),
         hosts: Mutex::new(HashMap::new()),
         cancelled_hosted: Mutex::new(HashMap::new()),
+        remote_plugins: Mutex::new(HashSet::new()),
+        remote_calls: Mutex::new(HashSet::new()),
+        remote_streams: Mutex::new(HashSet::new()),
+        remote_instances: Mutex::new(HashSet::new()),
+        remote_sink: Mutex::new(None),
     });
     RuntimeInit {
         runtime,

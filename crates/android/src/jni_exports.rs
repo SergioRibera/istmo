@@ -52,8 +52,18 @@ fn start<'local>(
     let class_ref = env.new_global_ref(runtime_class)?;
 
     let init = Runtime::init(RuntimeConfig::inline())?;
+    let runtime = init.runtime.clone();
     let init = __istmo_configure_runtime(init);
-    let handles = pump::spawn(jvm, class_ref, init.outbound);
+    let (handles, remote_sender) = pump::spawn(jvm, class_ref, init.outbound);
+    // Route declared-remote-plugin traffic into the pump's dedicated
+    // `onRemoteEnvelope` channel. Errors on the flume send are swallowed
+    // (pump gone / shutdown races); the alternative would trip the emitter
+    // for a shutdown-time race that the peer bridge has already forgotten.
+    runtime.install_remote_envelope_sink(std::sync::Arc::new(move |bytes: Vec<u8>| {
+        if let Err(err) = remote_sender.send(bytes) {
+            tracing::warn!(?err, "istmo remote sink send failed; pump gone?");
+        }
+    }));
 
     state::install(RuntimeState {
         pump_shutdown: std::sync::Mutex::new(Some(handles.shutdown)),
@@ -342,6 +352,33 @@ fn submit_early_queue<'local>(
         kind: EarlyEventKind::Queue { capacity },
         payload: bytes,
     }))?;
+    Ok(())
+}
+
+/// Kotlin: `external fun nativeInjectEnvelope(bytes: ByteArray)`.
+///
+/// Receive-side of a `:remote` bridge. Kotlin hands whatever the peer
+/// process shipped over Binder straight to
+/// [`Runtime::inject_wire_envelope`], which decodes the envelope and
+/// dispatches it locally. Kotlin never inspects the bytes — the envelope
+/// codec stays Rust-side per the FFI-boundary rule.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeInjectEnvelope<'local>(
+    env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    bytes: JByteArray<'local>,
+) {
+    if let Err(err) = inject_envelope(&env, &bytes) {
+        tracing::error!(?err, "istmo nativeInjectEnvelope failed");
+    }
+}
+
+fn inject_envelope<'local>(
+    env: &JNIEnv<'local>,
+    bytes: &JByteArray<'local>,
+) -> Result<(), AndroidRuntimeError> {
+    let payload = env.convert_byte_array(bytes)?;
+    Runtime::global()?.inject_wire_envelope(&payload)?;
     Ok(())
 }
 
