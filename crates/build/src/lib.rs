@@ -36,9 +36,10 @@ pub use crate::desktop::{
 };
 pub use crate::entitlements::{EntitlementValue, IosEntitlements};
 pub use crate::handover::{
-    CONTRACT_KEY, HandoverError, NATIVE_DEPS_KEY, collect_dep_contracts, collect_dep_native_deps,
-    deserialize_contract, deserialize_native_deps, emit_contract, emit_native_deps,
-    serialize_contract, serialize_native_deps,
+    CONTRACT_KEY, HandoverError, MANIFEST_KEY, NATIVE_DEPS_KEY, collect_dep_contracts,
+    collect_dep_manifests, collect_dep_native_deps, deserialize_contract, deserialize_manifest,
+    deserialize_native_deps, emit_contract, emit_manifest, emit_native_deps, serialize_contract,
+    serialize_manifest, serialize_native_deps,
 };
 pub use crate::ios::{
     BackgroundKind, ContinuousMode, IosBackgroundArtifacts, IosBackgroundContract,
@@ -49,8 +50,8 @@ pub use crate::kotlin_client::generate_kotlin_client;
 pub use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
 pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
 pub use crate::manifest::{
-    Manifest, ManifestError, PluginEntry, emit_manifest_metadata,
-    emit_manifest_metadata_with_contract,
+    Deployment, Manifest, ManifestError, PluginEntry, RemoteOverride, ResolvedWiring,
+    emit_manifest_metadata, emit_manifest_metadata_with_contract, emit_wiring_env, resolve_wiring,
 };
 pub use crate::native_deps::{
     GradleCoord, GradleDep, GradleKey, GradleScope, NativeDeps, SwiftPackageDep, VersionConflict,

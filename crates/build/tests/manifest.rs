@@ -16,7 +16,8 @@
 //!   the inputs come from `istmo.toml` files.
 
 use istmo_build::{
-    GradleScope, Manifest, NativeDeps, deserialize_native_deps, serialize_native_deps,
+    Deployment, GradleScope, Manifest, NativeDeps, deserialize_native_deps, resolve_wiring,
+    serialize_native_deps,
 };
 
 /// Two plugin authors publish the same `googleid` artefact at different
@@ -154,4 +155,101 @@ version = "1.13.0"
     let hex = serialize_native_deps(&m.native_deps).expect("serialize");
     let back = deserialize_native_deps(&hex).expect("deserialize");
     assert_eq!(back, m.native_deps);
+}
+
+/// Plugin manifest can hint deployment via `default_deployment = "remote"`.
+/// Parser accepts the field; `resolve_wiring` picks it up when no override
+/// is present.
+#[test]
+fn manifest_default_deployment_remote_flows_into_wiring() {
+    let plugin_src = r#"
+[plugin]
+id = "istmo.heavy_ml"
+client_type = "::istmo_heavy_ml::HeavyMlClient"
+default_deployment = "remote"
+"#;
+    let plugin = Manifest::parse(plugin_src).expect("parse plugin manifest");
+    assert_eq!(plugin.plugins[0].default_deployment, Deployment::Remote);
+
+    let wiring = resolve_wiring(&[plugin], None);
+    assert!(wiring.local_clients.is_empty());
+    assert_eq!(wiring.remote_clients, vec!["::istmo_heavy_ml::HeavyMlClient"]);
+}
+
+/// Local-by-default plugin flipped to remote via app-side override.
+#[test]
+fn app_manifest_override_flips_local_plugin_to_remote() {
+    let plugin_src = r#"
+[plugin]
+id = "istmo.compute"
+client_type = "::istmo_compute::ComputeClient"
+"#;
+    let app_src = r#"
+[[remote_override]]
+plugin = "istmo.compute"
+deployment = "remote"
+"#;
+    let plugin = Manifest::parse(plugin_src).expect("parse plugin");
+    let app = Manifest::parse(app_src).expect("parse app");
+    assert!(app.plugins.is_empty(), "app manifest may omit plugin sections");
+    assert_eq!(app.remote_overrides.len(), 1);
+
+    let wiring = resolve_wiring(&[plugin], Some(&app));
+    assert!(wiring.local_clients.is_empty());
+    assert_eq!(wiring.remote_clients, vec!["::istmo_compute::ComputeClient"]);
+}
+
+/// Reverse override — plugin declares itself remote, app forces local.
+#[test]
+fn app_manifest_override_flips_remote_plugin_to_local() {
+    let plugin_src = r#"
+[plugin]
+id = "istmo.heavy_ml"
+client_type = "::istmo_heavy_ml::HeavyMlClient"
+default_deployment = "remote"
+"#;
+    let app_src = r#"
+[[remote_override]]
+plugin = "istmo.heavy_ml"
+deployment = "local"
+"#;
+    let plugin = Manifest::parse(plugin_src).expect("parse plugin");
+    let app = Manifest::parse(app_src).expect("parse app");
+
+    let wiring = resolve_wiring(&[plugin], Some(&app));
+    assert_eq!(wiring.local_clients, vec!["::istmo_heavy_ml::HeavyMlClient"]);
+    assert!(wiring.remote_clients.is_empty());
+}
+
+/// Plugin without `client_type` contributes native deps only — skipped in
+/// wiring.
+#[test]
+fn plugin_without_client_type_is_skipped_by_wiring() {
+    let plugin_src = r#"
+[plugin]
+id = "istmo.native_only"
+
+[[gradle]]
+group = "androidx.core"
+artifact = "core-ktx"
+version = "1.13.0"
+"#;
+    let plugin = Manifest::parse(plugin_src).expect("parse");
+    let wiring = resolve_wiring(&[plugin], None);
+    assert!(wiring.local_clients.is_empty());
+    assert!(wiring.remote_clients.is_empty());
+}
+
+/// Unknown `deployment` literal → parse error.
+#[test]
+fn unknown_deployment_literal_is_rejected() {
+    let src = r#"
+[plugin]
+id = "istmo.example"
+default_deployment = "sandbox"
+"#;
+    let err = Manifest::parse(src).expect_err("must fail");
+    let msg = format!("{err}");
+    assert!(msg.contains("`sandbox`"), "got {msg}");
+    assert!(msg.contains("expected `local` or `remote`"), "got {msg}");
 }

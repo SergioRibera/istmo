@@ -19,11 +19,13 @@
 //! anywhere in this crate.**
 
 use istmo::plugins::{NotificationsClient, PermissionsClient, SafeArea};
-use istmo_google_sign_in::SignInClient;
 use istmo_plugins::admob::AdMobClient;
+// `SignInClient` is auto-wired via `plugins/google-sign-in/istmo.toml` —
+// its `client_type = "::istmo_google_sign_in::SignInClient"` reaches the
+// macro through `ISTMO_AUTO_PLUGINS`. See `build.rs`.
 
 istmo::runtime!(
-    plugins: [SignInClient, PermissionsClient, NotificationsClient, AdMobClient, SafeArea],
+    plugins: [PermissionsClient, NotificationsClient, AdMobClient, SafeArea],
 );
 
 // `app` runs on any target that has an eframe backend. The

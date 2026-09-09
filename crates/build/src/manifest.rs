@@ -79,43 +79,99 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use bincode::{Decode, Encode};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
-use crate::handover::{emit_contract, emit_native_deps};
+use crate::handover::{emit_contract, emit_manifest, emit_native_deps};
 use crate::native_deps::{GradleCoord, GradleDep, GradleScope, NativeDeps, SwiftPackageDep};
 
 /// Recognised top-level keys — anything outside this set is a hard error so
 /// typos surface immediately instead of being silently dropped.
-const KNOWN_KEYS: &[&str] = &["plugin", "gradle", "swift_package"];
+const KNOWN_KEYS: &[&str] = &["plugin", "gradle", "swift_package", "remote_override"];
 /// Recognised keys inside a `[plugin]` / `[[plugin]]` entry.
-const KNOWN_PLUGIN_KEYS: &[&str] = &["id", "client_type", "gradle", "swift_package"];
+const KNOWN_PLUGIN_KEYS: &[&str] = &[
+    "id",
+    "client_type",
+    "default_deployment",
+    "gradle",
+    "swift_package",
+];
+/// Recognised keys inside a `[[remote_override]]` entry.
+const KNOWN_OVERRIDE_KEYS: &[&str] = &["plugin", "deployment"];
+
+/// Where the plugin is expected to run relative to the app process.
+///
+/// Set by the plugin author as [`PluginEntry::default_deployment`];
+/// consuming apps override per plugin via a `[[remote_override]]` entry in
+/// their own `istmo.toml`. Auto-wiring resolves the final decision by
+/// applying overrides on top of the manifest defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
+pub enum Deployment {
+    /// Runs in the app's default process. Cheap dispatch, shared heap.
+    Local,
+    /// Runs in a `:remote` process. Isolated crashes / memory / lifecycle;
+    /// outbound frames route through the runtime's remote-envelope sink
+    /// via [`crate::Runtime::declare_remote_plugin`] wiring.
+    Remote,
+}
+
+impl Deployment {
+    /// Parses the TOML literal (`"local"` / `"remote"`). Case-sensitive on
+    /// purpose — matches the wire codec's stance elsewhere.
+    fn parse(literal: &str) -> Option<Self> {
+        match literal {
+            "local" => Some(Self::Local),
+            "remote" => Some(Self::Remote),
+            _ => None,
+        }
+    }
+}
 
 /// One plugin declared in an `istmo.toml`. Single-plugin manifests produce a
 /// [`Manifest`] with `plugins.len() == 1`; multi-plugin manifests carry one
 /// entry per `[[plugin]]`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct PluginEntry {
     /// Dotted plugin identifier — matches the `#[istmo::plugin]` id and the
     /// wire prefix used at runtime.
     pub id: String,
-    /// Fully-qualified path of the generated `<Trait>Client` type. Reserved
-    /// for a future auto-wiring pass that would let `runtime!` derive its
-    /// `plugins: [...]` list from `DEP_*_PLUGIN_CLIENT_TYPES`. `None` when
-    /// the manifest author leaves it out; safe to omit until the auto-wiring
-    /// lands.
+    /// Fully-qualified path of the generated `<Trait>Client` type. Consumed
+    /// by [`crate::emit_wiring_env`] to auto-populate the `plugins:` /
+    /// `remote:` sections of `istmo::runtime!`. `None` skips the plugin in
+    /// auto-wiring (only its native-dep contribution lands).
     pub client_type: Option<String>,
+    /// Where the plugin author expects the plugin to run. `Local` (default)
+    /// means outbound frames stay on the typed pump; `Remote` steers them
+    /// into the `:remote` bridge sink. Overridable app-side.
+    pub default_deployment: Deployment,
+}
+
+/// One entry in a consuming app's `[[remote_override]]` section. Flips the
+/// deployment target for a specific plugin regardless of the manifest's
+/// [`PluginEntry::default_deployment`] hint.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct RemoteOverride {
+    pub plugin: String,
+    pub deployment: Deployment,
 }
 
 /// Parsed representation of an `istmo.toml`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Manifest {
     /// Every plugin the containing crate exposes, in declaration order.
-    /// Always non-empty — the parser errors when no `[plugin]` / `[[plugin]]`
-    /// entry is present.
+    /// Plugin manifests always carry ≥ 1 entry; app-side manifests that
+    /// only contribute `[[remote_override]]` may leave this empty (the
+    /// parser is lenient in that case, requiring at least one plugin OR
+    /// override).
     pub plugins: Vec<PluginEntry>,
     /// Native dependencies aggregated across every top-level and per-plugin
     /// `[[gradle]]` / `[[swift_package]]` entry.
     pub native_deps: NativeDeps,
+    /// App-side deployment overrides — takes precedence over each plugin's
+    /// [`PluginEntry::default_deployment`] during
+    /// [`crate::emit_wiring_env`] resolution. Empty for plugin manifests
+    /// (they have no consumers to override for).
+    pub remote_overrides: Vec<RemoteOverride>,
 }
 
 impl Manifest {
@@ -153,7 +209,16 @@ impl Manifest {
                 native_deps.add_swift_package(&parse_swift_package(entry, "swift_package")?);
             }
         }
-        Ok(Self { plugins, native_deps })
+        let mut remote_overrides = Vec::new();
+        if let Some(item) = doc.get("remote_override") {
+            for entry in expect_array_of_tables(item, "remote_override")? {
+                remote_overrides.push(parse_remote_override(entry)?);
+            }
+        }
+        if plugins.is_empty() && remote_overrides.is_empty() {
+            return Err(ManifestError::Missing { key: "plugin" });
+        }
+        Ok(Self { plugins, native_deps, remote_overrides })
     }
 
     /// The first plugin's id. Convenience for callers that expect a
@@ -193,6 +258,8 @@ pub enum ManifestError {
     UnknownKey { key: String },
     /// A [`GradleScope`] literal was not one of the four supported values.
     UnknownGradleScope(String),
+    /// A [`Deployment`] literal was not `"local"` or `"remote"`.
+    UnknownDeployment { key: String, value: String },
 }
 
 impl std::fmt::Display for ManifestError {
@@ -208,6 +275,10 @@ impl std::fmt::Display for ManifestError {
             Self::UnknownGradleScope(s) => write!(
                 f,
                 "istmo.toml unknown gradle scope `{s}` (expected implementation, api, runtimeOnly or compileOnly)"
+            ),
+            Self::UnknownDeployment { key, value } => write!(
+                f,
+                "istmo.toml key `{key}` = `{value}` (expected `local` or `remote`)"
             ),
         }
     }
@@ -227,9 +298,12 @@ fn parse_plugins(
     doc: &DocumentMut,
     native_deps: &mut NativeDeps,
 ) -> Result<Vec<PluginEntry>, ManifestError> {
-    let item = doc.get("plugin").ok_or(ManifestError::Missing { key: "plugin" })?;
+    let Some(item) = doc.get("plugin") else {
+        // App-side manifests may ship only `[[remote_override]]`; the caller
+        // enforces that at least one of plugin/override is present.
+        return Ok(Vec::new());
+    };
     if let Some(table) = item.as_table() {
-        // Single-plugin form.
         let entry = parse_plugin_entry(table, "plugin", native_deps)?;
         Ok(vec![entry])
     } else if let Some(array) = item.as_array_of_tables() {
@@ -265,6 +339,16 @@ fn parse_plugin_entry(
         Some(item) => Some(expect_string(item, "plugin.client_type")?.to_owned()),
         None => None,
     };
+    let default_deployment = match table.get("default_deployment") {
+        Some(item) => {
+            let literal = expect_string(item, "plugin.default_deployment")?;
+            Deployment::parse(literal).ok_or_else(|| ManifestError::UnknownDeployment {
+                key: "plugin.default_deployment".to_owned(),
+                value: literal.to_owned(),
+            })?
+        }
+        None => Deployment::Local,
+    };
     if let Some(item) = table.get("gradle") {
         for entry in expect_array_of_tables(item, "plugin.gradle")? {
             native_deps.add_gradle(&parse_gradle(entry, "plugin.gradle")?);
@@ -275,7 +359,30 @@ fn parse_plugin_entry(
             native_deps.add_swift_package(&parse_swift_package(entry, "plugin.swift_package")?);
         }
     }
-    Ok(PluginEntry { id, client_type })
+    Ok(PluginEntry { id, client_type, default_deployment })
+}
+
+fn parse_remote_override(table: &Table) -> Result<RemoteOverride, ManifestError> {
+    for (name, _) in table {
+        if !KNOWN_OVERRIDE_KEYS.contains(&name) {
+            return Err(ManifestError::UnknownKey {
+                key: format!("remote_override.{name}"),
+            });
+        }
+    }
+    let plugin_item = table
+        .get("plugin")
+        .ok_or(ManifestError::Missing { key: "remote_override.plugin" })?;
+    let plugin = expect_string(plugin_item, "remote_override.plugin")?.to_owned();
+    let deployment_item = table
+        .get("deployment")
+        .ok_or(ManifestError::Missing { key: "remote_override.deployment" })?;
+    let literal = expect_string(deployment_item, "remote_override.deployment")?;
+    let deployment = Deployment::parse(literal).ok_or_else(|| ManifestError::UnknownDeployment {
+        key: "remote_override.deployment".to_owned(),
+        value: literal.to_owned(),
+    })?;
+    Ok(RemoteOverride { plugin, deployment })
 }
 
 fn parse_gradle(table: &Table, context: &'static str) -> Result<GradleDep, ManifestError> {
@@ -435,6 +542,11 @@ pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
     if !manifest.native_deps.is_empty() {
         emit_native_deps(&manifest.native_deps);
     }
+    // Full manifest — bincode-encoded — carries `client_type`,
+    // `default_deployment` and the plugin list needed by
+    // [`emit_wiring_env`]. `PLUGIN_IDS` stays as a cheap comma-separated
+    // sidecar for consumers that only want the id list without decoding.
+    emit_manifest(&manifest);
     let ids: Vec<&str> = manifest.plugin_ids().collect();
     println!("cargo:PLUGIN_IDS={}", ids.join(","));
     manifest
@@ -454,6 +566,98 @@ pub fn emit_manifest_metadata_with_contract(
     let manifest = emit_manifest_metadata(path);
     emit_contract(contract);
     manifest
+}
+
+/// Resolved wiring — the shape emitted by [`emit_wiring_env`] into
+/// `ISTMO_AUTO_PLUGINS` / `ISTMO_AUTO_REMOTE`. Exposed for testing;
+/// production consumers only care about the env-var side effects.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ResolvedWiring {
+    /// Client type paths (e.g. `::istmo_google_sign_in::SignInClient`) that
+    /// stay in the app process. Auto-injected into `runtime! { plugins: [] }`.
+    pub local_clients: Vec<String>,
+    /// Client type paths that route through the `:remote` bridge.
+    /// Auto-injected into `runtime! { remote: [] }`.
+    pub remote_clients: Vec<String>,
+}
+
+/// Resolves the final auto-wiring by combining dep manifests with an
+/// optional app-side override manifest. Overrides take precedence over
+/// each plugin's [`PluginEntry::default_deployment`].
+///
+/// Plugins whose manifest carries no `client_type` are skipped — they
+/// contribute only native deps and are not part of the runtime wiring.
+#[must_use]
+pub fn resolve_wiring(
+    dep_manifests: &[Manifest],
+    app_manifest: Option<&Manifest>,
+) -> ResolvedWiring {
+    let mut overrides: std::collections::HashMap<&str, Deployment> =
+        std::collections::HashMap::new();
+    if let Some(app) = app_manifest {
+        for ov in &app.remote_overrides {
+            overrides.insert(ov.plugin.as_str(), ov.deployment);
+        }
+    }
+    let mut local = Vec::new();
+    let mut remote = Vec::new();
+    for manifest in dep_manifests {
+        for entry in &manifest.plugins {
+            let Some(client_type) = entry.client_type.as_ref() else {
+                continue;
+            };
+            let deployment = overrides
+                .get(entry.id.as_str())
+                .copied()
+                .unwrap_or(entry.default_deployment);
+            match deployment {
+                Deployment::Local => local.push(client_type.clone()),
+                Deployment::Remote => remote.push(client_type.clone()),
+            }
+        }
+    }
+    ResolvedWiring { local_clients: local, remote_clients: remote }
+}
+
+/// App-side `build.rs` helper for auto-wiring `istmo::runtime!`.
+///
+/// Walks `DEP_*_ISTMO_MANIFEST`, optionally applies `[[remote_override]]`
+/// entries from the app's own `istmo.toml`, and emits two
+/// `cargo::rustc-env` pairs the `istmo::runtime!` macro reads at
+/// expansion time:
+///
+/// * `ISTMO_AUTO_PLUGINS` — comma-separated fully-qualified `<T>Client`
+///   paths that auto-populate the `plugins:` section.
+/// * `ISTMO_AUTO_REMOTE` — same shape, for the `remote:` section.
+///
+/// Pass `Some(path)` to point at the app's own `istmo.toml`; pass
+/// `None` when the app has no manifest of its own (defaults apply
+/// unchanged). Missing files at the given path produce a `cargo::warning`
+/// and treat the app as override-less rather than failing the build,
+/// which keeps the helper safe to call unconditionally.
+#[must_use]
+pub fn emit_wiring_env(app_manifest_path: Option<&Path>) -> ResolvedWiring {
+    let dep_manifests = crate::handover::collect_dep_manifests();
+    let app_manifest = app_manifest_path.and_then(|path| {
+        println!("cargo:rerun-if-changed={}", path.display());
+        match Manifest::from_path(path) {
+            Ok(m) => Some(m),
+            Err(err) => {
+                println!("cargo::warning=istmo-build: failed to read app istmo.toml: {err}");
+                None
+            }
+        }
+    });
+    let resolved = resolve_wiring(&dep_manifests, app_manifest.as_ref());
+    println!(
+        "cargo::rustc-env=ISTMO_AUTO_PLUGINS={}",
+        resolved.local_clients.join(","),
+    );
+    println!(
+        "cargo::rustc-env=ISTMO_AUTO_REMOTE={}",
+        resolved.remote_clients.join(","),
+    );
+    resolved
 }
 
 #[cfg(test)]

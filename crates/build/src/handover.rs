@@ -54,6 +54,7 @@ use bincode::config::Configuration;
 use bincode::error::{DecodeError, EncodeError};
 
 use crate::contract::Contract;
+use crate::manifest::Manifest;
 use crate::native_deps::NativeDeps;
 
 const CODEC: Configuration = bincode::config::standard();
@@ -64,6 +65,12 @@ pub const CONTRACT_KEY: &str = "CONTRACT";
 /// Metadata key used for the [`NativeDeps`] emission. Consumers see it as
 /// `DEP_<links>_NATIVE_DEPS`.
 pub const NATIVE_DEPS_KEY: &str = "NATIVE_DEPS";
+/// Metadata key used for the full [`Manifest`] emission.
+///
+/// Carries the plugin id list + `client_type` + `default_deployment` needed
+/// by the downstream [`emit_wiring_env`](crate::emit_wiring_env) pass.
+/// Consumers see it as `DEP_<links>_ISTMO_MANIFEST`.
+pub const MANIFEST_KEY: &str = "ISTMO_MANIFEST";
 
 /// Failure modes when decoding a hex-encoded bincode payload back into a
 /// typed value.
@@ -150,6 +157,54 @@ pub fn emit_contract(contract: &Contract) {
 pub fn emit_native_deps(deps: &NativeDeps) {
     let payload = serialize_native_deps(deps).expect("serialize istmo native deps");
     println!("cargo:{NATIVE_DEPS_KEY}={payload}");
+}
+
+/// bincode-encode + hex-encode a full [`Manifest`] for transit through a
+/// `cargo:KEY=VALUE` emission.
+pub fn serialize_manifest(manifest: &Manifest) -> Result<String, HandoverError> {
+    let bytes = bincode::encode_to_vec(manifest, CODEC).map_err(HandoverError::Encode)?;
+    Ok(hex_encode(&bytes))
+}
+
+/// Reverse of [`serialize_manifest`].
+pub fn deserialize_manifest(hex: &str) -> Result<Manifest, HandoverError> {
+    let bytes = hex_decode(hex)?;
+    let (manifest, _) = bincode::decode_from_slice::<Manifest, _>(&bytes, CODEC)
+        .map_err(HandoverError::Decode)?;
+    Ok(manifest)
+}
+
+/// Emits the `cargo:ISTMO_MANIFEST=…` pair for `manifest`.
+///
+/// Downstream build scripts see it as `DEP_<links>_ISTMO_MANIFEST` and can
+/// decode via [`deserialize_manifest`] or the aggregating
+/// [`collect_dep_manifests`] helper.
+///
+/// # Panics
+/// See [`emit_contract`] — same reasoning.
+pub fn emit_manifest(manifest: &Manifest) {
+    let payload = serialize_manifest(manifest).expect("serialize istmo manifest");
+    println!("cargo:{MANIFEST_KEY}={payload}");
+}
+
+/// Collects every dependency's [`Manifest`] emission.
+///
+/// Walks the calling `build.rs` environment for `DEP_*_ISTMO_MANIFEST`
+/// variables and decodes each. Values that fail to decode are logged via
+/// `cargo::warning` and skipped so a single bad dependency does not brick
+/// the whole build.
+#[must_use]
+pub fn collect_dep_manifests() -> Vec<Manifest> {
+    collect_env_payloads(MANIFEST_KEY)
+        .into_iter()
+        .filter_map(|(var, payload)| match deserialize_manifest(&payload) {
+            Ok(m) => Some(m),
+            Err(err) => {
+                println!("cargo::warning=istmo handover decode failed for {var}: {err}");
+                None
+            }
+        })
+        .collect()
 }
 
 /// Collects every [`Contract`] emitted by a dependency's build script.

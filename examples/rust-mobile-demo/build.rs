@@ -36,6 +36,14 @@ use istmo_plugins_schema as plugin_contract;
 use istmo_google_sign_in::codegen as google_sign_in_contract;
 
 fn main() {
+    // Auto-wire plugin clients + remote deployments from every dep's
+    // `istmo.toml`. `emit_wiring_env` walks `DEP_*_ISTMO_MANIFEST`, applies
+    // any `[[remote_override]]` entries in the app's own `istmo.toml`
+    // (none for this demo yet) and emits `ISTMO_AUTO_PLUGINS` /
+    // `ISTMO_AUTO_REMOTE` env vars that the `istmo::runtime!` macro reads
+    // at expansion.
+    let _wiring = istmo_build::emit_wiring_env(None);
+
     // Anchor everything at the demo's own directory. `CARGO_MANIFEST_DIR`
     // is the crate root regardless of who invoked cargo (Gradle, Xcode
     // pre-build script, plain `cargo build --workspace`).
