@@ -22,6 +22,14 @@
 
 import Foundation
 
+/// Callback surface for a Swift-hosted plugin that hands `NativeHandleId`s
+/// to Rust. When Rust drops the matching `NativeHandle<T>`, the runtime
+/// invokes [`releaseNativeHandle`] on the plugin recorded as owner (see
+/// [`IstmoRuntime.allocHandleId`] / [`IstmoRuntime.registerHandleReleaser`]).
+public protocol HandleReleaser: AnyObject {
+    func releaseNativeHandle(_ handleId: UInt64)
+}
+
 public final class IstmoRuntime {
 
     public static let shared = IstmoRuntime()
@@ -31,6 +39,14 @@ public final class IstmoRuntime {
     private var nextId: UInt64 = 1_000_000_000  // Swift-originated ids stay above Rust's range for debugging clarity.
     private var pending: [UInt64: CheckedContinuation<Data, Error>] = [:]
     private var streams: [UInt64: AsyncThrowingStream<Data, Error>.Continuation] = [:]
+
+    /// Central native-handle ownership map. Every Swift dispatcher that
+    /// returns a `NativeHandleId` to Rust allocates it via [`allocHandleId`]
+    /// so [`onReleaseNativeHandle`] can route the release back to the
+    /// correct owner. The map is `handleId -> pluginId`.
+    private var handleOwners: [UInt64: String] = [:]
+    private var nextHandleId: UInt64 = 1
+    private var releasers: [String: HandleReleaser] = [:]
 
     private init() {}
 
@@ -73,6 +89,8 @@ public final class IstmoRuntime {
                 cont.finish(throwing: IstmoRuntimeError.shutdown)
             }
             streams.removeAll()
+            handleOwners.removeAll()
+            releasers.removeAll()
             started = false
         }
     }
@@ -178,6 +196,54 @@ public final class IstmoRuntime {
                     self.streams.removeValue(forKey: streamId)
                 }
             }
+        }
+    }
+
+    // MARK: - Native handle registry
+
+    /// Register a `HandleReleaser` for `pluginId`. Swift-hosted plugins that
+    /// hand `NativeHandleId`s to Rust register a releaser once at startup so
+    /// the runtime can free the backing object when Rust drops its
+    /// `NativeHandle<T>`.
+    public func registerHandleReleaser(pluginId: String, releaser: HandleReleaser) {
+        queue.sync { self.releasers[pluginId] = releaser }
+    }
+
+    /// Reserve a fresh `NativeHandleId` and record `pluginId` as the owner.
+    ///
+    /// Called by a Swift dispatcher every time it registers a new native
+    /// object it wants Rust to track (a credential, an ad, a `UIImage`, ...).
+    /// [`onReleaseNativeHandle`] uses the recorded owner to route the release
+    /// back into the dispatcher's own registry.
+    ///
+    /// Global counter — ids are unique across every dispatcher, so release
+    /// routing is deterministic (no collisions between two dispatchers
+    /// reusing local counters starting at 1).
+    public func allocHandleId(pluginId: String) -> UInt64 {
+        queue.sync {
+            let id = self.nextHandleId
+            self.nextHandleId += 1
+            self.handleOwners[id] = pluginId
+            return id
+        }
+    }
+
+    /// Forget the ownership entry for `handleId`. Dispatchers call this from
+    /// their own release path (credential freed, ad dismissed) to avoid a
+    /// redundant [`HandleReleaser.releaseNativeHandle`] callback when the
+    /// eventual `Frame::ReleaseNativeHandle` arrives.
+    public func forgetHandle(_ handleId: UInt64) {
+        queue.sync { _ = self.handleOwners.removeValue(forKey: handleId) }
+    }
+
+    fileprivate func handleReleaseNativeHandle(_ handleId: UInt64) {
+        queue.async {
+            // Unknown ids are a no-op: the release may race a same-thread
+            // dispatcher-side release, in which case the owner entry has
+            // already been removed by `forgetHandle`.
+            guard let pluginId = self.handleOwners.removeValue(forKey: handleId) else { return }
+            guard let releaser = self.releasers[pluginId] else { return }
+            releaser.releaseNativeHandle(handleId)
         }
     }
 
@@ -324,11 +390,9 @@ private enum Trampolines {
 
     static let onReleaseNativeHandle: @convention(c) (
         UnsafeMutableRawPointer?, UInt64
-    ) -> Void = { _, handleId in
-        // Demo runtime does not own any native handles yet. Real apps hop
-        // to the main queue and free the object stored under `handleId` in
-        // their per-plugin registry.
-        NSLog("IstmoRuntime: onReleaseNativeHandle handle_id=\(handleId) — no handle registry")
+    ) -> Void = { ctx, handleId in
+        guard let runtime = ctxRuntime(ctx) else { return }
+        runtime.handleReleaseNativeHandle(handleId)
     }
 
     private static func ctxRuntime(_ ctx: UnsafeMutableRawPointer?) -> IstmoRuntime? {
