@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 bincode = { workspace = true }
+toml_edit = { workspace = true }
 
 [lints]
 workspace = true

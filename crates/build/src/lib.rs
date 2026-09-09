@@ -17,6 +17,7 @@ pub mod kotlin;
 pub mod kotlin_client;
 pub mod kotlin_host;
 pub mod kotlin_types;
+pub mod manifest;
 pub mod native_deps;
 pub mod rust;
 pub mod service;
@@ -47,6 +48,10 @@ pub use crate::kotlin::generate_kotlin;
 pub use crate::kotlin_client::generate_kotlin_client;
 pub use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
 pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
+pub use crate::manifest::{
+    Manifest, ManifestError, PluginEntry, emit_manifest_metadata,
+    emit_manifest_metadata_with_contract,
+};
 pub use crate::native_deps::{
     GradleCoord, GradleDep, GradleKey, GradleScope, NativeDeps, SwiftPackageDep, VersionConflict,
 };

@@ -52,6 +52,7 @@ syn = { version = "2", default-features = false, features = [
     "clone-impls",
 ] }
 jni = { version = "0.21", default-features = false }
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
 istmo-core = { path = "crates/core", version = "0.0.0" }
 istmo-build = { path = "crates/build", version = "0.0.0" }
