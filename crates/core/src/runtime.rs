@@ -95,6 +95,19 @@ impl RuntimeInit {
         self
     }
 
+    /// Declares that `T`'s wire id is routed through a `:remote` bridge —
+    /// outbound frames referencing it are steered into
+    /// [`Runtime::install_remote_envelope_sink`] instead of the typed pump.
+    /// Chains for use inside the `istmo::runtime!` `remote:` list.
+    #[must_use]
+    pub fn remotes<T>(self) -> Self
+    where
+        T: Plugin,
+    {
+        self.runtime.declare_remote_plugin(T::PLUGIN_ID);
+        self
+    }
+
     /// Turns on strict declaration enforcement. Call once after every
     /// [`Self::expects`] entry has been registered — subsequent
     /// `acquire()` calls for undeclared plugins fail fast with

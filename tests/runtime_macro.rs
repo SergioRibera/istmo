@@ -22,6 +22,11 @@ pub trait RuntimeAbsent {
     async fn nope(&self) -> Nothing;
 }
 
+#[istmo::plugin(name = "test.runtime.compute")]
+pub trait RuntimeCompute {
+    async fn crunch(&self, input: String) -> String;
+}
+
 #[derive(Debug)]
 pub struct EchoImpl;
 
@@ -34,6 +39,7 @@ impl RuntimeEcho for EchoImpl {
 // The macro under test.
 istmo::runtime!(
     plugins: [RuntimeAbsentClient],
+    remote:  [RuntimeCompute],
     hosts:   [RuntimeEcho => EchoImpl],
 );
 
@@ -90,4 +96,16 @@ fn runtime_macro_registers_host_dispatcher() {
         }
     }
     panic!("timed out waiting for Respond");
+}
+
+#[test]
+fn runtime_macro_declares_remote_plugins() {
+    let (rt, _outbound) = wired_init();
+    assert!(
+        rt.is_remote_plugin("test.runtime.compute"),
+        "`remote: [RuntimeCompute]` must have called declare_remote_plugin",
+    );
+    // Sibling plugins are NOT remote — the section is opt-in.
+    assert!(!rt.is_remote_plugin("test.runtime.echo"));
+    assert!(!rt.is_remote_plugin("test.runtime.absent"));
 }
