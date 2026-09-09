@@ -328,6 +328,112 @@ pub fn service_control() -> Contract {
     }
 }
 
+/// Contract for `istmo.task_scheduler` — the platform-hosted plugin
+/// that lands `WorkManager` (Android) / `BGTaskScheduler` (iOS)
+/// enqueue and cancel requests originating from Rust.
+#[must_use]
+pub fn task_scheduler() -> Contract {
+    Contract {
+        plugin_id: "istmo.task_scheduler".to_owned(),
+        type_name: "TaskScheduler".to_owned(),
+        methods: vec![
+            Method {
+                name: "enqueue".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "request".to_owned(),
+                    ty: named("TaskRequest"),
+                }],
+                returns: named("TaskHandle"),
+                error: Some(named("TaskSchedulerError")),
+            },
+            Method {
+                name: "cancel".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "handle".to_owned(),
+                    ty: named("TaskHandle"),
+                }],
+                returns: TypeRef::Unit,
+                error: Some(named("TaskSchedulerError")),
+            },
+            Method {
+                name: "cancel_by_tag".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "tag".to_owned(),
+                    ty: TypeRef::String,
+                }],
+                returns: TypeRef::Unit,
+                error: Some(named("TaskSchedulerError")),
+            },
+            Method {
+                name: "cancel_by_unique_name".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "name".to_owned(),
+                    ty: TypeRef::String,
+                }],
+                returns: TypeRef::Unit,
+                error: Some(named("TaskSchedulerError")),
+            },
+        ],
+        init: None,
+        types: vec![
+            enum_of(
+                "NetworkKind",
+                vec![
+                    unit_variant("NotRequired"),
+                    unit_variant("Connected"),
+                    unit_variant("Unmetered"),
+                    unit_variant("Metered"),
+                ],
+            ),
+            struct_of(
+                "Constraints",
+                vec![
+                    field("requiredNetwork", named("NetworkKind")),
+                    field("requiresCharging", TypeRef::Bool),
+                    field("requiresDeviceIdle", TypeRef::Bool),
+                    field("requiresBatteryNotLow", TypeRef::Bool),
+                    field("requiresStorageNotLow", TypeRef::Bool),
+                ],
+            ),
+            enum_of(
+                "ExistingWorkPolicy",
+                vec![
+                    unit_variant("Replace"),
+                    unit_variant("Keep"),
+                    unit_variant("Append"),
+                    unit_variant("AppendOrReplace"),
+                ],
+            ),
+            struct_of("TaskHandle", vec![field("id", TypeRef::String)]),
+            struct_of(
+                "TaskRequest",
+                vec![
+                    field("taskId", TypeRef::String),
+                    field("uniqueName", TypeRef::String),
+                    field("input", TypeRef::Bytes),
+                    field("constraints", named("Constraints")),
+                    field("initialDelaySeconds", opt(TypeRef::U64)),
+                    field("tags", vec(TypeRef::String)),
+                    field("existingWorkPolicy", named("ExistingWorkPolicy")),
+                ],
+            ),
+            enum_of(
+                "TaskSchedulerError",
+                vec![
+                    payload_variant("UnknownTask", TypeRef::String),
+                    payload_variant("InvalidConstraints", TypeRef::String),
+                    payload_variant("Conflict", TypeRef::String),
+                    payload_variant("Platform", TypeRef::String),
+                ],
+            ),
+        ],
+    }
+}
+
 #[must_use]
 pub fn google_sign_in() -> Contract {
     Contract {

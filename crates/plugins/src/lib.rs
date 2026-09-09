@@ -28,6 +28,7 @@ pub mod notifications;
 pub mod permissions;
 pub mod safe_area;
 pub mod service;
+pub mod task_scheduler;
 pub mod worker;
 
 pub use crate::activity_results::{
@@ -61,5 +62,9 @@ pub use crate::service::{
     NotificationSpec, SERVICE_CONTROL_PLUGIN_ID, ServiceContext, ServiceControl,
     ServiceControlClient, ServiceControlError, ServiceControlHost, StopNotifier, WakeLock,
     WakelockToken, stop_channel,
+};
+pub use crate::task_scheduler::{
+    ExistingWorkPolicy, TASK_SCHEDULER_PLUGIN_ID, TaskHandle, TaskRequest, TaskScheduler,
+    TaskSchedulerClient, TaskSchedulerError, TaskSchedulerHost,
 };
 pub use crate::worker::{Constraints, NetworkKind, TaskOutcome, WorkerContext};
