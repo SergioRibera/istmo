@@ -7,7 +7,7 @@
 //! Cargo runs each dependency's `build.rs` **before** the dependent crate's
 //! proc-macros expand. Cross-crate metadata therefore has to travel through
 //! Cargo's build-script channel: the plugin crate emits key/value pairs via
-//! `cargo::metadata::…=…`; Cargo forwards them to every dependent build
+//! `cargo:KEY=VALUE`; Cargo forwards them to every dependent build
 //! script as `DEP_<links>_<KEY>` environment variables.
 //!
 //! This module wraps that pattern for the two payload types the workspace
@@ -98,7 +98,7 @@ impl std::error::Error for HandoverError {
 }
 
 /// bincode-encode + hex-encode a [`Contract`] for transit through a
-/// `cargo::metadata::` emission.
+/// `cargo:KEY=VALUE` emission.
 pub fn serialize_contract(contract: &Contract) -> Result<String, HandoverError> {
     let bytes = bincode::encode_to_vec(contract, CODEC).map_err(HandoverError::Encode)?;
     Ok(hex_encode(&bytes))
@@ -113,7 +113,7 @@ pub fn deserialize_contract(hex: &str) -> Result<Contract, HandoverError> {
 }
 
 /// bincode-encode + hex-encode a [`NativeDeps`] bundle for transit through
-/// a `cargo::metadata::` emission.
+/// a `cargo:KEY=VALUE` emission.
 pub fn serialize_native_deps(deps: &NativeDeps) -> Result<String, HandoverError> {
     let bytes = bincode::encode_to_vec(deps, CODEC).map_err(HandoverError::Encode)?;
     Ok(hex_encode(&bytes))
@@ -127,9 +127,9 @@ pub fn deserialize_native_deps(hex: &str) -> Result<NativeDeps, HandoverError> {
     Ok(deps)
 }
 
-/// Emits the `cargo::metadata::CONTRACT=…` pair for `contract`. Call once
-/// per plugin trait from the plugin crate's `build.rs`. Prints to stdout,
-/// as Cargo expects.
+/// Emits the `cargo:CONTRACT=…` pair for `contract`. Call once per plugin
+/// trait from the plugin crate's `build.rs`. Prints to stdout, as Cargo
+/// expects.
 ///
 /// The plugin crate must carry a `links = "…"` entry in `Cargo.toml`; without
 /// it, Cargo silently drops metadata emissions for consumer scripts.
@@ -140,16 +140,16 @@ pub fn deserialize_native_deps(hex: &str) -> Result<NativeDeps, HandoverError> {
 /// mistake — surfacing it as a build-time panic keeps the API terse.
 pub fn emit_contract(contract: &Contract) {
     let payload = serialize_contract(contract).expect("serialize istmo contract");
-    println!("cargo::metadata::{CONTRACT_KEY}={payload}");
+    println!("cargo:{CONTRACT_KEY}={payload}");
 }
 
-/// Emits the `cargo::metadata::NATIVE_DEPS=…` pair for `deps`.
+/// Emits the `cargo:NATIVE_DEPS=…` pair for `deps`.
 ///
 /// # Panics
 /// See [`emit_contract`] — same reasoning.
 pub fn emit_native_deps(deps: &NativeDeps) {
     let payload = serialize_native_deps(deps).expect("serialize istmo native deps");
-    println!("cargo::metadata::{NATIVE_DEPS_KEY}={payload}");
+    println!("cargo:{NATIVE_DEPS_KEY}={payload}");
 }
 
 /// Collects every [`Contract`] emitted by a dependency's build script.

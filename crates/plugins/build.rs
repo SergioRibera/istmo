@@ -25,10 +25,6 @@ fn main() {
         &istmo_plugins_schema::notifications(),
     );
     emit(
-        &out_dir.join("google_sign_in_types.rs"),
-        &istmo_plugins_schema::google_sign_in(),
-    );
-    emit(
         &out_dir.join("admob_types.rs"),
         &istmo_plugins_schema::admob(),
     );

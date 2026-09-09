@@ -22,7 +22,6 @@
 pub mod activity_results;
 pub mod admob;
 pub mod deeplinks;
-pub mod google_sign_in;
 pub mod lifecycle;
 pub mod notifications;
 pub mod permissions;
@@ -44,10 +43,6 @@ pub use crate::admob::{
     BannerRequest, Interstitial, InterstitialOutcome, Rewarded, RewardedOutcome,
 };
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
-pub use crate::google_sign_in::{
-    Credential, GOOGLE_SIGN_IN_PLUGIN_ID, OwnedSignInAccount, SignIn, SignInAccount, SignInClient,
-    SignInConfig, SignInConfigBuilder, SignInError, SignInHost, SignInMode,
-};
 pub use crate::lifecycle::{AppLifecycle, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream};
 pub use crate::notifications::{
     NOTIFICATIONS_PLUGIN_ID, NotificationError, NotificationHandle, NotificationImportance,

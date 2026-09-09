@@ -1,7 +1,7 @@
 [package]
 name = "rust-mobile-demo"
 version = "0.0.0"
-description = "Full-Rust mobile demo — egui UI driving google_sign_in + notifications + permissions plugins."
+description = "Full-Rust mobile demo — egui UI driving google-sign-in + notifications + permissions plugins."
 publish = false
 edition.workspace = true
 rust-version.workspace = true
@@ -18,6 +18,10 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 istmo = { path = "../.." }
 istmo-plugins = { workspace = true }
+# External community plugin — lives in the sibling `plugins/` repo. First
+# real `istmo.toml` consumer; its native-dep contribution reaches this
+# crate's `build.rs` through Cargo's `DEP_*_NATIVE_DEPS` env-var handover.
+istmo-google-sign-in = { path = "../../../plugins/google-sign-in" }
 log = "0.4"
 pollster = { workspace = true }
 bincode = { workspace = true }
@@ -25,10 +29,12 @@ bincode = { workspace = true }
 # build.rs regenerates the Swift host dispatchers under
 # `ios/RustMobileDemo/Plugins/*/Generated/` on every cargo build so the
 # checked-in wire schema stays in lockstep with the Rust plugin
-# definitions. `codegen` exposes `istmo_plugins::contract::*` builders;
-# `istmo-build` renders them into Swift source.
+# definitions. `codegen` on `istmo-plugins-schema` exposes the bundled
+# contracts; `istmo-google-sign-in`'s `codegen` feature exposes the
+# community-plugin contract.
 [build-dependencies]
 istmo-plugins-schema = { workspace = true }
+istmo-google-sign-in = { path = "../../../plugins/google-sign-in", features = ["codegen"] }
 istmo-build = { workspace = true }
 
 # The demo picks eframe + wgpu as its UI stack; istmo itself is

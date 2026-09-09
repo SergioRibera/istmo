@@ -409,7 +409,7 @@ fn static_field(context: &'static str, field: &'static str) -> &'static str {
 
 /// Parse `istmo.toml` at `path` and emit its native-dep contribution.
 ///
-/// Forwards through the standard `cargo::metadata::…` channel. Plugin
+/// Forwards through the standard `cargo:KEY=VALUE` channel. Plugin
 /// `build.rs` convenience — one call replaces the hand-written
 /// [`NativeDeps`] construction + [`emit_native_deps`] pair.
 ///
@@ -436,7 +436,7 @@ pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
         emit_native_deps(&manifest.native_deps);
     }
     let ids: Vec<&str> = manifest.plugin_ids().collect();
-    println!("cargo::metadata::PLUGIN_IDS={}", ids.join(","));
+    println!("cargo:PLUGIN_IDS={}", ids.join(","));
     manifest
 }
 

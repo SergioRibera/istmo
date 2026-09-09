@@ -31,6 +31,9 @@ use istmo_build::{
     generate_swift_codecs, generate_swift_host, generate_swift_types,
 };
 use istmo_plugins_schema as plugin_contract;
+// External community plugin — supplies its own `Contract` builder under
+// the `codegen` feature (see `plugins/google-sign-in/`).
+use istmo_google_sign_in::codegen as google_sign_in_contract;
 
 fn main() {
     // Anchor everything at the demo's own directory. `CARGO_MANIFEST_DIR`
@@ -116,7 +119,7 @@ fn dispatchers() -> Vec<DispatcherSpec> {
         },
         DispatcherSpec {
             dir_name: "SignIn",
-            contract: plugin_contract::google_sign_in(),
+            contract: google_sign_in_contract::contract(),
             emit_kotlin: true,
         },
         DispatcherSpec {

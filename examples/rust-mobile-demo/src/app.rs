@@ -36,7 +36,7 @@ use istmo::plugins::{
 use istmo_plugins::admob::{
     AdError, AdMobClient, AdMobConfig, InterstitialOutcome, RewardedOutcome,
 };
-use istmo_plugins::google_sign_in::{
+use istmo_google_sign_in::{
     OwnedSignInAccount, SignInClient, SignInConfig, SignInError, SignInMode,
 };
 

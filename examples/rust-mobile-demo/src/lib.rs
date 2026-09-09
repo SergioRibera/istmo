@@ -19,8 +19,8 @@
 //! anywhere in this crate.**
 
 use istmo::plugins::{NotificationsClient, PermissionsClient, SafeArea};
+use istmo_google_sign_in::SignInClient;
 use istmo_plugins::admob::AdMobClient;
-use istmo_plugins::google_sign_in::SignInClient;
 
 istmo::runtime!(
     plugins: [SignInClient, PermissionsClient, NotificationsClient, AdMobClient, SafeArea],
