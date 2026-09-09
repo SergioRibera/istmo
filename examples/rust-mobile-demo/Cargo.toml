@@ -18,10 +18,10 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 istmo = { path = "../.." }
 istmo-plugins = { workspace = true }
-# External community plugin — lives in the sibling `plugins/` repo. First
-# real `istmo.toml` consumer; its native-dep contribution reaches this
+# Community plugin under `plugins/google-sign-in`. First real
+# `istmo.toml` consumer; its native-dep contribution reaches this
 # crate's `build.rs` through Cargo's `DEP_*_NATIVE_DEPS` env-var handover.
-istmo-google-sign-in = { path = "../../../plugins/google-sign-in" }
+istmo-google-sign-in = { workspace = true }
 log = "0.4"
 pollster = { workspace = true }
 bincode = { workspace = true }
@@ -34,7 +34,7 @@ bincode = { workspace = true }
 # community-plugin contract.
 [build-dependencies]
 istmo-plugins-schema = { workspace = true }
-istmo-google-sign-in = { path = "../../../plugins/google-sign-in", features = ["codegen"] }
+istmo-google-sign-in = { workspace = true, features = ["codegen"] }
 istmo-build = { workspace = true }
 
 # The demo picks eframe + wgpu as its UI stack; istmo itself is

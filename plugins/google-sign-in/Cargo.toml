@@ -1,0 +1,38 @@
+[package]
+name = "istmo-google-sign-in"
+version = "0.0.0"
+description = "Google Sign-In / Credential Manager plugin for the istmo framework."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+# `links` is mandatory for cross-crate `cargo::metadata::…` propagation
+# (`emit_manifest_metadata` publishes NativeDeps + PLUGIN_IDS through it).
+# Value has to be unique across the whole dep graph; namespacing under
+# `istmo_` keeps future community plugins from colliding.
+links = "istmo_google_sign_in"
+
+[features]
+default = []
+# Off by default so downstream `[dependencies]` do not pay for the `Contract`
+# builder + `istmo-build` transitive tree. Consumers that generate Kotlin /
+# Swift hosts flip this on inside their `build.rs` via `[build-dependencies]`.
+codegen = ["dep:istmo-build"]
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+bincode = { workspace = true }
+pollster = { workspace = true }
+istmo-build = { workspace = true, optional = true }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+flume = { workspace = true }
+pollster = { workspace = true }
+
+[lints]
+workspace = true

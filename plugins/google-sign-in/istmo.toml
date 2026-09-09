@@ -1,0 +1,33 @@
+# Declarative plugin metadata for `istmo-google-sign-in`.
+#
+# `build.rs` reads this file via `istmo_build::emit_manifest_metadata`;
+# every entry lands in Cargo's cross-crate metadata channel and is picked
+# up by the downstream app's `build.rs` through
+# `istmo_build::collect_dep_native_deps`.
+
+[plugin]
+id = "istmo.google_sign_in"
+client_type = "::istmo_google_sign_in::SignInClient"
+
+# Android — Credential Manager + Play Services Auth backend.
+[[gradle]]
+group = "androidx.credentials"
+artifact = "credentials"
+version = "1.3.0"
+
+[[gradle]]
+group = "androidx.credentials"
+artifact = "credentials-play-services-auth"
+version = "1.3.0"
+
+[[gradle]]
+scope = "api"
+group = "com.google.android.libraries.identity.googleid"
+artifact = "googleid"
+version = "1.1.1"
+
+# iOS — Google Sign-In SPM package (`GoogleSignIn` product).
+[[swift_package]]
+url = "https://github.com/google/GoogleSignIn-iOS.git"
+product = "GoogleSignIn"
+from_version = "7.0.0"

@@ -13,6 +13,7 @@ members = [
     "examples/android-multi/crates/widget",
     "examples/ios-demo",
     "examples/rust-mobile-demo",
+    "plugins/google-sign-in",
 ]
 
 [workspace.package]
@@ -61,6 +62,10 @@ istmo-android = { path = "crates/android", version = "0.0.0" }
 istmo-ios = { path = "crates/ios", version = "0.0.0" }
 istmo-plugins = { path = "crates/plugins", version = "0.0.0" }
 istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.0.0" }
+
+# Community plugins — separate crates under `plugins/`. Listed here so
+# consumers (examples + downstream apps) can use `{ workspace = true }`.
+istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.0.0" }
 
 [package]
 name = "istmo"
