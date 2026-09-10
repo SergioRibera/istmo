@@ -10,6 +10,7 @@
 
 pub mod contract;
 pub mod desktop;
+pub mod extract;
 pub mod entitlements;
 pub mod handover;
 pub mod ios;
@@ -35,6 +36,7 @@ pub use crate::desktop::{
     generate_windows_service,
 };
 pub use crate::entitlements::{EntitlementValue, IosEntitlements};
+pub use crate::extract::{ExtractError, extract_contract};
 pub use crate::handover::{
     CONTRACT_KEY, HandoverError, MANIFEST_KEY, NATIVE_DEPS_KEY, collect_dep_contracts,
     collect_dep_manifests, collect_dep_native_deps, deserialize_contract, deserialize_manifest,
@@ -50,8 +52,9 @@ pub use crate::kotlin_client::generate_kotlin_client;
 pub use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
 pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
 pub use crate::manifest::{
-    Deployment, Manifest, ManifestError, PluginEntry, RemoteOverride, ResolvedWiring,
-    emit_manifest_metadata, emit_manifest_metadata_with_contract, emit_wiring_env, resolve_wiring,
+    Deployment, Manifest, ManifestError, PluginEntry, RemoteOverride, ResolvedWiring, emit,
+    emit_from, emit_manifest_metadata, emit_manifest_metadata_with_contract, emit_wiring_env,
+    resolve_wiring,
 };
 pub use crate::native_deps::{
     GradleCoord, GradleDep, GradleKey, GradleScope, NativeDeps, SwiftPackageDep, VersionConflict,

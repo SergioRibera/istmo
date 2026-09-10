@@ -568,6 +568,75 @@ pub fn emit_manifest_metadata_with_contract(
     manifest
 }
 
+/// One-liner for a plugin crate's `build.rs`. Reads `istmo.toml` next to
+/// `Cargo.toml`, emits manifest metadata, and for every `[plugin]` entry
+/// with a `client_type` set, extracts the matching trait from `src/lib.rs`
+/// and emits its [`Contract`](crate::Contract).
+///
+/// Trait name is derived from `client_type` by stripping the `Client`
+/// suffix off the last path segment — matches the naming convention of
+/// `#[istmo::plugin]` (`SignInClient` → `SignIn`).
+///
+/// Multi-plugin crates: every plugin declared in `istmo.toml` is extracted
+/// from the same `src/lib.rs`. Plugins whose trait lives in a sibling
+/// module can still call [`crate::extract_contract`] + [`emit_contract`]
+/// by hand.
+///
+/// # Panics
+/// * Missing / unreadable `istmo.toml` — plugin author bug.
+/// * Missing / unreadable `src/lib.rs` when a plugin declares `client_type`.
+/// * `client_type` not ending in `Client`.
+/// * Extraction failure (trait not found, unsupported shape).
+pub fn emit() {
+    emit_from("istmo.toml", "src/lib.rs");
+}
+
+/// [`emit`] with explicit paths for crates whose manifest / source file
+/// live off the standard `istmo.toml` + `src/lib.rs` layout.
+///
+/// # Panics
+/// See [`emit`].
+pub fn emit_from(manifest_path: impl AsRef<Path>, source_path: impl AsRef<Path>) {
+    let manifest = emit_manifest_metadata(manifest_path);
+    let source_path = source_path.as_ref();
+
+    let has_client = manifest
+        .plugins
+        .iter()
+        .any(|p| p.client_type.is_some());
+    if has_client {
+        println!("cargo:rerun-if-changed={}", source_path.display());
+    }
+
+    for plugin in &manifest.plugins {
+        let Some(client_type) = plugin.client_type.as_deref() else {
+            continue;
+        };
+        let trait_name = trait_from_client_type(client_type);
+        let contract = crate::extract_contract(source_path, &trait_name)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "istmo-build emit(): extract `{trait_name}` for plugin `{}` from `{}`: {err}",
+                    plugin.id,
+                    source_path.display(),
+                )
+            });
+        emit_contract(&contract);
+    }
+}
+
+fn trait_from_client_type(client_type: &str) -> String {
+    let last = client_type.rsplit("::").next().unwrap_or(client_type);
+    last.strip_suffix("Client")
+        .unwrap_or_else(|| {
+            panic!(
+                "istmo-build emit(): `client_type = \"{client_type}\"` \
+                 does not end in `Client` — cannot derive trait name"
+            )
+        })
+        .to_owned()
+}
+
 /// Resolved wiring — the shape emitted by [`emit_wiring_env`] into
 /// `ISTMO_AUTO_PLUGINS` / `ISTMO_AUTO_REMOTE`. Exposed for testing;
 /// production consumers only care about the env-var side effects.
