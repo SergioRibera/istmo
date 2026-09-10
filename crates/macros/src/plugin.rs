@@ -411,6 +411,10 @@ struct MethodCtx<'a> {
     method_name_str: LitStr,
     arg_pats: Vec<TokenStream>,
     payload_expr: TokenStream,
+    /// `#[doc = "..."]` attributes copied verbatim from the trait method
+    /// so rustdoc on the generated client method mirrors the trait's own
+    /// documentation.
+    doc_attrs: Vec<Attribute>,
 }
 
 /// One decoded trait method argument, tagged with whether it participates
@@ -485,6 +489,13 @@ fn expand_client_method(
     };
     let (ok_ty, err_ty) = extract_result(&return_ty);
 
+    let doc_attrs: Vec<Attribute> = method
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("doc"))
+        .cloned()
+        .collect();
+
     let ctx = MethodCtx {
         plugin_id,
         root,
@@ -492,6 +503,7 @@ fn expand_client_method(
         method_name_str,
         arg_pats,
         payload_expr,
+        doc_attrs,
     };
 
     if is_stream_method(&method.attrs) {
@@ -813,8 +825,10 @@ fn expand_unary_method(
         method_name_str,
         arg_pats,
         payload_expr,
+        doc_attrs,
     } = ctx;
     Ok(quote! {
+        #(#doc_attrs)*
         pub async fn #name(&self, #(#arg_pats),*) -> ::core::result::Result<
             #ok_ty,
             #root::IstmoError,
@@ -853,6 +867,7 @@ fn expand_unary_owned_method(ctx: &MethodCtx<'_>, ok_ty: &Type) -> syn::Result<T
         root,
         name,
         arg_pats,
+        doc_attrs,
         ..
     } = ctx;
     let owned_name = format_ident!("{}_owned", name);
@@ -869,6 +884,7 @@ fn expand_unary_owned_method(ctx: &MethodCtx<'_>, ok_ty: &Type) -> syn::Result<T
         .collect();
     let (owned_return_ty, adopter_expr) = build_owned_return(ok_ty)?;
     Ok(quote! {
+        #(#doc_attrs)*
         pub async fn #owned_name(
             &self,
             #(#arg_pats),*
@@ -960,9 +976,11 @@ fn expand_stream_method(ctx: &MethodCtx<'_>, item_ty: &Type, err_ty: Option<&Typ
         method_name_str,
         arg_pats,
         payload_expr,
+        doc_attrs,
     } = ctx;
     let err_ty_tokens = err_ty.map_or_else(|| quote! { () }, |t| quote! { #t });
     quote! {
+        #(#doc_attrs)*
         pub fn #name(&self, #(#arg_pats),*) -> ::core::result::Result<
             #root::TypedStream<#item_ty, #err_ty_tokens>,
             #root::IstmoError,
