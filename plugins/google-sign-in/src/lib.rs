@@ -36,10 +36,8 @@
 #[cfg(feature = "codegen")]
 pub mod codegen;
 
-use std::sync::Arc;
-
-use istmo_core::{IstmoError, NativeHandle, NativeHandleId, Runtime};
-use istmo_macros::{message, plugin};
+use istmo_core::NativeHandleId;
+use istmo_macros::{message, owned, plugin};
 
 /// Wire identifier of the sign-in plugin.
 pub const GOOGLE_SIGN_IN_PLUGIN_ID: &str = "istmo.google_sign_in";
@@ -61,14 +59,14 @@ pub enum Credential {}
 // [`istmo_build::extract_contract`] over this file to derive the `Contract`
 // consumed by downstream Kotlin / Swift generators.
 
-#[message(bincode = "::bincode")]
+#[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum SignInMode {
     Interactive,
     SilentOnly,
 }
 
-#[message(bincode = "::bincode")]
+#[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SignInConfig {
     pub server_client_id: String,
@@ -78,7 +76,7 @@ pub struct SignInConfig {
     pub auto_select: bool,
 }
 
-#[message(bincode = "::bincode")]
+#[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SignInAccount {
     pub id: String,
@@ -87,10 +85,11 @@ pub struct SignInAccount {
     pub photo_url: Option<String>,
     pub id_token: String,
     pub granted_scopes: Vec<String>,
+    #[handle(Credential)]
     pub credential: NativeHandleId,
 }
 
-#[message(bincode = "::bincode")]
+#[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SignInError {
     UserCancelled,
@@ -153,24 +152,10 @@ impl SignInConfigBuilder {
     }
 }
 
-/// Rust-owned counterpart of [`SignInAccount`]: same data, but `credential`
-/// is an owned [`NativeHandle<Credential>`] that releases the native object
-/// on drop.
-///
-/// Returned by [`SignInClient::sign_in_owned`] — the ergonomic entry point
-/// that ties the credential's lifetime to Rust. Users that need to hand the
-/// raw id back into a subsequent `SignIn` call (e.g. a refresh flow) go
-/// through [`SignIn::sign_in`] instead and adopt manually when convenient.
-#[derive(Debug)]
-pub struct OwnedSignInAccount {
-    pub id: String,
-    pub email: Option<String>,
-    pub display_name: Option<String>,
-    pub photo_url: Option<String>,
-    pub id_token: String,
-    pub granted_scopes: Vec<String>,
-    pub credential: NativeHandle<Credential>,
-}
+// `OwnedSignInAccount` + `SignInAccount::into_owned` are emitted by the
+// `#[message]` macro from the `#[handle(Credential)]` field annotation
+// above. Dropping the owned wrapper fires `Frame::ReleaseNativeHandle` on
+// the native side.
 
 impl std::fmt::Display for SignInError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -196,8 +181,11 @@ impl std::error::Error for SignInError {}
 pub trait SignIn {
     /// Requests a credential. `mode` chooses interactive vs silent-only
     /// behaviour; the returned account carries a [`NativeHandleId`] the
-    /// caller adopts into a [`NativeHandle<Credential>`] via
-    /// [`NativeHandle::adopt`] to tie the object's lifetime to Rust.
+    /// caller adopts into a [`NativeHandle`](istmo_core::NativeHandle)
+    /// via [`sign_in_owned`](SignInClient::sign_in_owned) (auto-emitted
+    /// from the `#[owned]` marker below) or manually via
+    /// [`SignInAccount::into_owned`].
+    #[owned]
     async fn sign_in(&self, mode: SignInMode) -> Result<SignInAccount, SignInError>;
 
     /// Best-effort silent sign-in intended for app startup. Returns `None`
@@ -205,11 +193,13 @@ pub trait SignIn {
     /// on first launch, deliberately distinguished from
     /// [`SignInError::NoCredentialAvailable`] which is reserved for
     /// [`sign_in`](Self::sign_in) with [`SignInMode::SilentOnly`].
+    #[owned]
     async fn silent_sign_in(&self) -> Result<Option<SignInAccount>, SignInError>;
 
     /// Refresh the id-token for the credential already parked under
     /// `credential`. The native side keeps the same handle id and returns a
     /// fresh id-token + `granted_scopes` snapshot.
+    #[owned]
     async fn refresh(&self, credential: NativeHandleId) -> Result<SignInAccount, SignInError>;
 
     /// Signs the user out on the platform, invalidating cached credentials.
@@ -224,39 +214,6 @@ pub trait SignIn {
     async fn revoke(&self) -> Result<(), SignInError>;
 }
 
-impl SignInClient {
-    /// Ergonomic wrapper on top of the trait method that adopts the returned
-    /// [`NativeHandleId`] into an owned [`NativeHandle<Credential>`] tied to
-    /// this client's runtime.
-    ///
-    /// Prefer this over [`SignIn::sign_in`] when you want the credential's
-    /// native lifetime to be managed by Rust — dropping the returned
-    /// [`OwnedSignInAccount`] releases the native object.
-    ///
-    /// # Errors
-    /// Same as [`SignIn::sign_in`].
-    pub async fn sign_in_owned(&self, mode: SignInMode) -> Result<OwnedSignInAccount, IstmoError> {
-        let acc = self.sign_in(mode).await?;
-        Ok(adopt_account(&self.__runtime, acc))
-    }
-
-    /// Same as [`Self::sign_in_owned`] for the silent flow.
-    pub async fn silent_sign_in_owned(&self) -> Result<Option<OwnedSignInAccount>, IstmoError> {
-        Ok(self
-            .silent_sign_in()
-            .await?
-            .map(|acc| adopt_account(&self.__runtime, acc)))
-    }
-}
-
-fn adopt_account(rt: &Arc<Runtime>, wire: SignInAccount) -> OwnedSignInAccount {
-    OwnedSignInAccount {
-        id: wire.id,
-        email: wire.email,
-        display_name: wire.display_name,
-        photo_url: wire.photo_url,
-        id_token: wire.id_token,
-        granted_scopes: wire.granted_scopes,
-        credential: NativeHandle::adopt(rt, wire.credential),
-    }
-}
+// `SignInClient::{sign_in_owned, silent_sign_in_owned, refresh_owned}` are
+// emitted by the `#[plugin]` macro from the `#[owned]` markers on the
+// trait methods above.

@@ -495,17 +495,32 @@ fn expand_client_method(
     };
 
     if is_stream_method(&method.attrs) {
+        if is_owned_method(&method.attrs) {
+            return Err(syn::Error::new_spanned(
+                method,
+                "`#[istmo::owned]` is not supported on stream methods yet",
+            ));
+        }
         Ok(expand_stream_method(
             &ctx,
             ok_ty.as_ref().unwrap_or(&return_ty),
             err_ty.as_ref(),
         ))
     } else {
-        expand_unary_method(
+        let base = expand_unary_method(
             &ctx,
             sig.asyncness.is_some(),
             ok_ty.as_ref().unwrap_or(&return_ty),
-        )
+        )?;
+        if is_owned_method(&method.attrs) {
+            let owned = expand_unary_owned_method(
+                &ctx,
+                ok_ty.as_ref().unwrap_or(&return_ty),
+            )?;
+            Ok(quote! { #base #owned })
+        } else {
+            Ok(base)
+        }
     }
 }
 
@@ -759,18 +774,25 @@ fn extract_result(ty: &Type) -> (Option<Type>, Option<Type>) {
 }
 
 fn is_stream_method(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        let path = a.path();
-        if path.is_ident("stream") {
-            return true;
-        }
-        if path.segments.len() == 2 {
-            let first = &path.segments[0].ident;
-            let second = &path.segments[1].ident;
-            return first == "istmo" && second == "stream";
-        }
-        false
-    })
+    attrs.iter().any(|a| is_istmo_leaf_attr(a, "stream"))
+}
+
+fn is_owned_method(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|a| is_istmo_leaf_attr(a, "owned"))
+}
+
+/// Recognises `#[foo]`, `#[istmo::foo]`, `#[istmo_macros::foo]`.
+fn is_istmo_leaf_attr(attr: &Attribute, tail: &str) -> bool {
+    let path = attr.path();
+    if path.is_ident(tail) {
+        return true;
+    }
+    if path.segments.len() == 2 {
+        let first = &path.segments[0].ident;
+        let second = &path.segments[1].ident;
+        return (first == "istmo" || first == "istmo_macros") && second == tail;
+    }
+    false
 }
 
 fn expand_unary_method(
@@ -815,6 +837,118 @@ fn expand_unary_method(
                 }
             }
         }
+    })
+}
+
+/// Emit `pub async fn <name>_owned(...) -> Result<Owned<T-mapped>, IstmoError>`
+/// that delegates to the base method and adopts every `#[handle]` field in
+/// the returned value.
+///
+/// Supported return shapes: `T`, `Option<T>`, `Vec<T>`. `T` is expected to
+/// be a `#[message]` struct with `#[handle]` fields (producing an
+/// `OwnedT` sibling); enforcement of that is deferred to compile-time
+/// name resolution of `OwnedT`.
+fn expand_unary_owned_method(ctx: &MethodCtx<'_>, ok_ty: &Type) -> syn::Result<TokenStream> {
+    let MethodCtx {
+        root,
+        name,
+        arg_pats,
+        ..
+    } = ctx;
+    let owned_name = format_ident!("{}_owned", name);
+    let arg_names: Vec<TokenStream> = arg_pats
+        .iter()
+        .filter_map(|p| {
+            // `p` looks like `<ident>: <ty>` — extract the ident.
+            let tokens = p.to_string();
+            let (ident, _) = tokens.split_once(':')?;
+            let ident = ident.trim();
+            let id: Ident = syn::parse_str(ident).ok()?;
+            Some(quote! { #id })
+        })
+        .collect();
+    let (owned_return_ty, adopter_expr) = build_owned_return(ok_ty)?;
+    Ok(quote! {
+        pub async fn #owned_name(
+            &self,
+            #(#arg_pats),*
+        ) -> ::core::result::Result<#owned_return_ty, #root::IstmoError> {
+            let __wire = self.#name(#(#arg_names),*).await?;
+            let __rt = &self.__runtime;
+            ::core::result::Result::Ok(#adopter_expr)
+        }
+    })
+}
+
+/// Given the base method's ok type (e.g. `SignInAccount` /
+/// `Option<SignInAccount>` / `Vec<SignInAccount>`), return
+/// (owned-return-type, expression-that-adopts-`__wire`-into-owned).
+fn build_owned_return(ok_ty: &Type) -> syn::Result<(TokenStream, TokenStream)> {
+    // Bare wire type `Foo` → `OwnedFoo` + `__wire.into_owned(__rt)`.
+    if let Some(ident) = as_bare_ident(ok_ty) {
+        let owned_ident = format_ident!("Owned{}", ident);
+        return Ok((
+            quote! { #owned_ident },
+            quote! { __wire.into_owned(__rt) },
+        ));
+    }
+    // `Option<Foo>` → `Option<OwnedFoo>` + `__wire.map(|v| v.into_owned(__rt))`.
+    if let Some(inner) = as_generic("Option", ok_ty)
+        && let Some(inner_ident) = as_bare_ident(inner)
+    {
+        let owned_ident = format_ident!("Owned{}", inner_ident);
+        return Ok((
+            quote! { ::core::option::Option<#owned_ident> },
+            quote! { __wire.map(|v| v.into_owned(__rt)) },
+        ));
+    }
+    // `Vec<Foo>` → `Vec<OwnedFoo>` + `__wire.into_iter().map(...).collect()`.
+    if let Some(inner) = as_generic("Vec", ok_ty)
+        && let Some(inner_ident) = as_bare_ident(inner)
+    {
+        let owned_ident = format_ident!("Owned{}", inner_ident);
+        return Ok((
+            quote! { ::std::vec::Vec<#owned_ident> },
+            quote! {
+                __wire.into_iter().map(|v| v.into_owned(__rt)).collect::<::std::vec::Vec<_>>()
+            },
+        ));
+    }
+    Err(syn::Error::new_spanned(
+        ok_ty,
+        "`#[istmo::owned]` supports return shapes `T`, `Option<T>` or `Vec<T>` where `T` \
+         is a `#[message]` struct with `#[handle]` fields",
+    ))
+}
+
+fn as_bare_ident(ty: &Type) -> Option<&Ident> {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return None;
+    };
+    if path.segments.len() != 1 {
+        return None;
+    }
+    let seg = &path.segments[0];
+    if !matches!(seg.arguments, PathArguments::None) {
+        return None;
+    }
+    Some(&seg.ident)
+}
+
+fn as_generic<'a>(wrapper: &str, ty: &'a Type) -> Option<&'a Type> {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return None;
+    };
+    let seg = path.segments.last()?;
+    if seg.ident != wrapper {
+        return None;
+    }
+    let PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|a| match a {
+        GenericArgument::Type(t) => Some(t),
+        _ => None,
     })
 }
 

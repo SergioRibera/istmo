@@ -53,6 +53,31 @@ pub fn stream(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+/// Marker attribute placed on a `#[message]` struct field of type
+/// `NativeHandleId`. Signals that the field participates in the
+/// owned-wrapper codegen: `#[message]` emits a sibling `Owned<StructName>`
+/// with the field re-typed as `NativeHandle<Marker>` plus an
+/// `into_owned(rt)` adopter.
+///
+/// No-op outside a `#[message]` struct — real work happens inside
+/// [`message`] before its own emission.
+#[proc_macro_attribute]
+pub fn handle(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
+/// Marker attribute placed on a trait method whose return type contains a
+/// `#[message]` struct with `#[handle]` fields. Consumed by [`plugin`] —
+/// emits an additional `<method>_owned` client method that awaits the base
+/// call and adopts every handle in the return value.
+///
+/// No-op outside a `#[istmo::plugin]` trait so the annotated method
+/// parses on its own.
+#[proc_macro_attribute]
+pub fn owned(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
 /// Turn a trait declaration (`on_start` + optional `on_stop`) into a service
 /// adapter. See [`service`] source for the design.
 #[proc_macro_attribute]
