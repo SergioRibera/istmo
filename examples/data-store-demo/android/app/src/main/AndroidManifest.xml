@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:hasCode="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <!-- DataStoreDemoActivity is a NativeActivity subclass that boots
+             IstmoRuntime + registers the DataStoreDispatcher before
+             `android_main` fires. The `android.app.lib_name` metadata
+             tells NativeActivity which .so to load. -->
+        <activity
+            android:name="dev.istmo.datastoredemo.DataStoreDemoActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|keyboardHidden|screenSize">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="data_store_demo" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

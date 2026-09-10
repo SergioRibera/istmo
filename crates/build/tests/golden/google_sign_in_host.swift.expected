@@ -2,6 +2,7 @@
 // plugin id: istmo.google_sign_in
 
 import Foundation
+import IstmoRuntime
 
 /// Platform-facing surface for the `SignIn` plugin. Hand-write an
 /// impl with the SDK-specific logic; the dispatcher below handles

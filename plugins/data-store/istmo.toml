@@ -1,0 +1,18 @@
+# Declarative plugin metadata for `istmo-data-store`.
+#
+# `build.rs` reads this via `istmo_build::emit_manifest_metadata`; every entry
+# lands in Cargo's cross-crate metadata channel and is picked up by the
+# downstream app's `build.rs` through `istmo_build::collect_dep_native_deps`.
+#
+# Storage backends:
+# * Android — `SharedPreferences` (part of `android.content`, no extra
+#   dependency).
+# * iOS — `UserDefaults` (Foundation, no SPM package needed).
+#
+# Both backends live in `plugins/data-store/native/` as reference
+# implementations that consumer apps copy into their Gradle / Xcode source
+# sets. No third-party Gradle or SwiftPM entries are required.
+
+[plugin]
+id = "istmo.data_store"
+client_type = "::istmo_data_store::DataStoreClient"

@@ -25,6 +25,22 @@ examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/*Dispatche
 examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/*Types.kt
 examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/*CodecsImpl.kt
 
+# data-store-demo: xcodegen output + Xcode / cargo / Gradle build
+# products + build.rs-emitted host dispatchers + types + codecs.
+examples/data-store-demo/ios/DataStoreDemo.xcodeproj/
+examples/data-store-demo/ios/build/
+examples/data-store-demo/ios/IstmoRuntime/.build/
+examples/data-store-demo/ios/**/*.xcuserdata/
+examples/data-store-demo/ios/**/xcshareddata/
+examples/data-store-demo/ios/DataStoreDemo/Plugins/*/Generated/
+examples/data-store-demo/android/.gradle/
+examples/data-store-demo/android/build/
+examples/data-store-demo/android/**/build/
+examples/data-store-demo/android/local.properties
+examples/data-store-demo/android/app/src/main/java/dev/istmo/runtime/DataStoreDispatcher.kt
+examples/data-store-demo/android/app/src/main/java/dev/istmo/runtime/DataStoreTypes.kt
+examples/data-store-demo/android/app/src/main/java/dev/istmo/runtime/DataStoreCodecsImpl.kt
+
 # android-demo / android-multi: build.rs writes generated Kotlin under
 # each demo's `gen/` subpackage. Regenerated on every cargo build.
 examples/android-demo/android/app/src/main/java/dev/istmo/demo/gen/

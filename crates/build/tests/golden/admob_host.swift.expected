@@ -2,6 +2,7 @@
 // plugin id: istmo.admob
 
 import Foundation
+import IstmoRuntime
 
 /// Platform-facing surface for the `AdMob` plugin. Hand-write an
 /// impl with the SDK-specific logic; the dispatcher below handles

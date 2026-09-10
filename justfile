@@ -29,6 +29,7 @@ mount := "-v $(pwd):/src -v $HOME/.android:/root/.android -v gradle-cache:/root/
 # steps by name.
 
 android-demo: (build "android-demo") (install "android-demo") (run "android-demo")
+data-store: (build "data-store-demo") (install "data-store-demo") (run "data-store-demo")
 android-multi: (build "android-multi") (install "android-multi") (run "android-multi")
 rust-mobile-demo: (build "rust-mobile-demo") (install "rust-mobile-demo") (run "rust-mobile-demo")
 

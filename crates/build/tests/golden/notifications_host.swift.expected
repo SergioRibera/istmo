@@ -2,6 +2,7 @@
 // plugin id: istmo.notifications
 
 import Foundation
+import IstmoRuntime
 
 /// Platform-facing surface for the `Notifications` plugin. Hand-write an
 /// impl with the SDK-specific logic; the dispatcher below handles

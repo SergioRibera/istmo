@@ -14,6 +14,8 @@ members = [
     "examples/ios-demo",
     "examples/rust-mobile-demo",
     "plugins/google-sign-in",
+    "plugins/data-store",
+    "examples/data-store-demo",
 ]
 
 [workspace.package]
@@ -66,6 +68,7 @@ istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.0.0" }
 # Community plugins — separate crates under `plugins/`. Listed here so
 # consumers (examples + downstream apps) can use `{ workspace = true }`.
 istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.0.0" }
+istmo-data-store = { path = "plugins/data-store", version = "0.0.0" }
 
 [package]
 name = "istmo"

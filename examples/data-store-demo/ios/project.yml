@@ -1,0 +1,58 @@
+# xcodegen spec for the data-store demo (iOS side).
+#
+# Generate the .xcodeproj with:
+#
+#   cd examples/data-store-demo/ios && xcodegen generate
+#
+# The .xcodeproj is not checked into the repo. Regenerating is
+# deterministic — the day-to-day flow is `xcodegen generate` once and then
+# `xcodebuild` / Xcode against the result.
+#
+# The `preBuildScripts` phase runs `build-rust.sh` before every Xcode build
+# so cargo produces `libdata_store_demo.a` before the linker looks for it.
+
+name: DataStoreDemo
+
+options:
+  bundleIdPrefix: dev.istmo.datastoredemo
+  deploymentTarget:
+    iOS: 14.0
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+packages:
+  IstmoRuntime:
+    path: IstmoRuntime
+
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+    IPHONEOS_DEPLOYMENT_TARGET: 14.0
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    LIBRARY_SEARCH_PATHS:
+      - $(inherited)
+      - $(PROJECT_DIR)/build/rust/$(PLATFORM_NAME)/$(CURRENT_ARCH)
+    OTHER_LDFLAGS:
+      - $(inherited)
+      - -ldata_store_demo
+
+targets:
+  DataStoreDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: DataStoreDemo
+    info:
+      path: DataStoreDemo/Info.plist
+    dependencies:
+      - package: IstmoRuntime
+        product: IstmoRuntime
+    preBuildScripts:
+      - name: cargo build data-store-demo (staticlib per arch)
+        path: build-rust.sh
+        runOnlyWhenInstalling: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.istmo.datastoredemo.DataStoreDemo
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO

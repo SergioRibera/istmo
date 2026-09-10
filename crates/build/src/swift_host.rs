@@ -43,6 +43,10 @@ fn write_header(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "// plugin id: {}", contract.plugin_id);
     let _ = writeln!(out);
     let _ = writeln!(out, "import Foundation");
+    // `Bincode`, `PluginHandler`, `PluginException`, `PluginRuntimeError`
+    // live in the `IstmoRuntime` SPM package. Swift `import` is
+    // file-scoped, so the dispatcher must pull them in explicitly.
+    let _ = writeln!(out, "import IstmoRuntime");
     let _ = writeln!(out);
 }
 
