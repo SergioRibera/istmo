@@ -1,25 +1,26 @@
 //! Tests for `istmo_build::extract_contract`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use istmo_build::{
     Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
     extract_contract,
 };
 
+/// Monotonic counter avoids the nanosecond-collision race between parallel
+/// tests that a `SystemTime::now()`-based suffix hit intermittently.
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn write_source(source: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "istmo-extract-{}-{}",
         std::process::id(),
-        rand_suffix()
+        COUNTER.fetch_add(1, Ordering::Relaxed),
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("lib.rs");
     std::fs::write(&path, source).unwrap();
     path
-}
-
-fn rand_suffix() -> u128 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
 }
 
 #[test]
