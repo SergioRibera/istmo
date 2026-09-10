@@ -37,9 +37,7 @@
 
 pub mod slot;
 
-use std::sync::Arc;
-
-use istmo_core::{IstmoError, NativeHandle, NativeHandleId, Runtime};
+use istmo_core::{IstmoError, NativeHandle, NativeHandleId};
 use istmo_macros::plugin;
 
 /// Wire identifier of the `AdMob` plugin.
@@ -118,14 +116,6 @@ pub trait AdMob {
 }
 
 impl AdMobClient {
-    /// Runtime bound to this client — same accessor as `SignInClient::runtime`.
-    /// Handy for adopting `NativeHandleId`s returned from raw trait
-    /// methods into typed handles.
-    #[must_use]
-    pub const fn runtime(&self) -> &Arc<Runtime> {
-        &self.__runtime
-    }
-
     /// Ergonomic wrapper: load an interstitial and adopt the returned id
     /// into a typed [`NativeHandle<Interstitial>`] tied to this client's
     /// runtime. Dropping the handle without calling
