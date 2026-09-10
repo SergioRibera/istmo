@@ -1,131 +1,33 @@
-//! `Contract` builder for the `istmo.google_sign_in` wire surface.
+//! Downstream-facing `Contract` accessor for the `istmo.google_sign_in`
+//! plugin.
 //!
-//! Consumed twice:
-//! * By this crate's own `build.rs` to regenerate the `#[message]` shapes
-//!   included from `lib.rs`.
-//! * By downstream applications that need to codegen the Kotlin / Swift
-//!   host dispatcher — enable the `codegen` feature and call
-//!   [`contract`] from your `build.rs`.
+//! Enabled via the `codegen` feature. Downstream apps that need to codegen
+//! Kotlin / Swift host classes from `build.rs` add
+//! `istmo-google-sign-in = { workspace = true, features = ["codegen"] }`
+//! under `[build-dependencies]` and call [`contract`] directly. Consumers
+//! that go through the cross-crate metadata channel
+//! (`istmo_build::collect_dep_contracts`) do not need this feature.
 //!
-//! Keep this in lockstep with the `#[plugin]` trait declaration in `lib.rs`
-//! and the `#[message]` type declarations. Any drift is caught by the
-//! golden test suite in `istmo-build` (which happens to use its own inline
-//! copy of the same shape as a byte-for-byte fixture).
+//! The contract is extracted from this crate's own `src/lib.rs` at
+//! consumer-build time via [`istmo_build::extract_contract`], so the trait
+//! declaration in `lib.rs` remains the single source of truth.
 
-use istmo_build::{
-    Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
-};
+use istmo_build::{Contract, extract_contract};
 
+/// Absolute path to this plugin crate's `src/lib.rs`. `env!` expands at
+/// **this** crate's compile time, so the resulting string points at the
+/// plugin source no matter which downstream `build.rs` calls into
+/// [`contract`].
+const PLUGIN_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs");
+
+/// Extracts the `SignIn` contract from `src/lib.rs`.
+///
+/// # Panics
+/// Panics if the source file cannot be read or the trait annotation drifts
+/// away from a shape the extractor understands — either is a build-time
+/// authoring error and there is no meaningful recovery.
 #[must_use]
-#[allow(unreachable_pub)] // Callers depend on the `codegen` feature; the
-// `build.rs` `#[path]` include compiles this file into a separate crate
-// where `pub` is meaningful, but the lib crate re-links it via
-// `pub mod codegen`, so both callers see the same signature.
 pub fn contract() -> Contract {
-    Contract {
-        plugin_id: "istmo.google_sign_in".to_owned(),
-        type_name: "SignIn".to_owned(),
-        methods: vec![
-            Method {
-                name: "sign_in".to_owned(),
-                kind: MethodKind::Unary,
-                args: vec![Arg { name: "mode".to_owned(), ty: named("SignInMode") }],
-                returns: named("SignInAccount"),
-                error: Some(named("SignInError")),
-            },
-            Method {
-                name: "silent_sign_in".to_owned(),
-                kind: MethodKind::Unary,
-                args: vec![],
-                returns: opt(named("SignInAccount")),
-                error: Some(named("SignInError")),
-            },
-            Method {
-                name: "refresh".to_owned(),
-                kind: MethodKind::Unary,
-                args: vec![Arg { name: "credential".to_owned(), ty: named("NativeHandleId") }],
-                returns: named("SignInAccount"),
-                error: Some(named("SignInError")),
-            },
-            Method {
-                name: "sign_out".to_owned(),
-                kind: MethodKind::Unary,
-                args: vec![],
-                returns: TypeRef::Unit,
-                error: Some(named("SignInError")),
-            },
-            Method {
-                name: "revoke".to_owned(),
-                kind: MethodKind::Unary,
-                args: vec![],
-                returns: TypeRef::Unit,
-                error: Some(named("SignInError")),
-            },
-        ],
-        init: Some(named("SignInConfig")),
-        types: vec![
-            enum_of(
-                "SignInMode",
-                vec![unit_variant("Interactive"), unit_variant("SilentOnly")],
-            ),
-            struct_of(
-                "SignInConfig",
-                vec![
-                    field("serverClientId", TypeRef::String),
-                    field("scopes", vec_of(TypeRef::String)),
-                    field("hostedDomain", opt(TypeRef::String)),
-                    field("nonce", opt(TypeRef::String)),
-                    field("autoSelect", TypeRef::Bool),
-                ],
-            ),
-            struct_of(
-                "SignInAccount",
-                vec![
-                    field("id", TypeRef::String),
-                    field("email", opt(TypeRef::String)),
-                    field("displayName", opt(TypeRef::String)),
-                    field("photoUrl", opt(TypeRef::String)),
-                    field("idToken", TypeRef::String),
-                    field("grantedScopes", vec_of(TypeRef::String)),
-                    field("credential", named("NativeHandleId")),
-                ],
-            ),
-            enum_of(
-                "SignInError",
-                vec![
-                    unit_variant("UserCancelled"),
-                    unit_variant("NoCredentialAvailable"),
-                    unit_variant("Reauthenticate"),
-                    payload_variant("InvalidConfiguration", TypeRef::String),
-                    payload_variant("Network", TypeRef::String),
-                    payload_variant("Backend", TypeRef::String),
-                ],
-            ),
-        ],
-    }
-}
-
-fn named(name: &str) -> TypeRef {
-    TypeRef::Named(name.to_owned())
-}
-fn vec_of(inner: TypeRef) -> TypeRef {
-    TypeRef::Vec(Box::new(inner))
-}
-fn opt(inner: TypeRef) -> TypeRef {
-    TypeRef::Option(Box::new(inner))
-}
-fn field(name: &str, ty: TypeRef) -> Field {
-    Field { name: name.to_owned(), ty }
-}
-fn unit_variant(name: &str) -> EnumVariant {
-    EnumVariant { name: name.to_owned(), payload: Vec::new() }
-}
-fn payload_variant(name: &str, payload: TypeRef) -> EnumVariant {
-    EnumVariant { name: name.to_owned(), payload: vec![payload] }
-}
-fn enum_of(name: &str, variants: Vec<EnumVariant>) -> TypeDef {
-    TypeDef::Enum(EnumDef { name: name.to_owned(), variants })
-}
-fn struct_of(name: &str, fields: Vec<Field>) -> TypeDef {
-    TypeDef::Struct(StructDef { name: name.to_owned(), fields })
+    extract_contract(PLUGIN_SRC, "SignIn")
+        .expect("extract SignIn contract from istmo-google-sign-in/src/lib.rs")
 }

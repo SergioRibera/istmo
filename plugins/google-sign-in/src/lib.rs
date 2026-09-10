@@ -7,11 +7,13 @@
 //! * `build.rs` one-liner (`emit_manifest_metadata`) forwards it to
 //!   consumer apps through Cargo's cross-crate metadata channel.
 //! * Wire types and dispatch trait live behind a single `#[istmo::plugin]`
-//!   declaration.
-//! * The `Contract` builder in [`codegen`] is feature-gated so the runtime
-//!   dependency tree stays minimal — downstream apps flip the feature on
-//!   inside `[build-dependencies]` when they need to codegen Kotlin / Swift
-//!   host classes.
+//!   declaration; the [`Contract`] is derived from that same source at
+//!   `build.rs` time via [`istmo_build::extract_contract`].
+//! * The [`codegen`] module (feature-gated) re-exports the extracted
+//!   contract so downstream apps can codegen Kotlin / Swift host classes
+//!   without going through the `DEP_*_ISTMO_CONTRACT` env handover.
+//!
+//! [`Contract`]: istmo_build::Contract
 //!
 //! Validates three cross-cutting features of the runtime:
 //!
@@ -37,7 +39,7 @@ pub mod codegen;
 use std::sync::Arc;
 
 use istmo_core::{IstmoError, NativeHandle, NativeHandleId, Runtime};
-use istmo_macros::plugin;
+use istmo_macros::{message, plugin};
 
 /// Wire identifier of the sign-in plugin.
 pub const GOOGLE_SIGN_IN_PLUGIN_ID: &str = "istmo.google_sign_in";
@@ -55,10 +57,49 @@ pub const GOOGLE_SIGN_IN_PLUGIN_ID: &str = "istmo.google_sign_in";
 #[derive(Debug)]
 pub enum Credential {}
 
-// `SignInMode`, `SignInConfig`, `SignInAccount`, `SignInError` are
-// generated from the canonical `Contract` builder in `codegen::contract`
-// via `build.rs`.
-include!(concat!(env!("OUT_DIR"), "/google_sign_in_types.rs"));
+// Wire shape lives here as the single source of truth. `build.rs` calls
+// [`istmo_build::extract_contract`] over this file to derive the `Contract`
+// consumed by downstream Kotlin / Swift generators.
+
+#[message(bincode = "::bincode")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+pub enum SignInMode {
+    Interactive,
+    SilentOnly,
+}
+
+#[message(bincode = "::bincode")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SignInConfig {
+    pub server_client_id: String,
+    pub scopes: Vec<String>,
+    pub hosted_domain: Option<String>,
+    pub nonce: Option<String>,
+    pub auto_select: bool,
+}
+
+#[message(bincode = "::bincode")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SignInAccount {
+    pub id: String,
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+    pub photo_url: Option<String>,
+    pub id_token: String,
+    pub granted_scopes: Vec<String>,
+    pub credential: NativeHandleId,
+}
+
+#[message(bincode = "::bincode")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SignInError {
+    UserCancelled,
+    NoCredentialAvailable,
+    Reauthenticate,
+    InvalidConfiguration(String),
+    Network(String),
+    Backend(String),
+}
 
 impl SignInConfig {
     /// Fluent builder starting from a required server client id.
@@ -184,14 +225,6 @@ pub trait SignIn {
 }
 
 impl SignInClient {
-    /// Returns the runtime bound to this client — handy for adopting
-    /// [`NativeHandleId`]s returned from [`SignIn::sign_in`] /
-    /// [`SignIn::refresh`] into typed [`NativeHandle<Credential>`]s.
-    #[must_use]
-    pub const fn runtime(&self) -> &Arc<Runtime> {
-        &self.__runtime
-    }
-
     /// Ergonomic wrapper on top of the trait method that adopts the returned
     /// [`NativeHandleId`] into an owned [`NativeHandle<Credential>`] tied to
     /// this client's runtime.
