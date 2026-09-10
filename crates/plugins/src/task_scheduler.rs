@@ -106,6 +106,19 @@ pub enum TaskSchedulerError {
     Platform(String),
 }
 
+impl core::fmt::Display for TaskSchedulerError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnknownTask(id) => write!(f, "unknown task `{id}`"),
+            Self::InvalidConstraints(msg) => write!(f, "invalid constraints: {msg}"),
+            Self::Conflict(msg) => write!(f, "task conflict: {msg}"),
+            Self::Platform(msg) => write!(f, "task scheduler platform error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for TaskSchedulerError {}
+
 /// Client-side plugin that ships enqueue / cancel requests to the
 /// platform-native scheduler.
 ///

@@ -18,6 +18,14 @@ pub struct MultiError {
     pub reason: String,
 }
 
+impl core::fmt::Display for MultiError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for MultiError {}
+
 fn to_multi_error(err: &IstmoError) -> MultiError {
     MultiError {
         reason: err.to_string(),

@@ -97,6 +97,18 @@ pub enum ActivityLaunchError {
     Platform(String),
 }
 
+impl core::fmt::Display for ActivityLaunchError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NoActivityFound => f.write_str("no activity found for intent"),
+            Self::NotAuthorized => f.write_str("activity launch not authorized"),
+            Self::Platform(msg) => write!(f, "activity launch platform error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ActivityLaunchError {}
+
 #[plugin(name = "istmo.activity_results", crate = "::istmo_core")]
 pub trait ActivityResults {
     /// Launches `request` and awaits the terminal result.

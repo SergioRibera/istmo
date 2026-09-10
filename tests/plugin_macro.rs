@@ -15,6 +15,14 @@ pub struct EchoError {
     pub reason: String,
 }
 
+impl core::fmt::Display for EchoError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for EchoError {}
+
 #[istmo::plugin(name = "com.example.echo")]
 pub trait Echo {
     async fn ping(&self, msg: String) -> Result<String, EchoError>;

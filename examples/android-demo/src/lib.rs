@@ -23,6 +23,14 @@ pub struct EchoError {
     pub reason: String,
 }
 
+impl core::fmt::Display for EchoError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for EchoError {}
+
 fn as_echo_error(err: &IstmoError) -> EchoError {
     EchoError {
         reason: err.to_string(),

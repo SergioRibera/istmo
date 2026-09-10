@@ -85,6 +85,18 @@ pub enum ServiceControlError {
     Platform(String),
 }
 
+impl core::fmt::Display for ServiceControlError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnknownService(id) => write!(f, "unknown service `{id}`"),
+            Self::WakelockDenied(msg) => write!(f, "wakelock denied: {msg}"),
+            Self::Platform(msg) => write!(f, "service control platform error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ServiceControlError {}
+
 /// Plugin trait the platform implements to service [`ServiceContext`] helper
 /// calls. Native impl (Slice D) lives in the Kotlin runtime; mock impls
 /// (tests, desktop) can be plain Rust.
