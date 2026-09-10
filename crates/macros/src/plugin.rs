@@ -56,6 +56,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         .iter()
         .map(|m| expand_host_arm(root, m))
         .collect::<syn::Result<Vec<_>>>()?;
+    let error_bounds = expand_error_bounds(&methods);
 
     let stateless_ctors = if args.init.is_none() {
         Some(expand_stateless_ctors(&client_ident, root))
@@ -170,6 +171,8 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     Ok(quote! {
         #trait_def
 
+        #error_bounds
+
         #client_struct
 
         #stateless_ctors
@@ -177,6 +180,16 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         #stateful_ctors
 
         impl #client_ident {
+            #[must_use]
+            pub const fn runtime(&self) -> &::std::sync::Arc<#root::Runtime> {
+                &self.__runtime
+            }
+
+            #[must_use]
+            pub const fn instance_id(&self) -> ::core::option::Option<#root::InstanceId> {
+                self.__instance_id
+            }
+
             #(#client_methods)*
         }
 
@@ -669,6 +682,53 @@ fn build_payload_expr(root: &Path, arg_names: &[Ident]) -> TokenStream {
     } else {
         quote! { #root::codec::encode(&( #(#arg_names,)* ))? }
     }
+}
+
+/// Emit one anonymous `const _` per unique error type appearing in a
+/// `Result<_, E>` return position on the trait. Each block calls a
+/// `fn __assert<T: std::error::Error>()` — refusing to compile if `E`
+/// does not implement `Error` (which itself requires `Display + Debug`).
+///
+/// Enforcing this at the plugin annotation site fails loudly with the
+/// author's type name, rather than surfacing later at the call site as
+/// a bincode-encode / trait-object-cast diagnostic that hides the
+/// root cause.
+fn expand_error_bounds(methods: &[&TraitItemFn]) -> TokenStream {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut asserts = Vec::new();
+    for m in methods {
+        let ReturnType::Type(_, ty) = &m.sig.output else {
+            continue;
+        };
+        let (_, err_ty) = extract_result(ty);
+        let Some(err_ty) = err_ty else { continue };
+        // The unit type `()` appears in `Result<T, ()>` — refuse to
+        // assert against it since `()` does not (and cannot) impl
+        // `Error`. Trait authors that want a truly infallible domain
+        // return should model it as `-> T`, not `-> Result<T, ()>`.
+        if is_unit(&err_ty) {
+            continue;
+        }
+        let key = quote! { #err_ty }.to_string();
+        if !seen.insert(key) {
+            continue;
+        }
+        asserts.push(quote! {
+            const _: fn() = || {
+                fn __istmo_assert_error<T>()
+                where
+                    T: ::std::error::Error + 'static,
+                {
+                }
+                __istmo_assert_error::<#err_ty>();
+            };
+        });
+    }
+    quote! { #(#asserts)* }
+}
+
+fn is_unit(ty: &Type) -> bool {
+    matches!(ty, Type::Tuple(t) if t.elems.is_empty())
 }
 
 fn extract_result(ty: &Type) -> (Option<Type>, Option<Type>) {
