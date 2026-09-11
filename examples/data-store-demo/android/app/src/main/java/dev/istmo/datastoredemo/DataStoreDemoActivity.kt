@@ -26,7 +26,7 @@ class DataStoreDemoActivity : NativeActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val runtime = IstmoRuntime
-        val ok = runtime.start()
+        val ok = runtime.start("data_store_demo")
         check(ok) { "IstmoRuntime.start() failed — pump did not initialise" }
 
         runtime.registerHandler(

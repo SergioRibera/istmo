@@ -83,7 +83,28 @@ object IstmoRuntime {
         handleOwners.remove(handleId)
     }
 
-    /** Initialise the process runtime. Idempotent — subsequent calls return `false`. */
+    /**
+     * Initialise the process runtime. Idempotent — subsequent calls return
+     * `false`.
+     *
+     * `libraryName` is the consumer's own cdylib (e.g. `"data_store_demo"`),
+     * which the runtime loads via `System.loadLibrary` before invoking the
+     * JNI trampolines. Passing the name here ensures the .so is in memory
+     * before `nativeStart` runs — required when the caller invokes
+     * `start()` from `Activity.onCreate` *before* `super.onCreate` (the
+     * typical `NativeActivity` subclass shape). `System.loadLibrary` is
+     * idempotent, so a subsequent NativeActivity load of the same library
+     * via `android.app.lib_name` is a no-op.
+     */
+    fun start(libraryName: String): Boolean {
+        System.loadLibrary(libraryName)
+        return nativeStart(IstmoRuntime::class.java)
+    }
+
+    /**
+     * Escape hatch for consumers that load their cdylib themselves before
+     * reaching this call. Prefer [start] with an explicit library name.
+     */
     fun start(): Boolean = nativeStart(IstmoRuntime::class.java)
 
     /** Cancel every pending call/stream and stop the pump thread. */

@@ -49,7 +49,7 @@ class RustMobileActivity : NativeActivity() {
         // Register plugin dispatchers BEFORE super.onCreate() — the Rust
         // side may fire calls as soon as its NDK glue thread starts.
         val runtime = IstmoRuntime
-        val ok = runtime.start()
+        val ok = runtime.start("rust_mobile_demo")
         check(ok) { "IstmoRuntime.start() failed — pump did not initialise" }
 
         permissionsBackend = PermissionsBackendImpl(this)

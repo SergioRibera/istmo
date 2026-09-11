@@ -28,7 +28,9 @@ class LiveActivityDemoActivity : NativeActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val runtime = IstmoRuntime
-        check(runtime.start()) { "IstmoRuntime.start() failed — pump did not initialise" }
+        check(runtime.start("live_activity_demo")) {
+            "IstmoRuntime.start() failed — pump did not initialise"
+        }
 
         liveActivityBackend = LiveActivityBackendImpl(applicationContext).apply {
             register(TimerLiveActivityHandler(this@LiveActivityDemoActivity))
