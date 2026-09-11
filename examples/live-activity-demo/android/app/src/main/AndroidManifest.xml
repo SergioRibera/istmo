@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Live activities render as ongoing notifications on Android 13+;
+         POST_NOTIFICATIONS gates them behind an explicit user grant. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <application
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:hasCode="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <!-- LiveActivityDemoActivity is a NativeActivity subclass. It
+             boots IstmoRuntime + registers the LiveActivityDispatcher
+             before `android_main` fires inside libistmo_live_activity_demo.so.
+
+             `android.app.lib_name` metadata tells NativeActivity which
+             cdylib to load. -->
+        <activity
+            android:name="dev.istmo.liveactivitydemo.LiveActivityDemoActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|keyboardHidden|screenSize">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="live_activity_demo" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

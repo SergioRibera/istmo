@@ -1,6 +1,6 @@
 [package]
 name = "istmo-plugins-schema"
-version = "0.0.0"
+version = "0.1.0"
 description = "Contract builders for the bundled istmo plugins. Build-time only — consumed by `istmo-plugins`' own `build.rs` and by downstream demos to codegen the Kotlin / Swift / Rust type + codec files."
 edition.workspace = true
 rust-version.workspace = true

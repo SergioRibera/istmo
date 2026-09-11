@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Library manifest for `dev.istmo:istmo-runtime-android`.
+
+    Kept empty on purpose — the runtime carries no Android components of
+    its own. Consumer apps declare their activities, services and
+    permissions in their own `AndroidManifest.xml`; the runtime only
+    ships Kotlin classes.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

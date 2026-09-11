@@ -1,6 +1,6 @@
 [package]
 name = "istmo-data-store"
-version = "0.0.0"
+version = "0.1.0"
 description = "Persistent key-value store plugin backed by SharedPreferences / UserDefaults."
 edition.workspace = true
 rust-version.workspace = true

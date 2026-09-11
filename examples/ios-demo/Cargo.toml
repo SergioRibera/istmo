@@ -1,6 +1,6 @@
 [package]
 name = "istmo-ios-demo"
-version = "0.0.0"
+version = "0.1.0"
 description = "Minimal iOS app that exercises the istmo runtime end-to-end."
 publish = false
 edition.workspace = true

@@ -1,0 +1,15 @@
+# Gradle / IDE artifacts
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.cxx/
+
+# Legacy path from an earlier justfile revision; never re-populated.
+app/src/main/jniLibs/
+
+# Gradle wrapper jar — not committed. Builds inside the rust-android
+# docker image use the system-provided `gradle` CLI.
+gradle/wrapper/gradle-wrapper.jar

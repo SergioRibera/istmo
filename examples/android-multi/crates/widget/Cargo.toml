@@ -1,6 +1,6 @@
 [package]
 name = "istmo-android-multi-widget"
-version = "0.0.0"
+version = "0.1.0"
 description = "Multi-cdylib Android demo (widget cdylib) — packaging placeholder for the widget process."
 publish = false
 edition.workspace = true

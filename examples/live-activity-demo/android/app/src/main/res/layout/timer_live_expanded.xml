@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Expanded layout — visible when the shade row is opened. Adds the
+    progress bar + a subtitle line under the elapsed counter.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingHorizontal="16dp"
+    android:paddingVertical="12dp">
+
+    <LinearLayout
+        android:orientation="horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/timer_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="@color/timer_text_primary"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:ellipsize="end"
+            android:maxLines="1" />
+
+        <Chronometer
+            android:id="@+id/timer_elapsed"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/timer_text_primary"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:format="%s" />
+
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/timer_progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="6dp"
+        android:layout_marginTop="10dp"
+        android:progressTint="@color/timer_accent"
+        android:progressBackgroundTint="@color/timer_track"
+        android:max="100"
+        android:progress="0" />
+
+    <TextView
+        android:id="@+id/timer_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textColor="@color/timer_text_secondary"
+        android:textSize="12sp"
+        android:ellipsize="end"
+        android:maxLines="1" />
+
+</LinearLayout>

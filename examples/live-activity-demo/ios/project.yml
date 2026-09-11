@@ -1,0 +1,69 @@
+# xcodegen spec for the live-activity demo (iOS side).
+#
+# Generate the .xcodeproj with:
+#
+#   cd examples/live-activity-demo/ios && xcodegen generate
+#
+# The .xcodeproj is not checked into the repo. Regenerating is
+# deterministic — the day-to-day flow is `xcodegen generate` once and
+# then `xcodebuild` / Xcode against the result.
+#
+# The `preBuildScripts` phase runs `build-rust.sh` before every Xcode
+# build so cargo produces `liblive_activity_demo.a` before the linker
+# looks for it.
+#
+# `IstmoRuntime` is resolved from the monorepo root's Package.swift via
+# a relative-path SPM dependency. When a downstream app consumes the
+# runtime after a `runtime-vX.Y.Z` release, the same reference becomes
+# `.package(url: "https://github.com/SergioRibera/istmo.git", from: "…")`.
+
+name: LiveActivityDemo
+
+options:
+  bundleIdPrefix: dev.istmo.liveactivitydemo
+  deploymentTarget:
+    iOS: 16.1
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+packages:
+  IstmoRuntime:
+    path: ../../..
+
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+    IPHONEOS_DEPLOYMENT_TARGET: "16.1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    LIBRARY_SEARCH_PATHS:
+      - $(inherited)
+      - $(PROJECT_DIR)/build/rust/$(PLATFORM_NAME)/$(CURRENT_ARCH)
+    OTHER_LDFLAGS:
+      - $(inherited)
+      - -llive_activity_demo
+
+targets:
+  LiveActivityDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: LiveActivityDemo
+    info:
+      path: LiveActivityDemo/Info.plist
+    entitlements:
+      path: LiveActivityDemo/LiveActivityDemo.entitlements
+    dependencies:
+      - package: IstmoRuntime
+        product: IstmoRuntime
+    preBuildScripts:
+      - name: cargo build live-activity-demo (staticlib per arch)
+        path: build-rust.sh
+        runOnlyWhenInstalling: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.istmo.liveactivitydemo.LiveActivityDemo
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # ActivityKit is a system framework; nothing to import at build
+        # time. The `NSSupportsLiveActivities` key in Info.plist opts the
+        # app in on iOS 16.1+.

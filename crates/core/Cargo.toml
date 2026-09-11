@@ -1,6 +1,6 @@
 [package]
 name = "istmo-core"
-version = "0.0.0"
+version = "0.1.0"
 description = "Transport, protocol, routing and per-process runtime for the istmo framework."
 edition.workspace = true
 rust-version.workspace = true

@@ -1,0 +1,121 @@
+name: publish-runtime
+
+# Runtime releases are cut manually through `workflow_dispatch` — no
+# release ships on every push. The workflow:
+#
+#   1. Bumps the Kotlin runtime's Gradle version + Rust workspace crate
+#      versions to the requested SemVer.
+#   2. Creates the matching git tag (`v<version>`) so SPM consumers can
+#      resolve the Swift package at that version.
+#   3. Publishes the Android AAR + sources JAR to GitHub Packages under
+#      `dev.istmo:istmo-runtime-android:<version>`.
+#
+# The workflow does NOT push a versioned commit back to `main` — the
+# Gradle version bump happens in the runner's checkout only. Kotlin
+# consumers get the SemVer they asked for from the published artefact;
+# Swift consumers resolve the same version through the git tag. The next
+# release starts from whatever `runtime/android/gradle.properties`
+# currently declares in the tree.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer to publish (e.g. 0.2.0). Applied to Kotlin AAR + git tag consumed by SPM."
+        required: true
+        type: string
+      dry_run:
+        description: "Skip the publish step and the tag push — useful for verifying Gradle config."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write   # push git tag
+  packages: write   # publish to GitHub Packages Maven registry
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            echo "::error::version input must be SemVer (got: $VERSION)"
+            exit 1
+          fi
+          if git rev-parse --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "::error::git tag v$VERSION already exists"
+            exit 1
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.7"
+          cache-read-only: false
+
+      - name: Bump Gradle version
+        working-directory: runtime/android
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          sed -i -E "s/^runtimeVersion=.*/runtimeVersion=$VERSION/" gradle.properties
+          echo "gradle.properties after bump:"
+          grep '^runtimeVersion' gradle.properties
+
+      - name: Assemble runtime AAR
+        working-directory: runtime/android
+        run: gradle --no-daemon assembleRelease
+
+      - name: Publish to GitHub Packages
+        if: ${{ !inputs.dry_run }}
+        working-directory: runtime/android
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gradle --no-daemon publishReleasePublicationToGitHubPackagesRepository
+
+      - name: Configure git identity
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create + push git tag
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git tag -a "v$VERSION" -m "runtime v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Summary
+        env:
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "## istmo runtime v$VERSION"
+            echo
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "**Dry run** — nothing published, no tag pushed."
+            else
+              echo "* Kotlin: [\`dev.istmo:istmo-runtime-android:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
+              echo "* Swift: \`.package(url: \"https://github.com/SergioRibera/istmo.git\", from: \"$VERSION\")\`"
+              echo "* Git tag: [\`v$VERSION\`](https://github.com/SergioRibera/istmo/releases/tag/v$VERSION)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

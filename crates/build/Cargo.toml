@@ -1,6 +1,6 @@
 [package]
 name = "istmo-build"
-version = "0.0.0"
+version = "0.1.0"
 description = "Contract metadata and Kotlin/Swift codegen for istmo plugins."
 edition.workspace = true
 rust-version.workspace = true

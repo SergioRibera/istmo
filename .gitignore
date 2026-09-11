@@ -49,6 +49,7 @@ examples/android-multi/android/app/src/main/java/dev/istmo/multi/gen/
 # live-activity-demo: xcodegen output + Xcode / cargo / Gradle build
 # products + build.rs-emitted host dispatchers + types + codecs.
 examples/live-activity-demo/ios/LiveActivityDemo.xcodeproj/
+examples/live-activity-demo/ios/.build/
 examples/live-activity-demo/ios/build/
 examples/live-activity-demo/ios/IstmoRuntime/.build/
 examples/live-activity-demo/ios/**/*.xcuserdata/

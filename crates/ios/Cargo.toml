@@ -1,6 +1,6 @@
 [package]
 name = "istmo-ios"
-version = "0.0.0"
+version = "0.1.0"
 description = "iOS/Apple @_cdecl transport for the istmo runtime."
 edition.workspace = true
 rust-version.workspace = true

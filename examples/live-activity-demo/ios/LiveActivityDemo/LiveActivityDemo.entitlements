@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        ActivityKit itself does not require an entitlement in the classic
+        sense — the `NSSupportsLiveActivities` Info.plist key opts the
+        app in. A widget-extension target (a separate `.appex` bundle,
+        outside the scope of this xcodegen shell) is what actually
+        renders the Live Activity UI on the lock screen / Dynamic
+        Island; when that lands, the extension bundle carries its own
+        entitlements plist and both bundles ship in the same signed app.
+    -->
+</dict>
+</plist>

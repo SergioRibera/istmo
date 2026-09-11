@@ -1,6 +1,6 @@
 [package]
 name = "istmo-plugins"
-version = "0.0.0"
+version = "0.1.0"
 description = "Core plugin surface (Permissions, AppLifecycle, DeepLinks, ActivityResults)."
 edition.workspace = true
 rust-version.workspace = true

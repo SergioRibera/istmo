@@ -1,6 +1,6 @@
 [package]
 name = "istmo-android-multi-app"
-version = "0.0.0"
+version = "0.1.0"
 description = "Multi-cdylib Android demo (app cdylib) — foreground service via #[istmo::service]."
 publish = false
 edition.workspace = true

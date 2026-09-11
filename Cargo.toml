@@ -59,23 +59,23 @@ syn = { version = "2", default-features = false, features = [
 jni = { version = "0.21", default-features = false }
 toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
-istmo-core = { path = "crates/core", version = "0.0.0" }
-istmo-build = { path = "crates/build", version = "0.0.0" }
-istmo-macros = { path = "crates/macros", version = "0.0.0" }
-istmo-android = { path = "crates/android", version = "0.0.0" }
-istmo-ios = { path = "crates/ios", version = "0.0.0" }
-istmo-plugins = { path = "crates/plugins", version = "0.0.0" }
-istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.0.0" }
+istmo-core = { path = "crates/core", version = "0.1.0" }
+istmo-build = { path = "crates/build", version = "0.1.0" }
+istmo-macros = { path = "crates/macros", version = "0.1.0" }
+istmo-android = { path = "crates/android", version = "0.1.0" }
+istmo-ios = { path = "crates/ios", version = "0.1.0" }
+istmo-plugins = { path = "crates/plugins", version = "0.1.0" }
+istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.1.0" }
 
 # Community plugins — separate crates under `plugins/`. Listed here so
 # consumers (examples + downstream apps) can use `{ workspace = true }`.
-istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.0.0" }
-istmo-data-store = { path = "plugins/data-store", version = "0.0.0" }
-istmo-live-activity = { path = "plugins/live-activity", version = "0.0.0" }
+istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.1.0" }
+istmo-data-store = { path = "plugins/data-store", version = "0.1.0" }
+istmo-live-activity = { path = "plugins/live-activity", version = "0.1.0" }
 
 [package]
 name = "istmo"
-version = "0.0.0"
+version = "0.1.0"
 description = "Rust <-> mobile native interop framework (facade crate)."
 edition.workspace = true
 rust-version.workspace = true

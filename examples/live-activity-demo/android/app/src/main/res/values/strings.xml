@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">live-activity-demo</string>
+    <string name="channel_timer_name">Timer activities</string>
+    <string name="channel_timer_description">Ongoing status for running timers.</string>
+</resources>

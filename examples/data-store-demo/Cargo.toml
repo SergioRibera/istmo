@@ -1,6 +1,6 @@
 [package]
 name = "data-store-demo"
-version = "0.0.0"
+version = "0.1.0"
 description = "Multi-platform istmo demo — same Rust code drives desktop, Android, and iOS clients of the data-store plugin."
 publish = false
 edition.workspace = true

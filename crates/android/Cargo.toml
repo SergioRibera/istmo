@@ -1,6 +1,6 @@
 [package]
 name = "istmo-android"
-version = "0.0.0"
+version = "0.1.0"
 description = "Android JNI transport for the istmo runtime."
 edition.workspace = true
 rust-version.workspace = true
