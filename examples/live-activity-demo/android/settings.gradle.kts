@@ -33,12 +33,12 @@ rootProject.name = "live-activity-demo"
 include(":app")
 
 // Composite build against the workspace-local `runtime/android` project.
-// Swaps `dev.istmo:istmo-runtime-android` for the composite so consumers
+// Swaps `dev.istmo:istmo-runtime` for the composite so consumers
 // pick up runtime changes in the same `gradle build` — no `mavenLocal()`
 // stopover required.
 includeBuild("../../../runtime/android") {
     dependencySubstitution {
-        substitute(module("dev.istmo:istmo-runtime-android"))
+        substitute(module("dev.istmo:istmo-runtime"))
             .using(project(":"))
     }
 }

@@ -154,13 +154,13 @@ istmoCargoLib("data-store-demo")
 // ---- Kotlin runtime deps --------------------------------------------
 //
 // data-store plugin declares zero external native deps (`SharedPreferences`
-// ships with the platform). `dev.istmo:istmo-runtime-android` is
+// ships with the platform). `dev.istmo:istmo-runtime` is
 // substituted for the local `runtime/android` composite build in
 // `settings.gradle.kts`; a published `runtime-vX.Y.Z` release resolves the
 // same coordinate straight from GitHub Packages.
 
 dependencies {
-    implementation("dev.istmo:istmo-runtime-android:0.1.0")
+    implementation("dev.istmo:istmo-runtime:0.1.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

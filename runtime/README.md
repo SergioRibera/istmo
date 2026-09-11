@@ -37,7 +37,7 @@ Published artefact coordinates:
 
 ```
 groupId    = dev.istmo
-artifactId = istmo-runtime-android
+artifactId = istmo-runtime
 version    = <matches the Rust workspace SemVer>
 ```
 
@@ -76,7 +76,7 @@ gpr.key=<personal-access-token-with-read:packages>
 
 ```kotlin
 dependencies {
-    implementation("dev.istmo:istmo-runtime-android:0.1.0")
+    implementation("dev.istmo:istmo-runtime:0.1.0")
 }
 ```
 
@@ -89,14 +89,14 @@ step required. In the consumer's `settings.gradle.kts`:
 ```kotlin
 includeBuild("../../runtime/android") {
     dependencySubstitution {
-        substitute(module("dev.istmo:istmo-runtime-android"))
+        substitute(module("dev.istmo:istmo-runtime"))
             .using(project(":"))
     }
 }
 ```
 
 The rest of the app's `build.gradle.kts` still writes
-`implementation("dev.istmo:istmo-runtime-android:0.1.0")`; the
+`implementation("dev.istmo:istmo-runtime:0.1.0")`; the
 substitution swaps the resolved artefact for the local project.
 
 ## Consuming from Swift
@@ -135,7 +135,7 @@ workflow — `workflow_dispatch` on GitHub Actions:
 1. Bump the desired version through the workflow's `version` input.
 2. The action creates the matching git tag (`v<version>`) and publishes
    the Android AAR + sources JAR to GitHub Packages under
-   `dev.istmo:istmo-runtime-android:<version>`.
+   `dev.istmo:istmo-runtime:<version>`.
 3. The same tag makes the Swift package resolvable via SPM's SemVer
    selector.
 

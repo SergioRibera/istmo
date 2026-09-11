@@ -14,4 +14,4 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "istmo-runtime-android"
+rootProject.name = "istmo-runtime"

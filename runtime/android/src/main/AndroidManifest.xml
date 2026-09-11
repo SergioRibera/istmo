@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Library manifest for `dev.istmo:istmo-runtime-android`.
+    Library manifest for `dev.istmo:istmo-runtime`.
 
     Kept empty on purpose — the runtime carries no Android components of
     its own. Consumer apps declare their activities, services and

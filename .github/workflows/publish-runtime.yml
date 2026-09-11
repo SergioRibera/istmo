@@ -8,7 +8,7 @@ name: publish-runtime
 #   2. Creates the matching git tag (`v<version>`) so SPM consumers can
 #      resolve the Swift package at that version.
 #   3. Publishes the Android AAR + sources JAR to GitHub Packages under
-#      `dev.istmo:istmo-runtime-android:<version>`.
+#      `dev.istmo:istmo-runtime:<version>`.
 #
 # The workflow does NOT push a versioned commit back to `main` — the
 # Gradle version bump happens in the runner's checkout only. Kotlin
@@ -114,7 +114,7 @@ jobs:
             if [ "$DRY_RUN" = "true" ]; then
               echo "**Dry run** — nothing published, no tag pushed."
             else
-              echo "* Kotlin: [\`dev.istmo:istmo-runtime-android:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
+              echo "* Kotlin: [\`dev.istmo:istmo-runtime:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
               echo "* Swift: \`.package(url: \"https://github.com/SergioRibera/istmo.git\", from: \"$VERSION\")\`"
               echo "* Git tag: [\`v$VERSION\`](https://github.com/SergioRibera/istmo/releases/tag/v$VERSION)"
             fi

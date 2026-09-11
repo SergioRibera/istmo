@@ -168,7 +168,7 @@ dependencies {
     // Gradle composite build in `settings.gradle.kts`; the same
     // coordinate resolves from GitHub Packages once `runtime-vX.Y.Z` is
     // published.
-    implementation("dev.istmo:istmo-runtime-android:0.1.0")
+    implementation("dev.istmo:istmo-runtime:0.1.0")
 
     // AndroidX + Kotlin runtime.
     implementation("androidx.core:core-ktx:1.13.1")

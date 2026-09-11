@@ -13,7 +13,7 @@
 // ignores anything outside the paths declared below.
 //
 // The Kotlin sibling lives under `runtime/android/` and is published as
-// `dev.istmo:istmo-runtime-android` via the GitHub Packages Maven
+// `dev.istmo:istmo-runtime` via the GitHub Packages Maven
 // registry — see `runtime/README.md` for consumer setup.
 
 import PackageDescription

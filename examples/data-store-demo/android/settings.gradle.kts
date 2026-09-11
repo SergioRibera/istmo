@@ -29,7 +29,7 @@ include(":app")
 // Composite build against the workspace-local `runtime/android` project.
 includeBuild("../../../runtime/android") {
     dependencySubstitution {
-        substitute(module("dev.istmo:istmo-runtime-android"))
+        substitute(module("dev.istmo:istmo-runtime"))
             .using(project(":"))
     }
 }

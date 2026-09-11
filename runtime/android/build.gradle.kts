@@ -49,7 +49,7 @@ publishing {
             }
 
             pom {
-                name.set("istmo-runtime-android")
+                name.set("istmo-runtime")
                 description.set(
                     "Kotlin-side runtime for the istmo framework — JNI transport pump, wire codec, plugin dispatcher registry.",
                 )
