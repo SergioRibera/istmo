@@ -21,13 +21,15 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  * and Kotlin submits inbound frames through the `nativeSubmit*` trampolines
  * exported by `istmo-android`.
  *
- * `LIBRARY_NAME` is the demo's own cdylib. Loading it via `System.loadLibrary`
- * both pulls the JNI trampolines in and satisfies NativeActivity's own
- * `android.app.lib_name` requirement (idempotent — subsequent loads no-op).
+ * Consumer apps must load their own cdylib before invoking [start]. The
+ * canonical wiring is a `NativeActivity` subclass whose manifest declares
+ * `<meta-data android:name="android.app.lib_name" android:value="my_cdylib"/>` —
+ * NativeActivity loads it in its own `onCreate` before this runtime is
+ * touched. Non-NativeActivity consumers should call
+ * `System.loadLibrary("my_cdylib")` themselves before [start].
  */
 object IstmoRuntime {
 
-    private const val LIBRARY_NAME = "data_store_demo"
     private const val NO_INSTANCE_ID = 0L
     private const val SAFE_AREA_CHANNEL = "istmo.safe_area"
 
@@ -47,10 +49,6 @@ object IstmoRuntime {
     /** Pending Kotlin-initiated calls awaiting a `Frame::Respond`. */
     private val outboundCalls = ConcurrentHashMap<Long, PendingCall>()
     private val nextCallId = AtomicLong(1)
-
-    init {
-        System.loadLibrary(LIBRARY_NAME)
-    }
 
     /** Register a Kotlin backend for a plugin id (native-hosted plugins). */
     fun registerHandler(pluginId: String, handler: PluginHandler) {

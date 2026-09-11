@@ -164,6 +164,12 @@ istmoCargoLib("rust-mobile-demo")
 // generated from the `istmo::runtime!` declaration.
 
 dependencies {
+    // Canonical Kotlin runtime — pulled from `runtime/android` through a
+    // Gradle composite build in `settings.gradle.kts`; the same
+    // coordinate resolves from GitHub Packages once `runtime-vX.Y.Z` is
+    // published.
+    implementation("dev.istmo:istmo-runtime-android:0.1.0")
+
     // AndroidX + Kotlin runtime.
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")

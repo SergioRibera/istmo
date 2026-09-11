@@ -25,8 +25,13 @@ options:
   defaultConfig: Debug
 
 packages:
+  # SPM does not support subpath references, so the canonical
+  # `IstmoRuntime` sources live under `runtime/ios/Sources/IstmoRuntime`
+  # in the monorepo, discovered through the root `Package.swift`. The
+  # relative path from `examples/rust-mobile-demo/ios/` to the repo root
+  # is three directories up.
   IstmoRuntime:
-    path: IstmoRuntime
+    path: ../../..
   # Google Sign-In SDK. Version pinned to match the Android side's
   # `credentials` release cadence (crates/plugins/src/google_sign_in.rs).
   GoogleSignIn:

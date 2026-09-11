@@ -5,17 +5,22 @@ Cargo.lock
 .DS_Store
 .claude/settings.local.json
 
-# iOS demo: xcodegen output + Xcode / cargo build products
+# Repo-root SPM artefacts. `Package.swift` at the root vends
+# `IstmoRuntime` under `runtime/ios/Sources/`; `swift build`/`swift test`
+# invocations from the repo root land their caches in `.build/`, and
+# resolver metadata goes to `.swiftpm/`.
+/.build/
+/.swiftpm/
+
+# ios-demo: xcodegen output + Xcode / cargo build products
 examples/ios-demo/ios/IstmoDemo.xcodeproj/
 examples/ios-demo/ios/build/
-examples/ios-demo/ios/IstmoRuntime/.build/
 examples/ios-demo/ios/**/*.xcuserdata/
 examples/ios-demo/ios/**/xcshareddata/
 
 # rust-mobile-demo: xcodegen output + Xcode / cargo build products
 examples/rust-mobile-demo/ios/RustMobileDemo.xcodeproj/
 examples/rust-mobile-demo/ios/build/
-examples/rust-mobile-demo/ios/IstmoRuntime/.build/
 examples/rust-mobile-demo/ios/**/*.xcuserdata/
 examples/rust-mobile-demo/ios/**/xcshareddata/
 # build.rs-emitted host dispatchers + types + codecs — regenerated on
@@ -29,7 +34,6 @@ examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/*CodecsImp
 # products + build.rs-emitted host dispatchers + types + codecs.
 examples/data-store-demo/ios/DataStoreDemo.xcodeproj/
 examples/data-store-demo/ios/build/
-examples/data-store-demo/ios/IstmoRuntime/.build/
 examples/data-store-demo/ios/**/*.xcuserdata/
 examples/data-store-demo/ios/**/xcshareddata/
 examples/data-store-demo/ios/DataStoreDemo/Plugins/*/Generated/
@@ -49,9 +53,7 @@ examples/android-multi/android/app/src/main/java/dev/istmo/multi/gen/
 # live-activity-demo: xcodegen output + Xcode / cargo / Gradle build
 # products + build.rs-emitted host dispatchers + types + codecs.
 examples/live-activity-demo/ios/LiveActivityDemo.xcodeproj/
-examples/live-activity-demo/ios/.build/
 examples/live-activity-demo/ios/build/
-examples/live-activity-demo/ios/IstmoRuntime/.build/
 examples/live-activity-demo/ios/**/*.xcuserdata/
 examples/live-activity-demo/ios/**/xcshareddata/
 examples/live-activity-demo/ios/LiveActivityDemo/Plugins/*/Generated/

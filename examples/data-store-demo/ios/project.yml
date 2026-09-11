@@ -21,8 +21,14 @@ options:
   defaultConfig: Debug
 
 packages:
+  # SPM does not support subpath references, so the canonical
+  # `IstmoRuntime` sources live under `runtime/ios/Sources/IstmoRuntime`
+  # in the monorepo, discovered through the root `Package.swift`. The
+  # relative path from `examples/data-store-demo/ios/` to the repo root
+  # is three directories up. Once `runtime-vX.Y.Z` is tagged, downstream
+  # apps swap this entry for `url:` + `from:` version selectors.
   IstmoRuntime:
-    path: IstmoRuntime
+    path: ../../..
 
 settings:
   base:
