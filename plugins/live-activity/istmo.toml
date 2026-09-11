@@ -1,0 +1,31 @@
+# Declarative plugin metadata for `istmo-live-activity`.
+#
+# `build.rs` reads this via `istmo_build::emit_manifest_metadata`; every entry
+# lands in Cargo's cross-crate metadata channel and is picked up by the
+# downstream app's `build.rs` through `istmo_build::collect_dep_native_deps`.
+#
+# Native backends:
+# * iOS — ActivityKit (system framework, no SPM package required). Available
+#   iOS 16.1+; older versions surface `ActivityError::NotSupported`.
+# * Android — tiered rendering with automatic fallback:
+#     * API 21-34 → `NotificationCompat.Builder` + custom `RemoteViews`.
+#     * API 35+   → `Notification.ProgressStyle` system template.
+#     * API 36+   → `setPromotedOngoing(true)` + status-bar chip anchor
+#                   (Google's "Live Updates" API).
+#   No third-party Gradle dependency is required; the backend leans on
+#   `androidx.core:core` which every consumer already carries via
+#   `androidx.core:core-ktx`.
+#
+# Reference native impls live under `plugins/live-activity/native/` for
+# consumer apps to copy into their Gradle / Xcode source sets.
+#
+# Consumer Android apps must declare `<uses-permission
+# android:name="android.permission.POST_NOTIFICATIONS"/>` in their own
+# `AndroidManifest.xml` — Android 13+ requires the runtime permission
+# before any notification (ongoing or otherwise) can be posted. The
+# permission-plugin (or the app's own permission flow) is responsible
+# for the actual grant dialog.
+
+[plugin]
+id = "istmo.live_activity"
+client_type = "::istmo_live_activity::LiveActivityClient"

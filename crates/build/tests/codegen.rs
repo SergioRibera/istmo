@@ -1019,3 +1019,384 @@ fn xdg_desktop_entry_matches_golden() {
         &generate_desktop_entry(&gui_app_entry()),
     );
 }
+
+// ---- Live-activity plugin ----------------------------------------------
+//
+// Mirrors the `#[istmo::plugin] trait LiveActivity` in
+// `plugins/live-activity/src/lib.rs`. Hand-built here so the codegen
+// tests do not depend on `istmo-live-activity` (which would create a
+// circular dev-dependency edge — the plugin's own `build.rs` uses
+// `istmo-build`). Golden fixtures pin the wire shape both sides speak.
+
+fn live_activity() -> Contract {
+    Contract {
+        plugin_id: "istmo.live_activity".to_owned(),
+        type_name: "LiveActivity".to_owned(),
+        methods: vec![
+            Method {
+                name: "start".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![
+                    Arg {
+                        name: "activity_type".to_owned(),
+                        ty: TypeRef::String,
+                    },
+                    Arg {
+                        name: "attributes".to_owned(),
+                        ty: TypeRef::Bytes,
+                    },
+                    Arg {
+                        name: "initial_state".to_owned(),
+                        ty: TypeRef::Bytes,
+                    },
+                    Arg {
+                        name: "style".to_owned(),
+                        ty: TypeRef::Named("ActivityStyle".to_owned()),
+                    },
+                    Arg {
+                        name: "stale_after_seconds".to_owned(),
+                        ty: TypeRef::Option(Box::new(TypeRef::U32)),
+                    },
+                    Arg {
+                        name: "android_tier_hint".to_owned(),
+                        ty: TypeRef::Option(Box::new(TypeRef::Named(
+                            "AndroidTierHint".to_owned(),
+                        ))),
+                    },
+                ],
+                returns: TypeRef::Named("NativeHandleId".to_owned()),
+                error: Some(TypeRef::Named("ActivityError".to_owned())),
+            },
+            Method {
+                name: "update".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![
+                    Arg {
+                        name: "handle".to_owned(),
+                        ty: TypeRef::Named("NativeHandleId".to_owned()),
+                    },
+                    Arg {
+                        name: "state".to_owned(),
+                        ty: TypeRef::Bytes,
+                    },
+                    Arg {
+                        name: "alert".to_owned(),
+                        ty: TypeRef::Option(Box::new(TypeRef::Named("AlertConfig".to_owned()))),
+                    },
+                ],
+                returns: TypeRef::Unit,
+                error: Some(TypeRef::Named("ActivityError".to_owned())),
+            },
+            Method {
+                name: "end".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![
+                    Arg {
+                        name: "handle".to_owned(),
+                        ty: TypeRef::Named("NativeHandleId".to_owned()),
+                    },
+                    Arg {
+                        name: "final_state".to_owned(),
+                        ty: TypeRef::Option(Box::new(TypeRef::Bytes)),
+                    },
+                    Arg {
+                        name: "dismissal".to_owned(),
+                        ty: TypeRef::Named("DismissalPolicy".to_owned()),
+                    },
+                ],
+                returns: TypeRef::Unit,
+                error: Some(TypeRef::Named("ActivityError".to_owned())),
+            },
+            Method {
+                name: "are_activities_enabled".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![],
+                returns: TypeRef::Bool,
+                error: Some(TypeRef::Named("ActivityError".to_owned())),
+            },
+            Method {
+                name: "capabilities".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![],
+                returns: TypeRef::Named("PlatformCapabilities".to_owned()),
+                error: Some(TypeRef::Named("ActivityError".to_owned())),
+            },
+            Method {
+                name: "restore_active".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![],
+                returns: TypeRef::Vec(Box::new(TypeRef::Named("RestoredActivity".to_owned()))),
+                error: Some(TypeRef::Named("ActivityError".to_owned())),
+            },
+        ],
+        init: None,
+        types: vec![
+            TypeDef::Enum(EnumDef {
+                name: "ActivityStyle".to_owned(),
+                variants: vec![
+                    EnumVariant {
+                        name: "Standard".to_owned(),
+                        payload: vec![],
+                    },
+                    EnumVariant {
+                        name: "Transient".to_owned(),
+                        payload: vec![],
+                    },
+                ],
+            }),
+            TypeDef::Enum(EnumDef {
+                name: "AlertSound".to_owned(),
+                variants: vec![
+                    EnumVariant {
+                        name: "Default".to_owned(),
+                        payload: vec![],
+                    },
+                    EnumVariant {
+                        name: "Named".to_owned(),
+                        payload: vec![TypeRef::String],
+                    },
+                    EnumVariant {
+                        name: "None".to_owned(),
+                        payload: vec![],
+                    },
+                ],
+            }),
+            TypeDef::Struct(StructDef {
+                name: "AlertConfig".to_owned(),
+                fields: vec![
+                    Field {
+                        name: "title".to_owned(),
+                        ty: TypeRef::String,
+                    },
+                    Field {
+                        name: "body".to_owned(),
+                        ty: TypeRef::String,
+                    },
+                    Field {
+                        name: "sound".to_owned(),
+                        ty: TypeRef::Named("AlertSound".to_owned()),
+                    },
+                ],
+            }),
+            TypeDef::Enum(EnumDef {
+                name: "DismissalPolicy".to_owned(),
+                variants: vec![
+                    EnumVariant {
+                        name: "Immediate".to_owned(),
+                        payload: vec![],
+                    },
+                    EnumVariant {
+                        name: "Default".to_owned(),
+                        payload: vec![],
+                    },
+                    EnumVariant {
+                        name: "AfterSeconds".to_owned(),
+                        payload: vec![TypeRef::U32],
+                    },
+                ],
+            }),
+            TypeDef::Enum(EnumDef {
+                name: "AndroidTierHint".to_owned(),
+                variants: vec![
+                    EnumVariant {
+                        name: "ForceCustom".to_owned(),
+                        payload: vec![],
+                    },
+                    EnumVariant {
+                        name: "PreferSystemTemplates".to_owned(),
+                        payload: vec![],
+                    },
+                    EnumVariant {
+                        name: "RequireLiveUpdate".to_owned(),
+                        payload: vec![],
+                    },
+                ],
+            }),
+            TypeDef::Struct(StructDef {
+                name: "IosCapabilities".to_owned(),
+                fields: vec![
+                    Field {
+                        name: "activity_kit_available".to_owned(),
+                        ty: TypeRef::Bool,
+                    },
+                    Field {
+                        name: "activities_enabled".to_owned(),
+                        ty: TypeRef::Bool,
+                    },
+                    Field {
+                        name: "dynamic_island".to_owned(),
+                        ty: TypeRef::Bool,
+                    },
+                    Field {
+                        name: "push_updates".to_owned(),
+                        ty: TypeRef::Bool,
+                    },
+                ],
+            }),
+            TypeDef::Struct(StructDef {
+                name: "AndroidCapabilities".to_owned(),
+                fields: vec![
+                    Field {
+                        name: "supports_custom".to_owned(),
+                        ty: TypeRef::Bool,
+                    },
+                    Field {
+                        name: "supports_progress_style".to_owned(),
+                        ty: TypeRef::Bool,
+                    },
+                    Field {
+                        name: "supports_live_update".to_owned(),
+                        ty: TypeRef::Bool,
+                    },
+                    Field {
+                        name: "notifications_enabled".to_owned(),
+                        ty: TypeRef::Bool,
+                    },
+                ],
+            }),
+            TypeDef::Enum(EnumDef {
+                name: "PlatformCapabilities".to_owned(),
+                variants: vec![
+                    EnumVariant {
+                        name: "Ios".to_owned(),
+                        payload: vec![TypeRef::Named("IosCapabilities".to_owned())],
+                    },
+                    EnumVariant {
+                        name: "Android".to_owned(),
+                        payload: vec![TypeRef::Named("AndroidCapabilities".to_owned())],
+                    },
+                    EnumVariant {
+                        name: "Unsupported".to_owned(),
+                        payload: vec![],
+                    },
+                ],
+            }),
+            TypeDef::Struct(StructDef {
+                name: "RestoredActivity".to_owned(),
+                fields: vec![
+                    Field {
+                        name: "handle".to_owned(),
+                        ty: TypeRef::Named("NativeHandleId".to_owned()),
+                    },
+                    Field {
+                        name: "activity_type".to_owned(),
+                        ty: TypeRef::String,
+                    },
+                    Field {
+                        name: "attributes".to_owned(),
+                        ty: TypeRef::Bytes,
+                    },
+                    Field {
+                        name: "state".to_owned(),
+                        ty: TypeRef::Bytes,
+                    },
+                ],
+            }),
+            TypeDef::Enum(EnumDef {
+                name: "ActivityError".to_owned(),
+                variants: vec![
+                    EnumVariant {
+                        name: "NotSupported".to_owned(),
+                        payload: vec![],
+                    },
+                    EnumVariant {
+                        name: "Disabled".to_owned(),
+                        payload: vec![],
+                    },
+                    EnumVariant {
+                        name: "ExceededMaximum".to_owned(),
+                        payload: vec![],
+                    },
+                    EnumVariant {
+                        name: "HandleNotFound".to_owned(),
+                        payload: vec![],
+                    },
+                    EnumVariant {
+                        name: "UnknownActivityType".to_owned(),
+                        payload: vec![TypeRef::String],
+                    },
+                    EnumVariant {
+                        name: "Decode".to_owned(),
+                        payload: vec![TypeRef::String],
+                    },
+                    EnumVariant {
+                        name: "Backend".to_owned(),
+                        payload: vec![TypeRef::String],
+                    },
+                ],
+            }),
+        ],
+    }
+}
+
+#[test]
+fn live_activity_kotlin_host_matches_golden() {
+    assert_matches(
+        "live_activity_host",
+        "kt",
+        &generate_kotlin_host(&live_activity()),
+    );
+}
+
+#[test]
+fn live_activity_swift_host_matches_golden() {
+    assert_matches(
+        "live_activity_host",
+        "swift",
+        &generate_swift_host(&live_activity()),
+    );
+}
+
+#[test]
+fn live_activity_kotlin_types_matches_golden() {
+    assert_matches(
+        "live_activity_types",
+        "kt",
+        &generate_kotlin_types(&live_activity()),
+    );
+}
+
+#[test]
+fn live_activity_swift_types_matches_golden() {
+    assert_matches(
+        "live_activity_types",
+        "swift",
+        &generate_swift_types(&live_activity()),
+    );
+}
+
+#[test]
+fn live_activity_kotlin_codecs_matches_golden() {
+    assert_matches(
+        "live_activity_codecs",
+        "kt",
+        &generate_kotlin_codecs(&live_activity()),
+    );
+}
+
+#[test]
+fn live_activity_swift_codecs_matches_golden() {
+    assert_matches(
+        "live_activity_codecs",
+        "swift",
+        &generate_swift_codecs(&live_activity()),
+    );
+}
+
+#[test]
+fn live_activity_kotlin_client_matches_golden() {
+    assert_matches(
+        "live_activity_client",
+        "kt",
+        &generate_kotlin_client(&live_activity()),
+    );
+}
+
+#[test]
+fn live_activity_swift_client_matches_golden() {
+    assert_matches(
+        "live_activity_client",
+        "swift",
+        &generate_swift_client(&live_activity()),
+    );
+}

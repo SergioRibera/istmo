@@ -1,0 +1,36 @@
+[package]
+name = "istmo-live-activity"
+version = "0.0.0"
+description = "Live Activities / persistent ongoing-status plugin backed by ActivityKit (iOS) and tiered notifications (Android)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+# `links` is mandatory for cross-crate `cargo::metadata::…` propagation
+# (`emit_manifest_metadata` publishes NativeDeps + PLUGIN_IDS through it).
+links = "istmo_live_activity"
+
+[features]
+default = []
+# Off by default so runtime dependents do not pay for the `Contract` builder
+# tree. Downstream apps flip this on inside their `build.rs` via
+# `[build-dependencies]`.
+codegen = ["dep:istmo-build"]
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+bincode = { workspace = true }
+pollster = { workspace = true }
+istmo-build = { workspace = true, optional = true }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+flume = { workspace = true }
+pollster = { workspace = true }
+
+[lints]
+workspace = true

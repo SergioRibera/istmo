@@ -45,3 +45,22 @@ examples/data-store-demo/android/app/src/main/java/dev/istmo/runtime/DataStoreCo
 # each demo's `gen/` subpackage. Regenerated on every cargo build.
 examples/android-demo/android/app/src/main/java/dev/istmo/demo/gen/
 examples/android-multi/android/app/src/main/java/dev/istmo/multi/gen/
+
+# live-activity-demo: xcodegen output + Xcode / cargo / Gradle build
+# products + build.rs-emitted host dispatchers + types + codecs.
+examples/live-activity-demo/ios/LiveActivityDemo.xcodeproj/
+examples/live-activity-demo/ios/build/
+examples/live-activity-demo/ios/IstmoRuntime/.build/
+examples/live-activity-demo/ios/**/*.xcuserdata/
+examples/live-activity-demo/ios/**/xcshareddata/
+examples/live-activity-demo/ios/LiveActivityDemo/Plugins/*/Generated/
+examples/live-activity-demo/android/.gradle/
+examples/live-activity-demo/android/build/
+examples/live-activity-demo/android/**/build/
+examples/live-activity-demo/android/local.properties
+examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/LiveActivityDispatcher.kt
+examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/LiveActivityTypes.kt
+examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/LiveActivityCodecsImpl.kt
+examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/DemoDispatcher.kt
+examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/DemoTypes.kt
+examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/DemoCodecsImpl.kt

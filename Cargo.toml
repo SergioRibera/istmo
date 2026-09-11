@@ -15,7 +15,9 @@ members = [
     "examples/rust-mobile-demo",
     "plugins/google-sign-in",
     "plugins/data-store",
+    "plugins/live-activity",
     "examples/data-store-demo",
+    "examples/live-activity-demo",
 ]
 
 [workspace.package]
@@ -69,6 +71,7 @@ istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.0.0" }
 # consumers (examples + downstream apps) can use `{ workspace = true }`.
 istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.0.0" }
 istmo-data-store = { path = "plugins/data-store", version = "0.0.0" }
+istmo-live-activity = { path = "plugins/live-activity", version = "0.0.0" }
 
 [package]
 name = "istmo"
