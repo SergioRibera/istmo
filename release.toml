@@ -1,0 +1,64 @@
+# cargo-release configuration for the istmo mono-repo.
+#
+# Every crate + the Kotlin runtime + the Swift package share one SemVer
+# track. Running `cargo release <bump>` (patch / minor / major / <exact>)
+# from the workspace root:
+#
+#   1. Rewrites every crate's `version = "..."` line to the new SemVer.
+#   2. Applies the `pre-release-replacements` block below, which bumps
+#      the Kotlin runtime's `gradle.properties` and every hard-coded
+#      `dev.istmo:istmo-runtime:<ver>` coordinate in the reference
+#      Gradle demos + the runtime README.
+#   3. Rewrites the workspace-level `istmo-* = { version = "..." }`
+#      dependency entries in the root `Cargo.toml`
+#      (`dependent-version = "upgrade"`).
+#   4. Squashes the whole bump into a single commit
+#      (`consolidate-commits = true`).
+#   5. Tags the commit as `v<version>` and pushes to `origin`.
+#
+# The pushed tag is what the `publish-runtime.yml` GitHub Action watches
+# — it fires automatically, builds the AAR, and publishes
+# `dev.istmo:istmo-runtime:<version>` to GitHub Packages Maven. Swift
+# consumers resolve the same version through the git tag directly, so
+# there is no separate iOS publish step.
+
+allow-branch = ["main"]
+push-remote = "origin"
+
+# One version for every workspace member (crates + plugins + examples).
+shared-version = true
+consolidate-commits = true
+
+# Publish + tag + push semantics.
+release = true
+publish = true
+verify = true
+push = true
+tag = true
+dependent-version = "upgrade"
+metadata = "optional"
+
+# Tag ↔ workflow contract.
+#
+# `publish-runtime.yml` triggers on `push: tags: 'v[0-9]+.[0-9]+.[0-9]+'`
+# (+ SemVer prerelease suffix). The `v` prefix is intentional so plain
+# `<version>` git objects (bincode `0` on the wire, etc.) never collide
+# with release tags.
+tag-name = "v{{version}}"
+tag-message = "istmo v{{version}}"
+pre-release-commit-message = "chore(release): {{version}}"
+
+# Non-Cargo surfaces that carry a version string. `min = 0` keeps
+# consolidated releases happy — the substitution runs once per file even
+# when cargo-release walks every workspace member.
+pre-release-replacements = [
+    # Kotlin runtime property consumed by the GitHub Action to stamp
+    # the published AAR with the release SemVer.
+    { file = "runtime/android/gradle.properties", search = "^runtimeVersion=.*$", replace = "runtimeVersion={{version}}", min = 0 },
+
+    # Coordinate references baked into the reference demos + runtime README.
+    { file = "runtime/README.md", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+', replace = "dev.istmo:istmo-runtime:{{version}}", min = 0 },
+    { file = "examples/data-store-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+', replace = "dev.istmo:istmo-runtime:{{version}}", min = 0 },
+    { file = "examples/rust-mobile-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+', replace = "dev.istmo:istmo-runtime:{{version}}", min = 0 },
+    { file = "examples/live-activity-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+', replace = "dev.istmo:istmo-runtime:{{version}}", min = 0 },
+]
