@@ -1,12 +1,16 @@
 [package]
 name = "istmo-data-store"
 version = "0.1.0"
-description = "Persistent key-value store plugin backed by SharedPreferences / UserDefaults."
+description = "Persistent key-value store plugin for the istmo framework — SharedPreferences on Android, UserDefaults on iOS."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "storage", "shared-preferences", "userdefaults", "mobile"]
+categories = ["database", "api-bindings"]
 # `links` is mandatory for cross-crate `cargo::metadata::…` propagation
 # (`emit_manifest_metadata` publishes NativeDeps + PLUGIN_IDS through it).
 links = "istmo_data_store"

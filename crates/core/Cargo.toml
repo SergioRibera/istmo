@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["mobile", "android", "ios", "ffi", "istmo"]
+categories = ["development-tools::ffi", "network-programming", "os"]
 
 [dependencies]
 bincode = { workspace = true }

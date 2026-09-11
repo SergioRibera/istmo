@@ -1,12 +1,16 @@
 [package]
 name = "istmo-google-sign-in"
 version = "0.1.0"
-description = "Google Sign-In / Credential Manager plugin for the istmo framework."
+description = "Google Sign-In / Credential Manager plugin for the istmo framework — Android + iOS credential flows exposed as a typed Rust surface."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "google-signin", "oauth", "authentication", "mobile"]
+categories = ["authentication", "api-bindings"]
 # `links` is mandatory for cross-crate `cargo::metadata::…` propagation
 # (`emit_manifest_metadata` publishes NativeDeps + PLUGIN_IDS through it).
 # Value has to be unique across the whole dep graph; namespacing under

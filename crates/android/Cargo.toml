@@ -1,12 +1,16 @@
 [package]
 name = "istmo-android"
 version = "0.1.0"
-description = "Android JNI transport for the istmo runtime."
+description = "Android JNI transport for the istmo runtime — pump thread, native trampolines, event-loop glue."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "android", "jni", "ffi", "mobile"]
+categories = ["os::android-apis", "development-tools::ffi"]
 
 [dependencies]
 istmo-core = { workspace = true }

@@ -1,12 +1,16 @@
 [package]
 name = "istmo-build"
 version = "0.1.0"
-description = "Contract metadata and Kotlin/Swift codegen for istmo plugins."
+description = "Contract metadata and Kotlin/Swift codegen for istmo plugins — consumed by downstream build.rs scripts to emit typed native dispatchers."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "codegen", "kotlin", "swift", "build-script"]
+categories = ["development-tools::build-utils"]
 
 [dependencies]
 bincode = { workspace = true }

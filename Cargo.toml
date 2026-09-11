@@ -24,8 +24,10 @@ members = [
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-authors = ["istmo contributors"]
-repository = "https://example.invalid/istmo"
+authors = ["Sergio Ribera <sergioalejandroriberacosta@gmail.com>", "istmo contributors"]
+repository = "https://github.com/SergioRibera/istmo"
+homepage = "https://github.com/SergioRibera/istmo"
+readme = "README.md"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -59,29 +61,33 @@ syn = { version = "2", default-features = false, features = [
 jni = { version = "0.21", default-features = false }
 toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
-istmo-core = { path = "crates/core", version = "0.1.0" }
-istmo-build = { path = "crates/build", version = "0.1.0" }
-istmo-macros = { path = "crates/macros", version = "0.1.0" }
-istmo-android = { path = "crates/android", version = "0.1.0" }
-istmo-ios = { path = "crates/ios", version = "0.1.0" }
-istmo-plugins = { path = "crates/plugins", version = "0.1.0" }
-istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.1.0" }
+istmo-core = { path = "crates/core", version = "0.1.0-alpha.1" }
+istmo-build = { path = "crates/build", version = "0.1.0-alpha.1" }
+istmo-macros = { path = "crates/macros", version = "0.1.0-alpha.1" }
+istmo-android = { path = "crates/android", version = "0.1.0-alpha.1" }
+istmo-ios = { path = "crates/ios", version = "0.1.0-alpha.1" }
+istmo-plugins = { path = "crates/plugins", version = "0.1.0-alpha.1" }
+istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.1.0-alpha.1" }
 
 # Community plugins — separate crates under `plugins/`. Listed here so
 # consumers (examples + downstream apps) can use `{ workspace = true }`.
-istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.1.0" }
-istmo-data-store = { path = "plugins/data-store", version = "0.1.0" }
-istmo-live-activity = { path = "plugins/live-activity", version = "0.1.0" }
+istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.1.0-alpha.1" }
+istmo-data-store = { path = "plugins/data-store", version = "0.1.0-alpha.1" }
+istmo-live-activity = { path = "plugins/live-activity", version = "0.1.0-alpha.1" }
 
 [package]
 name = "istmo"
-version = "0.1.0"
-description = "Rust <-> mobile native interop framework (facade crate)."
+version = "0.1.0-alpha.1"
+description = "Rust ↔ mobile native interop framework — write shared Rust code, ship it to Android + iOS through a typed plugin contract."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mobile", "android", "ios", "ffi", "interop"]
+categories = ["development-tools::ffi", "os", "api-bindings"]
 
 [dependencies]
 istmo-core = { workspace = true }
