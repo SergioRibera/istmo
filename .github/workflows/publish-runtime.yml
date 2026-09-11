@@ -1,37 +1,44 @@
 name: publish-runtime
 
-# Runtime releases are cut manually through `workflow_dispatch` — no
-# release ships on every push. The workflow:
+# Publishes the Kotlin runtime AAR + sources JAR to the GitHub Packages
+# Maven registry as `dev.istmo:istmo-runtime:<version>`.
 #
-#   1. Bumps the Kotlin runtime's Gradle version + Rust workspace crate
-#      versions to the requested SemVer.
-#   2. Creates the matching git tag (`v<version>`) so SPM consumers can
-#      resolve the Swift package at that version.
-#   3. Publishes the Android AAR + sources JAR to GitHub Packages under
-#      `dev.istmo:istmo-runtime:<version>`.
+# * The **primary trigger** is a pushed `v<SemVer>` tag — that is how
+#   `cargo-release` cuts a release. The workflow reads the SemVer from
+#   the tag ref, bumps the Gradle version in the runner's checkout, and
+#   publishes.
+# * The **secondary trigger** is `workflow_dispatch` — useful for
+#   re-running a release, publishing a hotfix, or dry-running the Gradle
+#   config without a real tag.
 #
-# The workflow does NOT push a versioned commit back to `main` — the
-# Gradle version bump happens in the runner's checkout only. Kotlin
-# consumers get the SemVer they asked for from the published artefact;
-# Swift consumers resolve the same version through the git tag. The next
-# release starts from whatever `runtime/android/gradle.properties`
-# currently declares in the tree.
+# The Swift package has no publish step: SPM resolves consumers straight
+# from the git tag (`.package(url:, from: "0.2.0")`), so tagging alone is
+# enough for the iOS side. `cargo-release` creates the tag once and both
+# language surfaces pick it up.
+#
+# The workflow never pushes commits back to `main`. The Gradle version
+# bump only lives in the runner's checkout for the duration of the
+# build; `runtime/android/gradle.properties` on trunk keeps whatever
+# baseline SemVer it declared before the release.
 
 on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
   workflow_dispatch:
     inputs:
       version:
-        description: "SemVer to publish (e.g. 0.2.0). Applied to Kotlin AAR + git tag consumed by SPM."
-        required: true
+        description: "SemVer to publish (e.g. 0.2.0). Overrides the tag-derived version when re-running by hand."
+        required: false
         type: string
       dry_run:
-        description: "Skip the publish step and the tag push — useful for verifying Gradle config."
+        description: "Skip the actual publish — useful for verifying the Gradle config."
         required: false
         default: false
         type: boolean
 
 permissions:
-  contents: write   # push git tag
   packages: write   # publish to GitHub Packages Maven registry
 
 jobs:
@@ -40,21 +47,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Validate version input
+      - name: Resolve version
+        id: version
         env:
-          VERSION: ${{ inputs.version }}
+          INPUT_VERSION: ${{ inputs.version }}
+          TAG_REF: ${{ github.ref }}
         run: |
-          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
-            echo "::error::version input must be SemVer (got: $VERSION)"
+          if [ -n "$INPUT_VERSION" ]; then
+            resolved="$INPUT_VERSION"
+          else
+            resolved="${TAG_REF##*/v}"
+          fi
+          if ! echo "$resolved" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            echo "::error::resolved version is not SemVer (got: '$resolved'). Provide a valid `inputs.version` or push a `v<SemVer>` tag."
             exit 1
           fi
-          if git rev-parse --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
-            echo "::error::git tag v$VERSION already exists"
-            exit 1
-          fi
+          echo "resolved=$resolved" >> "$GITHUB_OUTPUT"
+          echo "Publishing istmo-runtime version: $resolved"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -71,7 +81,7 @@ jobs:
       - name: Bump Gradle version
         working-directory: runtime/android
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.resolved }}
         run: |
           sed -i -E "s/^runtimeVersion=.*/runtimeVersion=$VERSION/" gradle.properties
           echo "gradle.properties after bump:"
@@ -89,33 +99,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gradle --no-daemon publishReleasePublicationToGitHubPackagesRepository
 
-      - name: Configure git identity
-        if: ${{ !inputs.dry_run }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Create + push git tag
-        if: ${{ !inputs.dry_run }}
-        env:
-          VERSION: ${{ inputs.version }}
-        run: |
-          git tag -a "v$VERSION" -m "runtime v$VERSION"
-          git push origin "v$VERSION"
-
       - name: Summary
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.resolved }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           {
             echo "## istmo runtime v$VERSION"
             echo
             if [ "$DRY_RUN" = "true" ]; then
-              echo "**Dry run** — nothing published, no tag pushed."
+              echo "**Dry run** — Gradle assembled, nothing published."
             else
               echo "* Kotlin: [\`dev.istmo:istmo-runtime:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
-              echo "* Swift: \`.package(url: \"https://github.com/SergioRibera/istmo.git\", from: \"$VERSION\")\`"
-              echo "* Git tag: [\`v$VERSION\`](https://github.com/SergioRibera/istmo/releases/tag/v$VERSION)"
+              echo "* Swift: \`.package(url: \"https://github.com/SergioRibera/istmo.git\", from: \"$VERSION\")\` (resolved from the git tag directly)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
