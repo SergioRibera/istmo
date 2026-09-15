@@ -1,12 +1,16 @@
 [package]
 name = "istmo-ios"
 version = "0.1.0"
-description = "iOS/Apple @_cdecl transport for the istmo runtime."
+description = "iOS/Apple FFI transport for the istmo runtime — pump thread, callback table, C-callable exports linked by the Swift staticlib."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "ios", "swift", "ffi", "mobile"]
+categories = ["os", "development-tools::ffi"]
 
 [dependencies]
 istmo-core = { workspace = true }

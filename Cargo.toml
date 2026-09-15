@@ -24,8 +24,10 @@ members = [
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-authors = ["istmo contributors"]
-repository = "https://example.invalid/istmo"
+authors = ["Sergio Ribera <sergioalejandroriberacosta@gmail.com>", "istmo contributors"]
+repository = "https://github.com/SergioRibera/istmo"
+homepage = "https://github.com/SergioRibera/istmo"
+readme = "README.md"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -76,12 +78,16 @@ istmo-live-activity = { path = "plugins/live-activity", version = "0.1.0" }
 [package]
 name = "istmo"
 version = "0.1.0"
-description = "Rust <-> mobile native interop framework (facade crate)."
+description = "Rust ↔ mobile native interop framework — write shared Rust code, ship it to Android + iOS through a typed plugin contract."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mobile", "android", "ios", "ffi", "interop"]
+categories = ["development-tools::ffi", "os", "api-bindings"]
 
 [dependencies]
 istmo-core = { workspace = true }

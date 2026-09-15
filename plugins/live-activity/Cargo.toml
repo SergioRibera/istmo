@@ -1,12 +1,16 @@
 [package]
 name = "istmo-live-activity"
 version = "0.1.0"
-description = "Live Activities / persistent ongoing-status plugin backed by ActivityKit (iOS) and tiered notifications (Android)."
+description = "Live Activities plugin for the istmo framework — ActivityKit / Dynamic Island on iOS, three-tier adaptive notifications (RemoteViews / ProgressStyle / Live Updates chip) on Android."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "live-activity", "activitykit", "notifications", "mobile"]
+categories = ["os", "api-bindings"]
 # `links` is mandatory for cross-crate `cargo::metadata::…` propagation
 # (`emit_manifest_metadata` publishes NativeDeps + PLUGIN_IDS through it).
 links = "istmo_live_activity"
