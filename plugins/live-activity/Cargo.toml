@@ -1,6 +1,6 @@
 [package]
 name = "istmo-live-activity"
-version = "0.1.0"
+version = "0.1.1-alpha.1"
 description = "Live Activities plugin for the istmo framework — ActivityKit / Dynamic Island on iOS, three-tier adaptive notifications (RemoteViews / ProgressStyle / Live Updates chip) on Android."
 edition.workspace = true
 rust-version.workspace = true

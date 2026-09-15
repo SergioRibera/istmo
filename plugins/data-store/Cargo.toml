@@ -1,6 +1,6 @@
 [package]
 name = "istmo-data-store"
-version = "0.1.0"
+version = "0.1.1-alpha.1"
 description = "Persistent key-value store plugin for the istmo framework — SharedPreferences on Android, UserDefaults on iOS."
 edition.workspace = true
 rust-version.workspace = true

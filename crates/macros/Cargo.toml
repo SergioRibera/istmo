@@ -1,6 +1,6 @@
 [package]
 name = "istmo-macros"
-version = "0.1.0"
+version = "0.1.1-alpha.1"
 description = "Proc-macros for the istmo framework: #[plugin], #[message], #[service], #[worker], #[mobile_app], runtime! declarative wiring."
 edition.workspace = true
 rust-version.workspace = true
