@@ -107,3 +107,21 @@ flume = { workspace = true }
 
 [lints]
 workspace = true
+
+# cargo-release resolves `pre-release-replacements` file paths relative
+# to each crate's manifest directory. Attaching the block here (the
+# facade crate at the workspace root) makes the paths resolve from the
+# repo root, so every non-Cargo surface that carries a version string
+# gets bumped in the same commit as the crate versions.
+[package.metadata.release]
+pre-release-replacements = [
+    # Kotlin runtime property consumed by the `publish-runtime.yml`
+    # GitHub Action to stamp the published AAR with the release SemVer.
+    { file = "runtime/android/gradle.properties", search = "^runtimeVersion=.*$", replace = "runtimeVersion={{version}}" },
+
+    # Coordinate references baked into the reference demos + runtime README.
+    { file = "runtime/README.md", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "dev.istmo:istmo-runtime:{{version}}" },
+    { file = "examples/data-store-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "dev.istmo:istmo-runtime:{{version}}" },
+    { file = "examples/rust-mobile-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "dev.istmo:istmo-runtime:{{version}}" },
+    { file = "examples/live-activity-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "dev.istmo:istmo-runtime:{{version}}" },
+]

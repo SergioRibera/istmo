@@ -25,17 +25,11 @@ tag-name = "v{{version}}"
 tag-message = "istmo v{{version}}"
 pre-release-commit-message = "chore(release): {{version}}"
 
-# Non-Cargo surfaces that carry a version string. `min = 0` keeps
-# consolidated releases happy — the substitution runs once per file even
-# when cargo-release walks every workspace member.
-pre-release-replacements = [
-    # Kotlin runtime property consumed by the GitHub Action to stamp
-    # the published AAR with the release SemVer.
-    { file = "runtime/android/gradle.properties", search = "^runtimeVersion=.*$", replace = "runtimeVersion={{version}}" },
-
-    # Coordinate references baked into the reference demos + runtime README.
-    { file = "runtime/README.md", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+', replace = "dev.istmo:istmo-runtime:{{version}}" },
-    { file = "examples/data-store-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+', replace = "dev.istmo:istmo-runtime:{{version}}" },
-    { file = "examples/rust-mobile-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+', replace = "dev.istmo:istmo-runtime:{{version}}" },
-    { file = "examples/live-activity-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+', replace = "dev.istmo:istmo-runtime:{{version}}" },
-]
+# `pre-release-replacements` intentionally lives inside the facade
+# crate's `[package.metadata.release]` in the root `Cargo.toml`. Reason:
+# cargo-release resolves replacement `file` paths relative to *each*
+# crate's manifest directory during its per-crate walk — a workspace-
+# level entry ends up chasing `crates/core/examples/…` when it visits
+# `istmo-core`, which does not exist. The facade crate's manifest dir
+# *is* the workspace root, so `examples/foo/…` resolves cleanly when
+# declared there.
