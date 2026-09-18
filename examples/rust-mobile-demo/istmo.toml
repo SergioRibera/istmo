@@ -1,0 +1,4 @@
+[app]
+# Keep generated Kotlin next to the hand-written backend implementations that
+# already live under `dev.istmo.runtime`.
+android_package = "dev.istmo.runtime"

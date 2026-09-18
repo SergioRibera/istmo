@@ -1,81 +1,3 @@
-//! `istmo.toml` — declarative plugin metadata.
-//!
-//! Plugin crates ship an `istmo.toml` alongside their `Cargo.toml`. The file
-//! carries the native-build metadata that cannot be derived from the
-//! `#[istmo::plugin]` trait: Gradle coordinates the app must add on Android,
-//! `SwiftPM` products it must add on iOS.
-//!
-//! A plugin's `build.rs` collapses to a single call:
-//!
-//! ```no_run
-//! istmo_build::emit_manifest_metadata("istmo.toml");
-//! ```
-//!
-//! which parses the manifest and forwards its [`NativeDeps`] slice through
-//! the existing [`crate::handover`] channel. Downstream apps aggregate the
-//! contributions of every plugin via [`crate::collect_dep_native_deps`],
-//! producing one merged Gradle fragment.
-//!
-//! # Schema
-//!
-//! Two equivalent forms — a crate ships **one plugin** with `[plugin]`, or
-//! **several plugins** with `[[plugin]]`. Both accept top-level `[[gradle]]`
-//! and `[[swift_package]]` blocks; multi-plugin form additionally accepts
-//! per-plugin `[[plugin.gradle]]` / `[[plugin.swift_package]]` nested blocks
-//! for deps that only belong to one plugin. Every dep — top-level or nested —
-//! merges into the same [`NativeDeps`] bundle because Gradle / SPM dedupe on
-//! `(scope, group, artifact)` / `(url, product)` regardless of source.
-//!
-//! ## Single-plugin form
-//!
-//! ```toml
-//! [plugin]
-//! id = "istmo.google_sign_in"
-//! # `client_type` (optional) reserved for a future auto-wiring pass —
-//! # the fully-qualified path of the `<Trait>Client` this plugin generates.
-//! # client_type = "::istmo_google_sign_in::SignInClient"
-//!
-//! [[gradle]]
-//! scope = "implementation"          # optional, defaults to "implementation"
-//! group = "androidx.credentials"
-//! artifact = "credentials"
-//! version = "1.3.0"
-//!
-//! [[swift_package]]
-//! url = "https://github.com/google/GoogleSignIn-iOS.git"
-//! product = "GoogleSignIn"
-//! from_version = "7.0.0"
-//! ```
-//!
-//! ## Multi-plugin form
-//!
-//! ```toml
-//! [[plugin]]
-//! id = "istmo.google_sign_in"
-//!
-//!   [[plugin.gradle]]
-//!   group = "androidx.credentials"
-//!   artifact = "credentials"
-//!   version = "1.3.0"
-//!
-//! [[plugin]]
-//! id = "istmo.admob"
-//!
-//!   [[plugin.gradle]]
-//!   group = "com.google.android.gms"
-//!   artifact = "play-services-ads"
-//!   version = "23.0.0"
-//!
-//! # Optional: shared across every plugin in this crate.
-//! [[gradle]]
-//! group = "androidx.core"
-//! artifact = "core-ktx"
-//! version = "1.13.0"
-//! ```
-//!
-//! Unknown top-level keys or unrecognised entries surface as
-//! [`ManifestError::UnknownKey`] so drift is loud.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -85,10 +7,8 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 use crate::handover::{emit_contract, emit_manifest, emit_native_deps};
 use crate::native_deps::{GradleCoord, GradleDep, GradleScope, NativeDeps, SwiftPackageDep};
 
-/// Recognised top-level keys — anything outside this set is a hard error so
-/// typos surface immediately instead of being silently dropped.
-const KNOWN_KEYS: &[&str] = &["plugin", "gradle", "swift_package", "remote_override"];
-/// Recognised keys inside a `[plugin]` / `[[plugin]]` entry.
+const KNOWN_KEYS: &[&str] = &["plugin", "gradle", "swift_package", "remote_override", "app"];
+
 const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "id",
     "client_type",
@@ -96,28 +16,19 @@ const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "gradle",
     "swift_package",
 ];
-/// Recognised keys inside a `[[remote_override]]` entry.
+
 const KNOWN_OVERRIDE_KEYS: &[&str] = &["plugin", "deployment"];
 
-/// Where the plugin is expected to run relative to the app process.
-///
-/// Set by the plugin author as [`PluginEntry::default_deployment`];
-/// consuming apps override per plugin via a `[[remote_override]]` entry in
-/// their own `istmo.toml`. Auto-wiring resolves the final decision by
-/// applying overrides on top of the manifest defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum Deployment {
-    /// Runs in the app's default process. Cheap dispatch, shared heap.
+
     Local,
-    /// Runs in a `:remote` process. Isolated crashes / memory / lifecycle;
-    /// outbound frames route through the runtime's remote-envelope sink
-    /// via [`crate::Runtime::declare_remote_plugin`] wiring.
+
     Remote,
 }
 
 impl Deployment {
-    /// Parses the TOML literal (`"local"` / `"remote"`). Case-sensitive on
-    /// purpose — matches the wire codec's stance elsewhere.
+
     fn parse(literal: &str) -> Option<Self> {
         match literal {
             "local" => Some(Self::Local),
@@ -127,61 +38,39 @@ impl Deployment {
     }
 }
 
-/// One plugin declared in an `istmo.toml`. Single-plugin manifests produce a
-/// [`Manifest`] with `plugins.len() == 1`; multi-plugin manifests carry one
-/// entry per `[[plugin]]`.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct PluginEntry {
-    /// Dotted plugin identifier — matches the `#[istmo::plugin]` id and the
-    /// wire prefix used at runtime.
+
     pub id: String,
-    /// Fully-qualified path of the generated `<Trait>Client` type. Consumed
-    /// by [`crate::emit_wiring_env`] to auto-populate the `plugins:` /
-    /// `remote:` sections of `istmo::runtime!`. `None` skips the plugin in
-    /// auto-wiring (only its native-dep contribution lands).
+
     pub client_type: Option<String>,
-    /// Where the plugin author expects the plugin to run. `Local` (default)
-    /// means outbound frames stay on the typed pump; `Remote` steers them
-    /// into the `:remote` bridge sink. Overridable app-side.
+
     pub default_deployment: Deployment,
 }
 
-/// One entry in a consuming app's `[[remote_override]]` section. Flips the
-/// deployment target for a specific plugin regardless of the manifest's
-/// [`PluginEntry::default_deployment`] hint.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct RemoteOverride {
     pub plugin: String,
     pub deployment: Deployment,
 }
 
-/// Parsed representation of an `istmo.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Manifest {
-    /// Every plugin the containing crate exposes, in declaration order.
-    /// Plugin manifests always carry ≥ 1 entry; app-side manifests that
-    /// only contribute `[[remote_override]]` may leave this empty (the
-    /// parser is lenient in that case, requiring at least one plugin OR
-    /// override).
+
     pub plugins: Vec<PluginEntry>,
-    /// Native dependencies aggregated across every top-level and per-plugin
-    /// `[[gradle]]` / `[[swift_package]]` entry.
+
     pub native_deps: NativeDeps,
-    /// App-side deployment overrides — takes precedence over each plugin's
-    /// [`PluginEntry::default_deployment`] during
-    /// [`crate::emit_wiring_env`] resolution. Empty for plugin manifests
-    /// (they have no consumers to override for).
+
     pub remote_overrides: Vec<RemoteOverride>,
 }
 
 impl Manifest {
-    /// Parses a manifest from its serialized TOML form.
+
     pub fn parse(source: &str) -> Result<Self, ManifestError> {
         let doc: DocumentMut = source.parse().map_err(ManifestError::Parse)?;
         Self::from_document(&doc)
     }
 
-    /// Reads and parses `istmo.toml` at `path`.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ManifestError> {
         let path = path.as_ref();
         let text = fs::read_to_string(path).map_err(|error| ManifestError::Io {
@@ -215,50 +104,39 @@ impl Manifest {
                 remote_overrides.push(parse_remote_override(entry)?);
             }
         }
-        if plugins.is_empty() && remote_overrides.is_empty() {
-            return Err(ManifestError::Missing { key: "plugin" });
-        }
         Ok(Self { plugins, native_deps, remote_overrides })
     }
 
-    /// The first plugin's id. Convenience for callers that expect a
-    /// single-plugin manifest (the historical shape). Panics only if the
-    /// manifest was constructed by hand with an empty `plugins` list — the
-    /// parser guarantees at least one entry.
     #[must_use]
     pub fn primary_id(&self) -> &str {
         &self.plugins[0].id
     }
 
-    /// Iterator over every plugin id declared in the manifest.
     pub fn plugin_ids(&self) -> impl Iterator<Item = &str> + '_ {
         self.plugins.iter().map(|p| p.id.as_str())
     }
 
-    /// Consumes the manifest and returns just the native-dependency bundle.
-    /// Convenience for callers that only care about the Gradle / SPM entries.
     #[must_use]
     pub fn into_native_deps(self) -> NativeDeps {
         self.native_deps
     }
 }
 
-/// Failure modes for [`Manifest::parse`] / [`Manifest::from_path`].
 #[derive(Debug)]
 pub enum ManifestError {
-    /// The file at the given path could not be read.
+
     Io { path: PathBuf, error: std::io::Error },
-    /// The bytes were not valid TOML.
+
     Parse(toml_edit::TomlError),
-    /// A required key was missing.
+
     Missing { key: &'static str },
-    /// A value had the wrong shape (e.g. string expected, integer found).
+
     TypeMismatch { key: String, expected: &'static str },
-    /// A top-level key or a table entry was not in the recognised set.
+
     UnknownKey { key: String },
-    /// A [`GradleScope`] literal was not one of the four supported values.
+
     UnknownGradleScope(String),
-    /// A [`Deployment`] literal was not `"local"` or `"remote"`.
+
     UnknownDeployment { key: String, value: String },
 }
 
@@ -299,8 +177,7 @@ fn parse_plugins(
     native_deps: &mut NativeDeps,
 ) -> Result<Vec<PluginEntry>, ManifestError> {
     let Some(item) = doc.get("plugin") else {
-        // App-side manifests may ship only `[[remote_override]]`; the caller
-        // enforces that at least one of plugin/override is present.
+
         return Ok(Vec::new());
     };
     if let Some(table) = item.as_table() {
@@ -493,9 +370,6 @@ fn expect_string_ctx<'a>(
     }
 }
 
-/// Preserved-static path composed of two known-at-compile-time components.
-/// Used to keep [`ManifestError::Missing::key`] as `&'static str` while still
-/// naming the context (`gradle` vs `plugin.gradle`) precisely.
 fn static_field(context: &'static str, field: &'static str) -> &'static str {
     match (context, field) {
         ("gradle", "group") => "gradle.group",
@@ -514,25 +388,6 @@ fn static_field(context: &'static str, field: &'static str) -> &'static str {
     }
 }
 
-/// Parse `istmo.toml` at `path` and emit its native-dep contribution.
-///
-/// Forwards through the standard `cargo:KEY=VALUE` channel. Plugin
-/// `build.rs` convenience — one call replaces the hand-written
-/// [`NativeDeps`] construction + [`emit_native_deps`] pair.
-///
-/// Every plugin id declared in the manifest is exposed to downstream build
-/// scripts as `DEP_<links>_PLUGIN_IDS` (comma-separated; a single-plugin
-/// manifest produces a one-element list). When the manifest contributes no
-/// native dependencies the [`NativeDeps`] emission is skipped, saving one
-/// Cargo hop.
-///
-/// A `cargo:rerun-if-changed=<path>` line is printed unconditionally so
-/// builds pick up manifest edits.
-///
-/// # Panics
-///
-/// Panics on parse / IO failure. `build.rs` scripts have no recovery path,
-/// and a manifest error is a plugin-author bug — surface it immediately.
 pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
     let path = path.as_ref();
     println!("cargo:rerun-if-changed={}", path.display());
@@ -542,23 +397,13 @@ pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
     if !manifest.native_deps.is_empty() {
         emit_native_deps(&manifest.native_deps);
     }
-    // Full manifest — bincode-encoded — carries `client_type`,
-    // `default_deployment` and the plugin list needed by
-    // [`emit_wiring_env`]. `PLUGIN_IDS` stays as a cheap comma-separated
-    // sidecar for consumers that only want the id list without decoding.
+
     emit_manifest(&manifest);
     let ids: Vec<&str> = manifest.plugin_ids().collect();
     println!("cargo:PLUGIN_IDS={}", ids.join(","));
     manifest
 }
 
-/// Manifest emission bundled with a [`Contract`](crate::Contract) emission.
-///
-/// Handy when the plugin's `build.rs` already builds a [`Contract`] via
-/// `istmo-plugins-schema`; folds both emissions behind one call.
-///
-/// # Panics
-/// See [`emit_manifest_metadata`].
 pub fn emit_manifest_metadata_with_contract(
     path: impl AsRef<Path>,
     contract: &crate::Contract,
@@ -568,34 +413,22 @@ pub fn emit_manifest_metadata_with_contract(
     manifest
 }
 
-/// One-liner for a plugin crate's `build.rs`. Reads `istmo.toml` next to
-/// `Cargo.toml`, emits manifest metadata, and for every `[plugin]` entry
-/// with a `client_type` set, extracts the matching trait from `src/lib.rs`
-/// and emits its [`Contract`](crate::Contract).
-///
-/// Trait name is derived from `client_type` by stripping the `Client`
-/// suffix off the last path segment — matches the naming convention of
-/// `#[istmo::plugin]` (`SignInClient` → `SignIn`).
-///
-/// Multi-plugin crates: every plugin declared in `istmo.toml` is extracted
-/// from the same `src/lib.rs`. Plugins whose trait lives in a sibling
-/// module can still call [`crate::extract_contract`] + [`emit_contract`]
-/// by hand.
-///
-/// # Panics
-/// * Missing / unreadable `istmo.toml` — plugin author bug.
-/// * Missing / unreadable `src/lib.rs` when a plugin declares `client_type`.
-/// * `client_type` not ending in `Client`.
-/// * Extraction failure (trait not found, unsupported shape).
 pub fn emit() {
-    emit_from("istmo.toml", "src/lib.rs");
+    emit_with(crate::emit_app::AppOpts::default());
 }
 
-/// [`emit`] with explicit paths for crates whose manifest / source file
-/// live off the standard `istmo.toml` + `src/lib.rs` layout.
-///
-/// # Panics
-/// See [`emit`].
+pub fn emit_with(app: crate::emit_app::AppOpts) {
+    let manifest_path = Path::new("istmo.toml");
+    let manifest_exists = manifest_path.exists();
+
+    if manifest_exists {
+        emit_from(manifest_path, "src/lib.rs");
+    }
+    let app_toml = manifest_exists.then_some(manifest_path);
+    let _ = emit_wiring_env(app_toml);
+    crate::emit_app::emit_app_with(app);
+}
+
 pub fn emit_from(manifest_path: impl AsRef<Path>, source_path: impl AsRef<Path>) {
     let manifest = emit_manifest_metadata(manifest_path);
     let source_path = source_path.as_ref();
@@ -637,25 +470,14 @@ fn trait_from_client_type(client_type: &str) -> String {
         .to_owned()
 }
 
-/// Resolved wiring — the shape emitted by [`emit_wiring_env`] into
-/// `ISTMO_AUTO_PLUGINS` / `ISTMO_AUTO_REMOTE`. Exposed for testing;
-/// production consumers only care about the env-var side effects.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ResolvedWiring {
-    /// Client type paths (e.g. `::istmo_google_sign_in::SignInClient`) that
-    /// stay in the app process. Auto-injected into `runtime! { plugins: [] }`.
+
     pub local_clients: Vec<String>,
-    /// Client type paths that route through the `:remote` bridge.
-    /// Auto-injected into `runtime! { remote: [] }`.
+
     pub remote_clients: Vec<String>,
 }
 
-/// Resolves the final auto-wiring by combining dep manifests with an
-/// optional app-side override manifest. Overrides take precedence over
-/// each plugin's [`PluginEntry::default_deployment`].
-///
-/// Plugins whose manifest carries no `client_type` are skipped — they
-/// contribute only native deps and are not part of the runtime wiring.
 #[must_use]
 pub fn resolve_wiring(
     dep_manifests: &[Manifest],
@@ -688,22 +510,6 @@ pub fn resolve_wiring(
     ResolvedWiring { local_clients: local, remote_clients: remote }
 }
 
-/// App-side `build.rs` helper for auto-wiring `istmo::runtime!`.
-///
-/// Walks `DEP_*_ISTMO_MANIFEST`, optionally applies `[[remote_override]]`
-/// entries from the app's own `istmo.toml`, and emits two
-/// `cargo::rustc-env` pairs the `istmo::runtime!` macro reads at
-/// expansion time:
-///
-/// * `ISTMO_AUTO_PLUGINS` — comma-separated fully-qualified `<T>Client`
-///   paths that auto-populate the `plugins:` section.
-/// * `ISTMO_AUTO_REMOTE` — same shape, for the `remote:` section.
-///
-/// Pass `Some(path)` to point at the app's own `istmo.toml`; pass
-/// `None` when the app has no manifest of its own (defaults apply
-/// unchanged). Missing files at the given path produce a `cargo::warning`
-/// and treat the app as override-less rather than failing the build,
-/// which keeps the helper safe to call unconditionally.
 #[must_use]
 pub fn emit_wiring_env(app_manifest_path: Option<&Path>) -> ResolvedWiring {
     let dep_manifests = crate::handover::collect_dep_manifests();
@@ -798,7 +604,7 @@ version = "1.13.0"
         assert!(m.plugins[0].client_type.is_none());
         let gradle: Vec<_> = m.native_deps.gradle_entries().collect();
         assert_eq!(gradle.len(), 3);
-        // scope defaulted to Implementation on the second entry.
+
         let default_scope = gradle
             .iter()
             .find(|d| d.coord.artifact == "credentials-play-services-auth")
@@ -820,7 +626,7 @@ version = "1.13.0"
             Some("::istmo_plugins::SignInClient"),
         );
         assert!(m.plugins[1].client_type.is_none());
-        // Nested-per-plugin + shared top-level all merged into one bundle.
+
         let gradle: Vec<_> = m.native_deps.gradle_entries().collect();
         assert_eq!(gradle.len(), 3);
         assert!(gradle.iter().any(|g| g.coord.artifact == "credentials"));
@@ -830,10 +636,18 @@ version = "1.13.0"
     }
 
     #[test]
-    fn missing_plugin_section_is_reported() {
-        let err = Manifest::parse("[[gradle]]\ngroup=\"g\"\nartifact=\"a\"\nversion=\"1\"\n")
-            .expect_err("must fail");
-        assert!(matches!(err, ManifestError::Missing { key: "plugin" }));
+    fn manifest_with_only_shared_gradle_is_valid() {
+        let m = Manifest::parse("[[gradle]]\ngroup=\"g\"\nartifact=\"a\"\nversion=\"1\"\n")
+            .expect("parse");
+        assert!(m.plugins.is_empty());
+        assert_eq!(m.native_deps.gradle_entries().count(), 1);
+    }
+
+    #[test]
+    fn manifest_with_only_app_section_is_valid() {
+        let m = Manifest::parse("[app]\nandroid = false\n").expect("parse");
+        assert!(m.plugins.is_empty());
+        assert!(m.remote_overrides.is_empty());
     }
 
     #[test]
@@ -956,11 +770,11 @@ id = "istmo.example"
 
     #[test]
     fn manifest_native_deps_survive_bincode_round_trip() {
-        // Same channel a real cross-plugin handover would take: manifest
-        // → NativeDeps → serialize → deserialize → merge.
+
         let m = Manifest::parse(FULL_MANIFEST).expect("parse");
         let hex = crate::serialize_native_deps(&m.native_deps).expect("serialize");
         let back = crate::deserialize_native_deps(&hex).expect("deserialize");
         assert_eq!(back, m.native_deps);
     }
 }
+

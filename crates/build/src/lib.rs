@@ -1,15 +1,54 @@
-//! Contract metadata and Kotlin/Swift code generators for istmo plugins.
+//! Build-script helpers for the [`istmo`](https://docs.rs/istmo)
+//! framework.
 //!
-//! This crate is pure — no I/O, no macros. It defines the [`Contract`] data
-//! model produced by `#[istmo::plugin]` at macro-expand time and consumed by
-//! `build.rs` scripts to emit native glue.
+//! Plugin authors call the generators in this crate from a
+//! `build.rs` to emit matching Kotlin and Swift bindings, aggregate
+//! native-side dependencies, and hand off metadata to consuming apps
+//! through Cargo's build-script `DEP_*` env-var mechanism.
 //!
-//! At **M1** the generators emit interface / protocol declarations only.
-//! The concrete implementation classes that call the istmo runtime land
-//! together with the Android and iOS bindings in later milestones.
+//! # Typical usage
+//!
+//! Most plugin crates only need the one-line
+//! [`manifest::emit`] entry point plus [`extract_contract`] driven by
+//! the `istmo.toml` manifest.
+//!
+//! ```ignore
+//! fn main() {
+//!     istmo_build::emit();
+//! }
+//! ```
+//!
+//! Downstream apps aggregate every plugin's contract and native-side
+//! wiring by calling [`collect_dep_contracts`] +
+//! [`collect_dep_native_deps`] plus [`emit_wiring_env`] so the
+//! [`istmo::runtime!`](../../istmo_macros/macro.runtime.html) macro can
+//! pick them up transparently.
+//!
+//! # Module map
+//!
+//! - [`contract`] — the [`Contract`] IR shared by every generator.
+//! - [`extract`] — parse a plugin crate's `src/lib.rs` into a
+//!   [`Contract`].
+//! - [`manifest`] — parse and emit `istmo.toml` metadata.
+//! - [`handover`] — hex-encoded metadata piped between plugin
+//!   `build.rs`es and consuming apps via `DEP_*` env vars.
+//! - [`kotlin`] / [`kotlin_client`] / [`kotlin_host`] / [`kotlin_types`]
+//!   — Kotlin code generators.
+//! - [`swift`] / [`swift_host`] / [`swift_types`] — Swift generators.
+//! - [`rust`] — Rust-side type generators (used by the plugin schema
+//!   crate).
+//! - [`native_deps`] — Gradle / SwiftPM dependency aggregation.
+//! - [`ios`] — iOS background mode + entitlements contract.
+//! - [`service`] / [`worker`] — Android service / worker artefacts.
+//! - [`desktop`] — systemd unit, launchd plist, Windows sc.exe and
+//!   XDG `.desktop` generators.
+//! - [`entitlements`] — Apple entitlements plist builder.
+
+#![doc(html_root_url = "https://docs.rs/istmo-build")]
 
 pub mod contract;
 pub mod desktop;
+pub mod emit_app;
 pub mod extract;
 pub mod entitlements;
 pub mod handover;
@@ -35,6 +74,10 @@ pub use crate::desktop::{
     WindowsServiceArtifacts, generate_desktop_entry, generate_launchd_plist, generate_systemd_unit,
     generate_windows_service,
 };
+pub use crate::emit_app::{
+    AppOpts, AppPluginOpts, Platform, Role, detect_android_package, detect_ios_app_dir, emit_app,
+    emit_app_with,
+};
 pub use crate::entitlements::{EntitlementValue, IosEntitlements};
 pub use crate::extract::{ExtractError, extract_contract};
 pub use crate::handover::{
@@ -54,7 +97,7 @@ pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
 pub use crate::manifest::{
     Deployment, Manifest, ManifestError, PluginEntry, RemoteOverride, ResolvedWiring, emit,
     emit_from, emit_manifest_metadata, emit_manifest_metadata_with_contract, emit_wiring_env,
-    resolve_wiring,
+    emit_with, resolve_wiring,
 };
 pub use crate::native_deps::{
     GradleCoord, GradleDep, GradleKey, GradleScope, NativeDeps, SwiftPackageDep, VersionConflict,
@@ -65,3 +108,4 @@ pub use crate::swift::{generate_swift, generate_swift_client};
 pub use crate::swift_host::generate_swift_host;
 pub use crate::swift_types::{generate_swift_codecs, generate_swift_types};
 pub use crate::worker::{WorkerContract, generate_android_worker};
+
