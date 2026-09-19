@@ -59,6 +59,7 @@ pub mod kotlin_host;
 pub mod kotlin_types;
 pub mod manifest;
 pub mod native_deps;
+pub mod plugin_registry;
 pub mod rust;
 pub mod service;
 pub mod swift;
@@ -101,6 +102,9 @@ pub use crate::manifest::{
 };
 pub use crate::native_deps::{
     GradleCoord, GradleDep, GradleKey, GradleScope, NativeDeps, SwiftPackageDep, VersionConflict,
+};
+pub use crate::plugin_registry::{
+    RegistryEntry, generate_kotlin_plugin_registry, generate_swift_plugin_registry,
 };
 pub use crate::rust::generate_rust_types;
 pub use crate::service::{AndroidServiceArtifacts, ServiceContract, generate_android_service};

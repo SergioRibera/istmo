@@ -13,6 +13,7 @@ const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "id",
     "client_type",
     "default_deployment",
+    "auto_register",
     "gradle",
     "swift_package",
 ];
@@ -46,6 +47,13 @@ pub struct PluginEntry {
     pub client_type: Option<String>,
 
     pub default_deployment: Deployment,
+
+    /// Whether `emit_app` should auto-register this plugin's dispatcher
+    /// in the generated `IstmoPluginRegistry`. Default `true`. Plugins
+    /// with bespoke construction (custom config, non-standard
+    /// BackendImpl signature) set this to `false` and expect the app
+    /// author to register the handler manually.
+    pub auto_register: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -226,6 +234,10 @@ fn parse_plugin_entry(
         }
         None => Deployment::Local,
     };
+    let auto_register = match table.get("auto_register") {
+        Some(item) => expect_bool(item, "plugin.auto_register")?,
+        None => true,
+    };
     if let Some(item) = table.get("gradle") {
         for entry in expect_array_of_tables(item, "plugin.gradle")? {
             native_deps.add_gradle(&parse_gradle(entry, "plugin.gradle")?);
@@ -236,7 +248,12 @@ fn parse_plugin_entry(
             native_deps.add_swift_package(&parse_swift_package(entry, "plugin.swift_package")?);
         }
     }
-    Ok(PluginEntry { id, client_type, default_deployment })
+    Ok(PluginEntry {
+        id,
+        client_type,
+        default_deployment,
+        auto_register,
+    })
 }
 
 fn parse_remote_override(table: &Table) -> Result<RemoteOverride, ManifestError> {
@@ -352,6 +369,16 @@ fn expect_string<'a>(item: &'a Item, key: &'static str) -> Result<&'a str, Manif
         _ => Err(ManifestError::TypeMismatch {
             key: key.to_owned(),
             expected: "string",
+        }),
+    }
+}
+
+fn expect_bool(item: &Item, key: &'static str) -> Result<bool, ManifestError> {
+    match item {
+        Item::Value(Value::Boolean(b)) => Ok(*b.value()),
+        _ => Err(ManifestError::TypeMismatch {
+            key: key.to_owned(),
+            expected: "boolean",
         }),
     }
 }

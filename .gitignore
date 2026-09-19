@@ -29,6 +29,8 @@ examples/rust-mobile-demo/ios/RustMobileDemo/Plugins/*/Generated/
 examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/*Dispatcher.kt
 examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/*Types.kt
 examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/*CodecsImpl.kt
+examples/rust-mobile-demo/android/app/src/main/java/dev/istmo/runtime/IstmoPluginRegistry.kt
+examples/rust-mobile-demo/ios/RustMobileDemo/Plugins/IstmoPluginRegistry.swift
 
 # data-store-demo: xcodegen output + Xcode / cargo / Gradle build
 # products + build.rs-emitted host dispatchers + types + codecs.
@@ -44,6 +46,8 @@ examples/data-store-demo/android/local.properties
 examples/data-store-demo/android/app/src/main/java/dev/istmo/runtime/DataStoreDispatcher.kt
 examples/data-store-demo/android/app/src/main/java/dev/istmo/runtime/DataStoreTypes.kt
 examples/data-store-demo/android/app/src/main/java/dev/istmo/runtime/DataStoreCodecsImpl.kt
+examples/data-store-demo/android/app/src/main/java/dev/istmo/runtime/IstmoPluginRegistry.kt
+examples/data-store-demo/ios/DataStoreDemo/Plugins/IstmoPluginRegistry.swift
 
 # android-demo / android-multi: build.rs writes generated Kotlin under
 # each demo's `gen/` subpackage. Regenerated on every cargo build.
@@ -67,3 +71,5 @@ examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/LiveActi
 examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/DemoDispatcher.kt
 examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/DemoTypes.kt
 examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/DemoCodecsImpl.kt
+examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/IstmoPluginRegistry.kt
+examples/live-activity-demo/ios/LiveActivityDemo/Plugins/IstmoPluginRegistry.swift

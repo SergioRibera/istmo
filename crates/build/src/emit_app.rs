@@ -21,10 +21,13 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::contract::Contract;
-use crate::handover::collect_dep_contracts;
+use crate::handover::{collect_dep_contracts, collect_dep_manifests};
 use crate::kotlin_client::generate_kotlin_client;
 use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
 use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
+use crate::plugin_registry::{
+    RegistryEntry, generate_kotlin_plugin_registry, generate_swift_plugin_registry,
+};
 use crate::swift::generate_swift_client;
 use crate::swift_host::generate_swift_host;
 use crate::swift_types::{generate_swift_codecs, generate_swift_types};
@@ -65,6 +68,7 @@ impl Role {
 pub struct AppPluginOpts {
     pub role: Option<Role>,
     pub platforms: Option<Vec<Platform>>,
+    pub auto_register: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -80,6 +84,12 @@ pub struct AppOpts {
     pub extra_contracts: Vec<Contract>,
     pub per_plugin: HashMap<String, AppPluginOpts>,
     pub seed_backends: bool,
+    /// Emit `IstmoPluginRegistry.kt` / `.swift` files that construct
+    /// every plugin's dispatcher and register it with the runtime in
+    /// one call. Default `true`. When `false` `emit_app` skips the
+    /// registry entirely and the app author registers each dispatcher
+    /// by hand.
+    pub auto_register: Option<bool>,
 }
 
 pub fn emit_app() {
@@ -161,6 +171,21 @@ pub fn emit_app_with(opts: AppOpts) {
         return;
     }
 
+    let dep_manifests = collect_dep_manifests();
+    let plugin_auto_register: HashMap<String, bool> = dep_manifests
+        .iter()
+        .flat_map(|m| m.plugins.iter())
+        .map(|p| (p.id.clone(), p.auto_register))
+        .collect();
+
+    let app_auto_register = opts
+        .auto_register
+        .or(app_config.auto_register)
+        .unwrap_or(true);
+
+    let mut kotlin_registry: Vec<RegistryEntry> = Vec::new();
+    let mut swift_registry: Vec<RegistryEntry> = Vec::new();
+
     for contract in &contracts {
         let overrides = per_plugin
             .get(contract.plugin_id.as_str())
@@ -177,7 +202,17 @@ pub fn emit_app_with(opts: AppOpts) {
             ps
         });
 
-        for platform in platforms {
+        let plugin_declared_auto = plugin_auto_register
+            .get(contract.plugin_id.as_str())
+            .copied()
+            .unwrap_or(true);
+        let app_override = overrides.and_then(|o| o.auto_register);
+        let auto_register_this = app_auto_register
+            && plugin_declared_auto
+            && app_override.unwrap_or(true)
+            && role == Role::Host;
+
+        for platform in &platforms {
             match platform {
                 Platform::Android => {
                     if !android_active {
@@ -197,6 +232,11 @@ pub fn emit_app_with(opts: AppOpts) {
                         role,
                         opts.seed_backends,
                     );
+                    if auto_register_this {
+                        if let Some(entry) = RegistryEntry::from_contract(contract) {
+                            kotlin_registry.push(entry);
+                        }
+                    }
                 }
                 Platform::Ios => {
                     if !ios_active {
@@ -217,8 +257,24 @@ pub fn emit_app_with(opts: AppOpts) {
                         role,
                         opts.seed_backends,
                     );
+                    if auto_register_this {
+                        if let Some(entry) = RegistryEntry::from_contract(contract) {
+                            swift_registry.push(entry);
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    if android_active && app_auto_register {
+        if let Some(pkg) = android_package.as_deref() {
+            emit_kotlin_registry(&android_root, pkg, &kotlin_registry);
+        }
+    }
+    if ios_active && app_auto_register {
+        if let Some(app_dir) = ios_app_dir.as_deref() {
+            emit_swift_registry(&ios_root, app_dir, &ios_plugins_subdir, &swift_registry);
         }
     }
 
@@ -226,6 +282,30 @@ pub fn emit_app_with(opts: AppOpts) {
     if manifest_path.exists() {
         println!("cargo:rerun-if-changed=istmo.toml");
     }
+}
+
+fn emit_kotlin_registry(android_root: &Path, package: &str, entries: &[RegistryEntry]) {
+    let pkg_path = package.replace('.', "/");
+    let dest = android_root
+        .join("app/src/main/java")
+        .join(pkg_path)
+        .join("IstmoPluginRegistry.kt");
+    let src = generate_kotlin_plugin_registry(package, entries);
+    write_if_changed(&dest, &src);
+}
+
+fn emit_swift_registry(
+    ios_root: &Path,
+    app_dir: &str,
+    plugins_subdir: &str,
+    entries: &[RegistryEntry],
+) {
+    let dest = ios_root
+        .join(app_dir)
+        .join(plugins_subdir)
+        .join("IstmoPluginRegistry.swift");
+    let src = generate_swift_plugin_registry(entries);
+    write_if_changed(&dest, &src);
 }
 
 fn cargo_manifest_dir() -> PathBuf {
@@ -535,6 +615,7 @@ struct AppConfig {
     ios: Option<bool>,
     ios_app_dir: Option<String>,
     ios_plugins_subdir: Option<String>,
+    auto_register: Option<bool>,
     per_plugin: HashMap<String, AppPluginOpts>,
 }
 
@@ -561,6 +642,9 @@ fn parse_app_config(doc: &DocumentMut) -> AppConfig {
     }
     if let Some(v) = app_table.get("ios_plugins_subdir").and_then(item_str) {
         cfg.ios_plugins_subdir = Some(v.to_owned());
+    }
+    if let Some(v) = app_table.get("auto_register").and_then(item_bool) {
+        cfg.auto_register = Some(v);
     }
     if let Some(item) = app_table.get("plugin") {
         if let Some(array) = item.as_array_of_tables() {
@@ -596,9 +680,14 @@ fn parse_plugin_entry(table: &Table) -> Option<(String, AppPluginOpts)> {
         }
         Some(out)
     });
+    let auto_register = table.get("auto_register").and_then(item_bool);
     Some((
         key.to_owned(),
-        AppPluginOpts { role, platforms },
+        AppPluginOpts {
+            role,
+            platforms,
+            auto_register,
+        },
     ))
 }
 
