@@ -1,14 +1,3 @@
-//! Strongly-typed generic wrapper over [`LiveActivityClient`].
-//!
-//! The plugin trait is non-generic on the wire (bincode-encoded payloads
-//! tagged by `activity_type` string). This wrapper adds a compile-time
-//! type binding so callers hold `TypedLiveActivity<TimerAttributes,
-//! TimerState>` and never touch raw bytes.
-//!
-//! One instance per activity type. Multiple types (`"timer"`,
-//! `"delivery"`, `"workout"`) coexist in the same runtime by holding
-//! multiple `TypedLiveActivity<A, C>` values.
-
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -19,12 +8,6 @@ use crate::{
     LiveActivityClient, LiveActivityToken, PlatformCapabilities, RestoredActivity,
 };
 
-/// Compile-time typed wrapper around [`LiveActivityClient`].
-///
-/// `A` is the immutable attributes struct attached at start time; `C` is
-/// the mutable content state pushed with each update. Both must derive
-/// `bincode::Encode` + `bincode::Decode` (the `#[istmo::message]` attribute
-/// takes care of this).
 pub struct TypedLiveActivity<A, C>
 where
     A: Message,
@@ -40,12 +23,7 @@ where
     A: Message,
     C: Message,
 {
-    /// Bind to the live-activity plugin for the given `activity_type`.
-    ///
-    /// The string identifies which native-side backend handles this
-    /// type — Kotlin `IstmoRuntime.registerLiveActivityBackend(id, …)` /
-    /// Swift `IstmoRuntime.shared.register(activityBackend:for:)` must
-    /// have been called with a matching id.
+
     pub fn new(runtime: &Arc<Runtime>, activity_type: impl Into<String>) -> Result<Self, IstmoError> {
         Ok(Self {
             client: LiveActivityClient::from_runtime(runtime)?,
@@ -54,21 +32,16 @@ where
         })
     }
 
-    /// Wire-level activity-type identifier this wrapper is bound to.
     #[must_use]
     pub fn activity_type(&self) -> &str {
         &self.activity_type
     }
 
-    /// Handle to the shared runtime powering the underlying client.
     #[must_use]
     pub fn runtime(&self) -> &Arc<Runtime> {
         self.client.runtime()
     }
 
-    /// Start a new live activity, returning a RAII [`NativeHandle`]. When
-    /// dropped, the handle fires `Frame::ReleaseNativeHandle` which the
-    /// native side treats as an immediate end.
     pub async fn start(
         &self,
         attributes: A,
@@ -78,7 +51,6 @@ where
         self.start_with_hint(attributes, initial_state, style, None, None).await
     }
 
-    /// Full-featured start with optional stale-after / Android tier hint.
     pub async fn start_with_hint(
         &self,
         attributes: A,
@@ -103,7 +75,6 @@ where
         Ok(NativeHandle::adopt(self.runtime(), id))
     }
 
-    /// Push a new state snapshot. `alert` opts into a heads-up presentation.
     pub async fn update(
         &self,
         handle: NativeHandleId,
@@ -114,8 +85,6 @@ where
         self.call_update(handle, state, alert).await
     }
 
-    /// End the activity. `final_state` optionally supplies a last snapshot
-    /// to display through the dismissal grace window (iOS only).
     pub async fn end(
         &self,
         handle: NativeHandleId,
@@ -129,22 +98,14 @@ where
         self.call_end(handle, final_state, dismissal).await
     }
 
-    /// Probe whether the platform is willing to accept new activities.
     pub async fn are_activities_enabled(&self) -> Result<bool, ActivityError> {
         translate(self.client.are_activities_enabled().await)
     }
 
-    /// Full capability snapshot for the current device / OS version.
     pub async fn capabilities(&self) -> Result<PlatformCapabilities, ActivityError> {
         translate(self.client.capabilities().await)
     }
 
-    /// Reattach to previously-started activities of this type that
-    /// survived a process restart. Returns a tuple of `(NativeHandle,
-    /// attributes, latest_state)` per restored activity.
-    ///
-    /// Activities of other types are filtered out — the caller holds one
-    /// `TypedLiveActivity` per type and calls `restore` on each.
     pub async fn restore(&self) -> Result<Vec<Restored<A, C>>, ActivityError> {
         let all: Vec<RestoredActivity> = translate(self.client.restore_active().await)?;
         let mut out = Vec::new();
@@ -164,8 +125,6 @@ where
         }
         Ok(out)
     }
-
-    // ---- internal wire adapters ----
 
     async fn call_start(
         &self,
@@ -209,8 +168,6 @@ where
     }
 }
 
-/// A restored activity produced by [`TypedLiveActivity::restore`]. The
-/// [`NativeHandle`] is already adopted; drop or hold as needed.
 pub struct Restored<A, C>
 where
     A: Message,
@@ -235,10 +192,6 @@ where
     }
 }
 
-/// Convert an `IstmoError` returned by the generated client into the
-/// plugin-specific [`ActivityError`]. The generated `PluginError { bytes }`
-/// carries the bincode-encoded `ActivityError` produced by the native
-/// backend; any other transport-level error surfaces as `Backend(...)`.
 fn translate<T>(result: Result<T, IstmoError>) -> Result<T, ActivityError> {
     match result {
         Ok(v) => Ok(v),
@@ -265,3 +218,4 @@ where
             .finish()
     }
 }
+

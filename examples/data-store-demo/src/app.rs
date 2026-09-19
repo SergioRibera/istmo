@@ -1,11 +1,3 @@
-//! Shared egui UI.
-//!
-//! Runs on desktop (against the emulator), Android (against
-//! `DataStoreBackendImpl.kt` + `SharedPreferences`), and iOS (against
-//! `DataStoreBackendImpl.swift` + `UserDefaults`). Zero
-//! `#[cfg(target_os = ...)]` in the eframe app impl — the code path is
-//! literally identical.
-
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -15,8 +7,6 @@ use istmo_data_store::{DataStoreClient, DataStoreError};
 
 const DEMO_NAMESPACE: &str = "demo_prefs";
 
-/// Retention shape for one op's outcome — the transcript panel walks these
-/// in reverse insertion order.
 #[derive(Debug, Clone)]
 pub struct LogLine {
     pub op: String,
@@ -56,8 +46,6 @@ impl ValueKind {
     }
 }
 
-/// Shared handle every worker task borrows: the client (for ops), the egui
-/// context (to trigger repaints when a task finishes) and the transcript.
 #[derive(Debug)]
 pub struct SharedState {
     pub client: DataStoreClient,
@@ -304,9 +292,8 @@ fn decode_hex(input: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-/// Namespace used by every entrypoint. Kept in one place so the
-/// desktop/Android/iOS boots stay in lockstep.
 #[must_use]
 pub const fn namespace() -> &'static str {
     DEMO_NAMESPACE
 }
+

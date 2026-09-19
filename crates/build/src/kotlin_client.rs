@@ -1,27 +1,7 @@
-//! Kotlin client-side wrapper generator. Mirrors the Swift equivalent in
-//! [`crate::swift::generate_swift_client`].
-//!
-//! Emits a `<T>Client` class that Kotlin uses to call a **Rust-hosted**
-//! plugin — the direction where Kotlin is the consumer and Rust owns the
-//! trait implementation. Every method encodes its arguments with
-//! `Bincode` + user-provided `<T>Codecs`, ships the payload through
-//! `IstmoRuntime.call(...)` and decodes the response.
-//!
-//! The generated class takes a `<T>Codecs` implementation at construction
-//! — same interface consumed by [`crate::kotlin_host::generate_kotlin_host`]
-//! — so a project ships a single `<T>Codecs` impl for both directions.
-//! Contracts without any `Named` types can construct the client without
-//! any argument (the parameter defaults to a no-op codecs instance).
-//!
-//! Domain errors surface via a companion `<T>Exception` that carries the
-//! raw payload bytes plus an eagerly-decoded typed variant when the wire
-//! bytes match the declared error type.
-
 use std::fmt::Write as _;
 
 use crate::contract::{Contract, Method, MethodKind, TypeRef};
 
-/// Renders the Kotlin client class for `contract`.
 #[must_use]
 pub fn generate_kotlin_client(contract: &Contract) -> String {
     let mut out = String::new();
@@ -128,12 +108,7 @@ fn write_client_method(out: &mut String, plugin_ty: &str, method: &Method) {
             let _ = writeln!(out, "    }}");
         }
         MethodKind::Stream => {
-            // Streams from a Rust-hosted plugin are not exercised by any
-            // existing consumer today. Emit the surface so the shape
-            // matches the Swift client, but route to a helper that
-            // `IstmoRuntime` will grow in a follow-up milestone —
-            // `IstmoRuntime.stream(...)` is expected to return
-            // `Flow<ByteArray>` and every element is decoded via `.map`.
+
             let _ = writeln!(
                 out,
                 "    fun {}({arg_sig}): kotlinx.coroutines.flow.Flow<{ret_kt}> {{",
@@ -152,7 +127,6 @@ fn write_client_method(out: &mut String, plugin_ty: &str, method: &Method) {
     }
 }
 
-/// Emit the `val payload = ...` block that builds the outbound bytes.
 fn write_payload_build(out: &mut String, method: &Method, indent: &str) {
     if method.args.is_empty() {
         let _ = writeln!(out, "{indent}val payload = ByteArray(0)");
@@ -165,19 +139,12 @@ fn write_payload_build(out: &mut String, method: &Method, indent: &str) {
     let _ = writeln!(out, "{indent}val payload = payloadBuf.toByteArray()");
 }
 
-/// Emit the `return ...` line that decodes the response bytes. Never
-/// called for `Unit` returns — the caller emits a bare `_ = call(...)`
-/// instead so the response buffer stays unbound.
 fn write_return_decode(out: &mut String, ret: &TypeRef, indent: &str) {
     let _ = writeln!(out, "{indent}var cursor = 0");
     write_read_expr(out, indent, ret, "result");
     let _ = writeln!(out, "{indent}return result");
 }
 
-/// Emit the body of a `.map { bytes -> ... }` transform that decodes a
-/// single stream element. Ends with the decoded value as the block's
-/// implicit return — never uses a bare `return`, which would exit the
-/// enclosing method instead of the lambda.
 fn write_stream_map_body(out: &mut String, ret: &TypeRef, indent: &str) {
     if matches!(ret, TypeRef::Unit) {
         let _ = writeln!(out, "{indent}Unit");
@@ -229,8 +196,6 @@ fn domain_error(contract: &Contract) -> Option<String> {
         .find_map(|m| m.error.as_ref().map(TypeRef::to_kotlin))
 }
 
-/// Mirror of [`crate::kotlin_host::write_read_expr`], but writing the
-/// binding under the client-side `bytes` buffer / `cursor` variable.
 fn write_read_expr(out: &mut String, indent: &str, ty: &TypeRef, binding: &str) {
     if let TypeRef::Named(name) = ty {
         let _ = writeln!(
@@ -369,3 +334,4 @@ const fn kt_int_cast(ty: &TypeRef) -> &'static str {
         _ => "",
     }
 }
+

@@ -1,24 +1,3 @@
-//! Full-multiplatform istmo demo — one Rust crate driving desktop, Android
-//! and iOS clients of the `istmo.data_store` plugin.
-//!
-//! Layout:
-//!
-//! * `app` — shared eframe UI + `DemoApp` state.
-//! * `emulator` — desktop-only Rust-side "native emulator" that stands in
-//!   for the Kotlin / Swift dispatcher when the demo runs on a laptop.
-//! * `main.rs` (bin) — desktop entrypoint that boots the emulator and
-//!   `DataStoreClient::from_runtime_with(...)`.
-//! * `lib.rs` (this file) — mobile transport wiring. `istmo::runtime!`
-//!   installs the JNI trampolines on Android and the `@_cdecl` symbols on
-//!   iOS; `#[istmo::mobile_app]` emits `android_main` / `istmo_run_ios`
-//!   entry points that boot the shared `DemoApp` after
-//!   `DataStoreClient::acquire_with(config)` resolves against the
-//!   process-global `Runtime`.
-//!
-//! Zero `#[cfg(target_os = ...)]` in `app`. The only per-platform code
-//! lives in `main.rs` (desktop-only boot) and the two branches below
-//! (`AndroidApp` handle threading on Android).
-
 pub mod app;
 
 #[cfg(not(any(
@@ -30,18 +9,12 @@ pub mod app;
 )))]
 pub mod emulator;
 
-// `DataStoreClient` is imported by `istmo::runtime!` below through the
-// `plugins:` list.
 use istmo_data_store::DataStoreClient;
 
 istmo::runtime!(
     plugins: [DataStoreClient],
 );
 
-/// Mobile entrypoint. `#[istmo::mobile_app]` re-exports this as
-/// `android_main` on Android and `istmo_run_ios` on the Apple mobile
-/// family; on desktop the attribute is a no-op and `main.rs` calls the
-/// shared app entry directly.
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -106,3 +79,4 @@ fn mobile_main() {
         log::error!("eframe exited with error: {err:?}");
     }
 }
+

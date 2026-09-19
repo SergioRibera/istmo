@@ -1,32 +1,20 @@
-//! Wire protocol: frame types, envelope and identifier newtypes.
+//! Wire protocol: [`Envelope`], [`Frame`], typed identifiers and the
+//! current [`PROTOCOL_VERSION`].
 //!
-//! The message model is a small fixed set of frames. Whether a specific
-//! logical operation is a request/response or a stream is a plugin-side
-//! contract, not a frame distinction: streams simply omit `Respond` and emit
-//! zero-or-more `Event` frames terminated by `StreamEnd`.
+//! Every message that crosses the FFI boundary is a bincode-encoded
+//! [`Envelope`] carrying a single [`Frame`]. Version mismatches are
+//! rejected at decode time by [`Envelope::from_wire_bytes`].
 
 use core::fmt;
 
 use bincode::{Decode, Encode};
 
-/// Current wire version of the envelope. Bumped on any breaking frame change.
+/// Current on-wire protocol version.
 ///
-/// Version 2 added [`Frame::EarlyEvent`] so early-event publication crosses
-/// the same `dispatch_inbound` path as every other inbound frame. Bincode 2
-/// encodes enum discriminants as varint indexes in declaration order —
-/// adding a new terminal variant is a wire-breaking change for readers
-/// that don't know the discriminant.
-///
-/// Version 3 added [`Frame::ReleaseNativeHandle`] so the Rust side can tell
-/// the native side that a [`crate::native_handle::NativeHandle`] is no longer
-/// referenced and its backing object can be freed. Outbound-only, matching
-/// the Rust-owned-lifetime model.
-///
-/// Version 4 added [`Frame::Notify`] — fire-and-forget one-way call. No
-/// `call_id`, no [`Frame::Respond`] expected. Used for releasing
-/// service-side resources (wakelocks, foreground-notification handles)
-/// from `Drop` paths that must not block on a reply. Native side treats
-/// unknown methods as no-ops for symmetry with `ReleaseNativeHandle`.
+/// Peers exchanging frames encoded with a different version are rejected
+/// at decode time with [`IstmoError::ProtocolVersionMismatch`](crate::error::IstmoError::ProtocolVersionMismatch).
+/// Bumped whenever a new [`Frame`] variant is introduced or an existing
+/// one changes shape.
 pub const PROTOCOL_VERSION: u16 = 4;
 
 macro_rules! id_newtype {
@@ -37,11 +25,13 @@ macro_rules! id_newtype {
         pub struct $name(pub u64);
 
         impl $name {
+            /// Wrap a raw `u64` in this typed identifier.
             #[must_use]
             pub const fn new(value: u64) -> Self {
                 Self(value)
             }
 
+            /// Return the underlying `u64`.
             #[must_use]
             pub const fn get(self) -> u64 {
                 self.0
@@ -69,68 +59,89 @@ macro_rules! id_newtype {
 }
 
 id_newtype!(
-    /// Identifies a single request/response exchange, or the initiator of a stream.
+    /// Identifier for a single request/response pair.
+    ///
+    /// Allocated by the caller side of the runtime and echoed in the
+    /// matching [`Frame::Respond`].
     CallId,
     "call"
 );
 id_newtype!(
-    /// Identifies an ongoing stream. Shares its numeric value with the [`CallId`]
-    /// that opened it, but is a distinct type to prevent misrouting between the
-    /// two routing tables.
+    /// Identifier for an active stream of events.
+    ///
+    /// Allocated when a stream-returning method is invoked; carried on
+    /// every [`Frame::Event`] and closed by [`Frame::StreamEnd`].
     StreamId,
     "stream"
 );
 id_newtype!(
-    /// Identifies a plugin instance created via `CreateInstance`.
+    /// Identifier for a stateful plugin instance created via
+    /// [`Frame::CreateInstance`].
+    ///
+    /// Passed on subsequent [`Frame::Call`] frames to route methods to
+    /// the correct instance. Released by [`Frame::DestroyInstance`].
     InstanceId,
     "instance"
 );
 id_newtype!(
-    /// Wire id of a native-side object referenced from Rust through a
-    /// [`crate::native_handle::NativeHandle`].
+    /// Wire representation of a [`NativeHandle`](crate::native_handle::NativeHandle).
     ///
-    /// The native side owns the underlying object; Rust holds only the id
-    /// plus a compile-time phantom type parameter.
+    /// Opaque `u64` referring to a platform-owned object (for example a
+    /// Kotlin `Credential`). Released by [`Frame::ReleaseNativeHandle`]
+    /// when the corresponding `NativeHandle` is dropped on the Rust side.
     NativeHandleId,
     "native"
 );
 
-/// Reason attached to a [`Frame::StreamEnd`].
+/// Reason a stream terminated.
+///
+/// Carried by [`Frame::StreamEnd`] to distinguish clean completion from
+/// caller-initiated cancellation and provider-side failure.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum StreamEndReason {
-    /// The stream ended normally.
+    /// Producer finished normally.
     Complete,
-    /// The stream was cancelled from the Rust side.
+    /// Consumer cancelled the subscription (dropped its handle or
+    /// signalled a [`CancelToken`](crate::dispatch::CancelToken)).
     Cancelled,
-    /// The producer terminated the stream with a domain error payload.
+    /// Producer errored out. The wrapped bytes are the bincode-encoded
+    /// domain error emitted by the plugin.
     Error(Vec<u8>),
 }
 
-/// Retention shape requested for an early-event publication.
+/// Retention policy for [`Frame::EarlyEvent`].
 ///
-/// Mirrors the two [`crate::early_events`] primitives:
-///
-/// * [`Self::Latest`] targets `LatestValueSlot` — value semantics; late
-///   subscribers observe the last-published bytes.
-/// * [`Self::Queue { capacity }`] targets `PreMainQueue` — bounded FIFO
-///   buffered until a subscriber attaches. Capacity is honoured only on
-///   the first publication for a given channel (matches
-///   `EarlyEventStore::queue`).
+/// Controls how the runtime buffers events published before their first
+/// subscriber attaches.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum EarlyEventKind {
+    /// Keep only the most recent value. Late subscribers see the latest
+    /// value first, then live updates.
     Latest,
-    Queue { capacity: u32 },
+    /// Keep a bounded FIFO. Oldest entries are dropped once `capacity`
+    /// is exceeded; the queue drains into the first subscriber.
+    Queue {
+        /// Maximum entries retained before oldest is dropped.
+        capacity: u32,
+    },
 }
 
-/// Versioned envelope wrapping a single [`Frame`].
+/// Versioned wrapper around a [`Frame`] as it appears on the wire.
+///
+/// Encoded and decoded via [`Envelope::to_wire_bytes`] /
+/// [`Envelope::from_wire_bytes`]. The `version` field is compared
+/// against [`PROTOCOL_VERSION`] on decode and mismatches produce
+/// [`IstmoError::ProtocolVersionMismatch`](crate::error::IstmoError::ProtocolVersionMismatch).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Envelope {
+    /// Protocol version this envelope was encoded against.
     pub version: u16,
+    /// The frame carried inside the envelope.
     pub frame: Frame,
 }
 
 impl Envelope {
-    /// Wraps a frame with the current [`PROTOCOL_VERSION`].
+    /// Build a new envelope stamped with the current [`PROTOCOL_VERSION`].
     #[must_use]
     pub const fn new(frame: Frame) -> Self {
         Self {
@@ -139,21 +150,26 @@ impl Envelope {
         }
     }
 
-    /// Bincode-encode this envelope into the exact byte shape the wire
-    /// pump ships. Convenience wrapper over
-    /// [`crate::codec::encode`] so cross-process bridges do not need
-    /// to reach into the codec module directly.
+    /// Bincode-encode this envelope to a byte buffer suitable for
+    /// hopping across FFI or a process boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodecError`](crate::error::CodecError) if bincode
+    /// serialization fails.
     pub fn to_wire_bytes(&self) -> Result<Vec<u8>, crate::error::CodecError> {
         crate::codec::encode(self)
     }
 
-    /// Reverse of [`Self::to_wire_bytes`]: decode a bincoded envelope
-    /// and verify its version matches [`PROTOCOL_VERSION`].
+    /// Decode an envelope from its wire representation.
     ///
     /// # Errors
-    /// Returns [`crate::error::IstmoError::ProtocolVersionMismatch`] when
-    /// the decoded envelope declares a different version; codec errors
-    /// bubble up untouched.
+    ///
+    /// - [`IstmoError::Codec`](crate::error::IstmoError::Codec) if the
+    ///   bytes cannot be decoded.
+    /// - [`IstmoError::ProtocolVersionMismatch`](crate::error::IstmoError::ProtocolVersionMismatch)
+    ///   if the envelope was encoded against a different version of the
+    ///   protocol.
     pub fn from_wire_bytes(bytes: &[u8]) -> Result<Self, crate::error::IstmoError> {
         let (envelope, _) = crate::codec::decode::<Self>(bytes)?;
         if envelope.version != PROTOCOL_VERSION {
@@ -166,66 +182,102 @@ impl Envelope {
     }
 }
 
-/// The complete set of wire frames exchanged between Rust and the native side.
+/// A single message crossing the wire.
+///
+/// Payload bytes are always bincode-encoded plugin-specific data; the
+/// runtime never inspects them. Every variant is a distinct point in
+/// the call / event / lifecycle lifecycle of a plugin surface.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum Frame {
-    /// Invoke a plugin method. Depending on the plugin contract this may be
-    /// followed by a single `Respond` or a series of `Event` frames ending in
-    /// a `StreamEnd`.
+    /// Request half of a unary or stream-returning plugin method.
     Call {
+        /// Unique id assigned by the caller runtime.
         call_id: CallId,
+        /// Plugin the call is addressed to.
         plugin_id: String,
+        /// Instance receiving the call, or `None` for stateless plugins.
         instance_id: Option<InstanceId>,
+        /// Method name as declared on the plugin trait.
         method: String,
+        /// Bincode-encoded arguments tuple.
         payload: Vec<u8>,
     },
-    /// Reply to a `Call`, either with an encoded result or an encoded error.
+
+    /// Response half of a [`Frame::Call`].
     Respond {
+        /// Echoes the originating [`CallId`].
         call_id: CallId,
+        /// `Ok(bytes)` carries a bincode-encoded return value.
+        /// `Err(bytes)` carries a bincode-encoded domain error.
         result: Result<Vec<u8>, Vec<u8>>,
     },
-    /// Cancel an in-flight call or stream identified by `call_id`.
-    Cancel { call_id: CallId },
-    /// One element emitted on an open stream.
+
+    /// Ask the host to cooperatively cancel an in-flight call.
+    Cancel {
+        /// Call to cancel.
+        call_id: CallId,
+    },
+
+    /// One item on a live stream.
     Event {
+        /// Stream this event belongs to.
         stream_id: StreamId,
+        /// Bincode-encoded item.
         payload: Vec<u8>,
     },
-    /// Marks the end of a stream. No further `Event`s for `stream_id` will arrive.
+
+    /// Terminate a stream.
     StreamEnd {
+        /// Stream being closed.
         stream_id: StreamId,
+        /// Why the stream ended.
         reason: StreamEndReason,
     },
-    /// Ask the native factory to create a new plugin instance.
+
+    /// Construct a stateful plugin instance.
     CreateInstance {
+        /// Call id used to receive the resulting [`InstanceId`].
         call_id: CallId,
+        /// Plugin whose constructor is being invoked.
         plugin_id: String,
+        /// Bincode-encoded constructor arguments.
         payload: Vec<u8>,
     },
-    /// Tear down a previously created instance. Fire-and-forget.
-    DestroyInstance { instance_id: InstanceId },
-    /// Publish a payload to an early-event channel. Fire-and-forget from
-    /// the native side; the runtime routes it into the
-    /// [`crate::early_events::EarlyEventStore`] instead of into the
-    /// per-call routing tables.
+
+    /// Release a previously created plugin instance.
+    DestroyInstance {
+        /// Instance to release.
+        instance_id: InstanceId,
+    },
+
+    /// Fire-and-forget publish on an early-event channel.
+    ///
+    /// Buffered by the runtime until a subscriber attaches; the retention
+    /// policy is controlled by [`EarlyEventKind`].
     EarlyEvent {
+        /// Channel name (typically the plugin id or a subchannel path).
         channel: String,
+        /// Retention policy for the value.
         kind: EarlyEventKind,
+        /// Bincode-encoded value.
         payload: Vec<u8>,
     },
-    /// Tell the native side to release the object backing
-    /// [`NativeHandleId`]. Outbound-only, fire-and-forget: the native side
-    /// must treat unknown ids as no-ops so a late release racing a shutdown
-    /// is harmless.
-    ReleaseNativeHandle { handle_id: NativeHandleId },
-    /// Fire-and-forget invocation. No `call_id`, no `Respond` expected —
-    /// the receiver dispatches like a Call and discards the outcome.
-    /// Used for `Drop`-time release paths and other one-way signals
-    /// where blocking on a reply is not acceptable.
+
+    /// Ask the peer to drop its ownership of a native handle.
+    ReleaseNativeHandle {
+        /// Handle id to release.
+        handle_id: NativeHandleId,
+    },
+
+    /// Fire-and-forget one-way call. No [`Frame::Respond`] is expected.
     Notify {
+        /// Target plugin.
         plugin_id: String,
+        /// Target instance, if any.
         instance_id: Option<InstanceId>,
+        /// Method name.
         method: String,
+        /// Bincode-encoded arguments tuple.
         payload: Vec<u8>,
     },
 }

@@ -1,21 +1,3 @@
-//! `#[istmo::worker]` attribute macro implementation.
-//!
-//! Emits three siblings per annotated trait:
-//!
-//! * the trait itself, with the `async fn run(...)` signature rewritten so
-//!   the returned future is `Send + '_`;
-//! * a `<Trait>WorkerAdapter<Impl>` struct implementing
-//!   [`istmo_core::Dispatch`] and [`istmo_core::Plugin`], keyed by the
-//!   `name = "..."` argument (which doubles as `WorkManager`'s unique task
-//!   id on the wire);
-//! * an inherent `new(inner)` constructor.
-//!
-//! Wire contract: the adapter answers the method name `"run"` with an
-//! argument tuple `(String, String, Vec<u8>)` = `(task_id, unique_name,
-//! input_bytes)`, and responds with the bincode-encoded `TaskOutcome`
-//! returned by the impl (domain errors surface via
-//! [`istmo_core::Outcome::DomainError`] as usual).
-
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
@@ -42,7 +24,6 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let plugins = &args.plugins_path;
     let adapter_ident = format_ident!("{}WorkerAdapter", trait_ident);
 
-    // Bind the outcome-encode block once so the two arms below stay short.
     let encode_outcome = quote! {
         {
             let bytes = #core::codec::encode(&outcome)
@@ -308,3 +289,4 @@ fn expect_lit_str(expr: &Expr) -> syn::Result<LitStr> {
         _ => Err(syn::Error::new_spanned(expr, "expected string literal")),
     }
 }
+

@@ -1,17 +1,14 @@
-//! Public error type for the Android transport layer.
-
 use core::fmt;
 
-/// Errors surfaced from `istmo-android`.
 #[derive(Debug)]
 pub enum AndroidRuntimeError {
-    /// `nativeStart` was called more than once.
+
     AlreadyStarted,
-    /// `nativeSubmitFrame` / `nativeShutdown` fired before `nativeStart`.
+
     NotStarted,
-    /// A JNI call (attach thread, allocate ref, look up method) failed.
+
     Jni(jni::errors::Error),
-    /// The underlying core runtime returned an error.
+
     Core(istmo_core::IstmoError),
 }
 
@@ -47,3 +44,4 @@ impl From<jni::errors::Error> for AndroidRuntimeError {
         Self::Jni(value)
     }
 }
+

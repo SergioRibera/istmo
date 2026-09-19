@@ -1,21 +1,3 @@
-//! egui view + platform entry point for the full-Rust demo.
-//!
-//! Layout:
-//!
-//! * [`main`] — the app entry point, marked with `#[istmo::mobile_app]`.
-//!   The macro emits `android_main` (Android) and `istmo_run_ios` (iOS
-//!   family) trampolines that call this function. The body sets up the
-//!   eframe boot and stays symmetric across targets.
-//! * [`DemoApp`] — `eframe::App` implementation. Sign-in / sign-out
-//!   button, account card with the fields Google returns, one worker
-//!   thread (`std::thread::spawn`) per action.
-//!
-//! The native side (Kotlin `IstmoRuntime.start()` / Swift
-//! `IstmoRuntime.shared.start()`) is expected to boot the transport pump
-//! before firing the Rust entry point — the runtime is a `OnceLock` so
-//! second inits are a soft error, and having the native shell start it
-//! first means the pump is draining before `main` runs.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -40,36 +22,17 @@ use istmo_google_sign_in::{
     OwnedSignInAccount, SignInClient, SignInConfig, SignInError, SignInMode,
 };
 
-/// OAuth server client id for the demo. Real apps embed the id issued by
-/// Google Cloud Console for the *backend* — the audience the id-token
-/// must match. Kept as a placeholder here; replace before shipping.
 const SERVER_CLIENT_ID: &str =
     "848096709714-9le17umoe085dtcmrout03qdbcp8cpi7.apps.googleusercontent.com";
 
 const POST_NOTIFICATIONS: &str = "android.permission.POST_NOTIFICATIONS";
 
-// AdMob app id (production) — the manifest metadata must match, and the
-// SDK crashes at init if it does not.
 const ADMOB_APP_ID: &str = "ca-app-pub-1842517361828817~4357161875";
 
-// Ad units use Google's canonical *test* ids for now. Freshly-registered
-// production units routinely return `no fill` for hours or days while the
-// AdMob backend warms up, and mixing a test unit id with a production app
-// id is documented as supported. When the prod units start filling,
-// swap in:
-//   BANNER_UNIT:       "ca-app-pub-1842517361828817/1751908784"
-//   INTERSTITIAL_UNIT: "ca-app-pub-1842517361828817/4741139402"
 const INTERSTITIAL_UNIT: &str = "ca-app-pub-3940256099942544/1033173712";
 const BANNER_UNIT: &str = "ca-app-pub-3940256099942544/6300978111";
 const REWARDED_UNIT: &str = "ca-app-pub-3940256099942544/5224354917";
 
-/// App entry point. `#[istmo::mobile_app]` emits the target-specific
-/// trampoline symbols (`android_main` on Android, `istmo_run_ios` on iOS
-/// family) that call this function after the transport pump has started.
-///
-/// The body wires eframe boot; retrieving the `AndroidApp` handle on
-/// Android goes through `istmo::mobile::android_app()` — the macro
-/// stored it before invoking us.
 #[istmo::mobile_app]
 pub(crate) fn main() {
     #[cfg(target_os = "android")]
@@ -78,9 +41,6 @@ pub(crate) fn main() {
     );
     log::info!("rust-mobile-demo entry point running");
 
-    // eframe 0.29 expects a `Box<dyn FnOnce(&mut EventLoopBuilder<UserEvent>)>`
-    // — no `Send` bound. Match its shape exactly or the compile fails
-    // with `expected trait FnOnce(...), found FnOnce(...) + Send`.
     #[cfg(target_os = "android")]
     let event_loop_builder: Option<
         Box<dyn FnOnce(&mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>)>,
@@ -111,10 +71,6 @@ pub(crate) fn main() {
     }
 }
 
-/// UI-facing projection of `OwnedSignInAccount`. The Rust-side handle
-/// (`NativeHandle<Credential>`) is intentionally dropped once we build
-/// this — the native side keeps the credential registered under the
-/// original id until the next `sign_out`.
 #[derive(Debug, Clone)]
 struct AccountView {
     id: String,
@@ -127,8 +83,7 @@ struct AccountView {
 
 impl From<&OwnedSignInAccount> for AccountView {
     fn from(a: &OwnedSignInAccount) -> Self {
-        // Trim the JWT to a preview — the full token can be thousands of
-        // characters and belongs in a network call, not on screen.
+
         let id_token_preview = if a.id_token.len() > 42 {
             format!("{}…", &a.id_token[..42])
         } else {
@@ -153,9 +108,6 @@ enum Status {
     Err(String),
 }
 
-/// Ephemeral ad message shown below the ad buttons — mirrors the sign-in
-/// `Status` but scoped to ad actions so a rewarded-completion label
-/// doesn't clobber the sign-in card headline.
 #[derive(Debug, Clone, Default)]
 enum AdStatus {
     #[default]
@@ -165,33 +117,18 @@ enum AdStatus {
     Err(String),
 }
 
-/// Root eframe app state. Cheap to construct — every stateful client
-/// is `Option`-typed and lazily populated in `update()` so nothing
-/// touches the runtime before its pump has drained.
 struct DemoApp {
     status: Arc<Mutex<Status>>,
     ad_status: Arc<Mutex<AdStatus>>,
-    /// Cached `AdMobClient`, shared across every `BannerSlot`. `None`
-    /// until the first frame kicks off `acquire_with`; the mutex is
-    /// held only briefly so per-frame reads are cheap.
+
     admob: Arc<Mutex<Option<Arc<AdMobClient>>>>,
-    /// Latch preventing multiple concurrent `AdMobClient::acquire_with`
-    /// calls. First frame flips it to `true` and spawns the acquire;
-    /// subsequent frames observe `true` and skip.
+
     admob_acquiring: Arc<AtomicBool>,
-    /// One slot per in-feed banner placement. Grown lazily as the feed
-    /// scrolls into new positions. Vec index matches the deterministic
-    /// slot index computed from the item's position.
+
     banners: Vec<BannerSlot>,
-    /// Cached safe-area client. `None` until the runtime has been
-    /// initialised (first `update` call) so we never touch the runtime
-    /// from `DemoApp::new` — eframe constructs `DemoApp` before the
-    /// runtime pump has finished starting on some device timings.
+
     safe_area: Option<SafeArea>,
-    /// Rust-side publisher for `istmo.safe_area`. Ticked each frame
-    /// from `App::update`; iOS reads `UIWindow.safeAreaInsets` via
-    /// objc2, Android reads `WindowInsetsCompat` via JNI — same wire
-    /// schema on both.
+
     #[cfg(any(
         target_os = "android",
         target_os = "ios",
@@ -199,8 +136,7 @@ struct DemoApp {
         target_os = "visionos",
     ))]
     safe_area_publisher: Option<SafeAreaPublisher>,
-    /// Static feed content. Built once so scroll geometry stays stable
-    /// across frames.
+
     feed: Vec<FeedItem>,
 }
 
@@ -224,10 +160,6 @@ impl DemoApp {
         }
     }
 
-    /// Return a clone of the cached `AdMobClient`, kicking off the
-    /// `acquire_with` handshake in a worker if not started yet. First
-    /// few frames after sign-in return `None`; once the CreateInstance
-    /// round-trip lands, every subsequent frame gets the client.
     fn ensure_admob(&self, ctx: &egui::Context) -> Option<Arc<AdMobClient>> {
         {
             let guard = self.admob.lock().expect("admob mutex");
@@ -235,8 +167,7 @@ impl DemoApp {
                 return Some(c.clone());
             }
         }
-        // Flip the acquire latch; if it was already true, someone else
-        // is racing us. Otherwise spawn one attempt.
+
         if self
             .admob_acquiring
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -261,7 +192,7 @@ impl DemoApp {
                 }
                 Err(err) => {
                     log::warn!("admob acquire failed: {err}");
-                    // Release the latch so a later frame may retry.
+
                     latch.store(false, Ordering::SeqCst);
                 }
             }
@@ -269,11 +200,6 @@ impl DemoApp {
         None
     }
 
-    /// Lazily attach the safe-area client and repaint whenever an inset
-    /// snapshot arrives. Attaching a stream subscription per frame is a
-    /// no-op after the first successful acquire; the stream lives inside
-    /// a worker thread that pings `ctx.request_repaint()` on every update
-    /// so keyboard show/hide instantly reflows the UI.
     fn ensure_safe_area(&mut self, ctx: &egui::Context) -> Option<SafeAreaInsets> {
         if self.safe_area.is_none() {
             match SafeArea::acquire() {
@@ -281,8 +207,7 @@ impl DemoApp {
                     let stream = sa.stream();
                     let ctx_clone = ctx.clone();
                     std::thread::spawn(move || {
-                        // Pump every update as a repaint. A closed
-                        // channel returns Err — thread exits cleanly.
+
                         while let Ok(_insets) = stream.recv() {
                             ctx_clone.request_repaint();
                         }
@@ -381,19 +306,11 @@ impl DemoApp {
     }
 }
 
-/// Fallback padding used before the platform has posted its first
-/// safe-area snapshot. Conservative values so nothing renders under the
-/// status bar in the frames between eframe boot and the first
-/// `WindowInsets` callback firing.
 const FALLBACK_TOP_INSET_PT: f32 = 24.0;
 const FALLBACK_BOTTOM_INSET_PT: f32 = 0.0;
 
-/// Horizontal padding reserved on both sides of the content column so
-/// cards do not clip against the left / right edges of the screen.
 const HORIZONTAL_INSET: f32 = 12.0;
 
-/// Convert the platform snapshot into an `egui::Margin`, or synthesise a
-/// fallback when the plugin has not published anything yet.
 fn safe_area_margin(insets: Option<SafeAreaInsets>) -> egui::Margin {
     let padding: EdgeInsets = insets
         .map(SafeAreaInsets::view_padding)
@@ -413,13 +330,7 @@ fn safe_area_margin(insets: Option<SafeAreaInsets>) -> egui::Margin {
 
 impl eframe::App for DemoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Pump the Rust-side safe-area publisher once per frame so
-        // `SafeArea::current()` sees the latest platform insets. Both
-        // Android (JNI → `WindowInsetsCompat`) and iOS (objc2 →
-        // `UIWindow.safeAreaInsets`) land here — the Kotlin
-        // `installSafeAreaListener` path is gone. Lazy-install because
-        // eframe constructs `DemoApp` before the runtime pump is
-        // guaranteed drained.
+
         #[cfg(any(
             target_os = "android",
             target_os = "ios",
@@ -438,8 +349,7 @@ impl eframe::App for DemoApp {
                 publisher.tick();
             }
         }
-        // Snapshot state under the mutex, then render — never hold the
-        // lock across egui calls.
+
         let snapshot = self.status.lock().expect("status mutex").clone();
         let insets = self.ensure_safe_area(ctx);
         let safe = safe_area_margin(insets);
@@ -523,24 +433,15 @@ impl DemoApp {
     }
 
     fn render_signed_in(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, account: &AccountView) {
-        // Kick off admob acquire on first render; the client lands
-        // asynchronously and every slot picks it up on the next frame.
+
         let admob = self.ensure_admob(ctx);
 
-        // Header — account card, at top of scroll.
         card(ui, |ui| render_account(ui, account));
         ui.add_space(12.0);
 
-        // Ads actions (interstitial / rewarded). Banner button gone —
-        // banners are now automatic, embedded in the feed below.
         self.render_ads_actions_card(ui, ctx);
         ui.add_space(12.0);
 
-        // Feed of random content with a banner every `BANNER_EVERY`
-        // items. Each banner is a `BannerSlot` bound to a specific
-        // position; as the user scrolls, the slot syncs its native
-        // `AdView` to the rectangle egui allocates, and hides the
-        // banner when scrolled off-screen.
         const BANNER_EVERY: usize = 5;
         let px = ctx.pixels_per_point();
         let clip = ui.clip_rect();
@@ -633,10 +534,6 @@ impl DemoApp {
         });
     }
 
-    /// Reserve a rect in the feed for banner `banner_idx` and sync the
-    /// matching [`BannerSlot`] to it. On scroll, the same allocated
-    /// rect moves; on scroll-out, the intersection with `clip` empties
-    /// and the slot receives [`SlotTarget::Hide`].
     fn render_banner_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -645,9 +542,7 @@ impl DemoApp {
         clip: egui::Rect,
         px: f32,
     ) {
-        // Reserve a fixed-height rectangle regardless of ad state so
-        // the feed's scroll geometry does not jitter when banners load
-        // asynchronously.
+
         let width = ui.available_width();
         let size = egui::vec2(width, 60.0);
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -739,9 +634,6 @@ struct FeedItem {
     body: String,
 }
 
-/// Deterministic feed content — same set every run, no rng. Good
-/// enough to prove the banner slot layout without shipping a
-/// content-generation library in a demo.
 fn build_feed(count: usize) -> Vec<FeedItem> {
     const AUTHORS: [&str; 8] = [
         "@sonia", "@mateo", "@brian", "@ana", "@leo", "@nina", "@omar", "@zoe",
@@ -776,11 +668,6 @@ fn build_feed(count: usize) -> Vec<FeedItem> {
         .collect()
 }
 
-/// Draw `contents` inside a rounded card that fills the caller's
-/// available width without spilling over. The trick is
-/// `allocate_ui_with_layout` — it reserves the exact caller width for
-/// the card, so `Frame::group` renders bounded, and the inner Ui the
-/// closure receives is naturally clipped to `outer - 2*inner_margin`.
 fn card(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
     let width = ui.available_width();
     ui.allocate_ui_with_layout(
@@ -796,19 +683,14 @@ fn card(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn field(ui: &mut egui::Ui, key: &str, value: &str) {
-    // Fixed-width key column so the value's truncation budget is
-    // stable — otherwise `ui.horizontal` lays them out greedily and
-    // egui's truncate math misbehaves on the first frame.
+
     const KEY_COL_WIDTH: f32 = 78.0;
     ui.horizontal(|ui| {
         ui.add_sized(
             egui::vec2(KEY_COL_WIDTH, 0.0),
             egui::Label::new(egui::RichText::new(format!("{key}:")).strong().monospace()),
         );
-        // Truncate over wrap for long values (URLs, JWTs). Wrapping an
-        // id_token turns the card into ten lines of ugliness; a trailing
-        // ellipsis reads as "there is more, tap to copy in a future
-        // revision".
+
         ui.add(egui::Label::new(egui::RichText::new(value).monospace()).truncate());
     });
     ui.add_space(2.0);
@@ -973,10 +855,6 @@ async fn run_sign_out_flow() -> Result<(), String> {
     Ok(())
 }
 
-/// Turn an `IstmoError::PluginError { bytes }` from the sign-in plugin into
-/// a human-readable string. Every other `IstmoError` variant falls back to
-/// its `Display` impl. Transport / infra errors are already actionable
-/// without extra decoding.
 fn render_sign_in_error(err: &IstmoError) -> String {
     if let IstmoError::PluginError { bytes } = err {
         return match istmo::codec::decode::<SignInError>(bytes) {
@@ -1018,3 +896,4 @@ fn welcome_notification(account: &OwnedSignInAccount) -> NotificationRequest {
         tag: Some("sign-in-welcome".to_owned()),
     }
 }
+

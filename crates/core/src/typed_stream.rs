@@ -1,9 +1,8 @@
-//! Type-aware wrapper over the raw byte-oriented [`StreamHandle`].
+//! Typed adapter around [`StreamHandle`].
 //!
-//! Generated plugin glue returns `TypedStream<Item, Err>` so the plugin
-//! author never touches raw bytes. `next` decodes both the per-event payload
-//! (`Item`) and the terminal error variant (`Err`, if present) using the
-//! wire codec.
+//! [`TypedStream`] decodes each raw bincode payload into a strongly
+//! typed [`StreamItem`], so consumers work with domain values instead of
+//! byte slices.
 
 use std::marker::PhantomData;
 
@@ -14,21 +13,26 @@ use crate::protocol::{StreamEndReason, StreamId};
 use crate::routing::StreamMessage;
 use crate::runtime::StreamHandle;
 
-/// One decoded observation on a stream.
+/// One decoded event delivered by a [`TypedStream`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum StreamItem<T, E> {
-    /// A regular event.
+    /// A live event carrying a decoded value.
     Event(T),
-    /// The stream ended normally.
+    /// The producer signalled clean end-of-stream.
     Completed,
-    /// The stream ended because it was cancelled from the Rust side.
+    /// The consumer or a wrapping cancellation signal cancelled the
+    /// stream.
     Cancelled,
-    /// The stream ended with a domain error.
+    /// The producer errored out. The decoded domain error is attached.
     Failed(E),
 }
 
-/// Typed wrapper over [`StreamHandle`]. `Item` is the per-event value, `Err`
-/// is the domain error variant emitted by [`StreamEndReason::Error`].
+/// Typed wrapper around a raw [`StreamHandle`].
+///
+/// Each item and terminal error are decoded from bincode bytes into the
+/// caller-declared types. The three receive shapes ([`recv`](Self::recv),
+/// [`recv_async`](Self::recv_async), [`try_recv`](Self::try_recv)) mirror
+/// [`StreamHandle`]'s and behave identically otherwise.
 #[derive(Debug)]
 pub struct TypedStream<Item, Err = ()> {
     inner: StreamHandle,
@@ -40,7 +44,9 @@ where
     Item: Message,
     Err: Message,
 {
-    /// Wraps a raw stream handle.
+    /// Wrap an existing [`StreamHandle`] in a typed adapter.
+    ///
+    /// The item type parameters must match the plugin's declared shape.
     #[must_use]
     pub const fn new(inner: StreamHandle) -> Self {
         Self {
@@ -49,31 +55,40 @@ where
         }
     }
 
-    /// The id of the underlying stream.
+    /// [`StreamId`] of the wrapped handle.
     #[must_use]
     pub const fn stream_id(&self) -> StreamId {
         self.inner.stream_id()
     }
 
-    /// Blocks until the next observation arrives.
+    /// Block the current thread for the next decoded [`StreamItem`].
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::ChannelClosed`] on channel disconnect, or
+    /// [`IstmoError::Codec`] if the payload cannot be decoded against
+    /// `Item` / `Err`.
     pub fn recv(&self) -> Result<StreamItem<Item, Err>, IstmoError> {
         let msg = self.inner.recv()?;
         decode_message(msg)
     }
 
-    /// Awaits the next observation.
+    /// Async variant of [`recv`](Self::recv).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`recv`](Self::recv).
     pub async fn recv_async(&self) -> Result<StreamItem<Item, Err>, IstmoError> {
         let msg = self.inner.recv_async().await?;
         decode_message(msg)
     }
 
-    /// Non-blocking read. Returns `None` when there is nothing queued.
+    /// Non-blocking peek. Returns `None` if no item is buffered.
     pub fn try_recv(&self) -> Option<Result<StreamItem<Item, Err>, IstmoError>> {
         self.inner.try_recv().map(decode_message)
     }
 
-    /// Unwraps back into the raw handle. Useful for tests and for glue
-    /// that needs to observe raw bytes.
+    /// Unwrap the underlying raw [`StreamHandle`].
     #[must_use]
     pub fn into_inner(self) -> StreamHandle {
         self.inner

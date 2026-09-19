@@ -1,5 +1,3 @@
-//! Main-thread dispatcher implementations.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -29,6 +27,7 @@ fn mock_main_thread_defers_until_drain() {
     assert_eq!(counter.load(Ordering::Relaxed), 0);
     assert_eq!(dispatcher.drain(), 3);
     assert_eq!(counter.load(Ordering::Relaxed), 3);
-    // Nothing left to drain on the next call.
+
     assert_eq!(dispatcher.drain(), 0);
 }
+

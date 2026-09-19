@@ -10,18 +10,6 @@ import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/**
- * Kotlin backend for the `istmo.activity_results` plugin.
- *
- * The demo implements the ok-path for `VIEW`-style intents by handing the
- * intent to `startActivity` and immediately reporting `ActivityOutcome::Ok`.
- * A production backend would use `registerForActivityResult` to wait for the
- * real result; that's left as an exercise so the demo stays focused on the
- * wire round-trip.
- *
- * Wire types decoded / encoded here match the Rust `IntentRequest`,
- * `ActivityResult`, `ActivityOutcome`, `ExtraValue` and `ActivityLaunchError`.
- */
 class ActivityResultsImpl : PluginHandler {
 
     private var host: ActivityResultsHost? = null
@@ -97,8 +85,6 @@ interface ActivityResultsHost {
     val activity: android.app.Activity
 }
 
-// ---- Value mirrors of the Rust plugin types ----
-
 data class IntentRequestValue(
     val action: String,
     val uri: String?,
@@ -132,8 +118,6 @@ sealed class LaunchErrorValue {
     object NotAuthorized : LaunchErrorValue()
     data class Platform(val message: String) : LaunchErrorValue()
 }
-
-// ---- Codecs matching the bincode wire format ----
 
 private object IntentRequestCodec {
     fun read(payload: ByteArray, offset: Int): Bincode.Decoded<IntentRequestValue> {
@@ -227,3 +211,4 @@ private object ExtraValueCodec {
         }
     }
 }
+

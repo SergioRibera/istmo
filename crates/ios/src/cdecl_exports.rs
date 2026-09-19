@@ -1,8 +1,3 @@
-//! `#[unsafe(no_mangle)] pub extern "C"` symbols loaded by Swift.
-//!
-//! Naming: every symbol carries an `istmo_ios_` prefix so `@_silgen_name`
-//! declarations on the Swift side stay unambiguous under LTO.
-
 #![allow(unreachable_pub)]
 
 use std::os::raw::c_void;
@@ -18,14 +13,9 @@ use crate::error::IosRuntimeError;
 use crate::pump;
 use crate::state::{self, RuntimeState};
 
-// The `istmo::runtime!` macro emits `__istmo_configure_runtime` for every
-// cdylib. Same rationale as android: a missing symbol at link time is the
-// intended signal that the user forgot the macro.
 unsafe extern "Rust" {
     safe fn __istmo_configure_runtime(init: RuntimeInit) -> RuntimeInit;
 }
-
-// -- Callback function pointer types (Rust → Swift) ------------------------
 
 pub type OnCallFn = unsafe extern "C" fn(
     ctx: *mut c_void,
@@ -84,12 +74,6 @@ pub type OnNotifyFn = unsafe extern "C" fn(
     payload_len: usize,
 );
 
-/// C ABI callback table Swift hands over at [`istmo_ios_start`].
-///
-/// Every field is required — passing a null function pointer is UB and the
-/// pump will crash on the first matching outbound frame. `ctx` is passed
-/// verbatim to every callback and is typically the pointer to a Swift class
-/// instance (`Unmanaged.passUnretained(obj).toOpaque()`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct IstmoIosCallbacks {
@@ -111,9 +95,6 @@ pub struct IstmoIosCallbacks {
 unsafe impl Send for IstmoIosCallbacks {}
 unsafe impl Sync for IstmoIosCallbacks {}
 
-// -- Lifecycle -------------------------------------------------------------
-
-/// Swift: `@_silgen_name("istmo_ios_start") func istmoIosStart(callbacks: IstmoIosCallbacks) -> Bool`.
 #[unsafe(no_mangle)]
 pub extern "C" fn istmo_ios_start(callbacks: IstmoIosCallbacks) -> bool {
     match start(callbacks) {
@@ -136,7 +117,6 @@ fn start(callbacks: IstmoIosCallbacks) -> Result<(), IosRuntimeError> {
     Ok(())
 }
 
-/// Swift: `@_silgen_name("istmo_ios_shutdown") func istmoIosShutdown()`.
 #[unsafe(no_mangle)]
 pub extern "C" fn istmo_ios_shutdown() {
     if let Err(err) = shutdown() {
@@ -160,13 +140,6 @@ fn shutdown() -> Result<(), IosRuntimeError> {
     Ok(())
 }
 
-// -- Inbound submissions (Swift → Rust) ------------------------------------
-
-/// Swift: `istmo_ios_submit_response(callId, ok, payload, len)`.
-///
-/// # Safety
-/// `payload` must point to at least `payload_len` bytes of readable memory or
-/// be null when `payload_len == 0`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn istmo_ios_submit_response(
     call_id: u64,
@@ -183,7 +156,6 @@ pub unsafe extern "C" fn istmo_ios_submit_response(
     }));
 }
 
-/// Swift: `istmo_ios_submit_event(streamId, payload, len)`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn istmo_ios_submit_event(
     stream_id: u64,
@@ -197,9 +169,6 @@ pub unsafe extern "C" fn istmo_ios_submit_event(
     }));
 }
 
-/// Swift: `istmo_ios_submit_stream_end(streamId, reason, errPayload, errLen)`.
-///
-/// `reason` mapping: `0 = Complete`, `1 = Cancelled`, `2 = Error(payload)`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn istmo_ios_submit_stream_end(
     stream_id: u64,
@@ -222,11 +191,6 @@ pub unsafe extern "C" fn istmo_ios_submit_stream_end(
     }));
 }
 
-/// Symmetric counterpart of the outbound Call pump.
-///
-/// Swift: `istmo_ios_submit_call(callId, pluginId, len, instanceId, method,
-/// len, payload, len)`. Used to invoke a Rust-hosted plugin. `instance_id ==
-/// 0` encodes `None`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn istmo_ios_submit_call(
     call_id: u64,
@@ -256,13 +220,6 @@ pub unsafe extern "C" fn istmo_ios_submit_call(
     }
 }
 
-/// Swift: `istmo_ios_submit_notify(pluginId, len, instanceId, method, len,
-/// payload, len)`. Fire-and-forget counterpart of
-/// [`istmo_ios_submit_call`] — no reply expected.
-///
-/// # Safety
-/// Every pointer must reference at least the accompanying length of
-/// readable memory (or be null when the length is zero).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn istmo_ios_submit_notify(
     plugin_id_utf8: *const u8,
@@ -344,11 +301,6 @@ unsafe fn submit_call(
     Ok(())
 }
 
-/// Publishes a latest-value early event bypassing the frame protocol.
-///
-/// Swift: `istmo_ios_submit_early_latest(channelUtf8, channelLen, payload,
-/// len)`. Transitional shortcut matching the android sibling — see CLAUDE.md
-/// follow-up on migrating to a wire `Frame::EarlyEvent` variant.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn istmo_ios_submit_early_latest(
     channel_utf8: *const u8,
@@ -379,8 +331,6 @@ unsafe fn submit_early_latest(
     Ok(())
 }
 
-/// Swift: `istmo_ios_submit_early_queue(channelUtf8, channelLen, capacity,
-/// payload, len)`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn istmo_ios_submit_early_queue(
     channel_utf8: *const u8,
@@ -414,8 +364,6 @@ unsafe fn submit_early_queue(
     Ok(())
 }
 
-// -- Helpers ---------------------------------------------------------------
-
 fn dispatch_inbound(envelope: Envelope) {
     let runtime = match Runtime::global() {
         Ok(rt) => rt,
@@ -441,3 +389,4 @@ unsafe fn copy_utf8(ptr: *const u8, len: usize) -> Result<String, IosRuntimeErro
     let bytes = unsafe { copy_bytes(ptr, len) };
     String::from_utf8(bytes).map_err(|_| IosRuntimeError::InvalidUtf8)
 }
+

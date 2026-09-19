@@ -1,25 +1,3 @@
-//! `#[istmo::service]` attribute macro implementation.
-//!
-//! Expands a trait declaration with two async methods (`on_start` and
-//! `on_stop`) into three siblings:
-//!
-//! * the trait itself, with the `async fn` signatures rewritten to
-//!   `impl Future + Send + '_` so the adapter can spawn the future on an OS
-//!   thread;
-//! * a `<Trait>ServiceAdapter<Impl>` struct implementing
-//!   [`istmo_core::Dispatch`] and [`istmo_core::Plugin`], keyed by the
-//!   `name = "..."` argument;
-//! * inherent `new(inner)` constructor on the adapter.
-//!
-//! The adapter reaches its owning runtime via
-//! [`istmo_core::Dispatch::runtime_attached`] (called once at
-//! `Runtime::register_host` time). When an inbound `on_start` frame arrives
-//! it builds an [`istmo::plugins::ServiceContext`], spawns an OS thread that
-//! drives the user's `on_start` future to completion, and stores the
-//! [`istmo::plugins::StopNotifier`] under a `Mutex<Option<_>>`. An inbound
-//! `on_stop` frame signals the notifier, joins the worker thread and awaits
-//! the user's `on_stop` future.
-
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
@@ -37,8 +15,6 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
 
     let (on_start_returns_result, on_stop_present) = classify_methods(&trait_def)?;
 
-    // Snapshot untouched signatures before Send-rewrite so we can check
-    // shapes above and later work off the desugared version.
     add_send_bound_to_async_methods(&mut trait_def);
 
     let trait_ident = trait_def.ident.clone();
@@ -160,9 +136,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                                 stop_rx,
                                 cancel.clone(),
                             );
-                            // Bridge Frame::Cancel → stop notifier so a
-                            // running service impl that is `.await`ing
-                            // `ctx.stopped()` wakes without polling.
+
                             let notifier_for_watch = notifier.clone();
                             let cancel_for_watch = cancel.clone();
                             ::std::thread::spawn(move || {
@@ -178,8 +152,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                                 let mut guard = self.__state.lock().unwrap_or_else(|p| p.into_inner());
                                 if let ::core::option::Option::Some(mut prev) = guard.take() {
                                     prev.notifier.signal();
-                                    // Wake any lingering bridge thread from
-                                    // the previous invocation.
+
                                     prev.cancel.cancel();
                                     if let ::core::option::Option::Some(h) = prev.thread.take() {
                                         let _ = h.join();
@@ -204,8 +177,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                             };
                             if let ::core::option::Option::Some(mut state) = state {
                                 state.notifier.signal();
-                                // Also trip the cancel token so the bridge
-                                // thread wakes up and exits.
+
                                 state.cancel.cancel();
                                 if let ::core::option::Option::Some(h) = state.thread.take() {
                                     let _ = h.join();
@@ -242,8 +214,6 @@ fn reject_unsupported_trait_shape(t: &ItemTrait) -> syn::Result<()> {
     Ok(())
 }
 
-/// Verify the trait has exactly the methods `#[istmo::service]` expects, and
-/// return `(on_start_returns_result, on_stop_present)`.
 fn classify_methods(t: &ItemTrait) -> syn::Result<(bool, bool)> {
     let mut on_start: Option<&TraitItemFn> = None;
     let mut on_stop: Option<&TraitItemFn> = None;
@@ -276,7 +246,7 @@ fn classify_methods(t: &ItemTrait) -> syn::Result<(bool, bool)> {
             "`on_start` must be `async fn`",
         ));
     }
-    // `&self, ctx: ServiceContext` — receiver + one typed arg.
+
     if on_start.sig.inputs.len() != 2
         || !matches!(on_start.sig.inputs.first(), Some(FnArg::Receiver(_)))
     {
@@ -399,3 +369,4 @@ fn expect_lit_str(expr: &Expr) -> syn::Result<LitStr> {
         _ => Err(syn::Error::new_spanned(expr, "expected string literal")),
     }
 }
+

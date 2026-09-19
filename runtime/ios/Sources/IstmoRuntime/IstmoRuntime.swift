@@ -1,25 +1,3 @@
-// Swift-side singleton mirroring the Kotlin `IstmoRuntime` object.
-//
-// Owns:
-//
-// * The `IstmoIosCallbacks` table pinned via `Unmanaged` so the C
-//   trampolines can locate `self`.
-// * A `pending` map: call_id → CheckedContinuation, resolved when the
-//   matching `on_respond` callback fires.
-// * A `streams` map: stream_id → AsyncThrowingStream continuation, so
-//   Rust-hosted streams surface as Swift `AsyncThrowingStream<Data, Error>`.
-// * A `hosts` map: pluginId → Swift-side dispatcher (deferred; the M5 demo
-//   consumes a Rust-hosted plugin only, so no Swift-hosted plugin ever
-//   receives an `on_call` in the demo path).
-// * A `nextId` counter used when Swift initiates a call (`call(...)` /
-//   `stream(...)`) — Rust owns the counter for anything it originates, but
-//   Swift needs its own space for outbound calls.
-//
-// Everything is `@MainActor`-free — the transport thread invokes the
-// callbacks; the runtime hops to a serial `DispatchQueue` internally for
-// state mutations and resumes continuations on whichever executor the
-// caller happens to be on.
-
 import Foundation
 
 public final class IstmoRuntime {
@@ -28,33 +6,17 @@ public final class IstmoRuntime {
 
     private let queue = DispatchQueue(label: "dev.istmo.runtime", qos: .userInitiated)
     private var started = false
-    private var nextId: UInt64 = 1_000_000_000  // Swift-originated ids stay above Rust's range for debugging clarity.
+    private var nextId: UInt64 = 1_000_000_000
     private var pending: [UInt64: CheckedContinuation<Data, Error>] = [:]
     private var streams: [UInt64: AsyncThrowingStream<Data, Error>.Continuation] = [:]
-    /// Swift-side plugin dispatchers keyed by wire plugin id. Populated
-    /// through `registerHandler`; consulted from `handleCall` /
-    /// `handleCreateInstance` when the Rust pump delivers an inbound call
-    /// for a Swift-hosted plugin.
+
     private var handlers: [String: PluginHandler] = [:]
 
-    /// `NativeHandleId -> pluginId` map. Every dispatcher that hands a
-    /// native id back to Rust calls [`allocHandleId(pluginId:)`] first;
-    /// when Rust eventually drops the `NativeHandle<T>`, the resulting
-    /// `Frame::ReleaseNativeHandle` finds the owner here and routes the
-    /// release to that plugin's [`HandleReleaser`].
     private var handleOwners: [UInt64: String] = [:]
     private var nextGlobalHandleId: UInt64 = 1
 
     private init() {}
 
-    // MARK: - Native handle registry
-
-    /// Reserve a fresh `NativeHandleId` and record `pluginId` as the
-    /// owner. Called by any dispatcher that returns a native id to Rust
-    /// (Google Sign-In credential, AdMob ad, ...).
-    ///
-    /// Ids are globally unique across dispatchers so the release routing
-    /// is deterministic — two plugins can never collide on the same id.
     public func allocHandleId(pluginId: String) -> UInt64 {
         queue.sync {
             let id = self.nextGlobalHandleId
@@ -64,35 +26,14 @@ public final class IstmoRuntime {
         }
     }
 
-    /// Forget the ownership entry for `handleId`. Dispatchers call this
-    /// from their own release path (interstitial shown, credential freed)
-    /// to avoid a redundant [`HandleReleaser.releaseNativeHandle`]
-    /// callback when the eventual `Frame::ReleaseNativeHandle` arrives.
     public func forgetHandle(_ handleId: UInt64) {
         queue.sync { _ = self.handleOwners.removeValue(forKey: handleId) }
     }
 
-    // MARK: - Handler registry
-
-    /// Register a Swift-side dispatcher for a wire plugin id. Typical
-    /// call site is `main.swift` after `IstmoRuntime.shared.start()`:
-    ///
-    /// ```swift
-    /// IstmoRuntime.shared.registerHandler(
-    ///     PermissionsDispatcher.PLUGIN_ID,
-    ///     PermissionsDispatcher(backend: MyPermissions(), codecs: PermissionsCodecs())
-    /// )
-    /// ```
     public func registerHandler(_ pluginId: String, _ handler: PluginHandler) {
         queue.sync { self.handlers[pluginId] = handler }
     }
 
-    // MARK: - Lifecycle
-
-    /// Starts the transport. Idempotent on the Swift side; the C side
-    /// returns `false` if `Runtime::init` has already succeeded (a second
-    /// `start()` would install the callback table over an already-running
-    /// pump — not supported).
     public func start() throws {
         try queue.sync {
             guard !started else { return }
@@ -114,7 +55,6 @@ public final class IstmoRuntime {
         }
     }
 
-    /// Shuts the transport down and cancels every in-flight call / stream.
     public func shutdown() {
         queue.sync {
             istmo_ios_shutdown()
@@ -130,14 +70,6 @@ public final class IstmoRuntime {
         }
     }
 
-    // MARK: - Unary call (Swift → Rust)
-
-    /// Ships a bincode-encoded payload to a Rust-hosted plugin. Resolves
-    /// with the encoded response bytes, or throws:
-    ///
-    /// * [`PluginException`] — Rust responded with `Result::Err(bytes)`.
-    /// * [`IstmoRuntimeError.shutdown`] — the runtime tore down before the
-    ///   response arrived.
     public func call(pluginId: String, method: String, payload: Data) async throws -> Data {
         let callId = queue.sync { () -> UInt64 in
             let id = nextId
@@ -155,7 +87,7 @@ public final class IstmoRuntime {
                             istmo_ios_submit_call(
                                 callId,
                                 pidBuf.baseAddress, pidBuf.count,
-                                0,  // instance id — None
+                                0,
                                 mBuf.baseAddress, mBuf.count,
                                 payloadPtr.bindMemory(to: UInt8.self).baseAddress,
                                 payload.count
@@ -167,10 +99,6 @@ public final class IstmoRuntime {
         }
     }
 
-    /// Void-returning convenience for fire-and-forget style callers
-    /// (background task shims, notification triggers). Returns `true` if
-    /// the call resolved without a domain error, `false` otherwise. Never
-    /// throws — infrastructure failures are logged, not surfaced.
     public func callVoid(pluginId: String, method: String, payload: Data) async -> Bool {
         do {
             _ = try await call(pluginId: pluginId, method: method, payload: payload)
@@ -181,12 +109,9 @@ public final class IstmoRuntime {
         }
     }
 
-    /// Cancels every pending call for `pluginId`. Currently a coarse cancel
-    /// — the runtime has no per-plugin routing table and just walks the
-    /// pending map. Used by `BGTask.expirationHandler` shims.
     public func cancel(pluginId: String) {
         queue.sync {
-            // TODO: index pending by plugin id once the demo has more than one plugin.
+
             for (_, cont) in pending {
                 cont.resume(throwing: IstmoRuntimeError.shutdown)
             }
@@ -194,9 +119,6 @@ public final class IstmoRuntime {
         }
     }
 
-    /// Opens a stream against a Rust-hosted stream method. Each `Event`
-    /// frame emits one Data value; `StreamEnd::Complete` finishes cleanly,
-    /// `Cancelled` / `Error` throw the matching `IstmoRuntimeError`.
     public func stream(pluginId: String, method: String, payload: Data) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { cont in
             let streamId = self.queue.sync { () -> UInt64 in
@@ -224,17 +146,13 @@ public final class IstmoRuntime {
                 }
             }
             cont.onTermination = { @Sendable _ in
-                // Best-effort cancel: send an empty response to signal
-                // teardown. Full Cancel-frame path is a follow-up (see
-                // CLAUDE.md M5 deferred: cooperative cancellation).
+
                 self.queue.async {
                     self.streams.removeValue(forKey: streamId)
                 }
             }
         }
     }
-
-    // MARK: - Early events (Swift → Rust EarlyEventStore)
 
     public func publishEarlyLatest(channel: String, payload: Data) {
         let chBytes = Array(channel.utf8)
@@ -262,8 +180,6 @@ public final class IstmoRuntime {
             }
         }
     }
-
-    // MARK: - Callback handlers (invoked from Rust pump thread)
 
     fileprivate func handleRespond(callId: UInt64, ok: Bool, payload: Data) {
         queue.async {
@@ -345,10 +261,6 @@ public final class IstmoRuntime {
         }
     }
 
-    /// Route an inbound `Frame::ReleaseNativeHandle` to the dispatcher
-    /// that allocated the id. Unknown ids are dropped silently — a stale
-    /// release racing a dispatcher's own `forgetHandle` is expected and
-    /// non-fatal on both sides of the wire.
     fileprivate func handleReleaseNativeHandle(handleId: UInt64) {
         let owner = queue.sync { self.handleOwners.removeValue(forKey: handleId) }
         guard let ownerId = owner, let handler = queue.sync({ self.handlers[ownerId] }) else {
@@ -359,10 +271,6 @@ public final class IstmoRuntime {
         }
     }
 
-    /// Ship `payload` back to Rust via `istmo_ios_submit_response`.
-    /// Extracted to keep the two `handle*` methods short and consistent
-    /// about how empty payloads are represented on the wire (nil ptr +
-    /// zero length, matching the Rust decode fallback).
     private static func submitResponse(callId: UInt64, ok: Bool, payload: Data) {
         if payload.isEmpty {
             istmo_ios_submit_response(callId, ok, nil, 0)
@@ -374,8 +282,6 @@ public final class IstmoRuntime {
         }
     }
 }
-
-// MARK: - C trampolines
 
 private enum Trampolines {
 
@@ -459,3 +365,4 @@ private enum Trampolines {
         return Data(bytes: ptr, count: len)
     }
 }
+

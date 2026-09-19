@@ -20,21 +20,6 @@ import dev.istmo.runtime.RestoredActivity
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * Ready-made [LiveActivityHandler] that renders ongoing notifications
- * through a [RenderStrategy]. Handles tier selection, channel creation,
- * handle registry and dismissal semantics; the consumer app supplies
- * only:
- *
- * * `decodeAttributes` / `decodeState` — bincode → typed Kotlin.
- * * `encodeAttributes` / `encodeState` — typed Kotlin → bincode (only
- *   invoked by [restoreActive]; return an empty [ByteArray] if the
- *   handler never persists state across process death).
- * * `renderStrategy()` — the tier renderers.
- *
- * Multiple activities of the same type coexist safely; each one gets a
- * fresh notification id from a per-handler [AtomicInteger] counter.
- */
 abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
     override val activityType: String,
     override val channel: ChannelConfig,
@@ -44,15 +29,11 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
     private val notificationManager: NotificationManager =
         context.getSystemService(NotificationManager::class.java)
 
-    /** Per-handler counter; base backend collates across handlers. */
     private val notificationIdCounter = AtomicInteger(BASE_NOTIFICATION_ID)
 
-    /** `handle_id -> tracked activity state`. */
     private val active = ConcurrentHashMap<Long, ActiveEntry<A, C>>()
 
     private var channelCreated = false
-
-    // ---- Subclass hooks --------------------------------------------------
 
     abstract fun renderStrategy(): RenderStrategy<A, C>
 
@@ -60,16 +41,11 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
 
     abstract fun decodeState(bytes: ByteArray): C
 
-    /** Only required when overriding [restoreActive] to a non-empty list. */
     open fun encodeAttributes(attributes: A): ByteArray = ByteArray(0)
 
-    /** Only required when overriding [restoreActive] to a non-empty list. */
     open fun encodeState(state: C): ByteArray = ByteArray(0)
 
-    /** Small-icon drawable used by every tier. Subclasses must override. */
     abstract val smallIconRes: Int
-
-    // ---- LiveActivityHandler --------------------------------------------
 
     override suspend fun start(
         handle: NativeHandleId,
@@ -132,10 +108,6 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
     ) {
         val entry = active.remove(handle) ?: throw BackendException(ActivityError.HandleNotFound)
 
-        // Android has no `.after(delay)` on notifications; approximate the
-        // grace window by posting the final state once and cancelling
-        // after the schedule. `Default` and `AfterSeconds` collapse to a
-        // schedule; `Immediate` cancels straight away.
         when (dismissal) {
             DismissalPolicy.Immediate -> notificationManager.cancel(entry.notificationId)
             DismissalPolicy.Default -> {
@@ -165,8 +137,6 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
         val entry = active.remove(handle) ?: return
         notificationManager.cancel(entry.notificationId)
     }
-
-    // ---- Tier selection & rendering -------------------------------------
 
     private fun pickTier(hint: AndroidTierHint?): Tier? {
         val sdk = Build.VERSION.SDK_INT
@@ -247,13 +217,11 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
             .setOngoing(true)
             .setOnlyAlertOnce(alert == null)
             .setStyle(tier.progress?.render(context, attributes, state))
-        // API 36 hoist: the promoted-ongoing chip anchors in the status bar.
+
         builder = builder.setPromotedOngoing(true)
         applyAlertPlatform(builder, alert)
         return tier.liveUpdate.render(context, attributes, state, builder).build()
     }
-
-    // ---- Helpers --------------------------------------------------------
 
     private fun applyAlert(builder: NotificationCompat.Builder, alert: AlertConfig?) {
         if (alert == null) {
@@ -304,10 +272,7 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
     }
 
     private fun scheduleDismissal(notificationId: Int, delayMs: Long) {
-        // The plugin ships without any coroutine or scheduler dependency
-        // beyond stdlib; a bare `Thread` suffices for the rare fire-and-
-        // forget dismissal delay. Callers who need durability across
-        // process death can override `end` on their own handler.
+
         Thread {
             try {
                 Thread.sleep(delayMs)
@@ -341,3 +306,4 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
         private const val BASE_NOTIFICATION_ID: Int = 42_000
     }
 }
+

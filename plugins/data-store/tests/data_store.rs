@@ -1,6 +1,3 @@
-//! `DataStore` plugin: `acquire_with` round-trip against a mock native
-//! backend, plus domain-error surface check.
-
 use std::sync::Arc;
 use std::thread;
 
@@ -13,8 +10,6 @@ fn cfg() -> DataStoreConfig {
     DataStoreConfig::new("app_prefs")
 }
 
-/// Backend thread: services `CreateInstance` + one `Call` for `method`,
-/// answering with `respond`.
 fn spawn_backend(
     rt: Arc<Runtime>,
     outbound: flume::Receiver<Envelope>,
@@ -145,3 +140,4 @@ fn backend_error_surfaces_as_plugin_error_bytes() {
 
     backend.join().unwrap();
 }
+

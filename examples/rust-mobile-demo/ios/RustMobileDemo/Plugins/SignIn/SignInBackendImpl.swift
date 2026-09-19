@@ -1,23 +1,3 @@
-// iOS impl of `SignInBackend` using the GoogleSignIn SDK.
-//
-// GoogleSignIn's `GIDSignIn.sharedInstance` is a process-wide singleton;
-// it exposes both an interactive prompt (`signIn(withPresenting:...)`)
-// and a silent restore path (`restorePreviousSignIn`). Our backend maps
-// the two istmo `SignInMode` variants onto those.
-//
-// Credential lifetime — the SDK holds the current user via
-// `sharedInstance.currentUser`. We wrap that reference in a NativeHandle
-// so Rust can hand it back for `refresh`. The wrapping is by id: the
-// backend keeps a `[UInt64: GIDGoogleUser]` map keyed by the id issued
-// through `IstmoRuntime.shared.allocHandleId`. On `sign_out` /
-// `disconnect` (revoke) / release the id is forgotten.
-//
-// **iOS SDK setup** — `GIDSignIn.sharedInstance.configuration` must be
-// set to a `GIDConfiguration(clientID:)` at least once. We construct it
-// from the config's `server_client_id` field the first time
-// `SignInFactory.create` fires — matches the Android side where the
-// server client id is the audience for the id-token.
-
 import Foundation
 import IstmoRuntime
 #if canImport(GoogleSignIn)
@@ -43,8 +23,6 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
         self.config = config
         applyConfiguration()
     }
-
-    // MARK: - SignInBackend
 
     public func sign_in(mode: SignInMode) async throws -> SignInAccount {
         switch mode {
@@ -79,7 +57,7 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
                     cont.resume(throwing: SignInError.reauthenticate)
                     return
                 }
-                // Same handle id — the SDK object identity is preserved.
+
                 self.credLock.withLock { self.credentials[credential] = refreshed }
                 cont.resume(returning: self.account(from: refreshed, credentialId: credential))
             }
@@ -112,25 +90,13 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
         #endif
     }
 
-    // MARK: - HandleReleaser
-
     public func releaseNativeHandle(_ handleId: UInt64) {
         credLock.withLock { _ = credentials.removeValue(forKey: handleId) }
     }
 
-    // MARK: - Helpers
-
     private func applyConfiguration() {
         #if canImport(GoogleSignIn)
-        // GIDConfiguration takes the *iOS* OAuth client id — Info.plist's
-        // `GIDClientID` is consulted by default. We pass `nil` here to
-        // rely on that plist entry, then set the server client id on the
-        // shared instance separately.
-        //
-        // Note: on iOS the "server client id" ≠ "client id". The client
-        // id is bundle-specific and lives in Info.plist; the server
-        // client id is only used to request an id-token with a specific
-        // audience.
+
         if GIDSignIn.sharedInstance.configuration == nil {
             let plistClientId = Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String
             guard let plistClientId = plistClientId else {
@@ -182,9 +148,7 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
         return try await withCheckedThrowingContinuation { cont in
             GIDSignIn.sharedInstance.restorePreviousSignIn { user, error in
                 if let error = error {
-                    // The SDK returns an error when there is no previous
-                    // sign-in — that's not a domain error for us, it's
-                    // the caller's `noCredentialAvailable` case.
+
                     let nserror = error as NSError
                     if nserror.domain == kGIDSignInErrorDomain,
                        nserror.code == GIDSignInError.hasNoAuthInKeychain.rawValue {
@@ -239,10 +203,6 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
         return .backend(nserror.localizedDescription)
     }
 
-    /// Walks the app's active window scene to find a view controller
-    /// suitable for `signIn(withPresenting:)`. On a full-Rust app there
-    /// is exactly one `UIWindow` (owned by winit) whose root view
-    /// controller is the presenter Google's flow needs.
     @MainActor
     private static func topViewController() -> UIViewController? {
         let scenes = UIApplication.shared.connectedScenes
@@ -262,9 +222,7 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
 }
 
 private extension NSLock {
-    /// `withLock` shim — `NSLock` on iOS 14 lacks the closure variant
-    /// Swift 5.7 introduced. Inline lock/unlock keeps the call sites
-    /// readable.
+
     @discardableResult
     func withLock<T>(_ body: () -> T) -> T {
         lock()
@@ -272,3 +230,4 @@ private extension NSLock {
         return body()
     }
 }
+

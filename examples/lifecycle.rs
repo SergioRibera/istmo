@@ -1,8 +1,3 @@
-//! Demo of the `lifecycle` core plugin, driven by the early-event helpers
-//! that the native backend would normally call.
-//!
-//! Run with `cargo run --example lifecycle`.
-
 use std::thread;
 use std::time::Duration;
 
@@ -13,7 +8,6 @@ fn main() {
     let init = Runtime::mock();
     let rt = init.runtime;
 
-    // Native side publishes the current state before any subscriber attaches.
     publish(&rt, LifecycleState::Created);
     publish(&rt, LifecycleState::Started);
     publish(&rt, LifecycleState::Resumed);
@@ -26,7 +20,6 @@ fn main() {
 
     let stream = plugin.stream();
 
-    // Publish more transitions from a background "platform" thread.
     let publisher = rt;
     let bg = thread::spawn(move || {
         for state in [
@@ -55,3 +48,4 @@ fn publish(rt: &Runtime, state: LifecycleState) {
     let bytes = codec::encode(&state).expect("encode state");
     rt.publish_early_latest(LIFECYCLE_CHANNEL, bytes);
 }
+

@@ -1,50 +1,24 @@
-//! Persistent key-value store plugin.
+//! Namespaced key-value data store plugin for
+//! [`istmo`](https://docs.rs/istmo).
 //!
-//! Same shape as Flutter's `shared_preferences` — a small typed KV store
-//! backed by the platform-native persistent-preferences facility. Designed
-//! as a reference for integrating a plugin whose implementation lives on
-//! the native side rather than in Rust:
+//! Rust code sees a single async [`DataStore`] trait; the native side
+//! backs it with `SharedPreferences` on Android and `UserDefaults` on
+//! Apple platforms. Reference native implementations ship alongside
+//! this crate.
 //!
-//! * **Android** — `android.content.SharedPreferences` (no external Gradle
-//!   dependency).
-//! * **iOS** — `Foundation.UserDefaults` (no SPM package).
-//!
-//! Reference native impls live under `plugins/data-store/native/` for
-//! consumer apps to copy into their Gradle / Xcode source sets. The
-//! `SharedPreferences` and `UserDefaults` APIs are stable enough that the
-//! reference impls double as production code.
-//!
-//! Wire identifier is `istmo.data_store` under the `istmo.` core namespace.
-//!
-//! # Example
-//!
-//! ```no_run
-//! # async fn ex(rt: &std::sync::Arc<istmo_core::Runtime>) -> Result<(), istmo_core::IstmoError> {
-//! use istmo_data_store::{DataStoreClient, DataStoreConfig};
-//!
-//! let store = DataStoreClient::from_runtime_with(
-//!     rt,
-//!     DataStoreConfig { namespace: "app_prefs".to_owned() },
-//! ).await?;
-//!
-//! store.set_string("user_id".to_owned(), "u_42".to_owned()).await?;
-//! let uid = store.get_string("user_id".to_owned()).await?;
-//! assert_eq!(uid.as_deref(), Some("u_42"));
-//! # Ok(())
-//! # }
-//! ```
+//! Enable the `codegen` feature to expose the plugin's `Contract`
+//! (see [`istmo-build`](https://docs.rs/istmo-build)) for downstream
+//! code generation without going through the build-script handover.
+
+#![doc(html_root_url = "https://docs.rs/istmo-data-store")]
 
 #[cfg(feature = "codegen")]
 pub mod codegen;
 
 use istmo_macros::{message, plugin};
 
-/// Wire identifier of the data-store plugin.
+/// Wire identifier for the data-store plugin.
 pub const DATA_STORE_PLUGIN_ID: &str = "istmo.data_store";
-
-// Wire shape lives here as the single source of truth. `build.rs` calls
-// [`istmo_build::emit`] which extracts the `Contract` directly from these
-// declarations.
 
 #[message(bincode = "::bincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -71,16 +45,12 @@ impl std::fmt::Display for DataStoreError {
 impl std::error::Error for DataStoreError {}
 
 impl DataStoreConfig {
-    /// Convenience constructor. `namespace` is the logical container id —
-    /// `SharedPreferences` file name on Android, suite name on iOS. Multiple
-    /// namespaces can co-exist inside a single process.
     #[must_use]
     pub fn new(namespace: impl Into<String>) -> Self {
         Self { namespace: namespace.into() }
     }
 }
 
-/// Persistent key-value store plugin surface.
 #[plugin(
     name = "istmo.data_store",
     init = DataStoreConfig,
@@ -102,16 +72,12 @@ pub trait DataStore {
     async fn get_bytes(&self, key: String) -> Result<Option<Vec<u8>>, DataStoreError>;
     async fn set_bytes(&self, key: String, value: Vec<u8>) -> Result<(), DataStoreError>;
 
-    /// Returns `true` when `key` existed and was removed.
     async fn remove(&self, key: String) -> Result<bool, DataStoreError>;
 
-    /// Returns whether `key` is present in the namespace.
     async fn contains(&self, key: String) -> Result<bool, DataStoreError>;
 
-    /// Snapshot of every key currently stored. Order is backend-defined —
-    /// callers should not rely on it.
     async fn keys(&self) -> Result<Vec<String>, DataStoreError>;
 
-    /// Remove every key/value pair in the namespace.
     async fn clear(&self) -> Result<(), DataStoreError>;
 }
+

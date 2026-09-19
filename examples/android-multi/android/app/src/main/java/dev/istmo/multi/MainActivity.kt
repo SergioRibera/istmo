@@ -22,17 +22,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
-/**
- * Minimal UI for the multi-cdylib demo.
- *
- * Three interactions:
- *  1. `ping` — round-trips through the Rust-hosted `AppControl` trait.
- *  2. `Start Sync` — starts the [SyncService] foreground service; the
- *     Rust `SyncImpl` uses its [`ServiceContext`] to `startForeground`
- *     and update the notification every 2s.
- *  3. `Stop Sync` — asks the service to stop, which flips
- *     `ServiceContext::stopped()` on the Rust side.
- */
 class MainActivity : AppCompatActivity() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -41,7 +30,7 @@ class MainActivity : AppCompatActivity() {
     private val appControl by lazy { AppControlClient(AppControlCodecsImpl()) }
 
     private val notificationPermissionLauncher =
-        registerForActivityResult(RequestPermission()) { /* result ignored */ }
+        registerForActivityResult(RequestPermission()) {  }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -110,3 +99,4 @@ class MainActivity : AppCompatActivity() {
         }
     }
 }
+

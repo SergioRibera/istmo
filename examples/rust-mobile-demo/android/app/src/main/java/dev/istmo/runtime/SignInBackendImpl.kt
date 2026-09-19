@@ -21,32 +21,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
-/**
- * Android impl of the codegen `SignInBackend` interface, backed by the
- * legacy `GoogleSignInClient` (`play-services-auth`).
- *
- * Legacy vs Credential Manager — the M6 spec pointed at Credential
- * Manager, but on MIUI every Credential-Manager path goes through a
- * Play-Services-launched intermediate Activity that MIUI kills mid-flow,
- * surfacing as a bogus `TYPE_USER_CANCELED` right after account
- * selection. The legacy client launches the picker directly from the
- * calling Activity via `startActivityForResult`, which MIUI leaves alone.
- *
- * `notifyActivityResult` forwards the Activity's result callback into
- * the suspended sign-in coroutine.
- */
-@Suppress("DEPRECATION") // legacy GoogleSignInClient — see MIUI note above.
+@Suppress("DEPRECATION")
 class SignInBackendImpl(private val activity: Activity, private val config: SignInConfig) :
     SignInBackend, HandleReleaser {
 
     companion object {
         private const val TAG = "istmo.signin"
-        /**
-         * Base request code for the sign-in `startActivityForResult` flow.
-         * Each concurrent request gets `base + n`; the demo only ever
-         * fires one, so `base` alone would be enough — the counter keeps
-         * things obvious if a future refactor adds parallelism.
-         */
+
         private const val REQUEST_CODE_BASE = 0xE00
     }
 
@@ -86,19 +67,14 @@ class SignInBackendImpl(private val activity: Activity, private val config: Sign
         client().revokeAccess().await()
     }
 
-    /** Route from `RustMobileActivity.onActivityResult` into the
-     *  suspended `startActivityForResult` continuation. */
     fun notifyActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         val cont = pending.remove(requestCode) ?: return
         cont.resume(SignInResult(resultCode, data))
     }
 
-    // ---- Flows -----------------------------------------------------------
-
     private suspend fun interactiveSignIn(): SignInAccount {
         val client = client()
-        // Try silent first — instantaneous when the user already granted
-        // this app the requested scopes.
+
         try {
             val silent = client.silentSignIn().await()
             Log.i(TAG, "silent sign-in succeeded id=${silent.id}")
@@ -169,8 +145,7 @@ class SignInBackendImpl(private val activity: Activity, private val config: Sign
             .requestEmail()
             .requestProfile()
         for (scope in config.scopes) {
-            // Skip the OIDC-standard scopes DEFAULT_SIGN_IN + requestEmail +
-            // requestProfile already cover — Google logs a warning on duplicates.
+
             when (scope) {
                 "openid", "email", "profile" -> continue
                 Scopes.EMAIL, Scopes.PROFILE, Scopes.OPEN_ID -> continue
@@ -199,3 +174,4 @@ class SignInBackendImpl(private val activity: Activity, private val config: Sign
 
     private data class SignInResult(val resultCode: Int, val data: Intent?)
 }
+

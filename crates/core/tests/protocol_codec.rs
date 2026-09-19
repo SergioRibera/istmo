@@ -1,6 +1,3 @@
-//! Wire round-trip tests: every `Frame` variant encodes and decodes to the
-//! same value under the standard codec configuration.
-
 use istmo_core::{
     CallId, CodecError, EarlyEventKind, Envelope, Frame, InstanceId, NativeHandleId,
     PROTOCOL_VERSION, StreamEndReason, StreamId, codec,
@@ -117,7 +114,7 @@ fn to_wire_bytes_round_trips_via_from_wire_bytes() {
 
 #[test]
 fn from_wire_bytes_rejects_stale_protocol_version() {
-    // Hand-craft an envelope with a fake older version.
+
     let stale = Envelope {
         version: PROTOCOL_VERSION - 1,
         frame: Frame::Cancel { call_id: CallId(1) },
@@ -144,3 +141,4 @@ fn extra_trailing_bytes_are_reported_by_the_consumed_count() {
     assert_eq!(consumed, original_len);
     assert_eq!(bytes.len() - consumed, 3);
 }
+

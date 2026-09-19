@@ -1,35 +1,7 @@
-//! Rust type generator.
-//!
-//! Emits `#[istmo::message] pub struct` / `pub enum` declarations for
-//! every [`TypeDef`] the contract references, so a plugin author can
-//! keep the [`Contract`] as the single source of truth for both the
-//! Rust plugin surface and the Kotlin / Swift generated code.
-//!
-//! Typical wiring — a plugin crate ships a `build.rs`:
-//!
-//! ```ignore
-//! use istmo_build::generate_rust_types;
-//! fn main() {
-//!     let contract = istmo_plugins::contract::permissions();
-//!     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap())
-//!         .join("permissions_types.rs");
-//!     std::fs::write(&out, generate_rust_types(&contract)).unwrap();
-//! }
-//! ```
-//!
-//! then `include!(concat!(env!("OUT_DIR"), "/permissions_types.rs"));`
-//! from the plugin source.
-//!
-//! `NativeHandleId` is treated as an opaque wire alias — the generator
-//! does not emit a declaration for it. The type lives in
-//! `istmo_core::NativeHandleId` and is expected to be brought into scope
-//! by the caller.
-
 use std::fmt::Write as _;
 
 use crate::contract::{Contract, EnumDef, StructDef, TypeDef, TypeRef};
 
-/// Renders `#[message]`-annotated type declarations for `contract`.
 #[must_use]
 pub fn generate_rust_types(contract: &Contract) -> String {
     let mut out = String::new();
@@ -81,14 +53,6 @@ fn write_enum(out: &mut String, e: &EnumDef, all: &[TypeDef]) {
     let _ = writeln!(out, "}}");
 }
 
-/// Pick idiomatic derives for `ty`. Every emitted type gets
-/// `Debug + Clone + PartialEq`; the extras are conditional:
-///
-/// * `Eq` — no floating-point anywhere in the recursive shape.
-/// * `Hash` — Eq + no interior mutability + all fields hashable.
-/// * `Copy` — every field is `Copy` (primitives, `Copy` named types).
-///
-/// Recursion respects the contract's own type list via [`resolve_named`].
 fn suggest_derives(ty: &TypeDef, all: &[TypeDef]) -> Vec<&'static str> {
     let mut out = vec!["Debug", "Clone", "PartialEq"];
     if is_eq(ty, all) {
@@ -146,7 +110,7 @@ fn ty_is_eq(ty: &TypeRef, all: &[TypeDef]) -> bool {
 
 fn ty_is_copy(ty: &TypeRef, all: &[TypeDef]) -> bool {
     match ty {
-        // String, Vec, Option, Bytes are never `Copy` on Rust.
+
         TypeRef::String | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Option(_) => false,
         TypeRef::Named(name) => {
             resolve_named(name, all).is_some_and(|def| is_copy(&def, all))
@@ -158,7 +122,7 @@ fn ty_is_copy(ty: &TypeRef, all: &[TypeDef]) -> bool {
 
 fn ty_is_hash(ty: &TypeRef, all: &[TypeDef]) -> bool {
     match ty {
-        // Vec<u8> is Hash, but the caller usually treats bytes as opaque.
+
         TypeRef::F32 | TypeRef::F64 | TypeRef::Bytes => false,
         TypeRef::Vec(inner) | TypeRef::Option(inner) => ty_is_hash(inner, all),
         TypeRef::Named(name) => {
@@ -195,11 +159,6 @@ fn rust_ty(ty: &TypeRef) -> String {
     }
 }
 
-/// Convert a contract field name (`camelCase` in most bundled plugins,
-/// e.g. `channelId`, `serverClientId`) to Rust `snake_case`. The
-/// bincode wire is field-order-based, not name-based, so this is a pure
-/// cosmetic choice for the emitted Rust surface. Matches the naming in
-/// the hand-written `#[message]` types under `crates/plugins/src/`.
 fn to_rust_field(name: &str) -> String {
     let mut out = String::with_capacity(name.len() + 2);
     for (i, ch) in name.chars().enumerate() {
@@ -214,3 +173,4 @@ fn to_rust_field(name: &str) -> String {
     }
     out
 }
+

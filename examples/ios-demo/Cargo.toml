@@ -10,9 +10,6 @@ authors.workspace = true
 repository.workspace = true
 
 [lib]
-# staticlib produces a `.a` that Xcode links into the app target directly.
-# cdylib would give a `.dylib` which iOS forbids embedding except as an
-# XCFramework — extra step for zero benefit at this scale.
 crate-type = ["staticlib"]
 
 [dependencies]
@@ -32,3 +29,4 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 missing_safety_doc = "allow"
 redundant_pub_crate = "allow"
+

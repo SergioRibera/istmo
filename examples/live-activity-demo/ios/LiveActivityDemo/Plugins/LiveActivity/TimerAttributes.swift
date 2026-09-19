@@ -2,14 +2,6 @@ import Foundation
 #if canImport(ActivityKit)
 import ActivityKit
 
-/// `ActivityAttributes` conformer for the timer live activity.
-///
-/// Wrapped inside the `LiveTimer` namespace enum so its `Attributes`
-/// and `Attributes.ContentState` types do not collide with the generated
-/// wire structs `TimerAttributes` / `TimerState` emitted into
-/// `DemoTypes.swift` by `build.rs`. The Rust half (`app.rs`) is the
-/// single source of truth for the wire shape; this file only adds the
-/// ActivityKit-facing sugar plus the bincode ↔ ActivityKit bridge.
 public enum LiveTimer {
 
     @available(iOS 16.1, *)
@@ -64,3 +56,4 @@ public enum LiveTimer {
 }
 
 #endif
+

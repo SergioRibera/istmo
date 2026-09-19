@@ -16,9 +16,7 @@ android {
         versionCode = 1
         versionName = "0.1"
         ndk {
-            // SINGLE POINT OF CHANGE for target architectures. istmoCargoLib
-            // reads this list and registers a matching cargo task per
-            // (crate, ABI). Adding an ABI = add it here.
+
             abiFilters += setOf("arm64-v8a")
         }
     }
@@ -39,22 +37,9 @@ android {
     }
 }
 
-// Route the Gradle-managed rustJniLibs/ under $buildDir into the standard
-// JNI merge and REPLACE the default `src/main/jniLibs/` source dir — build
-// artefacts never live under src/.
 android.sourceSets["main"].jniLibs.setSrcDirs(
     listOf(layout.buildDirectory.dir("rustJniLibs").get().asFile),
 )
-
-// ---- istmo cargo integration ---------------------------------------
-//
-// Convention-based glue: Gradle IS the build root and drives cargo per
-// (crate, ABI). Multiple `istmoCargoLib(...)` calls stack — every resulting
-// `.so` lands in `$buildDir/rustJniLibs/<abi>/` and joins the JNI merge.
-// This is what the multi-cdylib packaging model needs.
-//
-// Rejected alternatives are documented in the sister demo
-// (`examples/android-demo/android/app/build.gradle.kts`).
 
 val abiToRustTarget = mapOf(
     "arm64-v8a" to "aarch64-linux-android",
@@ -63,9 +48,6 @@ val abiToRustTarget = mapOf(
     "x86" to "i686-linux-android",
 )
 
-// Workspace root: project.rootDir is the android/ Gradle root (settings.
-// gradle.kts lives there); climb three levels — android/ → android-multi/
-// → examples/ → istmo/ (the cargo workspace root).
 val workspaceRoot: File = project.rootDir.resolve("../../..").normalize()
 val rustJniLibsDir = layout.buildDirectory.dir("rustJniLibs")
 
@@ -138,11 +120,6 @@ afterEvaluate {
     }
 }
 
-// ---- Declare the demo's cdylibs -------------------------------------
-// Two calls proves the multi-cdylib packaging path: both `.so` files land
-// in the same rustJniLibs/<abi>/ folder and merge into a single APK. Only
-// the app cdylib is loaded at runtime today; the widget cdylib is a
-// packaging scaffold for the future widget-process artifact.
 istmoCargoLib("istmo-android-multi-app")
 istmoCargoLib("istmo-android-multi-widget")
 
@@ -152,3 +129,4 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-service:2.8.4")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
+

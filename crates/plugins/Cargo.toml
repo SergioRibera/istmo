@@ -14,12 +14,6 @@ categories = ["os", "api-bindings"]
 
 [features]
 default = []
-# Rust-side publisher for the safe-area plugin. iOS walks
-# `UIApplication.sharedApplication.keyWindow` via objc2 and reads
-# `safeAreaInsets` per tick, driving `Runtime::publish_early_latest`
-# directly so consumers do not need a Kotlin / Swift publisher.
-# Non-Apple targets get an inert publisher (Android's Kotlin path still
-# owns `WindowInsets` today).
 winit-publisher = []
 
 [dependencies]
@@ -30,26 +24,15 @@ flume = { workspace = true }
 pollster = { workspace = true }
 tracing = { workspace = true }
 
-# `objc2` refuses to compile off Apple, so scope the dep to iOS-family
-# targets. The publisher module's body is gated on the same cfg.
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies]
 objc2 = "0.6"
 
-# `build.rs` regenerates the `#[message]` type declarations from the
-# canonical `Contract` builders in `istmo-plugins-schema`. Both crates
-# are build-time only from `istmo-plugins`' perspective — nothing ships
-# in the runtime dep tree.
 [build-dependencies]
 istmo-build = { workspace = true }
 istmo-plugins-schema = { workspace = true }
 
 [dev-dependencies]
 
-# Override the workspace-wide `unsafe_code = "forbid"` so the safe-area
-# publisher can invoke objc2 / JNI FFI directly — both are inherently
-# unsafe. Every callsite still uses an explicit `unsafe {}` block with a
-# `# SAFETY` note; the crate-level relax just permits the block to
-# exist.
 [lints.rust]
 unsafe_code = "allow"
 missing_debug_implementations = "warn"
@@ -63,3 +46,4 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 missing_safety_doc = "allow"
 redundant_pub_crate = "allow"
+

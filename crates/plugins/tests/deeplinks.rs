@@ -1,5 +1,3 @@
-//! `DeepLinks` plugin: verifies pre-main queue drain and live propagation.
-
 use istmo_core::{Runtime, codec};
 use istmo_plugins::{DEEPLINKS_CHANNEL, DeepLink, DeepLinks};
 
@@ -76,3 +74,4 @@ fn second_subscriber_gets_no_backlog_only_live() {
     assert_eq!(stream_a.recv().unwrap(), live);
     assert_eq!(stream_b.recv().unwrap(), live);
 }
+

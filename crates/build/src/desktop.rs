@@ -1,116 +1,73 @@
-//! Desktop deployment-artefact codegen: systemd, launchd, Windows Service,
-//! XDG `.desktop` files.
-//!
-//! Backend on desktop is 100% Rust — nothing crosses a language boundary —
-//! so the [`crate::Contract`] / Kotlin / Swift generators do not apply. What
-//! desktop plugins *do* need is a per-platform packaging artefact that tells
-//! the OS init system how to launch, restart and stop the bin.
-//!
-//! This module is intentionally OS-neutral at the data model: one
-//! [`DesktopServiceContract`] value renders into each of systemd's
-//! `.service`, launchd's `.plist`, and a Windows `sc.exe` install script.
-//! Platform-specific tweaks live in optional fields that the other renderers
-//! ignore.
-//!
-//! GUI apps (rather than background services) go through
-//! [`DesktopAppContract`] + [`generate_desktop_entry`] for the Linux XDG
-//! `.desktop` file. macOS `.app` bundles and Windows shortcuts are out of
-//! scope — those are handled by the packager (`cargo-bundle`, `WiX`) rather
-//! than per-plugin codegen.
-
 use std::fmt::Write as _;
 
-/// Restart behaviour after the process exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestartPolicy {
-    /// Never restart automatically.
+
     Never,
-    /// Restart on abnormal exit (non-zero status, signal). systemd
-    /// `Restart=on-failure`, launchd bare `KeepAlive`, Windows SC
-    /// `FailureActions restart/…`.
+
     OnFailure,
-    /// Restart unconditionally. systemd `Restart=always`, launchd
-    /// `KeepAlive=true`, Windows SC `FailureActions restart/…` on every code.
+
     Always,
 }
 
-/// Whether the OS starts the unit at boot / login.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartType {
-    /// Enabled at boot / login. systemd `WantedBy=multi-user.target`,
-    /// launchd `RunAtLoad=true`, Windows `start=auto`.
+
     Auto,
-    /// User must start it explicitly. Windows `start=demand`; systemd
-    /// unit installed but not enabled; launchd `RunAtLoad=false`.
+
     Manual,
-    /// Installed but disabled. Windows `start=disabled`.
+
     Disabled,
 }
 
-/// Which init-system scope the unit installs into. Affects filenames and
-/// systemd `WantedBy=` / launchd `~/Library/LaunchAgents` vs
-/// `/Library/LaunchDaemons`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceScope {
-    /// Runs as the invoking user. systemd `--user`, launchd `LaunchAgent`.
+
     User,
-    /// System-wide, runs as `user` (or root by default). systemd system
-    /// unit, launchd `LaunchDaemon`, Windows Service (`LocalSystem`).
+
     System,
 }
 
-/// OS-neutral service description. Feed the same value into
-/// [`generate_systemd_unit`], [`generate_launchd_plist`] and
-/// [`generate_windows_service`]; each renderer picks the fields it needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopServiceContract {
-    /// Short identifier used as filename base (e.g. `myapp-sync` →
-    /// `myapp-sync.service`, `com.example.myapp.sync.plist`).
+
     pub name: String,
-    /// Reverse-DNS style label used for launchd `Label` and Windows service
-    /// name. Defaults to `name` on [`Self::new`].
+
     pub label: String,
-    /// Human-readable description. systemd `Description=`, Windows
-    /// `DisplayName`, launchd `Comment` (informational only).
+
     pub description: String,
-    /// Absolute path to the bin.
+
     pub exec_path: String,
-    /// Args passed to the bin.
+
     pub args: Vec<String>,
-    /// Working directory. None → inherit / OS default.
+
     pub working_directory: Option<String>,
-    /// Env vars set before launch.
+
     pub env: Vec<(String, String)>,
-    /// Restart behaviour.
+
     pub restart: RestartPolicy,
-    /// Start behaviour at boot / login.
+
     pub start_type: StartType,
-    /// Install scope.
+
     pub scope: ServiceScope,
-    /// User to run as (systemd `User=`, launchd `UserName`). Ignored for
-    /// [`ServiceScope::User`]. `None` on system scope → root.
+
     pub user: Option<String>,
-    /// Group to run as (systemd `Group=`, launchd `GroupName`).
+
     pub group: Option<String>,
-    /// systemd `After=` units. Ignored by other renderers.
+
     pub after: Vec<String>,
-    /// Windows service display name. `None` uses [`Self::description`].
+
     pub windows_display_name: Option<String>,
-    /// Windows service dependencies (`depend=` on `sc create`).
+
     pub windows_dependencies: Vec<String>,
-    /// launchd `KeepAlive` override — `Some(true/false)` overrides the
-    /// value derived from [`Self::restart`]; `None` uses the default
-    /// mapping.
+
     pub launchd_keep_alive: Option<bool>,
-    /// Seconds to wait for graceful stop before force-kill. systemd
-    /// `TimeoutStopSec=`, Windows `sc failure` reset timeout.
+
     pub stop_timeout_seconds: u32,
 }
 
 impl DesktopServiceContract {
-    /// Convenience constructor with sane defaults: `RestartPolicy::OnFailure`,
-    /// `StartType::Manual`, `ServiceScope::User`, empty args / env / after,
-    /// 30-second stop timeout.
+
     #[must_use]
     pub fn new(
         name: impl Into<String>,
@@ -140,24 +97,14 @@ impl DesktopServiceContract {
     }
 }
 
-/// Bundle returned by [`generate_windows_service`]. Windows install /
-/// uninstall are non-idempotent shell steps rather than a single manifest,
-/// hence the split.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsServiceArtifacts {
-    /// PowerShell script that creates the service via `sc.exe create` +
-    /// configures failure actions and start type.
+
     pub install_script: String,
-    /// PowerShell script that stops and deletes the service.
+
     pub uninstall_script: String,
 }
 
-/// Render a systemd `.service` unit for `contract`.
-///
-/// The caller decides whether the file lands in `/etc/systemd/system/`
-/// (system scope) or `~/.config/systemd/user/` (user scope) — the unit
-/// itself is the same text; only [`DesktopServiceContract::scope`] changes
-/// the `WantedBy=` target.
 #[must_use]
 pub fn generate_systemd_unit(contract: &DesktopServiceContract) -> String {
     let mut out = String::new();
@@ -215,9 +162,6 @@ pub fn generate_systemd_unit(contract: &DesktopServiceContract) -> String {
     out
 }
 
-/// Render a launchd `.plist` for `contract`. Suitable for
-/// `~/Library/LaunchAgents/<label>.plist` (user scope) or
-/// `/Library/LaunchDaemons/<label>.plist` (system scope).
 #[must_use]
 pub fn generate_launchd_plist(contract: &DesktopServiceContract) -> String {
     let mut out = String::new();
@@ -277,7 +221,7 @@ pub fn generate_launchd_plist(contract: &DesktopServiceContract) -> String {
     if keep_alive || matches!(contract.restart, RestartPolicy::OnFailure) {
         let _ = writeln!(out, "    <key>KeepAlive</key>");
         if matches!(contract.restart, RestartPolicy::OnFailure) {
-            // Restart only on non-zero exit.
+
             let _ = writeln!(out, "    <dict>");
             let _ = writeln!(out, "        <key>SuccessfulExit</key>");
             let _ = writeln!(out, "        <false/>");
@@ -297,12 +241,6 @@ pub fn generate_launchd_plist(contract: &DesktopServiceContract) -> String {
     out
 }
 
-/// Render PowerShell install / uninstall scripts for a Windows service.
-///
-/// The install script uses `sc.exe create` + `sc.exe failure` and, when
-/// [`DesktopServiceContract::description`] is set, `sc.exe description`.
-/// Requires an elevated shell. The uninstall script stops then deletes the
-/// service (idempotent-ish — deletion of an unknown service errors).
 #[must_use]
 pub fn generate_windows_service(contract: &DesktopServiceContract) -> WindowsServiceArtifacts {
     WindowsServiceArtifacts {
@@ -403,34 +341,32 @@ fn render_windows_uninstall(contract: &DesktopServiceContract) -> String {
     out
 }
 
-/// Content of an XDG `.desktop` entry for a GUI desktop app.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopAppContract {
-    /// User-visible app name (`Name=`).
+
     pub name: String,
-    /// Short description (`Comment=`).
+
     pub comment: String,
-    /// Absolute path to the bin (`Exec=`). Leave `%U` / `%F` placeholders in
-    /// if the app takes URL / file args.
+
     pub exec: String,
-    /// Icon name or absolute path (`Icon=`).
+
     pub icon: Option<String>,
-    /// XDG categories (`Categories=`). See freedesktop menu spec.
+
     pub categories: Vec<String>,
-    /// MIME types the app handles (`MimeType=`).
+
     pub mime_types: Vec<String>,
-    /// Show the app in the launcher menu (`NoDisplay=` inverted).
+
     pub visible: bool,
-    /// Run in a terminal (`Terminal=`).
+
     pub terminal: bool,
-    /// Startup notification support (`StartupNotify=`).
+
     pub startup_notify: bool,
-    /// Keywords for launcher search (`Keywords=`).
+
     pub keywords: Vec<String>,
 }
 
 impl DesktopAppContract {
-    /// Minimal constructor: name + exec, everything else defaulted.
+
     #[must_use]
     pub fn new(name: impl Into<String>, exec: impl Into<String>) -> Self {
         Self {
@@ -448,7 +384,6 @@ impl DesktopAppContract {
     }
 }
 
-/// Render an XDG `.desktop` entry.
 #[must_use]
 pub fn generate_desktop_entry(contract: &DesktopAppContract) -> String {
     let mut out = String::new();
@@ -484,9 +419,7 @@ pub fn generate_desktop_entry(contract: &DesktopAppContract) -> String {
 }
 
 fn quote_systemd_exec(exec: &str, args: &[String]) -> String {
-    // systemd allows unquoted paths as long as they contain no whitespace.
-    // Multiple args are separated by whitespace; wrap any arg containing
-    // spaces / special chars in double quotes with `\` escaping.
+
     let mut buf = String::new();
     buf.push_str(exec);
     for arg in args {
@@ -511,7 +444,7 @@ fn build_windows_bin_path(exec: &str, args: &[String]) -> String {
 }
 
 fn quote_ps(value: &str) -> String {
-    // PowerShell single-quoted strings: escape single quotes by doubling.
+
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for ch in value.chars() {
@@ -552,3 +485,4 @@ fn xml_escape(value: &str) -> String {
     }
     out
 }
+

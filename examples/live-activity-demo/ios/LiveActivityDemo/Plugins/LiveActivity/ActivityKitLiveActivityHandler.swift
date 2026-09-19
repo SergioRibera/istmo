@@ -3,45 +3,6 @@ import IstmoRuntime
 #if canImport(ActivityKit)
 import ActivityKit
 
-/// Generic ``LiveActivityHandler`` base class for authors whose activity
-/// state matches the `ActivityKit` shape: one `ActivityAttributes`
-/// conformer whose associated `ContentState` is the mutable snapshot.
-///
-/// Subclass with:
-///
-/// ```swift
-/// final class TimerLiveActivityHandler:
-///     ActivityKitLiveActivityHandler<TimerAttributes> {
-///
-///     override init() { super.init(activityType: "timer") }
-///
-///     override func decodeAttributes(_ data: Data) throws -> TimerAttributes {
-///         try TimerAttributes.decode(from: data)
-///     }
-///
-///     override func decodeState(_ data: Data) throws -> TimerAttributes.ContentState {
-///         try TimerAttributes.ContentState.decode(from: data)
-///     }
-///
-///     override func encodeState(_ state: TimerAttributes.ContentState) throws -> Data {
-///         try state.encode()
-///     }
-///
-///     override func encodeAttributes(_ attrs: TimerAttributes) throws -> Data {
-///         try attrs.encode()
-///     }
-/// }
-/// ```
-///
-/// The `encode`/`decode` helpers are the codegen-generated bincode
-/// bridges for the consumer's own `#[istmo::message]` types (see
-/// `generate_swift_types` / `generate_swift_codecs` in `istmo-build`).
-///
-/// The handler owns its own `[NativeHandleId: Activity<Attributes>]` map
-/// so multiple activities of the same type coexist safely. Handle-id
-/// allocation is delegated to ``IstmoRuntime`` via
-/// ``IstmoRuntime.shared.allocateHandleId(owner:)`` so the runtime's
-/// release routing works transparently.
 @available(iOS 16.1, *)
 open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveActivityHandler {
 
@@ -53,8 +14,6 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
     public init(activityType: String) {
         self.activityType = activityType
     }
-
-    // ---- Subclass hooks --------------------------------------------------
 
     open func decodeAttributes(_ data: Data) throws -> Attributes {
         fatalError("override decodeAttributes")
@@ -71,8 +30,6 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
     open func encodeState(_ state: Attributes.ContentState) throws -> Data {
         fatalError("override encodeState")
     }
-
-    // ---- LiveActivityHandler --------------------------------------------
 
     public func start(
         attributes: Data,
@@ -209,17 +166,12 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
         Task { await activity.end(nil, dismissalPolicy: .immediate) }
     }
 
-    // ---- Private helpers -------------------------------------------------
-
     private func request(
         attributes: Attributes,
         content: ActivityContent<Attributes.ContentState>,
         style _: ActivityStyle
     ) throws -> Activity<Attributes> {
-        // `Activity.request` throws a small set of enum cases we surface
-        // as `ActivityError`. The `style` argument is future-proofing —
-        // iOS 18's `.transient` style flag lives on `Activity.request`
-        // in newer SDKs; today the plugin ignores it.
+
         return try Activity<Attributes>.request(attributes: attributes, content: content)
     }
 
@@ -231,9 +183,8 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
         case .named(let name):
             sound = .named(name)
         case .none:
-            sound = .default // AlertConfiguration always plays something; the
-                             // wire `.none` variant is honoured by omitting
-                             // the alert entirely on the caller side.
+            sound = .default
+
         }
         return AlertConfiguration(
             title: LocalizedStringResource(stringLiteral: alert.title),
@@ -244,3 +195,4 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
 }
 
 #endif
+

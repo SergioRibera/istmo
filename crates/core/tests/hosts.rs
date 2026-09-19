@@ -1,6 +1,3 @@
-//! Hosted plugin dispatch: inbound `Frame::Call` → registered dispatcher →
-//! `Frame::Respond` back on the outbound channel.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
@@ -10,8 +7,6 @@ use istmo_core::{
     codec,
 };
 
-/// Trivial dispatcher: replies with the request payload prefixed by the
-/// method byte length.
 struct EchoDispatch {
     calls: AtomicU32,
     slow: AtomicBool,
@@ -147,12 +142,10 @@ fn inbound_cancel_before_completion_drops_the_response() {
     }))
     .expect("dispatch call");
 
-    // Cancel before the 80ms sleep completes.
     std::thread::sleep(Duration::from_millis(10));
     rt.dispatch_inbound(Envelope::new(Frame::Cancel { call_id }))
         .expect("dispatch cancel");
 
-    // No Respond should ever arrive.
     let result = outbound.recv_timeout(Duration::from_millis(200));
     assert!(
         result.is_err(),
@@ -171,7 +164,6 @@ fn runtime_notify_local_short_circuits_to_registered_host() {
     rt.notify(EchoDispatch::PLUGIN_ID, None, "release", vec![1, 2, 3])
         .unwrap();
 
-    // Wait for the dispatch thread to run — call counter is the observable.
     for _ in 0..1_000 {
         if dispatcher.calls.load(Ordering::SeqCst) > 0 {
             break;
@@ -179,8 +171,7 @@ fn runtime_notify_local_short_circuits_to_registered_host() {
         std::thread::sleep(Duration::from_millis(1));
     }
     assert_eq!(dispatcher.calls.load(Ordering::SeqCst), 1);
-    // Fire-and-forget — no Respond ever sent, no Notify frame emitted
-    // (short-circuited to local dispatch).
+
     assert!(
         outbound.try_recv().is_err(),
         "notify to local host must not touch the outbound channel",
@@ -217,9 +208,7 @@ fn runtime_notify_without_local_host_emits_outbound_notify_frame() {
 
 #[test]
 fn inject_wire_envelope_bridges_bincoded_bytes_into_dispatch() {
-    // Simulates the receive side of an AIDL/Binder `:remote` bridge:
-    // one process serialises an Envelope, ships the raw bytes, the
-    // other process feeds them straight into `inject_wire_envelope`.
+
     let init = Runtime::mock();
     let rt = init.runtime;
     let outbound = init.outbound;
@@ -251,7 +240,6 @@ fn inject_wire_envelope_rejects_stale_protocol_version() {
     let init = Runtime::mock();
     let rt = init.runtime;
 
-    // Craft an envelope with a hand-forged old version.
     let stale = Envelope {
         version: istmo_core::PROTOCOL_VERSION - 1,
         frame: Frame::Cancel { call_id: CallId(1) },
@@ -296,8 +284,6 @@ fn inbound_notify_routes_to_registered_host_without_response() {
     );
 }
 
-/// Adapter so both direct `EchoDispatch` and shared-Arc variants satisfy
-/// `Dispatch` (which needs `'static` self).
 struct ArcHostAdapter(Arc<EchoDispatch>);
 
 impl Dispatch for ArcHostAdapter {
@@ -331,7 +317,7 @@ fn declare_plugin_marks_ids_visible() {
 fn check_declared_is_permissive_by_default() {
     let init = Runtime::mock();
     let rt: Arc<Runtime> = init.runtime;
-    // Enforcement off — anything passes even without declaration.
+
     rt.check_declared("test.anything").expect("permissive");
 }
 
@@ -352,8 +338,6 @@ fn check_declared_rejects_undeclared_when_enforcing() {
     );
 }
 
-/// Dispatcher that polls its cancel token between short sleeps. Records
-/// whether it observed cancellation before completion.
 struct CooperativeDispatch {
     saw_cancel: Arc<AtomicBool>,
 }
@@ -409,7 +393,6 @@ fn cooperative_cancel_token_trips_dispatcher_mid_flight() {
     }))
     .expect("dispatch call");
 
-    // Let the dispatcher enter its polling loop, then cancel.
     std::thread::sleep(Duration::from_millis(20));
     rt.dispatch_inbound(Envelope::new(Frame::Cancel { call_id }))
         .expect("dispatch cancel");
@@ -423,8 +406,6 @@ fn cooperative_cancel_token_trips_dispatcher_mid_flight() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    // Response is still discarded — the dispatcher short-circuits, and the
-    // runtime drops any reply arriving after Cancel was recorded.
     let result = outbound.recv_timeout(Duration::from_millis(200));
     assert!(
         result.is_err(),
@@ -434,9 +415,7 @@ fn cooperative_cancel_token_trips_dispatcher_mid_flight() {
 
 #[test]
 fn cancel_arriving_before_dispatch_starts_trips_token_immediately() {
-    // Dispatch a call whose dispatcher records the token state on entry;
-    // pre-cancel by inserting Cancel first via a hand-built pre-populated
-    // dispatcher setup.
+
     let init = Runtime::mock();
     let rt: Arc<Runtime> = init.runtime;
     let outbound = init.outbound;
@@ -447,8 +426,7 @@ fn cancel_arriving_before_dispatch_starts_trips_token_immediately() {
     });
 
     let call_id = CallId(505);
-    // Cancel first — no active call yet. Runtime should pre-insert a
-    // cancelled token keyed by this call id.
+
     rt.dispatch_inbound(Envelope::new(Frame::Cancel { call_id }))
         .expect("pre-cancel");
     rt.dispatch_inbound(Envelope::new(Frame::Call {
@@ -476,5 +454,5 @@ fn cancel_arriving_before_dispatch_starts_trips_token_immediately() {
     );
 }
 
-// Compile-time check: `Dispatch` is object-safe.
 const _: fn(Arc<dyn Dispatch>) = |_| {};
+

@@ -1,5 +1,3 @@
-//! Tests for `istmo_build::extract_contract`.
-
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use istmo_build::{
@@ -7,8 +5,6 @@ use istmo_build::{
     extract_contract,
 };
 
-/// Monotonic counter avoids the nanosecond-collision race between parallel
-/// tests that a `SystemTime::now()`-based suffix hit intermittently.
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn write_source(source: &str) -> std::path::PathBuf {
@@ -98,7 +94,6 @@ fn stateful_result_with_error_and_stream() {
     assert_eq!(got.methods[1].returns, TypeRef::U64);
     assert_eq!(got.methods[1].error, None);
 
-    // Types collected in declaration order.
     assert_eq!(got.types.len(), 2);
     match &got.types[0] {
         TypeDef::Struct(s) => assert_eq!(s.name, "Config"),
@@ -165,9 +160,7 @@ fn primitive_and_wrapper_mapping() {
 
 #[test]
 fn matches_hand_built_google_sign_in_contract() {
-    // Fixture mirrors `plugins/google-sign-in/src/codegen.rs` exactly.
-    // Any drift between the trait declaration and the hand-authored
-    // Contract surfaces here.
+
     let source = r#"
         use istmo_core::NativeHandleId;
 
@@ -220,8 +213,6 @@ fn matches_hand_built_google_sign_in_contract() {
     let path = write_source(source);
     let got = extract_contract(&path, "SignIn").expect("extract");
 
-    // Spot-check the load-bearing bits: plugin id, init, method count,
-    // camelCase field renames on the account/config structs.
     assert_eq!(got.plugin_id, "istmo.google_sign_in");
     assert_eq!(got.type_name, "SignIn");
     assert_eq!(got.init, Some(TypeRef::Named("SignInConfig".to_owned())));
@@ -282,3 +273,4 @@ fn trait_not_found() {
     let err = extract_contract(&path, "Missing").unwrap_err();
     assert!(matches!(err, istmo_build::ExtractError::TraitNotFound(_)));
 }
+

@@ -1,31 +1,3 @@
-// iOS impl of `PermissionsBackend` — maps Android-style permission
-// strings onto the per-framework authorisation APIs each iOS SDK owns.
-//
-// Coverage:
-//
-// * `android.permission.POST_NOTIFICATIONS` → `UNUserNotificationCenter`.
-// * `android.permission.CAMERA` → `AVCaptureDevice.requestAccess(for: .video)`.
-// * `android.permission.RECORD_AUDIO` → `AVCaptureDevice.requestAccess(for: .audio)`.
-// * `android.permission.ACCESS_FINE_LOCATION` /
-//   `android.permission.ACCESS_COARSE_LOCATION` →
-//   `CLLocationManager.requestWhenInUseAuthorization`.
-// * `android.permission.READ_MEDIA_IMAGES` /
-//   `android.permission.READ_MEDIA_VIDEO` →
-//   `PHPhotoLibrary.requestAuthorization(for: .readWrite)`.
-// * `android.permission.READ_CONTACTS` /
-//   `android.permission.WRITE_CONTACTS` →
-//   `CNContactStore.requestAccess(for: .contacts)`.
-// * `android.permission.READ_CALENDAR` /
-//   `android.permission.WRITE_CALENDAR` →
-//   `EKEventStore.requestAccess(to: .event)`.
-//
-// Each framework requires a matching Info.plist usage description (e.g.
-// `NSCameraUsageDescription`) — the demo's `Info.plist` ships a stub
-// string for every entry so the OS actually prompts.
-//
-// Unknown ids return `.notSupported` — the client sees the same variant
-// regardless of platform.
-
 import Contacts
 import CoreLocation
 import EventKit
@@ -37,8 +9,6 @@ import AVFoundation
 
 public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocationManagerDelegate {
 
-    /// Kept alive so `CLLocationManager` delegate callbacks land on us
-    /// while a `request` is in flight.
     private let locationManager = CLLocationManager()
     private let locationLock = NSLock()
     private var locationContinuation: CheckedContinuation<PermissionStatus, Never>?
@@ -47,8 +17,6 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         super.init()
         locationManager.delegate = self
     }
-
-    // MARK: - PermissionsBackend
 
     public func check(permission: String) async throws -> PermissionStatus {
         switch permission {
@@ -85,13 +53,9 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         return out
     }
 
-    /// iOS has no "should show rationale" concept — the OS decides when
-    /// to re-prompt, and denied means denied.
     public func should_show_rationale(permission: String) async throws -> Bool {
         false
     }
-
-    // MARK: - Per-framework requesters
 
     private func requestOne(_ permission: String) async -> PermissionStatus {
         switch permission {
@@ -118,8 +82,6 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    // Notifications ---------------------------------------------------------
-
     private func notificationStatus() async -> PermissionStatus {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         return Self.mapNotifications(settings.authorizationStatus)
@@ -137,11 +99,8 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    // AV (camera + microphone) ---------------------------------------------
-
     private func requestAVMedia(_ mediaType: AVMediaType) async -> PermissionStatus {
-        // Fast-path known states so the OS does not re-prompt on a
-        // second call after decision.
+
         switch AVCaptureDevice.authorizationStatus(for: mediaType) {
         case .authorized: return .granted
         case .denied, .restricted: return .permanentlyDenied
@@ -151,8 +110,6 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         let granted = await AVCaptureDevice.requestAccess(for: mediaType)
         return granted ? .granted : .permanentlyDenied
     }
-
-    // Location -------------------------------------------------------------
 
     private func requestLocation() async -> PermissionStatus {
         switch locationManager.authorizationStatus {
@@ -171,8 +128,7 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
 
     public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = Self.mapLocation(manager.authorizationStatus)
-        // Drop notDetermined transitions — the delegate fires once with
-        // the initial state before the user has made a decision.
+
         if manager.authorizationStatus == .notDetermined { return }
         locationLock.lock()
         let cont = locationContinuation
@@ -181,16 +137,12 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         cont?.resume(returning: status)
     }
 
-    // Photos ---------------------------------------------------------------
-
     private func requestPhotos() async -> PermissionStatus {
         let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         if current != .notDetermined { return Self.mapPhotos(current) }
         let next = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
         return Self.mapPhotos(next)
     }
-
-    // Contacts -------------------------------------------------------------
 
     private func requestContacts() async -> PermissionStatus {
         let current = CNContactStore.authorizationStatus(for: .contacts)
@@ -205,8 +157,6 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    // Calendar -------------------------------------------------------------
-
     private func requestCalendar() async -> PermissionStatus {
         let current = EKEventStore.authorizationStatus(for: .event)
         if current != .notDetermined { return Self.mapCalendar(current) }
@@ -219,8 +169,6 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
             }
         }
     }
-
-    // MARK: - Mapping helpers
 
     private static func map(_ status: AVAuthorizationStatus) -> PermissionStatus {
         switch status {
@@ -277,3 +225,4 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 }
+

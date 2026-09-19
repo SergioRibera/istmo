@@ -2,26 +2,9 @@ package dev.istmo.runtime
 
 import java.io.ByteArrayOutputStream
 
-/**
- * Minimal bincode 2 (`standard()` config) codec for the shapes the demo plugin
- * surface needs.
- *
- * Wire format (from `bincode` crate, `VarintEncoding` + `LittleEndian`):
- * * u64 varint — 1 byte for values ≤ 250, otherwise tag byte
- *   (0xFB/0xFC/0xFD) followed by LE u16/u32/u64.
- * * i64 varint — zigzag encoded then u64 varint.
- * * bool — single byte (0x00 / 0x01).
- * * String — u64 varint length + UTF-8 bytes.
- * * Option<T> — 0x00 for None; 0x01 followed by T for Some.
- * * Vec<T> — u64 varint length + T*n.
- * * Tuple `(A, B)` — A followed by B (no length prefix).
- * * enum discriminant — u32 varint.
- */
 object Bincode {
 
     data class Decoded<T>(val value: T, val consumed: Int)
-
-    // ---- Primitives ----
 
     fun writeBool(out: ByteArrayOutputStream, value: Boolean) {
         out.write(if (value) 1 else 0)
@@ -46,11 +29,6 @@ object Bincode {
         return out.toByteArray()
     }
 
-    /**
-     * f32 is written as 4 IEEE 754 little-endian bytes. bincode 2's
-     * `standard()` config uses fixed-width encoding for floats — no
-     * varint applies to floating-point numbers.
-     */
     fun writeF32(out: ByteArrayOutputStream, value: Float) {
         val bits = java.lang.Float.floatToRawIntBits(value)
         for (i in 0 until 4) {
@@ -76,8 +54,6 @@ object Bincode {
         val value = String(payload, next, length.toInt(), Charsets.UTF_8)
         return Decoded(value, end)
     }
-
-    // ---- Combinators ----
 
     fun <T> writeOption(out: ByteArrayOutputStream, value: T?, writer: (ByteArrayOutputStream, T) -> Unit) {
         if (value == null) {
@@ -139,9 +115,6 @@ object Bincode {
         return Decoded(a.value to b.value, b.consumed)
     }
 
-    // ---- Enums (discriminant only helpers) ----
-
-    /** Write a fieldless enum variant: just the u32-varint discriminant. */
     fun writeEnumDiscriminant(out: ByteArrayOutputStream, discriminant: Int) {
         require(discriminant >= 0) { "enum discriminant must be non-negative" }
         writeVarintU64(out, discriminant.toLong())
@@ -151,8 +124,6 @@ object Bincode {
         val v = readVarintU64(payload, offset)
         return Decoded(v.value.toInt(), v.consumed)
     }
-
-    // ---- Varints ----
 
     fun writeVarintU64(out: ByteArrayOutputStream, value: Long) {
         when {
@@ -186,7 +157,7 @@ object Bincode {
     }
 
     fun writeVarintI64(out: ByteArrayOutputStream, value: Long) {
-        // Zigzag encoding then u64 varint.
+
         val zig = (value shl 1) xor (value shr 63)
         writeVarintU64(out, zig)
     }
@@ -211,3 +182,4 @@ object Bincode {
         return value
     }
 }
+

@@ -1,21 +1,4 @@
-//! Routing tables mapping inbound frames back to the futures / streams that
-//! originated them.
-//!
-//! Three logical registries live in [`RoutingTables`]:
-//!
-//! * `pending`: `u64 -> PendingReceiver`. Both calls and streams share this
-//!   map because their numeric ids come from the same monotonic counter in
-//!   the runtime — mixing them into a single table keeps the routing side
-//!   O(1) with no fan-out logic, and the [`PendingReceiver`] variant records
-//!   which kind was expected so an incorrectly-typed inbound frame produces
-//!   a clean [`IstmoError::RoutingMismatch`] instead of silent misdelivery.
-//! * `instances`: metadata for each live plugin instance, keyed by
-//!   [`InstanceId`].
-//!
-//! The tables themselves are internally synchronised via [`std::sync::Mutex`].
-//! Every locked section is a short hash-map mutation and never spans an
-//! `await`, so a `std::sync` primitive is the right shape here even though
-//! the surrounding runtime is async-facing.
+//! Pending-call, stream and instance registries used by the runtime.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -27,19 +10,25 @@ use crate::error::IstmoError;
 use crate::protocol::{CallId, InstanceId, StreamEndReason, StreamId};
 use crate::sync::lock;
 
-/// Result payload delivered by a successful (or errored) call.
+/// Bincode-encoded outcome of a unary call.
+///
+/// `Ok(bytes)` carries a decoded return value; `Err(bytes)` carries a
+/// plugin-declared domain error.
 pub type CallResult = Result<Vec<u8>, Vec<u8>>;
 
-/// Messages delivered on the receiver side of a stream.
+/// One decoded frame off a live stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamMessage {
+    /// A live event carrying a bincode-encoded item.
     Event(Vec<u8>),
+    /// Stream terminated.
     End(StreamEndReason),
 }
 
-/// Metadata stored per live native instance.
+/// Bookkeeping entry for a live plugin instance.
 #[derive(Debug, Clone)]
 pub struct InstanceEntry {
+    /// Plugin id the instance belongs to.
     pub plugin_id: String,
 }
 
@@ -49,7 +38,11 @@ enum PendingReceiver {
     Stream(FlumeSender<StreamMessage>),
 }
 
-/// All routing state for a single runtime.
+/// In-memory registry pairing pending [`CallId`]s / [`StreamId`]s with
+/// the channels waiting on their completion.
+///
+/// Owned by the runtime; the transport crates never touch these tables
+/// directly.
 #[derive(Debug, Default)]
 pub struct RoutingTables {
     inner: Mutex<Inner>,
@@ -62,12 +55,13 @@ struct Inner {
 }
 
 impl RoutingTables {
+    /// Build an empty set of routing tables.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Registers a pending call and returns the receiver end for the caller.
+    /// Register a pending call and return its response receiver.
     #[must_use]
     pub fn register_call(&self, call_id: CallId) -> oneshot::Receiver<CallResult> {
         let (tx, rx) = oneshot::channel();
@@ -77,11 +71,11 @@ impl RoutingTables {
         rx
     }
 
-    /// Registers a stream and returns the receiver end for the caller.
+    /// Register a pending stream and return its event receiver.
     ///
-    /// A `capacity` of zero requests an unbounded channel; any positive value
-    /// is used as the bounded capacity. Bounded streams apply back-pressure to
-    /// the sender: the runtime will park the caller if the receiver is slow.
+    /// `capacity == 0` yields an unbounded channel; any other value
+    /// caps the buffer at `capacity` messages before the producer
+    /// blocks.
     #[must_use]
     pub fn register_stream(
         &self,
@@ -99,27 +93,33 @@ impl RoutingTables {
         rx
     }
 
-    /// Removes a pending entry (call or stream) regardless of kind. Returns
-    /// whether an entry was present.
+    /// Drop the registration matching `id`. Returns `true` if it was
+    /// present.
     pub fn remove_pending(&self, id: u64) -> bool {
         lock(&self.inner).pending.remove(&id).is_some()
     }
 
-    /// Peeks whether a pending entry exists for `id` without removing it.
-    /// Used by same-runtime short-circuiting on `Respond` delivery.
+    /// Return `true` if `id` currently has a pending call or stream
+    /// waiting on it.
     #[must_use]
     pub fn has_pending(&self, id: u64) -> bool {
         lock(&self.inner).pending.contains_key(&id)
     }
 
-    /// Delivers a response to a previously registered call.
+    /// Deliver a unary response and close the matching registration.
+    ///
+    /// # Errors
+    ///
+    /// - [`IstmoError::UnknownCallId`] if no registration exists.
+    /// - [`IstmoError::RoutingMismatch`] if the id was registered as a
+    ///   stream.
     pub fn deliver_response(&self, call_id: CallId, result: CallResult) -> Result<(), IstmoError> {
         let Some(entry) = lock(&self.inner).pending.remove(&call_id.get()) else {
             return Err(IstmoError::UnknownCallId(call_id));
         };
         match entry {
             PendingReceiver::Call(tx) => {
-                // Receiver dropped means the caller no longer cares. Not an error.
+
                 drop(tx.send(result));
                 Ok(())
             }
@@ -129,8 +129,15 @@ impl RoutingTables {
         }
     }
 
-    /// Delivers a stream event. The stream registration is preserved: further
-    /// events for the same `stream_id` continue to route to the same receiver.
+    /// Push a stream event into the matching registration.
+    ///
+    /// # Errors
+    ///
+    /// - [`IstmoError::UnknownStreamId`] if no registration exists.
+    /// - [`IstmoError::RoutingMismatch`] if the id was registered as a
+    ///   unary call.
+    /// - [`IstmoError::ChannelClosed`] if the consumer's receiver has
+    ///   been dropped.
     pub fn deliver_event(&self, stream_id: StreamId, payload: Vec<u8>) -> Result<(), IstmoError> {
         let sender = {
             let inner = lock(&self.inner);
@@ -149,7 +156,14 @@ impl RoutingTables {
             .map_err(|_| IstmoError::ChannelClosed)
     }
 
-    /// Delivers the terminal `StreamEnd` for a stream, then removes it.
+    /// Close a stream registration with the given `reason`.
+    ///
+    /// # Errors
+    ///
+    /// - [`IstmoError::UnknownStreamId`] if the stream isn't
+    ///   registered.
+    /// - [`IstmoError::RoutingMismatch`] if the id was registered as a
+    ///   unary call.
     pub fn deliver_stream_end(
         &self,
         stream_id: StreamId,
@@ -169,25 +183,27 @@ impl RoutingTables {
         }
     }
 
-    /// Registers a newly created native instance.
+    /// Record a live plugin instance under `instance_id`.
     pub fn register_instance(&self, instance_id: InstanceId, entry: InstanceEntry) {
         lock(&self.inner).instances.insert(instance_id, entry);
     }
 
-    /// Removes an instance registration. Returns whether it was present.
+    /// Drop the registration for `instance_id`. Returns `true` if it
+    /// was present.
     pub fn remove_instance(&self, instance_id: InstanceId) -> bool {
         lock(&self.inner).instances.remove(&instance_id).is_some()
     }
 
-    /// Copy of the instance entry for `instance_id`, if registered.
+    /// Look up an instance registration.
     #[must_use]
     pub fn instance(&self, instance_id: InstanceId) -> Option<InstanceEntry> {
         lock(&self.inner).instances.get(&instance_id).cloned()
     }
 
-    /// Drops every pending entry: outstanding call receivers see the sender
-    /// closed, and stream receivers see the sender closed as well. Instance
-    /// entries are untouched. Returns the number of entries removed.
+    /// Drop every pending call and stream registration.
+    ///
+    /// Returns the number of entries cleared. Used during runtime
+    /// shutdown to wake blocked receivers.
     pub fn cancel_all_pending(&self) -> usize {
         let mut inner = lock(&self.inner);
         let count = inner.pending.len();
@@ -195,3 +211,4 @@ impl RoutingTables {
         count
     }
 }
+

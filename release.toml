@@ -1,10 +1,8 @@
 allow-branch = ["main"]
 
-# One version for every workspace member (crates + plugins + examples).
 shared-version = true
 consolidate-commits = true
 
-# Publish + tag + push semantics.
 release = true
 publish = false
 verify = true
@@ -15,21 +13,7 @@ sign-tag = true
 dependent-version = "upgrade"
 metadata = "optional"
 
-# Tag ↔ workflow contract.
-#
-# `publish-runtime.yml` triggers on `push: tags: 'v[0-9]+.[0-9]+.[0-9]+'`
-# (+ SemVer prerelease suffix). The `v` prefix is intentional so plain
-# `<version>` git objects (bincode `0` on the wire, etc.) never collide
-# with release tags.
 tag-name = "v{{version}}"
 tag-message = "istmo v{{version}}"
 pre-release-commit-message = "chore(release): {{version}}"
 
-# `pre-release-replacements` intentionally lives inside the facade
-# crate's `[package.metadata.release]` in the root `Cargo.toml`. Reason:
-# cargo-release resolves replacement `file` paths relative to *each*
-# crate's manifest directory during its per-crate walk — a workspace-
-# level entry ends up chasing `crates/core/examples/…` when it visits
-# `istmo-core`, which does not exist. The facade crate's manifest dir
-# *is* the workspace root, so `examples/foo/…` resolves cleanly when
-# declared there.

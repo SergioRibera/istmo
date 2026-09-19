@@ -1,17 +1,14 @@
-//! Public error type for the iOS transport layer.
-
 use core::fmt;
 
-/// Errors surfaced from `istmo-ios`.
 #[derive(Debug)]
 pub enum IosRuntimeError {
-    /// `istmo_ios_start` was called more than once.
+
     AlreadyStarted,
-    /// An inbound submission fired before `istmo_ios_start`.
+
     NotStarted,
-    /// A UTF-8 buffer supplied by the Swift side was not valid UTF-8.
+
     InvalidUtf8,
-    /// The underlying core runtime returned an error.
+
     Core(istmo_core::IstmoError),
 }
 
@@ -40,3 +37,4 @@ impl From<istmo_core::IstmoError> for IosRuntimeError {
         Self::Core(value)
     }
 }
+

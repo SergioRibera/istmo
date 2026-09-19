@@ -1,10 +1,3 @@
-//! Shared egui UI.
-//!
-//! Runs on desktop (against the emulator), Android (against
-//! `LiveActivityBackendImpl.kt` + tiered notification renderers) and iOS
-//! (against `LiveActivityBackendImpl.swift` + ActivityKit). Zero
-//! `#[cfg(target_os = ...)]` in the eframe app impl.
-
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,7 +10,6 @@ use istmo_live_activity::{
 };
 use istmo_macros::message;
 
-/// Wire identifier that keys this timer's handler on the native side.
 pub const ACTIVITY_TYPE: &str = "timer";
 
 #[message(bincode = "::bincode", crate = "::istmo_core")]
@@ -34,14 +26,12 @@ pub struct TimerState {
     pub label: String,
 }
 
-/// Convenience constructor used by both desktop and mobile entry points.
 pub fn activities(
     runtime: &Arc<Runtime>,
 ) -> Result<TypedLiveActivity<TimerAttributes, TimerState>, IstmoError> {
     TypedLiveActivity::<TimerAttributes, TimerState>::new(runtime, ACTIVITY_TYPE)
 }
 
-/// One line in the UI transcript panel.
 #[derive(Debug, Clone)]
 pub struct LogLine {
     pub op: String,
@@ -112,7 +102,7 @@ pub struct DemoApp {
 
 impl DemoApp {
     pub fn new(shared: Arc<SharedState>) -> Self {
-        // Kick off capability probe on boot so the UI can show tier info.
+
         let boot = Arc::clone(&shared);
         thread::spawn(move || match pollster::block_on(boot.activities.capabilities()) {
             Ok(caps) => boot.set_capabilities(caps),
@@ -259,8 +249,7 @@ fn format_elapsed(seconds: u32) -> String {
 
 impl eframe::App for DemoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Repaint every ~500ms while an activity is live so the elapsed
-        // counter ticks visibly.
+
         if self.shared.timer_start.lock().expect("timer mutex").is_some()
             && self.last_tick.elapsed() >= Duration::from_millis(500)
         {
@@ -382,3 +371,4 @@ impl eframe::App for DemoApp {
         });
     }
 }
+

@@ -1,6 +1,3 @@
-//! Early-event primitive semantics: value-retention for lifecycle-style
-//! events, buffered drain for launch-intent-style events.
-
 use istmo_core::early_events::{EarlyEventStore, LatestValueSlot, PreMainQueue};
 
 #[test]
@@ -9,7 +6,7 @@ fn latest_value_slot_replays_current_value_to_late_subscribers() {
     slot.publish(vec![1]);
     slot.publish(vec![2]);
     let rx = slot.subscribe();
-    // Late subscriber immediately sees the retained value.
+
     assert_eq!(rx.recv().unwrap(), vec![2]);
     slot.publish(vec![3]);
     assert_eq!(rx.recv().unwrap(), vec![3]);
@@ -73,7 +70,7 @@ fn pre_main_queue_second_subscriber_gets_no_backlog() {
     queue.publish(vec![1]);
     let rx1 = queue.subscribe();
     let rx2 = queue.subscribe();
-    // Backlog was drained into rx1 only.
+
     assert_eq!(rx1.recv().unwrap(), vec![1]);
     assert!(rx2.try_recv().is_err());
     queue.publish(vec![2]);
@@ -88,7 +85,7 @@ fn early_event_store_reuses_slots_by_key() {
     let a2 = store.latest_slot("lifecycle");
     a1.publish(vec![7]);
     assert_eq!(a2.peek(), Some(vec![7]));
-    // A different key yields a different slot.
+
     let b = store.latest_slot("deep-links");
     assert!(b.peek().is_none());
 }
@@ -102,3 +99,4 @@ fn early_event_store_reuses_queues_by_key() {
     let rx = q2.subscribe();
     assert_eq!(rx.recv().unwrap(), vec![1]);
 }
+

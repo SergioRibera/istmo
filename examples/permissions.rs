@@ -1,7 +1,3 @@
-//! Demo of the `permissions` core plugin using the settled mock pattern.
-//!
-//! Run with `cargo run --example permissions`.
-
 use istmo::Runtime;
 use istmo::plugins::{
     PermissionOutcome, PermissionStatus, Permissions, PermissionsClient, PermissionsHost,
@@ -60,3 +56,4 @@ fn main() {
             .expect("rationale");
     println!("should_show_rationale(CAMERA) -> {show}");
 }
+

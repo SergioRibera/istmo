@@ -1,6 +1,3 @@
-//! `SignIn` plugin: `acquire_with` round-trip, `NativeHandle` adoption and
-//! drop-cascade against a mock native backend.
-
 use std::sync::Arc;
 use std::thread;
 
@@ -30,8 +27,6 @@ fn sample_account(handle: u64) -> SignInAccount {
     }
 }
 
-/// Backend thread: services `CreateInstance` + one `Call` for `method`,
-/// answering with `respond`.
 fn spawn_backend(
     rt: Arc<Runtime>,
     outbound: flume::Receiver<Envelope>,
@@ -39,7 +34,6 @@ fn spawn_backend(
     respond: Result<Vec<u8>, Vec<u8>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        // 1. CreateInstance
         let env = outbound.recv().expect("create envelope");
         let (create_call_id, config_bytes) = match env.frame {
             Frame::CreateInstance { call_id, plugin_id, payload } => {
@@ -58,7 +52,6 @@ fn spawn_backend(
         }))
         .unwrap();
 
-        // 2. First method call
         let env = outbound.recv().expect("call envelope");
         let call_call_id = match env.frame {
             Frame::Call {
@@ -99,11 +92,6 @@ fn acquire_with_ships_config_and_sign_in_returns_owned_credential() {
     assert_eq!(owned.credential.id(), NativeHandleId(7));
 
     backend.join().unwrap();
-    // Deliberately don't assert on the release/destroy frames here —
-    // the outbound receiver has been consumed by the backend thread which
-    // is now joined; the release frame emitted on drop would fail its send
-    // silently. `dropping_owned_account_emits_release_native_handle_frame`
-    // owns the outbound side and asserts the cascade end-to-end.
     drop(owned);
     drop(client);
 }
@@ -114,10 +102,6 @@ fn dropping_owned_account_emits_release_native_handle_frame() {
     let rt = init.runtime.clone();
     let outbound = init.outbound;
 
-    // Manually adopt a NativeHandleId into an owned account shape by
-    // exercising `sign_in_owned` end-to-end. The backend feeds an account
-    // with credential id 314; the owned account is then dropped and the
-    // outbound channel receives a ReleaseNativeHandle frame.
     let account_bytes = codec::encode(&sample_account(314)).unwrap();
 
     let backend_rt = rt.clone();
@@ -162,7 +146,6 @@ fn dropping_owned_account_emits_release_native_handle_frame() {
         other => panic!("expected ReleaseNativeHandle, got {other:?}"),
     }
 
-    // And when the client itself drops, a DestroyInstance frame follows.
     drop(client);
     let destroy = outbound.recv().expect("destroy frame");
     assert!(matches!(destroy.frame, Frame::DestroyInstance { .. }));
@@ -204,3 +187,4 @@ fn domain_error_surfaces_as_plugin_error_bytes() {
     assert_eq!(decoded, SignInError::UserCancelled);
     backend.join().unwrap();
 }
+

@@ -1,6 +1,3 @@
-//! Routing table behaviour: registration, delivery, cancellation and
-//! type-mismatched delivery.
-
 use istmo_core::{
     CallId, InstanceEntry, InstanceId, IstmoError, RoutingTables, StreamEndReason, StreamId,
     StreamMessage,
@@ -41,7 +38,7 @@ fn register_and_deliver_stream() {
         rx.recv().unwrap(),
         StreamMessage::End(StreamEndReason::Complete)
     );
-    // Sender was dropped after StreamEnd, so the next recv is a channel-closed error.
+
     assert!(rx.recv().is_err());
 }
 
@@ -107,3 +104,4 @@ fn instance_registry_round_trip() {
     assert!(table.instance(InstanceId(1)).is_none());
     assert!(!table.remove_instance(InstanceId(1)));
 }
+

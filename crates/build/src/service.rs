@@ -1,51 +1,29 @@
-//! Android service codegen.
-//!
-//! Emits the two artefacts a service plugin needs to slot into an Android
-//! app: a Kotlin `LifecycleService` subclass that boots the istmo runtime
-//! and forwards `onStartCommand` / `onDestroy` into the Rust adapter, and a
-//! `<service .../>` manifest fragment ready to be merged into
-//! `AndroidManifest.xml`.
-//!
-//! The generator does not know the Rust adapter surface; it only knows the
-//! plugin id (which the adapter registers under) and cosmetics like the
-//! service's Kotlin class name / package. The Rust `#[istmo::service]`
-//! macro guarantees the adapter answers `"on_start"` and `"on_stop"`
-//! method names.
-
 use std::fmt::Write as _;
 
-/// Configuration for the Android side of a service plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceContract {
-    /// Wire plugin id matching the Rust adapter's `PLUGIN_ID`.
+
     pub plugin_id: String,
-    /// Kotlin class name for the generated `LifecycleService`.
+
     pub class_name: String,
-    /// Kotlin package the service class lives in. Also used as the
-    /// `android:name` component in the manifest fragment.
+
     pub kotlin_package: String,
-    /// Native library the `System.loadLibrary` call loads. Typically the
-    /// cdylib name of the service's Rust crate.
+
     pub lib_name: String,
-    /// Package the `IstmoRuntime` singleton lives in. Defaults to
-    /// `dev.istmo.runtime` on [`Self::new`].
+
     pub runtime_package: String,
-    /// Value for `android:foregroundServiceType`. `None` omits the attribute
-    /// (background-only service).
+
     pub foreground_service_type: Option<String>,
-    /// Value for `android:exported`.
+
     pub exported: bool,
-    /// Value for `android:permission`. `None` omits the attribute.
+
     pub permission: Option<String>,
-    /// Value for `android:process`. Typically `Some(":remote")` for a
-    /// separate-process service; `None` for same-process. The
-    /// separate-process transport is not implemented yet — the field is
-    /// preserved so the manifest fragment can still express the intent.
+
     pub process: Option<String>,
 }
 
 impl ServiceContract {
-    /// Convenience constructor filling in the standard runtime package.
+
     #[must_use]
     pub fn new(
         plugin_id: impl Into<String>,
@@ -67,16 +45,14 @@ impl ServiceContract {
     }
 }
 
-/// Bundle returned by [`generate_android_service`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AndroidServiceArtifacts {
-    /// Contents of `<ClassName>.kt`.
+
     pub kotlin: String,
-    /// XML `<service .../>` fragment ready for manifest merger.
+
     pub manifest_fragment: String,
 }
 
-/// Render the Android artefacts for `contract`.
 #[must_use]
 pub fn generate_android_service(contract: &ServiceContract) -> AndroidServiceArtifacts {
     AndroidServiceArtifacts {
@@ -214,3 +190,4 @@ fn xml_escape(value: &str) -> String {
     }
     out
 }
+

@@ -1,33 +1,16 @@
-//! Android [`androidx.work.CoroutineWorker`] codegen.
-//!
-//! Emits a Kotlin [`androidx.work.CoroutineWorker`] subclass that decodes
-//! its input `Data` blob (bincode-encoded `(String, String, Vec<u8>)`),
-//! forwards it to the Rust adapter under the task's wire id, and maps the
-//! returned [`crate::worker::WorkerContract`]-side `TaskOutcome` to
-//! `WorkManager`'s `Result.success()` / `.retry()` / `.failure()`.
-//!
-//! No manifest entry is required — `WorkManager` registers
-//! [`androidx.work.CoroutineWorker`] subclasses at runtime via the
-//! [`androidx.work.WorkerFactory`].
-//!
-//! [`androidx.work.CoroutineWorker`]: https://developer.android.com/reference/androidx/work/CoroutineWorker
-//! [`androidx.work.WorkerFactory`]: https://developer.android.com/reference/androidx/work/WorkerFactory
-
 use std::fmt::Write as _;
 
-/// Configuration for the Android side of a worker task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerContract {
-    /// Wire task id matching the Rust adapter's `PLUGIN_ID`.
+
     pub task_id: String,
-    /// Kotlin class name for the generated `CoroutineWorker`.
+
     pub class_name: String,
-    /// Kotlin package the worker class lives in.
+
     pub kotlin_package: String,
-    /// Native library the `System.loadLibrary` call loads. Typically the
-    /// cdylib name of the worker's Rust crate.
+
     pub lib_name: String,
-    /// Package the `IstmoRuntime` singleton lives in.
+
     pub runtime_package: String,
 }
 
@@ -49,7 +32,6 @@ impl WorkerContract {
     }
 }
 
-/// Render the Kotlin `CoroutineWorker` subclass for `contract`.
 #[must_use]
 pub fn generate_android_worker(contract: &WorkerContract) -> String {
     let mut out = String::new();
@@ -128,3 +110,4 @@ pub fn generate_android_worker(contract: &WorkerContract) -> String {
     let _ = writeln!(out, "}}");
     out
 }
+

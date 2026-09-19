@@ -1,28 +1,7 @@
-//! Kotlin type + codec generator.
-//!
-//! Emits `data class` / `enum class` / `sealed class` declarations for
-//! every [`TypeDef`] the contract references, plus a [`<T>CodecsImpl`]
-//! implementing the codec interface the host dispatcher generator emits.
-//!
-//! Wire encoding rules mirror `crates/plugins/src/*.rs`'s `#[message]`
-//! output:
-//!
-//! * Struct — fields in declaration order, no length prefix.
-//! * Enum without payload — u32 varint discriminant.
-//! * Enum with payload — u32 varint discriminant + per-variant payload.
-//! * Vec — u64 varint length + elements.
-//! * Option — 0x00 (None) or 0x01 + value.
-//!
-//! `NativeHandleId` is treated as an opaque `Long` typealias — the
-//! generator emits `readNativeHandleId` / `writeNativeHandleId` mapping
-//! to a plain `Long` varint but does not emit a `typealias`; the demo's
-//! runtime declares that in `PluginHandler.kt`.
-
 use std::fmt::Write as _;
 
 use crate::contract::{Contract, EnumDef, StructDef, TypeDef, TypeRef};
 
-/// Renders type declarations for `contract`.
 #[must_use]
 pub fn generate_kotlin_types(contract: &Contract) -> String {
     let mut out = String::new();
@@ -37,7 +16,6 @@ pub fn generate_kotlin_types(contract: &Contract) -> String {
     out
 }
 
-/// Renders the codec impl class for `contract`.
 #[must_use]
 pub fn generate_kotlin_codecs(contract: &Contract) -> String {
     let mut out = String::new();
@@ -69,8 +47,6 @@ fn write_header(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "// plugin id: {}", contract.plugin_id);
 }
 
-// ---- Type declarations --------------------------------------------------
-
 fn write_struct(out: &mut String, s: &StructDef) {
     let _ = writeln!(out, "data class {}(", s.name);
     for (i, f) in s.fields.iter().enumerate() {
@@ -93,9 +69,7 @@ fn write_enum(out: &mut String, e: &EnumDef) {
             if v.payload.is_empty() {
                 let _ = writeln!(out, "    object {} : {}()", v.name, e.name);
             } else {
-                // Payload is currently modelled as a single `TypeRef` per
-                // variant; when a variant grows fields, extend `EnumVariant`
-                // with a struct-like shape.
+
                 let ty = v.payload[0].to_kotlin();
                 let _ = writeln!(
                     out,
@@ -108,10 +82,8 @@ fn write_enum(out: &mut String, e: &EnumDef) {
     let _ = writeln!(out, "}}");
 }
 
-// ---- Codec impls --------------------------------------------------------
-
 fn write_struct_codec(out: &mut String, s: &StructDef) {
-    // read
+
     let _ = writeln!(
         out,
         "    override fun read{}(bytes: ByteArray, offset: Int): Bincode.Decoded<{}> {{",
@@ -134,7 +106,7 @@ fn write_struct_codec(out: &mut String, s: &StructDef) {
     );
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
-    // write
+
     let _ = writeln!(
         out,
         "    override fun write{}(out: ByteArrayOutputStream, value: {}) {{",
@@ -148,7 +120,7 @@ fn write_struct_codec(out: &mut String, s: &StructDef) {
 
 fn write_enum_codec(out: &mut String, e: &EnumDef) {
     let has_payload = e.variants.iter().any(|v| !v.payload.is_empty());
-    // ---- read
+
     let _ = writeln!(
         out,
         "    override fun read{}(bytes: ByteArray, offset: Int): Bincode.Decoded<{}> {{",
@@ -202,7 +174,7 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
     }
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
-    // ---- write
+
     let _ = writeln!(
         out,
         "    override fun write{}(out: ByteArrayOutputStream, value: {}) {{",
@@ -253,10 +225,6 @@ fn write_native_handle_codec(out: &mut String) {
     let _ = writeln!(out, "    }}");
 }
 
-// ---- Field read/write helpers -------------------------------------------
-
-/// Reads the value for `field_name` (advancing `cursor`) into a local
-/// `val <field_name>: T`.
 fn write_read_field(out: &mut String, indent: &str, field_name: &str, ty: &TypeRef) {
     write_read_bindings_for(out, indent, field_name, ty);
 }
@@ -441,3 +409,4 @@ fn contract_references_native_handle(contract: &Contract) -> bool {
             || m.error.as_ref().is_some_and(walks)
     }) || contract.init.as_ref().is_some_and(walks)
 }
+

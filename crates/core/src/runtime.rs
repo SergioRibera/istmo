@@ -1,21 +1,3 @@
-//! Per-process runtime: the plumbing hub every plugin talks to.
-//!
-//! The runtime holds no domain state. It owns:
-//!
-//! * The outbound channel to the platform backend.
-//! * The routing tables mapping in-flight `call_id`s / `stream_id`s back to
-//!   their Rust futures / streams.
-//! * The main-thread dispatcher abstraction.
-//! * The early-event store.
-//! * A single monotonic id counter shared by call, stream and instance ids —
-//!   they occupy different tables and are wrapped in distinct newtypes, so
-//!   sharing the counter is safe and reduces bookkeeping.
-//!
-//! [`Runtime::init`] installs a process-global instance behind an
-//! [`OnceLock`]; [`Runtime::global`] returns it. Tests and multi-runtime
-//! scenarios can bypass the global entirely via [`Runtime::mock`] plus
-//! explicit `Arc<Runtime>` passing.
-
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -35,21 +17,25 @@ use crate::protocol::{
 use crate::routing::{CallResult, InstanceEntry, RoutingTables, StreamMessage};
 use crate::sync::lock;
 
-/// Default bounded capacity of the outbound frame channel.
+/// Default depth of the outbound envelope channel.
 pub const DEFAULT_OUTBOUND_CAPACITY: usize = 256;
 
-/// Configuration for a real (non-mock) runtime.
+/// Startup parameters for [`Runtime::init`].
 #[derive(Debug)]
 pub struct RuntimeConfig {
-    /// Dispatcher used to schedule work back onto the platform main thread.
+    /// Adapter used to hop work onto the platform's main thread.
     pub main_thread: Arc<dyn MainThread>,
-    /// Bounded capacity of the outbound frame channel.
+    /// Capacity of the outbound envelope channel — controls how many
+    /// frames can queue up before a producer starts blocking.
     pub outbound_capacity: usize,
 }
 
 impl RuntimeConfig {
-    /// Config with an [`InlineMainThread`] dispatcher and the default outbound
-    /// capacity. Suitable for desktop mock backends.
+    /// A minimal configuration that runs every main-thread task inline
+    /// on the caller.
+    ///
+    /// Suitable for desktop binaries and tests; mobile transports supply
+    /// their own [`MainThread`] impl instead.
     #[must_use]
     pub fn inline() -> Self {
         Self {
@@ -59,22 +45,24 @@ impl RuntimeConfig {
     }
 }
 
-/// Bundle returned by [`Runtime::init`] or [`Runtime::mock`]: the runtime
-/// itself and the receiver end of the outbound channel that a platform
-/// backend must drain.
-///
-/// Supports a small builder API — [`Self::host`], [`Self::expects`] and
-/// [`Self::finish`] — so the `istmo::runtime!` macro and tests can write:
-/// `Runtime::mock().host(Hosted::new(MockX)).expects::<Perms>().finish()`.
+/// Result of [`Runtime::init`]: the shared [`Runtime`] plus the outbound
+/// [`Envelope`] receiver the platform transport must drain.
 #[derive(Debug)]
 pub struct RuntimeInit {
+    /// The freshly built runtime.
     pub runtime: Arc<Runtime>,
+    /// Receiver for outbound envelopes. The platform transport (JNI
+    /// pump on Android, FFI callback on iOS, or an in-process bridge)
+    /// pulls from this channel and forwards each envelope to the peer.
     pub outbound: FlumeReceiver<Envelope>,
 }
 
 impl RuntimeInit {
-    /// Registers a hosted plugin dispatcher on the runtime and returns
-    /// `self` so the call chains.
+    /// Register a Rust-hosted plugin dispatcher.
+    ///
+    /// Chainable with [`expects`](Self::expects) / [`remotes`](Self::remotes)
+    /// / [`finish`](Self::finish); typically driven by the
+    /// [`istmo::runtime!`](../../istmo_macros/macro.runtime.html) macro.
     #[must_use]
     pub fn host<D>(self, dispatcher: D) -> Self
     where
@@ -84,8 +72,10 @@ impl RuntimeInit {
         self
     }
 
-    /// Declares that this process's client side will `acquire()` `T`.
-    /// Chains for use inside the `istmo::runtime!` `plugins:` list.
+    /// Declare that this runtime intends to call plugin `T`.
+    ///
+    /// Used by [`finish`](Self::finish) to enforce that every plugin the
+    /// app touches is wired up before the runtime starts serving calls.
     #[must_use]
     pub fn expects<T>(self) -> Self
     where
@@ -95,10 +85,10 @@ impl RuntimeInit {
         self
     }
 
-    /// Declares that `T`'s wire id is routed through a `:remote` bridge —
-    /// outbound frames referencing it are steered into
-    /// [`Runtime::install_remote_envelope_sink`] instead of the typed pump.
-    /// Chains for use inside the `istmo::runtime!` `remote:` list.
+    /// Declare that plugin `T` lives in a remote process and its frames
+    /// should be shuttled through the registered remote envelope sink.
+    ///
+    /// See [`Runtime::install_remote_envelope_sink`].
     #[must_use]
     pub fn remotes<T>(self) -> Self
     where
@@ -108,10 +98,11 @@ impl RuntimeInit {
         self
     }
 
-    /// Turns on strict declaration enforcement. Call once after every
-    /// [`Self::expects`] entry has been registered — subsequent
-    /// `acquire()` calls for undeclared plugins fail fast with
-    /// [`IstmoError::PluginNotDeclared`].
+    /// Enable strict declaration enforcement.
+    ///
+    /// After this call, every outbound call goes through
+    /// [`Runtime::check_declared`]; requests for plugins that were not
+    /// wired up return [`IstmoError::PluginNotDeclared`].
     #[must_use]
     pub fn finish(self) -> Self {
         self.runtime.set_enforce_declarations(true);
@@ -119,70 +110,53 @@ impl RuntimeInit {
     }
 }
 
-/// Callback that receives a fully-encoded [`Envelope`] destined for a
-/// `:remote` peer.
+/// Sink for outbound envelopes destined for a plugin hosted in another
+/// process.
 ///
-/// Installed by the platform backend via
-/// [`Runtime::install_remote_envelope_sink`]; every outbound frame whose
-/// target (plugin id, call id, stream id or instance id) matches a
-/// [`Runtime::declare_remote_plugin`] entry is delivered here instead of
-/// travelling through the typed pump.
-///
-/// The callback is invoked on whichever thread the frame is emitted from
-/// (dispatcher worker, foreground app code, …); implementations that need
-/// to hop threads (e.g. Binder must be called from a specific thread) are
-/// expected to do so internally.
+/// Installed via [`Runtime::install_remote_envelope_sink`]; the sink
+/// receives the fully-encoded bytes and is expected to hand them to the
+/// remote runtime through an IPC channel (Binder on Android, XPC on
+/// Apple platforms, or anything else the app author wires up).
 pub type RemoteEnvelopeSink = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
 
-/// Process-scoped runtime. Never construct directly — use [`Runtime::init`]
-/// or [`Runtime::mock`].
+/// The per-process runtime.
+///
+/// One [`Runtime`] instance owns every routing table, host dispatcher
+/// and early-event store for a process. It is built via [`Runtime::init`]
+/// (or [`Runtime::mock`] in tests) and stashed in a process-global
+/// [`OnceLock`] reachable through [`Runtime::global`].
+///
+/// The runtime is deliberately transport-agnostic: it produces outbound
+/// [`Envelope`]s on a channel and accepts inbound bytes through
+/// [`Runtime::inject_wire_envelope`]. The [`istmo-android`] and
+/// [`istmo-ios`] crates provide the JNI / FFI pumps that connect it to
+/// the native side.
+///
+/// [`istmo-android`]: https://docs.rs/istmo-android
+/// [`istmo-ios`]: https://docs.rs/istmo-ios
 pub struct Runtime {
     outbound: FlumeSender<Envelope>,
     routing: Arc<RoutingTables>,
     early_events: Arc<EarlyEventStore>,
     main_thread: Arc<dyn MainThread>,
     next_id: AtomicU64,
-    /// Declared plugin ids: those the process's client side is allowed to
-    /// `acquire()`. Populated by [`Self::declare_plugin`] via the
-    /// `istmo::runtime!` macro's `plugins:` list.
+
     declared_plugins: Mutex<HashSet<&'static str>>,
-    /// When true, [`Self::check_declared`] rejects ids missing from
-    /// [`Self::declared_plugins`]. Set by `istmo::runtime!` after all
-    /// plugins are declared. Mocks default to permissive so tests can
-    /// construct clients without a full declaration list.
+
     enforce_declarations: std::sync::atomic::AtomicBool,
-    /// Server-side dispatchers keyed by plugin id — populated by
-    /// [`Self::register_host`].
+
     hosts: Mutex<HashMap<&'static str, Arc<dyn Dispatch>>>,
-    /// In-flight hosted calls keyed by call id, mapping to their cooperative
-    /// [`CancelToken`]. Populated by [`Self::dispatch_hosted_call`] before it
-    /// spawns the worker thread; [`Self::cancel_hosted`] either trips an
-    /// existing token or inserts a pre-cancelled one so an inbound
-    /// [`Frame::Cancel`] that races the dispatch entry is not lost.
-    /// The dispatcher thread also consults the token's flag before submitting
-    /// its Respond frame so a cancelled response is dropped rather than raced
-    /// with a stale reply.
+
     cancelled_hosted: Mutex<HashMap<CallId, CancelToken>>,
-    /// Plugin ids whose traffic crosses a `:remote` bridge instead of the
-    /// typed outbound pump. Symmetric — both peers of the bridge declare
-    /// the same set. See [`Self::declare_remote_plugin`].
+
     remote_plugins: Mutex<HashSet<String>>,
-    /// Call ids whose owning plugin is remote. Populated when a
-    /// [`Frame::Call`] / [`Frame::CreateInstance`] is issued or dispatched
-    /// for a remote plugin; consulted by outbound [`Frame::Respond`] /
-    /// [`Frame::Cancel`] classification (which carry only a call id).
+
     remote_calls: Mutex<HashSet<CallId>>,
-    /// Stream ids whose parent Call was remote. Same shape as
-    /// [`Self::remote_calls`] but for [`Frame::Event`] / [`Frame::StreamEnd`]
-    /// frames.
+
     remote_streams: Mutex<HashSet<StreamId>>,
-    /// Instance ids whose plugin is remote. Populated on
-    /// [`Frame::CreateInstance`] response routing; consulted by
-    /// [`Frame::DestroyInstance`] classification.
+
     remote_instances: Mutex<HashSet<InstanceId>>,
-    /// Encoded-envelope sink installed by the platform backend. `None` when
-    /// no bridge is wired; every outbound frame then travels through the
-    /// typed pump regardless of whether its target is declared remote.
+
     remote_sink: Mutex<Option<RemoteEnvelopeSink>>,
 }
 
@@ -198,9 +172,16 @@ impl std::fmt::Debug for Runtime {
 static GLOBAL: OnceLock<Arc<Runtime>> = OnceLock::new();
 
 impl Runtime {
-    /// Installs the process-global runtime. Fails with
-    /// [`IstmoError::RuntimeAlreadyStarted`] if a previous call already
-    /// succeeded.
+    /// Build a runtime and install it as the process-global singleton.
+    ///
+    /// Called once at app startup by the platform transport, typically
+    /// through the [`istmo::runtime!`](../../istmo_macros/macro.runtime.html)
+    /// macro.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IstmoError::RuntimeAlreadyStarted`] if another
+    /// [`Runtime`] has already been installed in this process.
     pub fn init(config: RuntimeConfig) -> Result<RuntimeInit, IstmoError> {
         let init = build(config);
         GLOBAL
@@ -209,52 +190,65 @@ impl Runtime {
         Ok(init)
     }
 
-    /// Returns the process-global runtime, or [`IstmoError::RuntimeNotStarted`]
-    /// if [`Runtime::init`] has not been called yet.
+    /// Return a clone of the process-global runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IstmoError::RuntimeNotStarted`] if [`Runtime::init`]
+    /// has not been called yet.
     pub fn global() -> Result<Arc<Self>, IstmoError> {
         GLOBAL.get().cloned().ok_or(IstmoError::RuntimeNotStarted)
     }
 
-    /// Builds a runtime backed by an inline main-thread dispatcher, without
-    /// touching the process global. Intended for tests and multi-runtime
-    /// scenarios.
+    /// Build a runtime for tests, without touching the process-global
+    /// slot.
+    ///
+    /// Wired with [`RuntimeConfig::inline`] — main-thread tasks run
+    /// synchronously on the caller.
     #[must_use]
     pub fn mock() -> RuntimeInit {
         build(RuntimeConfig::inline())
     }
 
-    /// Access to the main-thread dispatcher configured for this runtime.
+    /// Access the runtime's [`MainThread`] adapter.
     #[must_use]
     pub const fn main_thread(&self) -> &Arc<dyn MainThread> {
         &self.main_thread
     }
 
-    /// Access to the early-event store.
+    /// Access the runtime's early-event store.
     #[must_use]
     pub const fn early_events(&self) -> &Arc<EarlyEventStore> {
         &self.early_events
     }
 
-    /// Access to the routing tables. Reserved for the platform backend and
-    /// generated plugin glue.
+    /// Access the runtime's routing tables.
     #[must_use]
     pub const fn routing(&self) -> &Arc<RoutingTables> {
         &self.routing
     }
 
-    /// Allocates a fresh id from the monotonic counter.
     #[must_use]
     fn next_id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Fires a unary `Call` and returns a [`CallHandle`] that resolves to the
-    /// response.
+    /// Invoke a plugin method and return a [`CallHandle`] that resolves
+    /// to the response.
     ///
-    /// If the plugin is hosted on this same runtime (`hosts:` side of
-    /// `istmo::runtime!`), the Call is dispatched locally and never touches
-    /// the outbound channel — a same-runtime loop is a zero-wire-hop
-    /// round-trip. Otherwise the frame goes out via the platform pump.
+    /// The handle implements [`Future`] and can be `.await`ed directly;
+    /// it can also be resolved synchronously with
+    /// [`CallHandle::recv_blocking`]. Dropping the handle before the
+    /// response arrives cancels the call.
+    ///
+    /// Method arguments are passed as pre-encoded bincode `payload`
+    /// bytes — usually produced by the client generated by
+    /// [`#[plugin]`](../../istmo_macros/attr.plugin.html), so callers
+    /// rarely construct these frames by hand.
+    ///
+    /// # Errors
+    ///
+    /// Any of the routing / channel-closed variants of [`IstmoError`].
     pub fn call(
         self: &Arc<Self>,
         plugin_id: impl Into<String>,
@@ -285,8 +279,16 @@ impl Runtime {
         })
     }
 
-    /// Opens a stream. `capacity == 0` requests an unbounded channel;
-    /// positive values apply back-pressure at the receiver.
+    /// Open a stream-returning plugin method.
+    ///
+    /// Returns a [`StreamHandle`] whose [`recv`](StreamHandle::recv)
+    /// blocks on the next item until the peer signals end-of-stream.
+    /// `capacity` controls how many items may buffer before the producer
+    /// blocks.
+    ///
+    /// # Errors
+    ///
+    /// Any of the routing / channel-closed variants of [`IstmoError`].
     pub fn stream(
         self: &Arc<Self>,
         plugin_id: impl Into<String>,
@@ -314,9 +316,15 @@ impl Runtime {
         })
     }
 
-    /// Requests creation of a native plugin instance. The returned handle
-    /// resolves to the encoded response; plugin-generated code decodes the
-    /// [`InstanceId`] and calls [`Runtime::register_instance`].
+    /// Ask a stateful plugin to construct a new instance.
+    ///
+    /// The returned [`CallHandle`] resolves to the [`InstanceId`] of the
+    /// freshly created instance. Subsequent calls carry that instance id
+    /// to route methods to the correct object on the peer side.
+    ///
+    /// # Errors
+    ///
+    /// Any of the routing / channel-closed variants of [`IstmoError`].
     pub fn create_instance(
         self: &Arc<Self>,
         plugin_id: impl Into<String>,
@@ -337,7 +345,8 @@ impl Runtime {
         })
     }
 
-    /// Records an instance for later routing / bookkeeping.
+    /// Record a locally-hosted plugin instance in the routing tables so
+    /// subsequent inbound calls can find it.
     pub fn register_instance(&self, instance_id: InstanceId, plugin_id: impl Into<String>) {
         self.routing.register_instance(
             instance_id,
@@ -347,33 +356,40 @@ impl Runtime {
         );
     }
 
-    /// Sends `DestroyInstance` and removes the local registration.
+    /// Release a previously created plugin instance and notify the peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IstmoError::ChannelClosed`] if the outbound channel is
+    /// no longer draining (usually a shutting-down runtime).
     pub fn destroy_instance(&self, instance_id: InstanceId) -> Result<(), IstmoError> {
         self.routing.remove_instance(instance_id);
         let envelope = Envelope::new(Frame::DestroyInstance { instance_id });
         self.send_outbound(envelope)
     }
 
-    /// Emits [`Frame::ReleaseNativeHandle`] so the native side can free the
-    /// object backing `handle_id`. Fire-and-forget; the native side must
-    /// treat unknown ids as no-ops.
+    /// Notify the peer that it can drop the platform object backing
+    /// `handle_id`.
     ///
-    /// Called by [`crate::native_handle::NativeHandle`] on drop; plugins
-    /// generally do not need to invoke it directly.
+    /// Called from the [`Drop`] impl of [`NativeHandle`](crate::NativeHandle).
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::ChannelClosed`] when the outbound pump is gone.
     pub fn release_native_handle(&self, handle_id: NativeHandleId) -> Result<(), IstmoError> {
         let envelope = Envelope::new(Frame::ReleaseNativeHandle { handle_id });
         self.send_outbound(envelope)
     }
 
-    /// Fire-and-forget one-way invocation. Local hosts dispatch on a
-    /// worker thread and the outcome is dropped; remote receivers see a
-    /// [`Frame::Notify`] on the wire and must treat unknown methods as
-    /// no-ops.
+    /// Fire-and-forget one-way call.
     ///
-    /// Intended for `Drop`-time release paths (wakelocks, native handles
-    /// that need domain-specific teardown, one-way state signals) where
-    /// blocking on a reply would either deadlock or spawn a helper thread
-    /// just to discard the response.
+    /// No response is expected and no [`CallHandle`] is returned. Useful
+    /// for lifecycle notifications and other observer patterns where
+    /// dropping the ack round-trip is worth the latency saving.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::ChannelClosed`] when the outbound pump is gone.
     pub fn notify(
         self: &Arc<Self>,
         plugin_id: impl Into<String>,
@@ -421,16 +437,25 @@ impl Runtime {
         });
     }
 
-    /// Cancels an in-flight call by removing its local receiver and sending
-    /// a `Cancel` frame to the native side.
+    /// Signal cancellation of an in-flight call.
+    ///
+    /// Locally hosted calls fire their [`CancelToken`]; remote calls
+    /// emit a [`Frame::Cancel`] to the peer.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::ChannelClosed`] if the outbound pump is gone.
     pub fn cancel_call(&self, call_id: CallId) -> Result<(), IstmoError> {
         self.routing.remove_pending(call_id.get());
         let envelope = Envelope::new(Frame::Cancel { call_id });
         self.send_outbound(envelope)
     }
 
-    /// Cancels an open stream. Streams share the numeric id with the
-    /// initiating call, so the same `Cancel` frame terminates them.
+    /// Ask the peer to close a live stream.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::ChannelClosed`] if the outbound pump is gone.
     pub fn cancel_stream(&self, stream_id: StreamId) -> Result<(), IstmoError> {
         self.routing.remove_pending(stream_id.get());
         let envelope = Envelope::new(Frame::Cancel {
@@ -439,21 +464,32 @@ impl Runtime {
         self.send_outbound(envelope)
     }
 
-    /// Decodes a bincoded envelope and dispatches it. Convenience for
-    /// cross-process bridges (`:remote` AIDL/Binder shuttles) that
-    /// receive raw bytes over the transport and want to hand them
-    /// straight to the runtime without unwrapping the codec manually.
+    /// Decode a wire envelope and dispatch it through the runtime.
+    ///
+    /// Used by transport crates to hand received bytes back to the
+    /// runtime.
     ///
     /// # Errors
-    /// Returns [`IstmoError::ProtocolVersionMismatch`] on version drift,
-    /// otherwise the codec error surfaces through [`IstmoError::Codec`].
+    ///
+    /// Any variant of [`IstmoError`] surfaced by
+    /// [`Envelope::from_wire_bytes`] or [`Runtime::dispatch_inbound`].
     pub fn inject_wire_envelope(self: &Arc<Self>, bytes: &[u8]) -> Result<(), IstmoError> {
         let envelope = Envelope::from_wire_bytes(bytes)?;
         self.dispatch_inbound(envelope)
     }
 
-    /// Routes an inbound envelope. Called by the platform backend for each
-    /// frame received from native.
+    /// Dispatch an already-decoded envelope.
+    ///
+    /// Routes call frames to the matching registered dispatcher,
+    /// completes pending [`CallHandle`]s from response frames, forwards
+    /// stream events, and so on.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::UnknownPlugin`], [`IstmoError::UnknownInstance`],
+    /// [`IstmoError::UnknownCallId`] or [`IstmoError::UnknownStreamId`]
+    /// when the frame references something the routing tables don't know
+    /// about.
     pub fn dispatch_inbound(self: &Arc<Self>, envelope: Envelope) -> Result<(), IstmoError> {
         if envelope.version != PROTOCOL_VERSION {
             return Err(IstmoError::ProtocolVersionMismatch {
@@ -512,8 +548,10 @@ impl Runtime {
         }
     }
 
-    /// Registers a hosted plugin dispatcher. Called by the `istmo::runtime!`
-    /// macro for every trait in the `hosts:` or `services:` section.
+    /// Register a Rust-hosted plugin dispatcher.
+    ///
+    /// Called through [`RuntimeInit::host`] during startup; rarely used
+    /// directly outside macro-generated code.
     pub fn register_host<D: Dispatch>(self: &Arc<Self>, dispatcher: D) {
         let plugin_id = dispatcher.plugin_id();
         let dispatcher: Arc<dyn Dispatch> = Arc::new(dispatcher);
@@ -521,63 +559,59 @@ impl Runtime {
         lock(&self.hosts).insert(plugin_id, dispatcher);
     }
 
-    /// Records that this process expects a plugin id on the client side.
-    /// `acquire`-style helpers fail with [`IstmoError::PluginNotDeclared`]
-    /// for ids not in this set.
+    /// Record that this runtime expects to call plugin `plugin_id`.
+    ///
+    /// Interacts with [`Runtime::set_enforce_declarations`] to reject
+    /// calls to plugins that were never wired up.
     pub fn declare_plugin(&self, plugin_id: &'static str) {
         lock(&self.declared_plugins).insert(plugin_id);
     }
 
-    /// Returns `true` when `plugin_id` was previously passed to
-    /// [`Self::declare_plugin`].
     #[must_use]
+    /// Return `true` if `plugin_id` has been declared on this runtime.
     pub fn is_plugin_declared(&self, plugin_id: &str) -> bool {
         lock(&self.declared_plugins).contains(plugin_id)
     }
 
-    /// Turns strict declaration checking on. The `istmo::runtime!` macro
-    /// enables it after adding every `plugins:` entry so that late
-    /// `acquire()` calls for undeclared ids fail fast.
+    /// Toggle strict declaration enforcement.
+    ///
+    /// When enabled, [`check_declared`](Self::check_declared) rejects
+    /// calls to plugins that were not declared via
+    /// [`declare_plugin`](Self::declare_plugin).
     pub fn set_enforce_declarations(&self, enforce: bool) {
         self.enforce_declarations.store(enforce, Ordering::Relaxed);
     }
 
-    /// Marks `plugin_id` as living behind a `:remote` bridge. Both peers of
-    /// the bridge declare the same set so that outbound frames referencing
-    /// the id ([`Frame::Call`], [`Frame::CreateInstance`], [`Frame::Notify`]
-    /// plus their follow-up [`Frame::Respond`] / [`Frame::Cancel`] /
-    /// [`Frame::Event`] / [`Frame::StreamEnd`] frames) are steered through
-    /// [`Self::install_remote_envelope_sink`] instead of the typed pump.
+    /// Mark `plugin_id` as living in a separate process.
     ///
-    /// Idempotent — re-declaring the same id is a no-op.
+    /// Frames targeted at a remote plugin are steered through the sink
+    /// installed via [`install_remote_envelope_sink`](Self::install_remote_envelope_sink)
+    /// instead of the outbound envelope channel.
     pub fn declare_remote_plugin(&self, plugin_id: impl Into<String>) {
         lock(&self.remote_plugins).insert(plugin_id.into());
     }
 
-    /// Returns `true` when `plugin_id` was previously passed to
-    /// [`Self::declare_remote_plugin`].
     #[must_use]
+    /// Return `true` if `plugin_id` is routed through the remote sink.
     pub fn is_remote_plugin(&self, plugin_id: &str) -> bool {
         lock(&self.remote_plugins).contains(plugin_id)
     }
 
-    /// Installs the encoded-envelope sink invoked for frames destined for a
-    /// declared-remote plugin. Overwrites any previous sink.
+    /// Install (or replace) the sink that receives envelopes destined
+    /// for a remote-process plugin.
+    ///
+    /// The sink is called from whatever thread produced the outbound
+    /// frame; it is expected to enqueue the bytes onto the platform's
+    /// IPC channel and return quickly.
     pub fn install_remote_envelope_sink(&self, sink: RemoteEnvelopeSink) {
         *lock(&self.remote_sink) = Some(sink);
     }
 
-    /// Routes an outbound envelope through either the remote-bridge sink
-    /// (when the frame's target is a declared remote plugin) or the local
-    /// typed pump. Every outbound emission in the runtime funnels through
-    /// this method — do NOT push to [`Self::outbound`] directly.
     fn send_outbound(&self, envelope: Envelope) -> Result<(), IstmoError> {
         let sink = lock(&self.remote_sink).clone();
         if sink.is_some() && self.classify_and_track(&envelope.frame) {
             let bytes = envelope.to_wire_bytes()?;
-            // `sink` re-fetched above is a Clone of Arc<dyn Fn>; call it
-            // outside the mutex guard so the callback can freely call back
-            // into runtime methods without deadlocking.
+
             if let Some(sink) = sink {
                 sink(bytes);
                 return Ok(());
@@ -588,23 +622,6 @@ impl Runtime {
             .map_err(|_| IstmoError::ChannelClosed)
     }
 
-    /// Returns `true` when `frame` targets a `:remote`-declared plugin, and
-    /// updates the runtime's per-id tracking sets so follow-up frames route
-    /// consistently:
-    ///
-    /// * [`Frame::Call`] / [`Frame::CreateInstance`] with a matching plugin
-    ///   id → record `call_id`.
-    /// * [`Frame::Cancel`] / [`Frame::Respond`] → consult `remote_calls`,
-    ///   remove on Respond (a Respond terminates the call from the runtime's
-    ///   bookkeeping point of view).
-    /// * [`Frame::Event`] / [`Frame::StreamEnd`] → consult `remote_streams`,
-    ///   remove on `StreamEnd`.
-    /// * [`Frame::DestroyInstance`] → consult `remote_instances`, remove
-    ///   after check.
-    /// * [`Frame::Notify`] / [`Frame::EarlyEvent`] → plugin-id classification
-    ///   only.
-    /// * [`Frame::ReleaseNativeHandle`] → always local for now (handles
-    ///   rarely cross the bridge; add tracking when a real case surfaces).
     fn classify_and_track(&self, frame: &Frame) -> bool {
         match frame {
             Frame::Call {
@@ -654,30 +671,31 @@ impl Runtime {
         }
     }
 
-    /// Records `instance_id` as living inside a remote process. Called from
-    /// the client-side glue after a [`Frame::CreateInstance`] response
-    /// resolves and [`Self::register_instance`] is invoked, so that a later
-    /// [`Frame::DestroyInstance`] frame is routed through the bridge.
+    /// Record that a given [`InstanceId`] lives in a remote process.
+    ///
+    /// Called by the remote-bridge receive side after adopting a
+    /// [`Frame::CreateInstance`] response so the runtime routes future
+    /// calls to the correct sink.
     pub fn mark_instance_remote(&self, instance_id: InstanceId) {
         lock(&self.remote_instances).insert(instance_id);
     }
 
-    /// Records `call_id` as originating from a remote bridge. Called from
-    /// the receive-side of a `:remote` bridge just before
-    /// [`Self::inject_wire_envelope`] delivers the frame, so that the
-    /// eventual [`Frame::Respond`] / [`Frame::StreamEnd`] emitted by a
-    /// locally-hosted dispatcher travels back through the sink.
+    /// Record that a given [`CallId`] originated on a remote process.
+    ///
+    /// Used by the remote-bridge receive side so the eventual
+    /// [`Frame::Respond`] is steered back through the sink instead of
+    /// completing a local call handle.
     pub fn mark_call_remote(&self, call_id: CallId) {
         lock(&self.remote_calls).insert(call_id);
         lock(&self.remote_streams).insert(StreamId(call_id.get()));
     }
 
-    /// Validates that `plugin_id` is declared for this process. When
-    /// enforcement is off (the default for mocks), always returns `Ok(())`.
+    /// Verify that `plugin_id` has been declared on this runtime.
     ///
     /// # Errors
-    /// Returns [`IstmoError::PluginNotDeclared`] when enforcement is on and
-    /// the id is missing from the declared set.
+    ///
+    /// [`IstmoError::PluginNotDeclared`] when enforcement is enabled
+    /// and the plugin is missing from the declaration set.
     pub fn check_declared(&self, plugin_id: &'static str) -> Result<(), IstmoError> {
         if !self.enforce_declarations.load(Ordering::Relaxed) {
             return Ok(());
@@ -749,10 +767,6 @@ impl Runtime {
         });
     }
 
-    /// Drain `receiver` on a background thread, emitting a
-    /// [`Frame::Event`] per item and a `StreamEnd { Complete }` when the
-    /// sender disconnects. Uses local short-circuit when a same-runtime
-    /// caller is waiting on `stream_id`.
     fn spawn_stream_pump(
         self: &Arc<Self>,
         stream_id: StreamId,
@@ -801,10 +815,7 @@ impl Runtime {
     }
 
     fn send_respond(&self, call_id: CallId, result: CallResult) {
-        // Local short-circuit: if a same-runtime caller is waiting on this
-        // call id, deliver the response into its routing entry without a
-        // wire round-trip. Otherwise the response is destined for a remote
-        // consumer (Kotlin / iOS) and goes out through the pump.
+
         if self.routing.has_pending(call_id.get()) {
             if let Err(err) = self.routing.deliver_response(call_id, result) {
                 tracing::warn!(?err, "local Respond delivery failed");
@@ -820,29 +831,25 @@ impl Runtime {
         }
     }
 
-    /// Publishes `payload` to the latest-value slot named `channel`, creating
-    /// the slot on first use.
+    /// Publish a value on an early-event channel with
+    /// [`EarlyEventKind::Latest`] semantics.
     ///
-    /// Intended for the platform backend to forward events whose consumer may
-    /// not have subscribed yet (application lifecycle transitions being the
-    /// canonical case). A late [`crate::early_events::LatestValueSlot::subscribe`]
-    /// caller immediately observes the last value published here.
+    /// Only the most recent value is retained; late subscribers see it
+    /// on first attach.
     pub fn publish_early_latest(&self, channel: &str, payload: Vec<u8>) {
         self.early_events.latest_slot(channel).publish(payload);
     }
 
-    /// Publishes `payload` to the pre-main queue named `channel`, creating the
-    /// queue with the given `capacity` on first use. When the queue already
-    /// exists, its previously-configured capacity is preserved.
+    /// Publish onto an early-event channel with FIFO retention.
     ///
-    /// Intended for launch-intent-style events (deep links, launch push
-    /// notifications) that may be produced before the plugin subscribes.
+    /// Retains up to `capacity` values; overflow drops the oldest entry.
+    /// Late subscribers receive the buffered items in publish order.
     pub fn publish_early_queue(&self, channel: &str, capacity: usize, payload: Vec<u8>) {
         self.early_events.queue(channel, capacity).publish(payload);
     }
 
-    /// Cancels every in-flight call / stream. Intended for platform
-    /// teardown (Activity destroyed, application terminating).
+    /// Drop every pending call, close the outbound channel, and mark
+    /// the runtime as no longer accepting work.
     pub fn shutdown(&self) {
         let count = self.routing.cancel_all_pending();
         if count > 0 {
@@ -851,9 +858,6 @@ impl Runtime {
     }
 }
 
-/// Encodes a dispatch error as a bincode string so the client at least sees a
-/// human-readable domain error. This is a fallback for infrastructure failures
-/// (unknown method, decode failure); genuine domain errors use their own type.
 fn encode_dispatch_error_string(message: &str) -> Vec<u8> {
     crate::codec::encode(&message.to_owned()).unwrap_or_default()
 }
@@ -882,8 +886,11 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
     }
 }
 
-/// Handle to an in-flight unary call. Resolves to the encoded response, and
-/// automatically sends a `Cancel` frame if dropped before it completes.
+/// Handle to an in-flight unary call.
+///
+/// Returned by [`Runtime::call`] and [`Runtime::create_instance`]. The
+/// handle implements [`Future`] so it can be `.await`ed; dropping it
+/// before the response arrives sends a [`Frame::Cancel`] to the peer.
 #[derive(Debug)]
 pub struct CallHandle {
     call_id: CallId,
@@ -892,14 +899,19 @@ pub struct CallHandle {
 }
 
 impl CallHandle {
-    /// The call id assigned by the runtime.
+    /// The [`CallId`] this handle is waiting on.
     #[must_use]
     pub const fn call_id(&self) -> CallId {
         self.call_id
     }
 
-    /// Blocks the current thread until the response arrives. Intended for
-    /// tests and mock backends.
+    /// Synchronously block the current thread until the response
+    /// arrives.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::ChannelClosed`] if the response channel is closed
+    /// before a value is delivered (usually a shutting-down runtime).
     pub fn recv_blocking(mut self) -> Result<CallResult, IstmoError> {
         let rx = self.receiver.take().ok_or(IstmoError::ChannelClosed)?;
         rx.recv().map_err(|_| IstmoError::ChannelClosed)
@@ -934,15 +946,18 @@ impl Drop for CallHandle {
             return;
         }
         if let Some(rt) = self.runtime.upgrade() {
-            // A closed outbound channel means the runtime is going away and
-            // any Cancel would race with shutdown — no point surfacing the error.
+
             drop(rt.cancel_call(self.call_id));
         }
     }
 }
 
-/// Handle to an open stream. Automatically sends a `Cancel` frame on drop,
-/// which is idempotent on the native side.
+/// Handle to a live event stream.
+///
+/// Returned by [`Runtime::stream`]. Items are delivered in publish
+/// order; dropping the handle asks the peer to close the stream. All
+/// three receive shapes (blocking, async, non-blocking peek) are
+/// available.
 #[derive(Debug)]
 pub struct StreamHandle {
     stream_id: StreamId,
@@ -951,18 +966,27 @@ pub struct StreamHandle {
 }
 
 impl StreamHandle {
-    /// The stream id assigned by the runtime.
+    /// The [`StreamId`] backing this handle.
     #[must_use]
     pub const fn stream_id(&self) -> StreamId {
         self.stream_id
     }
 
-    /// Blocks until the next stream message arrives.
+    /// Block the current thread until the next stream message arrives.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::ChannelClosed`] if the stream's channel closes
+    /// without delivering another value.
     pub fn recv(&self) -> Result<StreamMessage, IstmoError> {
         self.receiver.recv().map_err(|_| IstmoError::ChannelClosed)
     }
 
-    /// Awaits the next stream message.
+    /// Async variant of [`recv`](Self::recv).
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::ChannelClosed`] on channel disconnection.
     pub async fn recv_async(&self) -> Result<StreamMessage, IstmoError> {
         self.receiver
             .recv_async()
@@ -970,7 +994,7 @@ impl StreamHandle {
             .map_err(|_| IstmoError::ChannelClosed)
     }
 
-    /// Non-blocking read of the next available message.
+    /// Non-blocking peek. Returns `None` if no message is buffered.
     #[must_use]
     pub fn try_recv(&self) -> Option<StreamMessage> {
         self.receiver.try_recv().ok()
@@ -984,3 +1008,4 @@ impl Drop for StreamHandle {
         }
     }
 }
+

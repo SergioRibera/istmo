@@ -1,10 +1,3 @@
-//! End-to-end verification of `#[istmo::service]` and the `services:` section
-//! of `istmo::runtime!`.
-//!
-//! Drives the adapter through the same inbound-frame path a real platform
-//! backend would use, then asserts the adapter spawned the service body and
-//! the stop signal wakes it up.
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -40,7 +33,6 @@ impl SyncService for SyncImpl {
             .push(ctx.service_id().to_owned());
         while !ctx.is_stopped() {
             self.ticks.fetch_add(1, Ordering::SeqCst);
-            // Cooperative sleep so the loop doesn't burn a whole core.
             thread::sleep(Duration::from_millis(1));
         }
         Ok(())
@@ -58,7 +50,6 @@ fn service_adapter_starts_and_stops_worker_thread() {
     let init = Runtime::mock().host(adapter).finish();
     let rt = init.runtime;
 
-    // Simulate the platform calling `on_start`.
     let call_id = istmo::CallId(1);
     let payload = codec::encode(&("service-a".to_owned(),)).unwrap();
     rt.dispatch_inbound(Envelope::new(Frame::Call {
@@ -70,7 +61,6 @@ fn service_adapter_starts_and_stops_worker_thread() {
     }))
     .unwrap();
 
-    // Wait until the service thread has recorded at least one tick.
     let start = std::time::Instant::now();
     while sync.ticks.load(Ordering::SeqCst) == 0 {
         assert!(
@@ -81,7 +71,6 @@ fn service_adapter_starts_and_stops_worker_thread() {
     }
     assert_eq!(sync.started_ids.lock().unwrap().as_slice(), ["service-a"]);
 
-    // Now simulate `on_stop`.
     let stop_payload = codec::encode(&()).unwrap();
     rt.dispatch_inbound(Envelope::new(Frame::Call {
         call_id: istmo::CallId(2),
@@ -92,8 +81,6 @@ fn service_adapter_starts_and_stops_worker_thread() {
     }))
     .unwrap();
 
-    // The adapter's on_stop dispatch runs asynchronously on a worker
-    // thread; wait for the counter to bump.
     let start = std::time::Instant::now();
     while sync.stops.load(Ordering::SeqCst) == 0 {
         assert!(
@@ -114,5 +101,6 @@ fn adapter_reports_stable_plugin_id() {
         "myapp.sync"
     );
     assert_eq!(adapter.plugin_id(), "myapp.sync");
-    let _ = Outcome::Ok(Vec::new()); // silence unused re-export warning
+    let _ = Outcome::Ok(Vec::new());
 }
+

@@ -1,14 +1,10 @@
-//! Main-thread dispatcher abstraction.
+//! "Run this on the platform's main thread" abstraction.
 //!
-//! On Android this is backed by a `Handler` bound to the main `Looper`; on
-//! iOS by `dispatch_async` on the main queue. Neither backend exists at M0 —
-//! this module provides the trait plus two implementations used by tests and
-//! by desktop / mock backends:
-//!
-//! * [`InlineMainThread`] runs the closure immediately on the caller's thread.
-//! * [`MockMainThread`] queues closures for later inspection via [`drain`].
-//!
-//! [`drain`]: MockMainThread::drain
+//! Every platform surface (Android UI, iOS main queue, desktop event
+//! loops) needs a way to hand a small closure back to the UI thread.
+//! [`MainThread`] is that seam; implementations live in the transport
+//! crates. Desktop / test code typically wires an [`InlineMainThread`]
+//! that runs work on the caller.
 
 use std::fmt;
 
@@ -16,17 +12,23 @@ use flume::{Receiver, Sender, bounded};
 
 use crate::sync::lock;
 
-/// Any type able to schedule work on the platform main thread.
+/// Abstraction over "post this task to the platform's main thread".
 pub trait MainThread: Send + Sync + fmt::Debug {
-    /// Enqueue a closure to be executed on the main thread.
+    /// Schedule `task` on the main thread.
+    ///
+    /// Implementations are free to run the task synchronously
+    /// (see [`InlineMainThread`]) or defer it to a real event loop.
     fn run(&self, task: Task);
 }
 
-/// Boxed closure enqueued on a [`MainThread`] dispatcher.
+/// Boxed callback dispatched through [`MainThread::run`].
 pub type Task = Box<dyn FnOnce() + Send + 'static>;
 
-/// Dispatcher that runs every task inline on the caller's thread. Useful for
-/// desktop / test scenarios where "main thread" has no special meaning.
+/// A [`MainThread`] that runs each task synchronously on the calling
+/// thread.
+///
+/// Suitable for desktop binaries, headless services and tests where
+/// there is no dedicated UI thread to hop onto.
 #[derive(Debug, Default)]
 pub struct InlineMainThread;
 
@@ -36,12 +38,11 @@ impl MainThread for InlineMainThread {
     }
 }
 
-/// Dispatcher that captures tasks in a bounded queue for deterministic tests.
+/// A [`MainThread`] that buffers tasks in memory for later inspection.
 ///
-/// Tasks are executed only when [`drain`] is called; the returned count is the
-/// number of tasks that ran on that call.
-///
-/// [`drain`]: MockMainThread::drain
+/// Used in unit tests to observe or drain scheduled callbacks without a
+/// real runloop; call [`MockMainThread::drain`] from the test thread to
+/// run every buffered task.
 pub struct MockMainThread {
     tx: Sender<Task>,
     rx: std::sync::Mutex<Receiver<Task>>,
@@ -54,13 +55,13 @@ impl Default for MockMainThread {
 }
 
 impl MockMainThread {
-    /// Creates a dispatcher with the default queue capacity.
+    /// Build a mock main thread with the default buffer capacity.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Creates a dispatcher with an explicit queue capacity.
+    /// Build a mock main thread with a custom buffer capacity.
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         let (tx, rx) = bounded(capacity);
@@ -70,7 +71,7 @@ impl MockMainThread {
         }
     }
 
-    /// Executes every task currently queued and returns how many ran.
+    /// Run every currently buffered task and return the number executed.
     pub fn drain(&self) -> usize {
         let rx = lock(&self.rx);
         let mut count = 0;
@@ -90,9 +91,6 @@ impl fmt::Debug for MockMainThread {
 
 impl MainThread for MockMainThread {
     fn run(&self, task: Task) {
-        // A closed / full queue means the runtime is shutting down; dropping
-        // the task is the correct outcome — the receiver end owns the mock and
-        // simply won't observe further tasks.
         drop(self.tx.send(task));
     }
 }

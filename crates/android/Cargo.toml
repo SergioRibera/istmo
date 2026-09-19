@@ -19,17 +19,12 @@ flume = { workspace = true }
 tracing = { workspace = true }
 jni = { workspace = true }
 
-# `android-activity` pulls `ndk-sys`, which refuses to compile off-android.
-# Target-gate it so `cargo check --workspace` on a Linux dev host still
-# works — the empty `pub mod app` on non-android targets keeps the facade's
-# `pub use istmo_android as android` re-export a valid path.
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", features = ["native-activity"] }
 
 [lints.rust]
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
-# Overrides workspace-wide forbid: JNI requires unsafe.
 unsafe_code = "allow"
 
 [lints.clippy]
@@ -39,7 +34,5 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 missing_safety_doc = "allow"
-# Rust's `unreachable_pub` and clippy's `redundant_pub_crate` contradict for
-# `pub` items inside private modules. We keep `unreachable_pub` (rust warns
-# by workspace policy) and silence the clippy counterpart.
 redundant_pub_crate = "allow"
+

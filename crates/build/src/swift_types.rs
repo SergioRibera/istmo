@@ -1,28 +1,7 @@
-//! Swift type + codec generator.
-//!
-//! Emits `struct` / `enum` declarations for every [`TypeDef`] the
-//! contract references, plus a `<T>CodecsImpl` class implementing the
-//! codec protocol the host dispatcher generator emits.
-//!
-//! Wire encoding mirrors the Rust `#[message]` output:
-//!
-//! * Struct — fields in declaration order.
-//! * Enum without payload — `enum: UInt32 { case foo = 0 }` + u32 varint.
-//! * Enum with payload — `enum { case foo(T); case bar }` + u32 varint
-//!   discriminant + payload.
-//! * Vec / Option — combinator helpers on `Bincode`.
-//!
-//! `NativeHandleId` is treated as an opaque `UInt64` typealias — the
-//! generator emits `readNativeHandleId` / `writeNativeHandleId` mapping
-//! to a plain `UInt64` varint but does not emit the typealias; the demo's
-//! runtime declares that in `PluginHandler.swift` alongside the
-//! `HandleReleaser` protocol.
-
 use std::fmt::Write as _;
 
 use crate::contract::{Contract, EnumDef, StructDef, TypeDef, TypeRef};
 
-/// Renders Swift `struct` / `enum` declarations for `contract`.
 #[must_use]
 pub fn generate_swift_types(contract: &Contract) -> String {
     let mut out = String::new();
@@ -39,7 +18,6 @@ pub fn generate_swift_types(contract: &Contract) -> String {
     out
 }
 
-/// Renders the codec impl class for `contract`.
 #[must_use]
 pub fn generate_swift_codecs(contract: &Contract) -> String {
     let mut out = String::new();
@@ -74,8 +52,6 @@ fn write_header(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "// plugin id: {}", contract.plugin_id);
 }
 
-// ---- Type declarations --------------------------------------------------
-
 fn write_struct(out: &mut String, s: &StructDef) {
     let _ = writeln!(out, "public struct {} {{", s.name);
     for f in &s.fields {
@@ -104,8 +80,7 @@ fn write_enum(out: &mut String, e: &EnumDef) {
             let _ = writeln!(out, "    case {case_name} = {i}");
         }
     } else {
-        // Errors conform to `Error` so the codegen dispatcher's `catch
-        // let err as <T>` arm compiles.
+
         let error_conform = if is_error_shape(&e.name) {
             ": Error"
         } else {
@@ -129,11 +104,6 @@ fn is_error_shape(name: &str) -> bool {
     name.ends_with("Error")
 }
 
-/// Lowercase the first character so Rust `PascalCase` variants match
-/// Swift `camelCase` case conventions. Preserves subsequent characters
-/// so `NotSupported` → `notSupported`. Backticks the result when it
-/// collides with a Swift keyword (e.g. `Default` → `` `default` ``,
-/// `Internal` → `` `internal` ``).
 fn to_swift_case(name: &str) -> String {
     let mut chars = name.chars();
     let base = match chars.next() {
@@ -147,10 +117,6 @@ fn to_swift_case(name: &str) -> String {
     }
 }
 
-/// Reserved words that would confuse the Swift parser at a `case`
-/// declaration or a `.<case>` reference. Any variant name that lowercases
-/// to one of these gets wrapped in backticks. Extend as new plugins
-/// introduce fresh collisions.
 const SWIFT_KEYWORDS: &[&str] = &[
     "associatedtype",
     "as",
@@ -212,10 +178,8 @@ const SWIFT_KEYWORDS: &[&str] = &[
     "while",
 ];
 
-// ---- Codec impls --------------------------------------------------------
-
 fn write_struct_codec(out: &mut String, s: &StructDef) {
-    // read
+
     let _ = writeln!(
         out,
         "    public func read{}(_ c: inout Bincode.Cursor) throws -> {} {{",
@@ -233,7 +197,7 @@ fn write_struct_codec(out: &mut String, s: &StructDef) {
     let _ = writeln!(out, "        return {}({init_args})", s.name);
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
-    // write
+
     let _ = writeln!(
         out,
         "    public func write{}(_ out: inout Data, _ value: {}) {{",
@@ -247,7 +211,7 @@ fn write_struct_codec(out: &mut String, s: &StructDef) {
 
 fn write_enum_codec(out: &mut String, e: &EnumDef) {
     let has_payload = e.variants.iter().any(|v| !v.payload.is_empty());
-    // ---- read
+
     let _ = writeln!(
         out,
         "    public func read{}(_ c: inout Bincode.Cursor) throws -> {} {{",
@@ -285,7 +249,7 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
     }
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
-    // ---- write
+
     let _ = writeln!(
         out,
         "    public func write{}(_ out: inout Data, _ value: {}) {{",
@@ -326,8 +290,6 @@ fn write_native_handle_codec(out: &mut String) {
     let _ = writeln!(out, "        Bincode.writeVarintU64(&out, value)");
     let _ = writeln!(out, "    }}");
 }
-
-// ---- Field read/write helpers -------------------------------------------
 
 fn write_read_field(out: &mut String, indent: &str, binding: &str, ty: &TypeRef) {
     if let TypeRef::Named(name) = ty {
@@ -477,3 +439,4 @@ fn contract_references_native_handle(contract: &Contract) -> bool {
             || m.error.as_ref().is_some_and(walks)
     }) || contract.init.as_ref().is_some_and(walks)
 }
+

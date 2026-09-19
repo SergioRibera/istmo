@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "istmo-android-demo"
 include(":app")
+

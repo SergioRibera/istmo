@@ -1,26 +1,3 @@
-// iOS impl of `AdMobBackend` using Google Mobile Ads SDK v11.x.
-//
-// Three ad formats:
-//
-// * **Interstitial** — `GADInterstitialAd.load(withAdUnitID:...)` +
-//   `present(fromRootViewController:)`. The load is async; the show
-//   returns once the ad is dismissed via a `GADFullScreenContentDelegate`.
-// * **Rewarded** — `GADRewardedAd.load` + `present(fromRootViewController:
-//   userDidEarnRewardHandler:)`. Same lifecycle as interstitial plus a
-//   reward callback that fires before dismissal.
-// * **Banner** — `GADBannerView` added to the app window's root view.
-//   Positioning uses the `BannerRect` (physical pixels) converted to
-//   UIKit points via `UIScreen.main.scale`.
-//
-// Every `load_*` and `show_banner` call mints a `NativeHandleId` via
-// `IstmoRuntime.shared.allocHandleId`. The backend stores the SDK object
-// under that id in `interstitials` / `rewardeds` / `banners`, and forgets
-// the id when the ad is consumed (shown / dismissed) or hidden. Rust's
-// `NativeHandle<T>` drop path also routes through `HandleReleaser` to
-// clean up if Rust drops the handle without calling `show_*` / `hide_*`.
-//
-// SDK init happens in `AdMobFactoryImpl.create`, exactly once per process.
-
 import Foundation
 import IstmoRuntime
 #if canImport(GoogleMobileAds)
@@ -33,17 +10,13 @@ public final class AdMobFactoryImpl: AdMobFactory {
 
     public func create(config: AdMobConfig) async throws -> AdMobBackend {
         #if canImport(GoogleMobileAds)
-        // Apply test device ids + child-directed flag BEFORE `start` so
-        // the initial ad request the SDK issues honours them.
+
         let cfg = MobileAds.shared.requestConfiguration
         cfg.testDeviceIdentifiers = config.testDeviceIds
         cfg.tagForChildDirectedTreatment = config.childDirectedTreatment
             ? NSNumber(value: true)
             : NSNumber(value: false)
 
-        // `start(completionHandler:)` runs once per process; a repeat call
-        // is a no-op. We await it so the first ad request sees an
-        // initialised SDK.
         _ = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             MobileAds.shared.start { _ in cont.resume(returning: true) }
         }
@@ -55,16 +28,12 @@ public final class AdMobFactoryImpl: AdMobFactory {
 public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
 
     private let lock = NSLock()
-    // The underlying types are stored as `AnyObject` so the file compiles
-    // when GoogleMobileAds is not linked; at runtime the casts back in
-    // each helper below are safe.
+
     private var interstitials: [NativeHandleId: AnyObject] = [:]
     private var rewardeds: [NativeHandleId: AnyObject] = [:]
     private var banners: [NativeHandleId: AnyObject] = [:]
 
     public init() {}
-
-    // MARK: - Interstitial
 
     public func load_interstitial(ad_unit_id: String) async throws -> NativeHandleId {
         #if canImport(GoogleMobileAds)
@@ -105,8 +74,6 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
         throw AdError.notInitialized
         #endif
     }
-
-    // MARK: - Rewarded
 
     public func load_rewarded(ad_unit_id: String) async throws -> NativeHandleId {
         #if canImport(GoogleMobileAds)
@@ -153,8 +120,6 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
         #endif
     }
 
-    // MARK: - Banner
-
     public func show_banner(request: BannerRequest) async throws -> NativeHandleId {
         #if canImport(GoogleMobileAds)
         let id = IstmoRuntime.shared.allocHandleId(pluginId: AdMobDispatcher.PLUGIN_ID)
@@ -186,7 +151,7 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
     public func update_banner(banner: NativeHandleId, rect: BannerRect) async throws {
         #if canImport(GoogleMobileAds)
         let view = lock.withLock { banners[banner] } as? BannerView
-        guard let view = view else { return } // hide_banner-race: silently ignore
+        guard let view = view else { return }
         await MainActor.run {
             let scale = UIScreen.main.scale
             view.frame = CGRect(
@@ -208,11 +173,8 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
         #endif
     }
 
-    // MARK: - HandleReleaser
-
     public func releaseNativeHandle(_ handleId: UInt64) {
-        // Drop from every map; the id only lives in one at a time but
-        // this way `HandleReleaser` stays branch-free.
+
         let interstitial = lock.withLock { interstitials.removeValue(forKey: handleId) }
         let rewarded = lock.withLock { rewardeds.removeValue(forKey: handleId) }
         let banner = lock.withLock { banners.removeValue(forKey: handleId) }
@@ -220,7 +182,7 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
         if let bannerView = banner as? BannerView {
             DispatchQueue.main.async { bannerView.removeFromSuperview() }
         }
-        _ = interstitial // released by ARC once we drop the last reference
+        _ = interstitial
         _ = rewarded
         #else
         _ = interstitial
@@ -229,17 +191,14 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
         #endif
     }
 
-    // MARK: - Helpers
-
     #if canImport(GoogleMobileAds)
     private static func mapAdError(_ error: Error) -> AdError {
         let nserror = error as NSError
-        // GoogleMobileAds errors live under `com.google.admob` on iOS and
-        // encode fine-grained codes in `code`. See `GADErrorCode`.
+
         if nserror.domain == "com.google.admob" || nserror.domain.contains("MobileAdsSDK") {
             switch nserror.code {
-            case 1: return .invalidRequest(nserror.localizedDescription)   // GADErrorInvalidRequest
-            case 2: return .network(nserror.localizedDescription)          // GADErrorNoFillOrInternal
+            case 1: return .invalidRequest(nserror.localizedDescription)
+            case 2: return .network(nserror.localizedDescription)
             case 3: return .noFill
             default: return .`internal`(nserror.localizedDescription)
             }
@@ -266,13 +225,8 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
     #endif
 }
 
-// MARK: - Full-screen ad coordinators
-
 #if canImport(GoogleMobileAds)
 
-/// Bridges `GADFullScreenContentDelegate` callbacks to a checked
-/// continuation. The instance stays alive because the ad object retains
-/// its delegate; when the ad is done, ARC drops both together.
 private final class InterstitialCoordinator: NSObject, FullScreenContentDelegate {
 
     var continuation: CheckedContinuation<InterstitialOutcome, Never>?
@@ -288,8 +242,6 @@ private final class InterstitialCoordinator: NSObject, FullScreenContentDelegate
     }
 }
 
-/// Same shape as `InterstitialCoordinator` plus reward fields the reward
-/// handler on `present` writes before dismissal.
 private final class RewardedCoordinator: NSObject, FullScreenContentDelegate {
 
     var continuation: CheckedContinuation<RewardedOutcome, Never>?
@@ -313,8 +265,6 @@ private final class RewardedCoordinator: NSObject, FullScreenContentDelegate {
 }
 
 #endif
-
-// MARK: - Small utilities
 
 private extension NSLock {
     @discardableResult

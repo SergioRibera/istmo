@@ -12,22 +12,6 @@ import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/**
- * Kotlin backend for the `istmo.permissions` plugin.
- *
- * The plugin's on-wire methods are:
- * * `check(String) -> PermissionStatus`
- * * `request(Vec<String>) -> Vec<PermissionOutcome>`
- * * `should_show_rationale(String) -> Boolean`
- *
- * `PermissionStatus` variants map to their Rust ordinals as
- * `Granted=0, Denied=1, PermanentlyDenied=2, NotDetermined=3, NotSupported=4`.
- * `PermissionOutcome` is a bincode struct `{ permission: String, status:
- * PermissionStatus }`.
- *
- * The class does not hold the [Activity] directly — the surrounding UI
- * attaches it via [attach] on `onCreate` and detaches on `onDestroy`.
- */
 class PermissionsImpl : PluginHandler {
 
     private var host: PermissionsHost? = null
@@ -111,7 +95,6 @@ class PermissionsImpl : PluginHandler {
     }
 }
 
-/** Mirror of Rust `istmo::plugins::PermissionStatus`. Ordinals are the wire discriminant. */
 enum class PermissionStatusValue {
     Granted,
     Denied,
@@ -120,16 +103,12 @@ enum class PermissionStatusValue {
     NotSupported,
 }
 
-/** Hookup surface [PermissionsImpl] uses to touch the Activity subsystem. */
 interface PermissionsHost {
     val activity: Activity
 
-    /**
-     * Kicks off a permission request. `onResult` receives one entry per input
-     * permission with a boolean granted/denied outcome.
-     */
     fun request(permissions: List<String>, onResult: (Map<String, Boolean>) -> Unit)
 
     fun shouldShowRationale(permission: String): Boolean =
         ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)
 }
+

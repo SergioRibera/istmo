@@ -1,6 +1,3 @@
-//! `LiveActivity` plugin: wire round-trip against a mock backend, plus
-//! [`TypedLiveActivity`] encode/decode + domain-error surfacing.
-
 use std::sync::Arc;
 use std::thread;
 
@@ -23,8 +20,6 @@ struct TimerState {
     elapsed: u64,
 }
 
-/// Backend thread that services exactly one `Call` for `method` and
-/// responds with `respond`.
 fn spawn_backend(
     rt: Arc<Runtime>,
     outbound: flume::Receiver<Envelope>,
@@ -78,15 +73,11 @@ fn typed_start_encodes_payload_and_returns_handle_id() {
     ))
     .expect("start ok");
 
-    // Consume the handle without firing a release — the test does not run
-    // a receive-side release handler.
     let issued = handle.into_id();
     assert_eq!(issued, handle_id);
 
     let payload = backend.join().unwrap();
-    // Decode the outbound tuple `(activity_type, attributes, initial_state,
-    // style, stale_after_seconds, android_tier_hint)` — client codegen keeps
-    // this shape in argument order.
+
     type StartTuple = (
         String,
         Vec<u8>,
@@ -210,3 +201,4 @@ fn base_client_capabilities_round_trips() {
     assert_eq!(value, caps);
     backend.join().unwrap();
 }
+

@@ -24,19 +24,6 @@ import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/**
- * Android impl of the codegen `AdMobBackend` protocol. Owns the Google
- * Mobile Ads SDK objects (`InterstitialAd`, `RewardedAd`, `AdView`) and
- * their lifetime; the generated `AdMobDispatcher` handles wire encode /
- * decode and forwards inbound `Frame::ReleaseNativeHandle` via
- * [HandleReleaser].
- *
- * Banner overlay: `NativeActivity` + wgpu draws directly to the window's
- * own Surface every frame, overwriting anything a `View` renders on top
- * of it. Attaching the `AdView` inside a `PopupWindow` sidesteps that —
- * SurfaceFlinger composites the popup as its own layer above the app
- * window, and wgpu cannot touch it.
- */
 class AdMobBackendImpl(private val activity: Activity) : AdMobBackend, HandleReleaser {
 
     companion object {
@@ -45,12 +32,9 @@ class AdMobBackendImpl(private val activity: Activity) : AdMobBackend, HandleRel
 
     private val interstitials = ConcurrentHashMap<NativeHandleId, InterstitialAd>()
     private val rewardeds = ConcurrentHashMap<NativeHandleId, RewardedAd>()
-    /** Live banner state — the AdView plus the PopupWindow. Both tear
-     *  down together. */
+
     private data class BannerEntry(val view: AdView, val popup: PopupWindow)
     private val banners = ConcurrentHashMap<NativeHandleId, BannerEntry>()
-
-    // ---- HandleReleaser --------------------------------------------------
 
     override fun releaseNativeHandle(handleId: Long) {
         interstitials.remove(handleId)
@@ -59,8 +43,6 @@ class AdMobBackendImpl(private val activity: Activity) : AdMobBackend, HandleRel
             activity.runOnUiThread { tearDownBanner(entry) }
         }
     }
-
-    // ---- Interstitial ----------------------------------------------------
 
     override suspend fun load_interstitial(ad_unit_id: String): NativeHandleId {
         val ad: InterstitialAd = try {
@@ -112,8 +94,6 @@ class AdMobBackendImpl(private val activity: Activity) : AdMobBackend, HandleRel
             }
         }
     }
-
-    // ---- Rewarded --------------------------------------------------------
 
     override suspend fun load_rewarded(ad_unit_id: String): NativeHandleId {
         val ad: RewardedAd = withContext(Dispatchers.Main) {
@@ -169,8 +149,6 @@ class AdMobBackendImpl(private val activity: Activity) : AdMobBackend, HandleRel
         }
     }
 
-    // ---- Banner ----------------------------------------------------------
-
     override suspend fun show_banner(request: BannerRequest): NativeHandleId {
         val handleId = IstmoRuntime.allocHandleId(AdMobDispatcher.PLUGIN_ID)
         withContext(Dispatchers.Main) {
@@ -225,16 +203,8 @@ class AdMobBackendImpl(private val activity: Activity) : AdMobBackend, HandleRel
         withContext(Dispatchers.Main) { tearDownBanner(entry) }
     }
 
-    // ---- Banner layout helpers ------------------------------------------
-
     private data class PxSize(val width: Int, val height: Int)
 
-    /**
-     * Attach the AdView inside a `PopupWindow` so SurfaceFlinger renders
-     * it above the wgpu-owned Surface. Non-focusable + `INPUT_METHOD_NOT_NEEDED`
-     * so the popup never steals key events / IME / back button from the
-     * native app underneath.
-     */
     private fun attachBannerAsPopup(
         view: AdView,
         rect: BannerRect,
@@ -269,12 +239,6 @@ class AdMobBackendImpl(private val activity: Activity) : AdMobBackend, HandleRel
         entry.view.destroy()
     }
 
-    /**
-     * Pick a real AdMob banner size — `AdSize(w,h)` with arbitrary
-     * dimensions is a "custom size" that standard inventory does not
-     * fill. Convert requested pixels → dp and ask the SDK for an anchored
-     * adaptive banner sized to that width.
-     */
     private fun pickAdSize(rect: BannerRect): AdSize {
         val density = activity.resources.displayMetrics.density
         val widthDp = (rect.width.toFloat() / density).toInt().coerceAtLeast(0)
@@ -290,7 +254,6 @@ class AdMobBackendImpl(private val activity: Activity) : AdMobBackend, HandleRel
         return PxSize(widthPx, heightPx)
     }
 
-    /** Map the SDK's `LoadAdError` code to the typed [AdError]. */
     private fun mapLoadError(err: LoadAdError): AdError = when (err.code) {
         3 -> AdError.NoFill
         2 -> AdError.Network(err.message)
@@ -298,3 +261,4 @@ class AdMobBackendImpl(private val activity: Activity) : AdMobBackend, HandleRel
         else -> AdError.Internal("code=${err.code} ${err.message}")
     }
 }
+

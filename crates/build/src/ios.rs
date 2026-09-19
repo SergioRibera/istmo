@@ -1,41 +1,20 @@
-//! iOS background execution + entitlements codegen.
-//!
-//! iOS has no equivalent of Android's `Service`. Long-running work must map
-//! to a small set of system-supplied primitives; this module models the
-//! honest subset:
-//!
-//! * [`BackgroundKind::Refresh`] — [`BGAppRefreshTask`]: short opportunistic
-//!   wakeups. The system picks the actual firing time; `interval_minutes` is
-//!   a *minimum* between runs.
-//! * [`BackgroundKind::Processing`] — [`BGProcessingTask`]: heavier jobs the
-//!   system may schedule when the device is idle / on power.
-//! * [`BackgroundKind::Continuous`] — the legitimate always-on background
-//!   modes ([`ContinuousMode`]). Each requires the matching entry in
-//!   `UIBackgroundModes` in `Info.plist`.
-//!
-//! [`BGAppRefreshTask`]: https://developer.apple.com/documentation/backgroundtasks/bgapprefreshtask
-//! [`BGProcessingTask`]: https://developer.apple.com/documentation/backgroundtasks/bgprocessingtask
-
 use std::fmt::Write as _;
 
 use crate::entitlements::IosEntitlements;
 
-/// How a Rust-side background task should be surfaced to iOS.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackgroundKind {
-    /// Short opportunistic refresh via `BGAppRefreshTaskRequest`.
+
     Refresh { interval_minutes: u32 },
-    /// Heavier work via `BGProcessingTaskRequest`.
+
     Processing {
         requires_power: bool,
         requires_network: bool,
     },
-    /// Legitimate always-on background mode.
+
     Continuous(ContinuousMode),
 }
 
-/// The always-on background modes iOS lets an app declare in Info.plist's
-/// `UIBackgroundModes`. Anything outside this list is unsupported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContinuousMode {
     Audio,
@@ -47,7 +26,7 @@ pub enum ContinuousMode {
 }
 
 impl ContinuousMode {
-    /// The exact string iOS expects in the `UIBackgroundModes` array.
+
     #[must_use]
     pub const fn info_plist_value(self) -> &'static str {
         match self {
@@ -61,38 +40,26 @@ impl ContinuousMode {
     }
 }
 
-/// Configuration of a single iOS background task.
-///
-/// The `task_identifier` is what `BGTaskScheduler.register(forTaskWithIdentifier:)`
-/// expects and must be listed under `BGTaskSchedulerPermittedIdentifiers` in
-/// Info.plist — the generator emits that fragment automatically for
-/// `Refresh` and `Processing` variants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IosBackgroundContract {
-    /// Wire plugin id matching the Rust adapter's `PLUGIN_ID`.
+
     pub plugin_id: String,
-    /// Swift class name for the generated shim.
+
     pub class_name: String,
-    /// Reverse-DNS task identifier registered with `BGTaskScheduler`. For
-    /// [`BackgroundKind::Continuous`] variants this is ignored (no
-    /// `BGTaskScheduler` registration needed).
+
     pub task_identifier: Option<String>,
-    /// Which system primitive to bind to.
+
     pub kind: BackgroundKind,
 }
 
-/// Bundle returned by [`generate_ios_background`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IosBackgroundArtifacts {
-    /// Contents of `<ClassName>.swift`.
+
     pub swift: String,
-    /// XML fragment ready to merge into Info.plist. Keys are wrapped so a
-    /// downstream tool can concatenate multiple fragments inside one
-    /// `<dict>` and run `plutil -convert` afterwards.
+
     pub info_plist_fragment: String,
 }
 
-/// Render Swift + Info.plist artefacts for `contract`.
 #[must_use]
 pub fn generate_ios_background(contract: &IosBackgroundContract) -> IosBackgroundArtifacts {
     IosBackgroundArtifacts {
@@ -299,11 +266,6 @@ fn render_info_plist(contract: &IosBackgroundContract) -> String {
     out
 }
 
-/// Returns the entitlements this background contract needs enabled, if any.
-///
-/// This is a convenience for `build.rs` scripts that want to aggregate all
-/// entitlement requirements from a workspace's registered plugins into a
-/// single `.entitlements` file. See [`IosEntitlements::render`].
 #[must_use]
 pub fn required_entitlements(contract: &IosBackgroundContract) -> IosEntitlements {
     let mut ent = IosEntitlements::new();
@@ -311,9 +273,9 @@ pub fn required_entitlements(contract: &IosBackgroundContract) -> IosEntitlement
         &contract.kind,
         BackgroundKind::Continuous(ContinuousMode::Voip)
     ) {
-        // VoIP calls specifically require the PushKit entitlement in
-        // addition to the UIBackgroundModes entry.
+
         ent.add_string("com.apple.developer.pushkit.unrestricted-voip", "true");
     }
     ent
 }
+

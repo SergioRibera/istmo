@@ -21,33 +21,13 @@ import dev.istmo.runtime.SignInCodecsImpl
 import dev.istmo.runtime.SignInDispatcher
 import dev.istmo.runtime.SignInFactoryImpl
 
-/**
- * NativeActivity subclass that boots the istmo runtime and registers the
- * plugin dispatchers the Rust cdylib consumes, all *before* the native
- * activity's onCreate runs `android_main`.
- *
- * `<meta-data android:name="android.app.lib_name" android:value="rust_mobile_demo"/>`
- * in the manifest tells NativeActivity which cdylib to load. We separately
- * call `IstmoRuntime.start()`, which:
- *
- *  1. Loads the same library via `System.loadLibrary` (idempotent).
- *  2. Runs `nativeStart` — invokes `__istmo_configure_runtime` emitted by
- *     `istmo::runtime!` in the Rust cdylib, initialising the process
- *     `Runtime`.
- *  3. Spawns the pump thread that drains outbound frames.
- *
- * Each plugin follows the codegen dispatcher pattern:
- * `<T>Dispatcher(factoryOrBackend, codecs)` — the dispatcher owns wire
- * encode / decode, the backend owns the SDK-specific logic.
- */
 class RustMobileActivity : NativeActivity() {
 
     private lateinit var permissionsBackend: PermissionsBackendImpl
     private lateinit var signInFactory: SignInFactoryImpl
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Register plugin dispatchers BEFORE super.onCreate() — the Rust
-        // side may fire calls as soon as its NDK glue thread starts.
+
         val runtime = IstmoRuntime
         val ok = runtime.start("rust_mobile_demo")
         check(ok) { "IstmoRuntime.start() failed — pump did not initialise" }
@@ -74,10 +54,6 @@ class RustMobileActivity : NativeActivity() {
 
         super.onCreate(savedInstanceState)
 
-        // Edge-to-edge — the Rust side reads safe-area insets from the
-        // `istmo.safe_area` early-event channel (Flutter-style) and
-        // reserves its own padding. Decor no longer manages the fit;
-        // system bars stay translucent overlays above our surface.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             show(WindowInsetsCompat.Type.systemBars())
@@ -86,12 +62,6 @@ class RustMobileActivity : NativeActivity() {
         installSafeAreaListener()
     }
 
-    /**
-     * Subscribe to Android's `WindowInsets` and publish every update on
-     * the `istmo.safe_area` early-event channel in logical dp. Flutter
-     * model — platform pushes safe-area geometry, framework (egui) reads
-     * a snapshot each frame.
-     */
     private fun installSafeAreaListener() {
         val density = resources.displayMetrics.density
         val root = window.decorView
@@ -106,9 +76,7 @@ class RustMobileActivity : NativeActivity() {
             )
             insets
         }
-        // Force an initial dispatch — otherwise the callback only fires on
-        // the first inset *change*, and Rust would start with a `None`
-        // slot until the user rotates or opens the keyboard.
+
         ViewCompat.requestApplyInsets(root)
     }
 
@@ -132,3 +100,4 @@ class RustMobileActivity : NativeActivity() {
         IstmoRuntime.shutdown()
     }
 }
+

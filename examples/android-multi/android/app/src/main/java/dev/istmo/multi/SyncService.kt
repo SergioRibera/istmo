@@ -1,7 +1,3 @@
-// Hand-mirrored equivalent of `istmo_build::generate_android_service` output
-// for the `dev.istmo.multi.sync` plugin. Kept in-repo (rather than emitted
-// from build.rs) so the demo does not depend on a working build integration.
-
 package dev.istmo.multi
 
 import android.content.Intent
@@ -46,3 +42,4 @@ class SyncService : LifecycleService() {
         super.onDestroy()
     }
 }
+

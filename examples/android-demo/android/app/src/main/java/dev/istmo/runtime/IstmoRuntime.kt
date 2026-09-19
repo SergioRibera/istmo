@@ -13,22 +13,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 
-/**
- * Kotlin-side singleton for the istmo runtime.
- *
- * The frame protocol is symmetric: the Rust pump thread invokes the
- * `@JvmStatic on*` callbacks below for every outbound frame (Rust → Kotlin),
- * and Kotlin submits inbound frames through the `nativeSubmit*` trampolines
- * exported by `istmo-android`.
- *
- * Two directions coexist:
- *  * Rust hosts a trait (`hosts: [T => TImpl]`) → Kotlin sends
- *    `Frame::Call` via [call] and awaits the matching `Respond` on
- *    [onRespond].
- *  * Native hosts a plugin (`plugins: [T]`) → Rust sends `Frame::Call` via
- *    the pump → Kotlin's registered [PluginHandler] answers via the
- *    existing `nativeSubmitResponse` trampoline.
- */
 object IstmoRuntime {
 
     private const val LIBRARY_NAME = "istmo_android_demo"
@@ -38,7 +22,6 @@ object IstmoRuntime {
     private val jobs = ConcurrentHashMap<Long, Job>()
     private val handlers = ConcurrentHashMap<String, PluginHandler>()
 
-    /** Pending Kotlin-initiated calls awaiting a `Frame::Respond`. */
     private val outboundCalls = ConcurrentHashMap<Long, PendingCall>()
     private val nextCallId = AtomicLong(1)
 
@@ -46,15 +29,12 @@ object IstmoRuntime {
         System.loadLibrary(LIBRARY_NAME)
     }
 
-    /** Register a Kotlin backend for a plugin id (used for `plugins:` direction). */
     fun registerHandler(pluginId: String, handler: PluginHandler) {
         handlers[pluginId] = handler
     }
 
-    /** Initialise the process runtime. Idempotent — subsequent calls return `false`. */
     fun start(): Boolean = nativeStart(IstmoRuntime::class.java)
 
-    /** Cancel every pending call/stream and stop the pump thread. */
     fun shutdown() {
         nativeShutdown()
         scope.cancel()
@@ -65,14 +45,6 @@ object IstmoRuntime {
         outboundCalls.clear()
     }
 
-    // ---- Outbound (Kotlin → Rust) ---------------------------------------
-
-    /**
-     * Send a `Frame::Call` and suspend until the matching `Respond` arrives.
-     * `payload` is bincode-encoded per plugin contract; the return is the
-     * raw response bytes on success. Domain errors surface as
-     * [PluginException] with the encoded error payload.
-     */
     suspend fun call(
         pluginId: String,
         instanceId: Long,
@@ -88,21 +60,16 @@ object IstmoRuntime {
         nativeSubmitCall(callId, pluginId, instanceId, method, payload)
     }
 
-    /** Convenience for stateless plugins (no instance id). */
     suspend fun call(pluginId: String, method: String, payload: ByteArray): ByteArray =
         call(pluginId, NO_INSTANCE_ID, method, payload)
 
-    /** Publish a latest-value early event (lifecycle-shaped). */
     fun submitEarlyLatest(channel: String, payload: ByteArray) {
         nativeSubmitEarlyLatest(channel, payload)
     }
 
-    /** Publish a queued early event (deep-link-shaped). */
     fun submitEarlyQueue(channel: String, capacity: Int, payload: ByteArray) {
         nativeSubmitEarlyQueue(channel, capacity, payload)
     }
-
-    // ---- Callbacks from the Rust pump thread ----------------------------
 
     @JvmStatic
     fun onCall(
@@ -150,23 +117,17 @@ object IstmoRuntime {
         }
     }
 
-    // Contract-driven signatures below: parameter names + types must match
-    // what the Rust pump resolves via `get_static_method_id`. Params the demo
-    // does not consume are suppressed rather than renamed so a future demo
-    // that wants them keeps the same public callback shape.
-
     @JvmStatic
     @Suppress("UNUSED_PARAMETER")
     fun onCreateInstance(callId: Long, pluginId: String, payload: ByteArray) {
-        // Stateful plugins are not exercised by this demo. Reply with an
-        // empty error so the client's `create_instance` future resolves.
+
         nativeSubmitResponse(callId, false, EMPTY_PAYLOAD)
     }
 
     @JvmStatic
     @Suppress("UNUSED_PARAMETER")
     fun onDestroyInstance(instanceId: Long) {
-        // No-op: this demo never creates instances.
+
     }
 
     @JvmStatic
@@ -182,31 +143,21 @@ object IstmoRuntime {
     @JvmStatic
     @Suppress("UNUSED_PARAMETER")
     fun onEvent(streamId: Long, payload: ByteArray) {
-        // Streams initiated from Kotlin aren't yet supported by this demo.
-        // Log and drop.
+
     }
 
     @JvmStatic
     @Suppress("UNUSED_PARAMETER")
     fun onStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray) {
-        // Same as onEvent — no Kotlin-side streams yet.
+
     }
 
     @JvmStatic
     @Suppress("UNUSED_PARAMETER")
     fun onReleaseNativeHandle(handleId: Long) {
-        // Demo does not register native handles; production apps free the
-        // object stored under handleId from their per-plugin registry here.
+
     }
 
-    /**
-     * Sink for `:remote`-bridge envelope bytes. Rust classifies every outbound
-     * frame; envelopes for plugins registered via
-     * `Runtime::declare_remote_plugin` land here instead of the typed
-     * `onCall` / `onRespond` / … callbacks. Install a bridge that forwards
-     * to the peer process (see `docs/remote-bridge/`); the demo leaves it
-     * `null`, so remote envelopes drop with a log line.
-     */
     @JvmField
     var remoteEnvelopeSink: ((ByteArray) -> Unit)? = null
 
@@ -217,8 +168,6 @@ object IstmoRuntime {
             sink(bytes)
         }
     }
-
-    // ---- Trampolines exported by istmo-android --------------------------
 
     external fun nativeStart(runtimeClass: Class<*>): Boolean
     external fun nativeSubmitCall(
@@ -239,7 +188,7 @@ object IstmoRuntime {
     external fun nativeSubmitStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray?)
     external fun nativeSubmitEarlyLatest(channel: String, payload: ByteArray)
     external fun nativeSubmitEarlyQueue(channel: String, capacity: Int, payload: ByteArray)
-    /** Receive-side of a `:remote` bridge — bytes shipped over Binder. */
+
     external fun nativeInjectEnvelope(bytes: ByteArray)
     external fun nativeShutdown()
 
@@ -247,3 +196,4 @@ object IstmoRuntime {
 
     private class PendingCall(val cont: CancellableContinuation<ByteArray>)
 }
+

@@ -11,17 +11,10 @@ homepage.workspace = true
 readme.workspace = true
 keywords = ["istmo", "google-signin", "oauth", "authentication", "mobile"]
 categories = ["authentication", "api-bindings"]
-# `links` is mandatory for cross-crate `cargo::metadata::…` propagation
-# (`emit_manifest_metadata` publishes NativeDeps + PLUGIN_IDS through it).
-# Value has to be unique across the whole dep graph; namespacing under
-# `istmo_` keeps future community plugins from colliding.
 links = "istmo_google_sign_in"
 
 [features]
 default = []
-# Off by default so downstream `[dependencies]` do not pay for the `Contract`
-# builder + `istmo-build` transitive tree. Consumers that generate Kotlin /
-# Swift hosts flip this on inside their `build.rs` via `[build-dependencies]`.
 codegen = ["dep:istmo-build"]
 
 [dependencies]
@@ -40,3 +33,4 @@ pollster = { workspace = true }
 
 [lints]
 workspace = true
+

@@ -1,5 +1,3 @@
-//! `Notifications` plugin: schedule + cancel + authorization round-trips.
-
 use std::thread;
 
 use istmo_core::{Envelope, Frame, Runtime, codec};
@@ -118,3 +116,4 @@ fn is_authorized_returns_bool() {
     assert!(authorized);
     backend.join().unwrap();
 }
+

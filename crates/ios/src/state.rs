@@ -1,5 +1,3 @@
-//! Process-global handles for the iOS transport layer.
-
 use std::fmt;
 use std::sync::{Mutex, OnceLock};
 use std::thread::JoinHandle;
@@ -8,9 +6,6 @@ use flume::Sender as FlumeSender;
 
 use crate::error::IosRuntimeError;
 
-/// Shutdown / join handles for the pump thread. Held so
-/// `istmo_ios_shutdown` can stop the pump deterministically without racing
-/// process teardown.
 pub(crate) struct RuntimeState {
     pub(crate) pump_shutdown: Mutex<Option<FlumeSender<()>>>,
     pub(crate) pump_join: Mutex<Option<JoinHandle<()>>>,
@@ -33,3 +28,4 @@ pub(crate) fn install(state: RuntimeState) -> Result<(), IosRuntimeError> {
 pub(crate) fn get() -> Result<&'static RuntimeState, IosRuntimeError> {
     STATE.get().ok_or(IosRuntimeError::NotStarted)
 }
+

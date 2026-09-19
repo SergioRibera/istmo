@@ -1,14 +1,3 @@
-//! Regenerate `#[message]` type declarations from the canonical
-//! `Contract` builders in `istmo-plugins-schema`.
-//!
-//! Each plugin's source file `include!()`s a generated file from
-//! `$OUT_DIR/<plugin>_types.rs`. The build script is the single point
-//! that keeps the Rust type layout, the Kotlin / Swift codegen (via
-//! `istmo-build`) and the wire schema in lockstep.
-//!
-//! Adding a new bundled plugin = add its contract builder to
-//! `istmo-plugins-schema` and mirror the `emit(...)` call here.
-
 use std::path::PathBuf;
 
 use istmo_build::{Contract, generate_rust_types};
@@ -43,3 +32,4 @@ fn emit(dest: &std::path::Path, contract: &Contract) {
         );
     }
 }
+

@@ -1,16 +1,3 @@
-//! End-to-end verification of the `@_cdecl` transport.
-//!
-//! Swift is simulated by:
-//!
-//! 1. Registering a callback table whose function pointers push received
-//!    frames into a shared `Mutex<Vec<Received>>`.
-//! 2. Calling `istmo_ios_submit_call` with a bincode-encoded argument tuple.
-//! 3. Waiting for the `on_respond` callback to fire.
-//!
-//! The hosted plugin (`Echo`) lives in this crate; `__istmo_configure_runtime`
-//! is provided directly, standing in for what the `istmo::runtime!` macro
-//! would emit in a real cdylib.
-
 use std::os::raw::c_void;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -26,8 +13,6 @@ use istmo_ios::{
 
 const CODEC: Configuration = bincode::config::standard();
 const PLUGIN_ID: &str = "test.ios.echo";
-
-// -- Hosted plugin ----------------------------------------------------------
 
 struct EchoHost;
 
@@ -63,14 +48,10 @@ impl Dispatch for EchoHost {
     }
 }
 
-// -- Runtime configuration hook --------------------------------------------
-
 #[unsafe(no_mangle)]
 pub extern "Rust" fn __istmo_configure_runtime(init: RuntimeInit) -> RuntimeInit {
     init.host(EchoHost).finish()
 }
-
-// -- Callback capture -------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Received {
@@ -119,8 +100,6 @@ enum Received {
 
 type ReceivedSink = Arc<Mutex<Vec<Received>>>;
 
-/// Global sink pinned for the callback pointers. Test process is single-shot
-/// so a `OnceLock` is fine.
 static SINK: OnceLock<ReceivedSink> = OnceLock::new();
 
 fn sink() -> &'static ReceivedSink {
@@ -288,17 +267,10 @@ fn wait_for<T>(mut check: impl FnMut() -> Option<T>) -> T {
     panic!("timeout waiting for callback");
 }
 
-// -- The single end-to-end test --------------------------------------------
-//
-// Cargo integration tests each get their own process, so `Runtime::init`
-// (invoked inside `istmo_ios_start`) firing at most once per file is fine.
-// Sub-tests share the same started transport.
-
 #[test]
 fn ios_transport_end_to_end() {
     assert!(istmo_ios_start(callbacks()), "start should succeed");
 
-    // --- Hosted call round-trip -------------------------------------------
     let call_id: u64 = 42;
     let args = bincode::encode_to_vec(&(String::from("hello"),), CODEC).unwrap();
     unsafe {
@@ -335,14 +307,12 @@ fn ios_transport_end_to_end() {
     let (reply, _): (String, _) = bincode::decode_from_slice(&payload, CODEC).unwrap();
     assert_eq!(reply, "echo:hello");
 
-    // --- Inbound Respond delivery to a Rust-side pending call -------------
-    // Simulate a Rust-initiated call whose Respond arrives from Swift.
     let runtime = istmo_core::Runtime::global().expect("started");
     let handle = runtime
         .call("test.ios.remote", None, "noop", Vec::new())
         .expect("call");
     let remote_call_id = handle.call_id().get();
-    // Drain the outbound Call frame (Swift would receive it via on_call).
+
     wait_for(|| {
         sink().lock().unwrap().iter().rev().find_map(|r| match r {
             Received::Call {
@@ -356,7 +326,7 @@ fn ios_transport_end_to_end() {
             _ => None,
         })
     });
-    // Now push the Respond back through the inbound path.
+
     let reply_bytes = bincode::encode_to_vec(String::from("pong"), CODEC).unwrap();
     unsafe {
         istmo_ios_submit_response(
@@ -373,3 +343,4 @@ fn ios_transport_end_to_end() {
 
     istmo_ios_shutdown();
 }
+

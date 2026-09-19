@@ -1,19 +1,7 @@
-//! Kotlin `interface` generator.
-//!
-//! Emits the declarative surface of a plugin trait — the interface itself
-//! plus, for plugins that use `acquire_with`, a companion factory hook that
-//! creates the native instance. The concrete implementation class (the one
-//! that actually calls the istmo runtime) lands in a later milestone when
-//! the runtime bindings for Kotlin are wired up.
-
 use std::fmt::Write as _;
 
 use crate::contract::{Contract, Method, MethodKind};
 
-/// Renders the Kotlin surface for `contract`.
-///
-/// The output contains no `package` header or imports; wrapping is left to
-/// the integration layer that consumes the generator.
 #[must_use]
 pub fn generate_kotlin(contract: &Contract) -> String {
     let mut out = String::new();
@@ -87,3 +75,4 @@ fn write_factory(out: &mut String, contract: &Contract, init: &crate::contract::
     );
     let _ = writeln!(out, "}}");
 }
+

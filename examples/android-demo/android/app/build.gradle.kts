@@ -16,9 +16,7 @@ android {
         versionCode = 1
         versionName = "0.1"
         ndk {
-            // SINGLE POINT OF CHANGE for target architectures. istmoCargoLib
-            // reads this list and registers a matching cargo task per
-            // (crate, ABI). Adding an ABI = add it here.
+
             abiFilters += setOf("arm64-v8a")
         }
     }
@@ -39,30 +37,9 @@ android {
     }
 }
 
-// Route the Gradle-managed rustJniLibs/ under $buildDir into the
-// standard JNI merge, REPLACING (not appending to) the default
-// `src/main/jniLibs/` source dir. Build artefacts NEVER live under
-// src/, and by dropping the default we make that a hard rule at the
-// AGP level — a stray .so under src/main/jniLibs/ can't accidentally
-// duplicate the Gradle-managed one.
 android.sourceSets["main"].jniLibs.setSrcDirs(
     listOf(layout.buildDirectory.dir("rustJniLibs").get().asFile),
 )
-
-// ---- istmo cargo integration ---------------------------------------
-//
-// Manual recipe for this demo; will be promoted to `istmo.gradle.kts`
-// (emitted by istmo-build + shipped in project-template) once the
-// contract is stable. Design: Gradle IS the build root and drives
-// cargo per (crate, ABI). Never the inverse.
-//
-// The rejected alternatives:
-// * `org.mozilla.rust-android-gradle` — assumes exactly one cargo module
-//   per Gradle project, incompatible with the multi-cdylib workspace
-//   model (app + service + widget produce distinct .so files that all
-//   land in one APK).
-// * `cargo-ndk` — the docker image already presets NDK toolchain env
-//   vars for every android target; the extra dependency buys nothing.
 
 val abiToRustTarget = mapOf(
     "arm64-v8a" to "aarch64-linux-android",
@@ -71,15 +48,9 @@ val abiToRustTarget = mapOf(
     "x86" to "i686-linux-android",
 )
 
-// Workspace root: project.rootDir is the android/ Gradle root; climb
-// three levels to reach istmo/, the cargo workspace root.
 val workspaceRoot: File = project.rootDir.resolve("../../..").normalize()
 val rustJniLibsDir = layout.buildDirectory.dir("rustJniLibs")
 
-// Shared inputs. Coarse but correct: cover every workspace member so
-// Gradle's up-to-date check fires when any istmo-* crate changes, not
-// just when Cargo.lock moves. Cargo does the fine-grained incremental
-// work; Gradle just decides whether to invoke it.
 val workspaceSources: FileTree = fileTree(workspaceRoot) {
     include(
         "crates/**/src/**",
@@ -100,17 +71,6 @@ val workspaceSources: FileTree = fileTree(workspaceRoot) {
 
 val cargoStageTaskNames = mutableListOf<String>()
 
-/**
- * Register per-ABI cargo build + staging tasks for a workspace crate.
- *
- * @param crate    workspace package name, e.g. `"istmo-android-demo"`.
- * @param libName  cdylib name (defaults to `crate.replace('-', '_')`,
- *                 matching what cargo emits as `lib<libName>.so`).
- *
- * Multi-cdylib support: call this once per artifact. All .so files land
- * in `$buildDir/rustJniLibs/<abi>/` and are picked up together by AGP's
- * JNI merge.
- */
 fun istmoCargoLib(crate: String, libName: String = crate.replace('-', '_')) {
     val soName = "lib$libName.so"
     val abis = android.defaultConfig.ndk.abiFilters
@@ -154,15 +114,12 @@ fun istmoCargoLib(crate: String, libName: String = crate.replace('-', '_')) {
     }
 }
 
-// Hook the staging tasks into every JNI merge task. `afterEvaluate` runs
-// once AGP has produced the per-variant task graph.
 afterEvaluate {
     tasks.matching { it.name.matches(Regex("merge.*JniLibFolders")) }.configureEach {
         cargoStageTaskNames.forEach { dependsOn(it) }
     }
 }
 
-// ---- Declare the demo's cdylibs -------------------------------------
 istmoCargoLib("istmo-android-demo")
 
 dependencies {
@@ -170,3 +127,4 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
+

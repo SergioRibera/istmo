@@ -1,8 +1,3 @@
-//! `#[unsafe(no_mangle)]` entry points loaded by the JVM via `System.loadLibrary`.
-//!
-//! Symbol naming follows the JNI convention for the Kotlin class
-//! `dev.istmo.runtime.IstmoRuntime`.
-
 #![allow(unreachable_pub)]
 
 use std::sync::Arc;
@@ -19,16 +14,10 @@ use crate::error::AndroidRuntimeError;
 use crate::pump;
 use crate::state::{self, RuntimeState};
 
-// The `istmo::runtime!` macro is required to link the demo cdylib: it emits
-// `__istmo_configure_runtime` which nativeStart calls once, immediately after
-// the process runtime is installed, to declare plugin ids and register host
-// dispatchers. Missing symbol == user forgot to call `istmo::runtime!` — the
-// linker error is the intended signal.
 unsafe extern "Rust" {
     safe fn __istmo_configure_runtime(init: RuntimeInit) -> RuntimeInit;
 }
 
-/// Kotlin: `external fun nativeStart(runtimeClass: Class<*>): Boolean`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeStart<'local>(
     env: JNIEnv<'local>,
@@ -55,10 +44,7 @@ fn start<'local>(
     let runtime = init.runtime.clone();
     let init = __istmo_configure_runtime(init);
     let (handles, remote_sender) = pump::spawn(jvm, class_ref, init.outbound);
-    // Route declared-remote-plugin traffic into the pump's dedicated
-    // `onRemoteEnvelope` channel. Errors on the flume send are swallowed
-    // (pump gone / shutdown races); the alternative would trip the emitter
-    // for a shutdown-time race that the peer bridge has already forgotten.
+
     runtime.install_remote_envelope_sink(std::sync::Arc::new(move |bytes: Vec<u8>| {
         if let Err(err) = remote_sender.send(bytes) {
             tracing::warn!(?err, "istmo remote sink send failed; pump gone?");
@@ -72,7 +58,6 @@ fn start<'local>(
     Ok(())
 }
 
-/// Kotlin: `external fun nativeSubmitResponse(callId: Long, ok: Boolean, payload: ByteArray)`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse<'local>(
     env: JNIEnv<'local>,
@@ -107,7 +92,6 @@ fn submit_response<'local>(
     Ok(())
 }
 
-/// Kotlin: `external fun nativeSubmitEvent(streamId: Long, payload: ByteArray)`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent<'local>(
     env: JNIEnv<'local>,
@@ -135,12 +119,6 @@ fn submit_event<'local>(
     Ok(())
 }
 
-/// Kotlin: `external fun nativeSubmitStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray?)`.
-///
-/// `reason` maps to `StreamEndReason` variants:
-/// * `0` — `Complete`
-/// * `1` — `Cancelled`
-/// * `2` — `Error(errorPayload)` (payload required, otherwise treated as empty).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitStreamEnd<'local>(
     env: JNIEnv<'local>,
@@ -185,12 +163,6 @@ fn submit_stream_end<'local>(
     Ok(())
 }
 
-/// Kotlin: `external fun nativeSubmitCall(callId: Long, pluginId: String, instanceId: Long, method: String, payload: ByteArray)`.
-///
-/// Symmetric counterpart of the outbound Call pump: Kotlin uses it to invoke
-/// a Rust-hosted plugin (a trait declared in the process's `hosts:` section).
-/// `instanceId == 0` encodes `None`; any positive value is treated as the
-/// wire `InstanceId`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall<'local>(
     mut env: JNIEnv<'local>,
@@ -241,12 +213,6 @@ fn submit_call<'local>(
     Ok(())
 }
 
-/// Kotlin: `external fun nativeSubmitNotify(pluginId: String, instanceId: Long, method: String, payload: ByteArray)`.
-///
-/// Fire-and-forget counterpart of
-/// [`Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall`]. `instanceId
-/// == 0` encodes `None`; the runtime dispatches the hosted call on a
-/// worker thread and discards the outcome.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitNotify<'local>(
     mut env: JNIEnv<'local>,
@@ -286,12 +252,6 @@ fn submit_notify<'local>(
     Ok(())
 }
 
-/// Kotlin: `external fun nativeSubmitEarlyLatest(channel: String, payload: ByteArray)`.
-///
-/// Typed JNI wrapper around [`Frame::EarlyEvent`]. The pump-facing surface
-/// stays as a typed inbound so Kotlin does not need to encode envelopes,
-/// but internally the payload takes the same `dispatch_inbound` path as
-/// every other inbound frame. See the M-D CLAUDE.md section.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLatest<'local>(
     mut env: JNIEnv<'local>,
@@ -319,11 +279,6 @@ fn submit_early_latest<'local>(
     Ok(())
 }
 
-/// Kotlin: `external fun nativeSubmitEarlyQueue(channel: String, capacity: Int, payload: ByteArray)`.
-///
-/// Companion to [`Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLatest`]
-/// for deep-link-shaped events (bounded FIFO buffered until a subscriber
-/// attaches). Same typed-wrapper rationale.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyQueue<'local>(
     mut env: JNIEnv<'local>,
@@ -355,13 +310,6 @@ fn submit_early_queue<'local>(
     Ok(())
 }
 
-/// Kotlin: `external fun nativeInjectEnvelope(bytes: ByteArray)`.
-///
-/// Receive-side of a `:remote` bridge. Kotlin hands whatever the peer
-/// process shipped over Binder straight to
-/// [`Runtime::inject_wire_envelope`], which decodes the envelope and
-/// dispatches it locally. Kotlin never inspects the bytes — the envelope
-/// codec stays Rust-side per the FFI-boundary rule.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeInjectEnvelope<'local>(
     env: JNIEnv<'local>,
@@ -382,7 +330,6 @@ fn inject_envelope<'local>(
     Ok(())
 }
 
-/// Kotlin: `external fun nativeShutdown()`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeShutdown(
     _env: JNIEnv<'_>,
@@ -408,3 +355,4 @@ fn shutdown() -> Result<(), AndroidRuntimeError> {
     }
     Ok(())
 }
+

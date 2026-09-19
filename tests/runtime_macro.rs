@@ -1,9 +1,3 @@
-//! Verifies that `istmo::runtime!` emits a working `__istmo_configure_runtime`
-//! function that wires expects/hosts onto a `RuntimeInit`.
-//!
-//! On non-android targets the macro emits only the configuration function;
-//! the JNI `pub use` block is `#[cfg(target_os = "android")]`-gated.
-
 use std::sync::Arc;
 
 use istmo::{Envelope, Frame, IstmoError, Runtime};
@@ -36,7 +30,6 @@ impl RuntimeEcho for EchoImpl {
     }
 }
 
-// The macro under test.
 istmo::runtime!(
     plugins: [RuntimeAbsentClient],
     remote:  [RuntimeCompute],
@@ -52,10 +45,8 @@ fn wired_init() -> (Arc<Runtime>, flume::Receiver<Envelope>) {
 fn runtime_macro_enforces_declared_plugins() {
     let (rt, _outbound) = wired_init();
 
-    // Declared → ok.
     RuntimeAbsentClient::from_runtime(&rt).expect("declared");
 
-    // Not declared → PluginNotDeclared.
     let err = RuntimeEchoClient::from_runtime(&rt).expect_err("must reject undeclared");
     assert!(
         matches!(err, IstmoError::PluginNotDeclared("test.runtime.echo")),
@@ -67,7 +58,6 @@ fn runtime_macro_enforces_declared_plugins() {
 fn runtime_macro_registers_host_dispatcher() {
     let (rt, outbound) = wired_init();
 
-    // Submit an inbound Call to the hosted plugin.
     let call_id = istmo::CallId(500);
     rt.dispatch_inbound(Envelope::new(Frame::Call {
         call_id,
@@ -78,7 +68,6 @@ fn runtime_macro_registers_host_dispatcher() {
     }))
     .expect("dispatch call");
 
-    // Await the Respond.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     while std::time::Instant::now() < deadline {
         if let Ok(env) = outbound.recv_timeout(std::time::Duration::from_millis(50)) {
@@ -105,7 +94,7 @@ fn runtime_macro_declares_remote_plugins() {
         rt.is_remote_plugin("test.runtime.compute"),
         "`remote: [RuntimeCompute]` must have called declare_remote_plugin",
     );
-    // Sibling plugins are NOT remote — the section is opt-in.
     assert!(!rt.is_remote_plugin("test.runtime.echo"));
     assert!(!rt.is_remote_plugin("test.runtime.absent"));
 }
+

@@ -1,39 +1,17 @@
-//! Declarative native-dependency model.
-//!
-//! A plugin frequently pulls in a native library the app builder must
-//! surface to Gradle (Android) or `SwiftPM` / Xcode (iOS). Examples the M6
-//! Google Sign-In plugin needs:
-//!
-//! * `androidx.credentials:credentials:1.3.0`
-//! * `androidx.credentials:credentials-play-services-auth:1.3.0`
-//! * `com.google.android.libraries.identity.googleid:googleid:1.1.1`
-//!
-//! Multiple plugins in the same app can request the same coordinate under
-//! different versions. This module models the metadata and provides a merge
-//! step whose policy is *highest wins, warn on downgrade candidates* — the
-//! same policy the PLAN documents. Downstream consumers (a `build.rs` script
-//! collecting metadata from each plugin's `istmo.toml`) call [`NativeDeps::merge`]
-//! for each contributor and then emit the Gradle fragment.
-//!
-//! iOS side is modelled but not rendered yet — SPM's `Package.swift` is not
-//! a fragment-friendly format, so integration lands with the future iOS
-//! build-integration recipe.
-
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use bincode::{Decode, Encode};
 
-/// Scope a Gradle dependency is added under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub enum GradleScope {
-    /// `implementation` — main sources.
+
     Implementation,
-    /// `api` — exposed on the module's compile classpath transitively.
+
     Api,
-    /// `runtimeOnly` — packaged, not on the compile classpath.
+
     RuntimeOnly,
-    /// `compileOnly` — on the compile classpath, not packaged.
+
     CompileOnly,
 }
 
@@ -49,12 +27,6 @@ impl GradleScope {
     }
 }
 
-/// A Maven / Gradle coordinate: `group:artifact:version`.
-///
-/// Versions are compared lexicographically per dot-separated segment with
-/// numeric-when-possible ordering. That gets `1.2.10` above `1.2.9`, which
-/// naïve string comparison does not, and covers what real Android artefact
-/// versions actually look like without pulling in a full semver crate.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub struct GradleCoord {
     pub group: String,
@@ -76,8 +48,6 @@ impl GradleCoord {
         }
     }
 
-    /// The coordinate without its version, used to detect duplicates on
-    /// merge.
     #[must_use]
     pub fn key(&self) -> GradleKey {
         GradleKey {
@@ -86,22 +56,18 @@ impl GradleCoord {
         }
     }
 
-    /// Render as the string Gradle accepts inside its DSL:
-    /// `"group:artifact:version"`.
     #[must_use]
     pub fn as_notation(&self) -> String {
         format!("{}:{}:{}", self.group, self.artifact, self.version)
     }
 }
 
-/// Group + artifact pair — the identity used to dedupe versions on merge.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub struct GradleKey {
     pub group: String,
     pub artifact: String,
 }
 
-/// One entry in [`NativeDeps::gradle`]: a coordinate at a specific scope.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct GradleDep {
     pub scope: GradleScope,
@@ -115,19 +81,16 @@ impl GradleDep {
     }
 }
 
-/// A Swift package product a plugin needs to link against.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub struct SwiftPackageDep {
-    /// Package URL (e.g. `https://github.com/google/GoogleSignIn-iOS.git`).
+
     pub url: String,
-    /// Product name inside the package (`.product(name: ...)`).
+
     pub product: String,
-    /// Minimum version requirement, rendered as `from:` in `Package.swift`.
+
     pub from_version: String,
 }
 
-/// Warning emitted by [`NativeDeps::merge`] when two contributors disagreed
-/// on a coordinate's version.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct VersionConflict {
     pub key: GradleKey,
@@ -135,17 +98,9 @@ pub struct VersionConflict {
     pub discarded: Vec<String>,
 }
 
-/// Aggregate of native dependencies contributed by one or more plugins.
-///
-/// Constructed empty ([`Self::new`] / [`Default`]), populated with
-/// [`Self::add_gradle`] / [`Self::add_swift_package`], and combined across
-/// plugins via [`Self::merge`]. The renderers ([`Self::render_gradle`]) then
-/// produce fragments ready to splice into a real Gradle build.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode)]
 pub struct NativeDeps {
-    /// Keyed by `(scope, group, artifact)` so different scopes of the same
-    /// artefact (rare, but legal) stay distinct while merges dedupe on
-    /// coordinate key.
+
     gradle: BTreeMap<(GradleScope, GradleKey), String>,
     swift: BTreeMap<(String, String), String>,
     conflicts: Vec<VersionConflict>,
@@ -157,7 +112,6 @@ impl NativeDeps {
         Self::default()
     }
 
-    /// Adds (or replaces at higher version) a Gradle dependency.
     pub fn add_gradle(&mut self, dep: &GradleDep) -> &mut Self {
         let key = (dep.scope, dep.coord.key());
         if let Some(existing) = self.gradle.get_mut(&key) {
@@ -182,9 +136,6 @@ impl NativeDeps {
         self
     }
 
-    /// Adds a Swift package requirement. Duplicate `(url, product)` pairs
-    /// resolve to the highest requested `from_version`, same policy as
-    /// Gradle.
     pub fn add_swift_package(&mut self, dep: &SwiftPackageDep) -> &mut Self {
         let key = (dep.url.clone(), dep.product.clone());
         let entry = self
@@ -196,9 +147,6 @@ impl NativeDeps {
         self
     }
 
-    /// Merges every dependency from `other` into `self`, applying the
-    /// version conflict policy per entry. Handy for aggregating multiple
-    /// plugins into a single set.
     pub fn merge(&mut self, other: Self) -> &mut Self {
         for ((scope, key), version) in other.gradle {
             self.add_gradle(&GradleDep {
@@ -221,7 +169,6 @@ impl NativeDeps {
         self
     }
 
-    /// All Gradle entries in stable render order.
     pub fn gradle_entries(&self) -> impl Iterator<Item = GradleDep> + '_ {
         self.gradle.iter().map(|((scope, key), version)| GradleDep {
             scope: *scope,
@@ -233,7 +180,6 @@ impl NativeDeps {
         })
     }
 
-    /// All Swift package entries in stable render order.
     pub fn swift_entries(&self) -> impl Iterator<Item = SwiftPackageDep> + '_ {
         self.swift
             .iter()
@@ -244,9 +190,6 @@ impl NativeDeps {
             })
     }
 
-    /// Version-conflict warnings produced by successive [`Self::add_gradle`]
-    /// / [`Self::merge`] calls. Consumers should surface them from their
-    /// `build.rs` via `cargo:warning=…` so the human sees the downgrade.
     #[must_use]
     pub fn conflicts(&self) -> &[VersionConflict] {
         &self.conflicts
@@ -257,9 +200,6 @@ impl NativeDeps {
         self.gradle.is_empty() && self.swift.is_empty()
     }
 
-    /// Renders a Gradle Kotlin-DSL `dependencies { ... }` block ready to be
-    /// spliced into an app module's `build.gradle.kts`. Deterministic output
-    /// — entries appear in `(scope, group, artifact)` order.
     #[must_use]
     pub fn render_gradle(&self) -> String {
         let mut out = String::new();
@@ -279,10 +219,6 @@ impl NativeDeps {
     }
 }
 
-/// Pick the higher of two version strings under a segment-wise, numeric-aware
-/// comparison. The comparison keeps two goals: (1) `1.2.10` > `1.2.9`, and
-/// (2) letters compare as strings (`1.0.0-beta` < `1.0.0`), which matches the
-/// intuition Maven's own resolution has for the common cases.
 fn pick_highest(existing: &str, candidate: &str) -> String {
     if compare_versions(candidate, existing).is_gt() {
         candidate.to_owned()
@@ -296,9 +232,7 @@ fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
     let (b_core, b_pre) = split_pre_release(b);
     match compare_dotted(a_core, b_core) {
         std::cmp::Ordering::Equal => {
-            // Pre-release qualifier: no qualifier ranks *higher* than any
-            // qualifier (semver-style: `1.0.0` > `1.0.0-beta`), and two
-            // qualifiers compare lexicographically as a good-enough fallback.
+
             match (a_pre, b_pre) {
                 (None, None) => std::cmp::Ordering::Equal,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
@@ -410,3 +344,4 @@ mod tests {
         );
     }
 }
+

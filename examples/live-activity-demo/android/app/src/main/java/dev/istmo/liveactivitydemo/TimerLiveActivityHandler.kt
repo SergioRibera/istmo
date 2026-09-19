@@ -11,24 +11,6 @@ import dev.istmo.plugins.liveactivity.RenderStrategy
 import dev.istmo.runtime.TimerAttributes
 import dev.istmo.runtime.TimerState
 
-/**
- * Demo-specific handler binding `TimerAttributes` + `TimerState` to
- * a three-tier notification renderer.
- *
- * * **Tier 1** (API 21-34) — custom `RemoteViews` layout at
- *   `res/layout/timer_live_{collapsed,expanded}.xml`, wiring the title +
- *   `Chronometer` + `ProgressBar`.
- * * **Tier 2** (API 35+) — `Notification.ProgressStyle` with a single
- *   accent-colored segment, driven directly off `state.elapsed_seconds`.
- * * **Tier 3** (API 36+) — `setPromotedOngoing(true)` +
- *   `setShortCriticalText(state.label)` so the activity anchors as a
- *   status-bar chip (Google's Live Update surface).
- *
- * Payload decoding runs through the generated
- * `dev.istmo.runtime.DemoCodecsImpl` — it wraps the `Bincode` helpers
- * emitted for `TimerAttributes` / `TimerState`, so the handler stays
- * free of hand-rolled wire parsing.
- */
 class TimerLiveActivityHandler(context: Context) :
     NotificationLiveActivityHandler<TimerAttributes, TimerState>(
         activityType = "timer",
@@ -73,8 +55,6 @@ class TimerLiveActivityHandler(context: Context) :
             liveUpdate = ::renderLiveUpdate,
         )
 
-    // ---- Tier 1: RemoteViews (API 21+) --------------------------------
-
     private fun renderCustom(
         context: Context,
         attributes: TimerAttributes,
@@ -111,14 +91,10 @@ class TimerLiveActivityHandler(context: Context) :
     }
 
     private fun applyChronometer(views: RemoteViews, state: TimerState) {
-        // `Chronometer` counts up from `base` (in `SystemClock.elapsedRealtime`
-        // units). To surface `state.elapsed_seconds` accurately we
-        // rebase every update: base = now - elapsed.
+
         val base = SystemClock.elapsedRealtime() - state.elapsed_seconds.toLong() * 1000L
         views.setChronometer(R.id.timer_elapsed, base, null, true)
     }
-
-    // ---- Tier 2: Notification.ProgressStyle (API 35+) -----------------
 
     @androidx.annotation.RequiresApi(35)
     private fun renderProgress(
@@ -139,8 +115,6 @@ class TimerLiveActivityHandler(context: Context) :
                 ),
             )
     }
-
-    // ---- Tier 3: Live Updates + status bar chip (API 36+) -------------
 
     @androidx.annotation.RequiresApi(36)
     private fun renderLiveUpdate(
@@ -165,3 +139,4 @@ class TimerLiveActivityHandler(context: Context) :
         return ((elapsed.toLong() * 100L) / target).coerceIn(0L, 100L).toInt()
     }
 }
+

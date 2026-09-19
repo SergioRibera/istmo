@@ -18,27 +18,6 @@ import dev.istmo.runtime.PlatformCapabilities
 import dev.istmo.runtime.RestoredActivity
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * Reference [LiveActivityBackend] implementation.
- *
- * Routes every wire call to a per-activity-type [LiveActivityHandler]
- * registered by the consumer app. The plugin ships this class so a
- * typical app writes only its concrete handlers — routing, handle-id
- * allocation, capability probes and the runtime `HandleReleaser` hookup
- * come for free.
- *
- * Wiring in the app's `Application` / `Activity`:
- *
- * ```kotlin
- * val backend = LiveActivityBackendImpl(applicationContext).apply {
- *     register(TimerLiveActivityHandler(applicationContext))
- * }
- * IstmoRuntime.registerHandler(
- *     LiveActivityDispatcher.PLUGIN_ID,
- *     LiveActivityDispatcher(backend, LiveActivityCodecsImpl()),
- * )
- * ```
- */
 class LiveActivityBackendImpl(
     private val appContext: Context,
 ) : LiveActivityBackend, HandleReleaser {
@@ -46,17 +25,13 @@ class LiveActivityBackendImpl(
     private val handlersByType = ConcurrentHashMap<String, LiveActivityHandler>()
     private val typeByHandle = ConcurrentHashMap<Long, String>()
 
-    /** Register a handler for its declared [LiveActivityHandler.activityType]. */
     fun register(handler: LiveActivityHandler) {
         handlersByType[handler.activityType] = handler
     }
 
-    /** Remove a previously-registered handler. In-flight handles keep routing. */
     fun unregister(activityType: String) {
         handlersByType.remove(activityType)
     }
-
-    // ---- LiveActivityBackend --------------------------------------------
 
     override suspend fun start(
         activity_type: String,
@@ -134,14 +109,10 @@ class LiveActivityBackendImpl(
         return out
     }
 
-    // ---- HandleReleaser -------------------------------------------------
-
     override fun releaseNativeHandle(handleId: Long) {
         val ty = typeByHandle.remove(handleId) ?: return
         handlersByType[ty]?.releaseHandle(handleId)
     }
-
-    // ---- Internal -------------------------------------------------------
 
     private fun handlerFor(activityType: String): LiveActivityHandler =
         handlersByType[activityType]
@@ -153,3 +124,4 @@ class LiveActivityBackendImpl(
         return handlerFor(ty)
     }
 }
+

@@ -11,15 +11,10 @@ homepage.workspace = true
 readme.workspace = true
 keywords = ["istmo", "live-activity", "activitykit", "notifications", "mobile"]
 categories = ["os", "api-bindings"]
-# `links` is mandatory for cross-crate `cargo::metadata::…` propagation
-# (`emit_manifest_metadata` publishes NativeDeps + PLUGIN_IDS through it).
 links = "istmo_live_activity"
 
 [features]
 default = []
-# Off by default so runtime dependents do not pay for the `Contract` builder
-# tree. Downstream apps flip this on inside their `build.rs` via
-# `[build-dependencies]`.
 codegen = ["dep:istmo-build"]
 
 [dependencies]
@@ -38,3 +33,4 @@ pollster = { workspace = true }
 
 [lints]
 workspace = true
+

@@ -1,22 +1,3 @@
-//! Full-multiplatform istmo demo — one Rust crate driving desktop,
-//! Android and iOS clients of the `istmo.live_activity` plugin.
-//!
-//! Layout mirrors `examples/data-store-demo/`:
-//!
-//! * `app` — shared eframe UI + `DemoApp` state driving a live-activity
-//!   timer through the `TypedLiveActivity<TimerAttributes, TimerState>`
-//!   wrapper.
-//! * `emulator` — desktop-only Rust-side "native emulator" that stands
-//!   in for the Kotlin `LiveActivityDispatcher` / Swift
-//!   `LiveActivityDispatcher` when the demo runs on a laptop.
-//! * `main.rs` (bin) — desktop entrypoint that boots the emulator and
-//!   the shared UI.
-//! * `lib.rs` (this file) — mobile transport wiring.
-//!
-//! Zero `#[cfg(target_os = ...)]` in `app`. The only per-platform code
-//! lives in `main.rs` (desktop-only boot) and the `AndroidApp` handle
-//! threading below.
-
 pub mod app;
 
 #[cfg(not(any(
@@ -34,10 +15,6 @@ istmo::runtime!(
     plugins: [LiveActivityClient],
 );
 
-/// Mobile entrypoint. `#[istmo::mobile_app]` re-exports this as
-/// `android_main` on Android and `istmo_run_ios` on the Apple mobile
-/// family; on desktop the attribute is a no-op and `main.rs` calls the
-/// shared app entry directly.
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -98,3 +75,4 @@ fn mobile_main() {
         log::error!("eframe exited with error: {err:?}");
     }
 }
+

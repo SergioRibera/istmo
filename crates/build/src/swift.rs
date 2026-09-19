@@ -1,25 +1,7 @@
-//! Swift `protocol` generator. Mirrors the Kotlin generator in shape.
-//!
-//! Two entry points:
-//!
-//! * [`generate_swift`] — the protocol declaration for a Swift-hosted plugin
-//!   (Rust consumer side): mirrors the Kotlin interface generator.
-//! * [`generate_swift_client`] — a Swift class that implements the same
-//!   protocol by shipping each call across the frame protocol via
-//!   `IstmoRuntime.shared.call(...)`. This is the Rust-hosted / Swift-consumer
-//!   direction — analogous to the hand-written `EchoClient.kt` today.
-//!
-//! The generated client references a `Bincode` helper module and an
-//! `IstmoRuntime` singleton that ship with the iOS runtime package. Only the
-//! primitive encoders / decoders needed by the demo are assumed to exist on
-//! the Swift side; adding new [`TypeRef`] variants requires the matching
-//! `Bincode` helper on Swift.
-
 use std::fmt::Write as _;
 
 use crate::contract::{Contract, Method, MethodKind, TypeRef};
 
-/// Renders the Swift surface for `contract`.
 #[must_use]
 pub fn generate_swift(contract: &Contract) -> String {
     let mut out = String::new();
@@ -31,9 +13,6 @@ pub fn generate_swift(contract: &Contract) -> String {
     out
 }
 
-/// Renders a Swift client class for a Rust-hosted plugin. The class conforms
-/// to the same protocol emitted by [`generate_swift`] and delegates every
-/// method to `IstmoRuntime.shared.call(...)`.
 #[must_use]
 pub fn generate_swift_client(contract: &Contract) -> String {
     let mut out = String::new();
@@ -199,3 +178,4 @@ fn write_factory(out: &mut String, contract: &Contract, init: &crate::contract::
     );
     let _ = writeln!(out, "}}");
 }
+

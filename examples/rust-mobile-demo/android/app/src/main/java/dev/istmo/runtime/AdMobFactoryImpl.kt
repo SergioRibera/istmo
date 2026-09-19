@@ -7,17 +7,6 @@ import com.google.android.gms.ads.RequestConfiguration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/**
- * Instance factory for the `AdMob` plugin. `AdMobDispatcher.handleCreateInstance`
- * decodes the `AdMobConfig` payload the caller shipped through
- * `AdMobClient::acquire_with`, then calls this factory to allocate the
- * per-instance backend.
- *
- * `MobileAds.initialize` runs exactly once per process — the flag on
- * this factory guards subsequent instantiations from re-initialising.
- * Test device ids + child-directed treatment are applied on every call
- * because the caller's config may differ per instance.
- */
 class AdMobFactoryImpl(private val activity: Activity) : AdMobFactory {
 
     companion object {
@@ -51,3 +40,4 @@ class AdMobFactoryImpl(private val activity: Activity) : AdMobFactory {
         }
     }
 }
+

@@ -1,8 +1,3 @@
-//! End-to-end verification of `#[istmo::plugin]` and `#[istmo::message]`.
-//!
-//! Each test spins up a mock backend on a background thread that services
-//! whatever frames the generated client emits, then exercises the client.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -118,18 +113,11 @@ fn generated_client_surfaces_domain_errors_as_plugin_error_bytes() {
     backend.join().unwrap();
 }
 
-// ---- Cancellation-aware trait DSL ---------------------------------------
-
-/// Trait exercising the DSL: `cancel: CancelToken` is stripped from the
-/// wire signature (client method + payload tuple) and gets filled by the
-/// runtime on the host side.
 #[istmo::plugin(name = "com.example.slow")]
 pub trait Slow {
     async fn wait(&self, delay_ms: u32, cancel: CancelToken) -> u32;
 }
 
-/// Host impl that parks on the cancel token instead of the delay when the
-/// runtime trips it. Records both branches so the test can assert.
 #[derive(Debug, Default)]
 struct SlowImpl {
     cancelled: Arc<AtomicBool>,
@@ -141,16 +129,12 @@ impl Slow for SlowImpl {
         self.started.store(true, Ordering::SeqCst);
         cancel.cancelled().await;
         self.cancelled.store(true, Ordering::SeqCst);
-        // The host respond frame is dropped by the runtime once the cancel
-        // flag is set — no test asserts on the return value.
         0
     }
 }
 
 #[test]
 fn cancel_token_arg_is_stripped_from_wire_and_client_signature() {
-    // Wire payload for `wait(delay_ms)` must decode as `(u32,)` — proves
-    // the CancelToken arg is not part of the encoded tuple.
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let outbound = init.outbound;
@@ -168,8 +152,6 @@ fn cancel_token_arg_is_stripped_from_wire_and_client_signature() {
             panic!("expected call");
         };
         assert_eq!(method, "wait");
-        // If the cancel token had leaked into the payload, this decode
-        // would either fail or leave trailing bytes.
         let ((delay_ms,), consumed) = codec::decode::<(u32,)>(&payload).unwrap();
         assert_eq!(delay_ms, 42);
         assert_eq!(
@@ -186,7 +168,6 @@ fn cancel_token_arg_is_stripped_from_wire_and_client_signature() {
     });
 
     let slow = SlowClient::from_runtime(&rt).expect("declared");
-    // Client's `wait` takes only `delay_ms` — no CancelToken parameter.
     assert_eq!(pollster::block_on(slow.wait(42)).unwrap(), 99);
     backend.join().unwrap();
 }
@@ -211,7 +192,6 @@ fn host_dispatcher_forwards_runtime_cancel_to_trait_impl() {
     }))
     .unwrap();
 
-    // Spin until the host thread has entered the impl body.
     for _ in 0..1_000 {
         if started.load(Ordering::SeqCst) {
             break;
@@ -234,8 +214,6 @@ fn host_dispatcher_forwards_runtime_cancel_to_trait_impl() {
         "cancel token forwarded to impl never tripped",
     );
 }
-
-// ---- Hosted streams -----------------------------------------------------
 
 #[istmo::plugin(name = "com.example.ticker")]
 pub trait Ticker {
@@ -347,3 +325,4 @@ fn generated_client_reads_stream_events() {
     assert_eq!(collected, vec![0_u32, 1, 2]);
     backend.join().unwrap();
 }
+

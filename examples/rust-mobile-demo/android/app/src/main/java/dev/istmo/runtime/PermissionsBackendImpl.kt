@@ -12,12 +12,6 @@ import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/**
- * Android impl of the codegen `PermissionsBackend` interface. The
- * `notifyPermissionsResult` entry point stays on this class so
- * [dev.istmo.rustdemo.RustMobileActivity.onRequestPermissionsResult] can
- * forward the OS callback into the suspended `request` coroutine.
- */
 class PermissionsBackendImpl(private val activity: Activity) : PermissionsBackend {
 
     private val nextRequestCode = AtomicInteger(1)
@@ -34,10 +28,6 @@ class PermissionsBackendImpl(private val activity: Activity) : PermissionsBacken
     override suspend fun should_show_rationale(permission: String): Boolean =
         ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)
 
-    /**
-     * Route from `RustMobileActivity.onRequestPermissionsResult` into
-     * the suspended request coroutine that fired the request.
-     */
     fun notifyPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
@@ -65,7 +55,7 @@ class PermissionsBackendImpl(private val activity: Activity) : PermissionsBacken
         if (stillNeeded.isEmpty()) {
             return permissions.map { it to PermissionStatus.Granted }
         }
-        // Android <13 has no runtime gate for POST_NOTIFICATIONS — treat as granted.
+
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
             stillNeeded.all { it == "android.permission.POST_NOTIFICATIONS" }
         ) {
@@ -90,3 +80,4 @@ class PermissionsBackendImpl(private val activity: Activity) : PermissionsBacken
         }
     }
 }
+

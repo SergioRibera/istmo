@@ -1,37 +1,14 @@
-//! Plugin contract data model shared by macros and code generators.
-
 use bincode::{Decode, Encode};
 
-/// Complete description of a plugin trait, sufficient to generate the client
-/// wrapper on the Rust side and the interface / protocol declarations on the
-/// native side.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Contract {
-    /// Dotted plugin identifier used on the wire, e.g. `"com.example.echo"`.
     pub plugin_id: String,
-    /// Rust / Kotlin / Swift type name, e.g. `"Echo"`.
     pub type_name: String,
-    /// Methods declared in the trait, in declaration order.
     pub methods: Vec<Method>,
-    /// Type carried by `CreateInstance` when the plugin uses `acquire_with`.
-    /// `None` for stateless plugins.
     pub init: Option<TypeRef>,
-    /// Definitions for every `Named` type referenced from `methods` /
-    /// `init`. Consumed by the Kotlin / Swift type + codec generators to
-    /// emit data classes / structs / enums plus their bincode wire codecs
-    /// so downstream demos do not hand-write them.
-    ///
-    /// Types that the wire treats as opaque (typealias-only shapes like
-    /// `NativeHandleId`) are omitted — the generator emits `typealias`
-    /// declarations for those separately, from a small built-in list.
     pub types: Vec<TypeDef>,
 }
 
-/// A named type used somewhere in the contract's method signatures.
-///
-/// Enum variants without a payload become primitive enums; variants with
-/// a payload become sealed classes (Kotlin) or associated-value enums
-/// (Swift). Struct definitions become `data class` / `struct`.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum TypeDef {
     Struct(StructDef),
@@ -66,56 +43,33 @@ pub struct EnumDef {
     pub variants: Vec<EnumVariant>,
 }
 
-/// Enum variant. `payload` empty → unit variant; single entry → tuple
-/// variant; multiple entries not yet supported (would need a real named
-/// or positional shape choice).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct EnumVariant {
     pub name: String,
     pub payload: Vec<TypeRef>,
 }
 
-/// One method exposed by the plugin.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Method {
-    /// Method identifier as it appears in the trait.
     pub name: String,
-    /// Whether the method is a unary call or a stream subscription.
     pub kind: MethodKind,
-    /// Ordered list of arguments (excluding `&self`).
     pub args: Vec<Arg>,
-    /// Success value returned by a unary call, or per-event value for a stream.
     pub returns: TypeRef,
-    /// Optional domain error type. `Some` when the Rust signature is
-    /// `Result<T, E>`; `None` when the method is infallible on the domain
-    /// side (transport errors are always still possible).
     pub error: Option<TypeRef>,
 }
 
-/// Whether a method is unary (single response) or a stream (many events).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum MethodKind {
     Unary,
     Stream,
 }
 
-/// A named method argument.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Arg {
     pub name: String,
     pub ty: TypeRef,
 }
 
-/// Type reference used on the wire.
-///
-/// Only the primitives listed here are understood by the built-in Kotlin /
-/// Swift generators. User-defined types are carried through as [`Named`]
-/// entries with the Rust type name; the generators emit that name verbatim
-/// on the native side, so the plugin author is expected to declare a
-/// matching Kotlin / Swift type (with matching wire representation) in the
-/// generated module's companion source.
-///
-/// [`Named`]: TypeRef::Named
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum TypeRef {
     Unit,
@@ -138,7 +92,6 @@ pub enum TypeRef {
 }
 
 impl TypeRef {
-    /// Kotlin syntax for this type reference.
     #[must_use]
     pub fn to_kotlin(&self) -> String {
         match self {
@@ -162,7 +115,6 @@ impl TypeRef {
         }
     }
 
-    /// Swift syntax for this type reference.
     #[must_use]
     pub fn to_swift(&self) -> String {
         match self {
@@ -186,3 +138,4 @@ impl TypeRef {
         }
     }
 }
+

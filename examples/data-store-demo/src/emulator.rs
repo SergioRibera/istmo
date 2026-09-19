@@ -1,16 +1,3 @@
-//! Desktop-only in-process "native emulator".
-//!
-//! On mobile the Kotlin `DataStoreDispatcher` / Swift `DataStoreDispatcher`
-//! answer outbound envelopes from the runtime. On desktop we stand in with
-//! a plain Rust thread that:
-//!
-//! * Reads the runtime's outbound envelopes.
-//! * Handles `Frame::CreateInstance` by allocating a fresh `Namespace`
-//!   keyed by `InstanceId` — same shape as the Kotlin
-//!   `DataStoreFactoryImpl.create(config)` reference impl.
-//! * Handles `Frame::Call` by decoding the arg tuple, mutating the
-//!   in-memory `HashMap`, and encoding the response.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
@@ -19,9 +6,6 @@ use bincode::{Decode, Encode};
 use istmo_core::{CallId, Envelope, Frame, InstanceId, Runtime, codec};
 use istmo_data_store::{DATA_STORE_PLUGIN_ID, DataStoreConfig, DataStoreError};
 
-/// Value stored under one key. Matches the plugin's typed accessors so the
-/// emulator can enforce type consistency (a `get_i64` against a slot last
-/// written by `set_string` returns `DataStoreError::Corrupted`).
 #[derive(Debug, Clone, Encode, Decode)]
 enum StoredValue {
     Str(String),
@@ -50,8 +34,6 @@ struct Namespace {
     entries: HashMap<String, StoredValue>,
 }
 
-/// Spawn the emulator on its own OS thread. Drops when the outbound
-/// channel closes (i.e. the runtime tears down).
 pub fn spawn(rt: Arc<Runtime>, outbound: flume::Receiver<Envelope>) {
     thread::Builder::new()
         .name("data-store-native-emulator".into())
@@ -209,3 +191,4 @@ fn encode_backend<E: std::fmt::Display>(err: E) -> Vec<u8> {
 fn encode_backend_err(msg: &str) -> Vec<u8> {
     codec::encode(&DataStoreError::Backend(msg.to_owned())).unwrap_or_default()
 }
+

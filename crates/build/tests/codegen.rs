@@ -1,12 +1,3 @@
-//! Golden-file tests for the Kotlin and Swift generators.
-//!
-//! Each fixture builds a [`Contract`] by hand and compares the generator
-//! output against a file at `tests/golden/{fixture}.{kt|swift}.expected`.
-//!
-//! Set `ISTMO_BUILD_UPDATE_GOLDEN=1` in the environment to overwrite the
-//! expected files with the current output. Handy after intentional format
-//! changes; never commit stale updates.
-
 use std::fs;
 use std::path::PathBuf;
 
@@ -317,8 +308,6 @@ fn backup_worker_kotlin_matches_golden() {
         &generate_android_worker(&backup_worker()),
     );
 }
-
-// ---- iOS ---------------------------------------------------------------
 
 #[test]
 fn unary_only_swift_client_matches_golden() {
@@ -719,8 +708,6 @@ fn native_deps_merge_prefers_highest_version() {
     );
 }
 
-// ---- Type + codec generation (types + codecs for `Named` types) --------
-
 fn permissions_with_types() -> Contract {
     let mut c = permissions();
     c.types = vec![
@@ -811,8 +798,6 @@ fn permissions_rust_types_matches_golden() {
     );
 }
 
-// ---- Host dispatchers (Kotlin + Swift native-hosted plugin surface) -----
-
 #[test]
 fn permissions_kotlin_host_matches_golden() {
     assert_matches(
@@ -888,8 +873,6 @@ fn ios_entitlements_merge_render() {
     ent.merge(required_entitlements(&continuous_voip_background()));
     assert_matches("ios_entitlements_merged", "plist", &ent.render());
 }
-
-// ---- Desktop -----------------------------------------------------------
 
 fn user_sync_service() -> DesktopServiceContract {
     let mut c = DesktopServiceContract::new(
@@ -1019,14 +1002,6 @@ fn xdg_desktop_entry_matches_golden() {
         &generate_desktop_entry(&gui_app_entry()),
     );
 }
-
-// ---- Live-activity plugin ----------------------------------------------
-//
-// Mirrors the `#[istmo::plugin] trait LiveActivity` in
-// `plugins/live-activity/src/lib.rs`. Hand-built here so the codegen
-// tests do not depend on `istmo-live-activity` (which would create a
-// circular dev-dependency edge — the plugin's own `build.rs` uses
-// `istmo-build`). Golden fixtures pin the wire shape both sides speak.
 
 fn live_activity() -> Contract {
     Contract {
@@ -1400,3 +1375,4 @@ fn live_activity_swift_client_matches_golden() {
         &generate_swift_client(&live_activity()),
     );
 }
+

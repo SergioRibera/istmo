@@ -1,21 +1,13 @@
-//! Early-event primitives.
+//! Buffers for values produced before their first subscriber attaches.
 //!
-//! Two primitives cover the "events that happen before the plugin subscribes"
-//! problem stated in the PLAN:
+//! Cold-start deep links, launch-intent notifications and initial
+//! lifecycle state all need to reach the app even when no consumer is
+//! subscribed yet. Two retention shapes are provided:
 //!
-//! * [`LatestValueSlot`] — value-semantics: a late subscriber immediately
-//!   observes the latest published value, then any updates that follow.
-//!   Ideal for lifecycle state (foreground / background / low-memory).
-//! * [`PreMainQueue`] — bounded FIFO: values published before there is a
-//!   subscriber are buffered and drained into the first subscriber, then
-//!   later publications are forwarded live. Ideal for launch-intent
-//!   deep-links and push notifications delivered before the app is ready.
-//!
-//! Both primitives operate on opaque byte payloads. Plugins own the codec.
-//!
-//! The [`EarlyEventStore`] aggregates instances of both primitives by string
-//! key so a single runtime can host arbitrarily many independent event lanes
-//! without knowing their domain types.
+//! - [`LatestValueSlot`] — keeps only the most recent value; late
+//!   subscribers see it on first attach followed by live updates.
+//! - [`PreMainQueue`] — bounded FIFO; buffered values are drained into
+//!   the first subscriber in publish order.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -24,8 +16,10 @@ use flume::{Receiver, Sender, unbounded};
 
 use crate::sync::lock;
 
-/// A slot that retains the most recent published value and replays it to any
-/// new subscriber.
+/// "Latest value wins" retention slot.
+///
+/// Publishes fan out to every current subscriber; late subscribers get
+/// the most recent value first and then live updates.
 #[derive(Debug, Default)]
 pub struct LatestValueSlot {
     inner: Mutex<LatestInner>,
@@ -38,14 +32,16 @@ struct LatestInner {
 }
 
 impl LatestValueSlot {
-    /// Creates an empty slot.
+    /// Build an empty slot.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Publishes a new value, replacing any previously retained one, and
-    /// forwards the value to all live subscribers.
+    /// Publish a new value and forward it to every subscriber.
+    ///
+    /// Dead subscribers (whose receiver was dropped) are cleaned up
+    /// during the fan-out.
     pub fn publish(&self, value: Vec<u8>) {
         let mut inner = lock(&self.inner);
         inner
@@ -54,36 +50,33 @@ impl LatestValueSlot {
         inner.value = Some(value);
     }
 
-    /// Subscribes to updates. The returned receiver first yields the currently
-    /// retained value (if any), then every subsequent [`publish`] call.
+    /// Subscribe to future updates.
     ///
-    /// [`publish`]: Self::publish
+    /// The returned receiver is primed with the most recently published
+    /// value, if any, followed by live updates.
     pub fn subscribe(&self) -> Receiver<Vec<u8>> {
         let (tx, rx) = unbounded();
         let mut inner = lock(&self.inner);
         if let Some(current) = inner.value.as_ref() {
-            // If the receiver has already been dropped there is nothing to do.
             drop(tx.send(current.clone()));
         }
         inner.subscribers.push(tx);
         rx
     }
 
-    /// Snapshot of the retained value, if any.
+    /// Return a copy of the currently retained value, if any.
     #[must_use]
     pub fn peek(&self) -> Option<Vec<u8>> {
         lock(&self.inner).value.clone()
     }
 }
 
-/// Bounded FIFO that buffers events published before a subscriber exists.
+/// Bounded FIFO retention.
 ///
-/// A publication is buffered when there are zero live subscribers. Once a
-/// subscriber attaches, the entire buffer is drained into it and further
-/// publications are broadcast live to all live subscribers.
-///
-/// When the buffer is full, the oldest entry is dropped to make room —
-/// matching the "short queue of pre-main deep links" spec in the PLAN.
+/// While no subscriber is attached, publishes accumulate up to
+/// `capacity` entries — the oldest is dropped once the queue overflows.
+/// The first subscriber drains the buffered items in publish order;
+/// subsequent publishes fan out live to every attached subscriber.
 #[derive(Debug)]
 pub struct PreMainQueue {
     inner: Mutex<PreMainInner>,
@@ -97,8 +90,11 @@ struct PreMainInner {
 }
 
 impl PreMainQueue {
-    /// Creates a queue with the given buffer capacity. `capacity` of zero
-    /// disables buffering entirely (publications with no subscriber are dropped).
+    /// Build a queue that retains up to `capacity` items while no
+    /// subscriber is attached.
+    ///
+    /// `capacity == 0` disables buffering entirely — publishes without a
+    /// live subscriber are dropped.
     #[must_use]
     pub const fn new(capacity: usize) -> Self {
         Self {
@@ -110,8 +106,11 @@ impl PreMainQueue {
         }
     }
 
-    /// Publishes a value. Buffered if there are no subscribers yet, otherwise
-    /// broadcast live.
+    /// Publish a value.
+    ///
+    /// Delivered directly to every attached subscriber; if none is
+    /// attached, it is appended to the internal buffer (dropping the
+    /// oldest entry on overflow).
     pub fn publish(&self, value: Vec<u8>) {
         let mut inner = lock(&self.inner);
         if inner.subscribers.is_empty() {
@@ -129,14 +128,13 @@ impl PreMainQueue {
         }
     }
 
-    /// Subscribes to the queue. On first subscribe the buffer is drained into
-    /// the new subscriber; subsequent subscribers receive only live events.
+    /// Subscribe to the queue.
+    ///
+    /// The receiver is primed with every buffered value in publish
+    /// order and then receives live updates.
     pub fn subscribe(&self) -> Receiver<Vec<u8>> {
         let (tx, rx) = unbounded();
         let mut inner = lock(&self.inner);
-        // Drain buffered events into the new subscriber. `drain(..)` empties
-        // the buffer regardless of how many subscribers already exist, which
-        // preserves at-least-once delivery for a single subscriber path.
         for buffered in inner.buffered.drain(..) {
             drop(tx.send(buffered));
         }
@@ -145,10 +143,10 @@ impl PreMainQueue {
     }
 }
 
-/// Registry of early-event lanes keyed by string.
+/// Named directory of early-event slots and queues.
 ///
-/// The store is kept in the [`Runtime`](crate::runtime::Runtime) as pure
-/// plumbing; the actual channel names are chosen by plugins.
+/// Slots are addressed by string key — usually a plugin id or a
+/// subchannel path (`"lifecycle"`, `"deep-links"`, and so on).
 #[derive(Debug, Default)]
 pub struct EarlyEventStore {
     latest: Mutex<HashMap<String, Arc<LatestValueSlot>>>,
@@ -156,13 +154,14 @@ pub struct EarlyEventStore {
 }
 
 impl EarlyEventStore {
-    /// Creates an empty store.
+    /// Build an empty store.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Returns the latest-value slot for `key`, creating it if absent.
+    /// Return the [`LatestValueSlot`] for `key`, creating it on first
+    /// access.
     pub fn latest_slot(&self, key: &str) -> Arc<LatestValueSlot> {
         let mut map = lock(&self.latest);
         if let Some(existing) = map.get(key) {
@@ -173,9 +172,11 @@ impl EarlyEventStore {
         slot
     }
 
-    /// Returns the pre-main queue for `key`, creating it with `capacity` if
-    /// absent. If a queue already exists, its previously-configured capacity
-    /// is preserved and `capacity` is ignored.
+    /// Return the [`PreMainQueue`] for `key`, creating it on first
+    /// access with the given `capacity`.
+    ///
+    /// If a queue already exists under `key`, its existing capacity is
+    /// preserved and the `capacity` argument is ignored.
     pub fn queue(&self, key: &str, capacity: usize) -> Arc<PreMainQueue> {
         let mut map = lock(&self.queues);
         if let Some(existing) = map.get(key) {

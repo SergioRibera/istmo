@@ -1,18 +1,3 @@
-//! Outbound frame pump.
-//!
-//! Drains the runtime's outbound channel and decomposes each [`Frame`] into
-//! a typed callback invocation against the [`super::IstmoIosCallbacks`]
-//! table registered at [`super::istmo_ios_start`].
-//!
-//! Every callback is invoked on this dedicated OS thread — never on the
-//! caller's context. The Swift side is expected to hop onto the main queue
-//! (via `DispatchQueue.main.async`) inside the callback body when the work
-//! must run on the main thread; the transport itself makes no such promise.
-//!
-//! Payload buffers passed to callbacks are borrowed for the duration of the
-//! call. Swift copies out into `Data` or `Array<UInt8>` synchronously —
-//! nothing crosses `await` boundaries with a raw pointer.
-
 use std::thread::{self, JoinHandle};
 
 use flume::{Receiver as FlumeReceiver, Sender as FlumeSender, unbounded};
@@ -154,9 +139,7 @@ fn deliver(callbacks: &IstmoIosCallbacks, frame: Frame) {
             }
         }
         Frame::EarlyEvent { channel, .. } => {
-            // EarlyEvent is an inbound-only variant: Swift publishes into
-            // the Rust `EarlyEventStore` via `istmo_ios_submit_early_*`.
-            // Rust does not ship early events back out to Swift.
+
             tracing::warn!(
                 channel = %channel,
                 "dropped outbound EarlyEvent frame; variant is inbound-only",
@@ -184,3 +167,4 @@ fn deliver(callbacks: &IstmoIosCallbacks, frame: Frame) {
         },
     }
 }
+

@@ -26,10 +26,10 @@ dependencyResolutionManagement {
 rootProject.name = "rust-mobile-demo"
 include(":app")
 
-// Composite build against the workspace-local `runtime/android` project.
 includeBuild("../../../runtime/android") {
     dependencySubstitution {
         substitute(module("dev.istmo:istmo-runtime"))
             .using(project(":"))
     }
 }
+

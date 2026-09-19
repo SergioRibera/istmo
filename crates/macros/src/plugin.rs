@@ -1,13 +1,3 @@
-//! `#[istmo::plugin]` attribute macro implementation.
-//!
-//! Expands to three siblings per annotated trait:
-//! * the trait itself (kept verbatim),
-//! * `<Trait>Client` — struct owning `Arc<Runtime>`, generated method
-//!   wrappers, `Plugin` impl,
-//! * `<Trait>Host<Impl: Trait + Send + Sync + 'static>` — dispatcher used by
-//!   the `hosts:` side that implements `Dispatch` + `Plugin` and decodes
-//!   inbound Call frames into direct calls on the concrete `Impl`.
-
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
@@ -31,8 +21,6 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let client_ident = format_ident!("{}Client", trait_ident);
     let host_ident = format_ident!("{}Host", trait_ident);
 
-    // Snapshot the original method signatures BEFORE we rewrite the trait for
-    // Send-ness — client/host codegen needs the async-fn shape.
     let methods_source: Vec<TraitItemFn> = trait_def
         .items
         .iter()
@@ -43,9 +31,6 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         .collect();
     let methods: Vec<&TraitItemFn> = methods_source.iter().collect();
 
-    // Rewrite the trait so every `async fn` returns an `impl Future + Send`;
-    // native async-in-trait futures are not Send-by-default and the host
-    // dispatcher needs to spawn them on a background thread.
     add_send_bound_to_async_methods(&mut trait_def);
 
     let client_methods = methods
@@ -199,25 +184,11 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     })
 }
 
-/// Desugar every `async fn foo(&self, ...) -> R` on the trait into
-/// `fn foo(&self, ...) -> impl Future<Output = R> + Send + '_`.
-///
-/// Native async trait methods do not carry a `Send` bound on the returned
-/// future, but the runtime spawns hosted dispatch tasks on a background
-/// thread — so the future needs to be `Send`. Users still write plain
-/// `async fn` in the trait declaration and in the impl block; the
-/// implementation continues to satisfy the desugared signature because
-/// `async fn` in an impl returns an anonymous `impl Future`.
 fn add_send_bound_to_async_methods(trait_def: &mut ItemTrait) {
     for item in &mut trait_def.items {
         let TraitItem::Fn(f) = item else { continue };
         if is_stream_method(&f.attrs) {
-            // Stream methods declare the ITEM type in their return
-            // position (`-> u32` = `Stream<Item = u32>`). Rewrite it to
-            // `flume::Receiver<T>` so host impls can return one channel
-            // per invocation; the client codegen still reads the raw T
-            // as the stream item type because it consults the
-            // pre-rewrite snapshot.
+
             let item_ty = match &f.sig.output {
                 ReturnType::Default => quote! { () },
                 ReturnType::Type(_, t) => quote! { #t },
@@ -403,7 +374,6 @@ fn expect_type(expr: &Expr) -> syn::Result<Type> {
     }
 }
 
-/// Everything the per-method client expanders need beyond the return-type shape.
 struct MethodCtx<'a> {
     plugin_id: &'a LitStr,
     root: &'a Path,
@@ -411,15 +381,10 @@ struct MethodCtx<'a> {
     method_name_str: LitStr,
     arg_pats: Vec<TokenStream>,
     payload_expr: TokenStream,
-    /// `#[doc = "..."]` attributes copied verbatim from the trait method
-    /// so rustdoc on the generated client method mirrors the trait's own
-    /// documentation.
+
     doc_attrs: Vec<Attribute>,
 }
 
-/// One decoded trait method argument, tagged with whether it participates
-/// in the wire payload or is filled from runtime state (currently only
-/// `CancelToken`).
 #[derive(Clone)]
 struct WireArg {
     ident: Ident,
@@ -441,13 +406,6 @@ fn arg_role(ty: &Type) -> ArgRole {
     }
 }
 
-/// Loose match on the type's last path segment. Any type whose leaf name
-/// is `CancelToken` counts — `CancelToken`, `istmo::CancelToken`,
-/// `istmo_core::CancelToken`, etc. Aliasing to a differently-named type
-/// (`type MyCancel = CancelToken;`) would break detection, but the trait
-/// DSL is deliberately conservative here: the token is not `Encode` /
-/// `Decode` anyway, so misclassifying it as a wire arg would fail
-/// downstream loudly.
 fn is_cancel_token(ty: &Type) -> bool {
     let Type::Path(tp) = ty else { return false };
     tp.path
@@ -466,8 +424,7 @@ fn expand_client_method(
     let method_name_str = LitStr::new(&name.to_string(), name.span());
 
     let all_args = extract_wire_args(sig)?;
-    // Client omits Cancel args from its own signature — drop-cancel on
-    // the returned future already fires `Frame::Cancel` for the caller.
+
     let wire_args: Vec<&WireArg> = all_args
         .iter()
         .filter(|a| a.role == ArgRole::Wire)
@@ -554,9 +511,7 @@ fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream
             .map_err(#root::DispatchError::Decode)?;
     };
     let destructure = destructure_arg_tuple(&wire_arg_names);
-    // Pass wire args + the runtime-provided cancel token in the exact
-    // slot the trait declares. Rebinding to the arg's own name lets us
-    // interleave them with wire args by position.
+
     let cancel_bindings: Vec<TokenStream> = all_args
         .iter()
         .filter(|a| a.role == ArgRole::Cancel)
@@ -568,12 +523,7 @@ fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream
     let call_args: Vec<Ident> = all_args.iter().map(|a| a.ident.clone()).collect();
 
     if is_stream_method(&method.attrs) {
-        // Call the impl to get a `flume::Receiver<T>`, spawn an encoder
-        // thread that turns each item into wire bytes, and hand the
-        // encoded receiver to the runtime as `Outcome::StreamOpened`.
-        // The runtime pumps `Frame::Event` per byte block and closes
-        // with `StreamEnd { Complete }` when the encoder receiver
-        // disconnects.
+
         let item_ty = match &sig.output {
             ReturnType::Default => Type::Verbatim(quote! { () }),
             ReturnType::Type(_, t) => (**t).clone(),
@@ -695,8 +645,7 @@ fn extract_wire_args(sig: &syn::Signature) -> syn::Result<Vec<WireArg>> {
                 args.push(WireArg { ident, ty, role });
             }
             FnArg::Receiver(_) => {
-                // Defensive: syn rejects multiple receivers, so past index 0
-                // this branch is unreachable in practice.
+
             }
         }
     }
@@ -711,15 +660,6 @@ fn build_payload_expr(root: &Path, arg_names: &[Ident]) -> TokenStream {
     }
 }
 
-/// Emit one anonymous `const _` per unique error type appearing in a
-/// `Result<_, E>` return position on the trait. Each block calls a
-/// `fn __assert<T: std::error::Error>()` — refusing to compile if `E`
-/// does not implement `Error` (which itself requires `Display + Debug`).
-///
-/// Enforcing this at the plugin annotation site fails loudly with the
-/// author's type name, rather than surfacing later at the call site as
-/// a bincode-encode / trait-object-cast diagnostic that hides the
-/// root cause.
 fn expand_error_bounds(methods: &[&TraitItemFn]) -> TokenStream {
     let mut seen = std::collections::BTreeSet::new();
     let mut asserts = Vec::new();
@@ -729,10 +669,7 @@ fn expand_error_bounds(methods: &[&TraitItemFn]) -> TokenStream {
         };
         let (_, err_ty) = extract_result(ty);
         let Some(err_ty) = err_ty else { continue };
-        // The unit type `()` appears in `Result<T, ()>` — refuse to
-        // assert against it since `()` does not (and cannot) impl
-        // `Error`. Trait authors that want a truly infallible domain
-        // return should model it as `-> T`, not `-> Result<T, ()>`.
+
         if is_unit(&err_ty) {
             continue;
         }
@@ -793,7 +730,6 @@ fn is_owned_method(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|a| is_istmo_leaf_attr(a, "owned"))
 }
 
-/// Recognises `#[foo]`, `#[istmo::foo]`, `#[istmo_macros::foo]`.
 fn is_istmo_leaf_attr(attr: &Attribute, tail: &str) -> bool {
     let path = attr.path();
     if path.is_ident(tail) {
@@ -854,14 +790,6 @@ fn expand_unary_method(
     })
 }
 
-/// Emit `pub async fn <name>_owned(...) -> Result<Owned<T-mapped>, IstmoError>`
-/// that delegates to the base method and adopts every `#[handle]` field in
-/// the returned value.
-///
-/// Supported return shapes: `T`, `Option<T>`, `Vec<T>`. `T` is expected to
-/// be a `#[message]` struct with `#[handle]` fields (producing an
-/// `OwnedT` sibling); enforcement of that is deferred to compile-time
-/// name resolution of `OwnedT`.
 fn expand_unary_owned_method(ctx: &MethodCtx<'_>, ok_ty: &Type) -> syn::Result<TokenStream> {
     let MethodCtx {
         root,
@@ -874,7 +802,7 @@ fn expand_unary_owned_method(ctx: &MethodCtx<'_>, ok_ty: &Type) -> syn::Result<T
     let arg_names: Vec<TokenStream> = arg_pats
         .iter()
         .filter_map(|p| {
-            // `p` looks like `<ident>: <ty>` — extract the ident.
+
             let tokens = p.to_string();
             let (ident, _) = tokens.split_once(':')?;
             let ident = ident.trim();
@@ -896,11 +824,8 @@ fn expand_unary_owned_method(ctx: &MethodCtx<'_>, ok_ty: &Type) -> syn::Result<T
     })
 }
 
-/// Given the base method's ok type (e.g. `SignInAccount` /
-/// `Option<SignInAccount>` / `Vec<SignInAccount>`), return
-/// (owned-return-type, expression-that-adopts-`__wire`-into-owned).
 fn build_owned_return(ok_ty: &Type) -> syn::Result<(TokenStream, TokenStream)> {
-    // Bare wire type `Foo` → `OwnedFoo` + `__wire.into_owned(__rt)`.
+
     if let Some(ident) = as_bare_ident(ok_ty) {
         let owned_ident = format_ident!("Owned{}", ident);
         return Ok((
@@ -908,7 +833,7 @@ fn build_owned_return(ok_ty: &Type) -> syn::Result<(TokenStream, TokenStream)> {
             quote! { __wire.into_owned(__rt) },
         ));
     }
-    // `Option<Foo>` → `Option<OwnedFoo>` + `__wire.map(|v| v.into_owned(__rt))`.
+
     if let Some(inner) = as_generic("Option", ok_ty)
         && let Some(inner_ident) = as_bare_ident(inner)
     {
@@ -918,7 +843,7 @@ fn build_owned_return(ok_ty: &Type) -> syn::Result<(TokenStream, TokenStream)> {
             quote! { __wire.map(|v| v.into_owned(__rt)) },
         ));
     }
-    // `Vec<Foo>` → `Vec<OwnedFoo>` + `__wire.into_iter().map(...).collect()`.
+
     if let Some(inner) = as_generic("Vec", ok_ty)
         && let Some(inner_ident) = as_bare_ident(inner)
     {
@@ -997,3 +922,4 @@ fn expand_stream_method(ctx: &MethodCtx<'_>, item_ty: &Type, err_ty: Option<&Typ
         }
     }
 }
+

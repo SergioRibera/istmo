@@ -24,7 +24,6 @@ pollster = { workspace = true }
 [lints.rust]
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
-# Overrides workspace-wide forbid: FFI requires unsafe.
 unsafe_code = "allow"
 
 [lints.clippy]
@@ -35,3 +34,4 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 missing_safety_doc = "allow"
 redundant_pub_crate = "allow"
+

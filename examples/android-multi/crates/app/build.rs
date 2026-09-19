@@ -1,22 +1,3 @@
-//! Regenerates the Kotlin glue for every plugin this cdylib either
-//! **hosts** (Rust-owned trait Kotlin calls via a generated `<T>Client`)
-//! or **consumes** (Kotlin-owned trait Rust calls via a generated
-//! `<T>Dispatcher`).
-//!
-//! Runs on every `cargo build` regardless of target — the generated
-//! files land under `android/app/src/main/java/dev/istmo/multi/gen/`
-//! which is git-ignored so a checkout after `cargo build` stays clean.
-//!
-//! Contract shapes come from `istmo-plugins-schema` (for the platform-
-//! hosted `ServiceControl` plugin) and from inline builders below (for
-//! the demo-specific `AppControl` trait). Rust-side trait changes flow
-//! through:
-//!
-//! 1. Update the trait in `src/lib.rs`.
-//! 2. Update the corresponding Contract builder here (or in
-//!    `istmo-plugins-schema` for bundled plugins).
-//! 3. `cargo build -p istmo-android-multi-app` regenerates the Kotlin.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -29,16 +10,14 @@ use istmo_plugins_schema as plugin_contract;
 
 fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // Two-hop up: crates/app → android-multi → examples/…/android/app/src/main/java
+
     let gen_dir = root
         .join("../../android/app/src/main/java/dev/istmo/multi/gen")
         .canonicalize()
         .unwrap_or_else(|_| root.join("../../android/app/src/main/java/dev/istmo/multi/gen"));
 
-    // ---- Rust-hosted plugins (Kotlin calls Rust) --------------------
     emit_client_bundle(&gen_dir, "dev.istmo.multi.gen", &app_control_contract());
 
-    // ---- Kotlin-hosted plugins (Rust calls Kotlin) ------------------
     emit_host_bundle(
         &gen_dir,
         "dev.istmo.multi.gen",
@@ -49,9 +28,6 @@ fn main() {
     println!("cargo:rerun-if-changed=src/lib.rs");
 }
 
-/// Bundle for a **Rust-hosted** trait: types + codecs interface + codecs
-/// impl + client. Kotlin instantiates `<T>Client(<T>CodecsImpl())` and
-/// calls its `suspend` methods.
 fn emit_client_bundle(gen_dir: &Path, package: &str, contract: &Contract) {
     let name = contract.type_name.as_str();
     emit(
@@ -72,10 +48,6 @@ fn emit_client_bundle(gen_dir: &Path, package: &str, contract: &Contract) {
     );
 }
 
-/// Bundle for a **Kotlin-hosted** trait: types + backend interface +
-/// codecs interface + dispatcher + codecs impl. Kotlin author writes a
-/// `<T>Backend` impl and registers
-/// `IstmoRuntime.registerHandler(PLUGIN_ID, <T>Dispatcher(backend, <T>CodecsImpl()))`.
 fn emit_host_bundle(gen_dir: &Path, package: &str, contract: &Contract) {
     let name = contract.type_name.as_str();
     emit(
@@ -114,16 +86,10 @@ fn app_control_contract() -> Contract {
     }
 }
 
-/// Prepend `package …` header. Types + codecs generators emit no imports.
 fn with_package(package: &str, body: &str) -> String {
     format!("package {package}\n\n{body}")
 }
 
-/// Prepend `package …` AND imports for the shared runtime types
-/// (`Bincode`, `IstmoRuntime`, `PluginException`, `PluginHandler`,
-/// `HandleReleaser`, `BackendException`). Host + client generators need
-/// these; types + codecs live in the same file so no extra import for
-/// them.
 fn with_package_and_imports(package: &str, body: &str) -> String {
     let imports = "\
 import dev.istmo.runtime.BackendException\n\
@@ -144,9 +110,6 @@ fn emit(dest: &Path, contents: &str) {
     }
 }
 
-/// Write `contents` only if the on-disk bytes differ. Prevents Gradle
-/// from re-invoking `kotlinc` for a codegen output that didn't actually
-/// change.
 fn write_if_changed(dest: &Path, contents: &str) -> std::io::Result<()> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
@@ -158,3 +121,4 @@ fn write_if_changed(dest: &Path, contents: &str) -> std::io::Result<()> {
     }
     fs::write(dest, contents)
 }
+

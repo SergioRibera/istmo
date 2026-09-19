@@ -1,17 +1,13 @@
-//! `Contract` builders for every bundled plugin.
+//! Wire [`Contract`] definitions for the first-party plugins bundled
+//! with [`istmo`](https://docs.rs/istmo).
 //!
-//! Downstream `build.rs` scripts consume these to emit Kotlin / Swift
-//! host dispatchers, types, and codecs via `istmo-build`'s generators
-//! without duplicating trait shape or wire encoding at the demo's own
-//! build layer.
-//!
-//! Only compiled behind the `codegen` cargo feature — off by default so
-//! runtime consumers of `istmo-plugins` do not pull `istmo-build`.
-//!
-//! Each builder must stay in lockstep with the matching `#[istmo::plugin]`
-//! trait declaration and `#[message]` type declarations. The golden test
-//! suite in `istmo-build` covers the generated output byte-for-byte and
-//! catches drift.
+//! Consumed by the code generators in
+//! [`istmo-build`](https://docs.rs/istmo-build) to emit matching Kotlin
+//! and Swift bindings. Third-party plugin crates typically derive their
+//! own contract via [`istmo_build::extract_contract`] instead of listing
+//! it here.
+
+#![doc(html_root_url = "https://docs.rs/istmo-plugins-schema")]
 
 use istmo_build::{
     Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
@@ -200,9 +196,6 @@ pub fn notifications() -> Contract {
     }
 }
 
-/// Contract for `istmo.service_control` — the platform-hosted plugin that
-/// [`istmo_plugins::ServiceContext`] shells its foreground-notification /
-/// wakelock / stop-self helpers into.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn service_control() -> Contract {
@@ -328,9 +321,6 @@ pub fn service_control() -> Contract {
     }
 }
 
-/// Contract for `istmo.task_scheduler` — the platform-hosted plugin
-/// that lands `WorkManager` (Android) / `BGTaskScheduler` (iOS)
-/// enqueue and cancel requests originating from Rust.
 #[must_use]
 pub fn task_scheduler() -> Contract {
     Contract {
@@ -570,3 +560,4 @@ pub fn admob() -> Contract {
         ],
     }
 }
+

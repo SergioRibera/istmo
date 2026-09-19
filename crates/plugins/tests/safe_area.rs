@@ -1,6 +1,3 @@
-//! `SafeArea` plugin: verifies inset publishing, replay for late subscribers,
-//! and the Flutter-style `padding` / `view_padding` combinators.
-
 use istmo_core::{Runtime, codec};
 use istmo_plugins::{EdgeInsets, SAFE_AREA_CHANNEL, SafeArea, SafeAreaInsets};
 
@@ -66,8 +63,7 @@ fn padding_is_element_wise_max_of_system_bars_and_cutout() {
         },
     };
     let padding = insets.padding();
-    // Cutout wins on top + horizontal edges (notch), system-bar wins
-    // on bottom (nav-bar taller than cutout there).
+
     assert!((padding.top - 40.0).abs() < f32::EPSILON);
     assert!((padding.right - 8.0).abs() < f32::EPSILON);
     assert!((padding.bottom - 48.0).abs() < f32::EPSILON);
@@ -89,9 +85,9 @@ fn view_padding_expands_bottom_by_ime_height() {
         display_cutout: EdgeInsets::ZERO,
     };
     let view_padding = insets.view_padding();
-    // Nav bar contributes 16 on bottom; keyboard shoves that to 320.
+
     assert!((view_padding.bottom - 320.0).abs() < f32::EPSILON);
-    // Top unchanged — IME never reserves top space in single-window mode.
+
     assert!((view_padding.top - 24.0).abs() < f32::EPSILON);
 }
 
@@ -121,9 +117,8 @@ fn multiple_subscribers_all_observe_each_update() {
 
 #[test]
 fn plugin_id_matches_channel_key() {
-    // Contract: a native backend that publishes on the wire channel needs
-    // to use exactly this key, and clients declaring the plugin use the
-    // same id. Drift between them silently breaks the subscription.
+
     use istmo_core::Plugin;
     assert_eq!(SafeArea::PLUGIN_ID, SAFE_AREA_CHANNEL);
 }
+

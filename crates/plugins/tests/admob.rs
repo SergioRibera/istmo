@@ -1,6 +1,3 @@
-//! `AdMob` plugin: `acquire_with` + load/show round-trip + banner handle
-//! cascade against a mock native backend.
-
 use std::sync::Arc;
 use std::thread;
 
@@ -54,7 +51,6 @@ fn load_and_show_interstitial_round_trip() {
     let backend = thread::spawn(move || {
         spawn_create_instance(&backend_rt, &outbound, InstanceId(1));
 
-        // load_interstitial -> returns handle id 7
         let env = outbound.recv().expect("load");
         let (load_call, ad_unit) = match env.frame {
             Frame::Call {
@@ -77,7 +73,6 @@ fn load_and_show_interstitial_round_trip() {
             }))
             .unwrap();
 
-        // show_interstitial -> returns Dismissed
         let env = outbound.recv().expect("show");
         let show_call = match env.frame {
             Frame::Call {
@@ -232,7 +227,6 @@ fn update_banner_forwards_new_rect_via_typed_call() {
     let backend = thread::spawn(move || {
         spawn_create_instance(&backend_rt, &backend_outbound, InstanceId(1));
 
-        // show_banner → returns id 42
         let env = backend_outbound.recv().expect("show_banner");
         let show_call = match env.frame {
             Frame::Call {
@@ -250,7 +244,6 @@ fn update_banner_forwards_new_rect_via_typed_call() {
             }))
             .unwrap();
 
-        // update_banner → verify new rect, respond ok
         let env = backend_outbound.recv().expect("update_banner");
         let (call, handle_arg, rect_arg) = match env.frame {
             Frame::Call {
@@ -302,7 +295,7 @@ fn update_banner_forwards_new_rect_via_typed_call() {
     ))
     .expect("update");
     backend.join().unwrap();
-    // Handle still alive → dropping it now still triggers release. Prove it.
+
     drop(banner);
     let release = outbound.recv().expect("release after update+drop");
     assert!(
@@ -312,10 +305,7 @@ fn update_banner_forwards_new_rect_via_typed_call() {
 
 #[test]
 fn hide_banner_consumes_handle_and_suppresses_release_frame() {
-    // `hide_banner_owned` calls `into_id()` — the handle disappears
-    // without ever firing a `ReleaseNativeHandle`. Native side is
-    // responsible for releasing its own registry entry inside the hide
-    // handler.
+
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let outbound = init.outbound;
@@ -375,8 +365,6 @@ fn hide_banner_consumes_handle_and_suppresses_release_frame() {
     pollster::block_on(client.hide_banner_owned(banner)).expect("hide");
     backend.join().unwrap();
 
-    // No further outbound frames — hide consumed the handle, no
-    // ReleaseNativeHandle should appear.
     assert!(
         outbound.try_recv().is_err(),
         "unexpected outbound after hide"
@@ -476,9 +464,7 @@ fn interstitial_failed_to_show_is_a_valid_terminal_outcome() {
 
 #[test]
 fn every_ad_error_variant_round_trips_through_the_wire() {
-    // Exhaustive check that AdError's typed variants survive the
-    // encode/decode boundary — a silent drift here would surface as
-    // "undecodable domain error" on the demo side.
+
     let variants = [
         AdError::NotInitialized,
         AdError::NoFill,
@@ -510,9 +496,7 @@ fn config_with_child_directed_treatment_round_trips_intact() {
 
 #[test]
 fn distinct_loads_produce_distinct_native_handles() {
-    // The client itself is stateless — each load call is independent.
-    // Verify by handing back two different ids and asserting the
-    // wrapper handles do not collide.
+
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let outbound = init.outbound.clone();
@@ -543,8 +527,6 @@ fn distinct_loads_produce_distinct_native_handles() {
     assert_eq!(b.id(), NativeHandleId(222));
     backend.join().unwrap();
 
-    // Drain the two release frames the drops will emit — order matches
-    // drop order (a first, then b).
     drop(a);
     drop(b);
     let mut released: Vec<u64> = Vec::new();
@@ -591,3 +573,4 @@ fn load_no_fill_surfaces_as_typed_error() {
     assert_eq!(decoded, AdError::NoFill);
     backend.join().unwrap();
 }
+

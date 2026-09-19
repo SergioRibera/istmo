@@ -1,7 +1,3 @@
-//! Slice A verification: `ServiceContext` talks to a hosted `ServiceControl`
-//! implementation via the frame protocol, and `StopNotifier` drives the
-//! `stopped()` future.
-
 use std::sync::{Arc, Mutex};
 
 use istmo_core::{CancelToken, Runtime};
@@ -182,12 +178,10 @@ fn wakelock_drop_forwards_release_via_notify_no_response_needed() {
     pollster::block_on(async {
         let lock = ctx.acquire_wakelock("bg-refresh").await.unwrap();
         assert_eq!(lock.token(), WakelockToken(1));
-        // No explicit .release(); dropping is enough now that the release
-        // path is fire-and-forget via `Runtime::notify`.
+
         drop(lock);
     });
 
-    // Notify dispatch runs on a spawned thread — spin until it lands.
     for _ in 0..1_000 {
         if !mock.snapshot().released.is_empty() {
             break;
@@ -240,3 +234,4 @@ fn stop_self_reaches_host() {
     let snap = mock.snapshot();
     assert_eq!(snap.stops, vec!["myapp.sync".to_owned()]);
 }
+

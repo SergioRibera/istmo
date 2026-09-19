@@ -1,7 +1,3 @@
-//! Desktop entrypoint. On mobile targets this compiles to an unused stub
-//! `fn main() {}` — the cdylib/staticlib carries the real entry via
-//! `#[istmo::mobile_app]` in `lib.rs`.
-
 #[cfg(not(any(
     target_os = "android",
     target_os = "ios",
@@ -51,7 +47,6 @@ fn main() -> Result<(), eframe::Error> {
     target_os = "watchos",
 ))]
 fn main() {
-    // Mobile targets carry the entrypoint in the cdylib / staticlib
-    // (`#[istmo::mobile_app]` in `lib.rs`). Keep this stub around so
-    // cargo's default `bin` target still compiles.
+
 }
+

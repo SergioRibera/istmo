@@ -11,17 +11,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import java.util.concurrent.atomic.AtomicInteger
 
-/**
- * Android impl of the codegen `NotificationsBackend` interface.
- *
- * `NotificationManagerCompat` fronts the OS surface; channels are
- * lazily created on first use per `channelId` so callers do not have to
- * pre-register them.
- *
- * Delayed posts are not implemented — a real scheduler needs an
- * `AlarmManager` + `BroadcastReceiver` shim; this demo honours only
- * zero-delay requests.
- */
 class NotificationsBackendImpl(private val activity: Activity) : NotificationsBackend {
 
     private val nextId = AtomicInteger(1)
@@ -30,10 +19,7 @@ class NotificationsBackendImpl(private val activity: Activity) : NotificationsBa
     override suspend fun is_authorized(): Boolean = manager.areNotificationsEnabled()
 
     override suspend fun request_authorization(): Boolean {
-        // The runtime prompt for POST_NOTIFICATIONS is handled by the
-        // Permissions plugin. This helper just reports the current
-        // enabled state — same shape as iOS's `requestAuthorization`
-        // which is idempotent for a second call.
+
         return manager.areNotificationsEnabled()
     }
 
@@ -69,8 +55,6 @@ class NotificationsBackendImpl(private val activity: Activity) : NotificationsBa
         manager.cancel(id.toInt())
     }
 
-    // ---- Channels + importance mapping ----------------------------------
-
     private fun ensureChannel(id: String, importance: NotificationImportance) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = activity.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -97,3 +81,4 @@ class NotificationsBackendImpl(private val activity: Activity) : NotificationsBa
         NotificationImportance.High -> NotificationManager.IMPORTANCE_HIGH
     }
 }
+

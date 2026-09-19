@@ -20,15 +20,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 
-/**
- * Demo Activity — every Rust ↔ Kotlin crossing goes through
- * [IstmoRuntime]. Each UI button invokes an [EchoClient] method whose Rust
- * implementation internally consumes the corresponding client plugin
- * (`PermissionsClient`, `ActivityResultsClient`, `AppLifecycle`,
- * `DeepLinks`). Response then round-trips back through the frame protocol.
- * Lifecycle transitions and deep links get pushed as early events on the
- * way in.
- */
 class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -104,8 +95,6 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         setIntent(intent)
         handleIntent(intent)
     }
-
-    // ---- Section wiring ----
 
     private fun wireEchoSection() {
         val input = findViewById<EditText>(R.id.inputText)
@@ -198,7 +187,6 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         view.text = "arrived (before drain):\n" + deeplinkHistory.joinToString("\n")
     }
 
-    /** Bincode-encode a `DeepLink { uri, source: Option<String>, received_at_ms: Option<u64> }`. */
     private fun encodeDeepLink(uri: String, source: String?): ByteArray {
         val out = ByteArrayOutputStream()
         Bincode.writeString(out, uri)
@@ -214,8 +202,6 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
     } catch (t: Throwable) {
         "transport error: ${t.message}"
     }
-
-    // ---- Notifier: Rust → Mobile initiator ---------------------------------
 
     private fun wireNotifierSection() {
         val countInput = findViewById<EditText>(R.id.notifyCount)
@@ -248,3 +234,4 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         }
     }
 }
+

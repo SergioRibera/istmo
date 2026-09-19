@@ -1,22 +1,3 @@
-// iOS impl of `NotificationsBackend`.
-//
-// Wraps `UNUserNotificationCenter`:
-//
-// * `is_authorized` / `request_authorization` mirror Android's shape —
-//   query and prompt respectively. iOS's authorisation is process-wide,
-//   not per-channel; `channel_id` in the `NotificationRequest` body is
-//   ignored on iOS.
-// * `schedule` builds a `UNNotificationRequest` and passes it to
-//   `add(_:)`. Immediate posts use a nil trigger; delayed posts use a
-//   `UNTimeIntervalNotificationTrigger`.
-// * `cancel(id)` maps to `removePendingNotificationRequests` +
-//   `removeDeliveredNotifications` on the string form of the id (matches
-//   the ids we hand out on `schedule`).
-//
-// `NotificationHandle.id` is drawn from a monotonic counter; the request
-// identifier the OS stores is the decimal string form of that id, so
-// `cancel` can round-trip.
-
 import Foundation
 import IstmoRuntime
 import UserNotifications
@@ -50,9 +31,7 @@ public final class NotificationsBackendImpl: NotificationsBackend {
     }
 
     public func schedule(request: NotificationRequest) async throws -> NotificationHandle {
-        // Bail early if the user has denied — otherwise `add` accepts the
-        // request but the notification never fires, which is worse UX
-        // than a domain error the caller can display.
+
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {
         case .authorized, .provisional, .ephemeral: break
@@ -68,9 +47,7 @@ public final class NotificationsBackendImpl: NotificationsBackend {
         content.title = request.title
         content.body = request.body
         content.sound = mapSound(request.importance)
-        // `interruptionLevel` landed in iOS 15. On earlier OS the property
-        // is not visible so we silently fall through — the notification
-        // uses the default (active) presentation.
+
         if #available(iOS 15.0, *) {
             content.interruptionLevel = mapInterruption(request.importance)
         }
@@ -105,8 +82,6 @@ public final class NotificationsBackendImpl: NotificationsBackend {
         center.removeDeliveredNotifications(withIdentifiers: [identifier])
     }
 
-    // MARK: - Importance mapping
-
     private func mapSound(_ importance: NotificationImportance) -> UNNotificationSound? {
         switch importance {
         case .min, .low: return nil
@@ -124,3 +99,4 @@ public final class NotificationsBackendImpl: NotificationsBackend {
         }
     }
 }
+

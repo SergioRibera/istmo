@@ -1,15 +1,3 @@
-//! Byte-for-byte snapshot of the `SignIn` `Contract` extracted from
-//! `src/lib.rs`.
-//!
-//! Guards against silent drift between the trait declaration and the
-//! Kotlin / Swift host-side glue that downstream consumers generate off
-//! the extracted contract. Any change to the trait — new method, renamed
-//! argument, altered error variant, added `#[handle]` — surfaces here
-//! and requires an intentional fixture update.
-//!
-//! Requires the `codegen` feature (that is the only build path where
-//! `istmo-build` is linked as a runtime dep of this crate).
-
 #![cfg(feature = "codegen")]
 
 use istmo_build::{
@@ -136,3 +124,4 @@ fn extracted_contract_matches_fixture() {
         );
     }
 }
+

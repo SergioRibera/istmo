@@ -1,11 +1,3 @@
-//! Regenerates the Kotlin glue for the demo's Rust-hosted `Echo` trait
-//! and Kotlin-hosted `Notifier` trait.
-//!
-//! Runs on every `cargo build`. Generated files land under
-//! `android/app/src/main/java/dev/istmo/demo/gen/` and are gitignored.
-//! Contracts for both traits are constructed inline here since they are
-//! demo-specific (not part of `istmo-plugins-schema`).
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,13 +14,8 @@ fn main() {
         .canonicalize()
         .unwrap_or_else(|_| root.join("android/app/src/main/java/dev/istmo/demo/gen"));
 
-    // Echo — Rust hosts, Kotlin calls via generated EchoClient.
     emit_client_bundle(&gen_dir, "dev.istmo.demo.gen", &echo_contract());
 
-    // Notifier — Kotlin hosts, Rust calls via generated NotifierDispatcher.
-    // Reuse EchoError from Echo's Types file — do NOT re-declare it here,
-    // just set `types: vec![]` on the notifier contract so the types
-    // generator produces no output.
     emit_host_bundle_without_types(&gen_dir, "dev.istmo.demo.gen", &notifier_contract());
 
     println!("cargo:rerun-if-changed=build.rs");
@@ -55,10 +42,6 @@ fn emit_client_bundle(gen_dir: &Path, package: &str, contract: &Contract) {
     );
 }
 
-/// Host bundle without emitting `<T>Types.kt` or `<T>CodecsImpl.kt` —
-/// used when the contract's named types are already declared by a
-/// sibling contract in the same package and the caller hand-writes a
-/// codecs adapter that delegates to the sibling's codec impl.
 fn emit_host_bundle_without_types(gen_dir: &Path, package: &str, contract: &Contract) {
     let name = contract.type_name.as_str();
     emit(
@@ -138,7 +121,7 @@ fn notifier_contract() -> Contract {
             error: Some(TypeRef::Named("EchoError".to_owned())),
         }],
         init: None,
-        // Empty: EchoError comes from EchoTypes.kt in the same package.
+
         types: vec![],
     }
 }
@@ -178,3 +161,4 @@ fn write_if_changed(dest: &Path, contents: &str) -> std::io::Result<()> {
     }
     fs::write(dest, contents)
 }
+

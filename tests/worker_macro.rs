@@ -1,6 +1,3 @@
-//! End-to-end verification of `#[istmo::worker]` and the `workers:` section
-//! of `istmo::runtime!`.
-
 use std::sync::{Arc, Mutex};
 
 use istmo::plugins::{TaskOutcome, WorkerContext};
@@ -57,7 +54,6 @@ fn worker_adapter_runs_and_encodes_outcome() {
     }))
     .unwrap();
 
-    // Adapter dispatches via `std::thread::spawn` — wait for outbound respond.
     let envelope = outbound.recv().expect("respond");
     let Frame::Respond {
         call_id: rid,
@@ -75,3 +71,4 @@ fn worker_adapter_runs_and_encodes_outcome() {
         [b"hello".to_vec()]
     );
 }
+

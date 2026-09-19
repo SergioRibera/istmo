@@ -1,11 +1,3 @@
-//! Outbound frame pump.
-//!
-//! Drains the runtime's outbound channel, decomposes each `Frame` variant into
-//! typed arguments and calls the matching static method on the Kotlin runtime
-//! class. This keeps the bincode envelope on the Rust side — Kotlin plugin
-//! implementations only see decoded primitives plus the raw method payload
-//! (which is itself bincode-encoded, but per plugin, and much simpler in shape).
-
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -16,9 +8,6 @@ use jni::JavaVM;
 use jni::objects::{GlobalRef, JObject, JValue};
 use jni::signature::{Primitive, ReturnType};
 
-/// Bincode config matching `istmo-core`'s wire codec (unused here — this file
-/// only reads pre-decoded frames — but kept for future outbound-encoding
-/// helpers such as `nativeSubmitEvent` chains).
 #[allow(dead_code)]
 const fn codec() -> bincode::config::Configuration {
     bincode::config::standard()
@@ -29,9 +18,6 @@ pub(crate) struct PumpHandles {
     pub(crate) join: JoinHandle<()>,
 }
 
-/// Sender half of the remote-envelope byte channel; the runtime's remote
-/// sink pushes into it, the pump thread drains it and forwards bytes via
-/// `onRemoteEnvelope`.
 pub(crate) type RemoteEnvelopeSender = flume::Sender<Vec<u8>>;
 
 pub(crate) fn spawn(
@@ -125,9 +111,6 @@ fn deliver_remote(
     )
 }
 
-/// Cached ids for every static method the pump invokes on the Kotlin runtime
-/// class. Outbound direction is Rust → Kotlin; the pump translates each
-/// [`Frame`] variant into a typed static-method call.
 #[allow(clippy::struct_field_names)]
 struct PumpMethods {
     on_call: jni::objects::JStaticMethodID,
@@ -285,10 +268,7 @@ fn deliver(
             )
         }
         Frame::EarlyEvent { channel, .. } => {
-            // EarlyEvent is an inbound-only variant: native publishes into
-            // the Rust `EarlyEventStore`. Rust does not ship early events
-            // back out to native (Kotlin observes lifecycle/deep-link
-            // state through its own channels, not through the frame pump).
+
             tracing::warn!(
                 channel = %channel,
                 "dropped outbound EarlyEvent frame; variant is inbound-only",
@@ -344,3 +324,4 @@ fn call_static_void(
     }
     Ok(())
 }
+

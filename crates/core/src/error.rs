@@ -1,47 +1,60 @@
-//! Typed error taxonomy for the istmo core layer.
-//!
-//! All errors are hand-implemented; the crate intentionally avoids
-//! `thiserror` to keep its dependency footprint minimal.
+//! Error types surfaced by the runtime and codec.
 
 use core::fmt;
 
 use crate::protocol::{CallId, InstanceId, StreamId};
 
-/// Top-level error surfaced by the core runtime.
+/// Everything the runtime can return through a fallible plugin call.
+///
+/// Domain errors raised by a plugin implementation are carried as
+/// [`IstmoError::PluginError`] with the bincode-encoded payload — the
+/// caller is expected to decode it against the plugin's declared error
+/// type.
 #[derive(Debug)]
 pub enum IstmoError {
-    /// The process runtime has not been initialised yet.
+    /// The process-global [`Runtime`](crate::runtime::Runtime) has not
+    /// been initialised.
     RuntimeNotStarted,
-    /// The process runtime was initialised twice.
+    /// The process-global runtime is already initialised. Attempts to
+    /// start a second runtime in the same process are rejected.
     RuntimeAlreadyStarted,
-    /// Wire codec failed while (de)serialising a frame or payload.
+    /// The wire codec failed. Wraps the underlying [`CodecError`].
     Codec(CodecError),
-    /// No plugin is registered under the given identifier.
+    /// No plugin is registered under this id.
     UnknownPlugin(String),
-    /// The instance id referenced does not exist.
+    /// The referenced instance no longer exists or was never created.
     UnknownInstance(InstanceId),
-    /// No pending call routes to this id (already responded, cancelled or spurious).
+    /// The response references a call id the routing table doesn't know
+    /// about — usually a late response after a cancel.
     UnknownCallId(CallId),
-    /// No active stream routes to this id.
+    /// The event or stream-end references an unknown stream id.
     UnknownStreamId(StreamId),
-    /// A required channel was closed while a send/receive was in flight.
+    /// A queue or oneshot channel closed before the value could be
+    /// delivered. Typically means the runtime is shutting down.
     ChannelClosed,
-    /// The peer advertised a protocol version this build does not understand.
-    ProtocolVersionMismatch { expected: u16, got: u16 },
-    /// Attempted to route a frame to the wrong kind of receiver
-    /// (e.g. a `Respond` frame landing on a stream id).
+    /// The peer's [`PROTOCOL_VERSION`](crate::protocol::PROTOCOL_VERSION)
+    /// does not match this runtime's.
+    ProtocolVersionMismatch {
+        /// Version this runtime expects.
+        expected: u16,
+        /// Version observed on the wire.
+        got: u16,
+    },
+    /// An outcome came back on the wrong routing lane (e.g. a stream
+    /// event landed on a unary call registration).
     RoutingMismatch(&'static str),
-    /// A plugin method returned a domain error whose payload is opaque to
-    /// the transport layer. Generated plugin glue decodes `bytes` into the
-    /// concrete error type declared by the trait.
-    PluginError { bytes: Vec<u8> },
-    /// A client tried to `acquire` a plugin that is not declared in this
-    /// process's `istmo::runtime!` `plugins:` list. Fail fast instead of
-    /// hanging on a call that no native side will ever answer.
+    /// A plugin-authored domain error, bincode-encoded against the
+    /// plugin's declared error type.
+    PluginError {
+        /// Encoded domain-error payload.
+        bytes: Vec<u8>,
+    },
+    /// The client was constructed for a plugin the runtime doesn't know
+    /// about. Add the client to the `plugins:` list of
+    /// [`runtime!`](../../istmo_macros/macro.runtime.html).
     PluginNotDeclared(&'static str),
-    /// `runtime!` glue validation determined that a declared `plugins:` entry
-    /// has no corresponding native binding. Surfaced from `nativeStart` when
-    /// contract metadata makes the check possible.
+    /// The plugin is declared but no native binding is registered — the
+    /// platform side hasn't installed its dispatcher yet.
     MissingNativePlugin(&'static str),
 }
 
@@ -89,10 +102,12 @@ impl From<CodecError> for IstmoError {
     }
 }
 
-/// Wire codec failures.
+/// Bincode encode / decode failures.
+///
+/// Wrapped by [`IstmoError::Codec`] when surfaced through the runtime.
 #[derive(Debug)]
 pub enum CodecError {
-    /// Encoding a value into bytes failed.
+    /// Encoding a value to bytes failed.
     Encode(bincode::error::EncodeError),
     /// Decoding a value from bytes failed.
     Decode(bincode::error::DecodeError),

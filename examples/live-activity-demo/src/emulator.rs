@@ -1,21 +1,3 @@
-//! Desktop-only in-process "native emulator" for the live-activity
-//! plugin.
-//!
-//! On mobile the Kotlin `LiveActivityDispatcher` / Swift
-//! `LiveActivityDispatcher` answer outbound envelopes from the runtime.
-//! On desktop we stand in with a plain Rust thread that:
-//!
-//! * Reads every outbound envelope from the runtime.
-//! * Handles `Frame::Call` for `istmo.live_activity` by decoding the arg
-//!   tuple, mutating an in-memory `HashMap<u64, ActivityRecord>`, and
-//!   encoding the response.
-//! * Reports a synthetic desktop-only `PlatformCapabilities::Unsupported`
-//!   so the UI can distinguish the emulator from a real device.
-//!
-//! Only the six trait methods that this demo actually exercises are
-//! implemented (start / update / end / are_activities_enabled /
-//! capabilities / restore_active).
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
@@ -34,8 +16,6 @@ struct ActivityRecord {
     state: Vec<u8>,
 }
 
-/// Spawn the emulator on its own OS thread. Drops when the outbound
-/// channel closes (i.e. the runtime tears down).
 pub fn spawn(rt: Arc<Runtime>, outbound: flume::Receiver<Envelope>) {
     let counter = AtomicU64::new(1);
     thread::Builder::new()
@@ -164,3 +144,4 @@ fn encode_backend<E: std::fmt::Display>(err: E) -> Vec<u8> {
 fn encode_backend_str(msg: &str) -> Vec<u8> {
     codec::encode(&ActivityError::Backend(msg.to_owned())).unwrap_or_default()
 }
+

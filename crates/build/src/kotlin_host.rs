@@ -1,35 +1,8 @@
-//! Kotlin host-side (native-hosted) dispatcher generator.
-//!
-//! Emits three siblings per plugin contract:
-//!
-//! * `<T>Backend` interface — the platform-facing surface. One method per
-//!   trait method. User hand-writes an impl with the SDK-specific body
-//!   (Activity / Context / SDK library calls) — no bincode, no wire concern.
-//! * `<T>Codecs` interface — reader / writer per `Named` type used in the
-//!   contract's signatures. User provides one impl; each entry is typically
-//!   a short delegate to a `companion object` helper on the type itself.
-//! * `<T>Dispatcher` class — implements `PluginHandler`, decodes inbound
-//!   wire bytes, invokes `<T>Backend`, encodes the response. Registered
-//!   with `IstmoRuntime.registerHandler(PLUGIN_ID, dispatcher)`.
-//!
-//! For `#[istmo::plugin(init = Config)]` contracts a `<T>Factory` interface
-//! is emitted (user hand-writes one instance per plugin instance) and the
-//! dispatcher's `handleCreateInstance` decodes the config, invokes the
-//! factory and returns the freshly allocated backend under the caller's
-//! `InstanceId`. Backend lookup is via an internal `ConcurrentHashMap`
-//! keyed by `InstanceId`.
-//!
-//! Domain-error methods (`Result<T, E>` in the trait) are wrapped in a
-//! `try` block: `BackendException<E>` thrown by the backend surfaces as
-//! `PluginException(bytes)` on the wire, and the Rust client sees
-//! `IstmoError::PluginError { bytes }`.
-
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use crate::contract::{Contract, Method, MethodKind, TypeRef};
 
-/// Renders the Kotlin host dispatcher for `contract`.
 #[must_use]
 pub fn generate_kotlin_host(contract: &Contract) -> String {
     let mut out = String::new();
@@ -42,12 +15,6 @@ pub fn generate_kotlin_host(contract: &Contract) -> String {
     out
 }
 
-/// Renders **only** the `<T>Codecs` interface as a standalone file.
-///
-/// Same output shape as the interface bundled inside
-/// [`generate_kotlin_host`]; use this when emitting the client-direction
-/// bundle (client + types + codecs impl) where the host dispatcher is
-/// not generated.
 #[must_use]
 pub fn generate_kotlin_codecs_interface(contract: &Contract) -> String {
     let mut out = String::new();
@@ -162,16 +129,6 @@ fn write_codecs_interface(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "}}");
 }
 
-/// Every named type the codec impl must be prepared to read / write.
-///
-/// Includes:
-/// * Named types referenced directly by method signatures (args,
-///   returns, error, init) — [`collect_named_types`].
-/// * Every type declared in [`Contract::types`] — the type + codec
-///   generators emit read/write pairs for these regardless of whether
-///   they appear in a signature (nested struct fields, enum payloads).
-///
-/// Deduplicated + sorted for deterministic output.
 fn collect_codec_types(contract: &Contract) -> Vec<String> {
     let mut set: BTreeSet<String> = collect_named_types(contract).into_iter().collect();
     for def in &contract.types {
@@ -180,8 +137,6 @@ fn collect_codec_types(contract: &Contract) -> Vec<String> {
     set.into_iter().collect()
 }
 
-/// Returns every unique `Named` type name referenced by the contract's
-/// methods (args, returns, error) and the optional `init` type.
 fn collect_named_types(contract: &Contract) -> Vec<String> {
     let mut set = BTreeSet::new();
     for method in &contract.methods {
@@ -209,9 +164,6 @@ fn collect_named(ty: &TypeRef, out: &mut BTreeSet<String>) {
     }
 }
 
-/// `true` when any signature references `NativeHandleId` — dispatcher
-/// grows a `HandleReleaser` implementation forwarding to each backend
-/// that opts in.
 fn uses_native_handles(contract: &Contract) -> bool {
     collect_named_types(contract)
         .iter()
@@ -268,7 +220,7 @@ fn write_stateless_dispatcher(out: &mut String, contract: &Contract) {
         let _ = writeln!(out, "    }}");
         let _ = writeln!(out);
     }
-    write_handle_call(out, contract, /*stateful=*/ false);
+    write_handle_call(out, contract,  false);
     let _ = writeln!(out, "}}");
 }
 
@@ -340,7 +292,7 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "        return out.toByteArray()");
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
-    write_handle_call(out, contract, /*stateful=*/ true);
+    write_handle_call(out, contract,  true);
     let _ = writeln!(out, "}}");
 }
 
@@ -405,10 +357,7 @@ fn write_method_arm(out: &mut String, method: &Method) {
     if has_error {
         let err_ty = method.error.as_ref().unwrap().to_kotlin();
         let _ = writeln!(out, "                }} catch (e: BackendException) {{");
-        // Safe cast — if the backend accidentally threw a
-        // `BackendException` with a wrong-type payload, rethrow so
-        // higher frames see the mismatch instead of a
-        // `ClassCastException`.
+
         let _ = writeln!(
             out,
             "                    val err = e.error as? {err_ty} ?: throw e",
@@ -433,8 +382,6 @@ fn write_method_arm(out: &mut String, method: &Method) {
     let _ = writeln!(out, "            }}");
 }
 
-/// Emit a `val <binding> = ...; cursor = ...` snippet decoding `ty` at
-/// `cursor` from `payload`.
 fn write_read_expr(out: &mut String, indent: &str, ty: &TypeRef, binding: &str) {
     if let TypeRef::Named(_) = ty {
         write_read_named(out, indent, ty, binding);
@@ -459,10 +406,6 @@ fn write_read_named(out: &mut String, indent: &str, ty: &TypeRef, binding: &str)
     let _ = writeln!(out, "{indent}val {binding} = d_{binding}.value");
 }
 
-/// Kotlin conversion suffix for a Long → target integer type.
-/// bincode 2 varint u64 always fits in a signed Long via bit-cast; the
-/// helper picks the idiomatic `.toX()` extension so the surface type
-/// matches the declared trait argument.
 const fn kt_int_cast(ty: &TypeRef) -> &'static str {
     match ty {
         TypeRef::U8 => ".toUByte()",
@@ -512,8 +455,6 @@ fn read_expr(ty: &TypeRef, bytes: &str, cursor: &str) -> String {
     }
 }
 
-/// Emit lines that write `binding` to `buf` per `ty`. Named types delegate
-/// to the codecs interface; primitives / composites use `Bincode.write*`.
 fn write_write_expr(out: &mut String, indent: &str, ty: &TypeRef, binding: &str, buf: &str) {
     match ty {
         TypeRef::Named(name) => {
@@ -567,8 +508,7 @@ fn write_write_expr(out: &mut String, indent: &str, ty: &TypeRef, binding: &str,
 }
 
 fn write_lambda(ty: &TypeRef) -> String {
-    // Body of a `{ s, v -> ... }` closure passed to `Bincode.writeVec` /
-    // `writeOption`. `s` is the fresh ByteArrayOutputStream, `v` the value.
+
     match ty {
         TypeRef::Named(name) => format!("codecs.write{name}(s, v)"),
         TypeRef::String => "Bincode.writeString(s, v)".to_owned(),
@@ -593,3 +533,4 @@ fn write_lambda(ty: &TypeRef) -> String {
         }
     }
 }
+

@@ -1,9 +1,39 @@
-//! Core transport, protocol and per-process runtime for the istmo framework.
+//! Wire protocol, per-process runtime and routing primitives for
+//! [`istmo`](https://docs.rs/istmo).
 //!
-//! See the workspace `PLAN.md` for the architectural context. This crate
-//! implements milestone **M0**: the wire message types, the codec, the
-//! routing tables and the per-process `Runtime`. All I/O is mocked; no
-//! JNI/FFI code lives here yet.
+//! This crate is transport-agnostic: it defines the frame format, the
+//! [`Runtime`] that dispatches inbound frames to registered plugins,
+//! and the routing tables that pair calls with their responses. Actual
+//! I/O (JNI, Swift FFI, in-process shortcuts) lives in sibling crates
+//! such as [`istmo-android`](https://docs.rs/istmo-android) and
+//! [`istmo-ios`](https://docs.rs/istmo-ios).
+//!
+//! Most users pull the whole framework in via the top-level
+//! [`istmo`](https://docs.rs/istmo) facade and never depend on
+//! `istmo-core` directly.
+//!
+//! # Modules
+//!
+//! - [`protocol`] — [`Frame`], [`Envelope`], typed IDs and
+//!   [`PROTOCOL_VERSION`].
+//! - [`runtime`] — the per-process [`Runtime`] plus its wiring types
+//!   ([`RuntimeInit`], [`RuntimeConfig`]).
+//! - [`dispatch`] — the [`Plugin`] and [`Dispatch`] contracts, the
+//!   [`Outcome`] returned by dispatchers, and [`CancelToken`].
+//! - [`routing`] — pending-call / stream / instance registries.
+//! - [`message`] — the [`Message`] trait every wire type implements.
+//! - [`native_handle`] — opaque platform-owned references
+//!   ([`NativeHandle`], [`NativeHandleId`]).
+//! - [`early_events`] — buffers for values published before their first
+//!   subscriber attaches.
+//! - [`main_thread`] — abstraction over "run this on the platform's
+//!   main thread" (Android `Handler`, iOS main queue, or an inline
+//!   executor on desktop).
+//! - [`typed_stream`] — typed wrapper around a raw byte-stream receiver.
+//! - [`codec`] — bincode configuration used across the wire.
+//! - [`error`] — [`IstmoError`] and [`CodecError`].
+
+#![doc(html_root_url = "https://docs.rs/istmo-core")]
 
 mod sync;
 
@@ -32,12 +62,10 @@ pub use crate::routing::{CallResult, InstanceEntry, RoutingTables, StreamMessage
 pub use crate::runtime::{
     CallHandle, DEFAULT_OUTBOUND_CAPACITY, Runtime, RuntimeConfig, RuntimeInit, StreamHandle,
 };
+pub use crate::typed_stream::{StreamItem, TypedStream};
 
-/// Implementation-detail re-exports used by macro-generated code. Nothing
-/// here is part of the stable public API.
 #[doc(hidden)]
 pub mod __private {
     pub use pollster::block_on;
     pub use tracing;
 }
-pub use crate::typed_stream::{StreamItem, TypedStream};

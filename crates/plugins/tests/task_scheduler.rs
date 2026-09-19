@@ -1,6 +1,3 @@
-//! `TaskScheduler` client + host wiring: enqueue / cancel / cancel-by-tag /
-//! cancel-by-unique-name land in the same order on the mock backend.
-
 use std::sync::{Arc, Mutex};
 
 use istmo_core::Runtime;
@@ -111,7 +108,6 @@ fn enqueue_domain_error_round_trips_as_typed_variant() {
     let (rt, _mock) = runtime_with_mock();
     let client = TaskSchedulerClient::from_runtime(&rt).expect("declared");
 
-    // Empty task_id triggers the mock's UnknownTask branch.
     let err = pollster::block_on(client.enqueue(sample_request("", "nightly")))
         .expect_err("empty task_id should fail");
     let bytes = match err {
@@ -174,3 +170,4 @@ fn task_request_round_trips_through_bincode() {
     let (decoded, _) = istmo_core::codec::decode::<TaskRequest>(&bytes).unwrap();
     assert_eq!(decoded, request);
 }
+

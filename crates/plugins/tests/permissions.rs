@@ -1,5 +1,3 @@
-//! Permissions plugin: end-to-end round-trip against a mock backend.
-
 use std::thread;
 
 use istmo_core::{Envelope, Frame, Runtime, codec};
@@ -126,3 +124,4 @@ fn should_show_rationale_round_trips_bool() {
     assert!(show);
     backend.join().unwrap();
 }
+

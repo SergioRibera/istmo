@@ -17,13 +17,6 @@ import dev.istmo.runtime.IstmoRuntime
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Pure-Kotlin backend for `istmo.service_control`. Wire encode / decode
- * runs in the generated `ServiceControlDispatcher`; this class only speaks
- * platform APIs and returns typed values. Domain errors surface via
- * [BackendException] so the dispatcher can encode them into
- * `Frame::Respond { Err(bytes) }`.
- */
 class ServiceControlBackendImpl(private val appContext: Context) : ServiceControlBackend {
 
     private val wakelocks = ConcurrentHashMap<ULong, PowerManager.WakeLock>()
@@ -76,8 +69,7 @@ class ServiceControlBackendImpl(private val appContext: Context) : ServiceContro
     }
 
     override suspend fun release_wakelock(service_id: String, token: WakelockToken) {
-        // service_id is not needed for release; the token identifies the
-        // acquired wakelock across all services.
+
         wakelocks.remove(token.token)?.let { if (it.isHeld) it.release() }
     }
 
@@ -110,3 +102,4 @@ class ServiceControlBackendImpl(private val appContext: Context) : ServiceContro
             .build()
     }
 }
+

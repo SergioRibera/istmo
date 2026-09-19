@@ -1,23 +1,27 @@
-//! Core plugins bundled with the istmo framework.
+//! First-party plugin surfaces bundled with [`istmo`](https://docs.rs/istmo).
 //!
-//! Milestone M3 lands four capabilities that every mobile app needs and that
-//! every downstream plugin will lean on:
+//! Each submodule exposes a plugin trait, its generated client, and any
+//! supporting message / config types. All plugins here are wire-only:
+//! the Rust side ships the trait, and the platform side provides the
+//! implementation.
 //!
-//! * [`permissions`] — runtime permission checks and requests.
-//! * [`lifecycle`] — foreground / background / low-memory transitions,
-//!   surfaced through the runtime's [`LatestValueSlot`] so late subscribers
-//!   immediately observe the current state.
-//! * [`deeplinks`] — deep-link URIs, buffered through the runtime's
-//!   [`PreMainQueue`] so links delivered before the app is ready are not
-//!   dropped.
-//! * [`activity_results`] — launch an intent (`Intent`, `UIActivityViewController`)
-//!   and await its result.
+//! # Modules
 //!
-//! The plugin id namespace used on the wire is `istmo.<name>`; native backends
-//! register handlers under those ids.
-//!
-//! [`LatestValueSlot`]: istmo_core::early_events::LatestValueSlot
-//! [`PreMainQueue`]: istmo_core::early_events::PreMainQueue
+//! - [`lifecycle`] — app foreground / background / terminated events
+//!   published as an early-event stream.
+//! - [`deeplinks`] — inbound URL routing, including cold-start intents
+//!   buffered as an early-event queue.
+//! - [`permissions`] — request and query runtime permissions.
+//! - [`notifications`] — local user notifications.
+//! - [`activity_results`] — Android `startActivityForResult` /
+//!   `ActivityResultLauncher` equivalent.
+//! - [`safe_area`] — safe-area insets published by the host UI layer.
+//! - [`admob`] — Google AdMob banner / interstitial / rewarded ads.
+//! - [`service`] — long-running background service control channel.
+//! - [`worker`] — one-shot scheduled task hooks.
+//! - [`task_scheduler`] — enqueue and cancel platform-scheduled tasks.
+
+#![doc(html_root_url = "https://docs.rs/istmo-plugins")]
 
 pub mod activity_results;
 pub mod admob;
@@ -65,3 +69,4 @@ pub use crate::task_scheduler::{
     TaskSchedulerClient, TaskSchedulerError, TaskSchedulerHost,
 };
 pub use crate::worker::{Constraints, NetworkKind, TaskOutcome, WorkerContext};
+

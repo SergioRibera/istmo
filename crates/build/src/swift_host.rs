@@ -1,31 +1,8 @@
-//! Swift host-side (native-hosted) dispatcher generator.
-//!
-//! Emits three siblings per plugin contract:
-//!
-//! * `<T>Backend` protocol — platform-facing surface. User hand-writes an
-//!   impl carrying the iOS SDK-specific logic; no bincode / wire concern.
-//! * `<T>Codecs` protocol — reader / writer per `Named` type used in the
-//!   contract's signatures. User provides one impl; each entry typically
-//!   delegates to a helper on the type itself.
-//! * `<T>Dispatcher` class — implements `PluginHandler`, decodes inbound
-//!   wire bytes, invokes the backend, encodes the response.
-//!
-//! For `#[istmo::plugin(init = Config)]` contracts a `<T>Factory` protocol
-//! is emitted and the dispatcher's `handleCreateInstance` decodes the
-//! config, invokes the factory and returns a fresh `InstanceId`. Backends
-//! are cached in a `[UInt64: <T>Backend]` dictionary.
-//!
-//! Domain-error methods (`Result<T, E>` in the trait) are wrapped in
-//! `do { ... } catch let err as E { ... }`: a typed throw from the
-//! backend surfaces as `PluginException(payload)` on the wire, and the
-//! Rust client sees `IstmoError::PluginError { bytes }`.
-
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use crate::contract::{Contract, Method, MethodKind, TypeRef};
 
-/// Renders the Swift host dispatcher for `contract`.
 #[must_use]
 pub fn generate_swift_host(contract: &Contract) -> String {
     let mut out = String::new();
@@ -43,9 +20,7 @@ fn write_header(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "// plugin id: {}", contract.plugin_id);
     let _ = writeln!(out);
     let _ = writeln!(out, "import Foundation");
-    // `Bincode`, `PluginHandler`, `PluginException`, `PluginRuntimeError`
-    // live in the `IstmoRuntime` SPM package. Swift `import` is
-    // file-scoped, so the dispatcher must pull them in explicitly.
+
     let _ = writeln!(out, "import IstmoRuntime");
     let _ = writeln!(out);
 }
@@ -143,7 +118,6 @@ fn write_codecs_protocol(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "}}");
 }
 
-/// See `kotlin_host::collect_codec_types` — same logic.
 fn collect_codec_types(contract: &Contract) -> Vec<String> {
     let mut set: BTreeSet<String> = collect_named_types(contract).into_iter().collect();
     for def in &contract.types {
@@ -179,9 +153,6 @@ fn collect_named(ty: &TypeRef, out: &mut BTreeSet<String>) {
     }
 }
 
-/// Returns `true` when any signature in the contract references
-/// `NativeHandleId` — signal that the dispatcher should also conform to
-/// `HandleReleaser` and forward `releaseNativeHandle` to backends.
 fn uses_native_handles(contract: &Contract) -> bool {
     collect_named_types(contract)
         .iter()
@@ -246,7 +217,7 @@ fn write_stateless_dispatcher(out: &mut String, contract: &Contract) {
         let _ = writeln!(out, "    }}");
         let _ = writeln!(out);
     }
-    write_handle_call(out, contract, /*stateful=*/ false);
+    write_handle_call(out, contract,  false);
     let _ = writeln!(out, "}}");
 }
 
@@ -332,12 +303,9 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "        return out");
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
-    write_handle_call(out, contract, /*stateful=*/ true);
+    write_handle_call(out, contract,  true);
     let _ = writeln!(out, "}}");
 }
-
-// (write_handle_call and write_method_arm handle both stateless and
-// stateful paths.)
 
 fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
     let name = &contract.type_name;
@@ -446,9 +414,6 @@ fn read_call(ty: &TypeRef) -> String {
     read_expr(ty, "c")
 }
 
-/// Reader expression using `cursor_name` as the buffer variable. Emitted
-/// verbatim into the source — the caller must have declared it as
-/// `var <cursor_name> = Bincode.Cursor(payload)` or a closure parameter.
 fn read_expr(ty: &TypeRef, cursor: &str) -> String {
     match ty {
         TypeRef::Bool => format!("try Bincode.readBool(&{cursor})"),
@@ -545,9 +510,7 @@ fn write_write_expr(out: &mut String, indent: &str, ty: &TypeRef, binding: &str,
 }
 
 fn write_lambda(ty: &TypeRef) -> String {
-    // Closure param order: (inout Data, T) — `$0` is the buffer, `$1` is the
-    // value. Using positional shorthand avoids the shadowing dance nested
-    // closures otherwise trigger with `inout` capture.
+
     match ty {
         TypeRef::Named(name) => format!("codecs.write{name}(&$0, $1)"),
         TypeRef::String => "Bincode.writeString(&$0, $1)".to_owned(),
@@ -572,3 +535,4 @@ fn write_lambda(ty: &TypeRef) -> String {
         }
     }
 }
+

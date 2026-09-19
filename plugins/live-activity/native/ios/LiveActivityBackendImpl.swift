@@ -4,30 +4,8 @@ import IstmoRuntime
 import ActivityKit
 #endif
 
-/// Reference `LiveActivityBackend` implementation.
-///
-/// Routes every wire call to a per-activity-type ``LiveActivityHandler``
-/// registered by the consumer app. The plugin ships this class so a
-/// typical app only writes the concrete handler(s) for its own activity
-/// types — the routing, handle registry and capability probes come for
-/// free.
-///
-/// Wiring in the app's Swift entry point:
-///
-/// ```swift
-/// let backend = LiveActivityBackendImpl()
-/// backend.register(handler: TimerLiveActivityHandler())
-///
-/// IstmoRuntime.shared.registerHandler(
-///     LiveActivityDispatcher.PLUGIN_ID,
-///     LiveActivityDispatcher(backend: backend, codecs: LiveActivityCodecsImpl())
-/// )
-/// ```
 public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser {
 
-    /// Serial queue guarding the routing tables. Every dictionary
-    /// mutation happens on this queue; `async` methods hop off it before
-    /// awaiting the handler.
     private let queue = DispatchQueue(label: "dev.istmo.plugins.live-activity.backend")
 
     private var handlersByType: [String: LiveActivityHandler] = [:]
@@ -35,27 +13,17 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
 
     public init() {}
 
-    // ---- Registration ----------------------------------------------------
-
-    /// Register a handler for its declared ``activityType``. Overwrites
-    /// any prior registration under the same key.
     public func register(handler: LiveActivityHandler) {
         queue.sync {
             handlersByType[handler.activityType] = handler
         }
     }
 
-    /// Remove the handler previously registered for ``activityType``.
-    /// Handles currently owned by the removed handler are left in the
-    /// map so an in-flight `update`/`end` still routes correctly; the
-    /// consumer is responsible for their eventual release.
     public func unregister(activityType: String) {
         queue.sync {
             _ = handlersByType.removeValue(forKey: activityType)
         }
     }
-
-    // ---- LiveActivityBackend --------------------------------------------
 
     public func start(
         activity_type: String,
@@ -71,7 +39,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
             initialState: initial_state,
             style: style,
             staleAfterSeconds: stale_after_seconds,
-            androidTierHint: nil // iOS ignores the Android hint entirely.
+            androidTierHint: nil
         )
         queue.sync {
             typeByHandle[id.value] = activity_type
@@ -119,10 +87,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
                 IosCapabilities(
                     activity_kit_available: true,
                     activities_enabled: info.areActivitiesEnabled,
-                    // Dynamic Island can only be probed via a live
-                    // Activity; treat every device on iOS 16.1+ as
-                    // "may support" and let SwiftUI's `.dynamicIsland`
-                    // configuration handle the visual fallback.
+
                     dynamic_island: true,
                     push_updates: false
                 )
@@ -156,11 +121,6 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
         return out
     }
 
-    // ---- HandleReleaser --------------------------------------------------
-
-    /// Invoked by the dispatcher when the Rust side drops its
-    /// `NativeHandle<LiveActivityToken>`. Unknown handles no-op — the
-    /// contract with the runtime is that release races are tolerated.
     public func releaseNativeHandle(_ handleId: UInt64) {
         let ty = queue.sync { typeByHandle[handleId] }
         guard let ty, let handler = queue.sync(execute: { handlersByType[ty] }) else {
@@ -171,8 +131,6 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
             _ = typeByHandle.removeValue(forKey: handleId)
         }
     }
-
-    // ---- Internal --------------------------------------------------------
 
     private func handler(for activityType: String) throws -> LiveActivityHandler {
         let handler = queue.sync { handlersByType[activityType] }
@@ -190,3 +148,4 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
         return try handler(for: ty)
     }
 }
+

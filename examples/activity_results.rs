@@ -1,7 +1,3 @@
-//! Demo of the `activity_results` core plugin using the settled mock pattern.
-//!
-//! Run with `cargo run --example activity_results`.
-
 use istmo::Runtime;
 use istmo::plugins::{
     ActivityLaunchError, ActivityOutcome, ActivityResult, ActivityResults, ActivityResultsClient,
@@ -65,3 +61,4 @@ fn main() {
         Err(other) => println!("share transport error: {other}"),
     }
 }
+

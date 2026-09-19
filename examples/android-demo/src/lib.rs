@@ -1,16 +1,3 @@
-//! Android demo cdylib — the frame protocol is the only crossing.
-//!
-//! The whole surface of this cdylib is a plugin trait, its impl, and the
-//! `istmo::runtime!` invocation. Every Kotlin ↔ Rust call goes through the
-//! five JNI symbols `runtime!` re-exports from `::istmo::android::entrypoint`.
-//!
-//! To exercise every M3 plugin end-to-end the `Echo` trait carries one
-//! method per plugin: Rust receives the invocation on the hosted side,
-//! consumes the corresponding client plugin (`PermissionsClient`,
-//! `ActivityResultsClient`, `AppLifecycle`, `DeepLinks`) and reports back a
-//! human-readable summary. That way the demo UI touches every direction of
-//! the frame protocol through a single trait.
-
 use istmo::plugins::{
     ActivityLaunchError, ActivityOutcome, ActivityResultsClient, AppLifecycle, DeepLinks,
     IntentRequest, PermissionsClient,
@@ -43,9 +30,6 @@ fn launch_error_to_echo(err: &ActivityLaunchError) -> EchoError {
     }
 }
 
-/// Kotlin-implemented plugin: the demo cdylib exposes an initiator method
-/// (`Echo::spam_notify`) that Rust calls N times to demonstrate the
-/// Rust → Mobile direction distinctly from Mobile → Rust.
 #[plugin(name = "dev.istmo.demo.notifier")]
 pub trait Notifier {
     async fn notify(&self, message: String) -> Result<(), EchoError>;
@@ -65,9 +49,6 @@ pub trait Echo {
 
     async fn drain_deeplinks(&self) -> Result<Vec<String>, EchoError>;
 
-    /// Fires `count` outbound calls into the Kotlin-side [`NotifierImpl`].
-    /// Rust initiates every one of them — this is the clearest
-    /// Rust → Mobile demonstration in the demo.
     async fn spam_notify(&self, count: u32) -> Result<u32, EchoError>;
 }
 
@@ -181,3 +162,4 @@ istmo::runtime!(
         Echo => EchoImpl,
     ],
 );
+

@@ -1,55 +1,3 @@
-//! Cross-crate metadata handover between plugin `build.rs` scripts and the
-//! downstream app's `build.rs`.
-//!
-//! # Why
-//!
-//! `#[istmo::plugin]` proc-macros can describe a plugin's [`Contract`], but
-//! Cargo runs each dependency's `build.rs` **before** the dependent crate's
-//! proc-macros expand. Cross-crate metadata therefore has to travel through
-//! Cargo's build-script channel: the plugin crate emits key/value pairs via
-//! `cargo:KEY=VALUE`; Cargo forwards them to every dependent build
-//! script as `DEP_<links>_<KEY>` environment variables.
-//!
-//! This module wraps that pattern for the two payload types the workspace
-//! actually crosses today:
-//!
-//! * [`Contract`] — one per plugin trait; downstream generates Kotlin /
-//!   Swift / Rust glue against it.
-//! * [`NativeDeps`] — Gradle coordinates + SPM products the plugin needs
-//!   the app to add to its native build.
-//!
-//! Encoding is bincode → uppercase hex. Hex survives env-var round-trips
-//! and stays under Cargo's practical limit for a metadata value (~a few KB
-//! per emission fits every real contract we have).
-//!
-//! # Plugin-side usage (`build.rs`)
-//!
-//! ```no_run
-//! let contract = istmo_build::Contract {
-//!     plugin_id: "com.example.echo".to_owned(),
-//!     type_name: "Echo".to_owned(),
-//!     methods: vec![],
-//!     init: None,
-//!     types: vec![],
-//! };
-//! istmo_build::emit_contract(&contract);
-//! ```
-//!
-//! Add `links = "istmo_com_example_echo"` (or any unique string) to the
-//! plugin crate's `[package]` in `Cargo.toml` — without it Cargo does not
-//! propagate the metadata pair to downstream build scripts.
-//!
-//! # Downstream usage (`build.rs`)
-//!
-//! ```no_run
-//! for contract in istmo_build::collect_dep_contracts() {
-//!     let out_dir = std::env::var("OUT_DIR").unwrap();
-//!     let kt = istmo_build::generate_kotlin_client(&contract);
-//!     let path = format!("{out_dir}/{}.kt", contract.type_name);
-//!     std::fs::write(path, kt).unwrap();
-//! }
-//! ```
-
 use bincode::config::Configuration;
 use bincode::error::{DecodeError, EncodeError};
 
@@ -59,28 +7,19 @@ use crate::native_deps::NativeDeps;
 
 const CODEC: Configuration = bincode::config::standard();
 
-/// Metadata key used for the [`Contract`] emission. Consumers see it as
-/// `DEP_<links>_CONTRACT` in their build-script environment.
 pub const CONTRACT_KEY: &str = "CONTRACT";
-/// Metadata key used for the [`NativeDeps`] emission. Consumers see it as
-/// `DEP_<links>_NATIVE_DEPS`.
+
 pub const NATIVE_DEPS_KEY: &str = "NATIVE_DEPS";
-/// Metadata key used for the full [`Manifest`] emission.
-///
-/// Carries the plugin id list + `client_type` + `default_deployment` needed
-/// by the downstream [`emit_wiring_env`](crate::emit_wiring_env) pass.
-/// Consumers see it as `DEP_<links>_ISTMO_MANIFEST`.
+
 pub const MANIFEST_KEY: &str = "ISTMO_MANIFEST";
 
-/// Failure modes when decoding a hex-encoded bincode payload back into a
-/// typed value.
 #[derive(Debug)]
 pub enum HandoverError {
-    /// The env-var payload was not valid hex.
+
     InvalidHex,
-    /// The hex decoded but bincode could not parse the bytes.
+
     Decode(DecodeError),
-    /// Encoding path failed. Only reachable from the emit helpers.
+
     Encode(EncodeError),
 }
 
@@ -104,14 +43,11 @@ impl std::error::Error for HandoverError {
     }
 }
 
-/// bincode-encode + hex-encode a [`Contract`] for transit through a
-/// `cargo:KEY=VALUE` emission.
 pub fn serialize_contract(contract: &Contract) -> Result<String, HandoverError> {
     let bytes = bincode::encode_to_vec(contract, CODEC).map_err(HandoverError::Encode)?;
     Ok(hex_encode(&bytes))
 }
 
-/// Reverse of [`serialize_contract`].
 pub fn deserialize_contract(hex: &str) -> Result<Contract, HandoverError> {
     let bytes = hex_decode(hex)?;
     let (contract, _) =
@@ -119,14 +55,11 @@ pub fn deserialize_contract(hex: &str) -> Result<Contract, HandoverError> {
     Ok(contract)
 }
 
-/// bincode-encode + hex-encode a [`NativeDeps`] bundle for transit through
-/// a `cargo:KEY=VALUE` emission.
 pub fn serialize_native_deps(deps: &NativeDeps) -> Result<String, HandoverError> {
     let bytes = bincode::encode_to_vec(deps, CODEC).map_err(HandoverError::Encode)?;
     Ok(hex_encode(&bytes))
 }
 
-/// Reverse of [`serialize_native_deps`].
 pub fn deserialize_native_deps(hex: &str) -> Result<NativeDeps, HandoverError> {
     let bytes = hex_decode(hex)?;
     let (deps, _) = bincode::decode_from_slice::<NativeDeps, _>(&bytes, CODEC)
@@ -134,39 +67,21 @@ pub fn deserialize_native_deps(hex: &str) -> Result<NativeDeps, HandoverError> {
     Ok(deps)
 }
 
-/// Emits the `cargo:CONTRACT=…` pair for `contract`. Call once per plugin
-/// trait from the plugin crate's `build.rs`. Prints to stdout, as Cargo
-/// expects.
-///
-/// The plugin crate must carry a `links = "…"` entry in `Cargo.toml`; without
-/// it, Cargo silently drops metadata emissions for consumer scripts.
-///
-/// # Panics
-/// Panics if serialization fails. `Contract` fields are plain owned types
-/// so encoding failure indicates a bincode bug rather than a caller
-/// mistake — surfacing it as a build-time panic keeps the API terse.
 pub fn emit_contract(contract: &Contract) {
     let payload = serialize_contract(contract).expect("serialize istmo contract");
     println!("cargo:{CONTRACT_KEY}={payload}");
 }
 
-/// Emits the `cargo:NATIVE_DEPS=…` pair for `deps`.
-///
-/// # Panics
-/// See [`emit_contract`] — same reasoning.
 pub fn emit_native_deps(deps: &NativeDeps) {
     let payload = serialize_native_deps(deps).expect("serialize istmo native deps");
     println!("cargo:{NATIVE_DEPS_KEY}={payload}");
 }
 
-/// bincode-encode + hex-encode a full [`Manifest`] for transit through a
-/// `cargo:KEY=VALUE` emission.
 pub fn serialize_manifest(manifest: &Manifest) -> Result<String, HandoverError> {
     let bytes = bincode::encode_to_vec(manifest, CODEC).map_err(HandoverError::Encode)?;
     Ok(hex_encode(&bytes))
 }
 
-/// Reverse of [`serialize_manifest`].
 pub fn deserialize_manifest(hex: &str) -> Result<Manifest, HandoverError> {
     let bytes = hex_decode(hex)?;
     let (manifest, _) = bincode::decode_from_slice::<Manifest, _>(&bytes, CODEC)
@@ -174,25 +89,11 @@ pub fn deserialize_manifest(hex: &str) -> Result<Manifest, HandoverError> {
     Ok(manifest)
 }
 
-/// Emits the `cargo:ISTMO_MANIFEST=…` pair for `manifest`.
-///
-/// Downstream build scripts see it as `DEP_<links>_ISTMO_MANIFEST` and can
-/// decode via [`deserialize_manifest`] or the aggregating
-/// [`collect_dep_manifests`] helper.
-///
-/// # Panics
-/// See [`emit_contract`] — same reasoning.
 pub fn emit_manifest(manifest: &Manifest) {
     let payload = serialize_manifest(manifest).expect("serialize istmo manifest");
     println!("cargo:{MANIFEST_KEY}={payload}");
 }
 
-/// Collects every dependency's [`Manifest`] emission.
-///
-/// Walks the calling `build.rs` environment for `DEP_*_ISTMO_MANIFEST`
-/// variables and decodes each. Values that fail to decode are logged via
-/// `cargo::warning` and skipped so a single bad dependency does not brick
-/// the whole build.
 #[must_use]
 pub fn collect_dep_manifests() -> Vec<Manifest> {
     collect_env_payloads(MANIFEST_KEY)
@@ -207,12 +108,6 @@ pub fn collect_dep_manifests() -> Vec<Manifest> {
         .collect()
 }
 
-/// Collects every [`Contract`] emitted by a dependency's build script.
-///
-/// Walks the calling `build.rs` environment for `DEP_*_CONTRACT`
-/// variables and decodes each. Values that fail to decode are logged via
-/// `cargo::warning` and skipped so a single bad dependency does not
-/// brick the whole build.
 #[must_use]
 pub fn collect_dep_contracts() -> Vec<Contract> {
     collect_env_payloads(CONTRACT_KEY)
@@ -227,13 +122,6 @@ pub fn collect_dep_contracts() -> Vec<Contract> {
         .collect()
 }
 
-/// Collects every dependency's [`NativeDeps`] emission into one merged
-/// bundle.
-///
-/// Walks the calling `build.rs` environment for `DEP_*_NATIVE_DEPS`
-/// variables and merges each via [`NativeDeps::merge`]. Version
-/// conflicts accumulate on the returned bundle exactly as if the caller
-/// had merged them by hand.
 #[must_use]
 pub fn collect_dep_native_deps() -> NativeDeps {
     let mut out = NativeDeps::new();
@@ -260,8 +148,7 @@ fn collect_env_payloads(key: &str) -> Vec<(String, String)> {
 fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        // upper-hex — env vars are case-preserving on every platform we
-        // target, but the choice is arbitrary; decoding accepts either.
+
         let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{byte:02X}"));
     }
     out
@@ -343,16 +230,17 @@ mod tests {
 
     #[test]
     fn deserialize_reports_decode_failure_on_valid_hex_bad_bytes() {
-        let hex = "DEADBEEF"; // valid hex, garbage as bincode.
+        let hex = "DEADBEEF";
         let err = deserialize_contract(hex).expect_err("bincode decode should fail");
         assert!(matches!(err, HandoverError::Decode(_)));
     }
 
     #[test]
     fn hex_decode_accepts_both_cases() {
-        let upper = "48454C4C4F"; // "HELLO"
+        let upper = "48454C4C4F";
         let lower = "48454c4c4f";
         assert_eq!(hex_decode(upper).unwrap(), b"HELLO");
         assert_eq!(hex_decode(lower).unwrap(), b"HELLO");
     }
 }
+

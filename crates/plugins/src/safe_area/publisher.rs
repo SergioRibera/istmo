@@ -1,36 +1,13 @@
-//! Rust-side safe-area publisher.
-//!
-//! iOS: walks `UIApplication.shared.connectedScenes` to find the key
-//! `UIWindow`, reads its `safeAreaInsets` on each
-//! [`SafeAreaPublisher::tick`] call and publishes to
-//! [`super::SAFE_AREA_CHANNEL`] whenever the value moves. No winit
-//! handle plumbing — the app is guaranteed to have exactly one window
-//! (winit's iOS backend creates one, eframe hosts inside it), so
-//! `keyWindow` is unambiguous.
-//!
-//! Non-Apple targets: the type is inert. Android's Kotlin
-//! `IstmoRuntime.publishSafeArea` still owns the `WindowInsets`
-//! pipeline; a JNI-driven Rust publisher lands as a follow-up.
-//!
-//! Wire encoding matches the Kotlin publisher: 12 `f32` fields in
-//! declaration order — the shape bincode 2 gives `SafeAreaInsets`
-//! verbatim.
-
 use std::sync::{Arc, Weak};
 
 use istmo_core::{IstmoError, Runtime, codec};
 
-// `EdgeInsets` referenced by the `ios::` sub-module via its own
-// `use super::…` import — `super` there resolves to this publisher
-// module, so the type has to be in scope here.
 #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))]
 use super::EdgeInsets;
 use super::{SAFE_AREA_CHANNEL, SafeAreaInsets};
 
 const PLUGIN_ID: &str = "istmo.safe_area";
 
-/// Holds the runtime handle needed to sample the current safe-area
-/// insets and publish updates.
 #[derive(Debug)]
 pub struct SafeAreaPublisher {
     runtime: Weak<Runtime>,
@@ -38,12 +15,7 @@ pub struct SafeAreaPublisher {
 }
 
 impl SafeAreaPublisher {
-    /// Install a Rust-side publisher for `istmo.safe_area`.
-    ///
-    /// # Errors
-    /// Returns [`IstmoError::PluginNotDeclared`] when the runtime
-    /// enforces declarations and `istmo.safe_area` is missing from the
-    /// `plugins:` list.
+
     pub fn install(runtime: &Arc<Runtime>) -> Result<Self, IstmoError> {
         runtime.check_declared(PLUGIN_ID)?;
         Ok(Self {
@@ -52,12 +24,6 @@ impl SafeAreaPublisher {
         })
     }
 
-    /// Sample the platform state and publish an updated
-    /// [`SafeAreaInsets`] whenever the value moves.
-    ///
-    /// Call from the app's per-frame update or from a debounced timer.
-    /// Publishing an unchanged value is skipped so downstream consumers
-    /// don't wake up on every frame.
     pub fn tick(&mut self) {
         let Some(runtime) = self.runtime.upgrade() else {
             return;
@@ -79,9 +45,6 @@ impl SafeAreaPublisher {
         }
     }
 
-    /// Read the current insets from the platform. Returns `None` when
-    /// the target has no publisher-side implementation (Android and
-    /// desktop today).
     fn sample(&self) -> Option<SafeAreaInsets> {
         #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))]
         {
@@ -89,10 +52,7 @@ impl SafeAreaPublisher {
         }
         #[cfg(not(any(target_os = "ios", target_os = "tvos", target_os = "visionos")))]
         {
-            // Android publishes safe-area insets from the Kotlin side via
-            // `IstmoRuntime.publishSafeArea` — cheaper and simpler than
-            // JNI-attaching per frame from a Rust winit thread. Desktop
-            // targets have no safe area.
+
             None
         }
     }
@@ -101,26 +61,12 @@ impl SafeAreaPublisher {
 #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))]
 #[allow(unsafe_code)]
 mod ios {
-    //! Direct UIKit reads via objc2.
-    //!
-    //! Walks `UIApplication.sharedApplication.connectedScenes`, finds
-    //! the first `UIWindowScene` with a key `UIWindow`, and reads
-    //! `safeAreaInsets`. Values come in points, matching egui's
-    //! logical-pixel model.
-    //!
-    //! `additionalSafeAreaInsets` / IME — iOS updates the effective
-    //! `safeAreaInsets` when the keyboard slides up via the automatic
-    //! keyboard layout guide, so a poll-driven reader captures IME
-    //! insets without a dedicated `UIKeyboardWillShow` observer.
 
     use objc2::msg_send;
     use objc2::runtime::{AnyClass, AnyObject};
 
     use super::{EdgeInsets, SafeAreaInsets};
 
-    /// Read insets from the current key window; `None` when no window
-    /// is attached yet (very early in the process lifetime, before the
-    /// first frame renders).
     pub(super) fn read_key_window_insets() -> Option<SafeAreaInsets> {
         let view_addr = key_window_view_addr()?;
         // SAFETY: `view_addr` came from a message send on a live
@@ -142,9 +88,6 @@ mod ios {
         })
     }
 
-    /// Fetch `UIApplication.sharedApplication.keyWindow` as a raw
-    /// pointer, cast to `usize` so the surrounding code stays free of
-    /// non-`Send` pointer types.
     fn key_window_view_addr() -> Option<usize> {
         // SAFETY: `UIApplication` is guaranteed to exist inside a
         // running iOS app; every message send below returns nil / null
@@ -163,8 +106,6 @@ mod ios {
         }
     }
 
-    /// Matches UIKit's `UIEdgeInsets` layout — order and CGFloat width.
-    /// Build targets `aarch64-apple-ios*` where CGFloat is `f64`.
     #[repr(C)]
     #[derive(Debug, Clone, Copy)]
     struct UIEdgeInsets {
@@ -188,3 +129,4 @@ mod ios {
         );
     }
 }
+

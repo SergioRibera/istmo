@@ -1,5 +1,3 @@
-//! Runtime end-to-end behaviour driven by the mock backend.
-
 use std::sync::Arc;
 
 use flume::Receiver as FlumeReceiver;
@@ -75,7 +73,7 @@ fn resolved_call_handle_does_not_send_cancel_on_drop() {
     }))
     .expect("dispatch");
     let _ = pollster::block_on(handle).expect("resolves");
-    // No further outbound envelopes must appear.
+
     assert!(outbound.try_recv().is_err());
 }
 
@@ -188,13 +186,12 @@ fn shutdown_cancels_all_pending_calls() {
     let (rt, outbound) = mock();
     let h1 = rt.call("plugin", None, "a", vec![]).expect("call");
     let h2 = rt.call("plugin", None, "b", vec![]).expect("call");
-    // Drain the two outbound Call frames so shutdown's channel is clean.
+
     let _ = outbound.recv().expect("call 1");
     let _ = outbound.recv().expect("call 2");
 
     rt.shutdown();
 
-    // Both receivers must be closed on the caller side.
     let r1 = pollster::block_on(h1);
     let r2 = pollster::block_on(h2);
     assert!(matches!(r1, Err(IstmoError::ChannelClosed)));
@@ -207,13 +204,13 @@ fn ids_are_monotonic_across_call_and_stream() {
     let c1 = rt.call("p", None, "a", vec![]).expect("c1");
     let s1 = rt.stream("p", None, "b", vec![], 1).expect("s1");
     let c2 = rt.call("p", None, "c", vec![]).expect("c2");
-    // Drain outbound so nothing hangs.
+
     for _ in 0..3 {
         let _ = outbound.recv();
     }
     assert!(c1.call_id().get() < s1.stream_id().get());
     assert!(s1.stream_id().get() < c2.call_id().get());
-    // Drop handles cleanly; they will each enqueue a Cancel that we ignore.
+
     drop((c1, s1, c2));
     for _ in 0..3 {
         let _ = outbound.recv();
@@ -238,9 +235,7 @@ fn dispatch_inbound_routes_early_event_latest_into_slot() {
 #[test]
 fn dispatch_inbound_routes_early_event_queue_into_queue() {
     let (rt, _outbound) = mock();
-    // Two publishes before the first subscriber attaches. The queue must
-    // buffer them because it was created with capacity 4 on the first
-    // dispatch_inbound below (subsequent dispatches inherit the same queue).
+
     rt.dispatch_inbound(Envelope::new(Frame::EarlyEvent {
         channel: "istmo.deeplinks".to_owned(),
         kind: EarlyEventKind::Queue { capacity: 4 },
@@ -259,8 +254,6 @@ fn dispatch_inbound_routes_early_event_queue_into_queue() {
     assert_eq!(rx.recv().expect("second"), b"b".to_vec());
 }
 
-/// Marker type used as the phantom parameter of the credential handle in
-/// the tests below. No value is ever constructed.
 struct GoogleCredential;
 
 #[test]
@@ -304,13 +297,14 @@ fn stream_id_and_call_id_share_the_numeric_space() {
     let (rt, outbound) = mock();
     let s = rt.stream("p", None, "ticks", vec![], 4).expect("stream");
     let stream_id = s.stream_id();
-    // The Call frame carries the same numeric id as the stream registration.
+
     let sent = outbound.recv().expect("call frame");
     match sent.frame {
         Frame::Call { call_id, .. } => assert_eq!(call_id.get(), stream_id.get()),
         other => panic!("expected Call, got {other:?}"),
     }
-    // Drop the stream so we don't leak the cancel envelope.
+
     drop(s);
     let _ = outbound.recv();
 }
+

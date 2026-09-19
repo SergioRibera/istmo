@@ -1,15 +1,3 @@
-//! Build-time extraction of a [`Contract`] from a plugin crate's Rust source.
-//!
-//! The plugin author writes the trait once under `#[istmo::plugin]` and its
-//! wire types under `#[istmo::message]`; the `build.rs` script calls
-//! [`extract_contract`] which parses the same source file with `syn`,
-//! walks the trait declaration and any sibling `#[istmo::message]` items,
-//! and returns a fully-formed [`Contract`] suitable for `emit_contract` and
-//! for the Kotlin / Swift generators.
-//!
-//! This removes the "two sources of truth" problem: the trait signature is
-//! now the only place the wire shape is described.
-
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -25,16 +13,15 @@ use crate::contract::{
     Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
 };
 
-/// Failure returned by [`extract_contract`].
 #[derive(Debug)]
 pub enum ExtractError {
-    /// Could not read the source file.
+
     Io(io::Error),
-    /// The source file did not parse as valid Rust.
+
     Parse(syn::Error),
-    /// No `#[istmo::plugin]` trait with the requested name was found.
+
     TraitNotFound(String),
-    /// Trait shape could not be lowered to the contract data model.
+
     Unsupported(String),
 }
 
@@ -65,12 +52,6 @@ impl From<syn::Error> for ExtractError {
     }
 }
 
-/// Parse `source_path` and lower the `#[istmo::plugin] trait <trait_name>`
-/// declaration (plus every `#[istmo::message]` item in the same file) into
-/// a [`Contract`].
-///
-/// # Errors
-/// See [`ExtractError`] variants.
 pub fn extract_contract(
     source_path: impl AsRef<Path>,
     trait_name: &str,
@@ -149,8 +130,8 @@ fn parse_plugin_attr(attr: &Attribute) -> Result<PluginAttrArgs, ExtractError> {
                 let ty = expect_type(&pair.value)?;
                 init = Some(type_to_ref(&ty)?);
             }
-            "crate" | "bincode" => {} // irrelevant to contract shape
-            _ => {} // forward-compat: ignore unknown keys
+            "crate" | "bincode" => {}
+            _ => {}
         }
     }
     Ok(PluginAttrArgs { plugin_id, init })
@@ -189,9 +170,7 @@ fn lower_method(func: &TraitItemFn) -> Result<Method, ExtractError> {
     for input in &func.sig.inputs {
         let FnArg::Typed(pat) = input else { continue };
         let ty = &*pat.ty;
-        // Convention (per CLAUDE.md): args whose leaf type is `CancelToken`
-        // are cooperative-cancellation opt-ins — the macro fills them from
-        // the runtime and strips them from the wire. Do the same here.
+
         if is_cancel_token(ty) {
             continue;
         }
@@ -266,8 +245,7 @@ fn type_to_ref(ty: &Type) -> Result<TypeRef, ExtractError> {
                 "String" => Ok(TypeRef::String),
                 "Vec" => {
                     let inner = generic_arg_ty(&seg.arguments, "Vec")?;
-                    // `Vec<u8>` collapses to `Bytes` so Kotlin surfaces
-                    // `ByteArray` and Swift `Data`.
+
                     if is_u8(inner) {
                         Ok(TypeRef::Bytes)
                     } else {
@@ -355,11 +333,7 @@ fn lower_struct(s: &ItemStruct) -> Result<StructDef, ExtractError> {
                 ))
             })?
             .to_string();
-        // Contract field names travel to Kotlin / Swift, both of which
-        // idiomatically use `camelCase`. Rust source is `snake_case`, so
-        // fold that convention here — the wire is field-order-based, not
-        // name-based, so this rename is cosmetic only. Fields already
-        // written in `camelCase` in the Rust source are left as-is.
+
         let wire_name = snake_to_camel(&name);
         fields.push(Field {
             name: wire_name,
@@ -400,7 +374,6 @@ fn lower_enum(e: &ItemEnum) -> Result<EnumDef, ExtractError> {
     })
 }
 
-/// Recognises `#[foo]`, `#[istmo::foo]`, `#[::istmo::foo]`.
 fn is_istmo_attr(attr: &Attribute, tail: &str) -> bool {
     let segs: Vec<String> = attr
         .path()
@@ -415,8 +388,6 @@ fn is_istmo_attr(attr: &Attribute, tail: &str) -> bool {
     }
 }
 
-/// `foo_bar_baz` → `fooBarBaz`. Names already in `camelCase` (no
-/// underscore) pass through unchanged. Leading underscore preserved.
 fn snake_to_camel(name: &str) -> String {
     if !name.contains('_') {
         return name.to_owned();
@@ -446,3 +417,4 @@ fn tokens(ty: &Type) -> String {
     ty.to_tokens(&mut s);
     s.to_string()
 }
+
