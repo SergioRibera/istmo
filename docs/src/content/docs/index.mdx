@@ -1,0 +1,77 @@
+---
+title: Istmo
+description: Write your mobile app in Rust. Reach every platform without giving up native APIs, native performance, or native feel.
+template: splash
+hero:
+  tagline: Rust plugins for iOS and Android that don't feel foreign.
+  actions:
+    - text: Get started
+      link: /getting-started/install/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/sergioribera/istmo
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Why Istmo
+
+<CardGrid stagger>
+  <Card title="Rust first, native second" icon="rocket">
+    Your business logic, state, and glue live in a single Rust crate. Kotlin
+    and Swift only show up where the platform actually demands them.
+  </Card>
+  <Card title="Real native APIs" icon="puzzle">
+    Sign in with Google, request background permissions, publish Live
+    Activities — through plugins that call the platform SDKs directly, not
+    through a lowest-common-denominator abstraction.
+  </Card>
+  <Card title="One binary protocol" icon="setting">
+    A single `bincode`-framed envelope crosses JNI and FFI. No per-plugin
+    trampolines, no code generation you can't read.
+  </Card>
+  <Card title="Bring your own UI" icon="pencil">
+    Istmo has no opinion on rendering. Ship `eframe`, `winit`, `slint`,
+    `SwiftUI`, `Jetpack Compose`, or a native `Activity` — the framework
+    stays underneath.
+  </Card>
+</CardGrid>
+
+## Where Istmo fits
+
+|                      | Istmo                    | Flutter                  | React Native             | KMP                      |
+| -------------------- | ------------------------ | ------------------------ | ------------------------ | ------------------------ |
+| Business logic       | Rust                     | Dart                     | JavaScript / TypeScript  | Kotlin                   |
+| Native surface       | Trait per plugin         | MethodChannel            | Native modules           | expect/actual            |
+| Rendering            | Bring your own           | Skia (Impeller)          | Native views             | Bring your own           |
+| Binary size overhead | Small                    | ~4-6 MB                  | ~7-10 MB                 | ~1-2 MB                  |
+| Threading model      | Executor-agnostic        | Dart isolates            | JS bridge / JSI          | Coroutines               |
+
+Istmo optimises for the case where you want **Rust's guarantees** —
+memory safety, deterministic performance, one language everywhere — and
+you're happy to pay the cost of writing a small native shim per plugin
+that talks to platform APIs the way those APIs expect to be talked to.
+
+## Start here
+
+<CardGrid>
+  <Card title="Install Istmo" icon="download">
+    Add the framework to a new or existing Rust workspace.
+    [Install →](/getting-started/install/)
+  </Card>
+  <Card title="Build your first app" icon="laptop">
+    Scaffold a full-Rust mobile app from the template repo.
+    [First app →](/getting-started/first-app/)
+  </Card>
+  <Card title="Write your first plugin" icon="add-document">
+    Wrap a native SDK behind a Rust trait, called from any target.
+    [First plugin →](/getting-started/first-plugin/)
+  </Card>
+  <Card title="Read the concepts" icon="open-book">
+    Contracts, host vs. client, manifests, the frame protocol.
+    [Concepts →](/concepts/architecture/)
+  </Card>
+</CardGrid>

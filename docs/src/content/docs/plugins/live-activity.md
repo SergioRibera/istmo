@@ -1,0 +1,140 @@
+---
+title: Live Activity
+description: Publish iOS Live Activities and Android ongoing notifications from a single Rust trait.
+sidebar:
+  order: 3
+---
+
+`istmo-live-activity` maps iOS 16+'s ActivityKit and Android's ongoing
+notifications behind a Rust trait. You describe your activity's
+attributes and state in Rust; both platforms render them idiomatically.
+
+## Install
+
+```toml
+[dependencies]
+istmo-live-activity = "0.1"
+```
+
+## Model your activity
+
+Attributes are immutable per activity; state is updated over its
+lifetime.
+
+```rust
+use istmo_live_activity::LiveActivityClient;
+
+#[istmo::message]
+pub struct TimerAttributes {
+    pub title:          String,
+    pub target_seconds: u32,
+}
+
+#[istmo::message]
+pub struct TimerState {
+    pub elapsed_seconds: u32,
+    pub label:           String,
+}
+```
+
+Register the codec once (Live Activities need to know how to serialize
+your named types), and start:
+
+```rust
+let la = LiveActivityClient::from_runtime(&runtime)?;
+let activity = la.start(TimerAttributes {
+    title: "Focus block".into(),
+    target_seconds: 25 * 60,
+}).await?;
+```
+
+## Update
+
+```rust
+activity.update(TimerState {
+    elapsed_seconds: 60,
+    label: "24:00 remaining".into(),
+}).await?;
+```
+
+`activity` is a `NativeHandle<LiveActivity>`. Dropping it *does not*
+end the activity — call `end()` explicitly. If you want the activity
+to survive process death, store the id in your data store and adopt
+it back with `LiveActivityClient::adopt(id)`.
+
+## End
+
+```rust
+activity.end(TimerState {
+    elapsed_seconds: 25 * 60,
+    label: "Done".into(),
+}).await?;
+```
+
+The final state renders briefly before the activity is removed.
+
+## iOS specifics
+
+- Requires iOS 16.1+ (`ActivityKit`).
+- Your `Info.plist` needs `NSSupportsLiveActivities = YES`.
+- You **must** implement an `ActivityAttributes` matching Swift
+  struct with the same shape as your Rust `Attributes`/`State`. The
+  reference `TimerLiveActivityHandler.swift` in the plugin repo shows
+  the pattern.
+- The Widget extension (SwiftUI) renders the compact + expanded layouts.
+  The plugin does not generate the SwiftUI code — you write it once
+  and it stays put.
+
+## Android specifics
+
+- Renders as an ongoing notification with custom content view.
+- Uses `NotificationChannel` with `IMPORTANCE_LOW` by default; adjust
+  in your `NotificationLiveActivityHandler.kt` copy.
+- Notifications survive process death; adopt back with the persisted
+  id.
+
+## Wire it up
+
+Call `IstmoPluginRegistry.registerAll(...)` once during startup. The
+registry constructs `LiveActivityDispatcher` with your copied
+`LiveActivityBackendImpl` and the appropriate handler.
+
+```kotlin
+override fun onCreate(savedInstanceState: Bundle?) {
+    IstmoRuntime.instance.start(this)
+    IstmoPluginRegistry.registerAll(applicationContext)
+    super.onCreate(savedInstanceState)
+}
+```
+
+```swift
+@main
+struct MyApp: App {
+    init() {
+        IstmoRuntime.shared.start()
+        IstmoPluginRegistry.registerAll()
+    }
+}
+```
+
+See [Auto-registration](/build-scripts/auto-register/) for the full
+mechanism.
+
+## Reference handlers
+
+The plugin repo ships two rendering strategies under
+`plugins/live-activity/native/`:
+
+- **iOS `ActivityKitLiveActivityHandler`** — invokes ActivityKit.
+- **Android `NotificationLiveActivityHandler`** — renders as ongoing
+  notification with an inflated RemoteView.
+
+Both are meant to be **copied and customised** — they render
+per-app-specific layouts. The rest of the plugin (protocol, dispatch,
+codec) never changes.
+
+## End-to-end sample
+
+See [`examples/live-activity-demo`](https://github.com/sergioribera/istmo/tree/main/examples/live-activity-demo)
+in the repo. Timer + notification-style handlers rendered in-process
+via a small "native emulator" thread.

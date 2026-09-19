@@ -1,0 +1,25 @@
+/* Istmo brand tokens layered on top of Starlight's built-in theme. */
+:root {
+  --sl-color-accent-low: #0f172a;
+  --sl-color-accent: #6366f1;
+  --sl-color-accent-high: #c7d2fe;
+  --sl-color-white: #f8fafc;
+  --sl-color-gray-1: #e2e8f0;
+  --sl-color-gray-2: #cbd5e1;
+  --sl-color-gray-3: #94a3b8;
+  --sl-color-gray-4: #475569;
+  --sl-color-gray-5: #1e293b;
+  --sl-color-gray-6: #0f172a;
+  --sl-color-black: #020617;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #eef2ff;
+  --sl-color-accent: #4f46e5;
+  --sl-color-accent-high: #312e81;
+}
+
+.hero h1 {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
