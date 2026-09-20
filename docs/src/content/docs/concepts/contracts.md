@@ -77,7 +77,7 @@ resolves this at the code-gen layer:
 - The sibling still emits its own dispatcher and codecs; it just
   imports the shared types from the primary contract.
 
-The [`emit_app`](/build-scripts/emit-overview/) helper handles this
+The [`emit_app`](/istmo/build-scripts/emit-overview/) helper handles this
 automatically when contracts come from the standard `DEP_*` handover.
 For hand-built testbed contracts, you set `Contract::types = vec![]`
 manually — see the `android-demo` example in the repo for a reference.
@@ -96,6 +96,6 @@ Cargo prints the contract to your terminal on the next build.
 
 ## Next
 
-- See `emit()` end-to-end: [Build scripts overview](/build-scripts/emit-overview/).
-- Learn where the trait lives: [Native vs. Rust-hosted](/concepts/native-vs-rust-hosted/).
-- See the wire format contracts are packed into: [Frame protocol](/concepts/frame-protocol/).
+- See `emit()` end-to-end: [Build scripts overview](/istmo/build-scripts/emit-overview/).
+- Learn where the trait lives: [Native vs. Rust-hosted](/istmo/concepts/native-vs-rust-hosted/).
+- See the wire format contracts are packed into: [Frame protocol](/istmo/concepts/frame-protocol/).

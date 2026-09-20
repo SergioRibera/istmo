@@ -42,9 +42,9 @@ La app contribuye:
 - Una línea de registro durante `Activity.onCreate` / `App.init` para
   enganchar el backend en `IstmoRuntime`.
 
-Plugins de referencia: [`google-sign-in`](/es/plugins/google-sign-in/),
-[`data-store`](/es/plugins/data-store/),
-[`live-activity`](/es/plugins/live-activity/).
+Plugins de referencia: [`google-sign-in`](/istmo/es/plugins/google-sign-in/),
+[`data-store`](/istmo/es/plugins/data-store/),
+[`live-activity`](/istmo/es/plugins/live-activity/).
 
 ## Rust-hosted
 
@@ -107,5 +107,5 @@ convertirse en un plugin Rust-hosted.
 
 ## Siguiente
 
-- Native-hosted end-to-end: [Escribir un plugin native-hosted](/es/writing-plugins/native-hosted/).
-- Rust-hosted end-to-end: [Escribir un plugin Rust-hosted](/es/writing-plugins/rust-hosted/).
+- Native-hosted end-to-end: [Escribir un plugin native-hosted](/istmo/es/writing-plugins/native-hosted/).
+- Rust-hosted end-to-end: [Escribir un plugin Rust-hosted](/istmo/es/writing-plugins/rust-hosted/).

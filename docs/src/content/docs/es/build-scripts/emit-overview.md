@@ -136,12 +136,12 @@ if let Ok(m) = istmo_build::Manifest::from_path("istmo.toml") {
 Junto con los archivos dispatcher, types y codec por plugin, `emit()`
 genera un solo `IstmoPluginRegistry.kt` / `.swift` que cablea cada
 dispatcher de plugin elegible en una sola llamada. Ver
-[Auto-registración](/es/build-scripts/auto-register/) para la
+[Auto-registración](/istmo/es/build-scripts/auto-register/) para la
 historia completa.
 
 ## Siguiente
 
-- Schema completo del manifest: [Referencia de `istmo.toml`](/es/build-scripts/istmo-toml-reference/).
-- Entender el mecanismo DEP_*: [Conceptos → Contratos](/es/concepts/contracts/).
-- Auto-wiring `runtime!`: [Avanzado → Auto-wiring](/es/advanced/auto-wiring/).
-- Auto-registrando dispatchers: [Auto-registración](/es/build-scripts/auto-register/).
+- Schema completo del manifest: [Referencia de `istmo.toml`](/istmo/es/build-scripts/istmo-toml-reference/).
+- Entender el mecanismo DEP_*: [Conceptos → Contratos](/istmo/es/concepts/contracts/).
+- Auto-wiring `runtime!`: [Avanzado → Auto-wiring](/istmo/es/advanced/auto-wiring/).
+- Auto-registrando dispatchers: [Auto-registración](/istmo/es/build-scripts/auto-register/).

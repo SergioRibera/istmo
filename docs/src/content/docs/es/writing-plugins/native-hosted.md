@@ -157,7 +157,7 @@ El registry asume que tu backend toma exactamente un argumento en
 Android (`context: Context`) y ninguno en iOS. Plugins que necesitan
 un constructor distinto setean `auto_register = false` en su
 `istmo.toml` y esperan que la app registre manualmente. Ver
-[Auto-registración](/es/build-scripts/auto-register/).
+[Auto-registración](/istmo/es/build-scripts/auto-register/).
 
 ## Llama desde Rust
 
@@ -199,6 +199,6 @@ como siempre.
 
 ## Siguiente
 
-- Streaming de eventos: [Streams](/es/writing-plugins/streams/).
-- Pasar recursos nativos: [Native handles](/es/writing-plugins/native-handles/).
-- Trabajo de larga duración: [Services y workers](/es/writing-plugins/services-workers/).
+- Streaming de eventos: [Streams](/istmo/es/writing-plugins/streams/).
+- Pasar recursos nativos: [Native handles](/istmo/es/writing-plugins/native-handles/).
+- Trabajo de larga duración: [Services y workers](/istmo/es/writing-plugins/services-workers/).

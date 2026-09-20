@@ -19,7 +19,7 @@ resultado.
 
 Si tu plugin necesita hablar con un SDK nativo, pedir permisos, o
 tocar el main thread de la plataforma, probablemente quieras un
-[plugin native-hosted](/es/writing-plugins/native-hosted/) en su
+[plugin native-hosted](/istmo/es/writing-plugins/native-hosted/) en su
 lugar.
 
 ## Skeleton
@@ -156,6 +156,6 @@ Para tests de integración, levanta un runtime con
 
 ## Siguiente
 
-- Añadir un stream: [Streams](/es/writing-plugins/streams/).
-- Cancel cooperativo: [Cancelación](/es/writing-plugins/cancellation/).
-- Si de verdad quieres hablar con Kotlin/Swift: [Plugin native-hosted](/es/writing-plugins/native-hosted/).
+- Añadir un stream: [Streams](/istmo/es/writing-plugins/streams/).
+- Cancel cooperativo: [Cancelación](/istmo/es/writing-plugins/cancellation/).
+- Si de verdad quieres hablar con Kotlin/Swift: [Plugin native-hosted](/istmo/es/writing-plugins/native-hosted/).

@@ -88,6 +88,6 @@ round-trip un frame en un unit test para verificar un cambio.
 
 ## Siguiente
 
-- Ver cómo los services Rust streamean: [Streams](/es/writing-plugins/streams/).
-- Ver cómo los handles nativos hacen roundtrip: [Native handles](/es/writing-plugins/native-handles/).
-- Bridging cross-process: [Proceso remoto](/es/advanced/remote-process/).
+- Ver cómo los services Rust streamean: [Streams](/istmo/es/writing-plugins/streams/).
+- Ver cómo los handles nativos hacen roundtrip: [Native handles](/istmo/es/writing-plugins/native-handles/).
+- Bridging cross-process: [Proceso remoto](/istmo/es/advanced/remote-process/).

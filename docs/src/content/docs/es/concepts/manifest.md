@@ -91,8 +91,8 @@ deployment = "remote"
 ```
 
 Todo bajo `[app]` y `[[app.plugin]]` da forma al codegen Kotlin/Swift
-— ver [vista general de `emit_app`](/es/build-scripts/emit-overview/)
-y la [referencia completa](/es/build-scripts/istmo-toml-reference/).
+— ver [vista general de `emit_app`](/istmo/es/build-scripts/emit-overview/)
+y la [referencia completa](/istmo/es/build-scripts/istmo-toml-reference/).
 
 `[[remote_override]]` flippea el deployment default de un plugin para
 que la clase cliente rutee a través del bridge `:remote` en vez del
@@ -112,6 +112,6 @@ en dos archivos.
 
 ## Siguiente
 
-- Referencia campo por campo: [Referencia de `istmo.toml`](/es/build-scripts/istmo-toml-reference/).
+- Referencia campo por campo: [Referencia de `istmo.toml`](/istmo/es/build-scripts/istmo-toml-reference/).
 - Entiende cómo la sección `[app]` app-side guía el codegen: [Vista
-  general de build scripts](/es/build-scripts/emit-overview/).
+  general de build scripts](/istmo/es/build-scripts/emit-overview/).

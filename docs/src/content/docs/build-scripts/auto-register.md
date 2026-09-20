@@ -6,7 +6,7 @@ sidebar:
 ---
 
 Rust-side auto-wiring picks up plugin **clients** transparently through
-`istmo::runtime!` (see [Auto-wiring](/advanced/auto-wiring/)). The
+`istmo::runtime!` (see [Auto-wiring](/istmo/advanced/auto-wiring/)). The
 native side needs its own mechanism because the plugin **backends** —
 `<T>BackendImpl.kt` / `<T>BackendImpl.swift` — are user-authored code
 that only the app knows how to construct.
@@ -163,6 +163,6 @@ manifest walked by `collect_dep_manifests()`.
 
 ## Next
 
-- `emit()` overview: [Build scripts overview](/build-scripts/emit-overview/).
-- Rust-side companion: [Auto-wiring](/advanced/auto-wiring/).
-- Manifest schema: [`istmo.toml` reference](/build-scripts/istmo-toml-reference/#plugin-plugin-single-form).
+- `emit()` overview: [Build scripts overview](/istmo/build-scripts/emit-overview/).
+- Rust-side companion: [Auto-wiring](/istmo/advanced/auto-wiring/).
+- Manifest schema: [`istmo.toml` reference](/istmo/build-scripts/istmo-toml-reference/#plugin-plugin-single-form).

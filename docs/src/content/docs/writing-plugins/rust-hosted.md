@@ -17,7 +17,7 @@ holds a generated `<T>Client` and calls in when it needs a result.
 
 If your plugin needs to talk to a native SDK, request a permission, or
 touch the platform's main thread, you probably want a
-[native-hosted plugin](/writing-plugins/native-hosted/) instead.
+[native-hosted plugin](/istmo/writing-plugins/native-hosted/) instead.
 
 ## Skeleton
 
@@ -153,6 +153,6 @@ and call the client just as your app would.
 
 ## Next
 
-- Add a stream: [Streams](/writing-plugins/streams/).
-- Cooperative cancel: [Cancellation](/writing-plugins/cancellation/).
-- If you actually want to talk to Kotlin/Swift: [Native-hosted plugin](/writing-plugins/native-hosted/).
+- Add a stream: [Streams](/istmo/writing-plugins/streams/).
+- Cooperative cancel: [Cancellation](/istmo/writing-plugins/cancellation/).
+- If you actually want to talk to Kotlin/Swift: [Native-hosted plugin](/istmo/writing-plugins/native-hosted/).

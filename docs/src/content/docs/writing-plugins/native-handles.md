@@ -142,5 +142,5 @@ credential.
 
 ## Next
 
-- The wire variant: [Frame protocol → `ReleaseNativeHandle`](/concepts/frame-protocol/).
-- Real usage: [`google-sign-in` plugin](/plugins/google-sign-in/).
+- The wire variant: [Frame protocol → `ReleaseNativeHandle`](/istmo/concepts/frame-protocol/).
+- Real usage: [`google-sign-in` plugin](/istmo/plugins/google-sign-in/).

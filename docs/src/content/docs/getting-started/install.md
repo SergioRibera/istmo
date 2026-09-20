@@ -69,13 +69,13 @@ istmo-build = "0.1"
 ```
 
 `emit()` figures out whether you're building a plugin, an app, or both.
-See [`emit()` overview](/build-scripts/emit-overview/) for the full
+See [`emit()` overview](/istmo/build-scripts/emit-overview/) for the full
 picture.
 
 ## Next steps
 
-- Scaffold your first app with the [template repo](/getting-started/first-app/).
+- Scaffold your first app with the [template repo](/istmo/getting-started/first-app/).
 - Understand what "plugin" means in Istmo through the [architecture
-  concept guide](/concepts/architecture/).
-- Skim the [`istmo.toml` reference](/build-scripts/istmo-toml-reference/)
+  concept guide](/istmo/concepts/architecture/).
+- Skim the [`istmo.toml` reference](/istmo/build-scripts/istmo-toml-reference/)
   before you name your first plugin.

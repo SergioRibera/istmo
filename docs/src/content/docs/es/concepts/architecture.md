@@ -49,7 +49,7 @@ En compile time produce `Runtime::new()` retornando un
 Un `Frame` es la unidad de todo: calls, respuestas, events, cancels,
 releases de handles. Se define en `istmo-core` y se serializa con
 `bincode 2`. La versión de protocolo actual es **4** (ver [Frame
-protocol](/es/concepts/frame-protocol/) para el historial).
+protocol](/istmo/es/concepts/frame-protocol/) para el historial).
 
 Variantes con las que te vas a encontrar:
 
@@ -80,10 +80,10 @@ Cada plugin es un **crate Rust** que:
 
 Existen dos modelos de hosting:
 
-- [**Rust-hosted**](/es/concepts/native-vs-rust-hosted/#rust-hosted) —
+- [**Rust-hosted**](/istmo/es/concepts/native-vs-rust-hosted/#rust-hosted) —
   Rust implementa el trait. Kotlin/Swift llaman *hacia adentro*
   (típico para plugins de computación pura).
-- [**Native-hosted**](/es/concepts/native-vs-rust-hosted/#native-hosted)
+- [**Native-hosted**](/istmo/es/concepts/native-vs-rust-hosted/#native-hosted)
   — Kotlin/Swift implementan el trait. Rust llama *hacia afuera*
   (típico para plugins de integración con la plataforma).
 
@@ -122,6 +122,6 @@ Istmo es **agnóstico de executor**. Usa channels `flume` y
 
 ## Siguiente
 
-- Zoom al split: [Native vs. Rust-hosted](/es/concepts/native-vs-rust-hosted/).
-- Entiende los contratos: [Contratos](/es/concepts/contracts/).
-- Ve los tipos del wire: [Frame protocol](/es/concepts/frame-protocol/).
+- Zoom al split: [Native vs. Rust-hosted](/istmo/es/concepts/native-vs-rust-hosted/).
+- Entiende los contratos: [Contratos](/istmo/es/concepts/contracts/).
+- Ve los tipos del wire: [Frame protocol](/istmo/es/concepts/frame-protocol/).

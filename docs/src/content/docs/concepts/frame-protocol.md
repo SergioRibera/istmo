@@ -84,6 +84,6 @@ unit test to verify a change.
 
 ## Next
 
-- See how Rust services stream: [Streams](/writing-plugins/streams/).
-- See how native handles roundtrip: [Native handles](/writing-plugins/native-handles/).
-- Cross-process bridging: [Remote process](/advanced/remote-process/).
+- See how Rust services stream: [Streams](/istmo/writing-plugins/streams/).
+- See how native handles roundtrip: [Native handles](/istmo/writing-plugins/native-handles/).
+- Cross-process bridging: [Remote process](/istmo/advanced/remote-process/).

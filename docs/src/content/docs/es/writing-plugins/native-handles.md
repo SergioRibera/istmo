@@ -145,5 +145,5 @@ nuevo credential.
 
 ## Siguiente
 
-- La variante del wire: [Frame protocol → `ReleaseNativeHandle`](/es/concepts/frame-protocol/).
-- Uso real: [plugin `google-sign-in`](/es/plugins/google-sign-in/).
+- La variante del wire: [Frame protocol → `ReleaseNativeHandle`](/istmo/es/concepts/frame-protocol/).
+- Uso real: [plugin `google-sign-in`](/istmo/es/plugins/google-sign-in/).

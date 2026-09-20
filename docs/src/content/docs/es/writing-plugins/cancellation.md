@@ -132,5 +132,5 @@ subsecuente cancele la instancia previa limpiamente.
 
 ## Siguiente
 
-- Cancel real en vuelo: [Services y workers](/es/writing-plugins/services-workers/).
-- Referencia de variante del frame: [Frame protocol → `Cancel`](/es/concepts/frame-protocol/).
+- Cancel real en vuelo: [Services y workers](/istmo/es/writing-plugins/services-workers/).
+- Referencia de variante del frame: [Frame protocol → `Cancel`](/istmo/es/concepts/frame-protocol/).

@@ -62,7 +62,7 @@ en lugar de las carpetas de proyecto de plataforma.
   shims Kotlin/Swift para cada plugin del que la app depende **y** un
   `IstmoPluginRegistry` para registración nativa one-shot.
 - `istmo.toml` declara cualquier override app-level — ver la
-  [referencia `[app]`](/es/build-scripts/istmo-toml-reference/#app).
+  [referencia `[app]`](/istmo/es/build-scripts/istmo-toml-reference/#app).
 
 ## Auto-registración por default
 
@@ -87,7 +87,7 @@ _ = istmo_run_ios()
 
 Cada plugin cuyo `istmo.toml` declara `auto_register = true` (el
 default) queda registrado con esa sola llamada. Ver
-[Auto-registración](/es/build-scripts/auto-register/) para el
+[Auto-registración](/istmo/es/build-scripts/auto-register/) para el
 mecanismo.
 
 ## Córrelo
@@ -116,6 +116,6 @@ que se linkea dentro de la app Swift.
 
 ## Adónde ir después
 
-- Añadir un plugin: [Escribiendo tu primer plugin](/es/getting-started/first-plugin/).
-- Entender las piezas: [Arquitectura](/es/concepts/architecture/).
-- Enviar un servicio de background: [Services y workers](/es/writing-plugins/services-workers/).
+- Añadir un plugin: [Escribiendo tu primer plugin](/istmo/es/getting-started/first-plugin/).
+- Entender las piezas: [Arquitectura](/istmo/es/concepts/architecture/).
+- Enviar un servicio de background: [Services y workers](/istmo/es/writing-plugins/services-workers/).

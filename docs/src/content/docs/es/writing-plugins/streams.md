@@ -123,7 +123,7 @@ observan la cancelación via el mecanismo estándar de cancelación que
 su API de stream soporte (`awaitClose` de `callbackFlow`,
 `onTermination` de `AsyncStream`).
 
-Ver [Cancelación](/es/writing-plugins/cancellation/) para el modelo
+Ver [Cancelación](/istmo/es/writing-plugins/cancellation/) para el modelo
 cooperativo en detalle.
 
 ## Tipos nombrados en items del stream
@@ -134,7 +134,7 @@ otros métodos del plugin usan. No escribes lógica extra de codec.
 
 ## Siguiente
 
-- Suscriptores de larga vida: [Cancelación](/es/writing-plugins/cancellation/).
-- Streaming de sensores nativos: [Native handles](/es/writing-plugins/native-handles/).
-- Ejemplo completo: el [plugin `live-activity`](/es/plugins/live-activity/)
+- Suscriptores de larga vida: [Cancelación](/istmo/es/writing-plugins/cancellation/).
+- Streaming de sensores nativos: [Native handles](/istmo/es/writing-plugins/native-handles/).
+- Ejemplo completo: el [plugin `live-activity`](/istmo/es/plugins/live-activity/)
   streamea actualizaciones de estado de activity.

@@ -132,5 +132,5 @@ cancels the previous instance cleanly.
 
 ## Next
 
-- Real cancellation in flight: [Services and workers](/writing-plugins/services-workers/).
-- Frame variant reference: [Frame protocol → `Cancel`](/concepts/frame-protocol/).
+- Real cancellation in flight: [Services and workers](/istmo/writing-plugins/services-workers/).
+- Frame variant reference: [Frame protocol → `Cancel`](/istmo/concepts/frame-protocol/).

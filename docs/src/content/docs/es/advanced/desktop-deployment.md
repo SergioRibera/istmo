@@ -123,5 +123,5 @@ task.
 
 ## Siguiente
 
-- Referencia completa `[app]`: [Referencia de `istmo.toml`](/es/build-scripts/istmo-toml-reference/).
-- Auto-wiring del runtime: [Auto-wiring](/es/advanced/auto-wiring/).
+- Referencia completa `[app]`: [Referencia de `istmo.toml`](/istmo/es/build-scripts/istmo-toml-reference/).
+- Auto-wiring del runtime: [Auto-wiring](/istmo/es/advanced/auto-wiring/).

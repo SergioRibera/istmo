@@ -147,5 +147,5 @@ depend on them yourself if you want them registered.
 
 ## Next
 
-- Runtime setup shape: [Concepts → Architecture](/concepts/architecture/).
-- Deploying to `:remote`: [Advanced → Remote process](/advanced/remote-process/).
+- Runtime setup shape: [Concepts → Architecture](/istmo/concepts/architecture/).
+- Deploying to `:remote`: [Advanced → Remote process](/istmo/advanced/remote-process/).

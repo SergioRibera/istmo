@@ -63,7 +63,7 @@ the platform project folders.
   depends on **and** an `IstmoPluginRegistry` for one-shot native
   registration.
 - `istmo.toml` declares any app-level overrides — see the
-  [`[app]` reference](/build-scripts/istmo-toml-reference/#app).
+  [`[app]` reference](/istmo/build-scripts/istmo-toml-reference/#app).
 
 ## Auto-registration is on by default
 
@@ -88,7 +88,7 @@ _ = istmo_run_ios()
 
 Every plugin whose `istmo.toml` declares `auto_register = true` (the
 default) is registered by that single call. See
-[Auto-registration](/build-scripts/auto-register/) for the mechanism.
+[Auto-registration](/istmo/build-scripts/auto-register/) for the mechanism.
 
 ## Run it
 
@@ -116,6 +116,6 @@ linked into the Swift app.
 
 ## Where to go next
 
-- Add a plugin: [Writing your first plugin](/getting-started/first-plugin/).
-- Understand the pieces: [Architecture](/concepts/architecture/).
-- Ship a background service: [Services and workers](/writing-plugins/services-workers/).
+- Add a plugin: [Writing your first plugin](/istmo/getting-started/first-plugin/).
+- Understand the pieces: [Architecture](/istmo/concepts/architecture/).
+- Ship a background service: [Services and workers](/istmo/writing-plugins/services-workers/).

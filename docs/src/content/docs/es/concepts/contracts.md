@@ -78,7 +78,7 @@ resuelve esto en la capa de codegen:
 - El hermano igual emite su propio dispatcher y codecs; solo importa
   los tipos compartidos del contrato primario.
 
-El helper [`emit_app`](/es/build-scripts/emit-overview/) maneja esto
+El helper [`emit_app`](/istmo/es/build-scripts/emit-overview/) maneja esto
 automáticamente cuando los contratos vienen del handover estándar
 `DEP_*`. Para contratos inline de testbed, fijas
 `Contract::types = vec![]` manualmente — ver el ejemplo `android-demo`
@@ -98,6 +98,6 @@ Cargo imprime el contrato en tu terminal en el próximo build.
 
 ## Siguiente
 
-- Ver `emit()` end-to-end: [Vista general de build scripts](/es/build-scripts/emit-overview/).
-- Aprende dónde vive el trait: [Native vs. Rust-hosted](/es/concepts/native-vs-rust-hosted/).
-- Ver el formato del wire en el que se empaquetan los contratos: [Frame protocol](/es/concepts/frame-protocol/).
+- Ver `emit()` end-to-end: [Vista general de build scripts](/istmo/es/build-scripts/emit-overview/).
+- Aprende dónde vive el trait: [Native vs. Rust-hosted](/istmo/es/concepts/native-vs-rust-hosted/).
+- Ver el formato del wire en el que se empaquetan los contratos: [Frame protocol](/istmo/es/concepts/frame-protocol/).

@@ -157,7 +157,7 @@ interval_minutes = 15      # requerido para `refresh`
 Agregá los marcadores `<!-- istmo:background:start -->` /
 `<!-- istmo:background:end -->` dentro del `<dict>` de tu `Info.plist`
 real y `emit_app` los parcha en cada build. Ver la [página de
-deployment de desktop](/es/advanced/desktop-deployment/) para el
+deployment de desktop](/istmo/es/advanced/desktop-deployment/) para el
 módulo hermano systemd / launchd / Windows Service.
 
 ## Workers
@@ -215,9 +215,9 @@ tokio::select! {
 }
 ```
 
-Ver [Cancelación](/es/writing-plugins/cancellation/) para los detalles.
+Ver [Cancelación](/istmo/es/writing-plugins/cancellation/) para los detalles.
 
 ## Siguiente
 
-- Bridge de proceso `:remote`: [Avanzado → Proceso remoto](/es/advanced/remote-process/).
-- Deployment de desktop: [Avanzado → Deployment de desktop](/es/advanced/desktop-deployment/).
+- Bridge de proceso `:remote`: [Avanzado → Proceso remoto](/istmo/es/advanced/remote-process/).
+- Deployment de desktop: [Avanzado → Deployment de desktop](/istmo/es/advanced/desktop-deployment/).

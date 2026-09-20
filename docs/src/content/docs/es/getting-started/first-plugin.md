@@ -59,7 +59,7 @@ client_type = "::battery_plugin::BatteryClient"
 
 `istmo.toml` es la única fuente de verdad para la identidad del plugin,
 su path del cliente Rust, y cualquier dependencia Gradle o SwiftPM que
-necesite. Ver la [referencia del manifest](/es/build-scripts/istmo-toml-reference/).
+necesite. Ver la [referencia del manifest](/istmo/es/build-scripts/istmo-toml-reference/).
 
 ## Escribe el trait
 
@@ -154,7 +154,7 @@ istmo::runtime!(
 
 La macro `istmo::runtime!` acepta una lista de clients separados por
 coma que planeas usar. También puedes dejarla auto-descubrir plugins
-desde tu `Cargo.toml` — ver [auto-wiring](/es/advanced/auto-wiring/).
+desde tu `Cargo.toml` — ver [auto-wiring](/istmo/es/advanced/auto-wiring/).
 
 Registra el backend nativo desde tu Activity / App. `istmo-build`
 genera una sola llamada `IstmoPluginRegistry.registerAll(...)` que
@@ -181,7 +181,7 @@ struct MyApp: App {
 }
 ```
 
-Ver [Auto-registración](/es/build-scripts/auto-register/) si necesitás
+Ver [Auto-registración](/istmo/es/build-scripts/auto-register/) si necesitás
 opt-out o manejar un constructor bespoke.
 
 ## Invócalo
@@ -200,6 +200,6 @@ volvió tipado.
 
 ## Siguientes pasos
 
-- Aprende el split: [Native vs. Rust-hosted](/es/concepts/native-vs-rust-hosted/).
-- Maneja eventos con streams: [Streams](/es/writing-plugins/streams/).
-- Cancela calls en vuelo limpiamente: [Cancelación](/es/writing-plugins/cancellation/).
+- Aprende el split: [Native vs. Rust-hosted](/istmo/es/concepts/native-vs-rust-hosted/).
+- Maneja eventos con streams: [Streams](/istmo/es/writing-plugins/streams/).
+- Cancela calls en vuelo limpiamente: [Cancelación](/istmo/es/writing-plugins/cancellation/).

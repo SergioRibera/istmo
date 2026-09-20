@@ -149,5 +149,5 @@ depender de ellos vos mismo si los quieres registrados.
 
 ## Siguiente
 
-- Forma de setup de runtime: [Conceptos → Arquitectura](/es/concepts/architecture/).
-- Deployment a `:remote`: [Avanzado → Proceso remoto](/es/advanced/remote-process/).
+- Forma de setup de runtime: [Conceptos → Arquitectura](/istmo/es/concepts/architecture/).
+- Deployment a `:remote`: [Avanzado → Proceso remoto](/istmo/es/advanced/remote-process/).

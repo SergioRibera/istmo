@@ -121,5 +121,5 @@ the cancellation token into your `on_start` when iOS expires the task.
 
 ## Next
 
-- Full `[app]` reference: [`istmo.toml` reference](/build-scripts/istmo-toml-reference/).
-- Runtime auto-wiring: [Auto-wiring](/advanced/auto-wiring/).
+- Full `[app]` reference: [`istmo.toml` reference](/istmo/build-scripts/istmo-toml-reference/).
+- Runtime auto-wiring: [Auto-wiring](/istmo/advanced/auto-wiring/).

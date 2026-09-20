@@ -60,7 +60,7 @@ from_version = "1.5.0"
   `IstmoPluginRegistry.registerAll(...)`. Set to `false` when the
   plugin's `BackendImpl` / `FactoryImpl` needs a non-standard
   constructor and the app author must register the dispatcher
-  manually. See [Auto-registration](/build-scripts/auto-register/).
+  manually. See [Auto-registration](/istmo/build-scripts/auto-register/).
 - **`[[plugin.gradle]]`** — Gradle deps scoped to this plugin. Merged
   with any top-level `[[gradle]]`.
 - **`[[plugin.swift_package]]`** — SwiftPM deps scoped to this plugin.
@@ -68,7 +68,7 @@ from_version = "1.5.0"
   Kotlin `LifecycleService` shim the app-side `emit_app` should
   generate. Fields: `class_name` (required), `foreground_service_type`,
   `exported` (default `false`), `permission`, `process`. See
-  [Services and workers](/writing-plugins/services-workers/) for the
+  [Services and workers](/istmo/writing-plugins/services-workers/) for the
   full auto-wire flow.
 - **`[plugin.ios_background]`** *(optional, table)* — declares an iOS
   `BGTaskScheduler` shim (or continuous background mode). Fields:
@@ -172,7 +172,7 @@ plugin     = "istmo.push_notifications"
 deployment = "remote"                   # local | remote
 ```
 
-See [Remote process](/advanced/remote-process/) for the bridge shape.
+See [Remote process](/istmo/advanced/remote-process/) for the bridge shape.
 
 ---
 

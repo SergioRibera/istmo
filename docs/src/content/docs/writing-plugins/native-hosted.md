@@ -156,7 +156,7 @@ The registry assumes your backend takes exactly one argument on
 Android (`context: Context`) and none on iOS. Plugins that need a
 different constructor set `auto_register = false` in their
 `istmo.toml` and expect the app to register manually. See
-[Auto-registration](/build-scripts/auto-register/).
+[Auto-registration](/istmo/build-scripts/auto-register/).
 
 ## Call from Rust
 
@@ -197,6 +197,6 @@ on the main thread (UIKit APIs, view-lifecycle work), gate it with
 
 ## Next
 
-- Streaming events: [Streams](/writing-plugins/streams/).
-- Handing native resources back and forth: [Native handles](/writing-plugins/native-handles/).
-- Long-running work: [Services and workers](/writing-plugins/services-workers/).
+- Streaming events: [Streams](/istmo/writing-plugins/streams/).
+- Handing native resources back and forth: [Native handles](/istmo/writing-plugins/native-handles/).
+- Long-running work: [Services and workers](/istmo/writing-plugins/services-workers/).

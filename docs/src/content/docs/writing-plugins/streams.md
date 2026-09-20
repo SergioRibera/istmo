@@ -122,7 +122,7 @@ observe cancellation via the standard cancellation mechanism their
 stream API supports (`callbackFlow`'s `awaitClose`,
 `AsyncStream.onTermination`).
 
-See [Cancellation](/writing-plugins/cancellation/) for the cooperative
+See [Cancellation](/istmo/writing-plugins/cancellation/) for the cooperative
 model in detail.
 
 ## Named types in stream items
@@ -133,7 +133,7 @@ plugin's other methods use. You do not write extra codec logic.
 
 ## Next
 
-- Long-lived subscribers: [Cancellation](/writing-plugins/cancellation/).
-- Streaming platform sensors: [Native handles](/writing-plugins/native-handles/).
-- Full example: [`live-activity` plugin](/plugins/live-activity/) streams
+- Long-lived subscribers: [Cancellation](/istmo/writing-plugins/cancellation/).
+- Streaming platform sensors: [Native handles](/istmo/writing-plugins/native-handles/).
+- Full example: [`live-activity` plugin](/istmo/plugins/live-activity/) streams
   activity state updates.
