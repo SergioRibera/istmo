@@ -23,7 +23,9 @@ Los atributos son inmutables por activity; el estado se actualiza
 sobre su lifetime.
 
 ```rust
-use istmo_live_activity::LiveActivityClient;
+use istmo_live_activity::{
+    ActivityStyle, DismissalPolicy, TypedLiveActivity,
+};
 
 #[istmo::message]
 pub struct TimerAttributes {
@@ -38,42 +40,51 @@ pub struct TimerState {
 }
 ```
 
-Registra el codec una vez (Live Activities necesita saber cómo
-serializar tus tipos nombrados), y arranca:
+`TypedLiveActivity<A, C>` fija los tipos de atributos y estado en
+compile-time y los encodea con bincode antes de cruzar el wire. El
+`LiveActivityClient` subyacente es stateless — bindealo una vez por
+tipo de activity:
 
 ```rust
-let la = LiveActivityClient::from_runtime(&runtime)?;
-let activity = la.start(TimerAttributes {
-    title: "Focus block".into(),
-    target_seconds: 25 * 60,
-}).await?;
+let activities =
+    TypedLiveActivity::<TimerAttributes, TimerState>::new(&runtime, "timer")?;
+
+let handle = activities.start(
+    TimerAttributes { title: "Focus block".into(), target_seconds: 25 * 60 },
+    TimerState { elapsed_seconds: 0, label: "0:00 / 25:00".into() },
+    ActivityStyle::Standard,
+).await?;
 ```
 
 ## Update
 
 ```rust
-activity.update(TimerState {
-    elapsed_seconds: 60,
-    label: "24:00 remaining".into(),
-}).await?;
+activities.update(
+    handle.id(),
+    TimerState { elapsed_seconds: 60, label: "24:00 remaining".into() },
+    None, // AlertConfig opcional
+).await?;
 ```
 
-`activity` es un `NativeHandle<LiveActivity>`. Dropearlo *no* termina
-la activity — llama `end()` explícitamente. Si quieres que la activity
-sobreviva muerte del proceso, guarda el id en tu data store y
-adóptalo de vuelta con `LiveActivityClient::adopt(id)`.
+`handle` es un `NativeHandle<LiveActivityToken>`. Dropearlo *no*
+termina la activity — llamá `end()` explícitamente. Si querés que una
+activity sobreviva muerte del proceso, persistí `handle.id()` y
+re-adoptalo tras el restart via `activities.restore()` (retorna las
+activities vivas filtradas por activity-type).
 
 ## End
 
 ```rust
-activity.end(TimerState {
-    elapsed_seconds: 25 * 60,
-    label: "Done".into(),
-}).await?;
+activities.end(
+    handle.id(),
+    Some(TimerState { elapsed_seconds: 25 * 60, label: "Done".into() }),
+    DismissalPolicy::Default,
+).await?;
 ```
 
 El estado final renderiza brevemente antes de que la activity sea
-removida.
+removida. `DismissalPolicy::Immediate` salta el render;
+`AfterSeconds(n)` lo mantiene `n` segundos.
 
 ## Detalles de iOS
 

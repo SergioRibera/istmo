@@ -31,32 +31,39 @@ required beyond the OAuth client IDs.
 Follow the [Google Cloud Console
 walkthrough](https://developers.google.com/identity) to create:
 
-- One **Web** OAuth client — used as `serverClientId` on Android.
-- One **iOS** OAuth client — used as `clientID` on iOS.
+- One **Web** OAuth client — used as `server_client_id` on Android
+  and as the audience the iOS SDK targets for the ID token.
 
-Add them to your app's config module and pass them at runtime:
+The plugin is stateful (`init = SignInConfig`), so you pass the
+configuration when acquiring the client:
 
 ```rust
-use istmo_google_sign_in::{SignInClient, SignInConfig};
+use istmo_google_sign_in::{SignInClient, SignInConfig, SignInMode};
 
-let sign_in = SignInClient::from_runtime(&runtime)?;
-sign_in.configure(SignInConfig {
-    server_client_id: "1234-web.apps.googleusercontent.com".into(),
-    ios_client_id: Some("1234-ios.apps.googleusercontent.com".into()),
-    scopes: vec!["email".into(), "profile".into()],
-}).await?;
+let cfg = SignInConfig::builder("1234-web.apps.googleusercontent.com")
+    .scope("email")
+    .scope("profile")
+    .auto_select(false)
+    .build();
+
+let sign_in = SignInClient::from_runtime_with(&runtime, cfg).await?;
 ```
+
+Optional fields available on the builder: `.hosted_domain(...)` for
+Google Workspace tenants and `.nonce(...)` for replay protection.
 
 ## Sign in
 
 ```rust
-let account = sign_in.sign_in_owned(SignInRequest {
-    prompt: SignInPrompt::SelectAccount,
-}).await?;
+let account = sign_in.sign_in_owned(SignInMode::Interactive).await?;
 
-tracing::info!("signed in as {} ({})", account.display_name, account.email);
+tracing::info!("signed in as {:?}", account.email);
 // account.credential: NativeHandle<Credential>
 ```
+
+`SignInMode::Interactive` shows the account chooser;
+`SignInMode::SilentOnly` fails with `SignInError::NoCredentialAvailable`
+instead of prompting when no cached credential exists.
 
 Use `sign_in_owned` (owned variant) unless you specifically need to
 re-ship the raw `NativeHandleId` — the owned variant frees the
@@ -68,7 +75,7 @@ Silent refresh returns a new credential handle. Drop the old one first
 if you want deterministic release:
 
 ```rust
-let refreshed = sign_in.refresh_owned(&account.credential).await?;
+let refreshed = sign_in.refresh_owned(account.credential.id()).await?;
 ```
 
 ## Sign out

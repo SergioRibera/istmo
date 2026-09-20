@@ -19,28 +19,33 @@ istmo-data-store = "0.1"
 
 ## Use it
 
+`DataStore` is stateful (`init = DataStoreConfig`) — the config carries
+the namespace the backend segregates values by:
+
 ```rust
-use istmo_data_store::DataStoreClient;
+use istmo_data_store::{DataStoreClient, DataStoreConfig};
 
-let store = DataStoreClient::from_runtime(&runtime)?;
+let cfg = DataStoreConfig::new("com.example.app");
+let store = DataStoreClient::from_runtime_with(&runtime, cfg).await?;
 
-store.put_string("user.email", "iris@example.com").await?;
-store.put_bool("onboarding.completed", true).await?;
-store.put_i64("last_sync_ms", now_ms()).await?;
+store.set_string("user.email".into(), "iris@example.com".into()).await?;
+store.set_bool("onboarding.completed".into(), true).await?;
+store.set_i64("last_sync_ms".into(), now_ms()).await?;
 
-let email = store.get_string("user.email").await?;
-let done  = store.get_bool("onboarding.completed").await?;
+let email = store.get_string("user.email".into()).await?;
+let done  = store.get_bool("onboarding.completed".into()).await?;
 ```
 
 Every getter returns `Option<T>` — missing keys are `None`, not an
-error.
+error. `set_bytes` / `get_bytes` cover `Vec<u8>` for opaque blobs.
 
 ### Removing and listing
 
 ```rust
-store.remove("user.email").await?;
-store.clear().await?;                    // wipe the entire store
-let all_keys = store.keys().await?;      // Vec<String>
+store.remove("user.email".into()).await?;   // returns bool: was present?
+store.clear().await?;                       // wipe the namespace
+let all_keys = store.keys().await?;         // Vec<String>
+let has_key  = store.contains("theme".into()).await?;
 ```
 
 ## Backing storage
