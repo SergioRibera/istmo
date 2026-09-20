@@ -3,7 +3,10 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  site: 'https://istmo.dev',
+  site: 'https://sergioribera.rs',
+  base: '/istmo',
+  outDir: './dist/istmo',
+  trailingSlash: 'ignore',
   integrations: [
     starlight({
       title: 'Istmo',
