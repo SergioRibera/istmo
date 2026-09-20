@@ -64,6 +64,20 @@ from_version = "1.5.0"
 - **`[[plugin.gradle]]`** — Gradle deps scoped to this plugin. Merged
   with any top-level `[[gradle]]`.
 - **`[[plugin.swift_package]]`** — SwiftPM deps scoped to this plugin.
+- **`[plugin.android_service]`** *(optional, table)* — declares a
+  Kotlin `LifecycleService` shim the app-side `emit_app` should
+  generate. Fields: `class_name` (required), `foreground_service_type`,
+  `exported` (default `false`), `permission`, `process`. See
+  [Services and workers](/writing-plugins/services-workers/) for the
+  full auto-wire flow.
+- **`[plugin.ios_background]`** *(optional, table)* — declares an iOS
+  `BGTaskScheduler` shim (or continuous background mode). Fields:
+  `class_name` (required), `task_identifier`, `kind` (`refresh` |
+  `processing` | `continuous`), plus kind-specific keys:
+  `interval_minutes` for `refresh`; `requires_power` /
+  `requires_network` for `processing`; `continuous_mode` (`audio` |
+  `location` | `voip` | `external_accessory` | `bluetooth_central` |
+  `bluetooth_peripheral`) for `continuous`.
 
 ## `[[plugin]]` — array form
 

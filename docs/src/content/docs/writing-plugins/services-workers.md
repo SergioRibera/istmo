@@ -81,42 +81,82 @@ behind the auto-generated `<T>Adapter`. The adapter is spawned on its
 own OS thread using `pollster::block_on`, so `on_start` never blocks
 any async caller.
 
-### Android — `Service` wrapping (manual today)
+### Android — `Service` wrapping
 
 If you want the service to survive the app process (media playback,
 location tracking), pair it with an Android `ForegroundService`.
-`istmo-build` exposes a `generate_android_service` helper you can call
-from your plugin's `build.rs`; **it is not wired into `emit()`
-automatically today**, so you need to invoke it yourself:
+Declare the shim in the plugin's `istmo.toml`:
 
-```rust
-// build.rs (at the plugin crate root)
-use istmo_build::{ServiceContract, generate_android_service};
+```toml
+[plugin]
+id = "myapp.sync"
+client_type = "::myapp_sync::SyncServiceClient"
 
-fn main() {
-    istmo_build::emit();
-
-    let out = generate_android_service(&ServiceContract {
-        plugin_id: "myapp.sync".into(),
-        service_class: "com.myapp.SyncForegroundService".into(),
-        // …notification channel, foreground type, etc.
-    });
-    std::fs::write("android/SyncForegroundService.kt", out.source).unwrap();
-    std::fs::write("android/AndroidManifest.snippet.xml", out.manifest).unwrap();
-}
+[plugin.android_service]
+class_name = "SyncForegroundService"
+foreground_service_type = "dataSync"          # optional
+exported = false                              # default false
+permission = "android.permission.FOREGROUND_SERVICE_DATA_SYNC" # optional
+process = ":sync"                              # optional
 ```
 
-Copy the emitted files into your app's `android/app/src/main/`
-tree. Auto-wiring the `Service` scaffolding through `emit()` is on the
-roadmap — until it lands, this manual invocation is the shape.
+The app's `build.rs` (a one-line `istmo_build::emit()`) picks the spec
+up through the standard manifest handover and materialises:
 
-### iOS — `BGTaskScheduler` (manual today)
+- `android/app/src/main/java/<namespace>.gen/SyncForegroundService.kt`
+  — the `LifecycleService` shim that forwards `onStartCommand` /
+  `onDestroy` into the Rust adapter registered under the same plugin
+  id. `System.loadLibrary(...)` uses your app crate's Cargo package
+  name (override with `[app] lib_name = "..."`).
+- `android/app/src/main/AndroidManifest.services.xml` — a ready-to-copy
+  `<service …/>` fragment listing every plugin-declared service.
 
-The iOS story is symmetric — `generate_ios_background` produces the
-`Info.plist` fragment + `AppDelegate` handler for `BGAppRefreshTask` /
-`BGProcessingTask`. Same story: you call it yourself from `build.rs`,
-`emit()` does not wire it. See the [desktop deployment page](/advanced/desktop-deployment/)
-for the sibling module.
+If your real `android/app/src/main/AndroidManifest.xml` contains the
+markers
+
+```xml
+<application>
+    …
+    <!-- istmo:services:start -->
+    <!-- istmo:services:end -->
+</application>
+```
+
+`emit_app` patches the block between them idempotently on every build,
+so you never touch the XML again. Without the markers, copy the
+sidecar file's contents once by hand.
+
+### iOS — `BGTaskScheduler`
+
+The iOS story is symmetric — declare the background task in
+`istmo.toml`:
+
+```toml
+[plugin.ios_background]
+class_name = "SyncBackgroundHandler"
+task_identifier = "com.myapp.sync.refresh"
+kind = "refresh"           # or "processing" | "continuous"
+interval_minutes = 15      # required for `refresh`
+# requires_power = true    # for `processing`
+# requires_network = true  # for `processing`
+# continuous_mode = "audio"  # for `continuous`
+```
+
+`emit_app` writes:
+
+- `ios/<AppDir>/Plugins/Background/SyncBackgroundHandler.swift` — the
+  `BGTaskScheduler.register(...)` + `expirationHandler` shim that
+  forwards to the Rust adapter's `on_start` and cooperatively cancels
+  it on expiration.
+- `ios/<AppDir>/Info.plist.background.xml` — a ready-to-copy fragment
+  carrying `BGTaskSchedulerPermittedIdentifiers` (for refresh /
+  processing) or `UIBackgroundModes` (for continuous).
+
+Add the markers `<!-- istmo:background:start -->` /
+`<!-- istmo:background:end -->` inside your app's real `Info.plist`
+`<dict>` and `emit_app` will patch them on every build. See the
+[desktop deployment page](/advanced/desktop-deployment/) for the
+sibling systemd / launchd / Windows Service module.
 
 ## Workers
 

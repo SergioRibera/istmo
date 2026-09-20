@@ -22,12 +22,20 @@ use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::contract::Contract;
 use crate::handover::{collect_dep_contracts, collect_dep_manifests};
+use crate::ios::{
+    BackgroundKind, ContinuousMode, IosBackgroundContract, generate_ios_background,
+};
 use crate::kotlin_client::generate_kotlin_client;
 use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
 use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
+use crate::manifest::{
+    AndroidServiceSpec, IosBackgroundKindSpec, IosBackgroundSpec, IosContinuousModeSpec, Manifest,
+    PluginEntry,
+};
 use crate::plugin_registry::{
     RegistryEntry, generate_kotlin_plugin_registry, generate_swift_plugin_registry,
 };
+use crate::service::{ServiceContract, generate_android_service};
 use crate::swift::generate_swift_client;
 use crate::swift_host::generate_swift_host;
 use crate::swift_types::{generate_swift_codecs, generate_swift_types};
@@ -82,6 +90,11 @@ pub struct AppOpts {
     pub ios_app_dir: Option<String>,
     pub ios_plugins_subdir: Option<String>,
     pub extra_contracts: Vec<Contract>,
+    /// Additional [`Manifest`] values to merge alongside those found via
+    /// the `DEP_*_ISTMO_MANIFEST` env-var handover. Useful for tests
+    /// and for apps that ship plugin scaffolding inline instead of
+    /// through a dedicated plugin crate.
+    pub extra_manifests: Vec<Manifest>,
     pub per_plugin: HashMap<String, AppPluginOpts>,
     pub seed_backends: bool,
     /// Emit `IstmoPluginRegistry.kt` / `.swift` files that construct
@@ -90,6 +103,10 @@ pub struct AppOpts {
     /// registry entirely and the app author registers each dispatcher
     /// by hand.
     pub auto_register: Option<bool>,
+    /// Name passed to `System.loadLibrary(...)` in generated Android
+    /// service shims. Defaults to `CARGO_PKG_NAME` with hyphens folded
+    /// to underscores — matches the Rust cdylib naming convention.
+    pub lib_name: Option<String>,
 }
 
 pub fn emit_app() {
@@ -171,7 +188,8 @@ pub fn emit_app_with(opts: AppOpts) {
         return;
     }
 
-    let dep_manifests = collect_dep_manifests();
+    let mut dep_manifests = collect_dep_manifests();
+    dep_manifests.extend(opts.extra_manifests.iter().cloned());
     let plugin_auto_register: HashMap<String, bool> = dep_manifests
         .iter()
         .flat_map(|m| m.plugins.iter())
@@ -278,10 +296,280 @@ pub fn emit_app_with(opts: AppOpts) {
         }
     }
 
+    let lib_name = opts
+        .lib_name
+        .clone()
+        .or_else(default_lib_name)
+        .unwrap_or_else(|| "istmo_app".to_owned());
+
+    emit_service_and_background(
+        &dep_manifests,
+        ServiceEmitOpts {
+            android_active,
+            android_root: &android_root,
+            android_package: android_package.as_deref(),
+            ios_active,
+            ios_root: &ios_root,
+            ios_app_dir: ios_app_dir.as_deref(),
+            ios_plugins_subdir: &ios_plugins_subdir,
+            lib_name: &lib_name,
+        },
+    );
+
     println!("cargo:rerun-if-changed=build.rs");
     if manifest_path.exists() {
         println!("cargo:rerun-if-changed=istmo.toml");
     }
+}
+
+struct ServiceEmitOpts<'a> {
+    android_active: bool,
+    android_root: &'a Path,
+    android_package: Option<&'a str>,
+    ios_active: bool,
+    ios_root: &'a Path,
+    ios_app_dir: Option<&'a str>,
+    ios_plugins_subdir: &'a str,
+    lib_name: &'a str,
+}
+
+fn default_lib_name() -> Option<String> {
+    std::env::var("CARGO_PKG_NAME")
+        .ok()
+        .map(|n| n.replace('-', "_"))
+}
+
+fn emit_service_and_background(dep_manifests: &[Manifest], opts: ServiceEmitOpts<'_>) {
+    let mut android_manifest_fragments: Vec<String> = Vec::new();
+    let mut ios_plist_fragments: Vec<String> = Vec::new();
+
+    for manifest in dep_manifests {
+        for plugin in &manifest.plugins {
+            if let (true, Some(spec)) =
+                (opts.android_active, plugin.android_service.as_ref())
+            {
+                match opts.android_package {
+                    Some(pkg) => {
+                        let fragment = emit_android_service(
+                            opts.android_root,
+                            pkg,
+                            opts.lib_name,
+                            plugin,
+                            spec,
+                        );
+                        android_manifest_fragments.push(fragment);
+                    }
+                    None => {
+                        println!(
+                            "cargo::warning=istmo-build: android_service on `{}` skipped — \
+                             android package unresolved (set [app] android_package)",
+                            plugin.id
+                        );
+                    }
+                }
+            }
+            if let (true, Some(spec)) =
+                (opts.ios_active, plugin.ios_background.as_ref())
+            {
+                match opts.ios_app_dir {
+                    Some(app_dir) => {
+                        let fragment = emit_ios_background(
+                            opts.ios_root,
+                            app_dir,
+                            opts.ios_plugins_subdir,
+                            plugin,
+                            spec,
+                        );
+                        ios_plist_fragments.push(fragment);
+                    }
+                    None => {
+                        println!(
+                            "cargo::warning=istmo-build: ios_background on `{}` skipped — \
+                             ios app dir unresolved (set [app] ios_app_dir)",
+                            plugin.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if opts.android_active
+        && !android_manifest_fragments.is_empty()
+        && opts.android_package.is_some()
+    {
+        write_android_manifest_sidecar(opts.android_root, &android_manifest_fragments);
+        patch_android_manifest(opts.android_root, &android_manifest_fragments);
+    }
+    if opts.ios_active && !ios_plist_fragments.is_empty() {
+        if let Some(app_dir) = opts.ios_app_dir {
+            write_ios_plist_sidecar(opts.ios_root, app_dir, &ios_plist_fragments);
+            patch_ios_info_plist(opts.ios_root, app_dir, &ios_plist_fragments);
+        }
+    }
+}
+
+fn emit_android_service(
+    android_root: &Path,
+    package: &str,
+    lib_name: &str,
+    plugin: &PluginEntry,
+    spec: &AndroidServiceSpec,
+) -> String {
+    let contract = ServiceContract {
+        plugin_id: plugin.id.clone(),
+        class_name: spec.class_name.clone(),
+        kotlin_package: package.to_owned(),
+        lib_name: lib_name.to_owned(),
+        runtime_package: "dev.istmo.runtime".to_owned(),
+        foreground_service_type: spec.foreground_service_type.clone(),
+        exported: spec.exported,
+        permission: spec.permission.clone(),
+        process: spec.process.clone(),
+    };
+    let artifacts = generate_android_service(&contract);
+    let pkg_path = package.replace('.', "/");
+    let dest = android_root
+        .join("app/src/main/java")
+        .join(pkg_path)
+        .join(format!("{}.kt", spec.class_name));
+    write_if_changed(&dest, &artifacts.kotlin);
+    artifacts.manifest_fragment
+}
+
+fn emit_ios_background(
+    ios_root: &Path,
+    app_dir: &str,
+    plugins_subdir: &str,
+    plugin: &PluginEntry,
+    spec: &IosBackgroundSpec,
+) -> String {
+    let contract = IosBackgroundContract {
+        plugin_id: plugin.id.clone(),
+        class_name: spec.class_name.clone(),
+        task_identifier: spec.task_identifier.clone(),
+        kind: ios_kind_from_spec(&spec.kind),
+    };
+    let artifacts = generate_ios_background(&contract);
+    let dest = ios_root
+        .join(app_dir)
+        .join(plugins_subdir)
+        .join("Background")
+        .join(format!("{}.swift", spec.class_name));
+    write_if_changed(&dest, &artifacts.swift);
+    artifacts.info_plist_fragment
+}
+
+fn ios_kind_from_spec(spec: &IosBackgroundKindSpec) -> BackgroundKind {
+    match spec {
+        IosBackgroundKindSpec::Refresh { interval_minutes } => BackgroundKind::Refresh {
+            interval_minutes: *interval_minutes,
+        },
+        IosBackgroundKindSpec::Processing {
+            requires_power,
+            requires_network,
+        } => BackgroundKind::Processing {
+            requires_power: *requires_power,
+            requires_network: *requires_network,
+        },
+        IosBackgroundKindSpec::Continuous(mode) => {
+            BackgroundKind::Continuous(match mode {
+                IosContinuousModeSpec::Audio => ContinuousMode::Audio,
+                IosContinuousModeSpec::Location => ContinuousMode::Location,
+                IosContinuousModeSpec::Voip => ContinuousMode::Voip,
+                IosContinuousModeSpec::ExternalAccessory => ContinuousMode::ExternalAccessory,
+                IosContinuousModeSpec::BluetoothCentral => ContinuousMode::BluetoothCentral,
+                IosContinuousModeSpec::BluetoothPeripheral => ContinuousMode::BluetoothPeripheral,
+            })
+        }
+    }
+}
+
+const ANDROID_MARK_START: &str = "<!-- istmo:services:start -->";
+const ANDROID_MARK_END: &str = "<!-- istmo:services:end -->";
+const IOS_MARK_START: &str = "<!-- istmo:background:start -->";
+const IOS_MARK_END: &str = "<!-- istmo:background:end -->";
+
+fn write_android_manifest_sidecar(android_root: &Path, fragments: &[String]) {
+    let dest = android_root
+        .join("app/src/main")
+        .join("AndroidManifest.services.xml");
+    let body = join_fragments(fragments);
+    let contents = format!(
+        "<!-- GENERATED by istmo-build - DO NOT EDIT. -->\n\
+         <!-- Copy the child element(s) below inside your <application> tag, -->\n\
+         <!-- or add the istmo markers so emit_app can patch AndroidManifest.xml directly:\n\
+                {ANDROID_MARK_START}\n\
+                {ANDROID_MARK_END}\n\
+             -->\n\
+         {body}"
+    );
+    write_if_changed(&dest, &contents);
+}
+
+fn write_ios_plist_sidecar(ios_root: &Path, app_dir: &str, fragments: &[String]) {
+    let dest = ios_root
+        .join(app_dir)
+        .join("Info.plist.background.xml");
+    let body = join_fragments(fragments);
+    let contents = format!(
+        "<!-- GENERATED by istmo-build - DO NOT EDIT. -->\n\
+         <!-- Copy the entries below into your Info.plist <dict>, or add the -->\n\
+         <!-- istmo markers so emit_app can patch Info.plist directly: -->\n\
+         <!-- {IOS_MARK_START} / {IOS_MARK_END} -->\n\
+         {body}"
+    );
+    write_if_changed(&dest, &contents);
+}
+
+fn patch_android_manifest(android_root: &Path, fragments: &[String]) {
+    let path = android_root.join("app/src/main/AndroidManifest.xml");
+    patch_marker_file(&path, ANDROID_MARK_START, ANDROID_MARK_END, fragments);
+}
+
+fn patch_ios_info_plist(ios_root: &Path, app_dir: &str, fragments: &[String]) {
+    let path = ios_root.join(app_dir).join("Info.plist");
+    patch_marker_file(&path, IOS_MARK_START, IOS_MARK_END, fragments);
+}
+
+fn patch_marker_file(path: &Path, start: &str, end: &str, fragments: &[String]) {
+    let Ok(source) = fs::read_to_string(path) else {
+        return;
+    };
+    let Some(start_idx) = source.find(start) else {
+        return;
+    };
+    let Some(end_idx) = source[start_idx..].find(end).map(|i| start_idx + i) else {
+        println!(
+            "cargo::warning=istmo-build: {} contains `{}` without matching `{}` — \
+             skipping istmo-managed block replacement",
+            path.display(),
+            start,
+            end,
+        );
+        return;
+    };
+    let mut managed = String::new();
+    managed.push_str(start);
+    managed.push('\n');
+    managed.push_str(&join_fragments(fragments));
+    managed.push_str(end);
+    let mut next = String::with_capacity(source.len());
+    next.push_str(&source[..start_idx]);
+    next.push_str(&managed);
+    next.push_str(&source[end_idx + end.len()..]);
+    if next != source {
+        write_if_changed(path, &next);
+    }
+}
+
+fn join_fragments(fragments: &[String]) -> String {
+    let mut out = String::new();
+    for frag in fragments {
+        out.push_str(frag.trim_end_matches('\n'));
+        out.push('\n');
+    }
+    out
 }
 
 fn emit_kotlin_registry(android_root: &Path, package: &str, entries: &[RegistryEntry]) {

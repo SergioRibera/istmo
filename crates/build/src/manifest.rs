@@ -16,6 +16,26 @@ const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "auto_register",
     "gradle",
     "swift_package",
+    "android_service",
+    "ios_background",
+];
+
+const KNOWN_ANDROID_SERVICE_KEYS: &[&str] = &[
+    "class_name",
+    "foreground_service_type",
+    "exported",
+    "permission",
+    "process",
+];
+
+const KNOWN_IOS_BACKGROUND_KEYS: &[&str] = &[
+    "class_name",
+    "task_identifier",
+    "kind",
+    "interval_minutes",
+    "requires_power",
+    "requires_network",
+    "continuous_mode",
 ];
 
 const KNOWN_OVERRIDE_KEYS: &[&str] = &["plugin", "deployment"];
@@ -54,6 +74,50 @@ pub struct PluginEntry {
     /// BackendImpl signature) set this to `false` and expect the app
     /// author to register the handler manually.
     pub auto_register: bool,
+
+    /// Optional Android `LifecycleService` shim declaration. When
+    /// present, [`emit_app`](crate::emit_app()) materialises the Kotlin
+    /// class and a matching `<service …/>` `AndroidManifest.xml`
+    /// fragment for the app to include.
+    pub android_service: Option<AndroidServiceSpec>,
+
+    /// Optional iOS `BGTaskScheduler` (or continuous background mode)
+    /// shim declaration. When present, [`emit_app`](crate::emit_app())
+    /// materialises the Swift class and the `Info.plist` fragment.
+    pub ios_background: Option<IosBackgroundSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct AndroidServiceSpec {
+    pub class_name: String,
+    pub foreground_service_type: Option<String>,
+    pub exported: bool,
+    pub permission: Option<String>,
+    pub process: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct IosBackgroundSpec {
+    pub class_name: String,
+    pub task_identifier: Option<String>,
+    pub kind: IosBackgroundKindSpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub enum IosBackgroundKindSpec {
+    Refresh { interval_minutes: u32 },
+    Processing { requires_power: bool, requires_network: bool },
+    Continuous(IosContinuousModeSpec),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub enum IosContinuousModeSpec {
+    Audio,
+    Location,
+    Voip,
+    ExternalAccessory,
+    BluetoothCentral,
+    BluetoothPeripheral,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -146,6 +210,10 @@ pub enum ManifestError {
     UnknownGradleScope(String),
 
     UnknownDeployment { key: String, value: String },
+
+    UnknownBackgroundKind { value: String },
+
+    UnknownContinuousMode { value: String },
 }
 
 impl std::fmt::Display for ManifestError {
@@ -165,6 +233,17 @@ impl std::fmt::Display for ManifestError {
             Self::UnknownDeployment { key, value } => write!(
                 f,
                 "istmo.toml key `{key}` = `{value}` (expected `local` or `remote`)"
+            ),
+            Self::UnknownBackgroundKind { value } => write!(
+                f,
+                "istmo.toml key `plugin.ios_background.kind` = `{value}` \
+                 (expected `refresh`, `processing` or `continuous`)"
+            ),
+            Self::UnknownContinuousMode { value } => write!(
+                f,
+                "istmo.toml key `plugin.ios_background.continuous_mode` = `{value}` \
+                 (expected `audio`, `location`, `voip`, `external_accessory`, \
+                 `bluetooth_central` or `bluetooth_peripheral`)"
             ),
         }
     }
@@ -248,11 +327,165 @@ fn parse_plugin_entry(
             native_deps.add_swift_package(&parse_swift_package(entry, "plugin.swift_package")?);
         }
     }
+    let android_service = match table.get("android_service") {
+        Some(item) => Some(parse_android_service(expect_table(
+            item,
+            "plugin.android_service",
+        )?)?),
+        None => None,
+    };
+    let ios_background = match table.get("ios_background") {
+        Some(item) => Some(parse_ios_background(expect_table(
+            item,
+            "plugin.ios_background",
+        )?)?),
+        None => None,
+    };
     Ok(PluginEntry {
         id,
         client_type,
         default_deployment,
         auto_register,
+        android_service,
+        ios_background,
+    })
+}
+
+fn parse_android_service(
+    table: &dyn toml_edit::TableLike,
+) -> Result<AndroidServiceSpec, ManifestError> {
+    for (name, _) in table.iter() {
+        if !KNOWN_ANDROID_SERVICE_KEYS.contains(&name) {
+            return Err(ManifestError::UnknownKey {
+                key: format!("plugin.android_service.{name}"),
+            });
+        }
+    }
+    let class_name = table
+        .get("class_name")
+        .ok_or(ManifestError::Missing {
+            key: "plugin.android_service.class_name",
+        })
+        .and_then(|item| expect_string(item, "plugin.android_service.class_name"))?
+        .to_owned();
+    let foreground_service_type = match table.get("foreground_service_type") {
+        Some(item) => Some(
+            expect_string(item, "plugin.android_service.foreground_service_type")?.to_owned(),
+        ),
+        None => None,
+    };
+    let exported = match table.get("exported") {
+        Some(item) => expect_bool(item, "plugin.android_service.exported")?,
+        None => false,
+    };
+    let permission = match table.get("permission") {
+        Some(item) => Some(expect_string(item, "plugin.android_service.permission")?.to_owned()),
+        None => None,
+    };
+    let process = match table.get("process") {
+        Some(item) => Some(expect_string(item, "plugin.android_service.process")?.to_owned()),
+        None => None,
+    };
+    Ok(AndroidServiceSpec {
+        class_name,
+        foreground_service_type,
+        exported,
+        permission,
+        process,
+    })
+}
+
+fn parse_ios_background(
+    table: &dyn toml_edit::TableLike,
+) -> Result<IosBackgroundSpec, ManifestError> {
+    for (name, _) in table.iter() {
+        if !KNOWN_IOS_BACKGROUND_KEYS.contains(&name) {
+            return Err(ManifestError::UnknownKey {
+                key: format!("plugin.ios_background.{name}"),
+            });
+        }
+    }
+    let class_name = table
+        .get("class_name")
+        .ok_or(ManifestError::Missing {
+            key: "plugin.ios_background.class_name",
+        })
+        .and_then(|item| expect_string(item, "plugin.ios_background.class_name"))?
+        .to_owned();
+    let task_identifier = match table.get("task_identifier") {
+        Some(item) => {
+            Some(expect_string(item, "plugin.ios_background.task_identifier")?.to_owned())
+        }
+        None => None,
+    };
+    let kind_literal = table
+        .get("kind")
+        .ok_or(ManifestError::Missing {
+            key: "plugin.ios_background.kind",
+        })
+        .and_then(|item| expect_string(item, "plugin.ios_background.kind"))?;
+    let kind = match kind_literal {
+        "refresh" => {
+            let interval = match table.get("interval_minutes") {
+                Some(item) => expect_integer(item, "plugin.ios_background.interval_minutes")?,
+                None => {
+                    return Err(ManifestError::Missing {
+                        key: "plugin.ios_background.interval_minutes",
+                    });
+                }
+            };
+            IosBackgroundKindSpec::Refresh {
+                interval_minutes: u32::try_from(interval).unwrap_or(0),
+            }
+        }
+        "processing" => {
+            let requires_power = match table.get("requires_power") {
+                Some(item) => expect_bool(item, "plugin.ios_background.requires_power")?,
+                None => false,
+            };
+            let requires_network = match table.get("requires_network") {
+                Some(item) => expect_bool(item, "plugin.ios_background.requires_network")?,
+                None => false,
+            };
+            IosBackgroundKindSpec::Processing {
+                requires_power,
+                requires_network,
+            }
+        }
+        "continuous" => {
+            let mode_literal = table
+                .get("continuous_mode")
+                .ok_or(ManifestError::Missing {
+                    key: "plugin.ios_background.continuous_mode",
+                })
+                .and_then(|item| {
+                    expect_string(item, "plugin.ios_background.continuous_mode")
+                })?;
+            let mode = match mode_literal {
+                "audio" => IosContinuousModeSpec::Audio,
+                "location" => IosContinuousModeSpec::Location,
+                "voip" => IosContinuousModeSpec::Voip,
+                "external_accessory" => IosContinuousModeSpec::ExternalAccessory,
+                "bluetooth_central" => IosContinuousModeSpec::BluetoothCentral,
+                "bluetooth_peripheral" => IosContinuousModeSpec::BluetoothPeripheral,
+                other => {
+                    return Err(ManifestError::UnknownContinuousMode {
+                        value: other.to_owned(),
+                    });
+                }
+            };
+            IosBackgroundKindSpec::Continuous(mode)
+        }
+        other => {
+            return Err(ManifestError::UnknownBackgroundKind {
+                value: other.to_owned(),
+            });
+        }
+    };
+    Ok(IosBackgroundSpec {
+        class_name,
+        task_identifier,
+        kind,
     })
 }
 
@@ -381,6 +614,27 @@ fn expect_bool(item: &Item, key: &'static str) -> Result<bool, ManifestError> {
             expected: "boolean",
         }),
     }
+}
+
+fn expect_integer(item: &Item, key: &'static str) -> Result<i64, ManifestError> {
+    match item {
+        Item::Value(Value::Integer(i)) => Ok(*i.value()),
+        _ => Err(ManifestError::TypeMismatch {
+            key: key.to_owned(),
+            expected: "integer",
+        }),
+    }
+}
+
+fn expect_table<'a>(
+    item: &'a Item,
+    key: &'static str,
+) -> Result<&'a dyn toml_edit::TableLike, ManifestError> {
+    item.as_table_like()
+        .ok_or_else(|| ManifestError::TypeMismatch {
+            key: key.to_owned(),
+            expected: "table",
+        })
 }
 
 fn expect_string_ctx<'a>(
@@ -802,6 +1056,168 @@ id = "istmo.example"
         let hex = crate::serialize_native_deps(&m.native_deps).expect("serialize");
         let back = crate::deserialize_native_deps(&hex).expect("deserialize");
         assert_eq!(back, m.native_deps);
+    }
+
+    #[test]
+    fn parses_android_service_spec() {
+        let src = r#"
+[plugin]
+id = "myapp.sync"
+
+[plugin.android_service]
+class_name = "SyncForegroundService"
+foreground_service_type = "dataSync"
+exported = false
+permission = "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+"#;
+        let m = Manifest::parse(src).expect("parse");
+        let spec = m.plugins[0]
+            .android_service
+            .as_ref()
+            .expect("android_service parsed");
+        assert_eq!(spec.class_name, "SyncForegroundService");
+        assert_eq!(spec.foreground_service_type.as_deref(), Some("dataSync"));
+        assert!(!spec.exported);
+        assert_eq!(
+            spec.permission.as_deref(),
+            Some("android.permission.FOREGROUND_SERVICE_DATA_SYNC"),
+        );
+        assert!(spec.process.is_none());
+    }
+
+    #[test]
+    fn parses_ios_background_refresh_spec() {
+        let src = r#"
+[plugin]
+id = "myapp.sync"
+
+[plugin.ios_background]
+class_name = "SyncBackgroundHandler"
+task_identifier = "com.myapp.sync.refresh"
+kind = "refresh"
+interval_minutes = 15
+"#;
+        let m = Manifest::parse(src).expect("parse");
+        let spec = m.plugins[0]
+            .ios_background
+            .as_ref()
+            .expect("ios_background parsed");
+        assert_eq!(spec.class_name, "SyncBackgroundHandler");
+        assert_eq!(spec.task_identifier.as_deref(), Some("com.myapp.sync.refresh"));
+        assert!(matches!(
+            spec.kind,
+            IosBackgroundKindSpec::Refresh { interval_minutes: 15 }
+        ));
+    }
+
+    #[test]
+    fn parses_ios_background_processing_spec() {
+        let src = r#"
+[plugin]
+id = "myapp.crunch"
+
+[plugin.ios_background]
+class_name = "CrunchBackground"
+task_identifier = "com.myapp.crunch"
+kind = "processing"
+requires_power = true
+requires_network = true
+"#;
+        let m = Manifest::parse(src).expect("parse");
+        let kind = &m.plugins[0]
+            .ios_background
+            .as_ref()
+            .expect("parsed")
+            .kind;
+        assert!(matches!(
+            kind,
+            IosBackgroundKindSpec::Processing {
+                requires_power: true,
+                requires_network: true,
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_ios_background_continuous_spec() {
+        let src = r#"
+[plugin]
+id = "myapp.player"
+
+[plugin.ios_background]
+class_name = "PlayerBackground"
+kind = "continuous"
+continuous_mode = "audio"
+"#;
+        let m = Manifest::parse(src).expect("parse");
+        let kind = &m.plugins[0]
+            .ios_background
+            .as_ref()
+            .expect("parsed")
+            .kind;
+        assert!(matches!(
+            kind,
+            IosBackgroundKindSpec::Continuous(IosContinuousModeSpec::Audio)
+        ));
+    }
+
+    #[test]
+    fn unknown_ios_background_kind_reported() {
+        let src = r#"
+[plugin]
+id = "myapp.sync"
+
+[plugin.ios_background]
+class_name = "Bg"
+kind = "bogus"
+"#;
+        let err = Manifest::parse(src).expect_err("must fail");
+        match err {
+            ManifestError::UnknownBackgroundKind { value } => assert_eq!(value, "bogus"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refresh_kind_requires_interval() {
+        let src = r#"
+[plugin]
+id = "myapp.sync"
+
+[plugin.ios_background]
+class_name = "Bg"
+kind = "refresh"
+"#;
+        let err = Manifest::parse(src).expect_err("must fail");
+        assert!(matches!(
+            err,
+            ManifestError::Missing { key: "plugin.ios_background.interval_minutes" }
+        ));
+    }
+
+    #[test]
+    fn service_and_background_survive_manifest_round_trip() {
+        let src = r#"
+[plugin]
+id = "myapp.sync"
+client_type = "::myapp::SyncServiceClient"
+
+[plugin.android_service]
+class_name = "SyncForegroundService"
+foreground_service_type = "dataSync"
+
+[plugin.ios_background]
+class_name = "SyncBg"
+task_identifier = "com.myapp.sync"
+kind = "refresh"
+interval_minutes = 30
+"#;
+        let m = Manifest::parse(src).expect("parse");
+        let hex = crate::serialize_manifest(&m).expect("serialize");
+        let back = crate::deserialize_manifest(&hex).expect("deserialize");
+        assert_eq!(back, m);
+        assert!(back.plugins[0].android_service.is_some());
+        assert!(back.plugins[0].ios_background.is_some());
     }
 }
 
