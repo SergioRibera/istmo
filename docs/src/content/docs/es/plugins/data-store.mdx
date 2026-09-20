@@ -5,6 +5,8 @@ sidebar:
   order: 2
 ---
 
+import PluginTypes from '../../../../generated/plugins/data-store-types.mdx';
+
 `istmo-data-store` es un store key/value native-hosted. La API Rust es
 idéntica en cada plataforma; el backend usa `SharedPreferences` en
 Android y `UserDefaults` en iOS. Los dos backends viajan en el crate
@@ -47,6 +49,10 @@ store.clear().await?;                       // borra el namespace
 let all_keys = store.keys().await?;         // Vec<String>
 let has_key  = store.contains("theme".into()).await?;
 ```
+
+## Tipos wire
+
+<PluginTypes />
 
 ## Storage subyacente
 

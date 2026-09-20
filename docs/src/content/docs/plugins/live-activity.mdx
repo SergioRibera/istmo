@@ -5,6 +5,8 @@ sidebar:
   order: 3
 ---
 
+import PluginTypes from '../../../generated/plugins/live-activity-types.mdx';
+
 `istmo-live-activity` maps iOS 16+'s ActivityKit and Android's ongoing
 notifications behind a Rust trait. You describe your activity's
 attributes and state in Rust; both platforms render them idiomatically.
@@ -84,6 +86,10 @@ activities.end(
 The final state renders briefly before the activity is removed.
 `DismissalPolicy::Immediate` skips the render; `AfterSeconds(n)` holds
 it for `n` seconds.
+
+## Wire types
+
+<PluginTypes />
 
 ## iOS specifics
 

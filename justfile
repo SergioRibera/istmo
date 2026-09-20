@@ -215,6 +215,20 @@ reset-owned name paths:
         --entrypoint sh {{image}} \
         -c 'rm -rf {{paths}}'
 
+# ---- Docs -----------------------------------------------------------
+#
+# Regenerate MDX partials for every shipped plugin's `#[istmo::message]`
+# types. Extracts docstrings from `src/lib.rs` with syn, writes to
+# `docs/src/generated/plugins/<slug>-types.mdx` which Starlight pages
+# import — zero drift between code and doc tables.
+
+docs-types:
+    cargo run -q -p istmo-build --bin docs-types -- \
+        --out docs/src/generated/plugins \
+        data-store=plugins/data-store/src/lib.rs \
+        google-sign-in=plugins/google-sign-in/src/lib.rs \
+        live-activity=plugins/live-activity/src/lib.rs
+
 # Gen default keystore default
 # keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
 helper:

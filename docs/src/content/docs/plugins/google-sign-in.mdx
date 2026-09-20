@@ -5,6 +5,8 @@ sidebar:
   order: 1
 ---
 
+import PluginTypes from '../../../generated/plugins/google-sign-in-types.mdx';
+
 `istmo-google-sign-in` wraps the platform-idiomatic Google Sign-In
 flows behind a single Rust trait.
 
@@ -87,6 +89,10 @@ sign_in.sign_out().await?;
 `sign_out` invalidates the credential on the native side and emits
 `Frame::ReleaseNativeHandle` for any outstanding credential your Rust
 code still holds.
+
+## Wire types
+
+<PluginTypes />
 
 ## Android specifics
 

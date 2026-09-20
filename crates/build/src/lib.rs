@@ -48,6 +48,7 @@
 
 pub mod contract;
 pub mod desktop;
+pub mod doc_extract;
 pub mod emit_app;
 pub mod extract;
 pub mod entitlements;
@@ -69,6 +70,10 @@ pub mod worker;
 
 pub use crate::contract::{
     Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
+};
+pub use crate::doc_extract::{
+    FieldDoc, PluginTypeDoc, PluginTypeDocKind, VariantDoc, extract_from_file,
+    extract_message_docs, render_types_mdx, write_types_mdx,
 };
 pub use crate::desktop::{
     DesktopAppContract, DesktopServiceContract, RestartPolicy, ServiceScope, StartType,
