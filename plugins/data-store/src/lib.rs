@@ -20,16 +20,32 @@ use istmo_macros::{message, plugin};
 /// Wire identifier for the data-store plugin.
 pub const DATA_STORE_PLUGIN_ID: &str = "istmo.data_store";
 
+/// Instance-scoped configuration for a [`DataStoreClient`].
+///
+/// The `namespace` is the isolation boundary the native backend uses
+/// to segregate values — on Android it maps to a `SharedPreferences`
+/// file name, on iOS to a `UserDefaults` suite name. Two instances
+/// with different namespaces cannot see each other's keys.
 #[message(bincode = "::bincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DataStoreConfig {
+    /// Backend namespace. Convention: reverse-DNS app id
+    /// (`com.example.myapp`) so different apps on the same device
+    /// cannot collide.
     pub namespace: String,
 }
 
+/// Domain-level errors returned by every [`DataStore`] method.
 #[message(bincode = "::bincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DataStoreError {
+    /// Native backend rejected the operation. Carries the platform's
+    /// error message verbatim (e.g. `SharedPreferences` disk failure,
+    /// `UserDefaults` suite-locked-out).
     Backend(String),
+    /// Stored value could not be decoded into the requested type —
+    /// usually the sign that a previous version of the app wrote a
+    /// different shape under the same key.
     Corrupted(String),
 }
 

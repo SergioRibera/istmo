@@ -27,44 +27,93 @@ pub const GOOGLE_SIGN_IN_PLUGIN_ID: &str = "istmo.google_sign_in";
 #[derive(Debug)]
 pub enum Credential {}
 
+/// How the platform should behave when no cached credential is
+/// available.
 #[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum SignInMode {
+    /// Present the account chooser sheet (Credential Manager on
+    /// Android, `ASAuthorizationController` on iOS).
     Interactive,
+    /// Return a credential only if the platform already has one
+    /// cached. Fail with `SignInError::NoCredentialAvailable` rather
+    /// than prompting the user.
     SilentOnly,
 }
 
+/// Instance-scoped OAuth configuration for the sign-in plugin.
+///
+/// Passed as `init` when acquiring a `SignInClient` — the native
+/// backend hangs on to the config for the lifetime of the instance.
 #[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SignInConfig {
+    /// Google Cloud Console **Web** OAuth client id. Used verbatim as
+    /// `serverClientId` on Android and as the ID-token audience on
+    /// iOS.
     pub server_client_id: String,
+    /// Extra OAuth scopes to request on top of the default `openid` /
+    /// `email` / `profile` set.
     pub scopes: Vec<String>,
+    /// Restrict sign-in to accounts belonging to this Google Workspace
+    /// domain. `None` allows any account.
     pub hosted_domain: Option<String>,
+    /// Optional nonce for replay protection. Recommended when the
+    /// resulting `id_token` is forwarded to your own backend.
     pub nonce: Option<String>,
+    /// If `true`, sign the user in without a chooser when exactly one
+    /// eligible credential is available. Ignored when
+    /// `SignInMode::Interactive` is requested.
     pub auto_select: bool,
 }
 
+/// A successfully authenticated Google account.
+///
+/// `credential` is an opaque handle that owns the underlying platform
+/// token material — obtain the ergonomic `OwnedSignInAccount` via
+/// `sign_in_owned` / `silent_sign_in_owned` to have it dropped
+/// deterministically.
 #[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SignInAccount {
+    /// Stable Google user id (`sub` claim of the id token).
     pub id: String,
+    /// Verified email address, if the user granted the `email` scope.
     pub email: Option<String>,
+    /// Full display name, if the user granted the `profile` scope.
     pub display_name: Option<String>,
+    /// Profile photo URL, if available.
     pub photo_url: Option<String>,
+    /// Signed OpenID Connect id token — forward to your backend to
+    /// verify the user's identity server-side.
     pub id_token: String,
+    /// Scopes actually granted by the user (may be a subset of what
+    /// `SignInConfig::scopes` requested).
     pub granted_scopes: Vec<String>,
+    /// Opaque credential handle. Native side releases the underlying
+    /// token when `Frame::ReleaseNativeHandle` arrives — usually via
+    /// `NativeHandle::drop` on the owned wrapper.
     #[handle(Credential)]
     pub credential: NativeHandleId,
 }
 
+/// Domain-level errors surfaced by every `SignIn` method.
 #[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SignInError {
+    /// User dismissed the account chooser or denied consent.
     UserCancelled,
+    /// [`SignInMode::SilentOnly`] was requested but the platform has
+    /// no cached credential.
     NoCredentialAvailable,
+    /// The credential has expired or was invalidated. Prompt the user
+    /// for interactive sign-in.
     Reauthenticate,
+    /// Config-level failure — bad client id, missing scope, etc.
     InvalidConfiguration(String),
+    /// Transient network failure while contacting Google. Retry-safe.
     Network(String),
+    /// Any other backend failure. Message is the raw platform error.
     Backend(String),
 }
 

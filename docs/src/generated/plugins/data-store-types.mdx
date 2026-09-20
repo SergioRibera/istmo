@@ -3,13 +3,22 @@
 
 ### `DataStoreConfig`
 
+Instance-scoped configuration for a [`DataStoreClient`].
+
+The `namespace` is the isolation boundary the native backend uses
+to segregate values — on Android it maps to a `SharedPreferences`
+file name, on iOS to a `UserDefaults` suite name. Two instances
+with different namespaces cannot see each other's keys.
+
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
-| `namespace` | `namespace` | `String` | — |
+| `namespace` | `namespace` | `String` | Backend namespace. Convention: reverse-DNS app id (`com.example.myapp`) so different apps on the same device cannot collide. |
 
 ### `DataStoreError`
 
+Domain-level errors returned by every [`DataStore`] method.
+
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `Backend` | `String` | — |
-| `Corrupted` | `String` | — |
+| `Backend` | `String` | Native backend rejected the operation. Carries the platform's error message verbatim (e.g. `SharedPreferences` disk failure, `UserDefaults` suite-locked-out). |
+| `Corrupted` | `String` | Stored value could not be decoded into the requested type — usually the sign that a previous version of the app wrote a different shape under the same key. |

@@ -10,7 +10,7 @@ use std::io;
 use std::path::Path;
 
 use quote::ToTokens;
-use syn::{Attribute, Expr, ExprLit, File, Item, ItemEnum, ItemStruct, Lit, Meta};
+use syn::{Attribute, Expr, ExprLit, File, Item, ItemEnum, ItemStruct, Lit, Meta, Visibility};
 
 use crate::extract::ExtractError;
 
@@ -54,16 +54,20 @@ pub fn extract_from_file(file: &File) -> Result<Vec<PluginTypeDoc>, ExtractError
     let mut out = Vec::new();
     for item in &file.items {
         match item {
-            Item::Struct(s) if has_message_attr(&s.attrs) => {
+            Item::Struct(s) if has_message_attr(&s.attrs) && is_public(&s.vis) => {
                 out.push(lower_struct(s)?);
             }
-            Item::Enum(e) if has_message_attr(&e.attrs) => {
+            Item::Enum(e) if has_message_attr(&e.attrs) && is_public(&e.vis) => {
                 out.push(lower_enum(e)?);
             }
             _ => {}
         }
     }
     Ok(out)
+}
+
+fn is_public(vis: &Visibility) -> bool {
+    matches!(vis, Visibility::Public(_))
 }
 
 /// Render one plugin's message types as a Markdown/MDX partial. The
@@ -144,6 +148,9 @@ fn lower_struct(s: &ItemStruct) -> Result<PluginTypeDoc, ExtractError> {
     let mut fields = Vec::new();
     if let syn::Fields::Named(named) = &s.fields {
         for f in &named.named {
+            if !is_public(&f.vis) {
+                continue;
+            }
             let name = f
                 .ident
                 .as_ref()
@@ -479,6 +486,44 @@ pub struct WireType { pub y: u32 }
         let types = extract_from_file(&file).unwrap();
         assert_eq!(types.len(), 1);
         assert_eq!(types[0].name, "WireType");
+    }
+
+    #[test]
+    fn skips_non_pub_message_types() {
+        let src = r#"
+#[istmo::message]
+pub(crate) struct CrateVisible { pub x: u32 }
+
+#[istmo::message]
+struct Private { pub y: u32 }
+
+#[istmo::message]
+pub struct WireType { pub z: u32 }
+"#;
+        let file: File = syn::parse_file(src).unwrap();
+        let types = extract_from_file(&file).unwrap();
+        assert_eq!(types.len(), 1);
+        assert_eq!(types[0].name, "WireType");
+    }
+
+    #[test]
+    fn skips_non_pub_fields_in_pub_struct() {
+        let src = r#"
+#[istmo::message]
+pub struct Mixed {
+    /// Public field.
+    pub a: u32,
+    b: u32,
+    pub(crate) c: u32,
+}
+"#;
+        let file: File = syn::parse_file(src).unwrap();
+        let types = extract_from_file(&file).unwrap();
+        let PluginTypeDocKind::Struct { fields } = &types[0].kind else {
+            panic!("expected struct");
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "a");
     }
 
     #[test]

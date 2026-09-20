@@ -3,86 +3,119 @@
 
 ### `ActivityStyle`
 
+How prominently the platform should render the live activity.
+
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `Standard` | — | — |
-| `Transient` | — | — |
+| `Standard` | — | Full presentation — Lock Screen banner + Dynamic Island on iOS, full ongoing notification with custom RemoteViews on Android. |
+| `Transient` | — | Compact / minimal presentation — Dynamic Island only on iOS, slim collapsed notification on Android. |
 
 ### `AlertConfig`
 
+Optional alert to fire alongside an activity update.
+
+On iOS the platform decides whether to actually surface the alert
+(respects Focus modes, do-not-disturb, etc.); on Android it becomes
+a heads-up notification tied to the ongoing activity.
+
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
-| `title` | `title` | `String` | — |
-| `body` | `body` | `String` | — |
-| `sound` | `sound` | `AlertSound` | — |
+| `title` | `title` | `String` | Short title shown as the alert headline. |
+| `body` | `body` | `String` | Body copy displayed under the title. |
+| `sound` | `sound` | `AlertSound` | Which sound to play with the alert. |
 
 ### `AlertSound`
 
+Sound played when an [`AlertConfig`] fires.
+
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `Default` | — | — |
-| `Named` | `String` | — |
-| `None` | — | — |
+| `Default` | — | Use the platform's default notification sound. |
+| `Named` | `String` | Play a named sound bundled with the app — the string maps to a resource id on Android and a filename in the main bundle on iOS. |
+| `None` | — | Silent alert (visual only). |
 
 ### `DismissalPolicy`
 
+How to remove the activity when `end()` is called.
+
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `Immediate` | — | — |
-| `Default` | — | — |
-| `AfterSeconds` | `u32` | — |
+| `Immediate` | — | Remove the activity immediately, no lingering final state. |
+| `Default` | — | Platform default — iOS keeps the activity visible for a few minutes, Android leaves the ongoing notification until the system prunes it. |
+| `AfterSeconds` | `u32` | Keep the final state visible for the given number of seconds, then remove. |
 
 ### `AndroidTierHint`
 
+Android-only hint that biases the backend towards a particular
+rendering strategy when several are available on the device (custom
+RemoteViews vs. `ProgressStyle` vs. Live Update APIs).
+
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `ForceCustom` | — | — |
-| `PreferSystemTemplates` | — | — |
-| `RequireLiveUpdate` | — | — |
+| `ForceCustom` | — | Force the fully custom RemoteView-based rendering. |
+| `PreferSystemTemplates` | — | Prefer platform-provided templates when available; fall back to custom. |
+| `RequireLiveUpdate` | — | Require the modern Live Update API. Fails on devices that lack it. |
 
 ### `PlatformCapabilities`
 
+Capabilities of the current device for live activities.
+
+Returned by `capabilities()` so apps can gate features (e.g. only
+enable Dynamic Island widgets when actually supported).
+
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `Ios` | `IosCapabilities` | — |
-| `Android` | `AndroidCapabilities` | — |
-| `Unsupported` | — | — |
+| `Ios` | `IosCapabilities` | Running on iOS with the ActivityKit surface. |
+| `Android` | `AndroidCapabilities` | Running on Android — capabilities depend on OS version. |
+| `Unsupported` | — | Live activities are not available on this device / OS. |
 
 ### `IosCapabilities`
 
+iOS-specific ActivityKit feature availability.
+
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
-| `activity_kit_available` | `activityKitAvailable` | `bool` | — |
-| `activities_enabled` | `activitiesEnabled` | `bool` | — |
-| `dynamic_island` | `dynamicIsland` | `bool` | — |
-| `push_updates` | `pushUpdates` | `bool` | — |
+| `activity_kit_available` | `activityKitAvailable` | `bool` | Whether the ActivityKit framework itself is available (iOS 16.1+). |
+| `activities_enabled` | `activitiesEnabled` | `bool` | Whether the user has activities enabled in system settings. |
+| `dynamic_island` | `dynamicIsland` | `bool` | Whether the device physically has a Dynamic Island. |
+| `push_updates` | `pushUpdates` | `bool` | Whether the app is configured to receive APNs push-token updates for its activities. |
 
 ### `AndroidCapabilities`
 
+Android-specific live-update / ongoing-notification capabilities.
+
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
-| `supports_custom` | `supportsCustom` | `bool` | — |
-| `supports_progress_style` | `supportsProgressStyle` | `bool` | — |
-| `supports_live_update` | `supportsLiveUpdate` | `bool` | — |
-| `notifications_enabled` | `notificationsEnabled` | `bool` | — |
+| `supports_custom` | `supportsCustom` | `bool` | Whether the plugin can render fully custom RemoteViews. |
+| `supports_progress_style` | `supportsProgressStyle` | `bool` | Whether the platform's `Notification.ProgressStyle` is available. |
+| `supports_live_update` | `supportsLiveUpdate` | `bool` | Whether the modern Live Update notification API is available (Android 15+). |
+| `notifications_enabled` | `notificationsEnabled` | `bool` | Whether the user has notifications enabled for this app. |
 
 ### `RestoredActivity`
 
+An activity that survived a process restart and was recovered by
+the platform.
+
+Payloads travel as raw bytes here — [`TypedLiveActivity::restore`]
+decodes them into concrete attributes and state types.
+
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
-| `handle` | `handle` | `istmo_core::NativeHandleId` | — |
-| `activity_type` | `activityType` | `String` | — |
-| `attributes` | `attributes` | `Vec<u8>` | — |
-| `state` | `state` | `Vec<u8>` | — |
+| `handle` | `handle` | `istmo_core::NativeHandleId` | Handle owning the underlying platform activity — release it (via `NativeHandle::drop` or `end()`) when done. |
+| `activity_type` | `activityType` | `String` | Activity-type discriminator matching the `activity_type` supplied at `start()`. |
+| `attributes` | `attributes` | `Vec<u8>` | Bincode-encoded attributes as originally passed to `start()`. |
+| `state` | `state` | `Vec<u8>` | Bincode-encoded latest state observed for the activity. |
 
 ### `ActivityError`
 
+Domain-level errors returned by every [`LiveActivity`] method.
+
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `NotSupported` | — | — |
-| `Disabled` | — | — |
-| `ExceededMaximum` | — | — |
-| `HandleNotFound` | — | — |
-| `UnknownActivityType` | `String` | — |
-| `Decode` | `String` | — |
-| `Backend` | `String` | — |
+| `NotSupported` | — | The device / OS does not offer live activities at all. |
+| `Disabled` | — | Live activities are supported but disabled by the user in system settings. |
+| `ExceededMaximum` | — | Platform-imposed cap on concurrent activities reached — end one before starting another. |
+| `HandleNotFound` | — | Referenced handle no longer maps to a live activity — usually because the platform ended it out from under us. |
+| `UnknownActivityType` | `String` | No backend registered for the requested `activity_type`. Add the handler in the native `LiveActivityBackendImpl`. |
+| `Decode` | `String` | Bincode failed to encode / decode an attributes or state payload. |
+| `Backend` | `String` | Any other backend failure. Message is the raw platform error. |

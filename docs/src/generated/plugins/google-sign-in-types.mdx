@@ -3,40 +3,57 @@
 
 ### `SignInMode`
 
+How the platform should behave when no cached credential is
+available.
+
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `Interactive` | — | — |
-| `SilentOnly` | — | — |
+| `Interactive` | — | Present the account chooser sheet (Credential Manager on Android, `ASAuthorizationController` on iOS). |
+| `SilentOnly` | — | Return a credential only if the platform already has one cached. Fail with `SignInError::NoCredentialAvailable` rather than prompting the user. |
 
 ### `SignInConfig`
 
+Instance-scoped OAuth configuration for the sign-in plugin.
+
+Passed as `init` when acquiring a `SignInClient` — the native
+backend hangs on to the config for the lifetime of the instance.
+
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
-| `server_client_id` | `serverClientId` | `String` | — |
-| `scopes` | `scopes` | `Vec<String>` | — |
-| `hosted_domain` | `hostedDomain` | `Option<String>` | — |
-| `nonce` | `nonce` | `Option<String>` | — |
-| `auto_select` | `autoSelect` | `bool` | — |
+| `server_client_id` | `serverClientId` | `String` | Google Cloud Console **Web** OAuth client id. Used verbatim as `serverClientId` on Android and as the ID-token audience on iOS. |
+| `scopes` | `scopes` | `Vec<String>` | Extra OAuth scopes to request on top of the default `openid` / `email` / `profile` set. |
+| `hosted_domain` | `hostedDomain` | `Option<String>` | Restrict sign-in to accounts belonging to this Google Workspace domain. `None` allows any account. |
+| `nonce` | `nonce` | `Option<String>` | Optional nonce for replay protection. Recommended when the resulting `id_token` is forwarded to your own backend. |
+| `auto_select` | `autoSelect` | `bool` | If `true`, sign the user in without a chooser when exactly one eligible credential is available. Ignored when `SignInMode::Interactive` is requested. |
 
 ### `SignInAccount`
 
+A successfully authenticated Google account.
+
+`credential` is an opaque handle that owns the underlying platform
+token material — obtain the ergonomic `OwnedSignInAccount` via
+`sign_in_owned` / `silent_sign_in_owned` to have it dropped
+deterministically.
+
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
-| `id` | `id` | `String` | — |
-| `email` | `email` | `Option<String>` | — |
-| `display_name` | `displayName` | `Option<String>` | — |
-| `photo_url` | `photoUrl` | `Option<String>` | — |
-| `id_token` | `idToken` | `String` | — |
-| `granted_scopes` | `grantedScopes` | `Vec<String>` | — |
-| `credential` | `credential` | `NativeHandleId` | — |
+| `id` | `id` | `String` | Stable Google user id (`sub` claim of the id token). |
+| `email` | `email` | `Option<String>` | Verified email address, if the user granted the `email` scope. |
+| `display_name` | `displayName` | `Option<String>` | Full display name, if the user granted the `profile` scope. |
+| `photo_url` | `photoUrl` | `Option<String>` | Profile photo URL, if available. |
+| `id_token` | `idToken` | `String` | Signed OpenID Connect id token — forward to your backend to verify the user's identity server-side. |
+| `granted_scopes` | `grantedScopes` | `Vec<String>` | Scopes actually granted by the user (may be a subset of what `SignInConfig::scopes` requested). |
+| `credential` | `credential` | `NativeHandleId` | Opaque credential handle. Native side releases the underlying token when `Frame::ReleaseNativeHandle` arrives — usually via `NativeHandle::drop` on the owned wrapper. |
 
 ### `SignInError`
 
+Domain-level errors surfaced by every `SignIn` method.
+
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `UserCancelled` | — | — |
-| `NoCredentialAvailable` | — | — |
-| `Reauthenticate` | — | — |
-| `InvalidConfiguration` | `String` | — |
-| `Network` | `String` | — |
-| `Backend` | `String` | — |
+| `UserCancelled` | — | User dismissed the account chooser or denied consent. |
+| `NoCredentialAvailable` | — | [`SignInMode::SilentOnly`] was requested but the platform has no cached credential. |
+| `Reauthenticate` | — | The credential has expired or was invalidated. Prompt the user for interactive sign-in. |
+| `InvalidConfiguration` | `String` | Config-level failure — bad client id, missing scope, etc. |
+| `Network` | `String` | Transient network failure while contacting Google. Retry-safe. |
+| `Backend` | `String` | Any other backend failure. Message is the raw platform error. |
