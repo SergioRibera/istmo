@@ -4,11 +4,12 @@ plugins {
     `maven-publish`
 }
 
-val runtimeGroup: String by project
-val runtimeVersion: String by project
+val pluginGroup: String by project
+val pluginArtifact: String by project
+val pluginVersion: String by project
 
-group = runtimeGroup
-version = runtimeVersion
+group = pluginGroup
+version = pluginVersion
 
 repositories {
     google()

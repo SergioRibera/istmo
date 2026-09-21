@@ -22,9 +22,10 @@ name: publish-runtime
 # language surfaces pick it up.
 #
 # The workflow never pushes commits back to `main`. The Gradle version
-# bump only lives in the runner's checkout for the duration of the
-# build; `runtime/android/gradle.properties` on trunk keeps whatever
-# baseline SemVer it declared before the release.
+# bumps live in the runner's checkout for the duration of the build;
+# `runtime/android/gradle.properties` and
+# `runtime/gradle-plugin/gradle.properties` on trunk keep whatever
+# baseline SemVer they declared before the release.
 
 on:
   push:
@@ -83,26 +84,40 @@ jobs:
           gradle-version: "8.7"
           cache-read-only: false
 
-      - name: Bump Gradle version
-        working-directory: runtime/android
+      - name: Bump Gradle versions
         env:
           VERSION: ${{ steps.version.outputs.resolved }}
         run: |
-          sed -i -E "s/^runtimeVersion=.*/runtimeVersion=$VERSION/" gradle.properties
-          echo "gradle.properties after bump:"
-          grep '^runtimeVersion' gradle.properties
+          sed -i -E "s/^runtimeVersion=.*/runtimeVersion=$VERSION/" runtime/android/gradle.properties
+          sed -i -E "s/^pluginVersion=.*/pluginVersion=$VERSION/" runtime/gradle-plugin/gradle.properties
+          echo "runtime/android/gradle.properties after bump:"
+          grep '^runtimeVersion' runtime/android/gradle.properties
+          echo "runtime/gradle-plugin/gradle.properties after bump:"
+          grep '^pluginVersion' runtime/gradle-plugin/gradle.properties
 
-      - name: Assemble runtime AAR + plugin-loader JAR
+      - name: Assemble runtime AAR
         working-directory: runtime/android
-        run: gradle --no-daemon :assembleRelease :plugin-loader:jar
+        run: gradle --no-daemon assembleRelease
 
-      - name: Publish to GitHub Packages
+      - name: Assemble plugin-loader JAR
+        working-directory: runtime/gradle-plugin
+        run: gradle --no-daemon jar
+
+      - name: Publish runtime to GitHub Packages
         if: ${{ !inputs.dry_run }}
         working-directory: runtime/android
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gradle --no-daemon :publishReleasePublicationToGitHubPackagesRepository :plugin-loader:publishAllPublicationsToGitHubPackagesRepository
+        run: gradle --no-daemon publishReleasePublicationToGitHubPackagesRepository
+
+      - name: Publish plugin-loader to GitHub Packages
+        if: ${{ !inputs.dry_run }}
+        working-directory: runtime/gradle-plugin
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gradle --no-daemon publishAllPublicationsToGitHubPackagesRepository
 
       - name: Summary
         env:

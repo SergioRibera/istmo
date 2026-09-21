@@ -6,7 +6,7 @@ pluginManagement {
     }
     // Pull in the istmo plugin loader (`dev.istmo.plugin-loader`) from
     // the checked-out repo — no maven publish needed for local demos.
-    includeBuild("../../../runtime/android")
+    includeBuild("../../../runtime/gradle-plugin")
 }
 
 dependencyResolutionManagement {
