@@ -35,7 +35,6 @@ android_logger = "0.14"
 
 [build-dependencies]
 istmo-build = { workspace = true }
-istmo-pen = { workspace = true, features = ["codegen"] }
 
 [lints.rust]
 missing_debug_implementations = "warn"
