@@ -204,4 +204,34 @@ pub trait Dispatch: Send + Sync + 'static {
         payload: &'a [u8],
         cancel: CancelToken,
     ) -> DispatchFuture<'a>;
+
+    /// Handle a [`Frame::CreateInstance`](crate::protocol::Frame::CreateInstance)
+    /// for stateful plugins hosted in this process.
+    ///
+    /// Default returns [`DispatchError::UnknownMethod`] — stateless
+    /// dispatchers never see this call. Stateful hosts override to
+    /// decode `config_payload`, spin up per-instance state, and return
+    /// the freshly-allocated [`InstanceId`] as bincode-encoded bytes in
+    /// [`Outcome::Ok`]. The runtime picks the id out of the response
+    /// and wires it into the routing tables so subsequent
+    /// [`dispatch`](Self::dispatch) calls carry `Some(instance_id)`.
+    fn create_instance<'a>(
+        &'a self,
+        config_payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        let _ = (config_payload, cancel);
+        Box::pin(async {
+            Err(DispatchError::UnknownMethod(
+                "__create_instance".to_owned(),
+            ))
+        })
+    }
+
+    /// Release per-instance state associated with `instance_id` after
+    /// the caller has dropped its client. Default is a no-op — stateful
+    /// hosts override to reap the entry from their instance map.
+    fn destroy_instance(&self, instance_id: InstanceId) {
+        let _ = instance_id;
+    }
 }

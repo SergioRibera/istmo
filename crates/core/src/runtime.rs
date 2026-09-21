@@ -297,18 +297,24 @@ impl Runtime {
         payload: Vec<u8>,
         capacity: usize,
     ) -> Result<StreamHandle, IstmoError> {
+        let plugin_id = plugin_id.into();
         let id = self.next_id();
         let call_id = CallId(id);
         let stream_id = StreamId(id);
         let rx = self.routing.register_stream(stream_id, capacity);
+        let hosted = lock(&self.hosts).contains_key(plugin_id.as_str());
         let envelope = Envelope::new(Frame::Call {
             call_id,
-            plugin_id: plugin_id.into(),
+            plugin_id,
             instance_id,
             method: method.into(),
             payload,
         });
-        self.send_outbound(envelope)?;
+        if hosted {
+            self.dispatch_inbound(envelope)?;
+        } else {
+            self.send_outbound(envelope)?;
+        }
         Ok(StreamHandle {
             stream_id,
             receiver: rx,
@@ -330,14 +336,20 @@ impl Runtime {
         plugin_id: impl Into<String>,
         payload: Vec<u8>,
     ) -> Result<CallHandle, IstmoError> {
+        let plugin_id = plugin_id.into();
         let call_id = CallId(self.next_id());
         let rx = self.routing.register_call(call_id);
+        let hosted = lock(&self.hosts).contains_key(plugin_id.as_str());
         let envelope = Envelope::new(Frame::CreateInstance {
             call_id,
-            plugin_id: plugin_id.into(),
+            plugin_id,
             payload,
         });
-        self.send_outbound(envelope)?;
+        if hosted {
+            self.dispatch_inbound(envelope)?;
+        } else {
+            self.send_outbound(envelope)?;
+        }
         Ok(CallHandle {
             call_id,
             receiver: Some(rx),
@@ -362,10 +374,19 @@ impl Runtime {
     ///
     /// Returns [`IstmoError::ChannelClosed`] if the outbound channel is
     /// no longer draining (usually a shutting-down runtime).
-    pub fn destroy_instance(&self, instance_id: InstanceId) -> Result<(), IstmoError> {
-        self.routing.remove_instance(instance_id);
+    pub fn destroy_instance(self: &Arc<Self>, instance_id: InstanceId) -> Result<(), IstmoError> {
+        let plugin_id = self.routing.instance(instance_id).map(|e| e.plugin_id);
+        let hosted = plugin_id
+            .as_deref()
+            .is_some_and(|pid| lock(&self.hosts).contains_key(pid));
         let envelope = Envelope::new(Frame::DestroyInstance { instance_id });
-        self.send_outbound(envelope)
+        if hosted {
+            self.dispatch_inbound(envelope)?;
+        } else {
+            self.routing.remove_instance(instance_id);
+            self.send_outbound(envelope)?;
+        }
+        Ok(())
     }
 
     /// Notify the peer that it can drop the platform object backing
@@ -539,9 +560,19 @@ impl Runtime {
                 self.dispatch_notify(&plugin_id, instance_id, method, payload);
                 Ok(())
             }
-            Frame::CreateInstance { .. }
-            | Frame::DestroyInstance { .. }
-            | Frame::ReleaseNativeHandle { .. } => {
+            Frame::CreateInstance {
+                call_id,
+                plugin_id,
+                payload,
+            } => {
+                self.dispatch_hosted_create_instance(call_id, plugin_id, payload);
+                Ok(())
+            }
+            Frame::DestroyInstance { instance_id } => {
+                self.dispatch_hosted_destroy_instance(instance_id);
+                Ok(())
+            }
+            Frame::ReleaseNativeHandle { .. } => {
                 tracing::warn!("dropped inbound frame with outbound-only variant");
                 Ok(())
             }
@@ -765,6 +796,91 @@ impl Runtime {
                 }
             }
         });
+    }
+
+    fn dispatch_hosted_create_instance(
+        self: &Arc<Self>,
+        call_id: CallId,
+        plugin_id: String,
+        payload: Vec<u8>,
+    ) {
+        let dispatcher = lock(&self.hosts).get(plugin_id.as_str()).cloned();
+        let Some(dispatcher) = dispatcher else {
+            tracing::warn!(plugin_id = %plugin_id, "inbound CreateInstance for unregistered plugin");
+            self.send_respond(
+                call_id,
+                Err(encode_dispatch_error_string(&format!(
+                    "no host registered for `{plugin_id}`"
+                ))),
+            );
+            return;
+        };
+        let cancel = lock(&self.cancelled_hosted)
+            .entry(call_id)
+            .or_default()
+            .clone();
+        let runtime = Arc::clone(self);
+        std::thread::spawn(move || {
+            let outcome = pollster::block_on(async {
+                dispatcher.create_instance(&payload, cancel).await
+            });
+            let cancelled = {
+                let mut map = lock(&runtime.cancelled_hosted);
+                map.remove(&call_id).is_some_and(|t| t.is_cancelled())
+            };
+            if cancelled {
+                tracing::debug!(?call_id, "hosted create_instance cancelled; discarding response");
+                return;
+            }
+            match outcome {
+                Ok(Outcome::Ok(bytes)) => {
+                    if let Ok((instance_id, _)) =
+                        crate::codec::decode::<InstanceId>(&bytes)
+                    {
+                        runtime.register_instance(instance_id, plugin_id.clone());
+                    } else {
+                        tracing::error!(
+                            ?call_id,
+                            "hosted create_instance returned undecodable InstanceId bytes",
+                        );
+                    }
+                    runtime.send_respond(call_id, Ok(bytes));
+                }
+                Ok(Outcome::DomainError(bytes)) => runtime.send_respond(call_id, Err(bytes)),
+                Ok(Outcome::StreamOpened(_)) => {
+                    tracing::error!(
+                        ?call_id,
+                        "hosted create_instance returned StreamOpened; refusing",
+                    );
+                    runtime.send_respond(
+                        call_id,
+                        Err(encode_dispatch_error_string(
+                            "create_instance returned StreamOpened",
+                        )),
+                    );
+                }
+                Err(err) => {
+                    tracing::error!(?err, ?call_id, "hosted create_instance failed");
+                    runtime
+                        .send_respond(call_id, Err(encode_dispatch_error_string(&err.to_string())));
+                }
+            }
+        });
+    }
+
+    fn dispatch_hosted_destroy_instance(self: &Arc<Self>, instance_id: InstanceId) {
+        let plugin_id = self
+            .routing
+            .instance(instance_id)
+            .map(|entry| entry.plugin_id);
+        self.routing.remove_instance(instance_id);
+        let Some(plugin_id) = plugin_id else {
+            return;
+        };
+        let dispatcher = lock(&self.hosts).get(plugin_id.as_str()).cloned();
+        if let Some(dispatcher) = dispatcher {
+            dispatcher.destroy_instance(instance_id);
+        }
     }
 
     fn spawn_stream_pump(

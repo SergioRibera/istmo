@@ -456,3 +456,150 @@ fn cancel_arriving_before_dispatch_starts_trips_token_immediately() {
 
 const _: fn(Arc<dyn Dispatch>) = |_| {};
 
+/// Rust-hosted stateful plugin: `create_instance` decodes a `u32`
+/// seed, `dispatch("get")` returns the seed for its instance,
+/// `destroy_instance` removes it. Verifies the framework wiring for
+/// stateful dispatchers hosted in the same process.
+struct SeedCounter {
+    next_id: AtomicU32,
+    instances: std::sync::Mutex<std::collections::HashMap<InstanceId, u32>>,
+    destroyed: std::sync::Mutex<Vec<InstanceId>>,
+}
+
+impl SeedCounter {
+    const PLUGIN_ID: &'static str = "test.seed_counter";
+
+    fn new() -> Self {
+        Self {
+            next_id: AtomicU32::new(1),
+            instances: std::sync::Mutex::new(std::collections::HashMap::new()),
+            destroyed: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Dispatch for SeedCounter {
+    fn plugin_id(&self) -> &'static str {
+        Self::PLUGIN_ID
+    }
+
+    fn create_instance<'a>(
+        &'a self,
+        payload: &'a [u8],
+        _cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        Box::pin(async move {
+            let (seed, _): (u32, _) = codec::decode(payload).unwrap();
+            let id = InstanceId::new(u64::from(self.next_id.fetch_add(1, Ordering::SeqCst)));
+            self.instances.lock().unwrap().insert(id, seed);
+            Ok(Outcome::Ok(codec::encode(&id).unwrap()))
+        })
+    }
+
+    fn destroy_instance(&self, instance_id: InstanceId) {
+        self.instances.lock().unwrap().remove(&instance_id);
+        self.destroyed.lock().unwrap().push(instance_id);
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        instance_id: Option<InstanceId>,
+        method: &'a str,
+        _payload: &'a [u8],
+        _cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        let id = instance_id.expect("stateful dispatch requires an instance id");
+        let seed = *self.instances.lock().unwrap().get(&id).expect("known instance");
+        let method_owned = method.to_owned();
+        Box::pin(async move {
+            match method_owned.as_str() {
+                "get" => Ok(Outcome::Ok(codec::encode(&seed).unwrap())),
+                other => Err(istmo_core::DispatchError::UnknownMethod(other.to_owned())),
+            }
+        })
+    }
+}
+
+#[test]
+fn hosted_stateful_plugin_round_trips_create_call_destroy() {
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let outbound = init.outbound;
+
+    let dispatcher = Arc::new(SeedCounter::new());
+    rt.register_host(SeedHost(dispatcher.clone()));
+
+    // create_instance short-circuits to hosted dispatcher.
+    let seed_a = 42u32;
+    let handle = rt
+        .create_instance(SeedCounter::PLUGIN_ID, codec::encode(&seed_a).unwrap())
+        .expect("create_instance");
+    let bytes = pollster::block_on(handle).expect("create ok").expect("create Ok");
+    let (instance_a, _): (InstanceId, _) = codec::decode(&bytes).unwrap();
+
+    // call round-trip returns the seed stored under this instance id.
+    let handle = rt
+        .call(
+            SeedCounter::PLUGIN_ID,
+            Some(instance_a),
+            "get",
+            Vec::new(),
+        )
+        .expect("call");
+    let bytes = pollster::block_on(handle).expect("call ok").expect("Ok");
+    let (returned, _): (u32, _) = codec::decode(&bytes).unwrap();
+    assert_eq!(returned, seed_a);
+
+    // A second instance is independent.
+    let seed_b = 100u32;
+    let handle = rt
+        .create_instance(SeedCounter::PLUGIN_ID, codec::encode(&seed_b).unwrap())
+        .expect("second create");
+    let bytes = pollster::block_on(handle).expect("create ok").expect("Ok");
+    let (instance_b, _): (InstanceId, _) = codec::decode(&bytes).unwrap();
+    assert_ne!(instance_a, instance_b);
+
+    // destroy_instance triggers the host's callback.
+    rt.destroy_instance(instance_a).expect("destroy");
+
+    // Give the destroy a beat — dispatch_inbound routes it synchronously
+    // but pollster block on a spawned thread means Destroy is inline.
+    let destroyed = dispatcher.destroyed.lock().unwrap().clone();
+    assert!(destroyed.contains(&instance_a));
+
+    // Outbound channel stays empty for the hosted round-trips.
+    assert!(outbound.try_recv().is_err());
+}
+
+/// Adapter used above so a shared `Arc<SeedCounter>` can be registered
+/// on the runtime AND kept for direct assertions on internal state.
+struct SeedHost(Arc<SeedCounter>);
+
+impl Dispatch for SeedHost {
+    fn plugin_id(&self) -> &'static str {
+        self.0.plugin_id()
+    }
+
+    fn create_instance<'a>(
+        &'a self,
+        payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        self.0.create_instance(payload, cancel)
+    }
+
+    fn destroy_instance(&self, instance_id: InstanceId) {
+        self.0.destroy_instance(instance_id);
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        instance_id: Option<InstanceId>,
+        method: &'a str,
+        payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        self.0.dispatch(instance_id, method, payload, cancel)
+    }
+}
+
