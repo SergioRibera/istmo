@@ -215,6 +215,39 @@ impl PenPublisher {
         &self.runtime
     }
 
+    /// Snapshot of the currently registered window ids. Useful for
+    /// backends that need to broadcast an event to every listener
+    /// (e.g. `libinput` on Linux where samples are seat-scoped rather
+    /// than per-window).
+    #[must_use]
+    pub fn window_ids(&self) -> Vec<u64> {
+        let guard = match self.windows.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.keys().copied().collect()
+    }
+
+    /// Install the `libinput`-backed sample source on this publisher.
+    /// Requires the `libinput` Cargo feature to be enabled on the
+    /// `istmo-pen` crate.
+    ///
+    /// The backend spawns a single background thread that polls a
+    /// process-wide `libinput` context (`seat0` via udev) and
+    /// broadcasts every tablet-tool sample to every registered
+    /// window. Suitable for kiosk-style apps that own the display;
+    /// standard Wayland / X11 clients should route through their
+    /// compositor and use [`Self::push_event`] / [`Self::push_hover`]
+    /// instead.
+    ///
+    /// # Errors
+    /// Any string returned by the underlying `libinput` setup — a
+    /// missing seat, insufficient permissions, or unavailable udev.
+    #[cfg(all(target_os = "linux", feature = "libinput"))]
+    pub fn install_libinput(self: &Arc<Self>) -> Result<(), String> {
+        linux::install_libinput(self)
+    }
+
     /// Manually publish a [`PenEvent`] into a registered window's event
     /// stream. Escape hatch for apps that source stylus samples from
     /// somewhere the built-in backends do not cover — Wayland

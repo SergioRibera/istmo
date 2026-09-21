@@ -24,6 +24,9 @@
           libxcursor
           libxi
           libxrandr
+          # libinput backend for the istmo-pen plugin (feature = "libinput").
+          libinput
+          udev
         ];
       in
       {
