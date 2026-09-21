@@ -103,8 +103,8 @@ pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
 pub use crate::manifest::{
     AndroidServiceSpec, Deployment, IosBackgroundKindSpec, IosBackgroundSpec,
     IosContinuousModeSpec, Manifest, ManifestError, PluginEntry, RemoteOverride, ResolvedWiring,
-    emit, emit_from, emit_manifest_metadata, emit_manifest_metadata_with_contract,
-    emit_wiring_env, emit_with, resolve_wiring,
+    WindowsManifestFragment, emit, emit_from, emit_manifest_metadata,
+    emit_manifest_metadata_with_contract, emit_wiring_env, emit_with, resolve_wiring,
 };
 pub use crate::native_deps::{
     GradleCoord, GradleDep, GradleKey, GradleScope, NativeDeps, SwiftPackageDep, VersionConflict,

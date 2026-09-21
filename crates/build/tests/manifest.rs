@@ -204,6 +204,51 @@ version = "1.13.0"
 }
 
 #[test]
+fn windows_manifest_fragments_parse_and_survive_bincode_roundtrip() {
+    let src = r#"
+[plugin]
+id = "istmo.pen"
+
+[[windows_manifest_fragment]]
+name = "dpi_aware"
+xml = "<dpiAware>true/pm</dpiAware>"
+
+[[windows_manifest_fragment]]
+name = "common_controls"
+xml = "<dependency/>"
+"#;
+    let m = Manifest::parse(src).expect("parse");
+    assert_eq!(m.windows_manifest_fragments.len(), 2);
+    assert_eq!(m.windows_manifest_fragments[0].name, "dpi_aware");
+    assert!(
+        m.windows_manifest_fragments[0]
+            .xml
+            .contains("<dpiAware>true/pm</dpiAware>")
+    );
+    assert_eq!(m.windows_manifest_fragments[1].name, "common_controls");
+
+    let hex = istmo_build::handover::serialize_manifest(&m).expect("serialize");
+    let back = istmo_build::handover::deserialize_manifest(&hex).expect("deserialize");
+    assert_eq!(back.windows_manifest_fragments, m.windows_manifest_fragments);
+}
+
+#[test]
+fn windows_manifest_fragment_unknown_key_rejected() {
+    let src = r#"
+[plugin]
+id = "istmo.pen"
+
+[[windows_manifest_fragment]]
+name = "dpi_aware"
+xml = "<a/>"
+scope = "app"
+"#;
+    let err = Manifest::parse(src).expect_err("must fail");
+    let msg = format!("{err}");
+    assert!(msg.contains("windows_manifest_fragment.scope"), "got {msg}");
+}
+
+#[test]
 fn unknown_deployment_literal_is_rejected() {
     let src = r#"
 [plugin]

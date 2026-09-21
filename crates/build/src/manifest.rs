@@ -7,7 +7,16 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 use crate::handover::{emit_contract, emit_manifest, emit_native_deps};
 use crate::native_deps::{GradleCoord, GradleDep, GradleScope, NativeDeps, SwiftPackageDep};
 
-const KNOWN_KEYS: &[&str] = &["plugin", "gradle", "swift_package", "remote_override", "app"];
+const KNOWN_KEYS: &[&str] = &[
+    "plugin",
+    "gradle",
+    "swift_package",
+    "remote_override",
+    "windows_manifest_fragment",
+    "app",
+];
+
+const KNOWN_WINDOWS_MANIFEST_KEYS: &[&str] = &["name", "xml"];
 
 const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "id",
@@ -126,6 +135,23 @@ pub struct RemoteOverride {
     pub deployment: Deployment,
 }
 
+/// XML fragment contributed to a consuming app's `App.exe.manifest`.
+///
+/// Plugins that need process-wide manifest settings (DPI awareness,
+/// execution level, common-controls version, …) declare fragments in
+/// their `istmo.toml`; the consuming app's `build.rs` composes every
+/// fragment reachable through the `DEP_*_ISTMO_MANIFEST` handover
+/// into a single `.manifest` written alongside the executable (or
+/// linked as a resource via `embed-resource` / `winres`).
+///
+/// The `name` is a stable identifier used for de-duplication when two
+/// plugins declare the same fragment.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+pub struct WindowsManifestFragment {
+    pub name: String,
+    pub xml: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Manifest {
 
@@ -134,6 +160,8 @@ pub struct Manifest {
     pub native_deps: NativeDeps,
 
     pub remote_overrides: Vec<RemoteOverride>,
+
+    pub windows_manifest_fragments: Vec<WindowsManifestFragment>,
 }
 
 impl Manifest {
@@ -176,7 +204,18 @@ impl Manifest {
                 remote_overrides.push(parse_remote_override(entry)?);
             }
         }
-        Ok(Self { plugins, native_deps, remote_overrides })
+        let mut windows_manifest_fragments = Vec::new();
+        if let Some(item) = doc.get("windows_manifest_fragment") {
+            for entry in expect_array_of_tables(item, "windows_manifest_fragment")? {
+                windows_manifest_fragments.push(parse_windows_manifest_fragment(entry)?);
+            }
+        }
+        Ok(Self {
+            plugins,
+            native_deps,
+            remote_overrides,
+            windows_manifest_fragments,
+        })
     }
 
     #[must_use]
@@ -487,6 +526,33 @@ fn parse_ios_background(
         task_identifier,
         kind,
     })
+}
+
+fn parse_windows_manifest_fragment(
+    table: &Table,
+) -> Result<WindowsManifestFragment, ManifestError> {
+    for (name, _) in table {
+        if !KNOWN_WINDOWS_MANIFEST_KEYS.contains(&name) {
+            return Err(ManifestError::UnknownKey {
+                key: format!("windows_manifest_fragment.{name}"),
+            });
+        }
+    }
+    let name = table
+        .get("name")
+        .ok_or(ManifestError::Missing {
+            key: "windows_manifest_fragment.name",
+        })
+        .and_then(|item| expect_string(item, "windows_manifest_fragment.name"))?
+        .to_owned();
+    let xml = table
+        .get("xml")
+        .ok_or(ManifestError::Missing {
+            key: "windows_manifest_fragment.xml",
+        })
+        .and_then(|item| expect_string(item, "windows_manifest_fragment.xml"))?
+        .to_owned();
+    Ok(WindowsManifestFragment { name, xml })
 }
 
 fn parse_remote_override(table: &Table) -> Result<RemoteOverride, ManifestError> {
