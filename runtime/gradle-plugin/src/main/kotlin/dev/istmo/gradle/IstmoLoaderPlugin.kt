@@ -155,16 +155,17 @@ class IstmoLoaderPlugin : Plugin<Project> {
             return emptySet()
         }
         val result = mutableSetOf<String>()
+        // Top-level `[dependencies]` + `[dev-dependencies]`.
+        // Target-scoped deps under `[target.'cfg(...)']` are
+        // deliberately skipped — plugins that ship
+        // `native/android/` are conventionally declared as
+        // unconditional dependencies (the target cfg lives in the
+        // plugin's own Cargo.toml, not the consumer's). Adding
+        // target-scoped parsing here means walking key names that
+        // include `(` / `,` / `"` which tomlj rejects as dotted-key
+        // paths.
         toml.getTable("dependencies")?.keySet()?.forEach { result.add(it) }
         toml.getTable("dev-dependencies")?.keySet()?.forEach { result.add(it) }
-        val targets = toml.getTable("target")
-        if (targets != null) {
-            for (key in targets.keySet()) {
-                val block = targets.getTable(key) ?: continue
-                block.getTable("dependencies")?.keySet()?.forEach { result.add(it) }
-                block.getTable("dev-dependencies")?.keySet()?.forEach { result.add(it) }
-            }
-        }
         return result
     }
 
