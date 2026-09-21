@@ -1,0 +1,6 @@
+# Gradle / IDE artifacts — never tracked.
+.gradle/
+build/
+local.properties
+.idea/
+*.iml

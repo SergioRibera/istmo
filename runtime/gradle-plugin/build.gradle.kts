@@ -11,11 +11,9 @@ val pluginVersion: String by project
 group = pluginGroup
 version = pluginVersion
 
-repositories {
-    google()
-    mavenCentral()
-    gradlePluginPortal()
-}
+// Repositories are declared centrally in `settings.gradle.kts` under
+// `dependencyResolutionManagement`, so this project stays composable
+// with consumer builds that enforce `FAIL_ON_PROJECT_REPOS`.
 
 dependencies {
     compileOnly("com.android.tools.build:gradle:8.2.2")
