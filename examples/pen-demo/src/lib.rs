@@ -6,10 +6,10 @@ pub mod app;
 
 pub const WINDOW_ID: u64 = 1;
 
-pub use app::{DrawApp, SharedInk, Stroke, StrokePoint};
+pub use app::{DrawApp, PenDebug, SharedInk, Stroke, StrokePoint};
 
 use istmo::plugins::SafeArea;
-use istmo_pen::{PenClient, PenEvent, PenHoverEvent};
+use istmo_pen::{PenClient, PenEvent, PenHoverEvent, PenSample, PenToolKind};
 
 istmo::runtime!(
     plugins: [PenClient, SafeArea],
@@ -57,23 +57,63 @@ pub fn pump_hover_stream(
 
 fn apply_event(event: PenEvent, ink: &std::sync::Arc<SharedInk>) {
     match event {
-        PenEvent::Down(sample) => ink.begin(point_from_sample(&sample)),
-        PenEvent::Move(m) => {
+        PenEvent::Down(ref sample) => {
+            ink.begin(point_from_sample(sample));
+            publish_debug(ink, sample, "down");
+        }
+        PenEvent::Move(ref m) => {
             for c in &m.coalesced {
                 ink.extend(point_from_sample(c));
             }
             ink.extend(point_from_sample(&m.sample));
+            publish_debug(ink, &m.sample, "move");
         }
-        PenEvent::Up(sample) => {
-            ink.extend(point_from_sample(&sample));
+        PenEvent::Up(ref sample) => {
+            ink.extend(point_from_sample(sample));
             ink.end();
+            publish_debug(ink, sample, "up");
         }
-        PenEvent::Cancel(_) => ink.end(),
-        PenEvent::ButtonChanged(_) => {}
+        PenEvent::Cancel(ref sample) => {
+            ink.end();
+            publish_debug(ink, sample, "cancel");
+        }
+        PenEvent::ButtonChanged(ref change) => {
+            publish_debug(ink, &change.sample, "button");
+            // Toggle the color menu whenever barrel button 1 flips.
+            if change.changed & 1 != 0 && change.sample.buttons & 1 != 0 {
+                ink.toggle_color_menu();
+            }
+        }
     }
 }
 
-fn point_from_sample(sample: &istmo_pen::PenSample) -> StrokePoint {
+fn publish_debug(ink: &std::sync::Arc<SharedInk>, sample: &PenSample, event: &'static str) {
+    ink.update_debug(PenDebug {
+        x: sample.x,
+        y: sample.y,
+        pressure: sample.pressure,
+        tilt_x: sample.tilt_x,
+        tilt_y: sample.tilt_y,
+        azimuth: sample.azimuth,
+        altitude: sample.altitude,
+        twist: sample.twist,
+        tangential_pressure: sample.tangential_pressure,
+        z_offset: sample.z_offset,
+        timestamp_us: sample.timestamp_us,
+        sequence: sample.sequence,
+        tool_id: sample.tool_id,
+        tool_kind: match sample.tool_kind {
+            PenToolKind::Tip => "tip",
+            PenToolKind::Eraser => "eraser",
+            PenToolKind::Unknown => "unknown",
+        },
+        buttons: sample.buttons,
+        last_event: event,
+        touches: 0,
+    });
+}
+
+fn point_from_sample(sample: &PenSample) -> StrokePoint {
     StrokePoint {
         pos: eframe::egui::Pos2::new(sample.x, sample.y),
         pressure: sample.pressure.clamp(0.0, 1.0),

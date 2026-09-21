@@ -15,6 +15,7 @@
 //! Both paths feed the same rendering code so the canvas looks
 //! identical across targets.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
@@ -30,29 +31,60 @@ pub struct StrokePoint {
 #[derive(Debug, Default, Clone)]
 pub struct Stroke {
     pub points: Vec<StrokePoint>,
+    pub color: Option<egui::Color32>,
+}
+
+/// Live snapshot of the last stylus sample — populated by the pen
+/// wire pump and rendered by the on-screen debug overlay.
+#[derive(Debug, Default, Clone)]
+pub struct PenDebug {
+    pub x: f32,
+    pub y: f32,
+    pub pressure: f32,
+    pub tilt_x: f32,
+    pub tilt_y: f32,
+    pub azimuth: f32,
+    pub altitude: f32,
+    pub twist: f32,
+    pub tangential_pressure: f32,
+    pub z_offset: f32,
+    pub timestamp_us: u64,
+    pub sequence: u32,
+    pub tool_id: u32,
+    pub tool_kind: &'static str,
+    pub buttons: u32,
+    pub last_event: &'static str,
+    pub touches: u64,
 }
 
 #[derive(Debug, Default)]
 pub struct SharedInk {
     pub strokes: Mutex<Vec<Stroke>>,
     pub current: Mutex<Option<Stroke>>,
+    pub debug: Mutex<PenDebug>,
+    pub color: Mutex<egui::Color32>,
+    pub color_menu_open: AtomicBool,
 }
 
 impl SharedInk {
     pub fn begin(&self, first: StrokePoint) {
+        let color = self.current_color();
         let mut cur = self.current.lock().unwrap_or_else(|p| p.into_inner());
         *cur = Some(Stroke {
             points: vec![first],
+            color: Some(color),
         });
     }
 
     pub fn extend(&self, point: StrokePoint) {
+        let color = self.current_color();
         let mut cur = self.current.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(stroke) = cur.as_mut() {
             stroke.points.push(point);
         } else {
             *cur = Some(Stroke {
                 points: vec![point],
+                color: Some(color),
             });
         }
     }
@@ -70,6 +102,42 @@ impl SharedInk {
         cur.take();
         let mut strokes = self.strokes.lock().unwrap_or_else(|p| p.into_inner());
         strokes.clear();
+    }
+
+    pub fn update_debug(&self, next: PenDebug) {
+        let mut d = self.debug.lock().unwrap_or_else(|p| p.into_inner());
+        let touches = d.touches;
+        *d = PenDebug {
+            touches: touches.saturating_add(1),
+            ..next
+        };
+    }
+
+    pub fn current_color(&self) -> egui::Color32 {
+        let guard = self.color.lock().unwrap_or_else(|p| p.into_inner());
+        if guard.a() == 0 {
+            egui::Color32::from_rgb(30, 30, 40)
+        } else {
+            *guard
+        }
+    }
+
+    pub fn set_color(&self, color: egui::Color32) {
+        let mut guard = self.color.lock().unwrap_or_else(|p| p.into_inner());
+        *guard = color;
+    }
+
+    pub fn toggle_color_menu(&self) {
+        let prev = self.color_menu_open.load(Ordering::Relaxed);
+        self.color_menu_open.store(!prev, Ordering::Relaxed);
+    }
+
+    pub fn set_color_menu(&self, open: bool) {
+        self.color_menu_open.store(open, Ordering::Relaxed);
+    }
+
+    pub fn color_menu_open(&self) -> bool {
+        self.color_menu_open.load(Ordering::Relaxed)
     }
 }
 
@@ -206,9 +274,130 @@ impl eframe::App for DrawApp {
                 let _ = rect;
             });
 
+        self.show_debug_overlay(ctx, top, left);
+        self.show_color_menu(ctx);
+
         // Redraw quickly enough to catch stylus samples arriving from
         // the background thread on Android.
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+}
+
+impl DrawApp {
+    fn show_debug_overlay(&self, ctx: &egui::Context, top_inset: f32, left_inset: f32) {
+        let debug = self
+            .ink
+            .debug
+            .lock()
+            .map(|d| d.clone())
+            .unwrap_or_default();
+        egui::Window::new("pen debug")
+            .anchor(
+                egui::Align2::LEFT_TOP,
+                egui::vec2(left_inset + 8.0, top_inset + 48.0),
+            )
+            .collapsible(true)
+            .resizable(false)
+            .default_open(true)
+            .show(ctx, |ui| {
+                ui.monospace(format!(
+                    "last event   {:>15}\n\
+                     touches      {:>15}\n\
+                     x            {:>15.2}\n\
+                     y            {:>15.2}\n\
+                     pressure     {:>15.3}\n\
+                     tilt_x       {:>15.3}\n\
+                     tilt_y       {:>15.3}\n\
+                     azimuth      {:>15.3}\n\
+                     altitude     {:>15.3}\n\
+                     twist        {:>15.3}\n\
+                     tangential   {:>15.3}\n\
+                     z_offset     {:>15.3}\n\
+                     tool         {:>15}\n\
+                     tool_id      {:>15}\n\
+                     buttons      {:>15}\n\
+                     seq          {:>15}\n\
+                     time_us      {:>15}",
+                    debug.last_event,
+                    debug.touches,
+                    debug.x,
+                    debug.y,
+                    debug.pressure,
+                    debug.tilt_x,
+                    debug.tilt_y,
+                    debug.azimuth,
+                    debug.altitude,
+                    debug.twist,
+                    debug.tangential_pressure,
+                    debug.z_offset,
+                    debug.tool_kind,
+                    debug.tool_id,
+                    format!("{:08b}", debug.buttons),
+                    debug.sequence,
+                    debug.timestamp_us,
+                ));
+                let color = self.ink.current_color();
+                ui.horizontal(|ui| {
+                    ui.label("brush");
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(24.0, 16.0),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(rect, 3.0, color);
+                });
+            });
+    }
+
+    fn show_color_menu(&self, ctx: &egui::Context) {
+        if !self.ink.color_menu_open() {
+            return;
+        }
+        egui::Window::new("brush colors")
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Press pen barrel button again to close.");
+                ui.add_space(4.0);
+                let palette = [
+                    egui::Color32::from_rgb(30, 30, 40),
+                    egui::Color32::from_rgb(200, 40, 40),
+                    egui::Color32::from_rgb(220, 100, 20),
+                    egui::Color32::from_rgb(220, 190, 0),
+                    egui::Color32::from_rgb(80, 170, 60),
+                    egui::Color32::from_rgb(30, 130, 200),
+                    egui::Color32::from_rgb(120, 60, 200),
+                    egui::Color32::from_rgb(230, 120, 200),
+                ];
+                let current = self.ink.current_color();
+                egui::Grid::new("palette").spacing(egui::vec2(6.0, 6.0)).show(ui, |ui| {
+                    for (i, color) in palette.iter().enumerate() {
+                        let selected = current == *color;
+                        let (rect, response) = ui.allocate_exact_size(
+                            egui::vec2(40.0, 40.0),
+                            egui::Sense::click(),
+                        );
+                        ui.painter().rect_filled(rect, 6.0, *color);
+                        if selected {
+                            ui.painter().rect_stroke(
+                                rect,
+                                6.0,
+                                egui::Stroke::new(3.0, egui::Color32::BLACK),
+                            );
+                        }
+                        if response.clicked() {
+                            self.ink.set_color(*color);
+                            self.ink.set_color_menu(false);
+                        }
+                        if (i + 1) % 4 == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+                if ui.button("Close").clicked() {
+                    self.ink.set_color_menu(false);
+                }
+            });
     }
 }
 
@@ -216,29 +405,19 @@ fn paint_stroke(painter: &egui::Painter, stroke: &Stroke) {
     if stroke.points.is_empty() {
         return;
     }
+    let base = stroke
+        .color
+        .unwrap_or_else(|| egui::Color32::from_rgb(30, 30, 40));
     for pair in stroke.points.windows(2) {
         let a = pair[0];
         let b = pair[1];
         let width = 1.5 + (a.pressure.max(b.pressure) * 22.0);
-        let hue = (a.tilt.abs().min(std::f32::consts::FRAC_PI_2)
-            / std::f32::consts::FRAC_PI_2)
-            .clamp(0.0, 1.0);
-        let color = hue_to_color(hue);
-        painter.line_segment([a.pos, b.pos], egui::Stroke::new(width, color));
+        painter.line_segment([a.pos, b.pos], egui::Stroke::new(width, base));
     }
     if let Some(last) = stroke.points.last() {
         let width = 1.5 + last.pressure * 22.0;
-        painter.circle_filled(last.pos, width * 0.5, egui::Color32::from_gray(50));
+        painter.circle_filled(last.pos, width * 0.5, base);
     }
-}
-
-fn hue_to_color(t: f32) -> egui::Color32 {
-    // Blue → magenta → orange sweep — matches "cool tip / warm side"
-    // intuition when the pen tilts.
-    let r = (60.0 + t * 180.0).min(255.0);
-    let g = (60.0 + (1.0 - t) * 40.0).min(255.0);
-    let b = (180.0 + (1.0 - t) * 60.0).min(255.0);
-    egui::Color32::from_rgb(r as u8, g as u8, b as u8)
 }
 
 #[cfg(not(target_os = "android"))]
