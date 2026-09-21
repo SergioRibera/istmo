@@ -91,7 +91,7 @@ class AdMobDispatcher(
         return out.toByteArray()
     }
 
-    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): ByteArray {
+    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): PluginResult {
         val backend = instances[instanceId]
             ?: error("AdMob: unknown instance $instanceId")
         return when (method) {
@@ -103,7 +103,7 @@ class AdMobDispatcher(
                     val result = backend.load_interstitial(ad_unit_id)
                     val out = ByteArrayOutputStream()
                     codecs.writeNativeHandleId(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -119,7 +119,7 @@ class AdMobDispatcher(
                     val result = backend.show_interstitial(ad)
                     val out = ByteArrayOutputStream()
                     codecs.writeInterstitialOutcome(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -135,7 +135,7 @@ class AdMobDispatcher(
                     val result = backend.load_rewarded(ad_unit_id)
                     val out = ByteArrayOutputStream()
                     codecs.writeNativeHandleId(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -151,7 +151,7 @@ class AdMobDispatcher(
                     val result = backend.show_rewarded(ad)
                     val out = ByteArrayOutputStream()
                     codecs.writeRewardedOutcome(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -167,7 +167,7 @@ class AdMobDispatcher(
                     val result = backend.show_banner(request)
                     val out = ByteArrayOutputStream()
                     codecs.writeNativeHandleId(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -183,7 +183,7 @@ class AdMobDispatcher(
                     val d_rect = codecs.readBannerRect(payload, cursor); cursor = d_rect.consumed
                     val rect = d_rect.value
                     backend.update_banner(banner, rect)
-                    ByteArray(0)
+                    PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -197,7 +197,7 @@ class AdMobDispatcher(
                     val d_banner = codecs.readNativeHandleId(payload, cursor); cursor = d_banner.consumed
                     val banner = d_banner.value
                     backend.hide_banner(banner)
-                    ByteArray(0)
+                    PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
                     val err = e.error as? AdError ?: throw e
                     val errOut = ByteArrayOutputStream()

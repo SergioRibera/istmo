@@ -300,7 +300,7 @@ fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
     let name = &contract.type_name;
     let _ = writeln!(
         out,
-        "    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): ByteArray {{",
+        "    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): PluginResult {{",
     );
     if stateful {
         let _ = writeln!(out, "        val backend = instances[instanceId]");
@@ -322,12 +322,13 @@ fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
 }
 
 fn write_method_arm(out: &mut String, method: &Method) {
+    let is_stream = matches!(method.kind, crate::contract::MethodKind::Stream);
     let has_error = method.error.is_some();
     let _ = writeln!(out, "            \"{}\" -> {{", method.name);
-    if has_error {
+    if has_error && !is_stream {
         let _ = writeln!(out, "                try {{");
     }
-    let indent = if has_error {
+    let indent = if has_error && !is_stream {
         "                    "
     } else {
         "                "
@@ -341,9 +342,37 @@ fn write_method_arm(out: &mut String, method: &Method) {
         arg_names.push(arg.name.clone());
     }
     let call_args = arg_names.join(", ");
-    if matches!(method.returns, TypeRef::Unit) {
+    if is_stream {
+        let _ = writeln!(
+            out,
+            "{indent}val __istmo_flow = backend.{}({call_args})",
+            method.name,
+        );
+        let _ = writeln!(
+            out,
+            "{indent}PluginResult.Stream(",
+        );
+        let _ = writeln!(
+            out,
+            "{indent}    __istmo_flow.map {{ __istmo_item ->",
+        );
+        let _ = writeln!(
+            out,
+            "{indent}        val out = ByteArrayOutputStream()",
+        );
+        write_write_expr(
+            out,
+            &format!("{indent}        "),
+            &method.returns,
+            "__istmo_item",
+            "out",
+        );
+        let _ = writeln!(out, "{indent}        out.toByteArray()");
+        let _ = writeln!(out, "{indent}    }}");
+        let _ = writeln!(out, "{indent})");
+    } else if matches!(method.returns, TypeRef::Unit) {
         let _ = writeln!(out, "{indent}backend.{}({call_args})", method.name);
-        let _ = writeln!(out, "{indent}ByteArray(0)");
+        let _ = writeln!(out, "{indent}PluginResult.Unary(ByteArray(0))");
     } else {
         let _ = writeln!(
             out,
@@ -352,9 +381,9 @@ fn write_method_arm(out: &mut String, method: &Method) {
         );
         let _ = writeln!(out, "{indent}val out = ByteArrayOutputStream()");
         write_write_expr(out, indent, &method.returns, "result", "out");
-        let _ = writeln!(out, "{indent}out.toByteArray()");
+        let _ = writeln!(out, "{indent}PluginResult.Unary(out.toByteArray())");
     }
-    if has_error {
+    if has_error && !is_stream {
         let err_ty = method.error.as_ref().unwrap().to_kotlin();
         let _ = writeln!(out, "                }} catch (e: BackendException) {{");
 

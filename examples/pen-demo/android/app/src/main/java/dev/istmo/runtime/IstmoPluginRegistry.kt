@@ -10,7 +10,7 @@ import android.content.Context
 import dev.istmo.runtime.IstmoRuntime
 
 object IstmoPluginRegistry {
-    fun registerAll(context: Context, runtime: IstmoRuntime = IstmoRuntime.instance) {
+    fun registerAll(context: Context, runtime: IstmoRuntime = IstmoRuntime) {
         // No auto-registerable plugins in this build.
     }
 }

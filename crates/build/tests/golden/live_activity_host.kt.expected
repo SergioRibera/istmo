@@ -79,7 +79,7 @@ class LiveActivityDispatcher(
         (backend as? HandleReleaser)?.releaseNativeHandle(handleId)
     }
 
-    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): ByteArray {
+    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): PluginResult {
         return when (method) {
             "start" -> {
                 try {
@@ -99,7 +99,7 @@ class LiveActivityDispatcher(
                     val result = backend.start(activity_type, attributes, initial_state, style, stale_after_seconds, android_tier_hint)
                     val out = ByteArrayOutputStream()
                     codecs.writeNativeHandleId(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -117,7 +117,7 @@ class LiveActivityDispatcher(
                     val d_alert = Bincode.readOption(payload, cursor) { p, o -> codecs.readAlertConfig(p, o) }; cursor = d_alert.consumed
                     val alert = d_alert.value
                     backend.update(handle, state, alert)
-                    ByteArray(0)
+                    PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -135,7 +135,7 @@ class LiveActivityDispatcher(
                     val d_dismissal = codecs.readDismissalPolicy(payload, cursor); cursor = d_dismissal.consumed
                     val dismissal = d_dismissal.value
                     backend.end(handle, final_state, dismissal)
-                    ByteArray(0)
+                    PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -148,7 +148,7 @@ class LiveActivityDispatcher(
                     val result = backend.are_activities_enabled()
                     val out = ByteArrayOutputStream()
                     Bincode.writeBool(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -161,7 +161,7 @@ class LiveActivityDispatcher(
                     val result = backend.capabilities()
                     val out = ByteArrayOutputStream()
                     codecs.writePlatformCapabilities(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -174,7 +174,7 @@ class LiveActivityDispatcher(
                     val result = backend.restore_active()
                     val out = ByteArrayOutputStream()
                     Bincode.writeVec(out, result) { s, v -> codecs.writeRestoredActivity(s, v) }
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e
                     val errOut = ByteArrayOutputStream()

@@ -43,19 +43,19 @@ class NotificationsDispatcher(
         const val PLUGIN_ID = "istmo.notifications"
     }
 
-    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): ByteArray {
+    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): PluginResult {
         return when (method) {
             "is_authorized" -> {
                 val result = backend.is_authorized()
                 val out = ByteArrayOutputStream()
                 Bincode.writeBool(out, result)
-                out.toByteArray()
+                PluginResult.Unary(out.toByteArray())
             }
             "request_authorization" -> {
                 val result = backend.request_authorization()
                 val out = ByteArrayOutputStream()
                 Bincode.writeBool(out, result)
-                out.toByteArray()
+                PluginResult.Unary(out.toByteArray())
             }
             "schedule" -> {
                 try {
@@ -65,7 +65,7 @@ class NotificationsDispatcher(
                     val result = backend.schedule(request)
                     val out = ByteArrayOutputStream()
                     codecs.writeNotificationHandle(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? NotificationError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -79,7 +79,7 @@ class NotificationsDispatcher(
                     val d_id = Bincode.readVarintU64(payload, cursor).let { Bincode.Decoded(it.value.toUInt(), it.consumed) }; cursor = d_id.consumed
                     val id = d_id.value
                     backend.cancel(id)
-                    ByteArray(0)
+                    PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
                     val err = e.error as? NotificationError ?: throw e
                     val errOut = ByteArrayOutputStream()

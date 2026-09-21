@@ -62,7 +62,7 @@ pub fn generate_kotlin_plugin_registry(package: &str, entries: &[RegistryEntry])
     out.push_str("import dev.istmo.runtime.IstmoRuntime\n\n");
     out.push_str("object IstmoPluginRegistry {\n");
     out.push_str(
-        "    fun registerAll(context: Context, runtime: IstmoRuntime = IstmoRuntime.instance) {\n",
+        "    fun registerAll(context: Context, runtime: IstmoRuntime = IstmoRuntime) {\n",
     );
     if entries.is_empty() {
         out.push_str("        // No auto-registerable plugins in this build.\n");

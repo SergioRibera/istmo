@@ -114,7 +114,10 @@ object IstmoRuntime {
         val job = scope.launch {
             try {
                 val result = handler.handleCall(instanceId, method, payload)
-                nativeSubmitResponse(callId, true, result)
+                when (result) {
+                    is PluginResult.Unary -> nativeSubmitResponse(callId, true, result.bytes)
+                    is PluginResult.Stream -> pumpStream(callId, result.flow)
+                }
             } catch (e: PluginException) {
                 nativeSubmitResponse(callId, false, e.payload)
             } catch (_: Throwable) {
@@ -125,6 +128,21 @@ object IstmoRuntime {
         }
         jobs[callId] = job
     }
+
+    private suspend fun pumpStream(callId: Long, flow: kotlinx.coroutines.flow.Flow<ByteArray>) {
+        try {
+            flow.collect { bytes -> nativeSubmitEvent(callId, bytes) }
+            nativeSubmitStreamEnd(callId, STREAM_END_COMPLETE, null)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
+            throw e
+        } catch (_: Throwable) {
+            nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
+        }
+    }
+
+    private const val STREAM_END_COMPLETE = 0
+    private const val STREAM_END_CANCELLED = 1
 
     @JvmStatic
     fun onCancel(callId: Long) {

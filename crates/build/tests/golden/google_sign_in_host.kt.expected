@@ -79,7 +79,7 @@ class SignInDispatcher(
         return out.toByteArray()
     }
 
-    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): ByteArray {
+    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): PluginResult {
         val backend = instances[instanceId]
             ?: error("SignIn: unknown instance $instanceId")
         return when (method) {
@@ -91,7 +91,7 @@ class SignInDispatcher(
                     val result = backend.sign_in(mode)
                     val out = ByteArrayOutputStream()
                     codecs.writeSignInAccount(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -104,7 +104,7 @@ class SignInDispatcher(
                     val result = backend.silent_sign_in()
                     val out = ByteArrayOutputStream()
                     Bincode.writeOption(out, result) { s, v -> codecs.writeSignInAccount(s, v) }
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -120,7 +120,7 @@ class SignInDispatcher(
                     val result = backend.refresh(credential)
                     val out = ByteArrayOutputStream()
                     codecs.writeSignInAccount(out, result)
-                    out.toByteArray()
+                    PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -131,7 +131,7 @@ class SignInDispatcher(
             "sign_out" -> {
                 try {
                     backend.sign_out()
-                    ByteArray(0)
+                    PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -142,7 +142,7 @@ class SignInDispatcher(
             "revoke" -> {
                 try {
                     backend.revoke()
-                    ByteArray(0)
+                    PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()

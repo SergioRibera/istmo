@@ -36,7 +36,7 @@ class PermissionsDispatcher(
         const val PLUGIN_ID = "istmo.permissions"
     }
 
-    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): ByteArray {
+    override suspend fun handleCall(instanceId: Long, method: String, payload: ByteArray): PluginResult {
         return when (method) {
             "check" -> {
                 var cursor = 0
@@ -45,7 +45,7 @@ class PermissionsDispatcher(
                 val result = backend.check(permission)
                 val out = ByteArrayOutputStream()
                 codecs.writePermissionStatus(out, result)
-                out.toByteArray()
+                PluginResult.Unary(out.toByteArray())
             }
             "request" -> {
                 var cursor = 0
@@ -54,7 +54,7 @@ class PermissionsDispatcher(
                 val result = backend.request(permissions)
                 val out = ByteArrayOutputStream()
                 Bincode.writeVec(out, result) { s, v -> codecs.writePermissionOutcome(s, v) }
-                out.toByteArray()
+                PluginResult.Unary(out.toByteArray())
             }
             "should_show_rationale" -> {
                 var cursor = 0
@@ -63,7 +63,7 @@ class PermissionsDispatcher(
                 val result = backend.should_show_rationale(permission)
                 val out = ByteArrayOutputStream()
                 Bincode.writeBool(out, result)
-                out.toByteArray()
+                PluginResult.Unary(out.toByteArray())
             }
             else -> error("unknown Permissions method: $method")
         }

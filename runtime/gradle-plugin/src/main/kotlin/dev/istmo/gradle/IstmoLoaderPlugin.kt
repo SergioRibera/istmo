@@ -47,7 +47,15 @@ class IstmoLoaderPlugin : Plugin<Project> {
                 return@afterEvaluate
             }
 
-            val dirs = discoverPluginNativeAndroidDirs(root, extension)
+            val consumerCargo = consumerCargoToml(project)
+            if (consumerCargo == null) {
+                project.logger.warn(
+                    "istmo-plugin-loader: no Cargo.toml next to ${project.rootDir}; skipping.",
+                )
+                return@afterEvaluate
+            }
+            val consumerDeps = readConsumerDeps(consumerCargo)
+            val dirs = discoverPluginNativeAndroidDirs(root, extension, consumerDeps)
             if (dirs.isEmpty()) {
                 project.logger.info("istmo-plugin-loader: no plugin native/android directories to link.")
                 return@afterEvaluate
@@ -87,6 +95,7 @@ class IstmoLoaderPlugin : Plugin<Project> {
     private fun discoverPluginNativeAndroidDirs(
         workspaceRoot: File,
         ext: IstmoLoaderExtension,
+        consumerDeps: Set<String>,
     ): List<File> {
         val cargoToml = File(workspaceRoot, "Cargo.toml")
         val toml = try {
@@ -113,12 +122,62 @@ class IstmoLoaderPlugin : Plugin<Project> {
 
         val result = mutableListOf<File>()
         for (crate in expanded.distinct()) {
-            if (exclude.contains(crate.name)) continue
+            val crateName = readCrateName(crate) ?: continue
+            if (exclude.contains(crateName)) continue
+            // Only inject plugins the consumer actually depends on.
+            // Otherwise every workspace plugin's native/android/ would
+            // land in every app's source set, dragging in Kotlin files
+            // that reference codegen output that only exists when the
+            // matching contract handover is active.
+            if (crateName !in consumerDeps) continue
             if (!File(crate, "istmo.toml").isFile) continue
             val nativeDir = File(crate, "native/android")
             if (nativeDir.isDirectory) result.add(nativeDir)
         }
         return result
+    }
+
+    private fun readCrateName(crateDir: File): String? {
+        val cargo = File(crateDir, "Cargo.toml")
+        if (!cargo.isFile) return null
+        val toml = try {
+            Toml.parse(cargo.toPath())
+        } catch (_: Exception) {
+            return null
+        }
+        return toml.getString("package.name")
+    }
+
+    private fun readConsumerDeps(consumerCargoToml: File): Set<String> {
+        val toml = try {
+            Toml.parse(consumerCargoToml.toPath())
+        } catch (_: Exception) {
+            return emptySet()
+        }
+        val result = mutableSetOf<String>()
+        toml.getTable("dependencies")?.keySet()?.forEach { result.add(it) }
+        toml.getTable("dev-dependencies")?.keySet()?.forEach { result.add(it) }
+        val targets = toml.getTable("target")
+        if (targets != null) {
+            for (key in targets.keySet()) {
+                val block = targets.getTable(key) ?: continue
+                block.getTable("dependencies")?.keySet()?.forEach { result.add(it) }
+                block.getTable("dev-dependencies")?.keySet()?.forEach { result.add(it) }
+            }
+        }
+        return result
+    }
+
+    /**
+     * Locate the Cargo crate that lives next to the Gradle project —
+     * an istmo app conventionally has `pen-demo/Cargo.toml` alongside
+     * `pen-demo/android/`. The plugin loader restricts its injection
+     * to plugins listed as dependencies of that crate.
+     */
+    private fun consumerCargoToml(project: Project): File? {
+        val parent = project.rootDir.parentFile ?: return null
+        val cargo = File(parent, "Cargo.toml")
+        return if (cargo.isFile) cargo else null
     }
 
     private fun expandGlob(workspaceRoot: File, pattern: String): List<File> {
