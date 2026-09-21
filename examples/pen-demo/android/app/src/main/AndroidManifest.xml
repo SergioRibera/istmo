@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:hasCode="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <!-- PenDemoActivity extends NativeActivity; it wires the pen
+             plugin factory into IstmoRuntime and adds a PenCaptureView
+             overlay above the native surface so MotionEvents are
+             intercepted for stylus tools. -->
+        <activity
+            android:name="dev.istmo.pendemo.PenDemoActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|keyboardHidden|screenSize">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="pen_demo" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

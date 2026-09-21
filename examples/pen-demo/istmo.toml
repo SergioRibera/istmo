@@ -1,0 +1,6 @@
+[app]
+android_package = "dev.istmo.runtime"
+
+[[app.plugin]]
+id = "istmo.pen"
+platforms = ["android"]

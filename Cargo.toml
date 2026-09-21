@@ -19,6 +19,7 @@ members = [
     "plugins/istmo-pen",
     "examples/data-store-demo",
     "examples/live-activity-demo",
+    "examples/pen-demo",
 ]
 
 [workspace.package]
