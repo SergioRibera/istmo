@@ -121,15 +121,18 @@ const fn platform_capabilities() -> PenCapabilities {
             target_os = "linux"
         )),
         tilt: cfg!(any(target_os = "windows", target_os = "macos")),
-        azimuth: cfg!(target_os = "macos"),
+        // `NSEvent` does not expose azimuth/altitude separately — only
+        // an `(x, y)` tilt normalized to `-1..1`. The publisher fills
+        // `azimuth`/`altitude` as zero and reports them unavailable.
+        azimuth: false,
         altitude: false,
         twist: cfg!(any(target_os = "windows", target_os = "macos")),
         tangential_pressure: cfg!(target_os = "macos"),
-        hover: cfg!(target_os = "windows"),
+        hover: cfg!(any(target_os = "windows", target_os = "macos")),
         predicted: false,
         coalesced: cfg!(target_os = "windows"),
         barrel_button: cfg!(any(target_os = "windows", target_os = "macos")),
-        eraser: cfg!(target_os = "windows"),
+        eraser: cfg!(any(target_os = "windows", target_os = "macos")),
     }
 }
 
