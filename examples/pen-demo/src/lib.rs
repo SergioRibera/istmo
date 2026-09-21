@@ -8,10 +8,11 @@ pub const WINDOW_ID: u64 = 1;
 
 pub use app::{DrawApp, SharedInk, Stroke, StrokePoint};
 
+use istmo::plugins::SafeArea;
 use istmo_pen::{PenClient, PenEvent, PenHoverEvent};
 
 istmo::runtime!(
-    plugins: [PenClient],
+    plugins: [PenClient, SafeArea],
 );
 
 #[cfg(target_os = "android")]

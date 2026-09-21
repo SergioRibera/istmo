@@ -18,6 +18,7 @@
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
+use istmo::plugins::SafeArea;
 
 #[derive(Debug, Clone, Copy)]
 pub struct StrokePoint {
@@ -75,6 +76,7 @@ impl SharedInk {
 #[derive(Debug)]
 pub struct DrawApp {
     pub ink: Arc<SharedInk>,
+    safe_area: Option<SafeArea>,
     #[cfg(not(target_os = "android"))]
     tracking: bool,
 }
@@ -83,28 +85,98 @@ impl DrawApp {
     pub fn new(ink: Arc<SharedInk>) -> Self {
         Self {
             ink,
+            safe_area: None,
             #[cfg(not(target_os = "android"))]
             tracking: false,
         }
+    }
+
+    fn ensure_safe_area(&mut self, ctx: &egui::Context) {
+        if self.safe_area.is_some() {
+            return;
+        }
+        match SafeArea::acquire() {
+            Ok(sa) => {
+                let stream = sa.stream();
+                let ctx_clone = ctx.clone();
+                std::thread::spawn(move || {
+                    while stream.recv().is_ok() {
+                        ctx_clone.request_repaint();
+                    }
+                });
+                self.safe_area = Some(sa);
+            }
+            Err(err) => {
+                log::debug!("safe_area not ready: {err}");
+            }
+        }
+    }
+
+    fn current_insets(&self) -> (f32, f32, f32, f32) {
+        let Some(sa) = self.safe_area.as_ref() else {
+            return (0.0, 0.0, 0.0, 0.0);
+        };
+        let insets = sa.current_or_zero();
+        let top = insets
+            .system_bars
+            .top
+            .max(insets.display_cutout.top);
+        let right = insets
+            .system_bars
+            .right
+            .max(insets.display_cutout.right);
+        let bottom = insets
+            .system_bars
+            .bottom
+            .max(insets.display_cutout.bottom)
+            .max(insets.ime.bottom);
+        let left = insets
+            .system_bars
+            .left
+            .max(insets.display_cutout.left);
+        (top, right, bottom, left)
     }
 }
 
 impl eframe::App for DrawApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("istmo-pen demo");
-                ui.separator();
-                ui.label("Draw with a stylus — width tracks pressure, hue tracks tilt.");
-                ui.separator();
-                if ui.button("Clear").clicked() {
-                    self.ink.clear();
-                }
+        self.ensure_safe_area(ctx);
+        let (top, right, bottom, left) = self.current_insets();
+
+        egui::TopBottomPanel::top("bar")
+            .frame(
+                egui::Frame::none()
+                    .inner_margin(egui::Margin {
+                        top,
+                        right,
+                        bottom: 6.0,
+                        left,
+                    })
+                    .fill(egui::Color32::from_gray(235)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("istmo-pen demo");
+                    ui.separator();
+                    ui.label("Draw with a stylus — width tracks pressure, hue tracks tilt.");
+                    ui.separator();
+                    if ui.button("Clear").clicked() {
+                        self.ink.clear();
+                    }
+                });
             });
-        });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::from_gray(250)))
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_gray(250))
+                    .inner_margin(egui::Margin {
+                        top: 0.0,
+                        right,
+                        bottom,
+                        left,
+                    }),
+            )
             .show(ctx, |ui| {
                 let painter = ui.painter();
                 let rect = ui.max_rect();

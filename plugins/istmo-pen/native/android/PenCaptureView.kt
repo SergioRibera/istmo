@@ -44,6 +44,10 @@ open class PenCaptureView @JvmOverloads constructor(
     )
     private val sequence = AtomicInteger(0)
     private val attachTimeMillis: Long = android.os.SystemClock.uptimeMillis()
+    // Convert `MotionEvent` pixel coordinates into density-independent
+    // pixels so consumers using logical coordinate systems (egui,
+    // Compose, SwiftUI-style) don't need to know the device density.
+    private val density: Float = context.resources.displayMetrics.density
 
     init {
         // Hover events only reach us when the view is focusable and
@@ -151,8 +155,8 @@ open class PenCaptureView @JvmOverloads constructor(
         val tiltY = -tiltAxis * kotlin.math.cos(orientation)
         val zOffset = event.getAxisValue(MotionEvent.AXIS_DISTANCE)
         return PenSample(
-            x = event.x,
-            y = event.y,
+            x = event.x / density,
+            y = event.y / density,
             pressure = event.pressure,
             tiltX = tiltX,
             tiltY = tiltY,
@@ -177,8 +181,8 @@ open class PenCaptureView @JvmOverloads constructor(
         val zOffset = event.getHistoricalAxisValue(MotionEvent.AXIS_DISTANCE, h)
         val time = event.getHistoricalEventTime(h)
         return PenSample(
-            x = event.getHistoricalX(h),
-            y = event.getHistoricalY(h),
+            x = event.getHistoricalX(h) / density,
+            y = event.getHistoricalY(h) / density,
             pressure = event.getHistoricalPressure(h),
             tiltX = tiltX,
             tiltY = tiltY,
