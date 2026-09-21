@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * Non-stylus events are handed back to the framework via `super.*`
  * and continue their normal dispatch.
  */
-class PenCaptureView @JvmOverloads constructor(
+open class PenCaptureView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0,
