@@ -1,36 +1,44 @@
 package dev.istmo.pendemo
 
+import android.app.NativeActivity
 import android.os.Bundle
-import androidx.appcompat.app.AppCompatActivity
+import android.view.ViewGroup
+import dev.istmo.plugins.pen.PenCaptureView
 import dev.istmo.plugins.pen.PenFactoryImpl
 import dev.istmo.runtime.IstmoRuntime
 import dev.istmo.runtime.PenCodecsImpl
 import dev.istmo.runtime.PenDispatcher
 
 /**
- * Regular (non-native) activity — `PenDrawingView` is the content view
- * and receives stylus [MotionEvent]s directly. The Rust `.so` is loaded
- * by `IstmoRuntime.start("pen_demo")`, whose JNI pump handles inbound
- * calls without any dependency on `android_main` / NativeActivity's
- * event loop.
+ * NativeActivity so winit / eframe (running in `android_main` on the
+ * Rust side) owns the drawing surface. A transparent
+ * [PenCaptureView] sits above the native surface, intercepts stylus
+ * `MotionEvent`s, and forwards them across the istmo wire as
+ * `PenEvent`s — the Rust `DrawApp` reads that stream and renders
+ * strokes.
  */
-class PenDemoActivity : AppCompatActivity() {
+class PenDemoActivity : NativeActivity() {
 
-    private lateinit var penView: PenDrawingView
+    private lateinit var penView: PenCaptureView
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
         val runtime = IstmoRuntime
         check(runtime.start("pen_demo")) { "IstmoRuntime.start() failed" }
 
-        penView = PenDrawingView(this)
+        penView = PenCaptureView(this)
+
         runtime.registerHandler(
             PenDispatcher.PLUGIN_ID,
             PenDispatcher(PenFactoryImpl(penView), PenCodecsImpl()),
         )
 
-        setContentView(penView)
+        super.onCreate(savedInstanceState)
+
+        val params = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        )
+        addContentView(penView, params)
     }
 
     override fun onDestroy() {

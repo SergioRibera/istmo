@@ -5,16 +5,19 @@
         android:allowBackup="true"
         android:label="@string/app_name"
         android:hasCode="true"
-        android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
-        <!-- Regular AppCompatActivity. `PenDrawingView` is the content
-             view (Kotlin renders strokes); `IstmoRuntime.start()`
-             loads the Rust .so and starts the JNI pump so the plugin
-             wire path is live too. -->
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <!-- NativeActivity so winit / eframe (in android_main) owns
+             the drawing surface. `PenCaptureView` overlays on top and
+             forwards stylus MotionEvents through the istmo wire to
+             the Rust DrawApp. -->
         <activity
             android:name="dev.istmo.pendemo.PenDemoActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:configChanges="orientation|keyboardHidden|screenSize">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="pen_demo" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
