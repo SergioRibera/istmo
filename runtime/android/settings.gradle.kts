@@ -16,3 +16,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "istmo-runtime"
 
+include(":plugin-loader")
+project(":plugin-loader").projectDir = file("plugin-loader")
+

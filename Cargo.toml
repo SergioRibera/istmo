@@ -115,5 +115,6 @@ pre-release-replacements = [
     { file = "examples/data-store-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "dev.istmo:istmo-runtime:{{version}}" },
     { file = "examples/rust-mobile-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "dev.istmo:istmo-runtime:{{version}}" },
     { file = "examples/live-activity-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "dev.istmo:istmo-runtime:{{version}}" },
+    { file = "examples/pen-demo/android/app/build.gradle.kts", search = 'dev\.istmo:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "dev.istmo:istmo-runtime:{{version}}" },
 ]
 

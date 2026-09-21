@@ -1,7 +1,12 @@
 name: publish-runtime
 
-# Publishes the Kotlin runtime AAR + sources JAR to the GitHub Packages
-# Maven registry as `dev.istmo:istmo-runtime:<version>`.
+# Publishes two Kotlin artefacts to the GitHub Packages Maven registry
+# as part of every release:
+#   * `dev.istmo:istmo-runtime:<version>`        — the AAR + sources JAR
+#   * `dev.istmo:istmo-plugin-loader:<version>`  — a Gradle plugin that
+#     auto-injects every istmo plugin's `native/android/` directory into
+#     the consuming app's Kotlin source set (the Flutter-style
+#     auto-linker for Android hosts).
 #
 # * The **primary trigger** is a pushed `v<SemVer>` tag — that is how
 #   `cargo-release` cuts a release. The workflow reads the SemVer from
@@ -87,9 +92,9 @@ jobs:
           echo "gradle.properties after bump:"
           grep '^runtimeVersion' gradle.properties
 
-      - name: Assemble runtime AAR
+      - name: Assemble runtime AAR + plugin-loader JAR
         working-directory: runtime/android
-        run: gradle --no-daemon assembleRelease
+        run: gradle --no-daemon :assembleRelease :plugin-loader:jar
 
       - name: Publish to GitHub Packages
         if: ${{ !inputs.dry_run }}
@@ -97,7 +102,7 @@ jobs:
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gradle --no-daemon publishReleasePublicationToGitHubPackagesRepository
+        run: gradle --no-daemon :publishReleasePublicationToGitHubPackagesRepository :plugin-loader:publishAllPublicationsToGitHubPackagesRepository
 
       - name: Summary
         env:
@@ -110,7 +115,8 @@ jobs:
             if [ "$DRY_RUN" = "true" ]; then
               echo "**Dry run** — Gradle assembled, nothing published."
             else
-              echo "* Kotlin: [\`dev.istmo:istmo-runtime:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
+              echo "* Kotlin runtime: [\`dev.istmo:istmo-runtime:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
+              echo "* Kotlin plugin loader: [\`dev.istmo:istmo-plugin-loader:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
               echo "* Swift: \`.package(url: \"https://github.com/SergioRibera/istmo.git\", from: \"$VERSION\")\` (resolved from the git tag directly)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
