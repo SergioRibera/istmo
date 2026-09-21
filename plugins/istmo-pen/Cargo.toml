@@ -37,6 +37,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+
 [build-dependencies]
 istmo-build = { workspace = true }
 

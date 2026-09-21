@@ -19,13 +19,16 @@ use std::sync::{Arc, Mutex};
 use flume::{Receiver, Sender};
 use istmo_core::Runtime;
 use raw_window_handle::{HandleError, HasWindowHandle};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use raw_window_handle::RawWindowHandle;
 
 use crate::{PenError, PenEvent, PenHoverEvent};
 
 #[cfg(target_os = "windows")]
 mod windows;
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 /// Per-registered-window state kept by the publisher.
 ///
@@ -35,14 +38,22 @@ mod windows;
 /// their backends land.
 #[derive(Debug)]
 struct WindowState {
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos")),
+        allow(dead_code)
+    )]
     events_tx: Sender<PenEvent>,
     events_rx: Mutex<Option<Receiver<PenEvent>>>,
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos")),
+        allow(dead_code)
+    )]
     hover_tx: Sender<PenHoverEvent>,
     hover_rx: Mutex<Option<Receiver<PenHoverEvent>>>,
     #[cfg(target_os = "windows")]
     windows_attachment: Mutex<Option<windows::WindowAttachment>>,
+    #[cfg(target_os = "macos")]
+    macos_attachment: Mutex<Option<macos::WindowAttachment>>,
 }
 
 impl WindowState {
@@ -56,6 +67,8 @@ impl WindowState {
             hover_rx: Mutex::new(Some(hover_rx)),
             #[cfg(target_os = "windows")]
             windows_attachment: Mutex::new(None),
+            #[cfg(target_os = "macos")]
+            macos_attachment: Mutex::new(None),
         }
     }
 }
@@ -114,7 +127,16 @@ impl PenPublisher {
                 Err(poisoned) => *poisoned.into_inner() = Some(attachment),
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        if let RawWindowHandle::AppKit(appkit) = handle.as_raw() {
+            let attachment = macos::attach_view(appkit.ns_view, Arc::clone(&state))
+                .map_err(|err| PenError::Backend(err.to_string()))?;
+            match state.macos_attachment.lock() {
+                Ok(mut guard) => *guard = Some(attachment),
+                Err(poisoned) => *poisoned.into_inner() = Some(attachment),
+            }
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         let _ = handle;
 
         let mut guard = match self.windows.lock() {
@@ -144,6 +166,16 @@ impl PenPublisher {
                 };
                 if let Some(attachment) = attachment {
                     windows::detach_hwnd(attachment);
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let attachment = match _state.macos_attachment.lock() {
+                    Ok(mut guard) => guard.take(),
+                    Err(poisoned) => poisoned.into_inner().take(),
+                };
+                if let Some(attachment) = attachment {
+                    macos::detach_view(attachment);
                 }
             }
         }
