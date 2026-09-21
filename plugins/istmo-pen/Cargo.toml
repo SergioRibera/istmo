@@ -1,0 +1,59 @@
+[package]
+name = "istmo-pen"
+version = "0.1.1-alpha.1"
+description = "Stylus / pencil input plugin for the istmo framework — Apple Pencil / UITouch on iOS, MotionEvent stylus on Android, WM_POINTER on Windows, NSEvent tablet on macOS, libinput on Linux."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "stylus", "pencil", "pointer", "tablet"]
+categories = ["gui", "api-bindings"]
+links = "istmo_pen"
+
+[features]
+default = []
+codegen = ["dep:istmo-build"]
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+bincode = { workspace = true }
+flume = { workspace = true }
+pollster = { workspace = true }
+istmo-build = { workspace = true, optional = true }
+
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
+raw-window-handle = { version = "0.6", default-features = false }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Controls",
+    "Win32_UI_Input_Pointer",
+    "Win32_Graphics_Gdi",
+] }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+flume = { workspace = true }
+pollster = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_safety_doc = "allow"
+redundant_pub_crate = "allow"
