@@ -83,7 +83,63 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         }
     };
 
-    let host_def = quote! {
+    let factory_ident = format_ident!("{}Factory", trait_ident);
+    let host_def = if let Some(init_ty) = args.init.as_ref() {
+        expand_stateful_host(
+            &vis,
+            &trait_ident,
+            &factory_ident,
+            &host_ident,
+            init_ty,
+            &plugin_id,
+            root,
+            &host_arms,
+        )
+    } else {
+        expand_stateless_host(&vis, &trait_ident, &host_ident, &plugin_id, root, &host_arms)
+    };
+
+    Ok(quote! {
+        #trait_def
+
+        #error_bounds
+
+        #client_struct
+
+        #stateless_ctors
+
+        #stateful_ctors
+
+        impl #client_ident {
+            #[must_use]
+            pub const fn runtime(&self) -> &::std::sync::Arc<#root::Runtime> {
+                &self.__runtime
+            }
+
+            #[must_use]
+            pub const fn instance_id(&self) -> ::core::option::Option<#root::InstanceId> {
+                self.__instance_id
+            }
+
+            #(#client_methods)*
+        }
+
+        #client_drop
+
+        #host_def
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn expand_stateless_host(
+    vis: &syn::Visibility,
+    trait_ident: &Ident,
+    host_ident: &Ident,
+    plugin_id: &LitStr,
+    root: &Path,
+    host_arms: &[TokenStream],
+) -> TokenStream {
+    quote! {
         #vis struct #host_ident<Impl>
         where
             Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
@@ -141,6 +197,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                 payload: &'__istmo_a [u8],
                 cancel: #root::CancelToken,
             ) -> #root::DispatchFuture<'__istmo_a> {
+                let __istmo_impl = &self.inner;
                 ::std::boxed::Box::pin(async move {
                     match method {
                         #(#host_arms)*
@@ -151,37 +208,159 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                 })
             }
         }
-    };
+    }
+}
 
-    Ok(quote! {
-        #trait_def
+#[allow(clippy::too_many_arguments)]
+fn expand_stateful_host(
+    vis: &syn::Visibility,
+    trait_ident: &Ident,
+    factory_ident: &Ident,
+    host_ident: &Ident,
+    init_ty: &Type,
+    plugin_id: &LitStr,
+    root: &Path,
+    host_arms: &[TokenStream],
+) -> TokenStream {
+    quote! {
+        /// Factory that constructs a per-instance implementation of the
+        /// plugin trait from the wire-decoded configuration payload.
+        #vis trait #factory_ident: ::core::marker::Send + ::core::marker::Sync + 'static {
+            /// Concrete per-instance trait implementation this factory
+            /// yields. The associated type keeps the plugin dispatcher
+            /// free of trait objects, which the plugin trait's
+            /// `impl Future` return types would otherwise disallow.
+            type Instance: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static;
 
-        #error_bounds
-
-        #client_struct
-
-        #stateless_ctors
-
-        #stateful_ctors
-
-        impl #client_ident {
-            #[must_use]
-            pub const fn runtime(&self) -> &::std::sync::Arc<#root::Runtime> {
-                &self.__runtime
-            }
-
-            #[must_use]
-            pub const fn instance_id(&self) -> ::core::option::Option<#root::InstanceId> {
-                self.__instance_id
-            }
-
-            #(#client_methods)*
+            /// Build a new instance for a `CreateInstance` frame.
+            fn create(&self, config: #init_ty) -> Self::Instance;
         }
 
-        #client_drop
+        #vis struct #host_ident<F>
+        where
+            F: #factory_ident,
+        {
+            factory: F,
+            instances: ::std::sync::Mutex<
+                ::std::collections::HashMap<
+                    #root::InstanceId,
+                    ::std::sync::Arc<<F as #factory_ident>::Instance>,
+                >,
+            >,
+            next_instance: ::std::sync::atomic::AtomicU64,
+        }
 
-        #host_def
-    })
+        impl<F> #host_ident<F>
+        where
+            F: #factory_ident,
+        {
+            pub fn new(factory: F) -> Self {
+                Self {
+                    factory,
+                    instances: ::std::sync::Mutex::new(::std::collections::HashMap::new()),
+                    next_instance: ::std::sync::atomic::AtomicU64::new(1),
+                }
+            }
+
+            #[must_use]
+            pub const fn factory(&self) -> &F {
+                &self.factory
+            }
+        }
+
+        impl<F> ::core::fmt::Debug for #host_ident<F>
+        where
+            F: #factory_ident,
+        {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                f.debug_struct(stringify!(#host_ident)).finish_non_exhaustive()
+            }
+        }
+
+        impl<F> #root::Plugin for #host_ident<F>
+        where
+            F: #factory_ident,
+        {
+            const PLUGIN_ID: &'static str = #plugin_id;
+        }
+
+        impl<F> #root::Dispatch for #host_ident<F>
+        where
+            F: #factory_ident,
+        {
+            fn plugin_id(&self) -> &'static str {
+                #plugin_id
+            }
+
+            fn create_instance<'__istmo_a>(
+                &'__istmo_a self,
+                config_payload: &'__istmo_a [u8],
+                _cancel: #root::CancelToken,
+            ) -> #root::DispatchFuture<'__istmo_a> {
+                ::std::boxed::Box::pin(async move {
+                    let (config, _) = #root::codec::decode::<#init_ty>(config_payload)
+                        .map_err(#root::DispatchError::Decode)?;
+                    let instance = ::std::sync::Arc::new(self.factory.create(config));
+                    let id = #root::InstanceId::new(
+                        self.next_instance
+                            .fetch_add(1, ::std::sync::atomic::Ordering::Relaxed),
+                    );
+                    {
+                        let mut guard = match self.instances.lock() {
+                            ::core::result::Result::Ok(g) => g,
+                            ::core::result::Result::Err(p) => p.into_inner(),
+                        };
+                        guard.insert(id, instance);
+                    }
+                    let bytes = #root::codec::encode(&id)
+                        .map_err(#root::DispatchError::Encode)?;
+                    ::core::result::Result::Ok(#root::Outcome::Ok(bytes))
+                })
+            }
+
+            fn destroy_instance(&self, instance_id: #root::InstanceId) {
+                let mut guard = match self.instances.lock() {
+                    ::core::result::Result::Ok(g) => g,
+                    ::core::result::Result::Err(p) => p.into_inner(),
+                };
+                guard.remove(&instance_id);
+            }
+
+            fn dispatch<'__istmo_a>(
+                &'__istmo_a self,
+                instance_id: ::core::option::Option<#root::InstanceId>,
+                method: &'__istmo_a str,
+                payload: &'__istmo_a [u8],
+                cancel: #root::CancelToken,
+            ) -> #root::DispatchFuture<'__istmo_a> {
+                let iid = instance_id;
+                let lookup = {
+                    let guard = match self.instances.lock() {
+                        ::core::result::Result::Ok(g) => g,
+                        ::core::result::Result::Err(p) => p.into_inner(),
+                    };
+                    iid.and_then(|id| guard.get(&id).map(::std::sync::Arc::clone))
+                };
+                ::std::boxed::Box::pin(async move {
+                    let __istmo_impl = lookup.ok_or_else(|| {
+                        #root::DispatchError::UnknownMethod(
+                            ::std::format!(
+                                "{} requires a known instance id (got {:?})",
+                                method,
+                                iid,
+                            ),
+                        )
+                    })?;
+                    match method {
+                        #(#host_arms)*
+                        other => ::core::result::Result::Err(
+                            #root::DispatchError::UnknownMethod(other.to_owned())
+                        ),
+                    }
+                })
+            }
+        }
+    }
 }
 
 fn add_send_bound_to_async_methods(trait_def: &mut ItemTrait) {
@@ -534,7 +713,7 @@ fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream
                 #destructure
                 let __istmo_source: ::flume::Receiver<#item_ty> = {
                     #(#cancel_bindings)*
-                    self.inner.#name(#(#call_args),*)
+                    __istmo_impl.#name(#(#call_args),*)
                 };
                 let (__istmo_etx, __istmo_erx) = ::flume::unbounded::<::std::vec::Vec<u8>>();
                 ::std::thread::spawn(move || {
@@ -568,7 +747,7 @@ fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream
     let call_expr = quote! {
         {
             #(#cancel_bindings)*
-            self.inner.#name(#(#call_args),*).await
+            __istmo_impl.#name(#(#call_args),*).await
         }
     };
 

@@ -1,41 +1,41 @@
-//! Rust-side host wiring that turns a [`PenPublisher`] into a plugin
-//! dispatcher: `PenBackend` implements the [`Pen`] trait for one
-//! registered window, and [`PenDesktopHost`] fans
-//! [`Frame::CreateInstance`](istmo_core::Frame) frames out into fresh
-//! per-window backends.
+//! Desktop-side factory that pairs the macro-emitted [`PenHost`] with
+//! a [`PenPublisher`]. Each `CreateInstance` frame the runtime routes
+//! to this host produces a fresh [`PenBackend`] whose flume receivers
+//! are already subscribed to the matching per-window channel on the
+//! publisher.
 //!
 //! Wiring pattern for a desktop app:
 //!
 //! ```ignore
-//! use istmo_pen::{PenClient, PenConfig, backend::PenDesktopHost, publisher::PenPublisher};
 //! use istmo::runtime;
+//! use istmo_pen::{
+//!     PenClient, PenConfig, PenHost, backend::PenPublisherFactory,
+//!     publisher::PenPublisher,
+//! };
 //!
 //! let publisher = PenPublisher::install(&runtime);
 //! publisher.register_window(1, &window)?;
 //!
 //! let rt = runtime! {
 //!     plugins: [PenClient],
-//!     hosts: [PenDesktopHost::new(publisher.clone())],
+//!     hosts: [PenHost::new(PenPublisherFactory::new(publisher))],
 //! };
 //! let client = PenClient::from_runtime_with(&rt, PenConfig::new(1)).await?;
-//! let events = client.events()?;      // Rust-hosted stream, no wire crossing
+//! let events = client.events()?;
 //! ```
 //!
 //! Only compiled on desktop targets (`windows`, `linux`, `macos`);
 //! mobile plugins are hosted by their language-side backends.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use flume::Receiver;
-use istmo_core::{
-    CancelToken, Dispatch, DispatchError, DispatchFuture, InstanceId, Outcome, Plugin, codec,
-};
+use istmo_core::CancelToken;
 
 use crate::publisher::PenPublisher;
 use crate::{
-    PEN_PLUGIN_ID, Pen, PenCapabilities, PenConfig, PenError, PenEvent, PenHoverEvent,
+    Pen, PenCapabilities, PenConfig, PenError, PenEvent, PenFactory, PenHoverEvent,
 };
 
 /// Per-instance [`Pen`] implementation. Holds the [`Receiver`] halves
@@ -121,9 +121,6 @@ const fn platform_capabilities() -> PenCapabilities {
             target_os = "linux"
         )),
         tilt: cfg!(any(target_os = "windows", target_os = "macos")),
-        // `NSEvent` does not expose azimuth/altitude separately — only
-        // an `(x, y)` tilt normalized to `-1..1`. The publisher fills
-        // `azimuth`/`altitude` as zero and reports them unavailable.
         azimuth: false,
         altitude: false,
         twist: cfg!(any(target_os = "windows", target_os = "macos")),
@@ -136,157 +133,32 @@ const fn platform_capabilities() -> PenCapabilities {
     }
 }
 
-/// Hand-written [`Dispatch`] implementation for the [`Pen`] plugin.
-///
-/// Rust-hosted stateful plugins are not modelled by the current
-/// [`#[plugin]`](istmo_macros::plugin) macro (which emits a
-/// single-instance `PenHost<Impl>`); this type routes
-/// [`Frame::CreateInstance`](istmo_core::Frame) into a per-window
-/// [`PenBackend`] and multiplexes subsequent method calls by
-/// `instance_id`.
+/// Factory that constructs a [`PenBackend`] bound to a shared
+/// [`PenPublisher`]. Register with the macro-emitted
+/// [`PenHost`](crate::PenHost) via `PenHost::new(PenPublisherFactory::new(publisher))`.
 #[derive(Debug)]
-pub struct PenDesktopHost {
+pub struct PenPublisherFactory {
     publisher: Arc<PenPublisher>,
-    instances: Mutex<HashMap<InstanceId, Arc<PenBackend>>>,
-    next_instance: AtomicU64,
 }
 
-impl PenDesktopHost {
-    /// Build a host bound to `publisher`. Register it on the runtime
-    /// via [`Runtime::register_host`](istmo_core::Runtime::register_host)
-    /// or through the `hosts:` section of `istmo::runtime!`.
+impl PenPublisherFactory {
     #[must_use]
     pub fn new(publisher: Arc<PenPublisher>) -> Self {
-        Self {
-            publisher,
-            instances: Mutex::new(HashMap::new()),
-            next_instance: AtomicU64::new(1),
-        }
+        Self { publisher }
     }
 
-    fn allocate_instance_id(&self) -> InstanceId {
-        InstanceId::new(self.next_instance.fetch_add(1, Ordering::Relaxed))
-    }
-
-    fn store_backend(&self, id: InstanceId, backend: Arc<PenBackend>) {
-        let mut guard = match self.instances.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.insert(id, backend);
-    }
-
-    fn lookup(&self, id: InstanceId) -> Option<Arc<PenBackend>> {
-        let guard = match self.instances.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.get(&id).cloned()
-    }
-
-    fn remove(&self, id: InstanceId) -> Option<Arc<PenBackend>> {
-        let mut guard = match self.instances.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.remove(&id)
+    #[must_use]
+    pub fn publisher(&self) -> &Arc<PenPublisher> {
+        &self.publisher
     }
 }
 
-impl Plugin for PenDesktopHost {
-    const PLUGIN_ID: &'static str = PEN_PLUGIN_ID;
-}
+impl PenFactory for PenPublisherFactory {
+    type Instance = PenBackend;
 
-impl Dispatch for PenDesktopHost {
-    fn plugin_id(&self) -> &'static str {
-        PEN_PLUGIN_ID
-    }
-
-    fn create_instance<'a>(
-        &'a self,
-        config_payload: &'a [u8],
-        _cancel: CancelToken,
-    ) -> DispatchFuture<'a> {
-        Box::pin(async move {
-            let (config, _) = codec::decode::<PenConfig>(config_payload)
-                .map_err(DispatchError::Decode)?;
-            let events_rx = self.publisher.subscribe_events(config.window_id);
-            let hover_rx = self.publisher.subscribe_hover(config.window_id);
-            let backend = Arc::new(PenBackend::new(config.window_id, events_rx, hover_rx));
-            let instance_id = self.allocate_instance_id();
-            self.store_backend(instance_id, backend);
-            let bytes = codec::encode(&instance_id).map_err(DispatchError::Encode)?;
-            Ok(Outcome::Ok(bytes))
-        })
-    }
-
-    fn destroy_instance(&self, instance_id: InstanceId) {
-        self.remove(instance_id);
-    }
-
-    fn dispatch<'a>(
-        &'a self,
-        instance_id: Option<InstanceId>,
-        method: &'a str,
-        payload: &'a [u8],
-        cancel: CancelToken,
-    ) -> DispatchFuture<'a> {
-        Box::pin(async move {
-            let instance_id = instance_id.ok_or_else(|| {
-                DispatchError::UnknownMethod(format!("{method} requires an instance id"))
-            })?;
-            let backend = self
-                .lookup(instance_id)
-                .ok_or_else(|| DispatchError::UnknownMethod(format!("unknown instance {instance_id:?}")))?;
-            match method {
-                "events" => Ok(open_stream::<PenEvent>(backend.events())),
-                "hover" => Ok(open_stream::<PenHoverEvent>(backend.hover())),
-                "capabilities" => {
-                    let result = backend.capabilities().await;
-                    encode_domain_result(result)
-                }
-                "set_prediction_enabled" => {
-                    let (args, _) = codec::decode::<(bool,)>(payload)
-                        .map_err(DispatchError::Decode)?;
-                    let (enabled,) = args;
-                    let result = backend.set_prediction_enabled(cancel, enabled).await;
-                    encode_domain_result(result)
-                }
-                other => Err(DispatchError::UnknownMethod(other.to_owned())),
-            }
-        })
+    fn create(&self, config: PenConfig) -> PenBackend {
+        let events_rx = self.publisher.subscribe_events(config.window_id);
+        let hover_rx = self.publisher.subscribe_hover(config.window_id);
+        PenBackend::new(config.window_id, events_rx, hover_rx)
     }
 }
-
-fn open_stream<T>(rx: Receiver<T>) -> Outcome
-where
-    T: bincode::Encode + Send + 'static,
-{
-    let (etx, erx) = flume::unbounded::<Vec<u8>>();
-    std::thread::spawn(move || {
-        while let Ok(item) = rx.recv() {
-            let Ok(bytes) = codec::encode(&item) else {
-                break;
-            };
-            if etx.send(bytes).is_err() {
-                break;
-            }
-        }
-    });
-    Outcome::StreamOpened(erx)
-}
-
-fn encode_domain_result<T>(result: Result<T, PenError>) -> Result<Outcome, DispatchError>
-where
-    T: bincode::Encode,
-{
-    match result {
-        Ok(value) => codec::encode(&value)
-            .map(Outcome::Ok)
-            .map_err(DispatchError::Encode),
-        Err(err) => codec::encode(&err)
-            .map(Outcome::DomainError)
-            .map_err(DispatchError::Encode),
-    }
-}
-

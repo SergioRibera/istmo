@@ -2,8 +2,8 @@
 
 use istmo_core::Runtime;
 use istmo_pen::{
-    PEN_PLUGIN_ID, PenClient, PenConfig, PenEvent, PenHoverEvent, PenSample, PenToolKind,
-    backend::PenDesktopHost, publisher::PenPublisher,
+    PEN_PLUGIN_ID, PenClient, PenConfig, PenEvent, PenHost, PenHoverEvent, PenSample, PenToolKind,
+    backend::PenPublisherFactory, publisher::PenPublisher,
 };
 use raw_window_handle::{
     HandleError, HasWindowHandle, RawWindowHandle, WindowHandle, XlibWindowHandle,
@@ -35,7 +35,7 @@ fn create_instance_and_open_streams_via_hosted_dispatch() {
         .register_window(1, MockHandle)
         .expect("register_window");
 
-    rt.register_host(PenDesktopHost::new(publisher));
+    rt.register_host(PenHost::new(PenPublisherFactory::new(publisher)));
 
     let client = pollster::block_on(PenClient::from_runtime_with(&rt, PenConfig::new(1)))
         .expect("from_runtime_with");
@@ -61,7 +61,7 @@ fn capabilities_round_trip_through_hosted_dispatch() {
         .register_window(7, MockHandle)
         .expect("register_window");
 
-    rt.register_host(PenDesktopHost::new(publisher));
+    rt.register_host(PenHost::new(PenPublisherFactory::new(publisher)));
 
     let client = pollster::block_on(PenClient::from_runtime_with(&rt, PenConfig::new(7)))
         .expect("from_runtime_with");
@@ -103,7 +103,7 @@ fn push_event_delivers_to_registered_window() {
     publisher
         .register_window(11, MockHandle)
         .expect("register_window");
-    rt.register_host(PenDesktopHost::new(publisher.clone()));
+    rt.register_host(PenHost::new(PenPublisherFactory::new(publisher.clone())));
 
     let client = pollster::block_on(PenClient::from_runtime_with(&rt, PenConfig::new(11)))
         .expect("from_runtime_with");
@@ -137,7 +137,7 @@ fn push_hover_delivers_to_registered_window() {
     publisher
         .register_window(12, MockHandle)
         .expect("register_window");
-    rt.register_host(PenDesktopHost::new(publisher.clone()));
+    rt.register_host(PenHost::new(PenPublisherFactory::new(publisher.clone())));
 
     let client = pollster::block_on(PenClient::from_runtime_with(&rt, PenConfig::new(12)))
         .expect("from_runtime_with");
@@ -174,7 +174,7 @@ fn set_prediction_enabled_returns_ok_on_desktop() {
         .register_window(9, MockHandle)
         .expect("register_window");
 
-    rt.register_host(PenDesktopHost::new(publisher));
+    rt.register_host(PenHost::new(PenPublisherFactory::new(publisher)));
 
     let client = pollster::block_on(PenClient::from_runtime_with(&rt, PenConfig::new(9)))
         .expect("from_runtime_with");
