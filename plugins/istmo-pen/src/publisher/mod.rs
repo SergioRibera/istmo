@@ -30,6 +30,9 @@ mod windows;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(target_os = "linux")]
+mod linux;
+
 /// Per-registered-window state kept by the publisher.
 ///
 /// [`RawWindowHandle`] is not `Send + Sync` (variants carry platform
@@ -210,6 +213,28 @@ impl PenPublisher {
     #[must_use]
     pub fn runtime(&self) -> &Arc<Runtime> {
         &self.runtime
+    }
+
+    /// Manually publish a [`PenEvent`] into a registered window's event
+    /// stream. Escape hatch for apps that source stylus samples from
+    /// somewhere the built-in backends do not cover — Wayland
+    /// tablet-v2, GTK / Qt event pipes, custom compositors, or unit
+    /// tests. Returns `true` if the window is registered and the event
+    /// was queued; `false` if `id` maps to nothing.
+    pub fn push_event(&self, id: u64, event: PenEvent) -> bool {
+        let Some(state) = self.state_for(id) else {
+            return false;
+        };
+        state.events_tx.send(event).is_ok()
+    }
+
+    /// Manually publish a [`PenHoverEvent`]. Symmetric with
+    /// [`Self::push_event`].
+    pub fn push_hover(&self, id: u64, event: PenHoverEvent) -> bool {
+        let Some(state) = self.state_for(id) else {
+            return false;
+        };
+        state.hover_tx.send(event).is_ok()
     }
 
     fn state_for(&self, id: u64) -> Option<Arc<WindowState>> {
