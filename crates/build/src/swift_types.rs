@@ -92,8 +92,13 @@ fn write_enum(out: &mut String, e: &EnumDef) {
             if v.payload.is_empty() {
                 let _ = writeln!(out, "    case {case_name}");
             } else {
-                let ty = v.payload[0].to_swift();
-                let _ = writeln!(out, "    case {case_name}({ty})");
+                let tys = v
+                    .payload
+                    .iter()
+                    .map(TypeRef::to_swift)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(out, "    case {case_name}({tys})");
             }
         }
     }
@@ -222,11 +227,30 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
         let _ = writeln!(out, "        switch disc {{");
         for (i, v) in e.variants.iter().enumerate() {
             let case_name = to_swift_case(&v.name);
-            if v.payload.is_empty() {
-                let _ = writeln!(out, "        case {i}: return .{case_name}");
-            } else {
-                let expr = read_expr(&v.payload[0]);
-                let _ = writeln!(out, "        case {i}: return .{case_name}({expr})");
+            match v.payload.len() {
+                0 => {
+                    let _ = writeln!(out, "        case {i}: return .{case_name}");
+                }
+                1 => {
+                    let expr = read_expr(&v.payload[0]);
+                    let _ = writeln!(out, "        case {i}: return .{case_name}({expr})");
+                }
+                _ => {
+                    let _ = writeln!(out, "        case {i}:");
+                    let bindings: Vec<String> = v
+                        .payload
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, ty)| {
+                            let name = format!("f{idx}");
+                            let expr = read_expr(ty);
+                            let _ = writeln!(out, "            let {name} = {expr}");
+                            name
+                        })
+                        .collect();
+                    let args = bindings.join(", ");
+                    let _ = writeln!(out, "            return .{case_name}({args})");
+                }
             }
         }
         let _ = writeln!(
@@ -259,13 +283,36 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
         let _ = writeln!(out, "        switch value {{");
         for (i, v) in e.variants.iter().enumerate() {
             let case_name = to_swift_case(&v.name);
-            if v.payload.is_empty() {
-                let _ = writeln!(out, "        case .{case_name}:");
-                let _ = writeln!(out, "            Bincode.writeVarintU32(&out, {i})");
-            } else {
-                let _ = writeln!(out, "        case .{case_name}(let payload):");
-                let _ = writeln!(out, "            Bincode.writeVarintU32(&out, {i})");
-                write_write_field(out, "            ", "payload", &v.payload[0], "out");
+            match v.payload.len() {
+                0 => {
+                    let _ = writeln!(out, "        case .{case_name}:");
+                    let _ = writeln!(out, "            Bincode.writeVarintU32(&out, {i})");
+                }
+                1 => {
+                    let _ = writeln!(out, "        case .{case_name}(let payload):");
+                    let _ = writeln!(out, "            Bincode.writeVarintU32(&out, {i})");
+                    write_write_field(out, "            ", "payload", &v.payload[0], "out");
+                }
+                _ => {
+                    let bindings = v
+                        .payload
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, _)| format!("let f{idx}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let _ = writeln!(out, "        case .{case_name}({bindings}):");
+                    let _ = writeln!(out, "            Bincode.writeVarintU32(&out, {i})");
+                    for (idx, ty) in v.payload.iter().enumerate() {
+                        write_write_field(
+                            out,
+                            "            ",
+                            &format!("f{idx}"),
+                            ty,
+                            "out",
+                        );
+                    }
+                }
             }
         }
         let _ = writeln!(out, "        }}");

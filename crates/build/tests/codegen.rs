@@ -1376,3 +1376,96 @@ fn live_activity_swift_client_matches_golden() {
     );
 }
 
+fn multi_payload_contract() -> Contract {
+    Contract {
+        plugin_id: "com.example.multi".to_owned(),
+        type_name: "Multi".to_owned(),
+        methods: vec![],
+        init: None,
+        types: vec![TypeDef::Enum(EnumDef {
+            name: "Frame".to_owned(),
+            variants: vec![
+                EnumVariant {
+                    name: "Empty".to_owned(),
+                    payload: vec![],
+                },
+                EnumVariant {
+                    name: "One".to_owned(),
+                    payload: vec![TypeRef::U32],
+                },
+                EnumVariant {
+                    name: "Three".to_owned(),
+                    payload: vec![
+                        TypeRef::U32,
+                        TypeRef::String,
+                        TypeRef::Vec(Box::new(TypeRef::Bool)),
+                    ],
+                },
+            ],
+        })],
+    }
+}
+
+#[test]
+fn multi_payload_kotlin_types_emit_positional_fields() {
+    let out = generate_kotlin_types(&multi_payload_contract());
+    assert!(
+        out.contains("object Empty : Frame()"),
+        "unit variant broken: {out}",
+    );
+    assert!(
+        out.contains("data class One(val value: UInt) : Frame()"),
+        "single-payload variant broken: {out}",
+    );
+    assert!(
+        out.contains("data class Three(val f0: UInt, val f1: String, val f2: List<Boolean>) : Frame()"),
+        "multi-payload variant broken: {out}",
+    );
+}
+
+#[test]
+fn multi_payload_kotlin_codecs_read_write_all_fields() {
+    let out = generate_kotlin_codecs(&multi_payload_contract());
+    assert!(out.contains("val d_f0"), "reads first field: {out}");
+    assert!(out.contains("val d_f1"), "reads second field: {out}");
+    assert!(out.contains("val d_f2"), "reads third field: {out}");
+    assert!(
+        out.contains("Frame.Three(f0, f1, f2)"),
+        "reconstructs multi-payload: {out}",
+    );
+    assert!(
+        out.contains("is Frame.Three ->"),
+        "write branch present: {out}",
+    );
+    assert!(out.contains("value.f0"), "writes first field: {out}");
+    assert!(out.contains("value.f1"), "writes second field: {out}");
+    assert!(out.contains("value.f2"), "writes third field: {out}");
+}
+
+#[test]
+fn multi_payload_swift_types_emit_positional_associated_values() {
+    let out = generate_swift_types(&multi_payload_contract());
+    assert!(out.contains("case empty"), "unit variant: {out}");
+    assert!(out.contains("case one(UInt32)"), "single-payload: {out}");
+    assert!(
+        out.contains("case three(UInt32, String, [Bool])"),
+        "multi-payload: {out}",
+    );
+}
+
+#[test]
+fn multi_payload_swift_codecs_read_write_all_fields() {
+    let out = generate_swift_codecs(&multi_payload_contract());
+    assert!(out.contains("let f0 ="), "reads first field: {out}");
+    assert!(out.contains("let f1 ="), "reads second field: {out}");
+    assert!(out.contains("let f2 ="), "reads third field: {out}");
+    assert!(
+        out.contains("return .three(f0, f1, f2)"),
+        "reconstructs multi-payload: {out}",
+    );
+    assert!(
+        out.contains("case .three(let f0, let f1, let f2):"),
+        "write pattern binds all fields: {out}",
+    );
+}
+

@@ -66,16 +66,32 @@ fn write_enum(out: &mut String, e: &EnumDef) {
     } else {
         let _ = writeln!(out, "sealed class {} {{", e.name);
         for v in &e.variants {
-            if v.payload.is_empty() {
-                let _ = writeln!(out, "    object {} : {}()", v.name, e.name);
-            } else {
-
-                let ty = v.payload[0].to_kotlin();
-                let _ = writeln!(
-                    out,
-                    "    data class {}(val value: {}) : {}()",
-                    v.name, ty, e.name,
-                );
+            match v.payload.len() {
+                0 => {
+                    let _ = writeln!(out, "    object {} : {}()", v.name, e.name);
+                }
+                1 => {
+                    let ty = v.payload[0].to_kotlin();
+                    let _ = writeln!(
+                        out,
+                        "    data class {}(val value: {}) : {}()",
+                        v.name, ty, e.name,
+                    );
+                }
+                _ => {
+                    let fields = v
+                        .payload
+                        .iter()
+                        .enumerate()
+                        .map(|(i, ty)| format!("val f{i}: {}", ty.to_kotlin()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let _ = writeln!(
+                        out,
+                        "    data class {}({fields}) : {}()",
+                        v.name, e.name,
+                    );
+                }
             }
         }
     }
@@ -135,21 +151,44 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
         let _ = writeln!(out, "        cursor = disc.consumed");
         let _ = writeln!(out, "        return when (disc.value.toInt()) {{");
         for (i, v) in e.variants.iter().enumerate() {
-            if v.payload.is_empty() {
-                let _ = writeln!(
-                    out,
-                    "            {i} -> Bincode.Decoded({}.{}, cursor)",
-                    e.name, v.name,
-                );
-            } else {
-                let _ = writeln!(out, "            {i} -> {{");
-                write_read_bindings_for(out, "                ", "inner", &v.payload[0]);
-                let _ = writeln!(
-                    out,
-                    "                Bincode.Decoded({}.{}(inner) as {}, cursor)",
-                    e.name, v.name, e.name,
-                );
-                let _ = writeln!(out, "            }}");
+            match v.payload.len() {
+                0 => {
+                    let _ = writeln!(
+                        out,
+                        "            {i} -> Bincode.Decoded({}.{}, cursor)",
+                        e.name, v.name,
+                    );
+                }
+                1 => {
+                    let _ = writeln!(out, "            {i} -> {{");
+                    write_read_bindings_for(out, "                ", "inner", &v.payload[0]);
+                    let _ = writeln!(
+                        out,
+                        "                Bincode.Decoded({}.{}(inner) as {}, cursor)",
+                        e.name, v.name, e.name,
+                    );
+                    let _ = writeln!(out, "            }}");
+                }
+                _ => {
+                    let _ = writeln!(out, "            {i} -> {{");
+                    let bindings: Vec<String> = v
+                        .payload
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, ty)| {
+                            let name = format!("f{idx}");
+                            write_read_bindings_for(out, "                ", &name, ty);
+                            name
+                        })
+                        .collect();
+                    let args = bindings.join(", ");
+                    let _ = writeln!(
+                        out,
+                        "                Bincode.Decoded({}.{}({args}) as {}, cursor)",
+                        e.name, v.name, e.name,
+                    );
+                    let _ = writeln!(out, "            }}");
+                }
             }
         }
         let _ = writeln!(
@@ -183,20 +222,39 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
     if has_payload {
         let _ = writeln!(out, "        when (value) {{");
         for (i, v) in e.variants.iter().enumerate() {
-            if v.payload.is_empty() {
-                let _ = writeln!(
-                    out,
-                    "            {}.{} -> Bincode.writeEnumDiscriminant(out, {i})",
-                    e.name, v.name,
-                );
-            } else {
-                let _ = writeln!(out, "            is {}.{} -> {{", e.name, v.name);
-                let _ = writeln!(
-                    out,
-                    "                Bincode.writeEnumDiscriminant(out, {i})"
-                );
-                write_write_field(out, "                ", "value.value", &v.payload[0]);
-                let _ = writeln!(out, "            }}");
+            match v.payload.len() {
+                0 => {
+                    let _ = writeln!(
+                        out,
+                        "            {}.{} -> Bincode.writeEnumDiscriminant(out, {i})",
+                        e.name, v.name,
+                    );
+                }
+                1 => {
+                    let _ = writeln!(out, "            is {}.{} -> {{", e.name, v.name);
+                    let _ = writeln!(
+                        out,
+                        "                Bincode.writeEnumDiscriminant(out, {i})"
+                    );
+                    write_write_field(out, "                ", "value.value", &v.payload[0]);
+                    let _ = writeln!(out, "            }}");
+                }
+                _ => {
+                    let _ = writeln!(out, "            is {}.{} -> {{", e.name, v.name);
+                    let _ = writeln!(
+                        out,
+                        "                Bincode.writeEnumDiscriminant(out, {i})"
+                    );
+                    for (idx, ty) in v.payload.iter().enumerate() {
+                        write_write_field(
+                            out,
+                            "                ",
+                            &format!("value.f{idx}"),
+                            ty,
+                        );
+                    }
+                    let _ = writeln!(out, "            }}");
+                }
             }
         }
         let _ = writeln!(out, "        }}");
