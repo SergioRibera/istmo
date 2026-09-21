@@ -16,7 +16,6 @@ links = "istmo_pen"
 [features]
 default = []
 codegen = ["dep:istmo-build"]
-libinput = ["dep:input", "dep:libc"]
 
 [dependencies]
 istmo-core = { workspace = true }
@@ -43,8 +42,8 @@ objc2 = "0.6"
 block2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-input = { version = "0.9", optional = true }
-libc = { version = "0.2", optional = true }
+input = "0.9"
+libc = "0.2"
 
 [build-dependencies]
 istmo-build = { workspace = true }

@@ -16,10 +16,6 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 name = "pen-demo"
 path = "src/main.rs"
 
-[features]
-default = []
-libinput = ["istmo-pen/libinput"]
-
 [dependencies]
 istmo = { path = "../.." }
 istmo-core = { workspace = true }

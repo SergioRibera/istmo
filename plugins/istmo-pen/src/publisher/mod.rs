@@ -229,8 +229,6 @@ impl PenPublisher {
     }
 
     /// Install the `libinput`-backed sample source on this publisher.
-    /// Requires the `libinput` Cargo feature to be enabled on the
-    /// `istmo-pen` crate.
     ///
     /// The backend spawns a single background thread that polls a
     /// process-wide `libinput` context (`seat0` via udev) and
@@ -243,7 +241,11 @@ impl PenPublisher {
     /// # Errors
     /// Any string returned by the underlying `libinput` setup — a
     /// missing seat, insufficient permissions, or unavailable udev.
-    #[cfg(all(target_os = "linux", feature = "libinput"))]
+    /// The escape hatch [`Self::push_event`] / [`Self::push_hover`]
+    /// remains usable regardless: apps can catch the error and fall
+    /// back to sourcing samples themselves (e.g. from a compositor
+    /// tablet protocol).
+    #[cfg(target_os = "linux")]
     pub fn install_libinput(self: &Arc<Self>) -> Result<(), String> {
         linux::install_libinput(self)
     }

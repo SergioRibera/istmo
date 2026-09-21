@@ -1,19 +1,19 @@
 {
-  description = "istmo — dev shell for desktop (egui) builds";
+  description = "istmo — dev shell for desktop (egui / winit) builds";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { nixpkgs, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
 
         # Libraries needed at both link time and runtime for the desktop
-        # eframe demos (glow backend, Wayland + X11 support, wgpu on the
-        # mobile crate's dev builds).
+        # eframe / winit demos (glow backend, Wayland + X11 support, wgpu
+        # on the mobile crate's dev builds).
         runtimeLibs = with pkgs; [
           libGL
           libxkbcommon
@@ -24,7 +24,6 @@
           libxcursor
           libxi
           libxrandr
-          # libinput backend for the istmo-pen plugin (feature = "libinput").
           libinput
           udev
         ];
@@ -45,8 +44,9 @@
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
 
           shellHook = ''
-            echo "istmo devshell — desktop deps loaded"
+            echo "istmo devshell — desktop deps loaded (libinput + wayland + x11)"
             echo "  cargo run -p data-store-demo"
+            echo "  cargo run -p pen-demo         # stylus/pencil sample logger"
           '';
         };
       });

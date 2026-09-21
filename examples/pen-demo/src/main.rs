@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.declare_plugin(istmo_pen::PEN_PLUGIN_ID);
 
     let publisher = PenPublisher::install(&runtime);
-    #[cfg(all(target_os = "linux", feature = "libinput"))]
+    #[cfg(target_os = "linux")]
     {
         match publisher.install_libinput() {
             Ok(()) => log::info!("libinput backend installed"),

@@ -748,6 +748,27 @@ pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
     emit_manifest(&manifest);
     let ids: Vec<&str> = manifest.plugin_ids().collect();
     println!("cargo:PLUGIN_IDS={}", ids.join(","));
+
+    // Advertise the plugin crate's `native/<platform>/` directories so
+    // consuming apps' `emit_app` can copy the reference Kotlin / Swift
+    // sources into the app tree without hand-copying them. Missing
+    // directories are silently skipped — mobile-only plugins ship
+    // Android + iOS files, native-hosted plugins may ship all three.
+    let crate_root = path.parent().unwrap_or_else(|| Path::new("."));
+    let native_root = crate_root.join("native");
+    for (platform, env_suffix) in [
+        ("android", "ANDROID"),
+        ("ios", "IOS"),
+        ("macos", "MACOS"),
+    ] {
+        let dir = native_root.join(platform);
+        if dir.is_dir() {
+            let display = fs::canonicalize(&dir).unwrap_or(dir);
+            println!("cargo:rerun-if-changed={}", display.display());
+            println!("cargo:ISTMO_NATIVE_{env_suffix}={}", display.display());
+        }
+    }
+
     manifest
 }
 
