@@ -34,7 +34,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::WindowState;
-use crate::{PenEvent, PenHoverEvent, PenSample, PenToolKind};
+use crate::{PenButtonChange, PenEvent, PenHoverEvent, PenMove, PenSample, PenToolKind};
 
 const SUBCLASS_ID: usize = 0x1570_0001;
 
@@ -262,10 +262,11 @@ fn handle_pen_message(hwnd: HWND, msg: u32, pointer_id: u32, entry: &Entry) {
         WM_POINTERUPDATE => {
             if sample.pressure > 0.0 {
                 let coalesced = read_history(hwnd, pointer_id, entry);
-                let _ = entry
-                    .state
-                    .events_tx
-                    .send(PenEvent::Move(sample, coalesced, Vec::new()));
+                let _ = entry.state.events_tx.send(PenEvent::Move(PenMove {
+                    sample,
+                    coalesced,
+                    predicted: Vec::new(),
+                }));
             } else {
                 let _ = entry.state.hover_tx.send(PenHoverEvent::Move(sample));
             }

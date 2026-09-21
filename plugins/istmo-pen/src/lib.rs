@@ -133,35 +133,52 @@ pub struct PenSample {
     pub buttons: u32,
 }
 
+/// Extra payload for [`PenEvent::Move`]. Wrapped in a struct because
+/// the current codegen (`istmo-build::kotlin_types`) models
+/// single-payload variants only — multi-tuple variants would truncate
+/// on the Kotlin / Swift side.
+#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct PenMove {
+    /// Live sample this move event reports.
+    pub sample: PenSample,
+    /// High-rate intermediate samples the platform captured between
+    /// the previous [`PenEvent::Move`] and this one (Android
+    /// `getHistorical*`, iOS `coalescedTouches`, Windows
+    /// `GetPointerPenInfoHistory`). Empty when unsupported.
+    pub coalesced: Vec<PenSample>,
+    /// Platform-forecast future samples when prediction is enabled
+    /// (iOS `predictedTouches`). Empty on every other platform.
+    pub predicted: Vec<PenSample>,
+}
+
+/// Extra payload for [`PenEvent::ButtonChanged`].
+#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct PenButtonChange {
+    /// Sample observed at the button transition.
+    pub sample: PenSample,
+    /// Bitmap of buttons whose state flipped since the previous
+    /// sample; the new pressed set lives on `sample.buttons`.
+    pub changed: u32,
+}
+
 /// A contact-phase event fired while the tool is touching the surface.
-///
-/// The tuple layouts intentionally avoid named-field variants because
-/// the wire schema is order-based and the surrounding codegen does not
-/// yet model struct-like variants.
 #[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub enum PenEvent {
-    /// Pen made contact with the surface. Payload: the sample at
-    /// touch-down.
+    /// Pen made contact with the surface.
     Down(PenSample),
-    /// Pen moved while in contact. Payload: `(live_sample, coalesced,
-    /// predicted)`. `coalesced` carries high-rate intermediate samples
-    /// the platform captured between the previous [`PenEvent::Move`]
-    /// and this one (Android `getHistorical*`, iOS `coalescedTouches`,
-    /// Windows `GetPointerPenInfoHistory`); `predicted` carries
-    /// platform-forecast future samples when prediction is enabled
-    /// (iOS `predictedTouches`, empty otherwise).
-    Move(PenSample, Vec<PenSample>, Vec<PenSample>),
-    /// Pen lifted off the surface. Payload: the sample at lift.
+    /// Pen moved while in contact.
+    Move(PenMove),
+    /// Pen lifted off the surface.
     Up(PenSample),
     /// Contact was cancelled by the platform (system gesture, palm
     /// rejection, screen locked). Draws in progress should be
-    /// discarded. Payload: the sample observed at cancel.
+    /// discarded.
     Cancel(PenSample),
-    /// Barrel button state changed. Payload: `(sample, changed)`.
-    /// `changed` is a bitmap of buttons whose state flipped since the
-    /// previous sample; the new pressed set lives on `sample.buttons`.
-    ButtonChanged(PenSample, u32),
+    /// Barrel button state changed.
+    ButtonChanged(PenButtonChange),
 }
 
 /// A hover-phase event fired while the tool is proximate but not
