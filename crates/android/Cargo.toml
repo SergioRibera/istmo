@@ -12,6 +12,18 @@ readme.workspace = true
 keywords = ["istmo", "android", "jni", "ffi", "mobile"]
 categories = ["os::android-apis", "development-tools::ffi"]
 
+[features]
+# Consumers pick the Android activity flavor via facade features. The
+# `android-activity` crate refuses both simultaneously with a
+# compile_error, so exactly one of `native-activity` / `game-activity`
+# must be enabled per build. `native-activity` stays the default so
+# existing demos (rust-mobile-demo, data-store-demo, live-activity-demo,
+# android-demo) keep working without opt-in; pen-demo overrides via
+# the facade's `game-activity` feature.
+default = ["native-activity"]
+native-activity = ["android-activity/native-activity"]
+game-activity = ["android-activity/game-activity"]
+
 [dependencies]
 istmo-core = { workspace = true }
 bincode = { workspace = true }
@@ -20,7 +32,7 @@ tracing = { workspace = true }
 jni = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-android-activity = { version = "0.6", features = ["native-activity"] }
+android-activity = { version = "0.6", default-features = false }
 
 [lints.rust]
 missing_debug_implementations = "warn"

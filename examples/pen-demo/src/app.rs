@@ -147,6 +147,21 @@ pub struct DrawApp {
     safe_area: Option<SafeArea>,
     #[cfg(not(target_os = "android"))]
     tracking: bool,
+    #[cfg(not(target_os = "android"))]
+    publisher: Option<Arc<istmo_pen::publisher::PenPublisher>>,
+    #[cfg(not(target_os = "android"))]
+    seq: std::sync::atomic::AtomicU32,
+    #[cfg(not(target_os = "android"))]
+    attach: std::time::Instant,
+    /// Last accepted pointer position while `tracking == true`. Used to
+    /// synthesise coalesced sub-samples between the previous frame's
+    /// pointer and this one — mouse polling gives us one sample per
+    /// eframe repaint (~60 Hz), which leaves visible gaps on fast
+    /// strokes. Rebuilding a per-pixel sub-sample train shortens
+    /// segments enough that the ribbon painter has clean data to
+    /// tessellate.
+    #[cfg(not(target_os = "android"))]
+    last_pointer: Option<egui::Pos2>,
 }
 
 impl DrawApp {
@@ -156,6 +171,34 @@ impl DrawApp {
             safe_area: None,
             #[cfg(not(target_os = "android"))]
             tracking: false,
+            #[cfg(not(target_os = "android"))]
+            publisher: None,
+            #[cfg(not(target_os = "android"))]
+            seq: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(not(target_os = "android"))]
+            attach: std::time::Instant::now(),
+            #[cfg(not(target_os = "android"))]
+            last_pointer: None,
+        }
+    }
+
+    /// Desktop-only ctor that also stores an [`Arc<PenPublisher>`] so
+    /// `pump_egui_pointer` forwards mouse/pen events through the plugin
+    /// wire — the same code path a real stylus would exercise on
+    /// Windows / macOS / Linux (libinput).
+    #[cfg(not(target_os = "android"))]
+    pub fn new_desktop(
+        ink: Arc<SharedInk>,
+        publisher: Arc<istmo_pen::publisher::PenPublisher>,
+    ) -> Self {
+        Self {
+            ink,
+            safe_area: None,
+            tracking: false,
+            publisher: Some(publisher),
+            seq: std::sync::atomic::AtomicU32::new(0),
+            attach: std::time::Instant::now(),
+            last_pointer: None,
         }
     }
 
@@ -252,6 +295,14 @@ impl eframe::App for DrawApp {
                 #[cfg(not(target_os = "android"))]
                 self.pump_egui_pointer(ctx, rect);
 
+                // Sample coords are canvas-local on desktop (subtracted
+                // in `pump_egui_pointer`), fullscreen-relative on Android
+                // (PenCaptureView doesn't know Rust's rect). Paint accordingly.
+                #[cfg(not(target_os = "android"))]
+                let paint_offset = rect.min.to_vec2();
+                #[cfg(target_os = "android")]
+                let paint_offset = egui::Vec2::ZERO;
+
                 let strokes = self
                     .ink
                     .strokes
@@ -259,7 +310,7 @@ impl eframe::App for DrawApp {
                     .map(|s| s.clone())
                     .unwrap_or_default();
                 for stroke in &strokes {
-                    paint_stroke(painter, stroke);
+                    paint_stroke(painter, stroke, paint_offset);
                 }
                 let current = self
                     .ink
@@ -268,10 +319,8 @@ impl eframe::App for DrawApp {
                     .ok()
                     .and_then(|c| c.clone());
                 if let Some(stroke) = current.as_ref() {
-                    paint_stroke(painter, stroke);
+                    paint_stroke(painter, stroke, paint_offset);
                 }
-
-                let _ = rect;
             });
 
         self.show_debug_overlay(ctx, top, left);
@@ -401,29 +450,146 @@ impl DrawApp {
     }
 }
 
-fn paint_stroke(painter: &egui::Painter, stroke: &Stroke) {
-    if stroke.points.is_empty() {
+fn paint_stroke(painter: &egui::Painter, stroke: &Stroke, offset: egui::Vec2) {
+    let raw = &stroke.points;
+    if raw.is_empty() {
         return;
     }
     let base = stroke
         .color
         .unwrap_or_else(|| egui::Color32::from_rgb(30, 30, 40));
-    for pair in stroke.points.windows(2) {
-        let a = pair[0];
-        let b = pair[1];
-        let width = 1.5 + (a.pressure.max(b.pressure) * 22.0);
-        painter.line_segment([a.pos, b.pos], egui::Stroke::new(width, base));
+    let width_at = |p: &StrokePoint| 1.5 + p.pressure * 22.0;
+
+    // Single-point stroke: just a dot.
+    if raw.len() == 1 {
+        painter.circle_filled(
+            raw[0].pos + offset,
+            width_at(&raw[0]) * 0.5,
+            base,
+        );
+        return;
     }
-    if let Some(last) = stroke.points.last() {
-        let width = 1.5 + last.pressure * 22.0;
-        painter.circle_filled(last.pos, width * 0.5, base);
+
+    // Chaikin subdivision (2 iterations) smooths the polyline so the
+    // ribbon tessellator gets a curve close to a Catmull-Rom / cubic
+    // spline without needing per-segment shape objects. Pressure /
+    // tilt travel with the interpolated points so width evolves
+    // continuously along the ribbon.
+    let mut pts: Vec<StrokePoint> = raw
+        .iter()
+        .map(|p| StrokePoint {
+            pos: p.pos + offset,
+            pressure: p.pressure,
+            tilt: p.tilt,
+        })
+        .collect();
+    for _ in 0..2 {
+        pts = chaikin_smooth(&pts);
     }
+
+    // Drop degenerate (near-zero-length) segments after smoothing so the
+    // miter math doesn't divide by ~0 direction vectors.
+    pts.dedup_by(|a, b| (a.pos - b.pos).length_sq() < 0.01);
+    if pts.len() < 2 {
+        painter.circle_filled(pts[0].pos, width_at(&pts[0]) * 0.5, base);
+        return;
+    }
+
+    // Ribbon tessellation. For each point compute a perpendicular
+    // miter direction (the average of the incoming/outgoing normals)
+    // extended so the ribbon edges meet cleanly on both sides. Clamp
+    // the miter length at sharp corners to avoid spikes.
+    let n = pts.len();
+    let mut mesh = egui::epaint::Mesh::default();
+    mesh.vertices.reserve(n * 2);
+    mesh.indices.reserve((n - 1) * 6);
+    for i in 0..n {
+        let dir_in = if i > 0 {
+            (pts[i].pos - pts[i - 1].pos).normalized()
+        } else {
+            (pts[i + 1].pos - pts[i].pos).normalized()
+        };
+        let dir_out = if i + 1 < n {
+            (pts[i + 1].pos - pts[i].pos).normalized()
+        } else {
+            dir_in
+        };
+        let miter = (dir_in + dir_out).normalized();
+        let mut normal = egui::Vec2::new(-miter.y, miter.x);
+        let perp_out = egui::Vec2::new(-dir_out.y, dir_out.x);
+        let scale = normal.dot(perp_out).abs().max(0.35);
+        normal /= scale;
+        let half = width_at(&pts[i]) * 0.5;
+        let left = pts[i].pos + normal * half;
+        let right = pts[i].pos - normal * half;
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: left,
+            uv: egui::epaint::WHITE_UV,
+            color: base,
+        });
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: right,
+            uv: egui::epaint::WHITE_UV,
+            color: base,
+        });
+    }
+    for i in 0..n - 1 {
+        let l0 = (i * 2) as u32;
+        let r0 = l0 + 1;
+        let l1 = l0 + 2;
+        let r1 = l0 + 3;
+        mesh.indices.extend_from_slice(&[l0, r0, l1, r0, r1, l1]);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+
+    // Round caps at both ends smooth the otherwise flat perpendicular
+    // termination of the ribbon.
+    painter.circle_filled(pts[0].pos, width_at(&pts[0]) * 0.5, base);
+    painter.circle_filled(
+        pts[n - 1].pos,
+        width_at(&pts[n - 1]) * 0.5,
+        base,
+    );
+}
+
+fn chaikin_smooth(pts: &[StrokePoint]) -> Vec<StrokePoint> {
+    if pts.len() < 3 {
+        return pts.to_vec();
+    }
+    let mut out = Vec::with_capacity(pts.len() * 2);
+    out.push(pts[0]);
+    for pair in pts.windows(2) {
+        let a = &pair[0];
+        let b = &pair[1];
+        let q_pos = egui::Pos2::new(
+            a.pos.x * 0.75 + b.pos.x * 0.25,
+            a.pos.y * 0.75 + b.pos.y * 0.25,
+        );
+        let r_pos = egui::Pos2::new(
+            a.pos.x * 0.25 + b.pos.x * 0.75,
+            a.pos.y * 0.25 + b.pos.y * 0.75,
+        );
+        out.push(StrokePoint {
+            pos: q_pos,
+            pressure: a.pressure * 0.75 + b.pressure * 0.25,
+            tilt: a.tilt * 0.75 + b.tilt * 0.25,
+        });
+        out.push(StrokePoint {
+            pos: r_pos,
+            pressure: a.pressure * 0.25 + b.pressure * 0.75,
+            tilt: a.tilt * 0.25 + b.tilt * 0.75,
+        });
+    }
+    out.push(pts[pts.len() - 1]);
+    out
 }
 
 #[cfg(not(target_os = "android"))]
 impl DrawApp {
     fn pump_egui_pointer(&mut self, ctx: &egui::Context, rect: egui::Rect) {
-        let (pressed, released, pos, pressure) = ctx.input(|i| {
+        use istmo_pen::{PenEvent, PenMove};
+
+        let (pressed, released, pos, held) = ctx.input(|i| {
             (
                 i.pointer.primary_pressed(),
                 i.pointer.primary_released(),
@@ -431,28 +597,114 @@ impl DrawApp {
                 i.pointer.button_down(egui::PointerButton::Primary),
             )
         });
-        // egui 0.29 doesn't expose pen pressure on every backend, so
-        // approximate with mouse velocity when the platform doesn't
-        // publish real force.
-        let sample = pos.map(|p| StrokePoint {
-            pos: rect.clamp(p),
-            pressure: if pressure { 0.65 } else { 0.0 },
-            tilt: 0.0,
-        });
+
+        let Some(publisher) = self.publisher.as_ref() else {
+            // Legacy path: no publisher wired (tests / other embedders).
+            // Fall back to direct ink mutation so the canvas still works.
+            let sample = pos.map(|p| StrokePoint {
+                pos: rect.clamp(p),
+                pressure: if held { 0.65 } else { 0.0 },
+                tilt: 0.0,
+            });
+            if pressed {
+                if let Some(p) = sample {
+                    self.ink.begin(p);
+                    self.tracking = true;
+                }
+            } else if released {
+                if self.tracking {
+                    self.ink.end();
+                    self.tracking = false;
+                }
+            } else if self.tracking {
+                if let Some(p) = sample {
+                    self.ink.extend(p);
+                }
+            }
+            return;
+        };
+
+        let Some(raw) = pos else {
+            return;
+        };
+        // Only start tracking when the press-down lands inside the drawing
+        // canvas rect. Top-bar clicks, resize handles, and out-of-bounds
+        // pointer drags shouldn't seed a stroke.
+        if pressed && !rect.contains(raw) {
+            return;
+        }
+        let clamped = rect.clamp(raw);
+        // Canvas-local coordinates: (0, 0) at the CentralPanel top-left so
+        // the sample matches the pointer regardless of top-bar height /
+        // safe-area insets. Painting adds `rect.min` back through
+        // `paint_offset()`.
+        let local = egui::Pos2::new(clamped.x - rect.min.x, clamped.y - rect.min.y);
+        let pressure = if held { 0.65 } else { 0.0 };
+        let sample = self.build_sample(local, pressure);
         if pressed {
-            if let Some(p) = sample {
-                self.ink.begin(p);
-                self.tracking = true;
-            }
-        } else if released {
-            if self.tracking {
-                self.ink.end();
-                self.tracking = false;
-            }
+            publisher.push_event(crate::WINDOW_ID, PenEvent::Down(sample));
+            self.tracking = true;
+            self.last_pointer = Some(local);
+        } else if released && self.tracking {
+            publisher.push_event(crate::WINDOW_ID, PenEvent::Up(sample));
+            self.tracking = false;
+            self.last_pointer = None;
         } else if self.tracking {
-            if let Some(p) = sample {
-                self.ink.extend(p);
-            }
+            // Synthesise coalesced sub-samples along the segment
+            // `last_pointer → local` — one per ~4 logical points, capped
+            // to keep the wire cost bounded on very fast pointer moves.
+            // Interpolated pressure sits between the previous and current
+            // frame so the ribbon width evolves smoothly across the
+            // segment instead of stepping at each frame boundary.
+            let coalesced = if let Some(prev) = self.last_pointer {
+                let delta = local - prev;
+                let dist = delta.length();
+                let steps = (dist / 4.0).ceil().clamp(0.0, 8.0) as usize;
+                let mut out = Vec::with_capacity(steps);
+                for step in 1..steps {
+                    let t = step as f32 / steps as f32;
+                    let sub_pos = egui::Pos2::new(prev.x + delta.x * t, prev.y + delta.y * t);
+                    // Constant pressure per stroke on desktop mouse — no
+                    // per-sub-sample interpolation needed; wintab / real
+                    // stylus paths already carry real pressure.
+                    out.push(self.build_sample(sub_pos, pressure));
+                }
+                out
+            } else {
+                Vec::new()
+            };
+            publisher.push_event(
+                crate::WINDOW_ID,
+                PenEvent::Move(PenMove {
+                    sample,
+                    coalesced,
+                    predicted: Vec::new(),
+                }),
+            );
+            self.last_pointer = Some(local);
+        }
+    }
+
+    fn build_sample(&self, pos: egui::Pos2, pressure: f32) -> istmo_pen::PenSample {
+        use istmo_pen::{PenSample, PenToolKind};
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        let timestamp_us = self.attach.elapsed().as_micros() as u64;
+        PenSample {
+            x: pos.x,
+            y: pos.y,
+            pressure,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+            azimuth: 0.0,
+            altitude: 0.0,
+            twist: 0.0,
+            tangential_pressure: 0.0,
+            z_offset: 0.0,
+            timestamp_us,
+            sequence: seq,
+            tool_id: 1,
+            tool_kind: PenToolKind::Tip,
+            buttons: if pressure > 0.0 { 1 } else { 0 },
         }
     }
 }

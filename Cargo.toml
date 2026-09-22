@@ -89,6 +89,15 @@ readme = "README.md"
 keywords = ["mobile", "android", "ios", "ffi", "interop"]
 categories = ["development-tools::ffi", "os", "api-bindings"]
 
+[features]
+# Forward the activity-flavor selection to `istmo-android`. Consumers
+# building the facade for Android pick exactly one. Keep
+# `native-activity` as the default so existing demos continue to work
+# unchanged; pen-demo opts into `game-activity` explicitly.
+default = ["native-activity"]
+native-activity = ["istmo-android/native-activity"]
+game-activity = ["istmo-android/game-activity"]
+
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
@@ -96,7 +105,11 @@ istmo-plugins = { workspace = true }
 bincode = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-istmo-android = { workspace = true }
+# Skip workspace inheritance so we can flip `default-features = false`
+# and let facade features pick the activity flavor (see the
+# `native-activity` / `game-activity` features above). Cargo forbids
+# overriding workspace `default-features` from an inheriting crate.
+istmo-android = { path = "crates/android", version = "0.1.1-alpha.1", default-features = false }
 
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))'.dependencies]
 istmo-ios = { workspace = true }

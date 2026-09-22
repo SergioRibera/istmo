@@ -1,12 +1,12 @@
 package dev.istmo.pendemo
 
-import android.app.NativeActivity
 import android.os.Bundle
-import android.view.ViewGroup
+import android.view.MotionEvent
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.google.androidgamesdk.GameActivity
 import dev.istmo.plugins.pen.PenCaptureView
 import dev.istmo.plugins.pen.PenFactoryImpl
 import dev.istmo.runtime.IstmoRuntime
@@ -14,16 +14,20 @@ import dev.istmo.runtime.PenCodecsImpl
 import dev.istmo.runtime.PenDispatcher
 
 /**
- * NativeActivity so winit / eframe (in `android_main` on the Rust
- * side) owns the drawing surface. A transparent [PenCaptureView] sits
- * above the native surface, intercepts stylus `MotionEvent`s, and
- * forwards them across the istmo wire as `PenEvent`s. The activity
- * also installs a `WindowInsets` listener that publishes the
- * device's safe-area insets on the `istmo.safe_area` early-event
- * channel so the Rust `DrawApp` can inset its canvas around the
- * status bar / display cutout.
+ * `GameActivity` (from AGDK / `androidx.games:games-activity`) forwards
+ * every `MotionEvent` through Java `dispatchTouchEvent` / `dispatchGenericMotionEvent`
+ * before handing off to the native (winit/eframe) side. That gives us a
+ * clean Kotlin seam to intercept stylus samples — impossible under
+ * `NativeActivity`, which takes the raw `InputQueue` and skips the view
+ * hierarchy entirely.
+ *
+ * `PenCaptureView` is instantiated as a detached observer (not added to
+ * the view tree). We call its `onTouchEvent` / `onGenericMotionEvent`
+ * directly from the dispatch overrides, then delegate to `super` so
+ * GameActivity's native forwarding still delivers the same events to
+ * winit / eframe on the Rust side.
  */
-class PenDemoActivity : NativeActivity() {
+class PenDemoActivity : GameActivity() {
 
     private lateinit var penView: PenCaptureView
 
@@ -45,12 +49,16 @@ class PenDemoActivity : NativeActivity() {
             isAppearanceLightStatusBars = false
         }
         installSafeAreaListener()
+    }
 
-        val params = ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-        )
-        addContentView(penView, params)
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        penView.onTouchEvent(event)
+        return super.dispatchTouchEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        penView.onGenericMotionEvent(event)
+        return super.dispatchGenericMotionEvent(event)
     }
 
     private fun installSafeAreaListener() {

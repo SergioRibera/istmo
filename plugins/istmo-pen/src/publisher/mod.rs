@@ -150,6 +150,27 @@ impl PenPublisher {
         Ok(())
     }
 
+    /// Register a window under `id` without binding it to a native
+    /// window handle.
+    ///
+    /// Suitable for apps that source stylus samples themselves via
+    /// [`Self::push_event`] / [`Self::push_hover`] (Wayland tablet-v2,
+    /// XInput2, egui pointer fallback, unit tests) and for the
+    /// `install_libinput` broadcast path — the id must still be present
+    /// so [`Self::state_for`] can resolve it, but no `WM_POINTER*` /
+    /// `NSEvent` local monitor gets installed. On Windows and macOS the
+    /// [`Self::register_window`] variant with a real window handle stays
+    /// the recommended path since it wires the OS-level pointer stream
+    /// into the plugin.
+    pub fn register_window_id(&self, id: u64) {
+        let state = Arc::new(WindowState::new());
+        let mut guard = match self.windows.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(id, state);
+    }
+
     /// Unregister a previously registered window. Silently ignores ids
     /// that were never registered.
     pub fn unregister_window(&self, id: u64) {

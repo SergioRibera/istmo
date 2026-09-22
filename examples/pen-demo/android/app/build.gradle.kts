@@ -152,4 +152,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // GameActivity dispatches MotionEvents through Java first, so a
+    // Kotlin `dispatchTouchEvent` override can spy on stylus samples
+    // before the events reach the native (winit/eframe) side. Required
+    // by the `android-game-activity` feature enabled on winit + eframe
+    // in `Cargo.toml`.
+    implementation("androidx.games:games-activity:4.4.0")
 }
