@@ -1,6 +1,6 @@
 [package]
 name = "istmo-google-sign-in"
-version = "0.1.1-alpha.1"
+version = "0.1.1-alpha.2"
 description = "Google Sign-In / Credential Manager plugin for the istmo framework — Android + iOS credential flows exposed as a typed Rust surface."
 edition.workspace = true
 rust-version.workspace = true

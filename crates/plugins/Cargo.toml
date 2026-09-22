@@ -1,6 +1,6 @@
 [package]
 name = "istmo-plugins"
-version = "0.1.1-alpha.1"
+version = "0.1.1-alpha.2"
 description = "First-party istmo plugins: Permissions, AppLifecycle, DeepLinks, ActivityResults, SafeAreaPublisher, Notifications."
 edition.workspace = true
 rust-version.workspace = true

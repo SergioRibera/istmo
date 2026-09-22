@@ -1,6 +1,6 @@
 [package]
 name = "istmo-build"
-version = "0.1.1-alpha.1"
+version = "0.1.1-alpha.2"
 description = "Contract metadata and Kotlin/Swift codegen for istmo plugins — consumed by downstream build.rs scripts to emit typed native dispatchers."
 edition.workspace = true
 rust-version.workspace = true

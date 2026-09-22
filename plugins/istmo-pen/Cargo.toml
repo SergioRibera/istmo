@@ -1,6 +1,6 @@
 [package]
 name = "istmo-pen"
-version = "0.1.1-alpha.1"
+version = "0.1.1-alpha.2"
 description = "Stylus / pencil input plugin for the istmo framework — Apple Pencil / UITouch on iOS, MotionEvent stylus on Android, WM_POINTER on Windows, NSEvent tablet on macOS, libinput on Linux."
 edition.workspace = true
 rust-version.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "pen-demo"
-version = "0.1.1-alpha.1"
+version = "0.1.1-alpha.2"
 description = "Multi-platform istmo demo — same Rust code subscribes to stylus events on desktop and Android."
 publish = false
 edition.workspace = true

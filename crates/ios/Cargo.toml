@@ -1,6 +1,6 @@
 [package]
 name = "istmo-ios"
-version = "0.1.1-alpha.1"
+version = "0.1.1-alpha.2"
 description = "iOS/Apple FFI transport for the istmo runtime — pump thread, callback table, C-callable exports linked by the Swift staticlib."
 edition.workspace = true
 rust-version.workspace = true
