@@ -178,4 +178,3 @@ fn write_factory(out: &mut String, contract: &Contract, init: &crate::contract::
     );
     let _ = writeln!(out, "}}");
 }
-

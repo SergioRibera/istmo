@@ -7,4 +7,3 @@ pub fn contract() -> Contract {
     extract_contract(PLUGIN_SRC, "SignIn")
         .expect("extract SignIn contract from istmo-google-sign-in/src/lib.rs")
 }
-

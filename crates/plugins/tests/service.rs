@@ -234,4 +234,3 @@ fn stop_self_reaches_host() {
     let snap = mock.snapshot();
     assert_eq!(snap.stops, vec!["myapp.sync".to_owned()]);
 }
-

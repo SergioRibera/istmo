@@ -124,4 +124,3 @@ fn launch_maps_domain_error_to_plugin_error_bytes() {
     assert_eq!(decoded, ActivityLaunchError::NoActivityFound);
     backend.join().unwrap();
 }
-

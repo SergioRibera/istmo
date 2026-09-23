@@ -221,11 +221,7 @@ pub trait Dispatch: Send + Sync + 'static {
         cancel: CancelToken,
     ) -> DispatchFuture<'a> {
         let _ = (config_payload, cancel);
-        Box::pin(async {
-            Err(DispatchError::UnknownMethod(
-                "__create_instance".to_owned(),
-            ))
-        })
+        Box::pin(async { Err(DispatchError::UnknownMethod("__create_instance".to_owned())) })
     }
 
     /// Release per-instance state associated with `instance_id` after

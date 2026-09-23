@@ -57,7 +57,11 @@ fn handle_frame(
     frame: Frame,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match frame {
-        Frame::CreateInstance { call_id, plugin_id, payload } => {
+        Frame::CreateInstance {
+            call_id,
+            plugin_id,
+            payload,
+        } => {
             if plugin_id != DATA_STORE_PLUGIN_ID {
                 respond_err(rt, call_id, "unknown plugin id")?;
                 return Ok(());
@@ -65,14 +69,25 @@ fn handle_frame(
             let (cfg, _) = codec::decode::<DataStoreConfig>(&payload)?;
             let iid = InstanceId(*next_instance);
             *next_instance += 1;
-            namespaces
-                .insert(iid, Namespace { name: cfg.namespace, entries: HashMap::new() });
+            namespaces.insert(
+                iid,
+                Namespace {
+                    name: cfg.namespace,
+                    entries: HashMap::new(),
+                },
+            );
             rt.dispatch_inbound(Envelope::new(Frame::Respond {
                 call_id,
                 result: Ok(codec::encode(&iid)?),
             }))?;
         }
-        Frame::Call { call_id, plugin_id, instance_id, method, payload } => {
+        Frame::Call {
+            call_id,
+            plugin_id,
+            instance_id,
+            method,
+            payload,
+        } => {
             if plugin_id != DATA_STORE_PLUGIN_ID {
                 respond_err(rt, call_id, "unknown plugin id")?;
                 return Ok(());
@@ -191,4 +206,3 @@ fn encode_backend<E: std::fmt::Display>(err: E) -> Vec<u8> {
 fn encode_backend_err(msg: &str) -> Vec<u8> {
     codec::encode(&DataStoreError::Backend(msg.to_owned())).unwrap_or_default()
 }
-

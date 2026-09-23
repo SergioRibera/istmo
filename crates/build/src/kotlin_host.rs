@@ -220,7 +220,7 @@ fn write_stateless_dispatcher(out: &mut String, contract: &Contract) {
         let _ = writeln!(out, "    }}");
         let _ = writeln!(out);
     }
-    write_handle_call(out, contract,  false);
+    write_handle_call(out, contract, false);
     let _ = writeln!(out, "}}");
 }
 
@@ -292,7 +292,7 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "        return out.toByteArray()");
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
-    write_handle_call(out, contract,  true);
+    write_handle_call(out, contract, true);
     let _ = writeln!(out, "}}");
 }
 
@@ -348,18 +348,9 @@ fn write_method_arm(out: &mut String, method: &Method) {
             "{indent}val __istmo_flow = backend.{}({call_args})",
             method.name,
         );
-        let _ = writeln!(
-            out,
-            "{indent}PluginResult.Stream(",
-        );
-        let _ = writeln!(
-            out,
-            "{indent}    __istmo_flow.map {{ __istmo_item ->",
-        );
-        let _ = writeln!(
-            out,
-            "{indent}        val out = ByteArrayOutputStream()",
-        );
+        let _ = writeln!(out, "{indent}PluginResult.Stream(",);
+        let _ = writeln!(out, "{indent}    __istmo_flow.map {{ __istmo_item ->",);
+        let _ = writeln!(out, "{indent}        val out = ByteArrayOutputStream()",);
         write_write_expr(
             out,
             &format!("{indent}        "),
@@ -537,7 +528,6 @@ fn write_write_expr(out: &mut String, indent: &str, ty: &TypeRef, binding: &str,
 }
 
 fn write_lambda(ty: &TypeRef) -> String {
-
     match ty {
         TypeRef::Named(name) => format!("codecs.write{name}(s, v)"),
         TypeRef::String => "Bincode.writeString(s, v)".to_owned(),
@@ -562,4 +552,3 @@ fn write_lambda(ty: &TypeRef) -> String {
         }
     }
 }
-

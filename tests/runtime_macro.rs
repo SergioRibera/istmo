@@ -97,4 +97,3 @@ fn runtime_macro_declares_remote_plugins() {
     assert!(!rt.is_remote_plugin("test.runtime.echo"));
     assert!(!rt.is_remote_plugin("test.runtime.absent"));
 }
-

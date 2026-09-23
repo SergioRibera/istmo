@@ -103,4 +103,3 @@ fn adapter_reports_stable_plugin_id() {
     assert_eq!(adapter.plugin_id(), "myapp.sync");
     let _ = Outcome::Ok(Vec::new());
 }
-

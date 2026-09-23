@@ -48,4 +48,3 @@ fn publish(rt: &Runtime, state: LifecycleState) {
     let bytes = codec::encode(&state).expect("encode state");
     rt.publish_early_latest(LIFECYCLE_CHANNEL, bytes);
 }
-

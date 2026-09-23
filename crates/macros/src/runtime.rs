@@ -1,7 +1,9 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::punctuated::Punctuated;
-use syn::{Expr, Ident, Path, Token, bracketed, parse::Parse, parse::ParseStream, parse2, parse_str};
+use syn::{
+    Expr, Ident, Path, Token, bracketed, parse::Parse, parse::ParseStream, parse_str, parse2,
+};
 
 #[allow(unreachable_pub)]
 pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
@@ -211,4 +213,3 @@ fn auto_paths_from_env(name: &str) -> syn::Result<Vec<Path>> {
         })
         .collect()
 }
-

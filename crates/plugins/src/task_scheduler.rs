@@ -71,4 +71,3 @@ pub trait TaskScheduler {
 
     async fn cancel_by_unique_name(&self, name: String) -> Result<(), TaskSchedulerError>;
 }
-

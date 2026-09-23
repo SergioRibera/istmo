@@ -2,7 +2,6 @@ use core::fmt;
 
 #[derive(Debug)]
 pub enum IosRuntimeError {
-
     AlreadyStarted,
 
     NotStarted,
@@ -37,4 +36,3 @@ impl From<istmo_core::IstmoError> for IosRuntimeError {
         Self::Core(value)
     }
 }
-

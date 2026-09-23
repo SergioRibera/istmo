@@ -220,9 +220,9 @@ fn dispatch_event(event: *mut AnyObject) {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        list.iter().find(|e| e.ns_window_id == window_id).map(|e| {
-            (Arc::clone(&e.state), Arc::clone(&e.clock))
-        })
+        list.iter()
+            .find(|e| e.ns_window_id == window_id)
+            .map(|e| (Arc::clone(&e.state), Arc::clone(&e.clock)))
     };
     let Some((state, clock)) = entry_snapshot else {
         return;
@@ -278,11 +278,7 @@ fn handle_mouse_from_tablet(
     }
 }
 
-fn handle_tablet_point(
-    event: *mut AnyObject,
-    state: &Arc<WindowState>,
-    clock: &Arc<AttachClock>,
-) {
+fn handle_tablet_point(event: *mut AnyObject, state: &Arc<WindowState>, clock: &Arc<AttachClock>) {
     // NSTabletPoint carries the richest signal but no click state —
     // fold it into a Move on the event stream. Rely on the mouse-backed
     // events for down/up transitions.

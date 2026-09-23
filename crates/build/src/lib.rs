@@ -50,8 +50,8 @@ pub mod contract;
 pub mod desktop;
 pub mod doc_extract;
 pub mod emit_app;
-pub mod extract;
 pub mod entitlements;
+pub mod extract;
 pub mod handover;
 pub mod ios;
 pub mod kotlin;
@@ -71,14 +71,14 @@ pub mod worker;
 pub use crate::contract::{
     Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
 };
-pub use crate::doc_extract::{
-    FieldDoc, PluginTypeDoc, PluginTypeDocKind, VariantDoc, extract_from_file,
-    extract_message_docs, render_types_mdx, write_types_mdx,
-};
 pub use crate::desktop::{
     DesktopAppContract, DesktopServiceContract, RestartPolicy, ServiceScope, StartType,
     WindowsServiceArtifacts, generate_desktop_entry, generate_launchd_plist, generate_systemd_unit,
     generate_windows_service,
+};
+pub use crate::doc_extract::{
+    FieldDoc, PluginTypeDoc, PluginTypeDocKind, VariantDoc, extract_from_file,
+    extract_message_docs, render_types_mdx, write_types_mdx,
 };
 pub use crate::emit_app::{
     AppOpts, AppPluginOpts, Platform, Role, detect_android_package, detect_ios_app_dir, emit_app,
@@ -118,4 +118,3 @@ pub use crate::swift::{generate_swift, generate_swift_client};
 pub use crate::swift_host::generate_swift_host;
 pub use crate::swift_types::{generate_swift_codecs, generate_swift_types};
 pub use crate::worker::{WorkerContract, generate_android_worker};
-

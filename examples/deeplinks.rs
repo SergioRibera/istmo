@@ -54,4 +54,3 @@ fn publish(rt: &Runtime, link: &DeepLink) {
     let bytes = codec::encode(link).expect("encode link");
     rt.publish_early_queue(DEEPLINKS_CHANNEL, 16, bytes);
 }
-

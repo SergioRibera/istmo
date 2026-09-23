@@ -170,4 +170,3 @@ fn task_request_round_trips_through_bincode() {
     let (decoded, _) = istmo_core::codec::decode::<TaskRequest>(&bytes).unwrap();
     assert_eq!(decoded, request);
 }
-

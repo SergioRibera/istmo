@@ -1034,9 +1034,7 @@ fn live_activity() -> Contract {
                     },
                     Arg {
                         name: "android_tier_hint".to_owned(),
-                        ty: TypeRef::Option(Box::new(TypeRef::Named(
-                            "AndroidTierHint".to_owned(),
-                        ))),
+                        ty: TypeRef::Option(Box::new(TypeRef::Named("AndroidTierHint".to_owned()))),
                     },
                 ],
                 returns: TypeRef::Named("NativeHandleId".to_owned()),
@@ -1418,7 +1416,9 @@ fn multi_payload_kotlin_types_emit_positional_fields() {
         "single-payload variant broken: {out}",
     );
     assert!(
-        out.contains("data class Three(val f0: UInt, val f1: String, val f2: List<Boolean>) : Frame()"),
+        out.contains(
+            "data class Three(val f0: UInt, val f1: String, val f2: List<Boolean>) : Frame()"
+        ),
         "multi-payload variant broken: {out}",
     );
 }
@@ -1468,4 +1468,3 @@ fn multi_payload_swift_codecs_read_write_all_fields() {
         "write pattern binds all fields: {out}",
     );
 }
-

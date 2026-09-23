@@ -161,4 +161,3 @@ fn write_if_changed(dest: &Path, contents: &str) -> std::io::Result<()> {
     }
     fs::write(dest, contents)
 }
-

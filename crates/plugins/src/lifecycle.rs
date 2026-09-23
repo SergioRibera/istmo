@@ -97,4 +97,3 @@ fn decode(bytes: &[u8]) -> Result<LifecycleState, IstmoError> {
     let (state, _) = codec::decode::<LifecycleState>(bytes)?;
     Ok(state)
 }
-

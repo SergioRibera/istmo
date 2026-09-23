@@ -2,7 +2,6 @@ use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestartPolicy {
-
     Never,
 
     OnFailure,
@@ -12,7 +11,6 @@ pub enum RestartPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartType {
-
     Auto,
 
     Manual,
@@ -22,7 +20,6 @@ pub enum StartType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceScope {
-
     User,
 
     System,
@@ -30,7 +27,6 @@ pub enum ServiceScope {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopServiceContract {
-
     pub name: String,
 
     pub label: String,
@@ -67,7 +63,6 @@ pub struct DesktopServiceContract {
 }
 
 impl DesktopServiceContract {
-
     #[must_use]
     pub fn new(
         name: impl Into<String>,
@@ -99,7 +94,6 @@ impl DesktopServiceContract {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsServiceArtifacts {
-
     pub install_script: String,
 
     pub uninstall_script: String,
@@ -221,7 +215,6 @@ pub fn generate_launchd_plist(contract: &DesktopServiceContract) -> String {
     if keep_alive || matches!(contract.restart, RestartPolicy::OnFailure) {
         let _ = writeln!(out, "    <key>KeepAlive</key>");
         if matches!(contract.restart, RestartPolicy::OnFailure) {
-
             let _ = writeln!(out, "    <dict>");
             let _ = writeln!(out, "        <key>SuccessfulExit</key>");
             let _ = writeln!(out, "        <false/>");
@@ -343,7 +336,6 @@ fn render_windows_uninstall(contract: &DesktopServiceContract) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopAppContract {
-
     pub name: String,
 
     pub comment: String,
@@ -366,7 +358,6 @@ pub struct DesktopAppContract {
 }
 
 impl DesktopAppContract {
-
     #[must_use]
     pub fn new(name: impl Into<String>, exec: impl Into<String>) -> Self {
         Self {
@@ -419,7 +410,6 @@ pub fn generate_desktop_entry(contract: &DesktopAppContract) -> String {
 }
 
 fn quote_systemd_exec(exec: &str, args: &[String]) -> String {
-
     let mut buf = String::new();
     buf.push_str(exec);
     for arg in args {
@@ -444,7 +434,6 @@ fn build_windows_bin_path(exec: &str, args: &[String]) -> String {
 }
 
 fn quote_ps(value: &str) -> String {
-
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for ch in value.chars() {
@@ -485,4 +474,3 @@ fn xml_escape(value: &str) -> String {
     }
     out
 }
-

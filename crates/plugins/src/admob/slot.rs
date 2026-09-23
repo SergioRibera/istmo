@@ -14,7 +14,6 @@ pub type SpawnFn = Arc<dyn Fn(BoxFuture) + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotTarget {
-
     Show(BannerRect),
 
     Hide,
@@ -22,7 +21,6 @@ pub enum SlotTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotStatus {
-
     Idle,
 
     Loading,
@@ -69,7 +67,6 @@ enum SlotState {
 }
 
 impl BannerSlot {
-
     #[must_use]
     pub fn new(ad_unit: impl Into<String>, client: Arc<AdMobClient>) -> Self {
         Self {
@@ -95,7 +92,6 @@ impl BannerSlot {
     }
 
     pub fn sync(&self, target: SlotTarget) {
-
         enum Action {
             None,
             Show(BannerRect),
@@ -112,11 +108,9 @@ impl BannerSlot {
                 (SlotState::Live { rect: current, .. }, SlotTarget::Show(rect))
                     if *current == rect =>
                 {
-
                     Action::None
                 }
                 (SlotState::Live { handle, .. }, SlotTarget::Show(rect)) => {
-
                     let handle_id = handle.id();
                     if let SlotState::Live { rect: current, .. } = &mut guard.state {
                         *current = rect;
@@ -140,7 +134,6 @@ impl BannerSlot {
                     }
                 }
                 (SlotState::Loading, SlotTarget::Show(rect)) => {
-
                     guard.pending_rect = Some(rect);
                     Action::None
                 }
@@ -250,9 +243,7 @@ impl BannerSlot {
 }
 
 impl Drop for BannerSlot {
-    fn drop(&mut self) {
-
-    }
+    fn drop(&mut self) {}
 }
 
 #[must_use]
@@ -315,4 +306,3 @@ fn classify(err: &IstmoError) -> AdError {
         other => AdError::Internal(other.to_string()),
     }
 }
-

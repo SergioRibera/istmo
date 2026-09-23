@@ -57,4 +57,3 @@ fn current_is_none_before_any_publish() {
     let plugin = AppLifecycle::from_runtime(&rt).expect("declared");
     assert!(plugin.current().unwrap().is_none());
 }
-

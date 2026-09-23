@@ -8,4 +8,3 @@ pub use crate::{
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitStreamEnd,
 };
-

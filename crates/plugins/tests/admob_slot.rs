@@ -397,7 +397,6 @@ fn rect_helper_converts_logical_units_via_scale_and_clamps_negatives() {
 
 #[test]
 fn multiple_slots_can_share_the_same_client_arc() {
-
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let outbound = init.outbound.clone();
@@ -445,7 +444,6 @@ fn multiple_slots_can_share_the_same_client_arc() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn rapid_rect_changes_coalesce_to_the_latest_via_one_updater_task() {
-
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let outbound = init.outbound.clone();
@@ -565,7 +563,6 @@ fn rapid_rect_changes_coalesce_to_the_latest_via_one_updater_task() {
 
 #[test]
 fn injected_spawn_is_the_only_executor_used() {
-
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let outbound = init.outbound.clone();
@@ -605,4 +602,3 @@ fn injected_spawn_is_the_only_executor_used() {
 
     assert_eq!(*counter.lock().unwrap(), 1, "exactly one spawn per action");
 }
-

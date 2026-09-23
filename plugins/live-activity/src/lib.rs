@@ -198,7 +198,9 @@ impl std::fmt::Display for ActivityError {
         match self {
             Self::NotSupported => f.write_str("live activities are not supported on this device"),
             Self::Disabled => f.write_str("live activities are disabled by the user"),
-            Self::ExceededMaximum => f.write_str("exceeded the platform maximum concurrent live activities"),
+            Self::ExceededMaximum => {
+                f.write_str("exceeded the platform maximum concurrent live activities")
+            }
             Self::HandleNotFound => f.write_str("live-activity handle not found"),
             Self::UnknownActivityType(ty) => {
                 write!(f, "no backend registered for activity type {ty:?}")
@@ -213,7 +215,6 @@ impl std::error::Error for ActivityError {}
 
 #[plugin(name = "istmo.live_activity", crate = "::istmo_core")]
 pub trait LiveActivity {
-
     async fn start(
         &self,
         activity_type: String,
@@ -244,4 +245,3 @@ pub trait LiveActivity {
 
     async fn restore_active(&self) -> Result<Vec<RestoredActivity>, ActivityError>;
 }
-

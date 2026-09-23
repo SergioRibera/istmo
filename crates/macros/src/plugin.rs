@@ -96,7 +96,14 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             &host_arms,
         )
     } else {
-        expand_stateless_host(&vis, &trait_ident, &host_ident, &plugin_id, root, &host_arms)
+        expand_stateless_host(
+            &vis,
+            &trait_ident,
+            &host_ident,
+            &plugin_id,
+            root,
+            &host_arms,
+        )
     };
 
     Ok(quote! {
@@ -367,7 +374,6 @@ fn add_send_bound_to_async_methods(trait_def: &mut ItemTrait) {
     for item in &mut trait_def.items {
         let TraitItem::Fn(f) = item else { continue };
         if is_stream_method(&f.attrs) {
-
             let item_ty = match &f.sig.output {
                 ReturnType::Default => quote! { () },
                 ReturnType::Type(_, t) => quote! { #t },
@@ -661,10 +667,7 @@ fn expand_client_method(
             ok_ty.as_ref().unwrap_or(&return_ty),
         )?;
         if is_owned_method(&method.attrs) {
-            let owned = expand_unary_owned_method(
-                &ctx,
-                ok_ty.as_ref().unwrap_or(&return_ty),
-            )?;
+            let owned = expand_unary_owned_method(&ctx, ok_ty.as_ref().unwrap_or(&return_ty))?;
             Ok(quote! { #base #owned })
         } else {
             Ok(base)
@@ -702,7 +705,6 @@ fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream
     let call_args: Vec<Ident> = all_args.iter().map(|a| a.ident.clone()).collect();
 
     if is_stream_method(&method.attrs) {
-
         let item_ty = match &sig.output {
             ReturnType::Default => Type::Verbatim(quote! { () }),
             ReturnType::Type(_, t) => (**t).clone(),
@@ -823,9 +825,7 @@ fn extract_wire_args(sig: &syn::Signature) -> syn::Result<Vec<WireArg>> {
                 let role = arg_role(&ty);
                 args.push(WireArg { ident, ty, role });
             }
-            FnArg::Receiver(_) => {
-
-            }
+            FnArg::Receiver(_) => {}
         }
     }
     Ok(args)
@@ -981,7 +981,6 @@ fn expand_unary_owned_method(ctx: &MethodCtx<'_>, ok_ty: &Type) -> syn::Result<T
     let arg_names: Vec<TokenStream> = arg_pats
         .iter()
         .filter_map(|p| {
-
             let tokens = p.to_string();
             let (ident, _) = tokens.split_once(':')?;
             let ident = ident.trim();
@@ -1004,13 +1003,9 @@ fn expand_unary_owned_method(ctx: &MethodCtx<'_>, ok_ty: &Type) -> syn::Result<T
 }
 
 fn build_owned_return(ok_ty: &Type) -> syn::Result<(TokenStream, TokenStream)> {
-
     if let Some(ident) = as_bare_ident(ok_ty) {
         let owned_ident = format_ident!("Owned{}", ident);
-        return Ok((
-            quote! { #owned_ident },
-            quote! { __wire.into_owned(__rt) },
-        ));
+        return Ok((quote! { #owned_ident }, quote! { __wire.into_owned(__rt) }));
     }
 
     if let Some(inner) = as_generic("Option", ok_ty)
@@ -1101,4 +1096,3 @@ fn expand_stream_method(ctx: &MethodCtx<'_>, item_ty: &Type, err_ty: Option<&Typ
         }
     }
 }
-

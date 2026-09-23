@@ -108,7 +108,6 @@ fn write_client_method(out: &mut String, plugin_ty: &str, method: &Method) {
             let _ = writeln!(out, "    }}");
         }
         MethodKind::Stream => {
-
             let _ = writeln!(
                 out,
                 "    fun {}({arg_sig}): kotlinx.coroutines.flow.Flow<{ret_kt}> {{",
@@ -334,4 +333,3 @@ const fn kt_int_cast(ty: &TypeRef) -> &'static str {
         _ => "",
     }
 }
-

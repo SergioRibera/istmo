@@ -307,4 +307,3 @@ fn stream_id_and_call_id_share_the_numeric_space() {
     drop(s);
     let _ = outbound.recv();
 }
-

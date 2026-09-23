@@ -86,11 +86,7 @@ fn write_enum(out: &mut String, e: &EnumDef) {
                         .map(|(i, ty)| format!("val f{i}: {}", ty.to_kotlin()))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    let _ = writeln!(
-                        out,
-                        "    data class {}({fields}) : {}()",
-                        v.name, e.name,
-                    );
+                    let _ = writeln!(out, "    data class {}({fields}) : {}()", v.name, e.name,);
                 }
             }
         }
@@ -99,7 +95,6 @@ fn write_enum(out: &mut String, e: &EnumDef) {
 }
 
 fn write_struct_codec(out: &mut String, s: &StructDef) {
-
     let _ = writeln!(
         out,
         "    override fun read{}(bytes: ByteArray, offset: Int): Bincode.Decoded<{}> {{",
@@ -246,12 +241,7 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
                         "                Bincode.writeEnumDiscriminant(out, {i})"
                     );
                     for (idx, ty) in v.payload.iter().enumerate() {
-                        write_write_field(
-                            out,
-                            "                ",
-                            &format!("value.f{idx}"),
-                            ty,
-                        );
+                        write_write_field(out, "                ", &format!("value.f{idx}"), ty);
                     }
                     let _ = writeln!(out, "            }}");
                 }
@@ -467,4 +457,3 @@ fn contract_references_native_handle(contract: &Contract) -> bool {
             || m.error.as_ref().is_some_and(walks)
     }) || contract.init.as_ref().is_some_and(walks)
 }
-

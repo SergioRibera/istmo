@@ -2,7 +2,6 @@ use core::fmt;
 
 #[derive(Debug)]
 pub enum AndroidRuntimeError {
-
     AlreadyStarted,
 
     NotStarted,
@@ -44,4 +43,3 @@ impl From<jni::errors::Error> for AndroidRuntimeError {
         Self::Jni(value)
     }
 }
-

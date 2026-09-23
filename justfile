@@ -11,7 +11,7 @@
 # cdylibs and stage the .so files under $buildDir/rustJniLibs/<abi>/.
 # Adding an ABI = touch `abiFilters` in the demo's app/build.gradle.kts.
 
-image := "sergioribera/rust-android:1.96-sdk-37.0"
+image := "sergioribera/rust-android:1.98-sdk-36"
 
 # Mount repo root at /src. Named volumes cache Gradle downloads + cargo
 # registry so repeat builds are fast. Host's ~/.android is bind-mounted

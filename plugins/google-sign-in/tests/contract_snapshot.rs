@@ -17,15 +17,24 @@ fn vec_of(inner: TypeRef) -> TypeRef {
 }
 
 fn field(name: &str, ty: TypeRef) -> Field {
-    Field { name: name.to_owned(), ty }
+    Field {
+        name: name.to_owned(),
+        ty,
+    }
 }
 
 fn unit_variant(name: &str) -> EnumVariant {
-    EnumVariant { name: name.to_owned(), payload: Vec::new() }
+    EnumVariant {
+        name: name.to_owned(),
+        payload: Vec::new(),
+    }
 }
 
 fn payload_variant(name: &str, payload: TypeRef) -> EnumVariant {
-    EnumVariant { name: name.to_owned(), payload: vec![payload] }
+    EnumVariant {
+        name: name.to_owned(),
+        payload: vec![payload],
+    }
 }
 
 fn expected_contract() -> Contract {
@@ -36,7 +45,10 @@ fn expected_contract() -> Contract {
             Method {
                 name: "sign_in".to_owned(),
                 kind: MethodKind::Unary,
-                args: vec![Arg { name: "mode".to_owned(), ty: named("SignInMode") }],
+                args: vec![Arg {
+                    name: "mode".to_owned(),
+                    ty: named("SignInMode"),
+                }],
                 returns: named("SignInAccount"),
                 error: Some(named("SignInError")),
             },
@@ -50,7 +62,10 @@ fn expected_contract() -> Contract {
             Method {
                 name: "refresh".to_owned(),
                 kind: MethodKind::Unary,
-                args: vec![Arg { name: "credential".to_owned(), ty: named("NativeHandleId") }],
+                args: vec![Arg {
+                    name: "credential".to_owned(),
+                    ty: named("NativeHandleId"),
+                }],
                 returns: named("SignInAccount"),
                 error: Some(named("SignInError")),
             },
@@ -124,4 +139,3 @@ fn extracted_contract_matches_fixture() {
         );
     }
 }
-

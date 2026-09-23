@@ -23,8 +23,10 @@ where
     A: Message,
     C: Message,
 {
-
-    pub fn new(runtime: &Arc<Runtime>, activity_type: impl Into<String>) -> Result<Self, IstmoError> {
+    pub fn new(
+        runtime: &Arc<Runtime>,
+        activity_type: impl Into<String>,
+    ) -> Result<Self, IstmoError> {
         Ok(Self {
             client: LiveActivityClient::from_runtime(runtime)?,
             activity_type: activity_type.into(),
@@ -48,7 +50,8 @@ where
         initial_state: C,
         style: ActivityStyle,
     ) -> Result<NativeHandle<LiveActivityToken>, ActivityError> {
-        self.start_with_hint(attributes, initial_state, style, None, None).await
+        self.start_with_hint(attributes, initial_state, style, None, None)
+            .await
     }
 
     pub async fn start_with_hint(
@@ -59,8 +62,10 @@ where
         stale_after_seconds: Option<u32>,
         android_tier_hint: Option<AndroidTierHint>,
     ) -> Result<NativeHandle<LiveActivityToken>, ActivityError> {
-        let attributes = codec::encode(&attributes).map_err(|e| ActivityError::Decode(e.to_string()))?;
-        let initial_state = codec::encode(&initial_state).map_err(|e| ActivityError::Decode(e.to_string()))?;
+        let attributes =
+            codec::encode(&attributes).map_err(|e| ActivityError::Decode(e.to_string()))?;
+        let initial_state =
+            codec::encode(&initial_state).map_err(|e| ActivityError::Decode(e.to_string()))?;
 
         let id = self
             .call_start(
@@ -92,7 +97,9 @@ where
         dismissal: DismissalPolicy,
     ) -> Result<(), ActivityError> {
         let final_state = match final_state {
-            Some(state) => Some(codec::encode(&state).map_err(|e| ActivityError::Decode(e.to_string()))?),
+            Some(state) => {
+                Some(codec::encode(&state).map_err(|e| ActivityError::Decode(e.to_string()))?)
+            }
             None => None,
         };
         self.call_end(handle, final_state, dismissal).await
@@ -115,8 +122,8 @@ where
             }
             let (attributes, _) = codec::decode::<A>(&r.attributes)
                 .map_err(|e| ActivityError::Decode(e.to_string()))?;
-            let (state, _) = codec::decode::<C>(&r.state)
-                .map_err(|e| ActivityError::Decode(e.to_string()))?;
+            let (state, _) =
+                codec::decode::<C>(&r.state).map_err(|e| ActivityError::Decode(e.to_string()))?;
             out.push(Restored {
                 handle: NativeHandle::adopt(self.runtime(), r.handle),
                 attributes,
@@ -218,4 +225,3 @@ where
             .finish()
     }
 }
-

@@ -38,4 +38,3 @@ istmo::runtime!(
         Echo => EchoImpl,
     ],
 );
-

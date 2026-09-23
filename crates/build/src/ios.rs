@@ -4,8 +4,9 @@ use crate::entitlements::IosEntitlements;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackgroundKind {
-
-    Refresh { interval_minutes: u32 },
+    Refresh {
+        interval_minutes: u32,
+    },
 
     Processing {
         requires_power: bool,
@@ -26,7 +27,6 @@ pub enum ContinuousMode {
 }
 
 impl ContinuousMode {
-
     #[must_use]
     pub const fn info_plist_value(self) -> &'static str {
         match self {
@@ -42,7 +42,6 @@ impl ContinuousMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IosBackgroundContract {
-
     pub plugin_id: String,
 
     pub class_name: String,
@@ -54,7 +53,6 @@ pub struct IosBackgroundContract {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IosBackgroundArtifacts {
-
     pub swift: String,
 
     pub info_plist_fragment: String,
@@ -273,9 +271,7 @@ pub fn required_entitlements(contract: &IosBackgroundContract) -> IosEntitlement
         &contract.kind,
         BackgroundKind::Continuous(ContinuousMode::Voip)
     ) {
-
         ent.add_string("com.apple.developer.pushkit.unrestricted-voip", "true");
     }
     ent
 }
-

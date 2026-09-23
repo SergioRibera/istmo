@@ -46,4 +46,3 @@ fn main() {
     let sum = pollster::block_on(echo.add(2, 3)).expect("add ok");
     println!("2 + 3 = {sum}");
 }
-

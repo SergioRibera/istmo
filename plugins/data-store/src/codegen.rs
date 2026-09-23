@@ -7,4 +7,3 @@ pub fn contract() -> Contract {
     extract_contract(PLUGIN_SRC, "DataStore")
         .expect("extract DataStore contract from istmo-data-store/src/lib.rs")
 }
-

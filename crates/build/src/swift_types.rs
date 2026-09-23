@@ -80,7 +80,6 @@ fn write_enum(out: &mut String, e: &EnumDef) {
             let _ = writeln!(out, "    case {case_name} = {i}");
         }
     } else {
-
         let error_conform = if is_error_shape(&e.name) {
             ": Error"
         } else {
@@ -184,7 +183,6 @@ const SWIFT_KEYWORDS: &[&str] = &[
 ];
 
 fn write_struct_codec(out: &mut String, s: &StructDef) {
-
     let _ = writeln!(
         out,
         "    public func read{}(_ c: inout Bincode.Cursor) throws -> {} {{",
@@ -304,13 +302,7 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
                     let _ = writeln!(out, "        case .{case_name}({bindings}):");
                     let _ = writeln!(out, "            Bincode.writeVarintU32(&out, {i})");
                     for (idx, ty) in v.payload.iter().enumerate() {
-                        write_write_field(
-                            out,
-                            "            ",
-                            &format!("f{idx}"),
-                            ty,
-                            "out",
-                        );
+                        write_write_field(out, "            ", &format!("f{idx}"), ty, "out");
                     }
                 }
             }
@@ -486,4 +478,3 @@ fn contract_references_native_handle(contract: &Contract) -> bool {
             || m.error.as_ref().is_some_and(walks)
     }) || contract.init.as_ref().is_some_and(walks)
 }
-

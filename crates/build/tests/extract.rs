@@ -43,14 +43,20 @@ fn stateless_unary_trait_with_primitive_arg() {
         methods: vec![Method {
             name: "echo".to_owned(),
             kind: MethodKind::Unary,
-            args: vec![Arg { name: "text".to_owned(), ty: TypeRef::String }],
+            args: vec![Arg {
+                name: "text".to_owned(),
+                ty: TypeRef::String,
+            }],
             returns: TypeRef::Named("EchoReply".to_owned()),
             error: None,
         }],
         init: None,
         types: vec![TypeDef::Struct(StructDef {
             name: "EchoReply".to_owned(),
-            fields: vec![Field { name: "text".to_owned(), ty: TypeRef::String }],
+            fields: vec![Field {
+                name: "text".to_owned(),
+                ty: TypeRef::String,
+            }],
         })],
     };
     assert_eq!(got, expected);
@@ -105,7 +111,10 @@ fn stateful_result_with_error_and_stream() {
             assert_eq!(
                 e.variants,
                 vec![
-                    EnumVariant { name: "Denied".to_owned(), payload: Vec::new() },
+                    EnumVariant {
+                        name: "Denied".to_owned(),
+                        payload: Vec::new()
+                    },
                     EnumVariant {
                         name: "Retry".to_owned(),
                         payload: vec![TypeRef::String],
@@ -154,13 +163,20 @@ fn primitive_and_wrapper_mapping() {
         TypeRef::Option(Box::new(TypeRef::Vec(Box::new(TypeRef::String))))
     );
     let m1 = &got.methods[1];
-    assert_eq!(m1.args[0].ty, TypeRef::Bytes, "Vec<u8> arg collapses to Bytes");
-    assert_eq!(m1.returns, TypeRef::Bytes, "Vec<u8> return collapses to Bytes");
+    assert_eq!(
+        m1.args[0].ty,
+        TypeRef::Bytes,
+        "Vec<u8> arg collapses to Bytes"
+    );
+    assert_eq!(
+        m1.returns,
+        TypeRef::Bytes,
+        "Vec<u8> return collapses to Bytes"
+    );
 }
 
 #[test]
 fn matches_hand_built_google_sign_in_contract() {
-
     let source = r#"
         use istmo_core::NativeHandleId;
 
@@ -273,4 +289,3 @@ fn trait_not_found() {
     let err = extract_contract(&path, "Missing").unwrap_err();
     assert!(matches!(err, istmo_build::ExtractError::TraitNotFound(_)));
 }
-

@@ -31,4 +31,3 @@ pub fn android_activity_object() -> Option<*mut std::ffi::c_void> {
         if clazz.is_null() { None } else { Some(clazz) }
     }
 }
-

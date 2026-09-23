@@ -15,7 +15,6 @@ use crate::contract::{
 
 #[derive(Debug)]
 pub enum ExtractError {
-
     Io(io::Error),
 
     Parse(syn::Error),
@@ -63,9 +62,9 @@ pub fn extract_contract(
 
 fn lower_contract(file: &File, trait_name: &str) -> Result<Contract, ExtractError> {
     let (trait_def, attr_args) = find_plugin_trait(file, trait_name)?;
-    let plugin_id = attr_args
-        .plugin_id
-        .ok_or_else(|| ExtractError::Unsupported("plugin attribute missing `name = \"…\"`".into()))?;
+    let plugin_id = attr_args.plugin_id.ok_or_else(|| {
+        ExtractError::Unsupported("plugin attribute missing `name = \"…\"`".into())
+    })?;
     let type_name = trait_def.ident.to_string();
 
     let mut methods = Vec::new();
@@ -417,4 +416,3 @@ fn tokens(ty: &Type) -> String {
     ty.to_tokens(&mut s);
     s.to_string()
 }
-

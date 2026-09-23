@@ -355,4 +355,3 @@ fn shutdown() -> Result<(), AndroidRuntimeError> {
     }
     Ok(())
 }
-

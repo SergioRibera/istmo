@@ -114,7 +114,6 @@ fn to_wire_bytes_round_trips_via_from_wire_bytes() {
 
 #[test]
 fn from_wire_bytes_rejects_stale_protocol_version() {
-
     let stale = Envelope {
         version: PROTOCOL_VERSION - 1,
         frame: Frame::Cancel { call_id: CallId(1) },
@@ -141,4 +140,3 @@ fn extra_trailing_bytes_are_reported_by_the_consumed_count() {
     assert_eq!(consumed, original_len);
     assert_eq!(bytes.len() - consumed, 3);
 }
-

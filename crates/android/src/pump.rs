@@ -32,7 +32,10 @@ pub(crate) fn spawn(
         .spawn(move || pump_loop(&jvm, &runtime_class, &outbound, &remote_rx, &shutdown_rx))
         .expect("spawn istmo pump thread");
     (
-        PumpHandles { shutdown: shutdown_tx, join },
+        PumpHandles {
+            shutdown: shutdown_tx,
+            join,
+        },
         remote_tx,
     )
 }
@@ -268,7 +271,6 @@ fn deliver(
             )
         }
         Frame::EarlyEvent { channel, .. } => {
-
             tracing::warn!(
                 channel = %channel,
                 "dropped outbound EarlyEvent frame; variant is inbound-only",
@@ -324,4 +326,3 @@ fn call_static_void(
     }
     Ok(())
 }
-

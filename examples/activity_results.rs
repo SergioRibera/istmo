@@ -61,4 +61,3 @@ fn main() {
         Err(other) => println!("share transport error: {other}"),
     }
 }
-

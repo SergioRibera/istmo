@@ -51,14 +51,12 @@ const KNOWN_OVERRIDE_KEYS: &[&str] = &["plugin", "deployment"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum Deployment {
-
     Local,
 
     Remote,
 }
 
 impl Deployment {
-
     fn parse(literal: &str) -> Option<Self> {
         match literal {
             "local" => Some(Self::Local),
@@ -70,7 +68,6 @@ impl Deployment {
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct PluginEntry {
-
     pub id: String,
 
     pub client_type: Option<String>,
@@ -114,8 +111,13 @@ pub struct IosBackgroundSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum IosBackgroundKindSpec {
-    Refresh { interval_minutes: u32 },
-    Processing { requires_power: bool, requires_network: bool },
+    Refresh {
+        interval_minutes: u32,
+    },
+    Processing {
+        requires_power: bool,
+        requires_network: bool,
+    },
     Continuous(IosContinuousModeSpec),
 }
 
@@ -154,7 +156,6 @@ pub struct WindowsManifestFragment {
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Manifest {
-
     pub plugins: Vec<PluginEntry>,
 
     pub native_deps: NativeDeps,
@@ -165,7 +166,6 @@ pub struct Manifest {
 }
 
 impl Manifest {
-
     pub fn parse(source: &str) -> Result<Self, ManifestError> {
         let doc: DocumentMut = source.parse().map_err(ManifestError::Parse)?;
         Self::from_document(&doc)
@@ -183,7 +183,9 @@ impl Manifest {
     fn from_document(doc: &DocumentMut) -> Result<Self, ManifestError> {
         for (name, _) in doc.as_table() {
             if !KNOWN_KEYS.contains(&name) {
-                return Err(ManifestError::UnknownKey { key: name.to_owned() });
+                return Err(ManifestError::UnknownKey {
+                    key: name.to_owned(),
+                });
             }
         }
         let mut native_deps = NativeDeps::new();
@@ -235,24 +237,40 @@ impl Manifest {
 
 #[derive(Debug)]
 pub enum ManifestError {
-
-    Io { path: PathBuf, error: std::io::Error },
+    Io {
+        path: PathBuf,
+        error: std::io::Error,
+    },
 
     Parse(toml_edit::TomlError),
 
-    Missing { key: &'static str },
+    Missing {
+        key: &'static str,
+    },
 
-    TypeMismatch { key: String, expected: &'static str },
+    TypeMismatch {
+        key: String,
+        expected: &'static str,
+    },
 
-    UnknownKey { key: String },
+    UnknownKey {
+        key: String,
+    },
 
     UnknownGradleScope(String),
 
-    UnknownDeployment { key: String, value: String },
+    UnknownDeployment {
+        key: String,
+        value: String,
+    },
 
-    UnknownBackgroundKind { value: String },
+    UnknownBackgroundKind {
+        value: String,
+    },
 
-    UnknownContinuousMode { value: String },
+    UnknownContinuousMode {
+        value: String,
+    },
 }
 
 impl std::fmt::Display for ManifestError {
@@ -303,7 +321,6 @@ fn parse_plugins(
     native_deps: &mut NativeDeps,
 ) -> Result<Vec<PluginEntry>, ManifestError> {
     let Some(item) = doc.get("plugin") else {
-
         return Ok(Vec::new());
     };
     if let Some(table) = item.as_table() {
@@ -333,10 +350,14 @@ fn parse_plugin_entry(
 ) -> Result<PluginEntry, ManifestError> {
     for (name, _) in table {
         if !KNOWN_PLUGIN_KEYS.contains(&name) {
-            return Err(ManifestError::UnknownKey { key: format!("{context}.{name}") });
+            return Err(ManifestError::UnknownKey {
+                key: format!("{context}.{name}"),
+            });
         }
     }
-    let id_item = table.get("id").ok_or(ManifestError::Missing { key: "plugin.id" })?;
+    let id_item = table
+        .get("id")
+        .ok_or(ManifestError::Missing { key: "plugin.id" })?;
     let id = expect_string(id_item, "plugin.id")?.to_owned();
     let client_type = match table.get("client_type") {
         Some(item) => Some(expect_string(item, "plugin.client_type")?.to_owned()),
@@ -408,9 +429,9 @@ fn parse_android_service(
         .and_then(|item| expect_string(item, "plugin.android_service.class_name"))?
         .to_owned();
     let foreground_service_type = match table.get("foreground_service_type") {
-        Some(item) => Some(
-            expect_string(item, "plugin.android_service.foreground_service_type")?.to_owned(),
-        ),
+        Some(item) => {
+            Some(expect_string(item, "plugin.android_service.foreground_service_type")?.to_owned())
+        }
         None => None,
     };
     let exported = match table.get("exported") {
@@ -497,9 +518,7 @@ fn parse_ios_background(
                 .ok_or(ManifestError::Missing {
                     key: "plugin.ios_background.continuous_mode",
                 })
-                .and_then(|item| {
-                    expect_string(item, "plugin.ios_background.continuous_mode")
-                })?;
+                .and_then(|item| expect_string(item, "plugin.ios_background.continuous_mode"))?;
             let mode = match mode_literal {
                 "audio" => IosContinuousModeSpec::Audio,
                 "location" => IosContinuousModeSpec::Location,
@@ -563,18 +582,19 @@ fn parse_remote_override(table: &Table) -> Result<RemoteOverride, ManifestError>
             });
         }
     }
-    let plugin_item = table
-        .get("plugin")
-        .ok_or(ManifestError::Missing { key: "remote_override.plugin" })?;
-    let plugin = expect_string(plugin_item, "remote_override.plugin")?.to_owned();
-    let deployment_item = table
-        .get("deployment")
-        .ok_or(ManifestError::Missing { key: "remote_override.deployment" })?;
-    let literal = expect_string(deployment_item, "remote_override.deployment")?;
-    let deployment = Deployment::parse(literal).ok_or_else(|| ManifestError::UnknownDeployment {
-        key: "remote_override.deployment".to_owned(),
-        value: literal.to_owned(),
+    let plugin_item = table.get("plugin").ok_or(ManifestError::Missing {
+        key: "remote_override.plugin",
     })?;
+    let plugin = expect_string(plugin_item, "remote_override.plugin")?.to_owned();
+    let deployment_item = table.get("deployment").ok_or(ManifestError::Missing {
+        key: "remote_override.deployment",
+    })?;
+    let literal = expect_string(deployment_item, "remote_override.deployment")?;
+    let deployment =
+        Deployment::parse(literal).ok_or_else(|| ManifestError::UnknownDeployment {
+            key: "remote_override.deployment".to_owned(),
+            value: literal.to_owned(),
+        })?;
     Ok(RemoteOverride { plugin, deployment })
 }
 
@@ -592,7 +612,9 @@ fn parse_gradle(table: &Table, context: &'static str) -> Result<GradleDep, Manif
             "artifact" => artifact = Some(expect_string_ctx(item, context, "artifact")?),
             "version" => version = Some(expect_string_ctx(item, context, "version")?),
             other => {
-                return Err(ManifestError::UnknownKey { key: format!("{context}.{other}") });
+                return Err(ManifestError::UnknownKey {
+                    key: format!("{context}.{other}"),
+                });
             }
         }
     }
@@ -633,21 +655,31 @@ fn parse_swift_package(
         match name {
             "url" => url = Some(expect_string_ctx(item, context, "url")?),
             "product" => product = Some(expect_string_ctx(item, context, "product")?),
-            "from_version" => from_version = Some(expect_string_ctx(item, context, "from_version")?),
+            "from_version" => {
+                from_version = Some(expect_string_ctx(item, context, "from_version")?)
+            }
             other => {
-                return Err(ManifestError::UnknownKey { key: format!("{context}.{other}") });
+                return Err(ManifestError::UnknownKey {
+                    key: format!("{context}.{other}"),
+                });
             }
         }
     }
     Ok(SwiftPackageDep {
         url: url
-            .ok_or_else(|| ManifestError::Missing { key: static_field(context, "url") })?
+            .ok_or_else(|| ManifestError::Missing {
+                key: static_field(context, "url"),
+            })?
             .to_owned(),
         product: product
-            .ok_or_else(|| ManifestError::Missing { key: static_field(context, "product") })?
+            .ok_or_else(|| ManifestError::Missing {
+                key: static_field(context, "product"),
+            })?
             .to_owned(),
         from_version: from_version
-            .ok_or_else(|| ManifestError::Missing { key: static_field(context, "from_version") })?
+            .ok_or_else(|| ManifestError::Missing {
+                key: static_field(context, "from_version"),
+            })?
             .to_owned(),
     })
 }
@@ -656,10 +688,11 @@ fn expect_array_of_tables<'a>(
     item: &'a Item,
     key: &'static str,
 ) -> Result<&'a ArrayOfTables, ManifestError> {
-    item.as_array_of_tables().ok_or_else(|| ManifestError::TypeMismatch {
-        key: key.to_owned(),
-        expected: "array of tables ([[…]])",
-    })
+    item.as_array_of_tables()
+        .ok_or_else(|| ManifestError::TypeMismatch {
+            key: key.to_owned(),
+            expected: "array of tables ([[…]])",
+        })
 }
 
 fn expect_string<'a>(item: &'a Item, key: &'static str) -> Result<&'a str, ManifestError> {
@@ -756,11 +789,7 @@ pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
     // Android + iOS files, native-hosted plugins may ship all three.
     let crate_root = path.parent().unwrap_or_else(|| Path::new("."));
     let native_root = crate_root.join("native");
-    for (platform, env_suffix) in [
-        ("android", "ANDROID"),
-        ("ios", "IOS"),
-        ("macos", "MACOS"),
-    ] {
+    for (platform, env_suffix) in [("android", "ANDROID"), ("ios", "IOS"), ("macos", "MACOS")] {
         let dir = native_root.join(platform);
         if dir.is_dir() {
             let display = fs::canonicalize(&dir).unwrap_or(dir);
@@ -801,10 +830,7 @@ pub fn emit_from(manifest_path: impl AsRef<Path>, source_path: impl AsRef<Path>)
     let manifest = emit_manifest_metadata(manifest_path);
     let source_path = source_path.as_ref();
 
-    let has_client = manifest
-        .plugins
-        .iter()
-        .any(|p| p.client_type.is_some());
+    let has_client = manifest.plugins.iter().any(|p| p.client_type.is_some());
     if has_client {
         println!("cargo:rerun-if-changed={}", source_path.display());
     }
@@ -814,14 +840,13 @@ pub fn emit_from(manifest_path: impl AsRef<Path>, source_path: impl AsRef<Path>)
             continue;
         };
         let trait_name = trait_from_client_type(client_type);
-        let contract = crate::extract_contract(source_path, &trait_name)
-            .unwrap_or_else(|err| {
-                panic!(
-                    "istmo-build emit(): extract `{trait_name}` for plugin `{}` from `{}`: {err}",
-                    plugin.id,
-                    source_path.display(),
-                )
-            });
+        let contract = crate::extract_contract(source_path, &trait_name).unwrap_or_else(|err| {
+            panic!(
+                "istmo-build emit(): extract `{trait_name}` for plugin `{}` from `{}`: {err}",
+                plugin.id,
+                source_path.display(),
+            )
+        });
         emit_contract(&contract);
     }
 }
@@ -840,7 +865,6 @@ fn trait_from_client_type(client_type: &str) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ResolvedWiring {
-
     pub local_clients: Vec<String>,
 
     pub remote_clients: Vec<String>,
@@ -875,7 +899,10 @@ pub fn resolve_wiring(
             }
         }
     }
-    ResolvedWiring { local_clients: local, remote_clients: remote }
+    ResolvedWiring {
+        local_clients: local,
+        remote_clients: remote,
+    }
 }
 
 #[must_use]
@@ -998,7 +1025,11 @@ version = "1.13.0"
         let gradle: Vec<_> = m.native_deps.gradle_entries().collect();
         assert_eq!(gradle.len(), 3);
         assert!(gradle.iter().any(|g| g.coord.artifact == "credentials"));
-        assert!(gradle.iter().any(|g| g.coord.artifact == "play-services-ads"));
+        assert!(
+            gradle
+                .iter()
+                .any(|g| g.coord.artifact == "play-services-ads")
+        );
         assert!(gradle.iter().any(|g| g.coord.artifact == "core-ktx"));
         assert_eq!(m.native_deps.swift_entries().count(), 1);
     }
@@ -1138,7 +1169,6 @@ id = "istmo.example"
 
     #[test]
     fn manifest_native_deps_survive_bincode_round_trip() {
-
         let m = Manifest::parse(FULL_MANIFEST).expect("parse");
         let hex = crate::serialize_native_deps(&m.native_deps).expect("serialize");
         let back = crate::deserialize_native_deps(&hex).expect("deserialize");
@@ -1190,10 +1220,15 @@ interval_minutes = 15
             .as_ref()
             .expect("ios_background parsed");
         assert_eq!(spec.class_name, "SyncBackgroundHandler");
-        assert_eq!(spec.task_identifier.as_deref(), Some("com.myapp.sync.refresh"));
+        assert_eq!(
+            spec.task_identifier.as_deref(),
+            Some("com.myapp.sync.refresh")
+        );
         assert!(matches!(
             spec.kind,
-            IosBackgroundKindSpec::Refresh { interval_minutes: 15 }
+            IosBackgroundKindSpec::Refresh {
+                interval_minutes: 15
+            }
         ));
     }
 
@@ -1211,11 +1246,7 @@ requires_power = true
 requires_network = true
 "#;
         let m = Manifest::parse(src).expect("parse");
-        let kind = &m.plugins[0]
-            .ios_background
-            .as_ref()
-            .expect("parsed")
-            .kind;
+        let kind = &m.plugins[0].ios_background.as_ref().expect("parsed").kind;
         assert!(matches!(
             kind,
             IosBackgroundKindSpec::Processing {
@@ -1237,11 +1268,7 @@ kind = "continuous"
 continuous_mode = "audio"
 "#;
         let m = Manifest::parse(src).expect("parse");
-        let kind = &m.plugins[0]
-            .ios_background
-            .as_ref()
-            .expect("parsed")
-            .kind;
+        let kind = &m.plugins[0].ios_background.as_ref().expect("parsed").kind;
         assert!(matches!(
             kind,
             IosBackgroundKindSpec::Continuous(IosContinuousModeSpec::Audio)
@@ -1278,7 +1305,9 @@ kind = "refresh"
         let err = Manifest::parse(src).expect_err("must fail");
         assert!(matches!(
             err,
-            ManifestError::Missing { key: "plugin.ios_background.interval_minutes" }
+            ManifestError::Missing {
+                key: "plugin.ios_background.interval_minutes"
+            }
         ));
     }
 
@@ -1307,4 +1336,3 @@ interval_minutes = 30
         assert!(back.plugins[0].ios_background.is_some());
     }
 }
-

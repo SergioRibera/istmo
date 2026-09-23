@@ -139,7 +139,6 @@ fn deliver(callbacks: &IstmoIosCallbacks, frame: Frame) {
             }
         }
         Frame::EarlyEvent { channel, .. } => {
-
             tracing::warn!(
                 channel = %channel,
                 "dropped outbound EarlyEvent frame; variant is inbound-only",
@@ -167,4 +166,3 @@ fn deliver(callbacks: &IstmoIosCallbacks, frame: Frame) {
         },
     }
 }
-

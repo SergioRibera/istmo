@@ -7,4 +7,3 @@ pub fn contract() -> Contract {
     extract_contract(PLUGIN_SRC, "LiveActivity")
         .expect("extract LiveActivity contract from istmo-live-activity/src/lib.rs")
 }
-

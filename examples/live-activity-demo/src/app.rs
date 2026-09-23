@@ -65,7 +65,10 @@ impl SharedState {
 
     fn push_log(&self, op: impl Into<String>, outcome: impl Into<String>) {
         let mut lines = self.transcript.lock().expect("transcript mutex");
-        lines.push(LogLine { op: op.into(), outcome: outcome.into() });
+        lines.push(LogLine {
+            op: op.into(),
+            outcome: outcome.into(),
+        });
         self.egui_ctx.request_repaint();
     }
 
@@ -102,12 +105,13 @@ pub struct DemoApp {
 
 impl DemoApp {
     pub fn new(shared: Arc<SharedState>) -> Self {
-
         let boot = Arc::clone(&shared);
-        thread::spawn(move || match pollster::block_on(boot.activities.capabilities()) {
-            Ok(caps) => boot.set_capabilities(caps),
-            Err(err) => boot.push_log("capabilities", format!("error: {err}")),
-        });
+        thread::spawn(
+            move || match pollster::block_on(boot.activities.capabilities()) {
+                Ok(caps) => boot.set_capabilities(caps),
+                Err(err) => boot.push_log("capabilities", format!("error: {err}")),
+            },
+        );
         Self {
             shared,
             title_input: "Focus block".to_owned(),
@@ -185,11 +189,11 @@ impl DemoApp {
         };
         let shared = Arc::clone(&self.shared);
         thread::spawn(move || {
-            match pollster::block_on(shared.activities.end(
-                handle_id,
-                Some(final_state),
-                dismissal,
-            )) {
+            match pollster::block_on(
+                shared
+                    .activities
+                    .end(handle_id, Some(final_state), dismissal),
+            ) {
                 Ok(()) => {
                     shared.push_log("end", "ok");
                     shared.set_handle(None);
@@ -202,13 +206,13 @@ impl DemoApp {
 
     fn on_probe_enabled(&self) {
         let shared = Arc::clone(&self.shared);
-        thread::spawn(
-            move || match pollster::block_on(shared.activities.are_activities_enabled()) {
+        thread::spawn(move || {
+            match pollster::block_on(shared.activities.are_activities_enabled()) {
                 Ok(true) => shared.push_log("are_activities_enabled", "true"),
                 Ok(false) => shared.push_log("are_activities_enabled", "false"),
                 Err(err) => shared.push_log("are_activities_enabled", format!("error: {err}")),
-            },
-        );
+            }
+        });
     }
 
     fn on_restore(&self) {
@@ -249,8 +253,12 @@ fn format_elapsed(seconds: u32) -> String {
 
 impl eframe::App for DemoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-
-        if self.shared.timer_start.lock().expect("timer mutex").is_some()
+        if self
+            .shared
+            .timer_start
+            .lock()
+            .expect("timer mutex")
+            .is_some()
             && self.last_tick.elapsed() >= Duration::from_millis(500)
         {
             self.last_tick = Instant::now();
@@ -371,4 +379,3 @@ impl eframe::App for DemoApp {
         });
     }
 }
-

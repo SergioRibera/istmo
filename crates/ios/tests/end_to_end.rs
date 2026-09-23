@@ -343,4 +343,3 @@ fn ios_transport_end_to_end() {
 
     istmo_ios_shutdown();
 }
-

@@ -120,7 +120,11 @@ version = "1.13.0"
     assert_eq!(ids, vec!["istmo.google_sign_in", "istmo.admob"]);
     let gradle: Vec<_> = m.native_deps.gradle_entries().collect();
     assert_eq!(gradle.len(), 3);
-    assert!(gradle.iter().all(|g| g.scope == GradleScope::Implementation));
+    assert!(
+        gradle
+            .iter()
+            .all(|g| g.scope == GradleScope::Implementation)
+    );
 
     let hex = serialize_native_deps(&m.native_deps).expect("serialize");
     let back = deserialize_native_deps(&hex).expect("deserialize");
@@ -140,7 +144,10 @@ default_deployment = "remote"
 
     let wiring = resolve_wiring(&[plugin], None);
     assert!(wiring.local_clients.is_empty());
-    assert_eq!(wiring.remote_clients, vec!["::istmo_heavy_ml::HeavyMlClient"]);
+    assert_eq!(
+        wiring.remote_clients,
+        vec!["::istmo_heavy_ml::HeavyMlClient"]
+    );
 }
 
 #[test]
@@ -157,12 +164,18 @@ deployment = "remote"
 "#;
     let plugin = Manifest::parse(plugin_src).expect("parse plugin");
     let app = Manifest::parse(app_src).expect("parse app");
-    assert!(app.plugins.is_empty(), "app manifest may omit plugin sections");
+    assert!(
+        app.plugins.is_empty(),
+        "app manifest may omit plugin sections"
+    );
     assert_eq!(app.remote_overrides.len(), 1);
 
     let wiring = resolve_wiring(&[plugin], Some(&app));
     assert!(wiring.local_clients.is_empty());
-    assert_eq!(wiring.remote_clients, vec!["::istmo_compute::ComputeClient"]);
+    assert_eq!(
+        wiring.remote_clients,
+        vec!["::istmo_compute::ComputeClient"]
+    );
 }
 
 #[test]
@@ -182,7 +195,10 @@ deployment = "local"
     let app = Manifest::parse(app_src).expect("parse app");
 
     let wiring = resolve_wiring(&[plugin], Some(&app));
-    assert_eq!(wiring.local_clients, vec!["::istmo_heavy_ml::HeavyMlClient"]);
+    assert_eq!(
+        wiring.local_clients,
+        vec!["::istmo_heavy_ml::HeavyMlClient"]
+    );
     assert!(wiring.remote_clients.is_empty());
 }
 
@@ -229,7 +245,10 @@ xml = "<dependency/>"
 
     let hex = istmo_build::handover::serialize_manifest(&m).expect("serialize");
     let back = istmo_build::handover::deserialize_manifest(&hex).expect("deserialize");
-    assert_eq!(back.windows_manifest_fragments, m.windows_manifest_fragments);
+    assert_eq!(
+        back.windows_manifest_fragments,
+        m.windows_manifest_fragments
+    );
 }
 
 #[test]
@@ -260,4 +279,3 @@ default_deployment = "sandbox"
     assert!(msg.contains("`sandbox`"), "got {msg}");
     assert!(msg.contains("expected `local` or `remote`"), "got {msg}");
 }
-

@@ -63,7 +63,9 @@ impl std::error::Error for DataStoreError {}
 impl DataStoreConfig {
     #[must_use]
     pub fn new(namespace: impl Into<String>) -> Self {
-        Self { namespace: namespace.into() }
+        Self {
+            namespace: namespace.into(),
+        }
     }
 }
 
@@ -96,4 +98,3 @@ pub trait DataStore {
 
     async fn clear(&self) -> Result<(), DataStoreError>;
 }
-

@@ -2,7 +2,6 @@ use std::fmt::Write as _;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerContract {
-
     pub task_id: String,
 
     pub class_name: String,
@@ -110,4 +109,3 @@ pub fn generate_android_worker(contract: &WorkerContract) -> String {
     let _ = writeln!(out, "}}");
     out
 }
-

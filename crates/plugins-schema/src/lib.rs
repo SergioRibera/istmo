@@ -560,4 +560,3 @@ pub fn admob() -> Contract {
         ],
     }
 }
-

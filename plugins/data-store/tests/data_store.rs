@@ -2,9 +2,7 @@ use std::sync::Arc;
 use std::thread;
 
 use istmo_core::{Envelope, Frame, InstanceId, Runtime, codec};
-use istmo_data_store::{
-    DATA_STORE_PLUGIN_ID, DataStoreClient, DataStoreConfig, DataStoreError,
-};
+use istmo_data_store::{DATA_STORE_PLUGIN_ID, DataStoreClient, DataStoreConfig, DataStoreError};
 
 fn cfg() -> DataStoreConfig {
     DataStoreConfig::new("app_prefs")
@@ -19,7 +17,11 @@ fn spawn_backend(
     thread::spawn(move || {
         let env = outbound.recv().expect("create envelope");
         let (create_call_id, config_bytes) = match env.frame {
-            Frame::CreateInstance { call_id, plugin_id, payload } => {
+            Frame::CreateInstance {
+                call_id,
+                plugin_id,
+                payload,
+            } => {
                 assert_eq!(plugin_id, DATA_STORE_PLUGIN_ID);
                 (call_id, payload)
             }
@@ -140,4 +142,3 @@ fn backend_error_surfaces_as_plugin_error_bytes() {
 
     backend.join().unwrap();
 }
-

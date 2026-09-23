@@ -32,7 +32,6 @@ pub struct EdgeInsets {
 }
 
 impl EdgeInsets {
-
     pub const ZERO: Self = Self {
         top: 0.0,
         right: 0.0,
@@ -64,7 +63,6 @@ impl EdgeInsets {
 #[message(bincode = "::bincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SafeAreaInsets {
-
     pub system_bars: EdgeInsets,
 
     pub ime: EdgeInsets,
@@ -73,7 +71,6 @@ pub struct SafeAreaInsets {
 }
 
 impl SafeAreaInsets {
-
     #[must_use]
     pub const fn padding(self) -> EdgeInsets {
         self.system_bars.max(self.display_cutout)
@@ -97,7 +94,6 @@ impl Plugin for SafeArea {
 }
 
 impl SafeArea {
-
     pub fn acquire() -> Result<Self, IstmoError> {
         let rt = Runtime::global()?;
         Self::from_runtime(&rt)
@@ -139,7 +135,6 @@ pub struct SafeAreaStream {
 }
 
 impl SafeAreaStream {
-
     pub fn recv(&self) -> Result<SafeAreaInsets, IstmoError> {
         let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
         decode(&bytes)
@@ -164,4 +159,3 @@ fn decode(bytes: &[u8]) -> Result<SafeAreaInsets, IstmoError> {
     let (insets, _) = codec::decode::<SafeAreaInsets>(bytes)?;
     Ok(insets)
 }
-

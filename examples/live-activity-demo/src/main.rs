@@ -38,7 +38,4 @@ fn main() -> Result<(), eframe::Error> {
     target_os = "visionos",
     target_os = "watchos",
 ))]
-fn main() {
-
-}
-
+fn main() {}

@@ -15,11 +15,11 @@ use istmo::plugins::{
     NotificationsClient, PermissionsClient, SafeArea, SafeAreaInsets, SlotTarget,
     banner_rect_from_logical,
 };
-use istmo_plugins::admob::{
-    AdError, AdMobClient, AdMobConfig, InterstitialOutcome, RewardedOutcome,
-};
 use istmo_google_sign_in::{
     OwnedSignInAccount, SignInClient, SignInConfig, SignInError, SignInMode,
+};
+use istmo_plugins::admob::{
+    AdError, AdMobClient, AdMobConfig, InterstitialOutcome, RewardedOutcome,
 };
 
 const SERVER_CLIENT_ID: &str =
@@ -83,7 +83,6 @@ struct AccountView {
 
 impl From<&OwnedSignInAccount> for AccountView {
     fn from(a: &OwnedSignInAccount) -> Self {
-
         let id_token_preview = if a.id_token.len() > 42 {
             format!("{}…", &a.id_token[..42])
         } else {
@@ -207,7 +206,6 @@ impl DemoApp {
                     let stream = sa.stream();
                     let ctx_clone = ctx.clone();
                     std::thread::spawn(move || {
-
                         while let Ok(_insets) = stream.recv() {
                             ctx_clone.request_repaint();
                         }
@@ -330,7 +328,6 @@ fn safe_area_margin(insets: Option<SafeAreaInsets>) -> egui::Margin {
 
 impl eframe::App for DemoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-
         #[cfg(any(
             target_os = "android",
             target_os = "ios",
@@ -433,7 +430,6 @@ impl DemoApp {
     }
 
     fn render_signed_in(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, account: &AccountView) {
-
         let admob = self.ensure_admob(ctx);
 
         card(ui, |ui| render_account(ui, account));
@@ -542,7 +538,6 @@ impl DemoApp {
         clip: egui::Rect,
         px: f32,
     ) {
-
         let width = ui.available_width();
         let size = egui::vec2(width, 60.0);
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -683,7 +678,6 @@ fn card(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn field(ui: &mut egui::Ui, key: &str, value: &str) {
-
     const KEY_COL_WIDTH: f32 = 78.0;
     ui.horizontal(|ui| {
         ui.add_sized(
@@ -896,4 +890,3 @@ fn welcome_notification(account: &OwnedSignInAccount) -> NotificationRequest {
         tag: Some("sign-in-welcome".to_owned()),
     }
 }
-

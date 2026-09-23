@@ -127,7 +127,6 @@ fn shuttle(
 
 #[test]
 fn app_to_remote_call_and_response_flow_over_bridge_bytes() {
-
     let app_init = Runtime::mock();
     let app = app_init.runtime;
     let app_outbound = app_init.outbound;
@@ -255,7 +254,9 @@ fn declare_remote_plugin_routes_matching_outbound_through_sink() {
     assert_eq!(sink_snapshot.len(), 1, "sink got one envelope");
     let sink_env = Envelope::from_wire_bytes(&sink_snapshot[0]).expect("decode sink envelope");
     match &sink_env.frame {
-        Frame::Call { plugin_id, method, .. } => {
+        Frame::Call {
+            plugin_id, method, ..
+        } => {
             assert_eq!(plugin_id, remote_id);
             assert_eq!(method, "compute");
         }
@@ -282,7 +283,9 @@ fn declare_remote_plugin_routes_matching_outbound_through_sink() {
     let _handle = rt
         .call(local_id, None, "echo", codec::encode(&()).unwrap())
         .expect("open local call");
-    let env = typed_outbound.try_recv().expect("local call on typed outbound");
+    let env = typed_outbound
+        .try_recv()
+        .expect("local call on typed outbound");
     match env.frame {
         Frame::Call { plugin_id, .. } => assert_eq!(plugin_id, local_id),
         other => panic!("expected Call for local plugin, got {other:?}"),
@@ -342,4 +345,3 @@ fn mark_call_remote_routes_hosted_respond_through_sink() {
         "respond must not reach typed outbound",
     );
 }
-

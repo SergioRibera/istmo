@@ -64,20 +64,18 @@ fn main() -> ExitCode {
             Ok(types) => {
                 let mdx = render_types_mdx(&types);
                 if let Err(err) = write_types_mdx(&dest, &mdx) {
-                    eprintln!(
-                        "docs-types: failed to write {}: {err}",
-                        dest.display()
-                    );
+                    eprintln!("docs-types: failed to write {}: {err}", dest.display());
                     failed = true;
                 } else {
-                    println!("docs-types: wrote {} ({} types)", dest.display(), types.len());
+                    println!(
+                        "docs-types: wrote {} ({} types)",
+                        dest.display(),
+                        types.len()
+                    );
                 }
             }
             Err(err) => {
-                eprintln!(
-                    "docs-types: failed to extract {}: {err}",
-                    source.display()
-                );
+                eprintln!("docs-types: failed to extract {}: {err}", source.display());
                 failed = true;
             }
         }

@@ -18,9 +18,9 @@ use std::sync::{Arc, Mutex};
 
 use flume::{Receiver, Sender};
 use istmo_core::Runtime;
-use raw_window_handle::{HandleError, HasWindowHandle};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use raw_window_handle::RawWindowHandle;
+use raw_window_handle::{HandleError, HasWindowHandle};
 
 use crate::{PenError, PenEvent, PenHoverEvent};
 
@@ -41,16 +41,10 @@ mod linux;
 /// their backends land.
 #[derive(Debug)]
 struct WindowState {
-    #[cfg_attr(
-        not(any(target_os = "windows", target_os = "macos")),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
     events_tx: Sender<PenEvent>,
     events_rx: Mutex<Option<Receiver<PenEvent>>>,
-    #[cfg_attr(
-        not(any(target_os = "windows", target_os = "macos")),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
     hover_tx: Sender<PenHoverEvent>,
     hover_rx: Mutex<Option<Receiver<PenHoverEvent>>>,
     #[cfg(target_os = "windows")]
@@ -111,11 +105,7 @@ impl PenPublisher {
     /// intercepts `WM_POINTER*` messages; on other desktop OSes it
     /// currently only records the mapping (backend lands in a later
     /// milestone). Fails only when the raw handle cannot be resolved.
-    pub fn register_window(
-        &self,
-        id: u64,
-        window: impl HasWindowHandle,
-    ) -> Result<(), PenError> {
+    pub fn register_window(&self, id: u64, window: impl HasWindowHandle) -> Result<(), PenError> {
         let handle = window
             .window_handle()
             .map_err(|err: HandleError| PenError::Backend(err.to_string()))?;

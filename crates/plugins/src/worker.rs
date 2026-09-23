@@ -13,7 +13,6 @@ use istmo_macros::message;
 #[message(bincode = "::bincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NetworkKind {
-
     #[default]
     NotRequired,
 
@@ -53,7 +52,6 @@ pub struct WorkerContext {
 }
 
 impl WorkerContext {
-
     #[must_use]
     pub const fn new(
         runtime: Arc<Runtime>,
@@ -106,4 +104,3 @@ impl WorkerContext {
         &self.runtime
     }
 }
-

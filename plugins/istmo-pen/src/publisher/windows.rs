@@ -22,9 +22,7 @@ use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
-use windows_sys::Win32::UI::Controls::{
-    DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass,
-};
+use windows_sys::Win32::UI::Controls::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::Input::Pointer::{
     GetPointerPenInfo, GetPointerPenInfoHistory, GetPointerType, POINTER_PEN_INFO,
 };
@@ -196,13 +194,11 @@ fn lookup_entry(hwnd_id: usize) -> Option<Entry> {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    list.iter()
-        .find(|e| e.hwnd_id == hwnd_id)
-        .map(|e| Entry {
-            hwnd_id: e.hwnd_id,
-            state: Arc::clone(&e.state),
-            clock: Arc::clone(&e.clock),
-        })
+    list.iter().find(|e| e.hwnd_id == hwnd_id).map(|e| Entry {
+        hwnd_id: e.hwnd_id,
+        state: Arc::clone(&e.state),
+        clock: Arc::clone(&e.clock),
+    })
 }
 
 const fn is_pointer_message(msg: u32) -> bool {
@@ -283,8 +279,7 @@ fn read_history(hwnd: HWND, pointer_id: u32, entry: &Entry) -> Vec<PenSample> {
     if ok == 0 || count <= 1 {
         return Vec::new();
     }
-    let mut buf: Vec<POINTER_PEN_INFO> =
-        vec![unsafe { std::mem::zeroed() }; count as usize];
+    let mut buf: Vec<POINTER_PEN_INFO> = vec![unsafe { std::mem::zeroed() }; count as usize];
     // SAFETY: buf holds `count` initialised POINTER_PEN_INFO slots.
     let ok = unsafe { GetPointerPenInfoHistory(pointer_id, &mut count, buf.as_mut_ptr()) };
     if ok == 0 {
@@ -322,12 +317,11 @@ fn decode_sample(hwnd: HWND, info: &POINTER_PEN_INFO, entry: &Entry) -> PenSampl
         0.0
     };
 
-    let tool_kind =
-        if info.penFlags & (PEN_FLAG_ERASER | PEN_FLAG_INVERTED) != 0 {
-            PenToolKind::Eraser
-        } else {
-            PenToolKind::Tip
-        };
+    let tool_kind = if info.penFlags & (PEN_FLAG_ERASER | PEN_FLAG_INVERTED) != 0 {
+        PenToolKind::Eraser
+    } else {
+        PenToolKind::Tip
+    };
 
     let mut buttons = 0u32;
     if info.penFlags & PEN_FLAG_BARREL != 0 {

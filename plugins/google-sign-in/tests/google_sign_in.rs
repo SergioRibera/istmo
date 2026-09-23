@@ -22,7 +22,11 @@ fn sample_account(handle: u64) -> SignInAccount {
         display_name: Some("Seymour Skinner".to_owned()),
         photo_url: None,
         id_token: "eyJhbGciOi...".to_owned(),
-        granted_scopes: vec!["openid".to_owned(), "email".to_owned(), "profile".to_owned()],
+        granted_scopes: vec![
+            "openid".to_owned(),
+            "email".to_owned(),
+            "profile".to_owned(),
+        ],
         credential: NativeHandleId(handle),
     }
 }
@@ -36,7 +40,11 @@ fn spawn_backend(
     thread::spawn(move || {
         let env = outbound.recv().expect("create envelope");
         let (create_call_id, config_bytes) = match env.frame {
-            Frame::CreateInstance { call_id, plugin_id, payload } => {
+            Frame::CreateInstance {
+                call_id,
+                plugin_id,
+                payload,
+            } => {
                 assert_eq!(plugin_id, GOOGLE_SIGN_IN_PLUGIN_ID);
                 (call_id, payload)
             }
@@ -187,4 +195,3 @@ fn domain_error_surfaces_as_plugin_error_bytes() {
     assert_eq!(decoded, SignInError::UserCancelled);
     backend.join().unwrap();
 }
-

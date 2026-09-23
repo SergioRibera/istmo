@@ -116,7 +116,10 @@ fn push_event_delivers_to_registered_window() {
     loop {
         if let Some(item) = stream.try_recv() {
             let msg = item.expect("stream item");
-            assert!(matches!(msg, istmo_core::StreamItem::Event(PenEvent::Down(_))));
+            assert!(matches!(
+                msg,
+                istmo_core::StreamItem::Event(PenEvent::Down(_))
+            ));
             break;
         }
         assert!(

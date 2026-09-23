@@ -117,8 +117,6 @@ fn multiple_subscribers_all_observe_each_update() {
 
 #[test]
 fn plugin_id_matches_channel_key() {
-
     use istmo_core::Plugin;
     assert_eq!(SafeArea::PLUGIN_ID, SAFE_AREA_CHANNEL);
 }
-

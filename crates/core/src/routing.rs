@@ -119,7 +119,6 @@ impl RoutingTables {
         };
         match entry {
             PendingReceiver::Call(tx) => {
-
                 drop(tx.send(result));
                 Ok(())
             }
@@ -211,4 +210,3 @@ impl RoutingTables {
         count
     }
 }
-

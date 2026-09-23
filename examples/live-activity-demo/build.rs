@@ -1,6 +1,4 @@
-use istmo_build::{
-    AppOpts, Contract, EnumDef, EnumVariant, Field, StructDef, TypeDef, TypeRef,
-};
+use istmo_build::{AppOpts, Contract, EnumDef, EnumVariant, Field, StructDef, TypeDef, TypeRef};
 
 fn main() {
     // `LiveActivity` ships via the standard `DEP_*_ISTMO_CONTRACT` handover;

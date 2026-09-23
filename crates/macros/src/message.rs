@@ -54,7 +54,6 @@ fn expand_struct(args: &MessageArgs, mut wire: ItemStruct) -> syn::Result<TokenS
 }
 
 struct HandleField {
-
     index: usize,
 
     marker: syn::Type,
@@ -62,7 +61,6 @@ struct HandleField {
 
 fn collect_handle_fields(s: &ItemStruct) -> syn::Result<Vec<HandleField>> {
     let syn::Fields::Named(named) = &s.fields else {
-
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
@@ -71,7 +69,10 @@ fn collect_handle_fields(s: &ItemStruct) -> syn::Result<Vec<HandleField>> {
             continue;
         };
         if f.ident.is_none() {
-            return Err(syn::Error::new_spanned(f, "`#[handle]` requires a named field"));
+            return Err(syn::Error::new_spanned(
+                f,
+                "`#[handle]` requires a named field",
+            ));
         }
         out.push(HandleField { index, marker });
     }
@@ -209,9 +210,7 @@ impl syn::parse::Parse for MessageArgs {
                 other => {
                     return Err(syn::Error::new_spanned(
                         &pair.path,
-                        format!(
-                            "unknown argument `{other}`; expected `bincode` or `crate`"
-                        ),
+                        format!("unknown argument `{other}`; expected `bincode` or `crate`"),
                     ));
                 }
             }
@@ -231,4 +230,3 @@ fn expect_lit_str(expr: &Expr) -> syn::Result<LitStr> {
         _ => Err(syn::Error::new_spanned(expr, "expected string literal")),
     }
 }
-

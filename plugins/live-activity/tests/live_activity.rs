@@ -67,7 +67,9 @@ fn typed_start_encodes_payload_and_returns_handle_id() {
     let activities =
         TypedLiveActivity::<TimerAttributes, TimerState>::new(&rt, "timer").expect("bind");
     let handle = pollster::block_on(activities.start(
-        TimerAttributes { title: "Focus".into() },
+        TimerAttributes {
+            title: "Focus".into(),
+        },
         TimerState { elapsed: 0 },
         ActivityStyle::Standard,
     ))
@@ -201,4 +203,3 @@ fn base_client_capabilities_round_trips() {
     assert_eq!(value, caps);
     backend.join().unwrap();
 }
-

@@ -44,7 +44,9 @@ pub struct VariantDoc {
 
 /// Parse the Rust file at `source_path` and return every
 /// `#[istmo::message]` struct / enum with its rustdoc.
-pub fn extract_message_docs(source_path: impl AsRef<Path>) -> Result<Vec<PluginTypeDoc>, ExtractError> {
+pub fn extract_message_docs(
+    source_path: impl AsRef<Path>,
+) -> Result<Vec<PluginTypeDoc>, ExtractError> {
     let text = fs::read_to_string(source_path.as_ref()).map_err(io_err)?;
     let file: File = syn::parse_file(&text).map_err(ExtractError::from)?;
     extract_from_file(&file)
@@ -154,10 +156,12 @@ fn lower_struct(s: &ItemStruct) -> Result<PluginTypeDoc, ExtractError> {
             let name = f
                 .ident
                 .as_ref()
-                .ok_or_else(|| ExtractError::Unsupported(format!(
-                    "unnamed field in `#[istmo::message]` struct `{}`",
-                    s.ident
-                )))?
+                .ok_or_else(|| {
+                    ExtractError::Unsupported(format!(
+                        "unnamed field in `#[istmo::message]` struct `{}`",
+                        s.ident
+                    ))
+                })?
                 .to_string();
             fields.push(FieldDoc {
                 wire_name: snake_to_camel(&name),
@@ -225,7 +229,9 @@ fn collect_docs(attrs: &[Attribute]) -> String {
         if !attr.path().is_ident("doc") {
             continue;
         }
-        let Meta::NameValue(nv) = &attr.meta else { continue };
+        let Meta::NameValue(nv) = &attr.meta else {
+            continue;
+        };
         let Expr::Lit(ExprLit {
             lit: Lit::Str(s), ..
         }) = &nv.value
@@ -430,7 +436,9 @@ pub enum SignInError {
         let mdx = render_types_mdx(&[ty]);
         assert!(mdx.contains("### `SignInConfig`"));
         assert!(mdx.contains("OAuth config."));
-        assert!(mdx.contains("| `server_client_id` | `serverClientId` | `String` | Web OAuth client id. |"));
+        assert!(mdx.contains(
+            "| `server_client_id` | `serverClientId` | `String` | Web OAuth client id. |"
+        ));
         assert!(mdx.contains("| `scopes` | `scopes` | `Vec<String>` | — |"));
     }
 
@@ -470,7 +478,10 @@ pub enum SignInError {
     fn prettifies_generic_type_tokens() {
         assert_eq!(prettify_type_tokens("Option < String >"), "Option<String>");
         assert_eq!(prettify_type_tokens("Vec < u8 >"), "Vec<u8>");
-        assert_eq!(prettify_type_tokens("HashMap < String , u32 >"), "HashMap<String, u32>");
+        assert_eq!(
+            prettify_type_tokens("HashMap < String , u32 >"),
+            "HashMap<String, u32>"
+        );
     }
 
     #[test]

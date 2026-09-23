@@ -54,4 +54,3 @@ impl Parse for MobileAppArgs {
         Ok(Self)
     }
 }
-

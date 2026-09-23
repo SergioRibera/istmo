@@ -199,4 +199,3 @@ pub trait SignIn {
 
     async fn revoke(&self) -> Result<(), SignInError>;
 }
-

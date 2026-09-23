@@ -109,4 +109,3 @@ fn escape_xml(value: &str) -> String {
     }
     out
 }
-

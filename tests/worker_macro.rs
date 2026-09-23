@@ -71,4 +71,3 @@ fn worker_adapter_runs_and_encodes_outcome() {
         [b"hello".to_vec()]
     );
 }
-

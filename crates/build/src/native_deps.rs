@@ -5,7 +5,6 @@ use bincode::{Decode, Encode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub enum GradleScope {
-
     Implementation,
 
     Api,
@@ -83,7 +82,6 @@ impl GradleDep {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub struct SwiftPackageDep {
-
     pub url: String,
 
     pub product: String,
@@ -100,7 +98,6 @@ pub struct VersionConflict {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode)]
 pub struct NativeDeps {
-
     gradle: BTreeMap<(GradleScope, GradleKey), String>,
     swift: BTreeMap<(String, String), String>,
     conflicts: Vec<VersionConflict>,
@@ -231,15 +228,12 @@ fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
     let (a_core, a_pre) = split_pre_release(a);
     let (b_core, b_pre) = split_pre_release(b);
     match compare_dotted(a_core, b_core) {
-        std::cmp::Ordering::Equal => {
-
-            match (a_pre, b_pre) {
-                (None, None) => std::cmp::Ordering::Equal,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (Some(ap), Some(bp)) => ap.cmp(bp),
-            }
-        }
+        std::cmp::Ordering::Equal => match (a_pre, b_pre) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (Some(ap), Some(bp)) => ap.cmp(bp),
+        },
         other => other,
     }
 }
@@ -344,4 +338,3 @@ mod tests {
         );
     }
 }
-

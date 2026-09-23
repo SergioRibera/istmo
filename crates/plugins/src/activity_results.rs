@@ -69,4 +69,3 @@ impl std::error::Error for ActivityLaunchError {}
 pub trait ActivityResults {
     async fn launch(&self, request: IntentRequest) -> Result<ActivityResult, ActivityLaunchError>;
 }
-

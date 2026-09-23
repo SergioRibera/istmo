@@ -20,11 +20,7 @@ interval_minutes = 15
 
 fn scratch_root(subdir: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
-    path.push(format!(
-        "istmo-emit-app-{}-{}",
-        subdir,
-        std::process::id(),
-    ));
+    path.push(format!("istmo-emit-app-{}-{}", subdir, std::process::id(),));
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).unwrap();
     path
@@ -57,10 +53,13 @@ fn emit_app_writes_kotlin_service_class_and_sidecar() {
 
     emit_app_with(opts);
 
-    let kotlin = android_root.join(
-        "app/src/main/java/com/example/app/gen/SyncForegroundService.kt",
+    let kotlin =
+        android_root.join("app/src/main/java/com/example/app/gen/SyncForegroundService.kt");
+    assert!(
+        kotlin.is_file(),
+        "kotlin class file expected at {}",
+        kotlin.display()
     );
-    assert!(kotlin.is_file(), "kotlin class file expected at {}", kotlin.display());
     let contents = fs::read_to_string(&kotlin).unwrap();
     assert!(contents.contains("class SyncForegroundService"));
     assert!(contents.contains("const val PLUGIN_ID: String = \"myapp.sync\""));
@@ -93,8 +92,7 @@ fn emit_app_writes_swift_bgtask_and_sidecar() {
 
     emit_app_with(opts);
 
-    let swift =
-        ios_root.join("MyApp/Plugins/Background/SyncBackgroundHandler.swift");
+    let swift = ios_root.join("MyApp/Plugins/Background/SyncBackgroundHandler.swift");
     assert!(swift.is_file(), "swift class file at {}", swift.display());
     let contents = fs::read_to_string(&swift).unwrap();
     assert!(contents.contains("public enum SyncBackgroundHandler"));

@@ -32,4 +32,3 @@ fn emit(dest: &std::path::Path, contract: &Contract) {
         );
     }
 }
-

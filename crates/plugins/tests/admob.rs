@@ -305,7 +305,6 @@ fn update_banner_forwards_new_rect_via_typed_call() {
 
 #[test]
 fn hide_banner_consumes_handle_and_suppresses_release_frame() {
-
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let outbound = init.outbound;
@@ -464,7 +463,6 @@ fn interstitial_failed_to_show_is_a_valid_terminal_outcome() {
 
 #[test]
 fn every_ad_error_variant_round_trips_through_the_wire() {
-
     let variants = [
         AdError::NotInitialized,
         AdError::NoFill,
@@ -496,7 +494,6 @@ fn config_with_child_directed_treatment_round_trips_intact() {
 
 #[test]
 fn distinct_loads_produce_distinct_native_handles() {
-
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let outbound = init.outbound.clone();
@@ -573,4 +570,3 @@ fn load_no_fill_surfaces_as_typed_error() {
     assert_eq!(decoded, AdError::NoFill);
     backend.join().unwrap();
 }
-

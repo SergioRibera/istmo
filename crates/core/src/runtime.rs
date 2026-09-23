@@ -821,22 +821,22 @@ impl Runtime {
             .clone();
         let runtime = Arc::clone(self);
         std::thread::spawn(move || {
-            let outcome = pollster::block_on(async {
-                dispatcher.create_instance(&payload, cancel).await
-            });
+            let outcome =
+                pollster::block_on(async { dispatcher.create_instance(&payload, cancel).await });
             let cancelled = {
                 let mut map = lock(&runtime.cancelled_hosted);
                 map.remove(&call_id).is_some_and(|t| t.is_cancelled())
             };
             if cancelled {
-                tracing::debug!(?call_id, "hosted create_instance cancelled; discarding response");
+                tracing::debug!(
+                    ?call_id,
+                    "hosted create_instance cancelled; discarding response"
+                );
                 return;
             }
             match outcome {
                 Ok(Outcome::Ok(bytes)) => {
-                    if let Ok((instance_id, _)) =
-                        crate::codec::decode::<InstanceId>(&bytes)
-                    {
+                    if let Ok((instance_id, _)) = crate::codec::decode::<InstanceId>(&bytes) {
                         runtime.register_instance(instance_id, plugin_id.clone());
                     } else {
                         tracing::error!(
@@ -931,7 +931,6 @@ impl Runtime {
     }
 
     fn send_respond(&self, call_id: CallId, result: CallResult) {
-
         if self.routing.has_pending(call_id.get()) {
             if let Err(err) = self.routing.deliver_response(call_id, result) {
                 tracing::warn!(?err, "local Respond delivery failed");
@@ -1062,7 +1061,6 @@ impl Drop for CallHandle {
             return;
         }
         if let Some(rt) = self.runtime.upgrade() {
-
             drop(rt.cancel_call(self.call_id));
         }
     }
@@ -1124,4 +1122,3 @@ impl Drop for StreamHandle {
         }
     }
 }
-

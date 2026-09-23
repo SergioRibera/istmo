@@ -15,7 +15,6 @@ pub const MANIFEST_KEY: &str = "ISTMO_MANIFEST";
 
 #[derive(Debug)]
 pub enum HandoverError {
-
     InvalidHex,
 
     Decode(DecodeError),
@@ -84,8 +83,8 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String, HandoverError> 
 
 pub fn deserialize_manifest(hex: &str) -> Result<Manifest, HandoverError> {
     let bytes = hex_decode(hex)?;
-    let (manifest, _) = bincode::decode_from_slice::<Manifest, _>(&bytes, CODEC)
-        .map_err(HandoverError::Decode)?;
+    let (manifest, _) =
+        bincode::decode_from_slice::<Manifest, _>(&bytes, CODEC).map_err(HandoverError::Decode)?;
     Ok(manifest)
 }
 
@@ -148,7 +147,6 @@ fn collect_env_payloads(key: &str) -> Vec<(String, String)> {
 fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-
         let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{byte:02X}"));
     }
     out
@@ -243,4 +241,3 @@ mod tests {
         assert_eq!(hex_decode(lower).unwrap(), b"HELLO");
     }
 }
-

@@ -110,7 +110,6 @@ fn ty_is_eq(ty: &TypeRef, all: &[TypeDef]) -> bool {
 
 fn ty_is_copy(ty: &TypeRef, all: &[TypeDef]) -> bool {
     match ty {
-
         TypeRef::String | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Option(_) => false,
         TypeRef::Named(name) => {
             resolve_named(name, all).is_some_and(|def| is_copy(&def, all))
@@ -122,7 +121,6 @@ fn ty_is_copy(ty: &TypeRef, all: &[TypeDef]) -> bool {
 
 fn ty_is_hash(ty: &TypeRef, all: &[TypeDef]) -> bool {
     match ty {
-
         TypeRef::F32 | TypeRef::F64 | TypeRef::Bytes => false,
         TypeRef::Vec(inner) | TypeRef::Option(inner) => ty_is_hash(inner, all),
         TypeRef::Named(name) => {
@@ -173,4 +171,3 @@ fn to_rust_field(name: &str) -> String {
     }
     out
 }
-

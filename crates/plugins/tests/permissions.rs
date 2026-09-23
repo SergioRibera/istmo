@@ -124,4 +124,3 @@ fn should_show_rationale_round_trips_bool() {
     assert!(show);
     backend.join().unwrap();
 }
-

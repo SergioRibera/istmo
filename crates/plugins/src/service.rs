@@ -19,7 +19,6 @@ pub const SERVICE_CONTROL_PLUGIN_ID: &str = "istmo.service_control";
 #[message(bincode = "::bincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationSpec {
-
     pub channel_id: String,
 
     pub notification_id: i32,
@@ -42,7 +41,6 @@ pub struct WakelockToken(pub u64);
 #[message(bincode = "::bincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceControlError {
-
     UnknownService(String),
 
     WakelockDenied(String),
@@ -64,7 +62,6 @@ impl std::error::Error for ServiceControlError {}
 
 #[plugin(name = "istmo.service_control", crate = "::istmo_core")]
 pub trait ServiceControl {
-
     async fn start_foreground(
         &self,
         service_id: String,
@@ -104,7 +101,6 @@ pub struct StopNotifier {
 }
 
 impl StopNotifier {
-
     pub fn signal(&self) {
         let _ = self.tx.try_send(());
     }
@@ -126,7 +122,6 @@ pub struct ServiceContext {
 }
 
 impl ServiceContext {
-
     #[must_use]
     pub const fn new(
         runtime: Arc<Runtime>,
@@ -233,7 +228,6 @@ pub struct WakeLock {
 }
 
 impl WakeLock {
-
     #[must_use]
     pub const fn token(&self) -> WakelockToken {
         self.token
@@ -301,4 +295,3 @@ fn decode_ok(result: istmo_core::CallResult) -> Result<Vec<u8>, IstmoError> {
         Err(bytes) => Err(IstmoError::PluginError { bytes }),
     }
 }
-

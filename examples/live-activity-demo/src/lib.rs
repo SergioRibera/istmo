@@ -65,14 +65,11 @@ fn mobile_main() {
         "live-activity-demo",
         options,
         Box::new(move |cc| {
-            let shared = std::sync::Arc::new(app::SharedState::new(
-                activities,
-                cc.egui_ctx.clone(),
-            ));
+            let shared =
+                std::sync::Arc::new(app::SharedState::new(activities, cc.egui_ctx.clone()));
             Ok(Box::new(app::DemoApp::new(shared)))
         }),
     ) {
         log::error!("eframe exited with error: {err:?}");
     }
 }
-

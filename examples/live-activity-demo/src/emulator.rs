@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 
 use istmo_core::{CallId, Envelope, Frame, NativeHandleId, Runtime, codec};
 use istmo_live_activity::{
@@ -38,9 +38,19 @@ fn handle_frame(
     frame: Frame,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match frame {
-        Frame::Call { call_id, plugin_id, instance_id: _, method, payload } => {
+        Frame::Call {
+            call_id,
+            plugin_id,
+            instance_id: _,
+            method,
+            payload,
+        } => {
             if plugin_id != LIVE_ACTIVITY_PLUGIN_ID {
-                respond_err(rt, call_id, ActivityError::Backend("unknown plugin id".into()))?;
+                respond_err(
+                    rt,
+                    call_id,
+                    ActivityError::Backend("unknown plugin id".into()),
+                )?;
                 return Ok(());
             }
             let result = dispatch(method.as_str(), &payload, counter, activities);
@@ -75,7 +85,11 @@ fn dispatch(
             let id = counter.fetch_add(1, Ordering::Relaxed);
             activities.insert(
                 id,
-                ActivityRecord { activity_type, attributes, state: initial_state },
+                ActivityRecord {
+                    activity_type,
+                    attributes,
+                    state: initial_state,
+                },
             );
             codec::encode(&NativeHandleId(id)).map_err(encode_backend)
         }
@@ -144,4 +158,3 @@ fn encode_backend<E: std::fmt::Display>(err: E) -> Vec<u8> {
 fn encode_backend_str(msg: &str) -> Vec<u8> {
     codec::encode(&ActivityError::Backend(msg.to_owned())).unwrap_or_default()
 }
-

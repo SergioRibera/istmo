@@ -228,23 +228,14 @@ impl DrawApp {
             return (0.0, 0.0, 0.0, 0.0);
         };
         let insets = sa.current_or_zero();
-        let top = insets
-            .system_bars
-            .top
-            .max(insets.display_cutout.top);
-        let right = insets
-            .system_bars
-            .right
-            .max(insets.display_cutout.right);
+        let top = insets.system_bars.top.max(insets.display_cutout.top);
+        let right = insets.system_bars.right.max(insets.display_cutout.right);
         let bottom = insets
             .system_bars
             .bottom
             .max(insets.display_cutout.bottom)
             .max(insets.ime.bottom);
-        let left = insets
-            .system_bars
-            .left
-            .max(insets.display_cutout.left);
+        let left = insets.system_bars.left.max(insets.display_cutout.left);
         (top, right, bottom, left)
     }
 }
@@ -312,12 +303,7 @@ impl eframe::App for DrawApp {
                 for stroke in &strokes {
                     paint_stroke(painter, stroke, paint_offset);
                 }
-                let current = self
-                    .ink
-                    .current
-                    .lock()
-                    .ok()
-                    .and_then(|c| c.clone());
+                let current = self.ink.current.lock().ok().and_then(|c| c.clone());
                 if let Some(stroke) = current.as_ref() {
                     paint_stroke(painter, stroke, paint_offset);
                 }
@@ -334,12 +320,7 @@ impl eframe::App for DrawApp {
 
 impl DrawApp {
     fn show_debug_overlay(&self, ctx: &egui::Context, top_inset: f32, left_inset: f32) {
-        let debug = self
-            .ink
-            .debug
-            .lock()
-            .map(|d| d.clone())
-            .unwrap_or_default();
+        let debug = self.ink.debug.lock().map(|d| d.clone()).unwrap_or_default();
         egui::Window::new("pen debug")
             .anchor(
                 egui::Align2::LEFT_TOP,
@@ -388,10 +369,8 @@ impl DrawApp {
                 let color = self.ink.current_color();
                 ui.horizontal(|ui| {
                     ui.label("brush");
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(24.0, 16.0),
-                        egui::Sense::hover(),
-                    );
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(24.0, 16.0), egui::Sense::hover());
                     ui.painter().rect_filled(rect, 3.0, color);
                 });
             });
@@ -419,30 +398,30 @@ impl DrawApp {
                     egui::Color32::from_rgb(230, 120, 200),
                 ];
                 let current = self.ink.current_color();
-                egui::Grid::new("palette").spacing(egui::vec2(6.0, 6.0)).show(ui, |ui| {
-                    for (i, color) in palette.iter().enumerate() {
-                        let selected = current == *color;
-                        let (rect, response) = ui.allocate_exact_size(
-                            egui::vec2(40.0, 40.0),
-                            egui::Sense::click(),
-                        );
-                        ui.painter().rect_filled(rect, 6.0, *color);
-                        if selected {
-                            ui.painter().rect_stroke(
-                                rect,
-                                6.0,
-                                egui::Stroke::new(3.0, egui::Color32::BLACK),
-                            );
+                egui::Grid::new("palette")
+                    .spacing(egui::vec2(6.0, 6.0))
+                    .show(ui, |ui| {
+                        for (i, color) in palette.iter().enumerate() {
+                            let selected = current == *color;
+                            let (rect, response) = ui
+                                .allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::click());
+                            ui.painter().rect_filled(rect, 6.0, *color);
+                            if selected {
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    6.0,
+                                    egui::Stroke::new(3.0, egui::Color32::BLACK),
+                                );
+                            }
+                            if response.clicked() {
+                                self.ink.set_color(*color);
+                                self.ink.set_color_menu(false);
+                            }
+                            if (i + 1) % 4 == 0 {
+                                ui.end_row();
+                            }
                         }
-                        if response.clicked() {
-                            self.ink.set_color(*color);
-                            self.ink.set_color_menu(false);
-                        }
-                        if (i + 1) % 4 == 0 {
-                            ui.end_row();
-                        }
-                    }
-                });
+                    });
                 if ui.button("Close").clicked() {
                     self.ink.set_color_menu(false);
                 }
@@ -462,11 +441,7 @@ fn paint_stroke(painter: &egui::Painter, stroke: &Stroke, offset: egui::Vec2) {
 
     // Single-point stroke: just a dot.
     if raw.len() == 1 {
-        painter.circle_filled(
-            raw[0].pos + offset,
-            width_at(&raw[0]) * 0.5,
-            base,
-        );
+        painter.circle_filled(raw[0].pos + offset, width_at(&raw[0]) * 0.5, base);
         return;
     }
 
@@ -545,11 +520,7 @@ fn paint_stroke(painter: &egui::Painter, stroke: &Stroke, offset: egui::Vec2) {
     // Round caps at both ends smooth the otherwise flat perpendicular
     // termination of the ribbon.
     painter.circle_filled(pts[0].pos, width_at(&pts[0]) * 0.5, base);
-    painter.circle_filled(
-        pts[n - 1].pos,
-        width_at(&pts[n - 1]) * 0.5,
-        base,
-    );
+    painter.circle_filled(pts[n - 1].pos, width_at(&pts[n - 1]) * 0.5, base);
 }
 
 fn chaikin_smooth(pts: &[StrokePoint]) -> Vec<StrokePoint> {

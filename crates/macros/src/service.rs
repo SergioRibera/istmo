@@ -369,4 +369,3 @@ fn expect_lit_str(expr: &Expr) -> syn::Result<LitStr> {
         _ => Err(syn::Error::new_spanned(expr, "expected string literal")),
     }
 }
-

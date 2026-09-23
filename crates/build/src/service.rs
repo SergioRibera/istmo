@@ -2,7 +2,6 @@ use std::fmt::Write as _;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceContract {
-
     pub plugin_id: String,
 
     pub class_name: String,
@@ -23,7 +22,6 @@ pub struct ServiceContract {
 }
 
 impl ServiceContract {
-
     #[must_use]
     pub fn new(
         plugin_id: impl Into<String>,
@@ -47,7 +45,6 @@ impl ServiceContract {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AndroidServiceArtifacts {
-
     pub kotlin: String,
 
     pub manifest_fragment: String,
@@ -190,4 +187,3 @@ fn xml_escape(value: &str) -> String {
     }
     out
 }
-

@@ -36,4 +36,3 @@ pub trait Notifications {
 
     async fn cancel(&self, id: u32) -> Result<(), NotificationError>;
 }
-

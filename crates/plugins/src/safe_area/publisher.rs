@@ -15,7 +15,6 @@ pub struct SafeAreaPublisher {
 }
 
 impl SafeAreaPublisher {
-
     pub fn install(runtime: &Arc<Runtime>) -> Result<Self, IstmoError> {
         runtime.check_declared(PLUGIN_ID)?;
         Ok(Self {
@@ -52,7 +51,6 @@ impl SafeAreaPublisher {
         }
         #[cfg(not(any(target_os = "ios", target_os = "tvos", target_os = "visionos")))]
         {
-
             None
         }
     }
@@ -129,4 +127,3 @@ mod ios {
         );
     }
 }
-

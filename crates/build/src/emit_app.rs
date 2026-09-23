@@ -22,9 +22,7 @@ use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::contract::Contract;
 use crate::handover::{collect_dep_contracts, collect_dep_manifests};
-use crate::ios::{
-    BackgroundKind, ContinuousMode, IosBackgroundContract, generate_ios_background,
-};
+use crate::ios::{BackgroundKind, ContinuousMode, IosBackgroundContract, generate_ios_background};
 use crate::kotlin_client::generate_kotlin_client;
 use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
 use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
@@ -148,10 +146,7 @@ pub fn emit_app_with(opts: AppOpts) {
     };
     let _ = manifest_source;
 
-    let android_enabled = opts
-        .android
-        .or(app_config.android)
-        .unwrap_or(true);
+    let android_enabled = opts.android.or(app_config.android).unwrap_or(true);
     let ios_enabled = opts.ios.or(app_config.ios).unwrap_or(true);
 
     let android_active = android_enabled && android_root.is_dir();
@@ -209,16 +204,18 @@ pub fn emit_app_with(opts: AppOpts) {
             .get(contract.plugin_id.as_str())
             .or_else(|| per_plugin.get(contract.type_name.as_str()));
         let role = overrides.and_then(|o| o.role).unwrap_or(Role::Host);
-        let platforms = overrides.and_then(|o| o.platforms.clone()).unwrap_or_else(|| {
-            let mut ps = Vec::new();
-            if android_active {
-                ps.push(Platform::Android);
-            }
-            if ios_active {
-                ps.push(Platform::Ios);
-            }
-            ps
-        });
+        let platforms = overrides
+            .and_then(|o| o.platforms.clone())
+            .unwrap_or_else(|| {
+                let mut ps = Vec::new();
+                if android_active {
+                    ps.push(Platform::Android);
+                }
+                if ios_active {
+                    ps.push(Platform::Ios);
+                }
+                ps
+            });
 
         let plugin_declared_auto = plugin_auto_register
             .get(contract.plugin_id.as_str())
@@ -243,13 +240,7 @@ pub fn emit_app_with(opts: AppOpts) {
                         );
                         continue;
                     };
-                    emit_kotlin(
-                        &android_root,
-                        pkg,
-                        contract,
-                        role,
-                        opts.seed_backends,
-                    );
+                    emit_kotlin(&android_root, pkg, contract, role, opts.seed_backends);
                     if auto_register_this {
                         if let Some(entry) = RegistryEntry::from_contract(contract) {
                             kotlin_registry.push(entry);
@@ -350,9 +341,7 @@ fn emit_service_and_background(dep_manifests: &[Manifest], opts: ServiceEmitOpts
 
     for manifest in dep_manifests {
         for plugin in &manifest.plugins {
-            if let (true, Some(spec)) =
-                (opts.android_active, plugin.android_service.as_ref())
-            {
+            if let (true, Some(spec)) = (opts.android_active, plugin.android_service.as_ref()) {
                 match opts.android_package {
                     Some(pkg) => {
                         let fragment = emit_android_service(
@@ -373,9 +362,7 @@ fn emit_service_and_background(dep_manifests: &[Manifest], opts: ServiceEmitOpts
                     }
                 }
             }
-            if let (true, Some(spec)) =
-                (opts.ios_active, plugin.ios_background.as_ref())
-            {
+            if let (true, Some(spec)) = (opts.ios_active, plugin.ios_background.as_ref()) {
                 match opts.ios_app_dir {
                     Some(app_dir) => {
                         let fragment = emit_ios_background(
@@ -477,16 +464,14 @@ fn ios_kind_from_spec(spec: &IosBackgroundKindSpec) -> BackgroundKind {
             requires_power: *requires_power,
             requires_network: *requires_network,
         },
-        IosBackgroundKindSpec::Continuous(mode) => {
-            BackgroundKind::Continuous(match mode {
-                IosContinuousModeSpec::Audio => ContinuousMode::Audio,
-                IosContinuousModeSpec::Location => ContinuousMode::Location,
-                IosContinuousModeSpec::Voip => ContinuousMode::Voip,
-                IosContinuousModeSpec::ExternalAccessory => ContinuousMode::ExternalAccessory,
-                IosContinuousModeSpec::BluetoothCentral => ContinuousMode::BluetoothCentral,
-                IosContinuousModeSpec::BluetoothPeripheral => ContinuousMode::BluetoothPeripheral,
-            })
-        }
+        IosBackgroundKindSpec::Continuous(mode) => BackgroundKind::Continuous(match mode {
+            IosContinuousModeSpec::Audio => ContinuousMode::Audio,
+            IosContinuousModeSpec::Location => ContinuousMode::Location,
+            IosContinuousModeSpec::Voip => ContinuousMode::Voip,
+            IosContinuousModeSpec::ExternalAccessory => ContinuousMode::ExternalAccessory,
+            IosContinuousModeSpec::BluetoothCentral => ContinuousMode::BluetoothCentral,
+            IosContinuousModeSpec::BluetoothPeripheral => ContinuousMode::BluetoothPeripheral,
+        }),
     }
 }
 
@@ -513,9 +498,7 @@ fn write_android_manifest_sidecar(android_root: &Path, fragments: &[String]) {
 }
 
 fn write_ios_plist_sidecar(ios_root: &Path, app_dir: &str, fragments: &[String]) {
-    let dest = ios_root
-        .join(app_dir)
-        .join("Info.plist.background.xml");
+    let dest = ios_root.join(app_dir).join("Info.plist.background.xml");
     let body = join_fragments(fragments);
     let contents = format!(
         "<!-- GENERATED by istmo-build - DO NOT EDIT. -->\n\
@@ -633,10 +616,7 @@ fn emit_kotlin(
         Role::Client => {
             write_if_changed(
                 &gen_dir.join(format!("{ty}Codecs.kt")),
-                &kotlin_with_package(
-                    &full_package,
-                    &generate_kotlin_codecs_interface(contract),
-                ),
+                &kotlin_with_package(&full_package, &generate_kotlin_codecs_interface(contract)),
             );
             write_if_changed(
                 &gen_dir.join(format!("{ty}Client.kt")),
@@ -751,8 +731,7 @@ fn emit_ios_plugins_fragment(ios_root: &Path, app_dir: &str) {
         // declares it. Prefer a repo-relative path so the fragment is
         // portable across machines / CI runners; fall back to the
         // absolute path if the plugin lives outside the workspace.
-        let display = relativise(&fragment_dir, Path::new(dir))
-            .unwrap_or_else(|| dir.clone());
+        let display = relativise(&fragment_dir, Path::new(dir)).unwrap_or_else(|| dir.clone());
         yaml.push_str(&format!("      - path: \"{display}\"\n"));
         yaml.push_str(&format!("        name: {name}\n"));
         yaml.push_str("        type: group\n");
@@ -940,7 +919,9 @@ fn extract_namespace(source: &str) -> Option<String> {
 fn extract_manifest_package(xml: &str) -> Option<String> {
     let idx = xml.find("package=")?;
     let after = &xml[idx + "package=".len()..];
-    let quoted = after.strip_prefix('"').or_else(|| after.strip_prefix('\''))?;
+    let quoted = after
+        .strip_prefix('"')
+        .or_else(|| after.strip_prefix('\''))?;
     let end = quoted.find(['"', '\''])?;
     Some(quoted[..end].to_owned())
 }
@@ -956,7 +937,9 @@ pub fn detect_ios_app_dir(ios_root: &Path) -> Option<String> {
                 && p.file_name()
                     .and_then(|n| n.to_str())
                     .is_some_and(|n| !n.starts_with('.'))
-                && !p.extension().is_some_and(|e| e == "xcodeproj" || e == "xcworkspace")
+                && !p
+                    .extension()
+                    .is_some_and(|e| e == "xcodeproj" || e == "xcworkspace")
         })
         .collect();
 

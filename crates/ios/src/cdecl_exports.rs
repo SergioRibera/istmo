@@ -389,4 +389,3 @@ unsafe fn copy_utf8(ptr: *const u8, len: usize) -> Result<String, IosRuntimeErro
     let bytes = unsafe { copy_bytes(ptr, len) };
     String::from_utf8(bytes).map_err(|_| IosRuntimeError::InvalidUtf8)
 }
-

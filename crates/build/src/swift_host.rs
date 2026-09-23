@@ -217,7 +217,7 @@ fn write_stateless_dispatcher(out: &mut String, contract: &Contract) {
         let _ = writeln!(out, "    }}");
         let _ = writeln!(out);
     }
-    write_handle_call(out, contract,  false);
+    write_handle_call(out, contract, false);
     let _ = writeln!(out, "}}");
 }
 
@@ -303,7 +303,7 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
     let _ = writeln!(out, "        return out");
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
-    write_handle_call(out, contract,  true);
+    write_handle_call(out, contract, true);
     let _ = writeln!(out, "}}");
 }
 
@@ -510,7 +510,6 @@ fn write_write_expr(out: &mut String, indent: &str, ty: &TypeRef, binding: &str,
 }
 
 fn write_lambda(ty: &TypeRef) -> String {
-
     match ty {
         TypeRef::Named(name) => format!("codecs.write{name}(&$0, $1)"),
         TypeRef::String => "Bincode.writeString(&$0, $1)".to_owned(),
@@ -535,4 +534,3 @@ fn write_lambda(ty: &TypeRef) -> String {
         }
     }
 }
-

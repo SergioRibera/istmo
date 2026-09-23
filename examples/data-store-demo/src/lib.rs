@@ -79,4 +79,3 @@ fn mobile_main() {
         log::error!("eframe exited with error: {err:?}");
     }
 }
-

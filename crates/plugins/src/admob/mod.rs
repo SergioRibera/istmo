@@ -48,7 +48,6 @@ impl std::error::Error for AdError {}
     crate = "::istmo_core",
 )]
 pub trait AdMob {
-
     async fn load_interstitial(&self, ad_unit_id: String) -> Result<NativeHandleId, AdError>;
 
     async fn show_interstitial(&self, ad: NativeHandleId) -> Result<InterstitialOutcome, AdError>;
@@ -65,7 +64,6 @@ pub trait AdMob {
 }
 
 impl AdMobClient {
-
     pub async fn load_interstitial_owned(
         &self,
         ad_unit_id: String,
@@ -119,4 +117,3 @@ impl AdMobClient {
         self.hide_banner(id).await
     }
 }
-

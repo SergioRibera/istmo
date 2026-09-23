@@ -7,7 +7,6 @@ use flume::Sender as FlumeSender;
 use crate::error::AndroidRuntimeError;
 
 pub(crate) struct RuntimeState {
-
     pub(crate) pump_shutdown: Mutex<Option<FlumeSender<()>>>,
     pub(crate) pump_join: Mutex<Option<JoinHandle<()>>>,
 }
@@ -29,4 +28,3 @@ pub(crate) fn install(state: RuntimeState) -> Result<(), AndroidRuntimeError> {
 pub(crate) fn get() -> Result<&'static RuntimeState, AndroidRuntimeError> {
     STATE.get().ok_or(AndroidRuntimeError::NotStarted)
 }
-

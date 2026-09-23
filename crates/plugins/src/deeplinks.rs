@@ -94,4 +94,3 @@ fn decode(bytes: &[u8]) -> Result<DeepLink, IstmoError> {
     let (link, _) = codec::decode::<DeepLink>(bytes)?;
     Ok(link)
 }
-

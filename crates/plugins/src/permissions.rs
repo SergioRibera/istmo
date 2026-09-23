@@ -18,4 +18,3 @@ pub trait Permissions {
 
     async fn should_show_rationale(&self, permission: String) -> bool;
 }
-

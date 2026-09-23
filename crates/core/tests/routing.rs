@@ -104,4 +104,3 @@ fn instance_registry_round_trip() {
     assert!(table.instance(InstanceId(1)).is_none());
     assert!(!table.remove_instance(InstanceId(1)));
 }
-

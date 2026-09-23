@@ -28,4 +28,3 @@ pub(crate) fn install(state: RuntimeState) -> Result<(), IosRuntimeError> {
 pub(crate) fn get() -> Result<&'static RuntimeState, IosRuntimeError> {
     STATE.get().ok_or(IosRuntimeError::NotStarted)
 }
-

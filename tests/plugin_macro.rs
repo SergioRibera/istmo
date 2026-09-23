@@ -325,4 +325,3 @@ fn generated_client_reads_stream_events() {
     assert_eq!(collected, vec![0_u32, 1, 2]);
     backend.join().unwrap();
 }
-

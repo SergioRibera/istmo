@@ -116,4 +116,3 @@ fn is_authorized_returns_bool() {
     assert!(authorized);
     backend.join().unwrap();
 }
-

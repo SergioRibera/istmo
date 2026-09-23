@@ -56,4 +56,3 @@ fn main() {
             .expect("rationale");
     println!("should_show_rationale(CAMERA) -> {show}");
 }
-

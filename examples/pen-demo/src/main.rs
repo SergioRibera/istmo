@@ -31,7 +31,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    runtime.register_host(PenHost::new(PenPublisherFactory::new(Arc::clone(&publisher))));
+    runtime.register_host(PenHost::new(PenPublisherFactory::new(Arc::clone(
+        &publisher,
+    ))));
 
     // Drain outbound so bounded channel never backs up. Local-hosted
     // Call frames short-circuit into dispatch_inbound, so only

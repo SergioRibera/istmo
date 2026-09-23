@@ -208,7 +208,6 @@ fn runtime_notify_without_local_host_emits_outbound_notify_frame() {
 
 #[test]
 fn inject_wire_envelope_bridges_bincoded_bytes_into_dispatch() {
-
     let init = Runtime::mock();
     let rt = init.runtime;
     let outbound = init.outbound;
@@ -415,7 +414,6 @@ fn cooperative_cancel_token_trips_dispatcher_mid_flight() {
 
 #[test]
 fn cancel_arriving_before_dispatch_starts_trips_token_immediately() {
-
     let init = Runtime::mock();
     let rt: Arc<Runtime> = init.runtime;
     let outbound = init.outbound;
@@ -509,7 +507,12 @@ impl Dispatch for SeedCounter {
         _cancel: CancelToken,
     ) -> DispatchFuture<'a> {
         let id = instance_id.expect("stateful dispatch requires an instance id");
-        let seed = *self.instances.lock().unwrap().get(&id).expect("known instance");
+        let seed = *self
+            .instances
+            .lock()
+            .unwrap()
+            .get(&id)
+            .expect("known instance");
         let method_owned = method.to_owned();
         Box::pin(async move {
             match method_owned.as_str() {
@@ -534,17 +537,14 @@ fn hosted_stateful_plugin_round_trips_create_call_destroy() {
     let handle = rt
         .create_instance(SeedCounter::PLUGIN_ID, codec::encode(&seed_a).unwrap())
         .expect("create_instance");
-    let bytes = pollster::block_on(handle).expect("create ok").expect("create Ok");
+    let bytes = pollster::block_on(handle)
+        .expect("create ok")
+        .expect("create Ok");
     let (instance_a, _): (InstanceId, _) = codec::decode(&bytes).unwrap();
 
     // call round-trip returns the seed stored under this instance id.
     let handle = rt
-        .call(
-            SeedCounter::PLUGIN_ID,
-            Some(instance_a),
-            "get",
-            Vec::new(),
-        )
+        .call(SeedCounter::PLUGIN_ID, Some(instance_a), "get", Vec::new())
         .expect("call");
     let bytes = pollster::block_on(handle).expect("call ok").expect("Ok");
     let (returned, _): (u32, _) = codec::decode(&bytes).unwrap();
@@ -580,11 +580,7 @@ impl Dispatch for SeedHost {
         self.0.plugin_id()
     }
 
-    fn create_instance<'a>(
-        &'a self,
-        payload: &'a [u8],
-        cancel: CancelToken,
-    ) -> DispatchFuture<'a> {
+    fn create_instance<'a>(&'a self, payload: &'a [u8], cancel: CancelToken) -> DispatchFuture<'a> {
         self.0.create_instance(payload, cancel)
     }
 
@@ -602,4 +598,3 @@ impl Dispatch for SeedHost {
         self.0.dispatch(instance_id, method, payload, cancel)
     }
 }
-

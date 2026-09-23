@@ -99,4 +99,3 @@ fn early_event_store_reuses_queues_by_key() {
     let rx = q2.subscribe();
     assert_eq!(rx.recv().unwrap(), vec![1]);
 }
-

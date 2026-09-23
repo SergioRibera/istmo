@@ -56,10 +56,10 @@ pub struct SharedState {
 
 impl SharedState {
     fn push_log(&self, op: impl Into<String>, outcome: impl Into<String>) {
-        self.transcript
-            .lock()
-            .unwrap()
-            .push(LogLine { op: op.into(), outcome: outcome.into() });
+        self.transcript.lock().unwrap().push(LogLine {
+            op: op.into(),
+            outcome: outcome.into(),
+        });
         self.egui_ctx.request_repaint();
     }
 
@@ -80,7 +80,12 @@ pub struct DemoApp {
 impl DemoApp {
     #[must_use]
     pub fn new(shared: Arc<SharedState>) -> Self {
-        Self { shared, key: "user_id".into(), value: "u_42".into(), kind: ValueKind::String }
+        Self {
+            shared,
+            key: "user_id".into(),
+            value: "u_42".into(),
+            kind: ValueKind::String,
+        }
     }
 
     fn spawn_op<F>(&self, op: impl Into<String>, task: F)
@@ -223,11 +228,21 @@ impl eframe::App for DemoApp {
             });
 
             ui.horizontal_wrapped(|ui| {
-                if ui.button("set").clicked() { self.on_set(); }
-                if ui.button("get").clicked() { self.on_get(); }
-                if ui.button("remove").clicked() { self.on_remove(); }
-                if ui.button("contains").clicked() { self.on_contains(); }
-                if ui.button("clear").clicked() { self.on_clear(); }
+                if ui.button("set").clicked() {
+                    self.on_set();
+                }
+                if ui.button("get").clicked() {
+                    self.on_get();
+                }
+                if ui.button("remove").clicked() {
+                    self.on_remove();
+                }
+                if ui.button("contains").clicked() {
+                    self.on_contains();
+                }
+                if ui.button("clear").clicked() {
+                    self.on_clear();
+                }
             });
 
             ui.separator();
@@ -296,4 +311,3 @@ fn decode_hex(input: &str) -> Result<Vec<u8>, String> {
 pub const fn namespace() -> &'static str {
     DEMO_NAMESPACE
 }
-

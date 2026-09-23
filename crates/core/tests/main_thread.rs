@@ -30,4 +30,3 @@ fn mock_main_thread_defers_until_drain() {
 
     assert_eq!(dispatcher.drain(), 0);
 }
-
