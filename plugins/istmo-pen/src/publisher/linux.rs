@@ -37,6 +37,7 @@
 pub(super) use libinput_backend::install_libinput;
 
 mod libinput_backend {
+    use std::collections::HashMap;
     use std::fs::OpenOptions;
     use std::os::fd::{IntoRawFd, OwnedFd};
     use std::os::unix::fs::OpenOptionsExt;
@@ -47,13 +48,23 @@ mod libinput_backend {
 
     use flume::{Receiver, Sender};
     use input::event::Event as LibinputEvent;
+    use input::event::pointer::ButtonState;
     use input::event::tablet_tool::{
-        ProximityState, TabletToolEvent, TabletToolEventTrait, TabletToolType, TipState,
+        ProximityState, TabletToolButtonEvent, TabletToolEvent, TabletToolEventTrait,
+        TabletToolType, TipState,
     };
     use input::{Libinput, LibinputInterface};
 
     use crate::publisher::PenPublisher;
-    use crate::{PenEvent, PenHoverEvent, PenMove, PenSample, PenToolKind};
+    use crate::{PenButtonChange, PenEvent, PenHoverEvent, PenMove, PenSample, PenToolKind};
+
+    // Linux input-event-codes for tablet-tool side buttons. libinput
+    // forwards these raw codes on `TabletToolButtonEvent::button()`;
+    // we fold them into contiguous LSB slots on `PenSample::buttons`
+    // so consumer UIs can index binding slots directly.
+    const BTN_STYLUS: u32 = 0x14b; // primary barrel button → bit 0
+    const BTN_STYLUS2: u32 = 0x14c; // secondary barrel button → bit 1
+    const BTN_STYLUS3: u32 = 0x149; // tertiary side button → bit 2
 
     /// Attempt to install a `libinput`-backed sample source on the
     /// publisher. Spawns one background thread per process; repeated
@@ -126,11 +137,14 @@ mod libinput_backend {
         match event {
             TabletToolEvent::Axis(axis) => {
                 let sample = decode_axis(&axis, clock);
-                broadcast_event(publisher, PenEvent::Move(PenMove {
-                    sample,
-                    coalesced: Vec::new(),
-                    predicted: Vec::new(),
-                }));
+                broadcast_event(
+                    publisher,
+                    PenEvent::Move(PenMove {
+                        sample,
+                        coalesced: Vec::new(),
+                        predicted: Vec::new(),
+                    }),
+                );
             }
             TabletToolEvent::Proximity(prox) => {
                 let sample = decode_axis(&prox, clock);
@@ -151,12 +165,66 @@ mod libinput_backend {
                 };
                 broadcast_event(publisher, ev);
             }
-            _ => {
-                // Button events are folded into the sample's `buttons`
-                // bitmap by the follow-up Axis event; nothing to emit
-                // on their own.
+            TabletToolEvent::Button(btn) => {
+                if let Some(change) = handle_button(&btn, clock) {
+                    broadcast_event(publisher, PenEvent::ButtonChanged(change));
+                }
             }
+            _ => {}
         }
+    }
+
+    fn handle_button(event: &TabletToolButtonEvent, clock: &Arc<Clock>) -> Option<PenButtonChange> {
+        let bit_index = match event.button() {
+            BTN_STYLUS => 0u32,
+            BTN_STYLUS2 => 1,
+            BTN_STYLUS3 => 2,
+            _ => return None,
+        };
+        let bit = 1u32 << bit_index;
+        let tool = event.tool();
+        let serial = tool.serial();
+        let (new_bitmap, changed) = {
+            let mut guard = match clock.button_state.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let entry = guard.entry(serial).or_insert(0);
+            let old = *entry;
+            match event.button_state() {
+                ButtonState::Pressed => *entry |= bit,
+                ButtonState::Released => *entry &= !bit,
+            }
+            (*entry, old ^ *entry)
+        };
+        if changed == 0 {
+            return None;
+        }
+        let tool_kind = match tool.tool_type() {
+            Some(TabletToolType::Eraser) => PenToolKind::Eraser,
+            Some(TabletToolType::Pen | TabletToolType::Pencil) => PenToolKind::Tip,
+            _ => PenToolKind::Unknown,
+        };
+        let time_us = event.time_usec();
+        let attach_us = clock.attach_us();
+        let sample = PenSample {
+            x: 0.0,
+            y: 0.0,
+            pressure: 0.0,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+            azimuth: 0.0,
+            altitude: 0.0,
+            twist: 0.0,
+            tangential_pressure: 0.0,
+            z_offset: 0.0,
+            timestamp_us: time_us.saturating_sub(attach_us),
+            sequence: clock.next_sequence(),
+            tool_id: (serial & 0xFFFF_FFFF) as u32,
+            tool_kind,
+            buttons: new_bitmap,
+        };
+        Some(PenButtonChange { sample, changed })
     }
 
     fn is_stylus(event: &TabletToolEvent) -> bool {
@@ -226,7 +294,15 @@ mod libinput_backend {
         let time_us = event.time_usec();
         let attach_us = clock.attach_us();
         let timestamp_us = time_us.saturating_sub(attach_us);
-        let tool_id = (tool.serial() & 0xFFFF_FFFF) as u32;
+        let serial = tool.serial();
+        let tool_id = (serial & 0xFFFF_FFFF) as u32;
+        let buttons = {
+            let guard = match clock.button_state.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.get(&serial).copied().unwrap_or(0)
+        };
         PenSample {
             x,
             y,
@@ -242,7 +318,7 @@ mod libinput_backend {
             sequence: clock.next_sequence(),
             tool_id,
             tool_kind,
-            buttons: 0,
+            buttons,
         }
     }
 
@@ -251,6 +327,11 @@ mod libinput_backend {
         sequence: AtomicU32,
         start: Instant,
         attach_us: AtomicU64,
+        // Per-tool pressed-button bitmap keyed by libinput's stable
+        // `tool.serial()`. libinput emits `Button` events out-of-band
+        // from `Axis` / `Tip` events, so we stash the current pressed
+        // set here and fold it back into the sample on every decode.
+        button_state: Mutex<HashMap<u64, u32>>,
     }
 
     impl Clock {
@@ -259,6 +340,7 @@ mod libinput_backend {
                 sequence: AtomicU32::new(0),
                 start: Instant::now(),
                 attach_us: AtomicU64::new(0),
+                button_state: Mutex::new(HashMap::new()),
             }
         }
 
@@ -282,10 +364,14 @@ mod libinput_backend {
     impl LibinputInterface for SeatInterface {
         fn open_restricted(&mut self, path: &Path, flags: i32) -> Result<OwnedFd, i32> {
             OpenOptions::new()
-                .read((flags & libc::O_ACCMODE) == libc::O_RDONLY
-                    || (flags & libc::O_ACCMODE) == libc::O_RDWR)
-                .write((flags & libc::O_ACCMODE) == libc::O_WRONLY
-                    || (flags & libc::O_ACCMODE) == libc::O_RDWR)
+                .read(
+                    (flags & libc::O_ACCMODE) == libc::O_RDONLY
+                        || (flags & libc::O_ACCMODE) == libc::O_RDWR,
+                )
+                .write(
+                    (flags & libc::O_ACCMODE) == libc::O_WRONLY
+                        || (flags & libc::O_ACCMODE) == libc::O_RDWR,
+                )
                 .custom_flags(flags)
                 .open(path)
                 .map(OwnedFd::from)

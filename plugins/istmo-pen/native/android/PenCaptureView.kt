@@ -63,13 +63,16 @@ open class PenCaptureView @JvmOverloads constructor(
         pressure = true,
         tilt = true,
         azimuth = true,
-        altitude = false,
+        altitude = true,
         twist = false,
         tangentialPressure = false,
         hover = true,
         predicted = false,
         coalesced = true,
-        barrelButton = true,
+        // `BUTTON_STYLUS_PRIMARY` + `BUTTON_STYLUS_SECONDARY`. Android
+        // does not surface additional stylus buttons through
+        // `MotionEvent.buttonState`.
+        buttonCount = 2u,
         eraser = true,
     )
 
@@ -161,7 +164,7 @@ open class PenCaptureView @JvmOverloads constructor(
             tiltX = tiltX,
             tiltY = tiltY,
             azimuth = orientation,
-            altitude = 0f,
+            altitude = altitudeFromTilt(tiltAxis),
             twist = 0f,
             tangentialPressure = 0f,
             zOffset = zOffset,
@@ -187,7 +190,7 @@ open class PenCaptureView @JvmOverloads constructor(
             tiltX = tiltX,
             tiltY = tiltY,
             azimuth = orientation,
-            altitude = 0f,
+            altitude = altitudeFromTilt(tiltAxis),
             twist = 0f,
             tangentialPressure = 0f,
             zOffset = zOffset,
@@ -210,6 +213,19 @@ open class PenCaptureView @JvmOverloads constructor(
         if (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY != 0) bits = bits or 1
         if (event.buttonState and MotionEvent.BUTTON_STYLUS_SECONDARY != 0) bits = bits or (1 shl 1)
         return bits.toUInt()
+    }
+
+    // `AXIS_TILT` is the polar angle in radians between the stylus and
+    // the surface normal (0 = perpendicular, PI/2 = flat). Altitude is
+    // the complementary angle above the surface — the shape most
+    // drawing engines want as an input to brush azimuth math.
+    private fun altitudeFromTilt(tiltRadians: Float): Float {
+        val altitude = HALF_PI - tiltRadians
+        return if (altitude < 0f) 0f else altitude
+    }
+
+    private companion object {
+        private val HALF_PI: Float = (kotlin.math.PI / 2.0).toFloat()
     }
 
     private fun emit(event: PenEvent) {

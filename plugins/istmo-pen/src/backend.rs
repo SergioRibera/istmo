@@ -34,9 +34,7 @@ use flume::Receiver;
 use istmo_core::CancelToken;
 
 use crate::publisher::PenPublisher;
-use crate::{
-    Pen, PenCapabilities, PenConfig, PenError, PenEvent, PenFactory, PenHoverEvent,
-};
+use crate::{Pen, PenCapabilities, PenConfig, PenError, PenEvent, PenFactory, PenHoverEvent};
 
 /// Per-instance [`Pen`] implementation. Holds the [`Receiver`] halves
 /// handed out by [`PenPublisher::subscribe_events`] /
@@ -114,22 +112,34 @@ fn take_or_closed<T>(slot: &Mutex<Option<Receiver<T>>>) -> Receiver<T> {
 }
 
 const fn platform_capabilities() -> PenCapabilities {
+    // Static maximums the backend can decode. Some devices expose
+    // fewer physical buttons; consumers wanting the *actual* count for
+    // a specific pen must snapshot state at proximity-in (future
+    // extension). Wacom pens on Linux commonly ship 2 barrel buttons +
+    // an eraser tail — libinput surfaces up to `BTN_STYLUS3`.
+    let button_count: u32 = if cfg!(target_os = "linux") {
+        3
+    } else if cfg!(any(target_os = "windows", target_os = "macos")) {
+        2
+    } else {
+        0
+    };
     PenCapabilities {
         pressure: cfg!(any(
             target_os = "windows",
             target_os = "macos",
             target_os = "linux"
         )),
-        tilt: cfg!(any(target_os = "windows", target_os = "macos")),
+        tilt: cfg!(any(target_os = "windows", target_os = "macos", target_os = "linux")),
         azimuth: false,
         altitude: false,
-        twist: cfg!(any(target_os = "windows", target_os = "macos")),
+        twist: cfg!(any(target_os = "windows", target_os = "macos", target_os = "linux")),
         tangential_pressure: cfg!(target_os = "macos"),
-        hover: cfg!(any(target_os = "windows", target_os = "macos")),
+        hover: cfg!(any(target_os = "windows", target_os = "macos", target_os = "linux")),
         predicted: false,
         coalesced: cfg!(target_os = "windows"),
-        barrel_button: cfg!(any(target_os = "windows", target_os = "macos")),
-        eraser: cfg!(any(target_os = "windows", target_os = "macos")),
+        button_count,
+        eraser: cfg!(any(target_os = "windows", target_os = "macos", target_os = "linux")),
     }
 }
 

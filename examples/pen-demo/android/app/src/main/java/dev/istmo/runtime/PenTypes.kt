@@ -68,7 +68,7 @@ data class PenCapabilities(
     val hover: Boolean,
     val predicted: Boolean,
     val coalesced: Boolean,
-    val barrelButton: Boolean,
+    val buttonCount: UInt,
     val eraser: Boolean
 )
 

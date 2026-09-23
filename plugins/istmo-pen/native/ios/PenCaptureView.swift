@@ -59,7 +59,12 @@ public final class PenCaptureView: UIView {
             hover: true,
             predicted: predictionEnabled,
             coalesced: true,
-            barrelButton: false,
+            // Apple Pencil hardware exposes no per-touch buttons.
+            // Squeeze / double-tap on Pencil 2 / Pencil Pro are
+            // delegate-driven `UIPencilInteraction` gestures, not
+            // continuous button state — surface those through a
+            // separate stream if / when a plugin needs them.
+            buttonCount: 0,
             eraser: true,
         )
     }

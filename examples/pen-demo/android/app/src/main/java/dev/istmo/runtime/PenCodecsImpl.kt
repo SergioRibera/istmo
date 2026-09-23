@@ -264,13 +264,13 @@ class PenCodecsImpl : PenCodecs {
         val d_coalesced = Bincode.readBool(bytes, cursor)
         cursor = d_coalesced.consumed
         val coalesced = d_coalesced.value
-        val d_barrelButton = Bincode.readBool(bytes, cursor)
-        cursor = d_barrelButton.consumed
-        val barrelButton = d_barrelButton.value
+        val d_buttonCount = Bincode.readVarintU64(bytes, cursor).let { Bincode.Decoded(it.value.toUInt(), it.consumed) }
+        cursor = d_buttonCount.consumed
+        val buttonCount = d_buttonCount.value
         val d_eraser = Bincode.readBool(bytes, cursor)
         cursor = d_eraser.consumed
         val eraser = d_eraser.value
-        return Bincode.Decoded(PenCapabilities(pressure = pressure, tilt = tilt, azimuth = azimuth, altitude = altitude, twist = twist, tangentialPressure = tangentialPressure, hover = hover, predicted = predicted, coalesced = coalesced, barrelButton = barrelButton, eraser = eraser), cursor)
+        return Bincode.Decoded(PenCapabilities(pressure = pressure, tilt = tilt, azimuth = azimuth, altitude = altitude, twist = twist, tangentialPressure = tangentialPressure, hover = hover, predicted = predicted, coalesced = coalesced, buttonCount = buttonCount, eraser = eraser), cursor)
     }
 
     override fun writePenCapabilities(out: ByteArrayOutputStream, value: PenCapabilities) {
@@ -283,7 +283,7 @@ class PenCodecsImpl : PenCodecs {
         Bincode.writeBool(out, value.hover)
         Bincode.writeBool(out, value.predicted)
         Bincode.writeBool(out, value.coalesced)
-        Bincode.writeBool(out, value.barrelButton)
+        Bincode.writeVarintU64(out, value.buttonCount.toLong())
         Bincode.writeBool(out, value.eraser)
     }
 

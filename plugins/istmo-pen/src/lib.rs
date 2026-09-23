@@ -127,9 +127,12 @@ pub struct PenSample {
     pub tool_id: u32,
     /// Which end of the tool produced this sample.
     pub tool_kind: PenToolKind,
-    /// Bitmap of currently pressed barrel buttons — LSB is the primary
-    /// button, bit 1 is the secondary. Higher bits reserved for
-    /// platforms that expose more.
+    /// Bitmap of currently pressed barrel / side buttons — LSB is the
+    /// primary button, bit 1 is the secondary, bit 2 is the tertiary
+    /// (some Wacom / Linux tablets), and so on. Consumers building
+    /// configuration UIs should size the bindings surface by
+    /// [`PenCapabilities::button_count`] and mask this field
+    /// accordingly. Bits at or above `button_count` are undefined.
     pub buttons: u32,
 }
 
@@ -215,7 +218,18 @@ pub struct PenCapabilities {
     pub hover: bool,
     pub predicted: bool,
     pub coalesced: bool,
-    pub barrel_button: bool,
+    /// Number of on-tool buttons the platform can report on
+    /// [`PenSample::buttons`]. Zero means the tool has no side buttons
+    /// (Apple Pencil 1/2/Pro report buttons through
+    /// `UIPencilInteraction` rather than per-touch state — they surface
+    /// as zero here). Typical stylus values: Wacom pens report 2 or 3
+    /// (barrel + eraser as tail); Android reports 2 (`BUTTON_STYLUS_PRIMARY`
+    /// + `_SECONDARY`); Windows reports 2 (barrel + second-button via
+    /// `POINTER_FLAG_SECONDBUTTON`); macOS reports 2 (barrel + tail
+    /// button through `NSEvent.buttonMask`). Consumers use this to
+    /// decide how many "action" bindings a UI settings panel should
+    /// expose.
+    pub button_count: u32,
     pub eraser: bool,
 }
 
