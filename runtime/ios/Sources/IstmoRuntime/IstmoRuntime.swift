@@ -12,6 +12,10 @@ public final class IstmoRuntime {
 
     private var handlers: [String: PluginHandler] = [:]
 
+    /// Swift-hosted calls in flight, so a Rust-side cancel (the caller
+    /// dropped its future) can cancel the backend's `Task`.
+    private var hostedTasks: [UInt64: Task<Void, Never>] = [:]
+
     private var handleOwners: [UInt64: String] = [:]
     private var nextGlobalHandleId: UInt64 = 1
 
@@ -66,6 +70,10 @@ public final class IstmoRuntime {
                 cont.finish(throwing: IstmoRuntimeError.shutdown)
             }
             streams.removeAll()
+            for (_, task) in hostedTasks {
+                task.cancel()
+            }
+            hostedTasks.removeAll()
             started = false
         }
     }
@@ -228,16 +236,10 @@ public final class IstmoRuntime {
             istmo_ios_submit_response(callId, false, nil, 0)
             return
         }
-        Task {
-            do {
-                let out = try await handler.handleCall(instanceId: instanceId, method: method, payload: payload)
-                Self.submitResponse(callId: callId, ok: true, payload: out)
-            } catch let e as PluginException {
-                Self.submitResponse(callId: callId, ok: false, payload: e.payload)
-            } catch {
-                NSLog("IstmoRuntime: handleCall failed plugin=\(pluginId) method=\(method): \(error)")
-                istmo_ios_submit_response(callId, false, nil, 0)
-            }
+        spawnHosted(callId: callId) {
+            try await handler.handleCall(instanceId: instanceId, method: method, payload: payload)
+        } onFailure: { error in
+            NSLog("IstmoRuntime: handleCall failed plugin=\(pluginId) method=\(method): \(error)")
         }
     }
 
@@ -248,15 +250,44 @@ public final class IstmoRuntime {
             istmo_ios_submit_response(callId, false, nil, 0)
             return
         }
-        Task {
-            do {
-                let out = try await handler.handleCreateInstance(payload: payload)
-                Self.submitResponse(callId: callId, ok: true, payload: out)
-            } catch let e as PluginException {
-                Self.submitResponse(callId: callId, ok: false, payload: e.payload)
-            } catch {
-                NSLog("IstmoRuntime: handleCreateInstance failed plugin=\(pluginId): \(error)")
-                istmo_ios_submit_response(callId, false, nil, 0)
+        spawnHosted(callId: callId) {
+            try await handler.handleCreateInstance(payload: payload)
+        } onFailure: { error in
+            NSLog("IstmoRuntime: handleCreateInstance failed plugin=\(pluginId): \(error)")
+        }
+    }
+
+    /// Cooperative cancel: the backend observes it through
+    /// `Task.isCancelled` / `withTaskCancellationHandler`.
+    fileprivate func handleCancel(callId: UInt64) {
+        let task = queue.sync { self.hostedTasks.removeValue(forKey: callId) }
+        task?.cancel()
+    }
+
+    /// Run a Swift-hosted call in a `Task` registered under `callId`.
+    /// Cancelled calls get no response: Rust already forgot the call id.
+    private func spawnHosted(
+        callId: UInt64,
+        _ body: @escaping () async throws -> Data,
+        onFailure: @escaping (Error) -> Void
+    ) {
+        // Registering inside the serial queue guarantees the task's own
+        // removal below runs after the insertion.
+        queue.sync {
+            self.hostedTasks[callId] = Task {
+                defer { self.queue.async { self.hostedTasks.removeValue(forKey: callId) } }
+                do {
+                    let out = try await body()
+                    guard !Task.isCancelled else { return }
+                    Self.submitResponse(callId: callId, ok: true, payload: out)
+                } catch let e as PluginException {
+                    guard !Task.isCancelled else { return }
+                    Self.submitResponse(callId: callId, ok: false, payload: e.payload)
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    onFailure(error)
+                    istmo_ios_submit_response(callId, false, nil, 0)
+                }
             }
         }
     }
@@ -299,8 +330,9 @@ private enum Trampolines {
         runtime.handleCall(callId: callId, pluginId: pluginId, instanceId: instanceId, method: method, payload: payload)
     }
 
-    static let onCancel: @convention(c) (UnsafeMutableRawPointer?, UInt64) -> Void = { _, callId in
-        NSLog("IstmoRuntime: onCancel call_id=\(callId) — Swift-hosted dispatch cancelled")
+    static let onCancel: @convention(c) (UnsafeMutableRawPointer?, UInt64) -> Void = { ctx, callId in
+        guard let runtime = ctxRuntime(ctx) else { return }
+        runtime.handleCancel(callId: callId)
     }
 
     static let onCreateInstance: @convention(c) (
