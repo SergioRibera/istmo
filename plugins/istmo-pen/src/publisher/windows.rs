@@ -11,7 +11,7 @@
 //! slot on [`PenEvent::Move`] stays empty on this platform.
 //!
 //! The subclass forwards every message to
-//! [`DefSubclassProc`](windows_sys::Win32::UI::Controls::DefSubclassProc)
+//! [`DefSubclassProc`](windows_sys::Win32::UI::Shell::DefSubclassProc)
 //! so the host app's own input handling keeps running — this publisher
 //! is a passive observer.
 
@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
-use windows_sys::Win32::UI::Controls::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::Input::Pointer::{
     GetPointerPenInfo, GetPointerPenInfoHistory, GetPointerType, POINTER_PEN_INFO,
 };
@@ -80,7 +80,9 @@ impl AttachClock {
 /// subclass installation later.
 #[derive(Debug)]
 pub(super) struct WindowAttachment {
-    hwnd: HWND,
+    /// `HWND` stored as an integer: the raw pointer type is not `Send`,
+    /// and the attachment lives inside state shared across threads.
+    hwnd_id: isize,
     _state: Arc<WindowState>,
     _clock: Arc<AttachClock>,
 }
@@ -135,18 +137,19 @@ pub(super) fn attach_hwnd(
         return Err(AttachError::SetWindowSubclassFailed);
     }
     Ok(WindowAttachment {
-        hwnd: hwnd_ptr,
+        hwnd_id: hwnd.get(),
         _state: state,
         _clock: clock,
     })
 }
 
 pub(super) fn detach_hwnd(attachment: WindowAttachment) {
-    let hwnd_id = attachment.hwnd as usize;
+    let hwnd = attachment.hwnd_id as HWND;
+    let hwnd_id = attachment.hwnd_id as usize;
     // SAFETY: RemoveWindowSubclass unhooks the callback for the given
     // (hwnd, proc, id) triple. Safe to call even if the HWND has been
     // destroyed — the call is a no-op.
-    let _ = unsafe { RemoveWindowSubclass(attachment.hwnd, Some(subclass_proc), SUBCLASS_ID) };
+    let _ = unsafe { RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID) };
     let mut list = match registry().write() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -218,8 +221,9 @@ const fn get_pointer_id_from_wparam(wparam: WPARAM) -> u32 {
 }
 
 fn is_pen_pointer(pointer_id: u32) -> bool {
-    let mut ty: u32 = 0;
-    // SAFETY: GetPointerType writes a single u32 through the pointer.
+    let mut ty: i32 = 0;
+    // SAFETY: GetPointerType writes a single POINTER_INPUT_TYPE (i32)
+    // through the pointer.
     let ok = unsafe { GetPointerType(pointer_id, &mut ty) };
     ok != 0 && ty == PT_PEN
 }

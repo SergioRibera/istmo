@@ -58,6 +58,14 @@ struct NsPoint {
     y: f64,
 }
 
+// SAFETY: `NsPoint` is `#[repr(C)]` with the exact field layout of
+// `CGPoint` (two `CGFloat`s, which are `f64` on every 64-bit Apple
+// target), matching the encoding declared here.
+unsafe impl objc2::Encode for NsPoint {
+    const ENCODING: objc2::Encoding =
+        objc2::Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
+}
+
 /// Book-keeping returned from [`attach_view`] and stashed on the
 /// [`WindowState`](super::WindowState) so [`detach_view`] can drop the
 /// entry when the app unregisters the window.
