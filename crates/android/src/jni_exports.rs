@@ -271,11 +271,7 @@ fn submit_early_latest<'local>(
 ) -> Result<(), AndroidRuntimeError> {
     let channel: String = env.get_string(channel)?.into();
     let bytes = env.convert_byte_array(payload)?;
-    Runtime::global()?.dispatch_inbound(Envelope::new(Frame::EarlyEvent {
-        channel,
-        kind: EarlyEventKind::Latest,
-        payload: bytes,
-    }))?;
+    Runtime::submit_early_event(channel, EarlyEventKind::Latest, bytes)?;
     Ok(())
 }
 
@@ -302,11 +298,7 @@ fn submit_early_queue<'local>(
     let channel: String = env.get_string(channel)?.into();
     let bytes = env.convert_byte_array(payload)?;
     let capacity = if capacity <= 0 { 0 } else { capacity as u32 };
-    Runtime::global()?.dispatch_inbound(Envelope::new(Frame::EarlyEvent {
-        channel,
-        kind: EarlyEventKind::Queue { capacity },
-        payload: bytes,
-    }))?;
+    Runtime::submit_early_event(channel, EarlyEventKind::Queue { capacity }, bytes)?;
     Ok(())
 }
 
