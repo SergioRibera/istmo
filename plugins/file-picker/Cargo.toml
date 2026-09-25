@@ -1,0 +1,45 @@
+[package]
+name = "istmo-file-picker"
+version = "0.1.1-alpha.2"
+description = "Cross-platform file-picker plugin for the istmo framework — SAF on Android, UIDocumentPicker on iOS, NSOpenPanel on macOS, IFileOpenDialog on Windows, XDG portal on Linux."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "file-picker", "saf", "document-picker", "mobile"]
+categories = ["filesystem", "api-bindings"]
+links = "istmo_file_picker"
+
+[features]
+default = []
+codegen = ["dep:istmo-build"]
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+bincode = { workspace = true }
+istmo-build = { workspace = true, optional = true }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+flume = { workspace = true }
+pollster = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_safety_doc = "allow"
+redundant_pub_crate = "allow"

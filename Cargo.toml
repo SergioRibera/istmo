@@ -15,6 +15,7 @@ members = [
     "examples/rust-mobile-demo",
     "plugins/google-sign-in",
     "plugins/data-store",
+    "plugins/file-picker",
     "plugins/live-activity",
     "plugins/istmo-pen",
     "examples/data-store-demo",

@@ -1,0 +1,5 @@
+[plugin]
+id = "istmo.file_picker"
+client_type = "::istmo_file_picker::FilePickerClient"
+default_deployment = "local"
+auto_register = false
