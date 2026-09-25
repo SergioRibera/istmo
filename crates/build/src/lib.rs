@@ -43,11 +43,14 @@
 //! - [`desktop`] — systemd unit, launchd plist, Windows sc.exe and
 //!   XDG `.desktop` generators.
 //! - [`entitlements`] — Apple entitlements plist builder.
+//! - [`apple_plist`] — per-plugin `Info.plist` / entitlements fragments
+//!   merged into the host app.
 //! - [`min_versions`] — `[min_versions]` parsing and the app-floor
 //!   check run from [`emit`].
 
 #![doc(html_root_url = "https://docs.rs/istmo-build")]
 
+pub mod apple_plist;
 pub mod contract;
 pub mod desktop;
 pub mod doc_extract;
@@ -71,6 +74,9 @@ pub mod swift_host;
 pub mod swift_types;
 pub mod worker;
 
+pub use crate::apple_plist::{
+    ENTITLEMENTS_FRAGMENT, INFO_PLIST_FRAGMENT, MergeWarning, PlistFragmentError, PlistFragments,
+};
 pub use crate::contract::{
     Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
 };
