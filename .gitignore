@@ -73,3 +73,21 @@ examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/DemoType
 examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/DemoCodecsImpl.kt
 examples/live-activity-demo/android/app/src/main/java/dev/istmo/runtime/IstmoPluginRegistry.kt
 examples/live-activity-demo/ios/LiveActivityDemo/Plugins/IstmoPluginRegistry.swift
+
+# biometric-demo: xcodegen output + Xcode / cargo / Gradle build
+# products + build.rs-emitted host dispatchers + types + codecs.
+examples/biometric-demo/ios/BiometricDemo.xcodeproj/
+examples/biometric-demo/ios/build/
+examples/biometric-demo/ios/**/*.xcuserdata/
+examples/biometric-demo/ios/**/xcshareddata/
+examples/biometric-demo/ios/BiometricDemo/Plugins/*/Generated/
+examples/biometric-demo/ios/BiometricDemo/Plugins/IstmoPluginRegistry.swift
+examples/biometric-demo/ios/BiometricDemo/Info.plist.background.xml
+examples/biometric-demo/android/.gradle/
+examples/biometric-demo/android/build/
+examples/biometric-demo/android/**/build/
+examples/biometric-demo/android/local.properties
+examples/biometric-demo/android/app/src/main/java/dev/istmo/runtime/BiometricDispatcher.kt
+examples/biometric-demo/android/app/src/main/java/dev/istmo/runtime/BiometricTypes.kt
+examples/biometric-demo/android/app/src/main/java/dev/istmo/runtime/BiometricCodecsImpl.kt
+examples/biometric-demo/android/app/src/main/java/dev/istmo/runtime/IstmoPluginRegistry.kt

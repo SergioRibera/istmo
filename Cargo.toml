@@ -22,6 +22,7 @@ members = [
     "examples/data-store-demo",
     "examples/live-activity-demo",
     "examples/pen-demo",
+    "examples/biometric-demo",
 ]
 
 [workspace.package]
