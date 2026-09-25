@@ -93,7 +93,8 @@ impl SharedContext {
 pub(super) struct VaultQuery(Vec<(CFString, CFType)>);
 
 impl VaultQuery {
-    pub(super) fn item(alias: &SecretAlias) -> Self {
+    /// Every vault item of this app.
+    fn service() -> Self {
         // SAFETY: the `kSec*` constants are immutable statics exported by
         // Security.framework; reading them is always sound.
         unsafe {
@@ -103,9 +104,25 @@ impl VaultQuery {
                     CFString::wrap_under_get_rule(kSecClassGenericPassword),
                 )
                 .with(kSecAttrService, CFString::new(KEYCHAIN_SERVICE))
-                .with(kSecAttrAccount, CFString::new(alias.as_str()))
                 .with(kSecUseDataProtectionKeychain, CFBoolean::true_value())
         }
+    }
+
+    pub(super) fn item(alias: &SecretAlias) -> Self {
+        // SAFETY: immutable Security.framework constant.
+        Self::service().with(unsafe { kSecAttrAccount }, CFString::new(alias.as_str()))
+    }
+
+    /// Whether this process may use the data-protection keychain at all:
+    /// unsigned binaries and apps without `keychain-access-groups` get
+    /// `errSecMissingEntitlement`. Never shows UI.
+    pub(super) fn keychain_usable() -> bool {
+        let context = SharedContext::new();
+        context.non_interactive();
+        !matches!(
+            Self::service().authenticated_by(&context).exists(),
+            Err(BiometricError::UnsupportedOperation(_))
+        )
     }
 
     /// Evaluate the item's access control with `context`, which carries

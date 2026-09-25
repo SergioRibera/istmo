@@ -32,8 +32,8 @@ raw-window-handle = { version = "0.6", default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 block2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString"] }
-objc2-local-authentication = { version = "0.3", default-features = false, features = ["std", "block2", "LABiometryType", "LAContext", "LAError"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSError", "NSString"] }
+objc2-local-authentication = { version = "0.3", default-features = false, features = ["std", "block2", "LABiometryType", "LAContext", "LADomainState", "LAError"] }
 # Keychain items guarded by `SecAccessControl` for biometric-bound secrets.
 core-foundation = "0.10"
 security-framework = { version = "3", default-features = false }
@@ -49,6 +49,8 @@ windows = { version = "0.62", features = [
     "Storage_Streams",
     "Win32_Foundation",
     "Win32_System_WinRT",
+    "Win32_Devices_BiometricFramework",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 windows-future = { version = "0.3", default-features = false, features = ["std"] }
 # Vault encryption under a key derived from a Windows Hello signature.

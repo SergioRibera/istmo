@@ -46,7 +46,7 @@
 //! | iOS      | Keychain item with `SecAccessControl` (`.biometryCurrentSet` / `.userPresence`) |
 //! | macOS    | Same as iOS, in the data-protection keychain (signed apps only)          |
 //! | Windows  | AES-GCM key derived from a Windows Hello (`KeyCredentialManager`) signature |
-//! | Linux    | Unsupported — fprintd exposes no key material                           |
+//! | Linux    | Opt-in Secret Service keyring item behind an fprintd check (UI gate only) |
 //!
 //! Secrets are addressed by a [`SecretAlias`]. With a biometric-only
 //! policy, enrolling a new fingerprint or face destroys the secret's
@@ -177,6 +177,14 @@ pub struct Availability {
     pub kinds: Vec<BiometricKind>,
     /// Whether a device PIN / pattern / password is set up.
     pub device_credential_available: bool,
+    /// Whether this device can keep biometric-bound secrets at all
+    /// ([`Biometric::store_secret`]). Whether a given policy can unlock
+    /// them still follows [`Availability::status`].
+    ///
+    /// `false` on Linux (unless the app opted into the UI-gated keyring
+    /// vault), on macOS binaries without the `keychain-access-groups`
+    /// entitlement, and on devices without a lock-screen credential.
+    pub vault_available: bool,
 }
 
 impl Availability {
@@ -492,4 +500,21 @@ pub trait Biometric {
 
     /// Whether a secret is stored as `alias`. Never shows UI.
     async fn has_secret(&self, alias: String) -> Result<bool, BiometricError>;
+
+    /// Opaque token describing the current biometric enrollment. Store
+    /// it after signing the user in and compare later: a different token
+    /// means fingers or faces were added or removed, so the app should
+    /// ask for its own credentials again. Never shows UI.
+    ///
+    /// `None` when there is nothing to fingerprint — no biometric
+    /// enrolled — or the platform cannot tell (Windows Hello). Tokens are
+    /// only comparable on the same device and app installation.
+    ///
+    /// * iOS / macOS → `LADomainState` biometry hash.
+    /// * Android → generation of a Keystore sentinel key that the OS
+    ///   invalidates on enrollment changes; the token changes the first
+    ///   time a change is observed.
+    /// * Linux → the fprintd list of enrolled fingers (re-enrolling the
+    ///   same finger goes unnoticed).
+    async fn enrollment_state(&self) -> Result<Option<Vec<u8>>, BiometricError>;
 }

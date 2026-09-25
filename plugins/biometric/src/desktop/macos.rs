@@ -11,9 +11,8 @@ use objc2::rc::Retained;
 use objc2::runtime::Bool;
 use objc2_foundation::{NSError, NSString};
 use objc2_local_authentication::{LABiometryType, LAContext, LAError, LAPolicy};
-use raw_window_handle::RawWindowHandle;
 
-use super::until_cancelled;
+use super::{DesktopOptions, until_cancelled};
 use crate::{
     AuthMethod, AuthPolicy, AuthPrompt, Availability, BiometricError, BiometricKind,
     BiometricStatus, SecretAlias,
@@ -24,13 +23,10 @@ use keychain::{SharedContext, VaultQuery};
 pub(super) struct Backend;
 
 impl Backend {
-    // Mirrors the Windows backend, the only one that uses the window.
-    #[allow(clippy::unused_self, clippy::needless_pass_by_ref_mut)]
-    pub(super) const fn set_parent_window(&mut self, _window: RawWindowHandle) {}
-
     #[allow(clippy::unused_async)] // Async like every platform backend.
     pub(super) async fn availability(
         &self,
+        _options: &DesktopOptions,
         policy: AuthPolicy,
     ) -> Result<Availability, BiometricError> {
         // SAFETY: `LAContext` has no initialisation preconditions.
@@ -52,15 +48,19 @@ impl Backend {
         };
         let status = evaluated.map_or_else(LaErrorCode::status, |()| BiometricStatus::Available);
         let device_credential_available = credential.is_ok();
+        // Vault items are only accessible while a login password is set.
+        let vault_available = device_credential_available && VaultQuery::keychain_usable();
         Ok(Availability {
             status,
             kinds,
             device_credential_available,
+            vault_available,
         })
     }
 
     pub(super) async fn authenticate(
         &self,
+        _options: &DesktopOptions,
         prompt: AuthPrompt,
         cancel: CancelToken,
     ) -> Result<AuthMethod, BiometricError> {
@@ -91,6 +91,7 @@ impl Backend {
     #[allow(clippy::unused_async)] // Async like every platform backend.
     pub(super) async fn store_secret(
         &self,
+        _options: &DesktopOptions,
         alias: &SecretAlias,
         secret: Vec<u8>,
         prompt: AuthPrompt,
@@ -102,6 +103,7 @@ impl Backend {
 
     pub(super) async fn read_secret(
         &self,
+        _options: &DesktopOptions,
         alias: &SecretAlias,
         prompt: AuthPrompt,
         cancel: CancelToken,
@@ -135,15 +137,51 @@ impl Backend {
     }
 
     #[allow(clippy::unused_async)] // Async like every platform backend.
-    pub(super) async fn delete_secret(&self, alias: &SecretAlias) -> Result<(), BiometricError> {
+    pub(super) async fn delete_secret(
+        &self,
+        _options: &DesktopOptions,
+        alias: &SecretAlias,
+    ) -> Result<(), BiometricError> {
         VaultQuery::item(alias).delete()
     }
 
     #[allow(clippy::unused_async)] // Async like every platform backend.
-    pub(super) async fn has_secret(&self, alias: &SecretAlias) -> Result<bool, BiometricError> {
+    pub(super) async fn has_secret(
+        &self,
+        _options: &DesktopOptions,
+        alias: &SecretAlias,
+    ) -> Result<bool, BiometricError> {
         let context = SharedContext::new();
         context.non_interactive();
         VaultQuery::item(alias).authenticated_by(&context).exists()
+    }
+
+    /// `LADomainState` biometry hash (macOS 15+), or the equivalent
+    /// `evaluatedPolicyDomainState` on older releases.
+    #[allow(clippy::unused_async)] // Async like every platform backend.
+    pub(super) async fn enrollment_state(
+        &self,
+        _options: &DesktopOptions,
+    ) -> Result<Option<Vec<u8>>, BiometricError> {
+        // SAFETY: `LAContext` has no initialisation preconditions.
+        let context = unsafe { LAContext::new() };
+        // The domain state is only populated after a successful
+        // biometric `canEvaluatePolicy`.
+        if can_evaluate(&context, LAPolicy::DeviceOwnerAuthenticationWithBiometrics).is_err() {
+            return Ok(None);
+        }
+        let hash = if objc2::available!(macos = 15.0) {
+            // SAFETY: property reads on a live context; `domainState`
+            // exists from macOS 15, checked above.
+            unsafe { context.domainState().biometry().stateHash() }
+        } else {
+            // SAFETY: property read on a live context.
+            #[allow(deprecated)] // Replaced by `domainState` on macOS 15+.
+            unsafe {
+                context.evaluatedPolicyDomainState()
+            }
+        };
+        Ok(hash.map(|data| data.to_vec()))
     }
 }
 

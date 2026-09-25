@@ -109,6 +109,7 @@ fn expected_methods() -> Vec<Method> {
             vec![arg("alias", TypeRef::String)],
             TypeRef::Bool,
         ),
+        unary("enrollment_state", vec![], opt(TypeRef::Bytes)),
     ]
 }
 
@@ -141,6 +142,7 @@ fn expected_types() -> Vec<TypeDef> {
                 field("status", named("BiometricStatus")),
                 field("kinds", vec_of(named("BiometricKind"))),
                 field("deviceCredentialAvailable", TypeRef::Bool),
+                field("vaultAvailable", TypeRef::Bool),
             ],
         }),
         TypeDef::Struct(StructDef {

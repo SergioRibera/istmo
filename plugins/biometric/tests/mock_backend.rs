@@ -37,6 +37,7 @@ impl ScriptedBackend {
                 status: BiometricStatus::Available,
                 kinds: vec![BiometricKind::Fingerprint, BiometricKind::Face],
                 device_credential_available: true,
+                vault_available: true,
             },
             script: Mutex::new(script),
             prompts: Mutex::new(Vec::new()),
@@ -68,6 +69,7 @@ impl Biometric for Shared {
                 status: BiometricStatus::NoHardware,
                 kinds: Vec::new(),
                 device_credential_available: true,
+                vault_available: false,
             }),
         }
     }
@@ -136,6 +138,10 @@ impl Biometric for Shared {
             .expect("vault")
             .contains_key(alias.as_str()))
     }
+
+    async fn enrollment_state(&self) -> Result<Option<Vec<u8>>, BiometricError> {
+        Ok(Some(b"enrollment-generation-1".to_vec()))
+    }
 }
 
 fn build(script: Script) -> (Arc<Runtime>, BiometricClient, Arc<ScriptedBackend>) {
@@ -160,6 +166,7 @@ fn availability_round_trips_per_policy() {
         vec![BiometricKind::Fingerprint, BiometricKind::Face]
     );
     assert!(strong.device_credential_available);
+    assert!(strong.vault_available);
 
     let weak =
         pollster::block_on(client.availability(AuthPolicy::BiometricWeak)).expect("availability");
@@ -267,6 +274,13 @@ fn secret_aliases_are_validated() {
         BiometricError::try_from(err).expect("domain error"),
         BiometricError::InvalidAlias("../escape".to_owned())
     );
+}
+
+#[test]
+fn enrollment_state_round_trips() {
+    let (_rt, client, _backend) = build(Script::Succeed(AuthMethod::Biometric));
+    let state = pollster::block_on(client.enrollment_state()).expect("enrollment state");
+    assert_eq!(state.as_deref(), Some(&b"enrollment-generation-1"[..]));
 }
 
 #[test]

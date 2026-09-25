@@ -20,7 +20,8 @@ use windows::Security::Credentials::{
 use windows::Security::Cryptography::CryptographicBuffer;
 use windows::core::{Array, HSTRING};
 
-use super::{complete, winrt_error};
+use super::super::app_namespace;
+use super::{complete, raise_credential_dialog, winrt_error};
 use crate::{BiometricError, BiometricStatus, SecretAlias};
 
 /// Bumped whenever the derivation or the file layout changes.
@@ -37,21 +38,9 @@ pub(super) struct Vault {
 
 impl Default for Vault {
     fn default() -> Self {
-        let sanitize = |c: char| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-') {
-                c
-            } else {
-                '_'
-            }
-        };
-        let app = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))
-            .map_or_else(
-                || "app".to_owned(),
-                |stem| stem.chars().map(sanitize).collect(),
-            );
-        Self { app }
+        Self {
+            app: app_namespace(),
+        }
     }
 }
 
@@ -60,12 +49,13 @@ impl Vault {
         &self,
         alias: &SecretAlias,
         secret: &[u8],
+        parent_window: Option<isize>,
         cancel: &CancelToken,
     ) -> Result<(), BiometricError> {
         Self::ensure_supported(cancel).await?;
         let name = self.credential_name(alias);
-        let credential = Self::open_or_create(&name, cancel).await?;
-        let cipher = Self::cipher(&credential, &name, cancel).await?;
+        let credential = Self::open_or_create(&name, parent_window, cancel).await?;
+        let cipher = Self::cipher(&credential, &name, parent_window, cancel).await?;
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let sealed = cipher
             .encrypt(
@@ -94,6 +84,7 @@ impl Vault {
     pub(super) async fn read(
         &self,
         alias: &SecretAlias,
+        parent_window: Option<isize>,
         cancel: &CancelToken,
     ) -> Result<Vec<u8>, BiometricError> {
         let path = self.path(alias)?;
@@ -131,7 +122,7 @@ impl Vault {
             other => return Err(HelloKeyStatus(other).into()),
         }
         let credential = opened.Credential().map_err(winrt_error)?;
-        let cipher = Self::cipher(&credential, &name, cancel).await?;
+        let cipher = Self::cipher(&credential, &name, parent_window, cancel).await?;
         cipher
             .decrypt(
                 Nonce::from_slice(nonce),
@@ -178,6 +169,7 @@ impl Vault {
 
     async fn open_or_create(
         name: &HSTRING,
+        parent_window: Option<isize>,
         cancel: &CancelToken,
     ) -> Result<KeyCredential, BiometricError> {
         let opened = complete(
@@ -193,6 +185,7 @@ impl Vault {
                 KeyCredentialCreationOption::ReplaceExisting,
             )
             .map_err(winrt_error)?;
+            raise_credential_dialog(parent_window);
             complete(create, cancel).await?
         };
         match result.Status().map_err(winrt_error)? {
@@ -206,6 +199,7 @@ impl Vault {
     async fn cipher(
         credential: &KeyCredential,
         name: &HSTRING,
+        parent_window: Option<isize>,
         cancel: &CancelToken,
     ) -> Result<Aes256Gcm, BiometricError> {
         let challenge = Sha256::new()
@@ -219,6 +213,7 @@ impl Vault {
                 CryptographicBuffer::CreateFromByteArray(&challenge).map_err(winrt_error)?;
             credential.RequestSignAsync(&buffer).map_err(winrt_error)?
         };
+        raise_credential_dialog(parent_window);
         let signed = complete(request, cancel).await?;
         match signed.Status().map_err(winrt_error)? {
             KeyCredentialStatus::Success => {}
