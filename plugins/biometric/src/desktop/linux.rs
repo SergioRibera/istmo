@@ -9,8 +9,10 @@ use zbus::zvariant::OwnedObjectPath;
 use super::until_cancelled;
 use crate::{
     AuthMethod, AuthPolicy, AuthPrompt, Availability, BiometricError, BiometricKind,
-    BiometricStatus,
+    BiometricStatus, SecretAlias,
 };
+
+const NO_SECRETS: &str = "fprintd exposes no key material to bind secrets to";
 
 /// fprintd resolves an empty user name to the calling user.
 const CURRENT_USER: &str = "";
@@ -151,6 +153,38 @@ impl Backend {
             tracing::debug!(%err, "fprintd Release failed");
         }
         outcome
+    }
+
+    #[allow(clippy::unused_async)] // Async like every platform backend.
+    pub(super) async fn store_secret(
+        &self,
+        _alias: &SecretAlias,
+        _secret: Vec<u8>,
+        _prompt: AuthPrompt,
+        _cancel: CancelToken,
+    ) -> Result<(), BiometricError> {
+        Err(BiometricError::UnsupportedOperation(NO_SECRETS.to_owned()))
+    }
+
+    #[allow(clippy::unused_async)] // Async like every platform backend.
+    pub(super) async fn read_secret(
+        &self,
+        _alias: &SecretAlias,
+        _prompt: AuthPrompt,
+        _cancel: CancelToken,
+    ) -> Result<Vec<u8>, BiometricError> {
+        Err(BiometricError::UnsupportedOperation(NO_SECRETS.to_owned()))
+    }
+
+    /// Nothing can be stored, so there is nothing to delete.
+    #[allow(clippy::unused_async)] // Async like every platform backend.
+    pub(super) async fn delete_secret(&self, _alias: &SecretAlias) -> Result<(), BiometricError> {
+        Ok(())
+    }
+
+    #[allow(clippy::unused_async)] // Async like every platform backend.
+    pub(super) async fn has_secret(&self, _alias: &SecretAlias) -> Result<bool, BiometricError> {
+        Ok(false)
     }
 
     async fn default_device() -> Result<DeviceProxy<'static>, FprintFailure> {

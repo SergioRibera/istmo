@@ -32,8 +32,28 @@
 //!
 //! A successful [`Biometric::authenticate`] is a *UI gate*: on a rooted
 //! or jailbroken device an attacker can forge the success callback.
-//! Protect real secrets with key material that the OS only releases
-//! after verification.
+//! Protect real secrets with the vault below instead.
+//!
+//! # Biometric-bound secrets
+//!
+//! [`Biometric::store_secret`] / [`Biometric::read_secret`] keep small
+//! secrets (tokens, keys) encrypted under key material the OS only
+//! releases after a successful verification:
+//!
+//! | Platform | Storage                                                                 |
+//! | -------- | ----------------------------------------------------------------------- |
+//! | Android  | AES-GCM Keystore key bound to `BiometricPrompt.CryptoObject`            |
+//! | iOS      | Keychain item with `SecAccessControl` (`.biometryCurrentSet` / `.userPresence`) |
+//! | macOS    | Same as iOS, in the data-protection keychain (signed apps only)          |
+//! | Windows  | AES-GCM key derived from a Windows Hello (`KeyCredentialManager`) signature |
+//! | Linux    | Unsupported — fprintd exposes no key material                           |
+//!
+//! Secrets are addressed by a [`SecretAlias`]. With a biometric-only
+//! policy, enrolling a new fingerprint or face destroys the secret's
+//! key: Android reports [`BiometricError::KeyInvalidated`], Apple
+//! platforms stop finding the item ([`BiometricError::SecretNotFound`]).
+//! Windows reports [`BiometricError::KeyInvalidated`] when the Hello key
+//! itself is gone (PIN reset, Hello removed).
 //!
 //! # Deployment
 //!
@@ -248,6 +268,58 @@ impl AuthPrompt {
     }
 }
 
+/// Longest accepted [`SecretAlias`], in bytes.
+pub const MAX_SECRET_ALIAS_LEN: usize = 64;
+
+/// Name of a biometric-bound secret: 1 to [`MAX_SECRET_ALIAS_LEN`] ASCII
+/// letters, digits, `.`, `_` or `-`, so every backend can use it as a
+/// file name, preference key or keychain account verbatim.
+///
+/// The wire carries plain strings; every backend re-validates them and
+/// rejects bad ones with [`BiometricError::InvalidAlias`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SecretAlias(String);
+
+impl SecretAlias {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<&str> for SecretAlias {
+    type Error = BiometricError;
+
+    fn try_from(alias: &str) -> Result<Self, Self::Error> {
+        let valid_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+        if alias.is_empty() || alias.len() > MAX_SECRET_ALIAS_LEN || !alias.chars().all(valid_char)
+        {
+            return Err(BiometricError::InvalidAlias(alias.to_owned()));
+        }
+        Ok(Self(alias.to_owned()))
+    }
+}
+
+impl TryFrom<String> for SecretAlias {
+    type Error = BiometricError;
+
+    fn try_from(alias: String) -> Result<Self, Self::Error> {
+        Self::try_from(alias.as_str())
+    }
+}
+
+impl From<SecretAlias> for String {
+    fn from(alias: SecretAlias) -> Self {
+        alias.0
+    }
+}
+
+impl std::fmt::Display for SecretAlias {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Factor the user verified with in a successful
 /// [`Biometric::authenticate`].
 #[message(bincode = "::bincode", crate = "::istmo_core")]
@@ -287,6 +359,17 @@ pub enum BiometricError {
     /// The [`AuthPrompt`] cannot be shown as configured, e.g. an empty
     /// `reason`.
     InvalidPrompt(String),
+    /// The alias is not a valid [`SecretAlias`].
+    InvalidAlias(String),
+    /// No secret is stored under the alias.
+    SecretNotFound,
+    /// The key sealing the secret is gone — biometric enrollment changed
+    /// (Android) or the Windows Hello key was reset. The secret is lost;
+    /// store it again.
+    KeyInvalidated,
+    /// The operation is not available on this platform (biometric-bound
+    /// secrets on Linux, the macOS keychain in unsigned binaries).
+    UnsupportedOperation(String),
     /// Any other backend failure. Message is the raw platform error.
     Backend(String),
 }
@@ -306,6 +389,12 @@ impl std::fmt::Display for BiometricError {
             }
             Self::AuthFailed => f.write_str("biometric verification failed"),
             Self::InvalidPrompt(msg) => write!(f, "invalid biometric prompt: {msg}"),
+            Self::InvalidAlias(alias) => write!(f, "invalid secret alias `{alias}`"),
+            Self::SecretNotFound => f.write_str("no secret stored under this alias"),
+            Self::KeyInvalidated => {
+                f.write_str("secret invalidated by a biometric enrollment change")
+            }
+            Self::UnsupportedOperation(msg) => write!(f, "unsupported biometric operation: {msg}"),
             Self::Backend(msg) => write!(f, "biometric backend error: {msg}"),
         }
     }
@@ -359,4 +448,36 @@ pub trait Biometric {
         prompt: AuthPrompt,
         cancel: CancelToken,
     ) -> Result<AuthMethod, BiometricError>;
+
+    /// Encrypt `secret` under key material bound to `prompt.policy` and
+    /// store it as `alias`, replacing any previous value.
+    ///
+    /// Android and Windows verify the user before encrypting, so they
+    /// show `prompt`; Apple platforms store without UI. Biometric-only
+    /// policies are treated as [`AuthPolicy::BiometricStrong`] — the only
+    /// class Android allows to unlock keys.
+    async fn store_secret(
+        &self,
+        alias: String,
+        secret: Vec<u8>,
+        prompt: AuthPrompt,
+        cancel: CancelToken,
+    ) -> Result<(), BiometricError>;
+
+    /// Verify the user with `prompt` and decrypt the secret stored as
+    /// `alias`. The policy it was stored with applies; `prompt.policy`
+    /// only shapes the dialog.
+    async fn read_secret(
+        &self,
+        alias: String,
+        prompt: AuthPrompt,
+        cancel: CancelToken,
+    ) -> Result<Vec<u8>, BiometricError>;
+
+    /// Delete the secret stored as `alias` and its key. Succeeds when
+    /// nothing is stored. Never shows UI.
+    async fn delete_secret(&self, alias: String) -> Result<(), BiometricError>;
+
+    /// Whether a secret is stored as `alias`. Never shows UI.
+    async fn has_secret(&self, alias: String) -> Result<bool, BiometricError>;
 }

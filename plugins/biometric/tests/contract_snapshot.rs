@@ -64,81 +64,120 @@ fn expected_contract() -> Contract {
     Contract {
         plugin_id: "istmo.biometric".to_owned(),
         type_name: "Biometric".to_owned(),
-        methods: vec![
-            unary(
-                "availability",
-                vec![arg("policy", named("AuthPolicy"))],
-                named("Availability"),
-            ),
-            unary(
-                "authenticate",
-                vec![arg("prompt", named("AuthPrompt"))],
-                named("AuthMethod"),
-            ),
-        ],
+        methods: expected_methods(),
         init: None,
-        types: vec![
-            unit_enum(
-                "AuthPolicy",
-                &[
-                    "BiometricStrong",
-                    "BiometricWeak",
-                    "BiometricOrDeviceCredential",
-                ],
-            ),
-            unit_enum(
-                "BiometricStatus",
-                &[
-                    "Available",
-                    "NoneEnrolled",
-                    "NoHardware",
-                    "HardwareUnavailable",
-                    "LockedOut",
-                    "SecurityUpdateRequired",
-                    "Unsupported",
-                ],
-            ),
-            unit_enum("BiometricKind", &["Fingerprint", "Face", "Iris", "Other"]),
-            TypeDef::Struct(StructDef {
-                name: "Availability".to_owned(),
-                fields: vec![
-                    field("status", named("BiometricStatus")),
-                    field("kinds", vec_of(named("BiometricKind"))),
-                    field("deviceCredentialAvailable", TypeRef::Bool),
-                ],
-            }),
-            TypeDef::Struct(StructDef {
-                name: "AuthPrompt".to_owned(),
-                fields: vec![
-                    field("title", TypeRef::String),
-                    field("reason", TypeRef::String),
-                    field("subtitle", opt(TypeRef::String)),
-                    field("cancelLabel", opt(TypeRef::String)),
-                    field("fallbackLabel", opt(TypeRef::String)),
-                    field("policy", named("AuthPolicy")),
-                    field("confirmationRequired", TypeRef::Bool),
-                ],
-            }),
-            unit_enum(
-                "AuthMethod",
-                &["Biometric", "DeviceCredential", "Unspecified"],
-            ),
-            TypeDef::Enum(EnumDef {
-                name: "BiometricError".to_owned(),
-                variants: vec![
-                    variant("UserCancelled", vec![]),
-                    variant("SystemCancelled", vec![]),
-                    variant("UserFallback", vec![]),
-                    variant("NotAvailable", vec![named("BiometricStatus")]),
-                    variant("LockedOut", vec![]),
-                    variant("LockedOutPermanent", vec![]),
-                    variant("AuthFailed", vec![]),
-                    variant("InvalidPrompt", vec![TypeRef::String]),
-                    variant("Backend", vec![TypeRef::String]),
-                ],
-            }),
-        ],
+        types: expected_types(),
     }
+}
+
+fn expected_methods() -> Vec<Method> {
+    vec![
+        unary(
+            "availability",
+            vec![arg("policy", named("AuthPolicy"))],
+            named("Availability"),
+        ),
+        unary(
+            "authenticate",
+            vec![arg("prompt", named("AuthPrompt"))],
+            named("AuthMethod"),
+        ),
+        unary(
+            "store_secret",
+            vec![
+                arg("alias", TypeRef::String),
+                arg("secret", TypeRef::Bytes),
+                arg("prompt", named("AuthPrompt")),
+            ],
+            TypeRef::Unit,
+        ),
+        unary(
+            "read_secret",
+            vec![
+                arg("alias", TypeRef::String),
+                arg("prompt", named("AuthPrompt")),
+            ],
+            TypeRef::Bytes,
+        ),
+        unary(
+            "delete_secret",
+            vec![arg("alias", TypeRef::String)],
+            TypeRef::Unit,
+        ),
+        unary(
+            "has_secret",
+            vec![arg("alias", TypeRef::String)],
+            TypeRef::Bool,
+        ),
+    ]
+}
+
+fn expected_types() -> Vec<TypeDef> {
+    vec![
+        unit_enum(
+            "AuthPolicy",
+            &[
+                "BiometricStrong",
+                "BiometricWeak",
+                "BiometricOrDeviceCredential",
+            ],
+        ),
+        unit_enum(
+            "BiometricStatus",
+            &[
+                "Available",
+                "NoneEnrolled",
+                "NoHardware",
+                "HardwareUnavailable",
+                "LockedOut",
+                "SecurityUpdateRequired",
+                "Unsupported",
+            ],
+        ),
+        unit_enum("BiometricKind", &["Fingerprint", "Face", "Iris", "Other"]),
+        TypeDef::Struct(StructDef {
+            name: "Availability".to_owned(),
+            fields: vec![
+                field("status", named("BiometricStatus")),
+                field("kinds", vec_of(named("BiometricKind"))),
+                field("deviceCredentialAvailable", TypeRef::Bool),
+            ],
+        }),
+        TypeDef::Struct(StructDef {
+            name: "AuthPrompt".to_owned(),
+            fields: vec![
+                field("title", TypeRef::String),
+                field("reason", TypeRef::String),
+                field("subtitle", opt(TypeRef::String)),
+                field("cancelLabel", opt(TypeRef::String)),
+                field("fallbackLabel", opt(TypeRef::String)),
+                field("policy", named("AuthPolicy")),
+                field("confirmationRequired", TypeRef::Bool),
+            ],
+        }),
+        unit_enum(
+            "AuthMethod",
+            &["Biometric", "DeviceCredential", "Unspecified"],
+        ),
+        TypeDef::Enum(EnumDef {
+            name: "BiometricError".to_owned(),
+            variants: vec![
+                variant("UserCancelled", vec![]),
+                variant("SystemCancelled", vec![]),
+                variant("UserFallback", vec![]),
+                variant("NotAvailable", vec![named("BiometricStatus")]),
+                variant("LockedOut", vec![]),
+                variant("LockedOutPermanent", vec![]),
+                variant("AuthFailed", vec![]),
+                variant("InvalidPrompt", vec![TypeRef::String]),
+                variant("InvalidAlias", vec![TypeRef::String]),
+                variant("SecretNotFound", vec![]),
+                variant("KeyInvalidated", vec![]),
+                variant("UnsupportedOperation", vec![TypeRef::String]),
+                variant("Backend", vec![TypeRef::String]),
+            ],
+        }),
+    ]
 }
 
 #[test]

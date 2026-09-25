@@ -1,4 +1,7 @@
-//! Windows Hello backend through `WinRT` `UserConsentVerifier`.
+//! Windows Hello backend through `WinRT` `UserConsentVerifier`, plus a
+//! Hello-sealed vault for biometric-bound secrets.
+
+mod vault;
 
 use istmo_core::CancelToken;
 use raw_window_handle::RawWindowHandle;
@@ -7,17 +10,20 @@ use windows::Security::Credentials::UI::{
 };
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::WinRT::IUserConsentVerifierInterop;
-use windows::core::{HSTRING, factory};
+use windows::core::{HSTRING, RuntimeType, factory};
 use windows_future::IAsyncOperation;
 
 use super::until_cancelled;
-use crate::{AuthMethod, AuthPolicy, AuthPrompt, Availability, BiometricError, BiometricStatus};
+use crate::{
+    AuthMethod, AuthPolicy, AuthPrompt, Availability, BiometricError, BiometricStatus, SecretAlias,
+};
 
 #[derive(Debug, Default, Clone)]
 pub(super) struct Backend {
     /// `HWND` the Hello dialog is parented to, as an address so the
     /// backend stays `Send + Sync`.
     parent_window: Option<isize>,
+    vault: vault::Vault,
 }
 
 impl Backend {
@@ -51,12 +57,36 @@ impl Backend {
         cancel: CancelToken,
     ) -> Result<AuthMethod, BiometricError> {
         let operation = self.request_verification(&HSTRING::from(prompt.reason.as_str()))?;
-        let Some(result) = until_cancelled(operation.clone().into_future(), &cancel).await else {
-            // Best effort: Hello may keep its dialog up regardless.
-            let _ = operation.Cancel();
-            return Err(BiometricError::SystemCancelled);
-        };
-        HelloResult(result.map_err(winrt_error)?).into()
+        HelloResult(complete(operation, &cancel).await?).into()
+    }
+
+    /// Hello shows its own texts for key operations; `prompt` is only
+    /// validated.
+    pub(super) async fn store_secret(
+        &self,
+        alias: &SecretAlias,
+        secret: Vec<u8>,
+        _prompt: AuthPrompt,
+        cancel: CancelToken,
+    ) -> Result<(), BiometricError> {
+        self.vault.store(alias, &secret, &cancel).await
+    }
+
+    pub(super) async fn read_secret(
+        &self,
+        alias: &SecretAlias,
+        _prompt: AuthPrompt,
+        cancel: CancelToken,
+    ) -> Result<Vec<u8>, BiometricError> {
+        self.vault.read(alias, &cancel).await
+    }
+
+    pub(super) async fn delete_secret(&self, alias: &SecretAlias) -> Result<(), BiometricError> {
+        self.vault.delete(alias).await
+    }
+
+    pub(super) async fn has_secret(&self, alias: &SecretAlias) -> Result<bool, BiometricError> {
+        self.vault.contains(alias).await
     }
 
     fn request_verification(
@@ -74,6 +104,20 @@ impl Backend {
         unsafe { interop.RequestVerificationForWindowAsync(HWND(hwnd as *mut _), message) }
             .map_err(winrt_error)
     }
+}
+
+/// Await a `WinRT` operation unless `cancel` fires first, in which case
+/// the operation is cancelled (best effort: Hello may keep its dialog
+/// up regardless).
+async fn complete<T: RuntimeType + 'static>(
+    operation: IAsyncOperation<T>,
+    cancel: &CancelToken,
+) -> Result<T, BiometricError> {
+    let Some(result) = until_cancelled(operation.clone().into_future(), cancel).await else {
+        let _ = operation.Cancel();
+        return Err(BiometricError::SystemCancelled);
+    };
+    result.map_err(winrt_error)
 }
 
 #[allow(clippy::needless_pass_by_value)] // Used as `map_err(winrt_error)`.

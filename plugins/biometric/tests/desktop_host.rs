@@ -52,6 +52,21 @@ fn empty_reason_is_rejected_before_touching_the_platform() {
 }
 
 #[test]
+fn secret_management_validates_aliases_and_never_prompts() {
+    let (_rt, client) = client();
+    let err = pollster::block_on(client.has_secret("no/slashes".to_owned())).expect_err("invalid");
+    assert_eq!(
+        BiometricError::try_from(err).expect("domain error"),
+        BiometricError::InvalidAlias("no/slashes".to_owned())
+    );
+    // Deleting a missing secret succeeds without any UI on every
+    // platform, which also makes `has_secret` false afterwards.
+    let alias = "istmo-desktop-host-test".to_owned();
+    pollster::block_on(client.delete_secret(alias.clone())).expect("delete");
+    assert!(!pollster::block_on(client.has_secret(alias)).expect("has"));
+}
+
+#[test]
 #[ignore = "interactive: needs enrolled biometrics and a human"]
 fn interactive_authentication() {
     let (_rt, client) = client();

@@ -4,16 +4,21 @@
 //! desktop OS's user-verification API:
 //!
 //! * **macOS** — `LocalAuthentication` (`LAContext`), i.e. Touch ID with
-//!   the login password as device credential.
+//!   the login password as device credential. Secrets live in the
+//!   data-protection keychain, which only signed apps carrying the
+//!   `keychain-access-groups` entitlement may use; elsewhere they fail
+//!   with [`BiometricError::UnsupportedOperation`].
 //! * **Windows** — Windows Hello through `WinRT` `UserConsentVerifier`.
 //!   Hello does not report which factor verified the user and always
 //!   offers its PIN, so every policy behaves like
 //!   [`AuthPolicy::BiometricOrDeviceCredential`] and success is reported
-//!   as [`AuthMethod::Unspecified`].
+//!   as [`AuthMethod::Unspecified`]. Secrets are sealed with a key
+//!   derived from a Hello credential signature and stored under
+//!   `%LOCALAPPDATA%\istmo\biometric\<exe name>\`.
 //! * **Linux** — `fprintd` over the system D-Bus. fprintd has no UI:
 //!   the app must tell the user to touch the sensor while
 //!   [`Biometric::authenticate`] is pending. There is no device
-//!   credential fallback.
+//!   credential fallback, and no biometric-bound secrets.
 //!
 //! Register it as a Rust-hosted plugin:
 //!
@@ -29,7 +34,9 @@ use std::task::Poll;
 use istmo_core::CancelToken;
 use raw_window_handle::HasWindowHandle;
 
-use crate::{AuthMethod, AuthPolicy, AuthPrompt, Availability, Biometric, BiometricError};
+use crate::{
+    AuthMethod, AuthPolicy, AuthPrompt, Availability, Biometric, BiometricError, SecretAlias,
+};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -75,12 +82,55 @@ impl Biometric for DesktopBiometric {
         prompt: AuthPrompt,
         cancel: CancelToken,
     ) -> Result<AuthMethod, BiometricError> {
-        if prompt.reason.trim().is_empty() {
+        prompt.check()?;
+        self.backend.authenticate(prompt, cancel).await
+    }
+
+    async fn store_secret(
+        &self,
+        alias: String,
+        secret: Vec<u8>,
+        prompt: AuthPrompt,
+        cancel: CancelToken,
+    ) -> Result<(), BiometricError> {
+        let alias = SecretAlias::try_from(alias)?;
+        prompt.check()?;
+        self.backend
+            .store_secret(&alias, secret, prompt, cancel)
+            .await
+    }
+
+    async fn read_secret(
+        &self,
+        alias: String,
+        prompt: AuthPrompt,
+        cancel: CancelToken,
+    ) -> Result<Vec<u8>, BiometricError> {
+        let alias = SecretAlias::try_from(alias)?;
+        prompt.check()?;
+        self.backend.read_secret(&alias, prompt, cancel).await
+    }
+
+    async fn delete_secret(&self, alias: String) -> Result<(), BiometricError> {
+        let alias = SecretAlias::try_from(alias)?;
+        self.backend.delete_secret(&alias).await
+    }
+
+    async fn has_secret(&self, alias: String) -> Result<bool, BiometricError> {
+        let alias = SecretAlias::try_from(alias)?;
+        self.backend.has_secret(&alias).await
+    }
+}
+
+impl AuthPrompt {
+    /// Reject prompts every desktop platform would refuse to show.
+    fn check(&self) -> Result<(), BiometricError> {
+        if self.reason.trim().is_empty() {
             return Err(BiometricError::InvalidPrompt(
                 "`reason` must not be empty".to_owned(),
             ));
         }
-        self.backend.authenticate(prompt, cancel).await
+        Ok(())
     }
 }
 

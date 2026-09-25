@@ -1,4 +1,9 @@
-//! `LocalAuthentication` backend (Touch ID, login password fallback).
+//! `LocalAuthentication` backend (Touch ID, login password fallback) and
+//! data-protection keychain vault for biometric-bound secrets.
+
+mod keychain;
+
+use std::sync::Arc;
 
 use block2::RcBlock;
 use istmo_core::CancelToken;
@@ -11,8 +16,9 @@ use raw_window_handle::RawWindowHandle;
 use super::until_cancelled;
 use crate::{
     AuthMethod, AuthPolicy, AuthPrompt, Availability, BiometricError, BiometricKind,
-    BiometricStatus,
+    BiometricStatus, SecretAlias,
 };
+use keychain::{SharedContext, VaultQuery};
 
 #[derive(Debug, Default, Clone)]
 pub(super) struct Backend;
@@ -78,6 +84,66 @@ impl Backend {
                 Err(BiometricError::SystemCancelled)
             }
         }
+    }
+}
+
+impl Backend {
+    #[allow(clippy::unused_async)] // Async like every platform backend.
+    pub(super) async fn store_secret(
+        &self,
+        alias: &SecretAlias,
+        secret: Vec<u8>,
+        prompt: AuthPrompt,
+        _cancel: CancelToken,
+    ) -> Result<(), BiometricError> {
+        VaultQuery::item(alias).delete()?;
+        VaultQuery::item(alias).add(&secret, prompt.policy)
+    }
+
+    pub(super) async fn read_secret(
+        &self,
+        alias: &SecretAlias,
+        prompt: AuthPrompt,
+        cancel: CancelToken,
+    ) -> Result<Vec<u8>, BiometricError> {
+        let context = SharedContext::new();
+        context.configure(&prompt);
+        let (reply_tx, reply_rx) = flume::bounded(1);
+        // `SecItemCopyMatching` blocks while the Touch ID sheet is up.
+        let worker_context = Arc::clone(&context);
+        let alias = alias.clone();
+        std::thread::Builder::new()
+            .name("istmo-biometric-keychain".to_owned())
+            .spawn(move || {
+                let data = VaultQuery::item(&alias)
+                    .authenticated_by(&worker_context)
+                    .copy_data();
+                let _ = reply_tx.send(data);
+            })
+            .map_err(|err| BiometricError::Backend(format!("spawn keychain thread: {err}")))?;
+
+        match until_cancelled(reply_rx.recv_async(), &cancel).await {
+            Some(Ok(outcome)) => outcome,
+            Some(Err(_)) => Err(BiometricError::Backend(
+                "keychain thread exited without a reply".to_owned(),
+            )),
+            None => {
+                context.invalidate();
+                Err(BiometricError::SystemCancelled)
+            }
+        }
+    }
+
+    #[allow(clippy::unused_async)] // Async like every platform backend.
+    pub(super) async fn delete_secret(&self, alias: &SecretAlias) -> Result<(), BiometricError> {
+        VaultQuery::item(alias).delete()
+    }
+
+    #[allow(clippy::unused_async)] // Async like every platform backend.
+    pub(super) async fn has_secret(&self, alias: &SecretAlias) -> Result<bool, BiometricError> {
+        let context = SharedContext::new();
+        context.non_interactive();
+        VaultQuery::item(alias).authenticated_by(&context).exists()
     }
 }
 
