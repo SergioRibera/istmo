@@ -1,0 +1,185 @@
+---
+title: Biometric
+description: Autenticación biométrica y secretos protegidos por biometría en Android, iOS, macOS, Windows y Linux desde un único trait de Rust.
+sidebar:
+  order: 4
+---
+
+import PluginTypes from '../../../../generated/plugins/biometric-types.mdx';
+
+`istmo-biometric` comprueba si el dispositivo puede verificar a su
+usuario, muestra el prompt biométrico del sistema y guarda secretos
+pequeños cifrados con material de clave que el SO sólo libera tras una
+verificación exitosa. La API de Rust es la misma en todas partes:
+
+| Plataforma | Backend                                          | Hosteado en |
+| ---------- | ------------------------------------------------ | ----------- |
+| Android    | `androidx.biometric` (`BiometricPrompt`)         | Kotlin      |
+| iOS        | `LocalAuthentication` (Face ID / Touch ID)       | Swift       |
+| macOS      | `LocalAuthentication` (Touch ID)                 | Rust        |
+| Windows    | Windows Hello (`UserConsentVerifier`)            | Rust        |
+| Linux      | `fprintd` sobre el D-Bus del sistema             | Rust        |
+
+## Instalación
+
+```toml
+[dependencies]
+istmo-biometric = "0.1"
+```
+
+## Comprobar disponibilidad
+
+`availability` nunca muestra UI. Usalo para decidir si ofrecer un botón
+"desbloquear con Face ID":
+
+```rust
+use istmo_biometric::{AuthPolicy, BiometricClient};
+
+let biometric = BiometricClient::acquire()?;
+let availability = biometric.availability(AuthPolicy::BiometricStrong).await?;
+if availability.is_available() {
+    // availability.kinds: [Fingerprint], [Face], …
+}
+```
+
+## Autenticar
+
+```rust
+use istmo_biometric::{AuthPolicy, AuthPrompt, BiometricError};
+
+let prompt = AuthPrompt::new("Desbloquear", "Confirmá que sos vos para abrir tus notas")
+    .subtitle("Notas")
+    .cancel_label("Ahora no")
+    .policy(AuthPolicy::BiometricOrDeviceCredential);
+
+match biometric.authenticate(prompt).await {
+    Ok(method) => println!("verificado con {method:?}"),
+    Err(err) => match BiometricError::try_from(err) {
+        Ok(BiometricError::UserCancelled) => {}
+        Ok(domain) => eprintln!("{domain}"),
+        Err(transport) => eprintln!("error del runtime: {transport}"),
+    },
+}
+```
+
+Las llamadas del cliente devuelven `istmo_core::IstmoError`;
+`BiometricError::try_from` recupera el error de dominio tipado y
+devuelve intactos los errores de transporte.
+
+Soltar el future cancela la llamada y cierra el prompt
+(`cancelAuthentication` en Android, `LAContext.invalidate` en Apple,
+`VerifyStop` en fprintd). Windows Hello sólo ofrece una cancelación
+best-effort.
+
+:::caution
+Un `authenticate` exitoso es una barrera de UI: en un dispositivo
+rooteado o con jailbreak el callback de éxito se puede falsificar.
+Protegé los secretos reales con la bóveda de abajo.
+:::
+
+## Secretos protegidos por biometría
+
+```rust
+let prompt = AuthPrompt::new("Desbloquear", "Leer tu token de API");
+
+biometric
+    .store_secret("api.token".into(), token.into_bytes(), prompt.clone())
+    .await?;
+let token = biometric.read_secret("api.token".into(), prompt).await?;
+biometric.delete_secret("api.token".into()).await?;
+let stored = biometric.has_secret("api.token".into()).await?; // sin UI
+```
+
+Los alias tienen de 1 a 64 caracteres ASCII: letras, dígitos, `.`, `_`
+o `-`; validalos de antemano con `SecretAlias::try_from`.
+
+| Plataforma | Cómo se protege el secreto                                                                    |
+| ---------- | --------------------------------------------------------------------------------------------- |
+| Android    | Clave AES-256-GCM del Keystore usable sólo a través de `BiometricPrompt.CryptoObject`          |
+| iOS        | Ítem del Keychain con `SecAccessControl` (`.biometryCurrentSet` o `.userPresence`)             |
+| macOS      | Igual que iOS, en el keychain de data-protection — sólo apps firmadas con `keychain-access-groups` |
+| Windows    | Clave AES-256-GCM derivada (HKDF) de la firma de una credencial de Windows Hello               |
+| Linux      | No soportado (`UnsupportedOperation`): fprintd no expone material de clave                     |
+
+Android y Windows también verifican al usuario al guardar, así que
+`store_secret` muestra el prompt allí. Con una política sólo
+biométrica, registrar un dedo o rostro nuevo destruye la clave: Android
+reporta `KeyInvalidated` y Apple deja de encontrar el ítem
+(`SecretNotFound`).
+
+## Tipos del wire
+
+<PluginTypes />
+
+## Conectarlo
+
+El plugin declara `auto_register = false`: `BiometricPrompt` necesita
+una `FragmentActivity`, que la convención `BackendImpl(context)` del
+registry no puede proveer.
+
+### Android
+
+La Activity tiene que ser una `FragmentActivity` — `AppCompatActivity`
+o `GameActivity` (activá el feature `game-activity` del facade), no
+`NativeActivity`:
+
+```kotlin
+class MainActivity : GameActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        check(IstmoRuntime.start("my_app"))
+        IstmoRuntime.registerHandler(
+            BiometricDispatcher.PLUGIN_ID,
+            BiometricDispatcher(BiometricBackendImpl(this), BiometricCodecsImpl()),
+        )
+        super.onCreate(savedInstanceState)
+    }
+}
+```
+
+Agregá `implementation("androidx.biometric:biometric:1.1.0")`; su
+manifest aporta el permiso `USE_BIOMETRIC`.
+
+### iOS
+
+```swift
+IstmoRuntime.shared.registerHandler(
+    BiometricDispatcher.PLUGIN_ID,
+    BiometricDispatcher(backend: BiometricBackendImpl(), codecs: BiometricCodecsImpl())
+)
+```
+
+iOS termina las apps que usan Face ID sin `NSFaceIDUsageDescription`.
+El plugin declara un valor por defecto con `[plugin.info_plist]`;
+localizalo en el `istmo.toml` de tu app:
+
+```toml
+[app.info_plist]
+NSFaceIDUsageDescription = "Usá Face ID para abrir tu bóveda."
+```
+
+`emit_app` lo escribe entre los marcadores
+`<!-- istmo:background:start -->` / `<!-- istmo:background:end -->` de
+tu `Info.plist` (ver
+[`[app.info_plist]`](/istmo/es/build-scripts/istmo-toml-reference/#appinfo_plist)).
+
+### Escritorio
+
+```rust
+use istmo_biometric::{BiometricHost, DesktopBiometric};
+
+runtime.register_host(BiometricHost::new(
+    DesktopBiometric::default().with_parent_window(&window),
+));
+```
+
+`with_parent_window` mantiene el diálogo de Windows Hello delante de tu
+ventana; se ignora en macOS y Linux. En Linux no hay prompt del
+sistema: indicale al usuario que toque el lector mientras
+`authenticate` está pendiente.
+
+## Ejemplo
+
+[`examples/biometric-demo`](https://github.com/sergioribera/istmo/tree/main/examples/biometric-demo)
+corre la misma UI de egui en escritorio (`cargo run -p biometric-demo`),
+Android (`just biometric-demo`) e iOS (`xcodegen` + Xcode), cubriendo
+disponibilidad, autenticación con cancelación y la bóveda.

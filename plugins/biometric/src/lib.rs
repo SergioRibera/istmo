@@ -155,7 +155,9 @@ pub enum BiometricStatus {
 #[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BiometricKind {
+    /// Fingerprint reader (Touch ID, capacitive or under-display sensors).
     Fingerprint,
+    /// Face recognition (Face ID, Android face unlock).
     Face,
     /// Iris or Optic ID.
     Iris,
@@ -325,7 +327,9 @@ impl std::fmt::Display for SecretAlias {
 #[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthMethod {
+    /// A biometric sensor verified the user.
     Biometric,
+    /// The user entered the device PIN / pattern / password.
     DeviceCredential,
     /// The platform does not report which factor was used — Windows
     /// Hello, Apple with [`AuthPolicy::BiometricOrDeviceCredential`],

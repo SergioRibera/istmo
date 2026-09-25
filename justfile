@@ -230,7 +230,8 @@ docs-types:
         --out docs/src/generated/plugins \
         data-store=plugins/data-store/src/lib.rs \
         google-sign-in=plugins/google-sign-in/src/lib.rs \
-        live-activity=plugins/live-activity/src/lib.rs
+        live-activity=plugins/live-activity/src/lib.rs \
+        biometric=plugins/biometric/src/lib.rs
 
 # Gen default keystore default
 # keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
