@@ -598,3 +598,49 @@ impl Dispatch for SeedHost {
         self.0.dispatch(instance_id, method, payload, cancel)
     }
 }
+
+struct ParkUntilCancelled {
+    observed: flume::Sender<()>,
+}
+
+impl Dispatch for ParkUntilCancelled {
+    fn plugin_id(&self) -> &'static str {
+        "test.park"
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        _instance_id: Option<InstanceId>,
+        _method: &'a str,
+        _payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        Box::pin(async move {
+            cancel.cancelled().await;
+            self.observed.send(()).expect("test still listening");
+            Ok(Outcome::Ok(Vec::new()))
+        })
+    }
+}
+
+#[test]
+fn dropping_a_locally_hosted_call_trips_its_cancel_token() {
+    let init = Runtime::mock();
+    let rt: Arc<Runtime> = init.runtime;
+    let outbound = init.outbound;
+    let (observed, cancelled) = flume::bounded(1);
+    rt.register_host(ParkUntilCancelled { observed });
+
+    let handle = rt
+        .call("test.park", None, "park", Vec::new())
+        .expect("call dispatched");
+    drop(handle);
+
+    cancelled
+        .recv_timeout(Duration::from_secs(1))
+        .expect("hosted dispatch observed the cancellation");
+    assert!(
+        outbound.try_recv().is_err(),
+        "a locally hosted call must not leak a Cancel frame to the peer"
+    );
+}
