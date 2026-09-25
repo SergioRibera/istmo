@@ -28,6 +28,7 @@ import dev.istmo.runtime.BiometricKind
 import dev.istmo.runtime.BiometricStatus
 import java.security.GeneralSecurityException
 import java.security.KeyStore
+import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -67,15 +68,26 @@ import kotlinx.coroutines.withContext
  * ciphertext lives in private `SharedPreferences`. Before API 30 the
  * Keystore cannot bind a per-use key to the device credential, so
  * `BiometricOrDeviceCredential` secrets fall back to a key usable for
- * [AUTH_VALIDITY_SECONDS] after any unlock.
+ * [credentialValiditySeconds] after any unlock — keep it short.
+ *
+ * `enrollment_state` is the random generation of a sentinel Keystore key
+ * that the OS invalidates whenever a biometric is enrolled or removed; a
+ * new generation is minted the first time the invalidation is observed.
  */
 class BiometricBackendImpl(
     private val activity: FragmentActivity,
+    private val credentialValiditySeconds: Int = DEFAULT_AUTH_VALIDITY_SECONDS,
 ) : BiometricBackend {
+
+    init {
+        require(credentialValiditySeconds > 0) { "credentialValiditySeconds must be positive" }
+    }
 
     private val manager: BiometricManager = BiometricManager.from(activity)
     private val vault: SharedPreferences =
         activity.getSharedPreferences(VAULT_PREFERENCES, Context.MODE_PRIVATE)
+    private val enrollment: SharedPreferences =
+        activity.getSharedPreferences(ENROLLMENT_PREFERENCES, Context.MODE_PRIVATE)
     private val keyStore: KeyStore by lazy {
         KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
     }
@@ -96,10 +108,13 @@ class BiometricBackendImpl(
             BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED -> BiometricStatus.Unsupported
             else -> BiometricStatus.HardwareUnavailable
         }
+        val deviceSecure = keyguard().isDeviceSecure
         return Availability(
             status = status,
             kinds = sensorKinds(),
-            deviceCredentialAvailable = keyguard().isDeviceSecure,
+            deviceCredentialAvailable = deviceSecure,
+            // Auth-bound Keystore keys need a secure lock screen.
+            vaultAvailable = deviceSecure,
         )
     }
 
@@ -146,6 +161,23 @@ class BiometricBackendImpl(
         return withContext(Dispatchers.IO) {
             vault.contains(alias) && keyStore.containsAlias(keyAlias(alias))
         }
+    }
+
+    override suspend fun enrollment_state(): ByteArray? = withContext(Dispatchers.IO) {
+        // The sentinel needs an enrolled strong biometric to exist.
+        if (manager.canAuthenticate(BIOMETRIC_STRONG) != BiometricManager.BIOMETRIC_SUCCESS) {
+            return@withContext null
+        }
+        val generation = enrollment.getString(ENROLLMENT_GENERATION, null)
+        if (generation != null && sentinelValid()) {
+            return@withContext Base64.decode(generation, Base64.NO_WRAP)
+        }
+        createSentinel()
+        val fresh = ByteArray(ENROLLMENT_GENERATION_BYTES).also { SecureRandom().nextBytes(it) }
+        enrollment.edit()
+            .putString(ENROLLMENT_GENERATION, Base64.encodeToString(fresh, Base64.NO_WRAP))
+            .apply()
+        fresh
     }
 
     // ------------------------------------------------------------- prompting
@@ -241,7 +273,7 @@ class BiometricBackendImpl(
         /** Every use goes through a `CryptoObject`; biometrics or credential (API 30+). */
         CredentialPerUse,
 
-        /** Usable for [AUTH_VALIDITY_SECONDS] after any unlock (API < 30). */
+        /** Usable for `credentialValiditySeconds` after any unlock (API < 30). */
         CredentialTimeBound;
 
         companion object {
@@ -317,6 +349,42 @@ class BiometricBackendImpl(
         }
     }
 
+    /**
+     * Whether the sentinel key still exists and survived every enrollment
+     * change: initialising a cipher needs no user, but fails with
+     * `KeyPermanentlyInvalidatedException` once the OS invalidated it.
+     */
+    private fun sentinelValid(): Boolean {
+        val key = keyStore.getKey(ENROLLMENT_KEY_ALIAS, null) as? SecretKey ?: return false
+        return try {
+            Cipher.getInstance(TRANSFORMATION).init(Cipher.ENCRYPT_MODE, key)
+            true
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            false
+        }
+    }
+
+    private fun createSentinel() {
+        if (keyStore.containsAlias(ENROLLMENT_KEY_ALIAS)) keyStore.deleteEntry(ENROLLMENT_KEY_ALIAS)
+        val spec = KeyGenParameterSpec.Builder(
+            ENROLLMENT_KEY_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .setUserAuthenticationRequired(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            spec.setInvalidatedByBiometricEnrollment(true)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            spec.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
+        }
+        KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+            .apply { init(spec.build()) }
+            .generateKey()
+    }
+
     private fun createKey(alias: String, mode: KeyMode): SecretKey {
         deleteQuietly(alias)
         val spec = KeyGenParameterSpec.Builder(
@@ -344,7 +412,7 @@ class BiometricBackendImpl(
                 }
             KeyMode.CredentialTimeBound ->
                 @Suppress("DEPRECATION")
-                spec.setUserAuthenticationValidityDurationSeconds(AUTH_VALIDITY_SECONDS)
+                spec.setUserAuthenticationValidityDurationSeconds(credentialValiditySeconds)
         }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
             .apply { init(spec.build()) }
@@ -420,14 +488,20 @@ class BiometricBackendImpl(
         else -> BiometricError.Backend("BiometricPrompt error $code: $message")
     }
 
-    private companion object {
-        const val ANDROID_KEYSTORE = "AndroidKeyStore"
-        const val VAULT_PREFERENCES = "dev.istmo.biometric.vault"
-        const val KEY_ALIAS_PREFIX = "dev.istmo.biometric."
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val GCM_TAG_BITS = 128
-        const val FORMAT_VERSION = "v1"
-        const val AUTH_VALIDITY_SECONDS = 10
-        val ALIAS_PATTERN = Regex("^[A-Za-z0-9._-]{1,64}$")
+    companion object {
+        /** Default of the `credentialValiditySeconds` constructor argument. */
+        const val DEFAULT_AUTH_VALIDITY_SECONDS = 10
+
+        private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+        private const val VAULT_PREFERENCES = "dev.istmo.biometric.vault"
+        private const val KEY_ALIAS_PREFIX = "dev.istmo.biometric."
+        private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val GCM_TAG_BITS = 128
+        private const val FORMAT_VERSION = "v1"
+        private const val ENROLLMENT_PREFERENCES = "dev.istmo.biometric.enrollment"
+        private const val ENROLLMENT_GENERATION = "generation"
+        private const val ENROLLMENT_GENERATION_BYTES = 16
+        private const val ENROLLMENT_KEY_ALIAS = "dev.istmo.biometric-enrollment-sentinel"
+        private val ALIAS_PATTERN = Regex("^[A-Za-z0-9._-]{1,64}$")
     }
 }

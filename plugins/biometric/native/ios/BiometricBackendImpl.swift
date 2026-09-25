@@ -47,10 +47,17 @@ public final class BiometricBackendImpl: BiometricBackend {
         return Availability(
             status: evaluated ? .available : Self.status(for: error),
             kinds: kinds,
-            deviceCredentialAvailable: credential
+            deviceCredentialAvailable: credential,
+            // Access-controlled Keychain items need a device passcode.
+            vaultAvailable: credential
         )
         #else
-        return Availability(status: .unsupported, kinds: [], deviceCredentialAvailable: false)
+        return Availability(
+            status: .unsupported,
+            kinds: [],
+            deviceCredentialAvailable: false,
+            vaultAvailable: false
+        )
         #endif
     }
 
@@ -194,6 +201,26 @@ public final class BiometricBackendImpl: BiometricBackend {
         }
         #else
         return false
+        #endif
+    }
+
+    /// `LADomainState` biometry hash (iOS 18+), or the equivalent
+    /// `evaluatedPolicyDomainState` on older releases. `nil` without an
+    /// enrolled biometric.
+    public func enrollment_state() async throws -> Data? {
+        #if canImport(LocalAuthentication)
+        let context = LAContext()
+        // The domain state is only populated after a successful
+        // biometric `canEvaluatePolicy`.
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else {
+            return nil
+        }
+        if #available(iOS 18.0, *) {
+            return context.domainState.biometry.stateHash
+        }
+        return context.evaluatedPolicyDomainState
+        #else
+        return nil
         #endif
     }
 
