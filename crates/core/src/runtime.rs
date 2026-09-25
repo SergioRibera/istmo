@@ -119,6 +119,16 @@ impl RuntimeInit {
 /// Apple platforms, or anything else the app author wires up).
 pub type RemoteEnvelopeSink = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
 
+/// Callback fired locally for every [`Frame::ReleaseNativeHandle`]
+/// emitted by [`Runtime::release_native_handle`].
+///
+/// Installed via [`Runtime::install_native_handle_release_hook`]; hooks
+/// are additive (multiple can be registered) and fire *in addition to*
+/// the wire-side release frame that is sent to the outbound channel.
+/// Rust-side hosts use this to free their own resources without
+/// depending on an external transport pump to route the release back.
+pub type NativeHandleReleaseHook = Arc<dyn Fn(NativeHandleId) + Send + Sync>;
+
 /// The per-process runtime.
 ///
 /// One [`Runtime`] instance owns every routing table, host dispatcher
@@ -158,6 +168,8 @@ pub struct Runtime {
     remote_instances: Mutex<HashSet<InstanceId>>,
 
     remote_sink: Mutex<Option<RemoteEnvelopeSink>>,
+
+    native_handle_release_hooks: Mutex<Vec<NativeHandleReleaseHook>>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -394,12 +406,42 @@ impl Runtime {
     ///
     /// Called from the [`Drop`] impl of [`NativeHandle`](crate::NativeHandle).
     ///
+    /// Every hook registered via
+    /// [`install_native_handle_release_hook`](Self::install_native_handle_release_hook)
+    /// fires before the wire frame is enqueued — hooks are the release
+    /// route for Rust-side hosts whose handles are consumed by clients
+    /// living inside the same process (no external transport pump).
+    ///
     /// # Errors
     ///
     /// [`IstmoError::ChannelClosed`] when the outbound pump is gone.
     pub fn release_native_handle(&self, handle_id: NativeHandleId) -> Result<(), IstmoError> {
+        let hooks: Vec<NativeHandleReleaseHook> =
+            lock(&self.native_handle_release_hooks).clone();
+        for hook in &hooks {
+            hook(handle_id);
+        }
         let envelope = Envelope::new(Frame::ReleaseNativeHandle { handle_id });
         self.send_outbound(envelope)
+    }
+
+    /// Register a local callback that fires for every
+    /// [`Frame::ReleaseNativeHandle`] emitted by
+    /// [`release_native_handle`](Self::release_native_handle).
+    ///
+    /// Multiple hooks are supported and all fire on every release.
+    /// Handles allocated by a Rust-side host register a hook so they can
+    /// free the URI / URL / path map entry when the client drops its
+    /// [`NativeHandle`](crate::NativeHandle), without depending on an
+    /// external transport pump to route the release back into the
+    /// process.
+    ///
+    /// Hooks fire *in addition* to the outbound wire frame — mobile
+    /// transports (JNI pump on Android, FFI callbacks on iOS) still
+    /// receive the release the same way. Hooks that inspect handle ids
+    /// not owned by their host should be no-ops.
+    pub fn install_native_handle_release_hook(&self, hook: NativeHandleReleaseHook) {
+        lock(&self.native_handle_release_hooks).push(hook);
     }
 
     /// Fire-and-forget one-way call.
@@ -994,6 +1036,7 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         remote_streams: Mutex::new(HashSet::new()),
         remote_instances: Mutex::new(HashSet::new()),
         remote_sink: Mutex::new(None),
+        native_handle_release_hooks: Mutex::new(Vec::new()),
     });
     RuntimeInit {
         runtime,
