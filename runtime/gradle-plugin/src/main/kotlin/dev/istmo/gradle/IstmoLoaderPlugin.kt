@@ -1,6 +1,9 @@
 package dev.istmo.gradle
 
+import com.android.build.api.variant.AndroidComponentsExtension
+import com.android.build.api.variant.Variant
 import com.android.build.gradle.BaseExtension
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.provider.ListProperty
@@ -17,18 +20,62 @@ open class IstmoLoaderExtension(project: Project) {
 }
 
 /**
+ * One istmo plugin crate linked into the app.
+ *
+ * @property nativeDir `native/android/` — Kotlin sources.
+ * @property manifest `native/android/AndroidManifest.xml` when present:
+ *   merged into every variant's manifest (providers, receivers,
+ *   intent filters, permissions, `<queries>`).
+ * @property resDir `native/android/res/` when present: added as a
+ *   resource source directory (e.g. `xml/file_paths.xml`).
+ * @property minAndroidApi `[min_versions] android` from `istmo.toml`.
+ */
+data class LinkedPlugin(
+    val crateName: String,
+    val nativeDir: File,
+    val manifest: File?,
+    val resDir: File?,
+    val minAndroidApi: Int?,
+)
+
+/**
  * Auto-linking Gradle plugin for istmo apps. Walks upward from the
  * consumer app's `project.rootDir` until it finds a Cargo workspace
  * root (a `Cargo.toml` with a `[workspace]` table), enumerates the
  * workspace's plugin crates by looking at each member's `istmo.toml`
- * + `native/android/` sibling, and adds every existing directory to
- * the Android app's `main` Kotlin source set. No files are copied.
+ * + `native/android/` sibling, and:
+ *
+ * - adds every existing directory to the Android app's `main` Kotlin
+ *   source set;
+ * - merges each plugin's `native/android/AndroidManifest.xml` into
+ *   every variant's manifest and adds `native/android/res/` as a
+ *   resource directory (AGP 8.3+ Variant API);
+ * - fails the build when a plugin's `[min_versions] android` is newer
+ *   than the variant's `minSdk`.
+ *
+ * No files are copied.
  */
 class IstmoLoaderPlugin : Plugin<Project> {
 
     override fun apply(project: Project) {
         val extension: IstmoLoaderExtension =
             project.extensions.create("istmo", IstmoLoaderExtension::class.java, project)
+
+        // Variant callbacks must be registered before AGP computes the
+        // variants, i.e. at apply time — not in `afterEvaluate`. The
+        // plugin list itself is resolved lazily inside the callback so
+        // the `istmo { … }` extension is fully configured by then.
+        val linked: Lazy<List<LinkedPlugin>> = lazy { resolveLinkedPlugins(project, extension) }
+        project.pluginManager.withPlugin("com.android.application") {
+            val components = project.extensions.findByType(AndroidComponentsExtension::class.java)
+            if (components == null) {
+                project.logger.warn("istmo-plugin-loader: androidComponents extension not found; manifest/res merging disabled.")
+                return@withPlugin
+            }
+            components.onVariants(components.selector().all()) { variant ->
+                wireVariant(project, variant, linked.value)
+            }
+        }
 
         project.afterEvaluate {
             val root = resolveWorkspaceRoot(project, extension)
@@ -55,7 +102,7 @@ class IstmoLoaderPlugin : Plugin<Project> {
                 return@afterEvaluate
             }
             val consumerDeps = readConsumerDeps(consumerCargo)
-            val dirs = discoverPluginNativeAndroidDirs(root, extension, consumerDeps)
+            val dirs = discoverPlugins(root, extension, consumerDeps).map { it.nativeDir }
             if (dirs.isEmpty()) {
                 project.logger.info("istmo-plugin-loader: no plugin native/android directories to link.")
                 return@afterEvaluate
@@ -71,6 +118,53 @@ class IstmoLoaderPlugin : Plugin<Project> {
                 "istmo-plugin-loader: linked ${dirs.size} plugin source dir(s) [$names]",
             )
         }
+    }
+
+    private fun resolveLinkedPlugins(project: Project, ext: IstmoLoaderExtension): List<LinkedPlugin> {
+        val root = resolveWorkspaceRoot(project, ext) ?: return emptyList()
+        val consumerCargo = consumerCargoToml(project) ?: return emptyList()
+        return discoverPlugins(root, ext, readConsumerDeps(consumerCargo))
+    }
+
+    private fun wireVariant(project: Project, variant: Variant, plugins: List<LinkedPlugin>) {
+        if (plugins.isEmpty()) return
+        checkMinSdk(variant, plugins)
+        for (plugin in plugins) {
+            plugin.manifest?.let { manifest ->
+                try {
+                    variant.sources.manifests.addStaticManifestFile(manifest.absolutePath)
+                } catch (_: LinkageError) {
+                    // `Sources.manifests` landed in AGP 8.3. Older AGPs
+                    // keep working; the author merges by hand.
+                    project.logger.warn(
+                        "istmo-plugin-loader: AGP < 8.3 cannot merge ${manifest.path}; " +
+                            "copy its <application> children into your AndroidManifest.xml or upgrade AGP.",
+                    )
+                }
+            }
+            plugin.resDir?.let { res ->
+                variant.sources.res?.addStaticSourceDirectory(res.absolutePath)
+            }
+        }
+    }
+
+    private fun checkMinSdk(variant: Variant, plugins: List<LinkedPlugin>) {
+        val minSdk = try {
+            variant.minSdk.apiLevel
+        } catch (_: LinkageError) {
+            // `Variant.minSdk` replaced `minSdkVersion` in AGP 8.1.
+            @Suppress("DEPRECATION")
+            variant.minSdkVersion.apiLevel
+        }
+        val violations = plugins.filter { (it.minAndroidApi ?: 0) > minSdk }
+        if (violations.isEmpty()) return
+        val report = violations.joinToString("\n") {
+            "  - ${it.crateName} requires minSdk >= ${it.minAndroidApi}"
+        }
+        throw GradleException(
+            "istmo-plugin-loader: variant '${variant.name}' has minSdk $minSdk, but:\n$report\n" +
+                "Raise minSdk or drop the plugin.",
+        )
     }
 
     private fun resolveWorkspaceRoot(project: Project, ext: IstmoLoaderExtension): File? {
@@ -92,11 +186,11 @@ class IstmoLoaderPlugin : Plugin<Project> {
         return null
     }
 
-    private fun discoverPluginNativeAndroidDirs(
+    private fun discoverPlugins(
         workspaceRoot: File,
         ext: IstmoLoaderExtension,
         consumerDeps: Set<String>,
-    ): List<File> {
+    ): List<LinkedPlugin> {
         val cargoToml = File(workspaceRoot, "Cargo.toml")
         val toml = try {
             Toml.parse(cargoToml.toPath())
@@ -120,7 +214,7 @@ class IstmoLoaderPlugin : Plugin<Project> {
             expanded.addAll(expandGlob(workspaceRoot, pattern))
         }
 
-        val result = mutableListOf<File>()
+        val result = mutableListOf<LinkedPlugin>()
         for (crate in expanded.distinct()) {
             val crateName = readCrateName(crate) ?: continue
             if (exclude.contains(crateName)) continue
@@ -130,11 +224,30 @@ class IstmoLoaderPlugin : Plugin<Project> {
             // that reference codegen output that only exists when the
             // matching contract handover is active.
             if (crateName !in consumerDeps) continue
-            if (!File(crate, "istmo.toml").isFile) continue
+            val istmoToml = File(crate, "istmo.toml")
+            if (!istmoToml.isFile) continue
             val nativeDir = File(crate, "native/android")
-            if (nativeDir.isDirectory) result.add(nativeDir)
+            if (!nativeDir.isDirectory) continue
+            result.add(
+                LinkedPlugin(
+                    crateName = crateName,
+                    nativeDir = nativeDir,
+                    manifest = File(nativeDir, "AndroidManifest.xml").takeIf { it.isFile },
+                    resDir = File(nativeDir, "res").takeIf { it.isDirectory },
+                    minAndroidApi = readMinAndroidApi(istmoToml),
+                ),
+            )
         }
         return result
+    }
+
+    private fun readMinAndroidApi(istmoToml: File): Int? {
+        val toml = try {
+            Toml.parse(istmoToml.toPath())
+        } catch (_: Exception) {
+            return null
+        }
+        return toml.getLong("min_versions.android")?.toInt()
     }
 
     private fun readCrateName(crateDir: File): String? {
