@@ -26,9 +26,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         options,
         Box::new(move |cc| {
             // Parenting the prompt to the window keeps Windows Hello in
-            // front of the app.
+            // front of the app. The UI-gated keyring vault only affects
+            // Linux, where fprintd offers no key material; it is a UI
+            // gate, not a cryptographic binding.
             runtime.register_host(BiometricHost::new(
-                DesktopBiometric::default().with_parent_window(cc),
+                DesktopBiometric::default()
+                    .with_parent_window(cc)
+                    .with_ui_gated_vault(),
             ));
             let client = BiometricClient::from_runtime(&runtime)?;
             Ok(Box::new(DemoApp::new(SharedState::new(

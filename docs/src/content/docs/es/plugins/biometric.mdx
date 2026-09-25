@@ -40,7 +40,41 @@ let availability = biometric.availability(AuthPolicy::BiometricStrong).await?;
 if availability.is_available() {
     // availability.kinds: [Fingerprint], [Face], …
 }
+if availability.vault_available {
+    // store_secret / read_secret van a funcionar en este dispositivo.
+}
 ```
+
+`kinds` viene de la plataforma: Face ID / Touch ID / Optic ID en Apple,
+features de `PackageManager` en Android, el Windows Biometric Framework
+en Windows y siempre `[Fingerprint]` en Linux (fprintd sólo maneja
+lectores de huellas). `vault_available` es `false` en dispositivos sin
+credencial de bloqueo, en binarios de macOS sin el entitlement del
+keychain y en Linux salvo que la app active la bóveda del keyring.
+
+## Detectar cambios de enrolamiento
+
+`enrollment_state` devuelve un token opaco que cambia cuando se agregan
+o quitan huellas o rostros. Guardalo después de loguear al usuario y
+pedí tus propias credenciales de nuevo cuando cambie — eso cierra el
+agujero de "alguien agregó su huella al teléfono de la víctima":
+
+```rust
+let current = biometric.enrollment_state().await?;
+if stored_token.is_some() && current != stored_token {
+    // Reautenticar con la contraseña de la cuenta y guardar `current`.
+}
+```
+
+| Plataforma  | Token                                                                              |
+| ----------- | ---------------------------------------------------------------------------------- |
+| iOS / macOS | Hash biométrico de `LADomainState` (`evaluatedPolicyDomainState` antes de iOS 18 / macOS 15) |
+| Android     | Generación aleatoria de una clave centinela del Keystore que el SO invalida al cambiar el enrolamiento; se genera una nueva la primera vez que se observa el cambio |
+| Linux       | Los nombres de los dedos enrolados — re-enrolar el mismo dedo no se detecta       |
+| Windows     | Siempre `None`: Windows Hello no expone el estado de enrolamiento                  |
+
+`None` también significa que no hay biometría enrolada. Los tokens sólo
+son comparables en el mismo dispositivo e instalación de la app.
 
 ## Autenticar
 
@@ -99,13 +133,34 @@ o `-`; validalos de antemano con `SecretAlias::try_from`.
 | iOS        | Ítem del Keychain con `SecAccessControl` (`.biometryCurrentSet` o `.userPresence`)             |
 | macOS      | Igual que iOS, en el keychain de data-protection — [sólo apps firmadas](#macos-los-secretos-requieren-una-app-firmada) |
 | Windows    | Clave AES-256-GCM derivada (HKDF) de la firma de una credencial de Windows Hello               |
-| Linux      | No soportado (`UnsupportedOperation`): fprintd no expone material de clave                     |
+| Linux      | Sólo opt-in: ítem del keyring de Secret Service detrás de fprintd ([barrera de UI](#linux-bóveda-en-el-keyring-con-barrera-de-ui)) |
 
 Android y Windows también verifican al usuario al guardar, así que
 `store_secret` muestra el prompt allí. Con una política sólo
 biométrica, registrar un dedo o rostro nuevo destruye la clave: Android
 reporta `KeyInvalidated` y Apple deja de encontrar el ítem
 (`SecretNotFound`).
+
+Windows crea la clave de Hello en el primer `store_secret` de un alias y
+después firma con ella, así que ese primer guardado muestra Hello dos
+veces.
+
+### Linux: bóveda en el keyring con barrera de UI
+
+fprintd no tiene material de clave al que atar un secreto, así que Linux
+no tiene una bóveda real. Las apps que acepten una garantía más débil
+pueden activar una:
+
+```rust
+DesktopBiometric::default().with_ui_gated_vault()
+```
+
+Los secretos van entonces al keyring de Secret Service del usuario
+(GNOME Keyring, KWallet, KeePassXC, …) y cada `store_secret` /
+`read_secret` exige antes una huella válida. Es una **barrera de UI, no
+un vínculo criptográfico**: cualquier proceso del mismo usuario puede
+leer el ítem del keyring sin tocar el lector. Sin el opt-in los métodos
+de la bóveda devuelven `UnsupportedOperation`.
 
 ### macOS: los secretos requieren una app firmada
 
@@ -188,6 +243,12 @@ class MainActivity : GameActivity() {
 Agregá `implementation("androidx.biometric:biometric:1.1.0")`; su
 manifest aporta el permiso `USE_BIOMETRIC`.
 
+Antes de la API 30 el Keystore no puede atar una clave de uso único a la
+credencial del dispositivo, así que los secretos
+`BiometricOrDeviceCredential` usan una clave que queda desbloqueada unos
+segundos después de cualquier desbloqueo (10 por defecto). Ajustalo con
+`BiometricBackendImpl(this, credentialValiditySeconds = 5)`.
+
 ### iOS
 
 ```swift
@@ -217,14 +278,21 @@ tu `Info.plist` (ver
 use istmo_biometric::{BiometricHost, DesktopBiometric};
 
 runtime.register_host(BiometricHost::new(
-    DesktopBiometric::default().with_parent_window(&window),
+    DesktopBiometric::default()
+        .with_parent_window(&window)
+        .with_ui_gated_vault(), // sólo Linux, ver arriba
 ));
 ```
 
-`with_parent_window` mantiene el diálogo de Windows Hello delante de tu
-ventana; se ignora en macOS y Linux. En Linux no hay prompt del
-sistema: indicale al usuario que toque el lector mientras
-`authenticate` está pendiente.
+- `with_parent_window` mantiene los diálogos de Windows Hello —
+  incluidos los de credenciales de la bóveda — delante de tu ventana. Se
+  ignora en macOS y Linux.
+- `with_fprintd_user("alice")` hace que Linux verifique las huellas de
+  otro usuario (la política polkit de fprintd sólo lo permite a llamadores
+  privilegiados). Se ignora en el resto.
+
+En Linux no hay prompt del sistema: indicale al usuario que toque el
+lector mientras `authenticate` está pendiente.
 
 ## Ejemplo
 

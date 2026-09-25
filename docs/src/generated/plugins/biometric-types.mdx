@@ -50,6 +50,7 @@ Result of [`Biometric::availability`].
 | `status` | `status` | `BiometricStatus` | Whether the requested [`AuthPolicy`] can be satisfied. |
 | `kinds` | `kinds` | `Vec<BiometricKind>` | Sensors the device exposes. Best effort — may be empty when the platform does not report sensor types. |
 | `device_credential_available` | `deviceCredentialAvailable` | `bool` | Whether a device PIN / pattern / password is set up. |
+| `vault_available` | `vaultAvailable` | `bool` | Whether this device can keep biometric-bound secrets at all ([`Biometric::store_secret`]). Whether a given policy can unlock them still follows [`Availability::status`]. `false` on Linux (unless the app opted into the UI-gated keyring vault), on macOS binaries without the `keychain-access-groups` entitlement, and on devices without a lock-screen credential. |
 
 ### `AuthPrompt`
 

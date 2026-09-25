@@ -40,7 +40,41 @@ let availability = biometric.availability(AuthPolicy::BiometricStrong).await?;
 if availability.is_available() {
     // availability.kinds: [Fingerprint], [Face], …
 }
+if availability.vault_available {
+    // store_secret / read_secret will work on this device.
+}
 ```
+
+`kinds` comes from the platform: Face ID / Touch ID / Optic ID on Apple,
+`PackageManager` features on Android, the Windows Biometric Framework on
+Windows and always `[Fingerprint]` on Linux (fprintd only drives
+fingerprint readers). `vault_available` is `false` on devices without a
+lock-screen credential, on macOS binaries without the keychain
+entitlement and on Linux unless the app opted into the keyring vault.
+
+## Detect enrollment changes
+
+`enrollment_state` returns an opaque token that changes when fingers or
+faces are added or removed. Store it after signing the user in and ask
+for your own credentials again when it changes — that closes the "someone
+added their fingerprint to the victim's phone" hole:
+
+```rust
+let current = biometric.enrollment_state().await?;
+if stored_token.is_some() && current != stored_token {
+    // Re-authenticate with the account password, then store `current`.
+}
+```
+
+| Platform | Token                                                                              |
+| -------- | ---------------------------------------------------------------------------------- |
+| iOS / macOS | `LADomainState` biometry hash (`evaluatedPolicyDomainState` before iOS 18 / macOS 15) |
+| Android  | Random generation of a Keystore sentinel key the OS invalidates on enrollment changes; a new generation is minted the first time the change is observed |
+| Linux    | The enrolled finger names — re-enrolling the same finger goes unnoticed            |
+| Windows  | Always `None`: Windows Hello exposes no enrollment state                           |
+
+`None` also means no biometric is enrolled. Tokens are only comparable on
+the same device and app installation.
 
 ## Authenticate
 
@@ -98,12 +132,31 @@ up front with `SecretAlias::try_from`.
 | iOS      | Keychain item with `SecAccessControl` (`.biometryCurrentSet`, or `.userPresence`)             |
 | macOS    | Same as iOS, in the data-protection keychain — [signed apps only](#macos-secrets-need-a-signed-app) |
 | Windows  | AES-256-GCM key derived (HKDF) from a Windows Hello credential signature                       |
-| Linux    | Not supported (`UnsupportedOperation`): fprintd exposes no key material                        |
+| Linux    | Opt-in only: Secret Service keyring item behind an fprintd check ([UI gate](#linux-ui-gated-keyring-vault)) |
 
 Android and Windows verify the user when storing too, so `store_secret`
 shows the prompt there. With a biometric-only policy, enrolling a new
 finger or face destroys the key: Android reports `KeyInvalidated`,
 Apple platforms stop finding the item (`SecretNotFound`).
+
+Windows creates the Hello key on the first `store_secret` of an alias and
+then signs with it, so that first store shows Hello twice.
+
+### Linux: UI-gated keyring vault
+
+fprintd has no key material to bind a secret to, so Linux has no real
+vault. Apps that accept a weaker guarantee can opt into one:
+
+```rust
+DesktopBiometric::default().with_ui_gated_vault()
+```
+
+Secrets then go to the user's Secret Service keyring (GNOME Keyring,
+KWallet, KeePassXC, …) and every `store_secret` / `read_secret` first
+requires a matching fingerprint. This is a **UI gate, not a
+cryptographic binding**: any process running as the same user can read
+the keyring item without touching the reader. Without the opt-in the
+vault methods return `UnsupportedOperation`.
 
 ### macOS: secrets need a signed app
 
@@ -186,6 +239,11 @@ class MainActivity : GameActivity() {
 Add `implementation("androidx.biometric:biometric:1.1.0")`; its manifest
 brings the `USE_BIOMETRIC` permission.
 
+Before API 30 the Keystore cannot bind a per-use key to the device
+credential, so `BiometricOrDeviceCredential` secrets use a key that
+stays unlocked for a few seconds after any unlock (10 by default).
+Tune it with `BiometricBackendImpl(this, credentialValiditySeconds = 5)`.
+
 ### iOS
 
 ```swift
@@ -214,14 +272,21 @@ NSFaceIDUsageDescription = "Use Face ID to open your vault."
 use istmo_biometric::{BiometricHost, DesktopBiometric};
 
 runtime.register_host(BiometricHost::new(
-    DesktopBiometric::default().with_parent_window(&window),
+    DesktopBiometric::default()
+        .with_parent_window(&window)
+        .with_ui_gated_vault(), // Linux only, see above
 ));
 ```
 
-`with_parent_window` keeps the Windows Hello dialog in front of your
-window; it is ignored on macOS and Linux. On Linux there is no system
-prompt: tell the user to touch the reader while `authenticate` is
-pending.
+- `with_parent_window` keeps the Windows Hello dialogs — including the
+  key-credential ones of the vault — in front of your window. Ignored
+  on macOS and Linux.
+- `with_fprintd_user("alice")` makes Linux verify another user's
+  fingerprints (fprintd's polkit policy only allows that to privileged
+  callers). Ignored elsewhere.
+
+On Linux there is no system prompt: tell the user to touch the reader
+while `authenticate` is pending.
 
 ## Sample
 

@@ -130,8 +130,8 @@ impl DemoApp {
             move |client, cancel| {
                 run(client.availability(policy), cancel, |a| {
                     format!(
-                        "{:?}, sensors {:?}, device credential: {}",
-                        a.status, a.kinds, a.device_credential_available
+                        "{:?}, sensors {:?}, device credential: {}, vault: {}",
+                        a.status, a.kinds, a.device_credential_available, a.vault_available
                     )
                 })
             },
@@ -172,6 +172,14 @@ impl DemoApp {
         let alias = self.alias.clone();
         self.spawn_call(format!("has_secret({alias})"), move |client, cancel| {
             run(client.has_secret(alias), cancel, |has| has.to_string())
+        });
+    }
+
+    fn on_enrollment_state(&self) {
+        self.spawn_call("enrollment_state".to_owned(), move |client, cancel| {
+            run(client.enrollment_state(), cancel, |state| {
+                state.map_or_else(|| "none".to_owned(), |token| hex(&token))
+            })
         });
     }
 
@@ -222,6 +230,12 @@ impl eframe::App for DemoApp {
                     .clicked()
                 {
                     self.on_authenticate();
+                }
+                if ui
+                    .add_enabled(idle, egui::Button::new("enrollment state"))
+                    .clicked()
+                {
+                    self.on_enrollment_state();
                 }
             });
 
@@ -305,6 +319,14 @@ fn run<T>(
         },
         None => "cancelled from the UI".to_owned(),
     }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
 }
 
 fn policy_label(policy: AuthPolicy) -> &'static str {
