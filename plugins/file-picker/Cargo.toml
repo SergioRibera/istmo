@@ -23,6 +23,19 @@ istmo-macros = { workspace = true }
 bincode = { workspace = true }
 istmo-build = { workspace = true, optional = true }
 
+# Reference desktop backend (Rust-hosted): rfd wraps the native pickers.
+# Windows/macOS use native APIs synchronously; Linux uses the XDG
+# Desktop Portal, which rfd drives via an internal pollster executor
+# (no external async runtime required).
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+rfd = { version = "0.17", default-features = false }
+
+# Linux: skip rfd's `wayland` default feature (which pulls wayland-sys +
+# pkg-config); the XDG portal works on both X11 and Wayland through the
+# session DBus service, no direct Wayland link needed.
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+
 [build-dependencies]
 istmo-build = { workspace = true }
 

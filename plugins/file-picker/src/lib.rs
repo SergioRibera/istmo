@@ -53,6 +53,12 @@
 #[cfg(feature = "codegen")]
 pub mod codegen;
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+pub mod desktop;
+
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+pub use desktop::DesktopFilePicker;
+
 mod fd_bridge;
 
 pub use fd_bridge::{PickedFileReader, PickedFileWriter};

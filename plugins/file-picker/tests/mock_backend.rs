@@ -2,6 +2,8 @@
 //! tempfile, exercising the full wire round-trip + fd bridging + std
 //! trait wrappers end-to-end.
 
+#![allow(clippy::similar_names, clippy::items_after_statements)]
+
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -32,9 +34,12 @@ impl TempFileBackend {
     }
 
     fn alloc(&self, path: PathBuf) -> NativeHandleId {
-        let mut n = self.next_id.lock().expect("id counter");
-        let id = *n;
-        *n += 1;
+        let id = {
+            let mut n = self.next_id.lock().expect("id counter");
+            let id = *n;
+            *n += 1;
+            id
+        };
         self.files
             .lock()
             .expect("files map")
