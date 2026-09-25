@@ -183,3 +183,25 @@ fn set_prediction_enabled_returns_ok_on_desktop() {
         .expect("from_runtime_with");
     pollster::block_on(client.set_prediction_enabled(true)).expect("set_prediction_enabled");
 }
+
+#[test]
+fn follows_shared_window_registry() {
+    let init = Runtime::mock();
+    let publisher = PenPublisher::install(&init.runtime);
+    let registry = istmo_window::WindowRegistry::default();
+    registry
+        .register(istmo_window::WindowId(3), &MockHandle)
+        .expect("register before follow");
+    publisher.follow_registry(&registry).expect("follow");
+    assert_eq!(publisher.window_ids(), [3]);
+
+    registry
+        .register(istmo_window::WindowId(4), &MockHandle)
+        .expect("register after follow");
+    let mut ids = publisher.window_ids();
+    ids.sort_unstable();
+    assert_eq!(ids, [3, 4]);
+
+    registry.unregister(istmo_window::WindowId(3));
+    assert_eq!(publisher.window_ids(), [4]);
+}

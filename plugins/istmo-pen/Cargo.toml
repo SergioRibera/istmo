@@ -27,6 +27,7 @@ istmo-build = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 raw-window-handle = { version = "0.6", default-features = false }
+istmo-window = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [
