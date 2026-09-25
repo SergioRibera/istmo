@@ -79,6 +79,19 @@ from_version = "1.5.0"
   `requires_network` para `processing`; `continuous_mode` (`audio` |
   `location` | `voip` | `external_accessory` | `bluetooth_central` |
   `bluetooth_peripheral`) para `continuous`.
+- **`[plugin.info_plist]`** *(opcional, tabla)* — entradas top-level
+  de `Info.plist` que el plugin necesita en iOS (usage descriptions,
+  flags de capabilities). Las claves son claves de `Info.plist`; los
+  valores son strings o booleanos:
+  ```toml
+  [plugin.info_plist]
+  NSFaceIDUsageDescription = "Authenticate to unlock protected content."
+  ```
+  `emit_app` mergea las entradas de todos los plugins (gana la primera
+  declaración si hay valores en conflicto, con un warning de build),
+  aplica los overrides de [`[app.info_plist]`](#appinfo_plist) de la
+  app y las escribe en el bloque gestionado de `Info.plist` y en el
+  sidecar `Info.plist.background.xml`.
 
 ## `[[plugin]]` — forma array
 
@@ -161,6 +174,30 @@ role      = "client"
 
 Regla de matching: `id` toma precedencia, luego `type`. Cualquiera
 matchea por igualdad de string.
+
+### `[app.info_plist]`
+
+Sobrescribe (o agrega) entradas de `Info.plist` por encima de las que
+declaran los plugins con `[plugin.info_plist]` — típicamente para
+localizar una usage description:
+
+```toml
+[app.info_plist]
+NSFaceIDUsageDescription = "Usá Face ID para abrir tu bóveda."
+```
+
+Las entradas se escriben entre los marcadores gestionados del
+`Info.plist` de la app, compartidos con `[plugin.ios_background]`:
+
+```xml
+<dict>
+    <!-- istmo:background:start -->
+    <!-- istmo:background:end -->
+</dict>
+```
+
+Sin los marcadores, copiá las entradas a mano desde el sidecar
+generado `Info.plist.background.xml`.
 
 ## `[[remote_override]]`
 

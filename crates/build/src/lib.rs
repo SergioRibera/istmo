@@ -101,9 +101,9 @@ pub use crate::kotlin_client::generate_kotlin_client;
 pub use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
 pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
 pub use crate::manifest::{
-    AndroidServiceSpec, Deployment, IosBackgroundKindSpec, IosBackgroundSpec,
-    IosContinuousModeSpec, Manifest, ManifestError, PluginEntry, RemoteOverride, ResolvedWiring,
-    WindowsManifestFragment, emit, emit_from, emit_manifest_metadata,
+    AndroidServiceSpec, Deployment, InfoPlistEntry, InfoPlistValue, IosBackgroundKindSpec,
+    IosBackgroundSpec, IosContinuousModeSpec, Manifest, ManifestError, PluginEntry, RemoteOverride,
+    ResolvedWiring, WindowsManifestFragment, emit, emit_from, emit_manifest_metadata,
     emit_manifest_metadata_with_contract, emit_wiring_env, emit_with, resolve_wiring,
 };
 pub use crate::native_deps::{
