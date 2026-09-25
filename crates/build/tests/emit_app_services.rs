@@ -70,6 +70,7 @@ fn emit_app_writes_kotlin_service_class_and_sidecar() {
     let sidecar_body = fs::read_to_string(&sidecar).unwrap();
     assert!(sidecar_body.contains("<service"));
     assert!(sidecar_body.contains("com.example.app.gen.SyncForegroundService"));
+    assert_well_formed_comments(&sidecar_body);
     assert!(sidecar_body.contains("android:foregroundServiceType=\"dataSync\""));
 
     let _ = fs::remove_dir_all(&root);
@@ -104,6 +105,7 @@ fn emit_app_writes_swift_bgtask_and_sidecar() {
     let sidecar_body = fs::read_to_string(&sidecar).unwrap();
     assert!(sidecar_body.contains("BGTaskSchedulerPermittedIdentifiers"));
     assert!(sidecar_body.contains("com.myapp.sync.refresh"));
+    assert_well_formed_comments(&sidecar_body);
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -274,6 +276,7 @@ fn emit_app_merges_plugin_info_plist_entries_with_app_overrides() {
     assert!(patched.contains("<key>UIFileSharingEnabled</key>\n<true/>"));
     let sidecar = fs::read_to_string(ios_root.join("MyApp/Info.plist.background.xml")).unwrap();
     assert!(sidecar.contains("Plugin default reason"));
+    assert_well_formed_comments(&sidecar);
 
     // `[app.info_plist]` overrides the plugin default.
     let patched = emit("[app]\n\n[app.info_plist]\nNSFaceIDUsageDescription = \"App reason\"\n");
@@ -282,6 +285,24 @@ fn emit_app_merges_plugin_info_plist_entries_with_app_overrides() {
     assert_eq!(patched.matches("NSFaceIDUsageDescription").count(), 1);
 
     let _ = fs::remove_dir_all(&root);
+}
+
+/// XML comments do not nest: every `<!--` must be closed by `-->`
+/// before the next `<!--` opens, and `--` may not appear inside.
+fn assert_well_formed_comments(xml: &str) {
+    let mut rest = xml;
+    while let Some(open) = rest.find("<!--") {
+        let after = &rest[open + 4..];
+        let close = after
+            .find("-->")
+            .unwrap_or_else(|| panic!("unterminated comment in:\n{xml}"));
+        let body = &after[..close];
+        assert!(
+            !body.contains("<!--") && !body.contains("--"),
+            "malformed comment `{body}` in:\n{xml}"
+        );
+        rest = &after[close + 3..];
+    }
 }
 
 fn dummy_contract() -> istmo_build::Contract {
