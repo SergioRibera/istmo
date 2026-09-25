@@ -1,0 +1,22 @@
+[plugin]
+id = "istmo.share"
+client_type = "::istmo_share::ShareClient"
+default_deployment = "local"
+auto_register = false
+
+# FileProvider (`androidx.core.content.FileProvider`) exposes shared
+# files as `content://` URIs.
+[[gradle]]
+group = "androidx.core"
+artifact = "core-ktx"
+version = "1.13.1"
+
+[min_versions]
+# ACTION_SEND chooser with IntentSender callback (target reporting).
+android = 22
+# UIActivityViewController + LinkPresentation (rich previews).
+ios = "13.0"
+# NSSharingServicePicker delegate + LPLinkMetadata.
+macos = "10.15"
+# DataTransferManager interop for Win32 windows + ShareCompleted.
+windows = "10.0.16299"
