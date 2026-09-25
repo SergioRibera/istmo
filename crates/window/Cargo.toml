@@ -1,0 +1,19 @@
+[package]
+name = "istmo-window"
+version = "0.1.1-alpha.2"
+description = "Process-wide registry of native desktop windows shared by istmo plugins that need an HWND / NSView anchor."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "window", "hwnd", "nsview", "raw-window-handle"]
+categories = ["gui", "api-bindings"]
+
+[dependencies]
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

@@ -8,6 +8,7 @@ members = [
     "crates/ios",
     "crates/plugins",
     "crates/plugins-schema",
+    "crates/window",
     "examples/android-demo",
     "examples/android-multi/crates/app",
     "examples/android-multi/crates/widget",
@@ -70,6 +71,7 @@ istmo-android = { path = "crates/android", version = "0.1.1-alpha.2" }
 istmo-ios = { path = "crates/ios", version = "0.1.1-alpha.2" }
 istmo-plugins = { path = "crates/plugins", version = "0.1.1-alpha.2" }
 istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.1.1-alpha.2" }
+istmo-window = { path = "crates/window", version = "0.1.1-alpha.2" }
 
 istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.1.1-alpha.2" }
 istmo-data-store = { path = "plugins/data-store", version = "0.1.1-alpha.2" }
