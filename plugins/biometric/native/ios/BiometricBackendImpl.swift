@@ -18,6 +18,12 @@ import LocalAuthentication
 /// Face ID requires `NSFaceIDUsageDescription` in the app's `Info.plist`;
 /// `istmo-build` writes it from the plugin's `[plugin.info_plist]`
 /// (override the text with `[app.info_plist]`).
+///
+/// Secrets are generic-password Keychain items (service
+/// `dev.istmo.biometric`) guarded by a `SecAccessControl`:
+/// `.biometryCurrentSet` for biometric-only policies — enrolling a new
+/// face or finger makes the item unreadable — and `.userPresence` when
+/// the passcode may stand in.
 public final class BiometricBackendImpl: BiometricBackend {
 
     public init() {}
@@ -92,7 +98,117 @@ public final class BiometricBackendImpl: BiometricBackend {
         #endif
     }
 
+    public func store_secret(alias: String, secret: Data, prompt: AuthPrompt) async throws {
+        try Self.checkAlias(alias)
+        #if canImport(LocalAuthentication)
+        let flags: SecAccessControlCreateFlags = prompt.policy == .biometricOrDeviceCredential
+            ? .userPresence
+            : .biometryCurrentSet
+        var error: Unmanaged<CFError>?
+        guard let access = SecAccessControlCreateWithFlags(
+            nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, flags, &error
+        ) else {
+            let reason = error?.takeRetainedValue().localizedDescription ?? "unknown"
+            throw BiometricError.backend("SecAccessControlCreateWithFlags: \(reason)")
+        }
+        try Self.deleteItem(alias)
+        var attributes = Self.itemQuery(alias)
+        attributes[kSecValueData as String] = secret
+        attributes[kSecAttrAccessControl as String] = access
+        try Self.check(SecItemAdd(attributes as CFDictionary, nil))
+        #else
+        throw BiometricError.unsupportedOperation("the Keychain is unavailable on this platform")
+        #endif
+    }
+
+    public func read_secret(alias: String, prompt: AuthPrompt) async throws -> Data {
+        try Self.checkAlias(alias)
+        guard !prompt.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw BiometricError.invalidPrompt("`reason` must not be empty")
+        }
+        #if canImport(LocalAuthentication)
+        let context = LAContext()
+        context.localizedReason = prompt.reason
+        if let label = prompt.cancelLabel {
+            context.localizedCancelTitle = label
+        }
+        if let label = prompt.fallbackLabel {
+            context.localizedFallbackTitle = label
+        }
+        var query = Self.itemQuery(alias)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecUseAuthenticationContext as String] = context
+        let box = ContextBox(context)
+        let lookup = QueryBox(query)
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                // `SecItemCopyMatching` blocks while the Face ID sheet is up.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    var result: CFTypeRef?
+                    let status = SecItemCopyMatching(lookup.query as CFDictionary, &result)
+                    do {
+                        try Self.check(status)
+                        guard let data = result as? Data else {
+                            throw BiometricError.backend("Keychain returned no data")
+                        }
+                        cont.resume(returning: data)
+                    } catch {
+                        cont.resume(throwing: error)
+                    }
+                }
+            }
+        } onCancel: {
+            box.context.invalidate()
+        }
+        #else
+        throw BiometricError.unsupportedOperation("the Keychain is unavailable on this platform")
+        #endif
+    }
+
+    public func delete_secret(alias: String) async throws {
+        try Self.checkAlias(alias)
+        #if canImport(LocalAuthentication)
+        try Self.deleteItem(alias)
+        #endif
+    }
+
+    public func has_secret(alias: String) async throws -> Bool {
+        try Self.checkAlias(alias)
+        #if canImport(LocalAuthentication)
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        var query = Self.itemQuery(alias)
+        query[kSecReturnAttributes as String] = true
+        query[kSecUseAuthenticationContext as String] = context
+        switch SecItemCopyMatching(query as CFDictionary, nil) {
+        case errSecSuccess, errSecInteractionNotAllowed:
+            // The item exists; reading it would need authentication.
+            return true
+        case errSecItemNotFound:
+            return false
+        case let status:
+            try Self.check(status)
+            return false
+        }
+        #else
+        return false
+        #endif
+    }
+
     // ------------------------------------------------------- helpers
+
+    private static let keychainService = "dev.istmo.biometric"
+
+    private static func checkAlias(_ alias: String) throws {
+        let allowed = CharacterSet(charactersIn:
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        guard (1...64).contains(alias.utf8.count),
+              alias.unicodeScalars.allSatisfy(allowed.contains) else {
+            throw BiometricError.invalidAlias(alias)
+        }
+    }
 
     #if canImport(LocalAuthentication)
     /// Lets the cancellation handler reach the context; `LAContext` is
@@ -100,6 +216,47 @@ public final class BiometricBackendImpl: BiometricBackend {
     private final class ContextBox: @unchecked Sendable {
         let context: LAContext
         init(_ context: LAContext) { self.context = context }
+    }
+
+    /// Hands the immutable query to the Keychain worker queue.
+    private final class QueryBox: @unchecked Sendable {
+        let query: [String: Any]
+        init(_ query: [String: Any]) { self.query = query }
+    }
+
+    private static func itemQuery(_ alias: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: alias,
+        ]
+    }
+
+    private static func deleteItem(_ alias: String) throws {
+        let status = SecItemDelete(itemQuery(alias) as CFDictionary)
+        guard status != errSecItemNotFound else { return }
+        try check(status)
+    }
+
+    private static func check(_ status: OSStatus) throws {
+        switch status {
+        case errSecSuccess:
+            return
+        case errSecItemNotFound:
+            throw BiometricError.secretNotFound
+        case errSecUserCanceled:
+            throw BiometricError.userCancelled
+        case errSecAuthFailed:
+            throw BiometricError.authFailed
+        case errSecInteractionNotAllowed:
+            throw BiometricError.systemCancelled
+        case errSecParam where !LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil):
+            // Access-controlled items need a device passcode.
+            throw BiometricError.notAvailable(.noneEnrolled)
+        default:
+            let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+            throw BiometricError.backend("Keychain: \(message)")
+        }
     }
 
     private static func laPolicy(_ policy: AuthPolicy) -> LAPolicy {
