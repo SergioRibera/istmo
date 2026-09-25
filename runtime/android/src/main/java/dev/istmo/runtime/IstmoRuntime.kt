@@ -28,6 +28,9 @@ object IstmoRuntime {
     private val outboundCalls = ConcurrentHashMap<Long, PendingCall>()
     private val nextCallId = AtomicLong(1)
 
+    /** Early events published before the native library was loaded. */
+    private val pendingEarlyQueue = java.util.ArrayDeque<Triple<String, Int, ByteArray>>()
+
     fun registerHandler(pluginId: String, handler: PluginHandler) {
         handlers[pluginId] = handler
     }
@@ -44,10 +47,41 @@ object IstmoRuntime {
 
     fun start(libraryName: String): Boolean {
         System.loadLibrary(libraryName)
-        return nativeStart(IstmoRuntime::class.java)
+        return start()
     }
 
-    fun start(): Boolean = nativeStart(IstmoRuntime::class.java)
+    fun start(): Boolean {
+        val ok = nativeStart(IstmoRuntime::class.java)
+        synchronized(pendingEarlyQueue) { flushPendingEarlyQueueLocked() }
+        return ok
+    }
+
+    /**
+     * Publish [payload] on the early-event queue [channel] (see
+     * `istmo_core::early_events::PreMainQueue`). Safe to call before the
+     * native library is loaded — e.g. from an `Activity.onCreate` that
+     * handles a share intent — the event is held here and flushed on the
+     * next publish or on [start]. Once the library is loaded, the Rust
+     * side buffers until the runtime itself is initialised.
+     */
+    fun publishEarlyQueue(channel: String, capacity: Int, payload: ByteArray) {
+        synchronized(pendingEarlyQueue) {
+            pendingEarlyQueue.addLast(Triple(channel, capacity, payload))
+            flushPendingEarlyQueueLocked()
+        }
+    }
+
+    private fun flushPendingEarlyQueueLocked() {
+        while (pendingEarlyQueue.isNotEmpty()) {
+            val (channel, capacity, payload) = pendingEarlyQueue.peekFirst()
+            try {
+                nativeSubmitEarlyQueue(channel, capacity, payload)
+            } catch (_: UnsatisfiedLinkError) {
+                return
+            }
+            pendingEarlyQueue.removeFirst()
+        }
+    }
 
     fun shutdown() {
         nativeShutdown()
