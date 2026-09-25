@@ -1,0 +1,22 @@
+[plugin]
+id = "istmo.biometric"
+client_type = "::istmo_biometric::BiometricClient"
+# Prompts are system UI owned by the foreground app process; a remote
+# (`:remote`) process has no window to anchor them to.
+default_deployment = "local"
+# Android's `BiometricPrompt` needs a `FragmentActivity`, so the backend
+# cannot follow the `<T>BackendImpl(context)` auto-registration
+# convention. Register the dispatcher manually (see the crate docs).
+auto_register = false
+
+# Ships `USE_BIOMETRIC` in its own manifest; the manifest merger adds it
+# to the app automatically.
+[[plugin.gradle]]
+group = "androidx.biometric"
+artifact = "biometric"
+version = "1.1.0"
+
+# iOS terminates apps that evaluate Face ID without this key. Apps
+# localise it through `[app.info_plist]`.
+[plugin.info_plist]
+NSFaceIDUsageDescription = "Authenticate with Face ID to continue."
