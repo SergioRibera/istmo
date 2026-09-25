@@ -17,6 +17,7 @@ section is optional; an empty file is legal.
 | `[[swift_package]]`  | array of tables   | plugin, app | Extra SwiftPM packages                        |
 | `[[remote_override]]`| array of tables   | app         | Force a specific plugin to the `:remote` process |
 | `[app]`              | table             | app         | App-side Kotlin/Swift codegen configuration   |
+| `[min_versions]`     | table             | plugin, app | Minimum OS versions (requirements / app floor) |
 
 Unknown top-level keys are rejected — expect a build-time error if you
 typo a section.
@@ -175,6 +176,75 @@ deployment = "remote"                   # local | remote
 See [Remote process](/istmo/advanced/remote-process/) for the bridge shape.
 
 ---
+
+## `[min_versions]`
+
+Oldest OS release the crate supports. Every key is optional.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `android` | integer | Android API level (`minSdk`). |
+| `ios` | string | iOS deployment target, e.g. `"15.0"`. |
+| `macos` | string | macOS deployment target, e.g. `"11.0"`. |
+| `windows` | string | Windows build, e.g. `"10.0.17763"`. |
+
+```toml
+[min_versions]
+android = 24
+ios     = "15.0"
+macos   = "11.0"
+windows = "10.0.17763"
+```
+
+On a **plugin** crate these are requirements. On an **app** crate they
+are the floor the app ships to. `istmo_build::emit()` compares every
+plugin against the app floor of the target being compiled and fails the
+build when a plugin needs a newer OS. The floor is taken from the app's
+own `[min_versions]` when present; otherwise it is detected:
+
+| Target | Detected from |
+|---|---|
+| Android | `minSdk` in `android/app/build.gradle(.kts)` |
+| iOS | `$IPHONEOS_DEPLOYMENT_TARGET` |
+| macOS | `$MACOSX_DEPLOYMENT_TARGET` |
+| Windows | only the app's `[min_versions]` |
+
+The platform tools repeat the check on their own: the Gradle plugin
+loader compares `android` against each variant's resolved `minSdk`, and
+the generated `istmo-plugins.yml` adds an Xcode pre-build script that
+compares `ios` against `IPHONEOS_DEPLOYMENT_TARGET`.
+
+## Native manifest fragments
+
+Plugins that need entries in the host app's platform manifests ship
+them as files next to their native sources; nothing goes in
+`istmo.toml`.
+
+| File | Merged into | By |
+|---|---|---|
+| `native/android/AndroidManifest.xml` | every variant's manifest | Gradle plugin loader (AGP 8.3+) |
+| `native/android/res/` | app resources | Gradle plugin loader |
+| `native/ios/Info.plist.fragment` | app `Info.plist` | `istmo-build` |
+| `native/ios/App.entitlements.fragment` | app `.entitlements` | `istmo-build` |
+
+The Android fragment is a regular library-style manifest
+(`<manifest>` with `<application>` children, `<queries>`,
+`<uses-permission>`); `${applicationId}` placeholders work.
+
+The Apple fragments are property lists whose top-level value is a
+`<dict>`. `istmo-build` merges them (dicts recursively, arrays
+concatenated, first plugin wins on scalar conflicts, the app always
+wins over plugins) and writes the result between markers placed inside
+the app's `<dict>`:
+
+```xml
+<!-- istmo:plugins:start -->
+<!-- istmo:plugins:end -->
+```
+
+Without markers, the merged keys are written to a sidecar
+(`Info.plist.plugins.xml`, `<App>.entitlements.plugins.xml`) to copy by
+hand.
 
 ## Full example (plugin crate)
 
