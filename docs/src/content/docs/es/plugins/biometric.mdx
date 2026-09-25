@@ -97,7 +97,7 @@ o `-`; validalos de antemano con `SecretAlias::try_from`.
 | ---------- | --------------------------------------------------------------------------------------------- |
 | Android    | Clave AES-256-GCM del Keystore usable sólo a través de `BiometricPrompt.CryptoObject`          |
 | iOS        | Ítem del Keychain con `SecAccessControl` (`.biometryCurrentSet` o `.userPresence`)             |
-| macOS      | Igual que iOS, en el keychain de data-protection — sólo apps firmadas con `keychain-access-groups` |
+| macOS      | Igual que iOS, en el keychain de data-protection — [sólo apps firmadas](#macos-los-secretos-requieren-una-app-firmada) |
 | Windows    | Clave AES-256-GCM derivada (HKDF) de la firma de una credencial de Windows Hello               |
 | Linux      | No soportado (`UnsupportedOperation`): fprintd no expone material de clave                     |
 
@@ -106,6 +106,55 @@ Android y Windows también verifican al usuario al guardar, así que
 biométrica, registrar un dedo o rostro nuevo destruye la clave: Android
 reporta `KeyInvalidated` y Apple deja de encontrar el ítem
 (`SecretNotFound`).
+
+### macOS: los secretos requieren una app firmada
+
+En macOS la bóveda vive en el **keychain de data-protection**, el único
+keychain que aplica el control de acceso biométrico. macOS sólo deja
+usarlo a apps firmadas con un Team ID que llevan el entitlement
+`keychain-access-groups`, que es restringido: tiene que otorgarlo un
+provisioning profile embebido.
+
+Sin él, todas las llamadas a la bóveda (`store_secret`, `read_secret`,
+`has_secret`, `delete_secret`) fallan con
+`BiometricError::UnsupportedOperation` (`errSecMissingEntitlement`).
+Eso incluye los binarios lanzados con `cargo run` y los firmados ad-hoc
+(`codesign -s -`). `availability` y `authenticate` no tocan el keychain
+y funcionan sin firma.
+
+Para habilitarlo:
+
+1. Creá un App ID con la capability **Keychain Sharing** y un
+   provisioning profile para él (en Xcode, *Signing & Capabilities → +
+   Keychain Sharing* hace ambas cosas).
+2. Declará el access group en tu archivo de entitlements:
+
+   ```xml title="MyApp.entitlements"
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+       <key>keychain-access-groups</key>
+       <array>
+           <string>TEAMID.com.example.myapp</string>
+       </array>
+   </dict>
+   </plist>
+   ```
+
+3. Empaquetá el binario como `.app`, embebé el profile y firmá con tu
+   certificado Apple Development o Developer ID:
+
+   ```sh
+   cp MyApp.provisionprofile MyApp.app/Contents/embedded.provisionprofile
+   codesign --force --options runtime \
+       --entitlements MyApp.entitlements \
+       --sign "Developer ID Application: Example Inc (TEAMID)" \
+       MyApp.app
+   ```
+
+Las apps de iOS siempre se firman con un profile, así que esto sólo
+aplica a macOS.
 
 ## Tipos del wire
 
@@ -182,4 +231,7 @@ sistema: indicale al usuario que toque el lector mientras
 [`examples/biometric-demo`](https://github.com/sergioribera/istmo/tree/main/examples/biometric-demo)
 corre la misma UI de egui en escritorio (`cargo run -p biometric-demo`),
 Android (`just biometric-demo`) e iOS (`xcodegen` + Xcode), cubriendo
-disponibilidad, autenticación con cancelación y la bóveda.
+disponibilidad, autenticación con cancelación y la bóveda. Con
+`cargo run` en macOS los botones de la bóveda devuelven
+`UnsupportedOperation` hasta que
+[firmes la app](#macos-los-secretos-requieren-una-app-firmada).

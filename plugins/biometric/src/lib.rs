@@ -460,6 +460,14 @@ pub trait Biometric {
     /// show `prompt`; Apple platforms store without UI. Biometric-only
     /// policies are treated as [`AuthPolicy::BiometricStrong`] — the only
     /// class Android allows to unlock keys.
+    ///
+    /// # macOS
+    ///
+    /// Every vault method needs an app signed with a Team ID and the
+    /// `keychain-access-groups` entitlement (granted by an embedded
+    /// provisioning profile). Unsigned binaries — including `cargo run`
+    /// and ad-hoc signed builds — get
+    /// [`BiometricError::UnsupportedOperation`].
     async fn store_secret(
         &self,
         alias: String,

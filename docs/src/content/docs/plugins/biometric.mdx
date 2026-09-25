@@ -96,7 +96,7 @@ up front with `SecretAlias::try_from`.
 | -------- | -------------------------------------------------------------------------------------------- |
 | Android  | AES-256-GCM Keystore key usable only through `BiometricPrompt.CryptoObject`                   |
 | iOS      | Keychain item with `SecAccessControl` (`.biometryCurrentSet`, or `.userPresence`)             |
-| macOS    | Same as iOS, in the data-protection keychain — signed apps with `keychain-access-groups` only |
+| macOS    | Same as iOS, in the data-protection keychain — [signed apps only](#macos-secrets-need-a-signed-app) |
 | Windows  | AES-256-GCM key derived (HKDF) from a Windows Hello credential signature                       |
 | Linux    | Not supported (`UnsupportedOperation`): fprintd exposes no key material                        |
 
@@ -104,6 +104,55 @@ Android and Windows verify the user when storing too, so `store_secret`
 shows the prompt there. With a biometric-only policy, enrolling a new
 finger or face destroys the key: Android reports `KeyInvalidated`,
 Apple platforms stop finding the item (`SecretNotFound`).
+
+### macOS: secrets need a signed app
+
+On macOS the vault lives in the **data-protection keychain**, the only
+keychain that enforces biometric access control. macOS only lets an app
+use it when the app is code-signed with a Team ID and carries the
+`keychain-access-groups` entitlement, which is a restricted entitlement:
+it must be granted by an embedded provisioning profile.
+
+Without it, every vault call (`store_secret`, `read_secret`,
+`has_secret`, `delete_secret`) fails with
+`BiometricError::UnsupportedOperation` (`errSecMissingEntitlement`).
+That includes binaries started with `cargo run` and ad-hoc signed
+(`codesign -s -`) builds. `availability` and `authenticate` do not
+touch the keychain and work unsigned.
+
+To enable it:
+
+1. Create an App ID with the **Keychain Sharing** capability and a
+   provisioning profile for it (Xcode: *Signing & Capabilities → +
+   Keychain Sharing* does both).
+2. Declare the access group in your entitlements file:
+
+   ```xml title="MyApp.entitlements"
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+       <key>keychain-access-groups</key>
+       <array>
+           <string>TEAMID.com.example.myapp</string>
+       </array>
+   </dict>
+   </plist>
+   ```
+
+3. Bundle the binary as an `.app`, embed the profile and sign with your
+   Apple Development or Developer ID certificate:
+
+   ```sh
+   cp MyApp.provisionprofile MyApp.app/Contents/embedded.provisionprofile
+   codesign --force --options runtime \
+       --entitlements MyApp.entitlements \
+       --sign "Developer ID Application: Example Inc (TEAMID)" \
+       MyApp.app
+   ```
+
+iOS apps are always signed with a profile, so this only matters on
+macOS.
 
 ## Wire types
 
@@ -179,4 +228,6 @@ pending.
 [`examples/biometric-demo`](https://github.com/sergioribera/istmo/tree/main/examples/biometric-demo)
 runs the same egui UI on desktop (`cargo run -p biometric-demo`),
 Android (`just biometric-demo`) and iOS (`xcodegen` + Xcode), covering
-availability, authentication with cancellation, and the vault.
+availability, authentication with cancellation, and the vault. Under
+`cargo run` on macOS the vault buttons report `UnsupportedOperation`
+until you [sign the app](#macos-secrets-need-a-signed-app).
