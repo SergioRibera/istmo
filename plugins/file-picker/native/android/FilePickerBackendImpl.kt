@@ -30,16 +30,22 @@ import kotlinx.coroutines.sync.withLock
  *
  * `ActivityResultLauncher`s must be registered before the host `Activity`
  * reaches `STARTED`, so this class *must* be constructed inside
- * `Activity.onCreate` and held for the activity's lifetime. Register it
- * with the plugin registry once during onCreate:
+ * `Activity.onCreate` and held for the activity's lifetime. Wrap it in
+ * the codegen-emitted `FilePickerDispatcher` and register that with the
+ * runtime:
  *
  * ```kotlin
  * override fun onCreate(savedInstanceState: Bundle?) {
  *     super.onCreate(savedInstanceState)
- *     val picker = FilePickerBackendImpl(this)
- *     IstmoRuntime.registerHandler("istmo.file_picker", picker)
+ *     val backend = FilePickerBackendImpl(this)
+ *     val dispatcher = FilePickerDispatcher(backend, FilePickerCodecsImpl())
+ *     IstmoRuntime.registerHandler(FilePickerDispatcher.PLUGIN_ID, dispatcher)
  * }
  * ```
+ *
+ * The dispatcher forwards `releaseNativeHandle` calls to this backend
+ * (which implements `HandleReleaser`) so URI permissions drop
+ * deterministically when the Rust side lets the handle go.
  *
  * Auto-registration is disabled in `istmo.toml` because the constructor
  * needs an `Activity`, not a plain `Context`.
@@ -127,15 +133,15 @@ class FilePickerBackendImpl(
 
     // ------------------------------------------------------------- HandleReleaser
 
-    override fun onReleaseNativeHandle(handle: NativeHandleId) {
-        val uri = files.remove(handle) ?: return
+    override fun releaseNativeHandle(handleId: Long) {
+        val uri = files.remove(handleId) ?: return
         try {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             resolver.releasePersistableUriPermission(uri, flags)
         } catch (_: SecurityException) {
             // Permission may already have been dropped by the system.
         }
-        IstmoRuntime.forgetHandle(handle)
+        IstmoRuntime.forgetHandle(handleId)
     }
 
     // ------------------------------------------------------------- helpers
@@ -189,9 +195,8 @@ class FilePickerBackendImpl(
     }
 
     private fun registerAndDescribe(uri: Uri): PickedFile {
-        val id = IstmoRuntime.allocHandleId(HANDLE_KIND)
+        val id = IstmoRuntime.allocHandleId(PLUGIN_ID)
         files[id] = uri
-        IstmoRuntime.registerReleaser(HANDLE_KIND, this)
         val (name, size, mime) = describe(uri)
         return PickedFile(display_name = name, mime_type = mime, size = size, handle = id)
     }
@@ -213,6 +218,6 @@ class FilePickerBackendImpl(
     }
 
     companion object {
-        private const val HANDLE_KIND = "istmo.file_picker.file_ref"
+        private const val PLUGIN_ID = "istmo.file_picker"
     }
 }

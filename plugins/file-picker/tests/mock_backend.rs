@@ -268,6 +268,31 @@ fn seek_from_start_after_read() {
 }
 
 #[test]
+fn release_hook_fires_on_native_handle_drop() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let path = tmp("release");
+    let (rt, picker) = build_runtime(TempFileBackend::new(path.clone(), b"released"));
+
+    let released = Arc::new(AtomicU64::new(0));
+    let released_hook = Arc::clone(&released);
+    rt.install_native_handle_release_hook(Arc::new(move |id| {
+        released_hook.store(id.get(), Ordering::Relaxed);
+    }));
+
+    let picked = pollster::block_on(picker.pick_file_owned(PickConfig::default()))
+        .expect("pick_file")
+        .expect("user did not cancel");
+    let handle_id = picked.handle.id().get();
+    assert_eq!(released.load(Ordering::Relaxed), 0);
+
+    drop(picked);
+    assert_eq!(released.load(Ordering::Relaxed), handle_id);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn writer_type_is_debug_and_readers_expose_asfd() {
     // Compile-time smoke tests over the trait objects the docs advertise.
     fn assert_read_seek<R: Read + std::io::Seek>() {}

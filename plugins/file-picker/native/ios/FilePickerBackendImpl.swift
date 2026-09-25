@@ -87,20 +87,19 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
     // ------------------------------------------------------- helpers
 
     private func lookup(_ id: NativeHandleId) throws -> Entry {
-        let entry: Entry? = queue.sync { files[id.value] }
+        let entry: Entry? = queue.sync { files[id] }
         guard let entry else {
-            throw FilePickerError.notFound("handle \(id.value)")
+            throw FilePickerError.notFound("handle \(id)")
         }
         return entry
     }
 
     private func register(url: URL) -> PickedFile {
         let scopeActive = url.startAccessingSecurityScopedResource()
-        let id = IstmoRuntime.shared.allocHandleId("istmo.file_picker.file_ref")
+        let id: NativeHandleId = IstmoRuntime.shared.allocHandleId(pluginId: "istmo.file_picker")
         queue.sync {
-            files[id.value] = Entry(url: url, scopeActive: scopeActive)
+            files[id] = Entry(url: url, scopeActive: scopeActive)
         }
-        IstmoRuntime.shared.registerReleaser("istmo.file_picker.file_ref", self)
         let (name, size, mime) = describe(url: url)
         return PickedFile(display_name: name, mime_type: mime, size: size, handle: id)
     }

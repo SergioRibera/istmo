@@ -26,10 +26,10 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
-use istmo_core::NativeHandleId;
+use istmo_core::{NativeHandleId, Runtime};
 
 use crate::{
     FileFilter, FilePicker, FilePickerError, PickConfig, PickedFile, RawFileHandle, SaveConfig,
@@ -37,10 +37,32 @@ use crate::{
 
 /// Reference `FilePicker` backend for desktop targets.
 ///
-/// Construct with [`DesktopFilePicker::new`] and register with the
-/// runtime via `FilePickerHost::new(DesktopFilePicker::new())`.
-#[derive(Debug, Default)]
+/// Backed by an `Arc<Inner>` so a single backend can be cloned into the
+/// macro-emitted `FilePickerHost` and simultaneously held by the caller
+/// for release-hook installation:
+///
+/// ```ignore
+/// let backend = DesktopFilePicker::new();
+/// let init = Runtime::mock()
+///     .expects::<FilePickerClient>()
+///     .host(FilePickerHost::new(backend.clone()))
+///     .finish();
+/// backend.install_release_hook(&init.runtime);
+/// ```
+///
+/// The release hook clears the internal `NativeHandleId -> PathBuf` map
+/// when the Rust client drops a [`PickedFile`]'s
+/// [`NativeHandle`](istmo_core::NativeHandle). File descriptors already
+/// handed out through [`FilePicker::open_read`] / [`FilePicker::open_write`]
+/// are unaffected — the caller owns them through their `std::fs::File`
+/// wrappers.
+#[derive(Debug, Default, Clone)]
 pub struct DesktopFilePicker {
+    inner: Arc<DesktopFilePickerInner>,
+}
+
+#[derive(Debug, Default)]
+struct DesktopFilePickerInner {
     files: Mutex<HashMap<u64, PathBuf>>,
     next_id: AtomicU64,
 }
@@ -51,18 +73,34 @@ impl DesktopFilePicker {
         Self::default()
     }
 
-    /// Drop the entire in-process URI/path map.
-    ///
-    /// File descriptors already handed out via [`crate::FilePicker::open_read`]
-    /// / [`crate::FilePicker::open_write`] are unaffected — those are
-    /// owned by the caller through their [`std::fs::File`] wrappers.
+    /// Install a hook on `runtime` that removes the picker's cached
+    /// path when the client drops the corresponding
+    /// [`NativeHandle`](istmo_core::NativeHandle). Idempotent — installing
+    /// twice registers two hooks, both fire per release; the second
+    /// simply no-ops on already-gone entries.
+    pub fn install_release_hook(&self, runtime: &Arc<Runtime>) {
+        let weak = Arc::downgrade(&self.inner);
+        runtime.install_native_handle_release_hook(Arc::new(move |id| {
+            if let Some(inner) = weak.upgrade() {
+                inner
+                    .files
+                    .lock()
+                    .expect("files map")
+                    .remove(&id.get());
+            }
+        }));
+    }
+
+    /// Drop the entire in-process URI/path map. Manual escape hatch
+    /// when the release hook is not wired up.
     pub fn purge(&self) {
-        self.files.lock().expect("files map").clear();
+        self.inner.files.lock().expect("files map").clear();
     }
 
     fn alloc(&self, path: PathBuf) -> NativeHandleId {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        self.files
+        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        self.inner
+            .files
             .lock()
             .expect("files map")
             .insert(id, path);
@@ -80,7 +118,8 @@ impl DesktopFilePicker {
     }
 
     fn lookup(&self, id: NativeHandleId) -> Result<PathBuf, FilePickerError> {
-        self.files
+        self.inner
+            .files
             .lock()
             .expect("files map")
             .get(&id.get())
