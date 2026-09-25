@@ -172,9 +172,10 @@ impl ShareFile {
 /// Rich preview shown at the top of the share sheet. Opt-in: leave
 /// [`ShareRequest::preview`] as `None` for the platform default.
 ///
-/// Honoured by iOS/macOS (`LPLinkMetadata`), Android 10+ (`EXTRA_TITLE`
-/// + `ClipData` thumbnail) and Windows (`DataPackage` title and
-/// thumbnail).
+/// Honoured by iOS (`LPLinkMetadata`), Android 10+ (`EXTRA_TITLE` and
+/// a `ClipData` thumbnail) and Windows (`DataPackage` title and
+/// thumbnail). macOS ignores it — `NSSharingServicePicker` has no
+/// preview header. Check [`ShareCapabilities::rich_preview`].
 #[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct SharePreview {
@@ -182,7 +183,7 @@ pub struct SharePreview {
     pub title: Option<String>,
     /// Image shown in the preview header (PNG/JPEG).
     pub thumbnail: Option<ShareFile>,
-    /// iOS/macOS only: fetch title and icon from [`ShareRequest::url`]
+    /// iOS only: fetch title and icon from [`ShareRequest::url`]
     /// with `LPMetadataProvider` before presenting. Adds a network
     /// round-trip; ignored when `url` is `None`.
     pub fetch_link_metadata: bool,
