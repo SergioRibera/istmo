@@ -27,8 +27,8 @@
 //! verified with. Dropping the returned future cancels the call and
 //! dismisses the prompt (`BiometricPrompt::cancelAuthentication` on
 //! Android, `LAContext::invalidate` on Apple platforms,
-//! `VerifyStop` on fprintd). Windows Hello exposes no cancellation API;
-//! its dialog stays up until the user answers it.
+//! `VerifyStop` on fprintd). Windows Hello only offers a best-effort
+//! `IAsyncInfo::Cancel`; its dialog may stay up until the user answers.
 //!
 //! A successful [`Biometric::authenticate`] is a *UI gate*: on a rooted
 //! or jailbroken device an attacker can forge the success callback.
@@ -72,6 +72,12 @@
 
 #[cfg(feature = "codegen")]
 pub mod codegen;
+
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+pub mod desktop;
+
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+pub use desktop::DesktopBiometric;
 
 use istmo_core::{CancelToken, IstmoError, codec};
 use istmo_macros::{message, plugin};

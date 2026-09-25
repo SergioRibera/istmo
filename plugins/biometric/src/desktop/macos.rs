@@ -1,0 +1,211 @@
+//! `LocalAuthentication` backend (Touch ID, login password fallback).
+
+use block2::RcBlock;
+use istmo_core::CancelToken;
+use objc2::rc::Retained;
+use objc2::runtime::Bool;
+use objc2_foundation::{NSError, NSString};
+use objc2_local_authentication::{LABiometryType, LAContext, LAError, LAPolicy};
+use raw_window_handle::RawWindowHandle;
+
+use super::until_cancelled;
+use crate::{
+    AuthMethod, AuthPolicy, AuthPrompt, Availability, BiometricError, BiometricKind,
+    BiometricStatus,
+};
+
+#[derive(Debug, Default, Clone)]
+pub(super) struct Backend;
+
+impl Backend {
+    // Mirrors the Windows backend, the only one that uses the window.
+    #[allow(clippy::unused_self, clippy::needless_pass_by_ref_mut)]
+    pub(super) const fn set_parent_window(&mut self, _window: RawWindowHandle) {}
+
+    #[allow(clippy::unused_async)] // Async like every platform backend.
+    pub(super) async fn availability(
+        &self,
+        policy: AuthPolicy,
+    ) -> Result<Availability, BiometricError> {
+        // SAFETY: `LAContext` has no initialisation preconditions.
+        let context = unsafe { LAContext::new() };
+        let biometrics = can_evaluate(&context, LAPolicy::DeviceOwnerAuthenticationWithBiometrics);
+        // `biometryType` is only meaningful after a `canEvaluatePolicy`
+        // call on the same context.
+        // SAFETY: plain property read on a live context.
+        let kinds = match unsafe { context.biometryType() } {
+            LABiometryType::TouchID => vec![BiometricKind::Fingerprint],
+            LABiometryType::FaceID => vec![BiometricKind::Face],
+            LABiometryType::OpticID => vec![BiometricKind::Iris],
+            _ => Vec::new(),
+        };
+        let credential = can_evaluate(&context, LAPolicy::DeviceOwnerAuthentication);
+        let evaluated = match policy {
+            AuthPolicy::BiometricStrong | AuthPolicy::BiometricWeak => biometrics,
+            AuthPolicy::BiometricOrDeviceCredential => credential,
+        };
+        let status = evaluated.map_or_else(LaErrorCode::status, |()| BiometricStatus::Available);
+        let device_credential_available = credential.is_ok();
+        Ok(Availability {
+            status,
+            kinds,
+            device_credential_available,
+        })
+    }
+
+    pub(super) async fn authenticate(
+        &self,
+        prompt: AuthPrompt,
+        cancel: CancelToken,
+    ) -> Result<AuthMethod, BiometricError> {
+        let (reply_tx, reply_rx) = flume::bounded(1);
+        let (cancel_tx, cancel_rx) = flume::bounded(1);
+        // `LAContext` is not `Send`: it lives on its own thread for the
+        // whole evaluation and is only reached through channels.
+        std::thread::Builder::new()
+            .name("istmo-biometric-la".to_owned())
+            .spawn(move || Evaluation::new(&prompt).run(&reply_tx, &cancel_rx))
+            .map_err(|err| BiometricError::Backend(format!("spawn LAContext thread: {err}")))?;
+
+        match until_cancelled(reply_rx.recv_async(), &cancel).await {
+            Some(Ok(outcome)) => outcome,
+            Some(Err(_)) => Err(BiometricError::Backend(
+                "LAContext thread exited without a reply".to_owned(),
+            )),
+            None => {
+                // Invalidating the context dismisses the sheet.
+                let _ = cancel_tx.send(());
+                Err(BiometricError::SystemCancelled)
+            }
+        }
+    }
+}
+
+/// One `evaluatePolicy` round-trip bound to the thread that owns its
+/// `LAContext`.
+struct Evaluation {
+    context: Retained<LAContext>,
+    policy: AuthPolicy,
+    reason: Retained<NSString>,
+}
+
+impl Evaluation {
+    fn new(prompt: &AuthPrompt) -> Self {
+        // SAFETY: `LAContext` has no initialisation preconditions.
+        let context = unsafe { LAContext::new() };
+        if let Some(label) = &prompt.cancel_label {
+            // SAFETY: property setter on a live context.
+            unsafe { context.setLocalizedCancelTitle(Some(&NSString::from_str(label))) };
+        }
+        if let Some(label) = &prompt.fallback_label {
+            // SAFETY: property setter on a live context; an empty string
+            // hides the fallback button, as documented by Apple.
+            unsafe { context.setLocalizedFallbackTitle(Some(&NSString::from_str(label))) };
+        }
+        Self {
+            context,
+            policy: prompt.policy,
+            reason: NSString::from_str(&prompt.reason),
+        }
+    }
+
+    fn run(
+        self,
+        reply: &flume::Sender<Result<AuthMethod, BiometricError>>,
+        cancel: &flume::Receiver<()>,
+    ) {
+        let (done_tx, done_rx) = flume::bounded(1);
+        let block = RcBlock::new(move |success: Bool, error: *mut NSError| {
+            let outcome = if success.as_bool() {
+                Ok(())
+            } else {
+                // SAFETY: LocalAuthentication passes either null or a
+                // valid `NSError` that outlives the reply block call.
+                Err(unsafe { error.as_ref() }
+                    .map_or(LaErrorCode(LAError::AuthenticationFailed.0), |e| {
+                        LaErrorCode(e.code())
+                    }))
+            };
+            let _ = done_tx.send(outcome);
+        });
+        // SAFETY: the reply block only captures a `Send` channel sender,
+        // as required by `evaluatePolicy:localizedReason:reply:`.
+        unsafe {
+            self.context.evaluatePolicy_localizedReason_reply(
+                la_policy(self.policy),
+                &self.reason,
+                &block,
+            );
+        }
+
+        let finished = flume::Selector::new()
+            .recv(&done_rx, Result::ok)
+            .recv(cancel, |_| None)
+            .wait();
+        let Some(outcome) = finished else {
+            // SAFETY: invalidating a live context is always allowed; the
+            // pending evaluation then replies with `LAErrorAppCancel`.
+            unsafe { self.context.invalidate() };
+            let _ = done_rx.recv();
+            return;
+        };
+        let _ = reply.send(match outcome {
+            Ok(()) => Ok(match self.policy {
+                AuthPolicy::BiometricStrong | AuthPolicy::BiometricWeak => AuthMethod::Biometric,
+                AuthPolicy::BiometricOrDeviceCredential => AuthMethod::Unspecified,
+            }),
+            Err(code) => Err(code.into()),
+        });
+    }
+}
+
+const fn la_policy(policy: AuthPolicy) -> LAPolicy {
+    match policy {
+        AuthPolicy::BiometricStrong | AuthPolicy::BiometricWeak => {
+            LAPolicy::DeviceOwnerAuthenticationWithBiometrics
+        }
+        AuthPolicy::BiometricOrDeviceCredential => LAPolicy::DeviceOwnerAuthentication,
+    }
+}
+
+fn can_evaluate(context: &LAContext, policy: LAPolicy) -> Result<(), LaErrorCode> {
+    // SAFETY: preflight check on a live context; never shows UI.
+    unsafe { context.canEvaluatePolicy_error(policy) }.map_err(|err| LaErrorCode(err.code()))
+}
+
+/// `NSError.code` in the `LAErrorDomain`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LaErrorCode(isize);
+
+impl LaErrorCode {
+    const fn status(self) -> BiometricStatus {
+        match LAError(self.0) {
+            LAError::PasscodeNotSet | LAError::BiometryNotEnrolled => BiometricStatus::NoneEnrolled,
+            LAError::BiometryNotAvailable => BiometricStatus::NoHardware,
+            LAError::BiometryLockout => BiometricStatus::LockedOut,
+            _ => BiometricStatus::HardwareUnavailable,
+        }
+    }
+}
+
+impl From<LaErrorCode> for BiometricError {
+    fn from(code: LaErrorCode) -> Self {
+        match LAError(code.0) {
+            LAError::AuthenticationFailed => Self::AuthFailed,
+            LAError::UserCancel => Self::UserCancelled,
+            LAError::UserFallback => Self::UserFallback,
+            LAError::SystemCancel | LAError::AppCancel => Self::SystemCancelled,
+            // Touch ID lockout lifts only after the login password.
+            LAError::BiometryLockout => Self::LockedOutPermanent,
+            LAError::PasscodeNotSet
+            | LAError::BiometryNotEnrolled
+            | LAError::BiometryNotAvailable
+            | LAError::BiometryNotPaired
+            | LAError::BiometryDisconnected => Self::NotAvailable(code.status()),
+            LAError::NotInteractive => {
+                Self::Backend("LocalAuthentication refused a non-interactive session".to_owned())
+            }
+            other => Self::Backend(format!("LocalAuthentication error {}", other.0)),
+        }
+    }
+}
