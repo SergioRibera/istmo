@@ -279,3 +279,44 @@ default_deployment = "sandbox"
     assert!(msg.contains("`sandbox`"), "got {msg}");
     assert!(msg.contains("expected `local` or `remote`"), "got {msg}");
 }
+
+#[test]
+fn parses_min_versions_table() {
+    let m = Manifest::parse(
+        r#"
+[plugin]
+id = "istmo.share"
+
+[min_versions]
+android = 24
+ios = "15.0"
+macos = "11"
+windows = "10.0.17763"
+"#,
+    )
+    .expect("parse");
+    assert_eq!(m.min_versions.android, Some(24));
+    assert_eq!(
+        m.min_versions.ios,
+        Some(istmo_build::OsVersion::new(15, 0, 0))
+    );
+    assert_eq!(
+        m.min_versions.macos,
+        Some(istmo_build::OsVersion::new(11, 0, 0))
+    );
+    assert_eq!(
+        m.min_versions.windows,
+        Some(istmo_build::OsVersion::new(10, 0, 17763))
+    );
+    let hex = istmo_build::serialize_manifest(&m).expect("serialize");
+    let back = istmo_build::deserialize_manifest(&hex).expect("deserialize");
+    assert_eq!(back.min_versions, m.min_versions);
+}
+
+#[test]
+fn rejects_malformed_min_versions() {
+    let err = Manifest::parse("[min_versions]\nios = \"fifteen\"\n").expect_err("invalid");
+    assert!(err.to_string().contains("min_versions.ios"), "{err}");
+    let err = Manifest::parse("[min_versions]\ntvos = \"1\"\n").expect_err("unknown");
+    assert!(err.to_string().contains("min_versions.tvos"), "{err}");
+}

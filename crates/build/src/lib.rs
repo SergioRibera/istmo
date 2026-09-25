@@ -43,6 +43,8 @@
 //! - [`desktop`] — systemd unit, launchd plist, Windows sc.exe and
 //!   XDG `.desktop` generators.
 //! - [`entitlements`] — Apple entitlements plist builder.
+//! - [`min_versions`] — `[min_versions]` parsing and the app-floor
+//!   check run from [`emit`].
 
 #![doc(html_root_url = "https://docs.rs/istmo-build")]
 
@@ -59,6 +61,7 @@ pub mod kotlin_client;
 pub mod kotlin_host;
 pub mod kotlin_types;
 pub mod manifest;
+pub mod min_versions;
 pub mod native_deps;
 pub mod plugin_registry;
 pub mod rust;
@@ -105,6 +108,10 @@ pub use crate::manifest::{
     IosContinuousModeSpec, Manifest, ManifestError, PluginEntry, RemoteOverride, ResolvedWiring,
     WindowsManifestFragment, emit, emit_from, emit_manifest_metadata,
     emit_manifest_metadata_with_contract, emit_wiring_env, emit_with, resolve_wiring,
+};
+pub use crate::min_versions::{
+    FloorSource, InvalidOsVersion, MinVersionPlatform, MinVersionViolation, MinVersions, OsVersion,
+    PluginRequirement, check_min_versions, detect_app_floor, enforce_min_versions,
 };
 pub use crate::native_deps::{
     GradleCoord, GradleDep, GradleKey, GradleScope, NativeDeps, SwiftPackageDep, VersionConflict,
