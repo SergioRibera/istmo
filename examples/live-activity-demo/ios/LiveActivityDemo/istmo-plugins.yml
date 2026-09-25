@@ -10,3 +10,5 @@ targets:
         name: ISTMO_LIVE_ACTIVITY
         type: group
         createIntermediateGroups: true
+        excludes:
+          - "*.fragment"
