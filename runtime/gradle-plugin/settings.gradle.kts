@@ -15,4 +15,4 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "istmo-plugin-loader"
+rootProject.name = "istmo-gradle-plugin"

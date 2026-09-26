@@ -80,9 +80,9 @@ impl<'a> Doctor<'a> {
         };
         if !gradle.contains("dev.istmo.app") {
             let message = if gradle.contains("dev.istmo.plugin-loader") {
-                "android/app applies `dev.istmo.plugin-loader`, which only links workspace \
-                 plugins; switch to `id(\"dev.istmo.app\")` to also build the Rust library, link \
-                 plugins from any source and apply `[app]`"
+                "android/app applies `dev.istmo.plugin-loader`, which was removed; replace it \
+                 with `id(\"dev.istmo.app\")` and drop the hand-written cargo tasks, which the \
+                 new plugin replaces"
             } else {
                 "android/app does not apply the istmo Gradle plugin; add \
                  `id(\"dev.istmo.app\")` to its `plugins {}` block so the Rust library, plugin \
@@ -221,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn suggests_migrating_off_plugin_loader() {
+    fn flags_removed_plugin_loader() {
         let root = temp_dir("android-loader");
         write(
             &root.join("app/build.gradle.kts"),
@@ -230,7 +230,7 @@ mod tests {
         let app = app(&["cdylib"], false);
         let findings = Doctor::new(&app, Some(&root), None).examine();
         assert_eq!(findings.len(), 1);
-        assert!(findings[0].message.contains("switch to"));
+        assert!(findings[0].message.contains("was removed"));
     }
 
     #[test]

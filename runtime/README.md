@@ -20,7 +20,7 @@ runtime/
 │       ├── IstmoPluginRegistrant.kt
 │       ├── IstmoRuntime.kt
 │       └── PluginHandler.kt
-├── gradle-plugin/           # `dev.istmo.app` (and the legacy `dev.istmo.plugin-loader`)
+├── gradle-plugin/           # `dev.istmo.app` Gradle plugin
 └── ios/
     └── Sources/IstmoRuntime/     # source set consumed by the root Package.swift
         ├── Bincode.swift

@@ -106,9 +106,6 @@ istmo {
 }
 ```
 
-`dev.istmo.app` reemplaza a `dev.istmo.plugin-loader`, que sólo
-linkeaba plugins miembros del mismo workspace de Cargo.
-
 ## iOS
 
 `build.rs` escribe `istmo-plugins.yml` al lado de las fuentes de tu app,

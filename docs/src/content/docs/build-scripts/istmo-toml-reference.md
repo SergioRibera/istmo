@@ -271,8 +271,8 @@ own `[min_versions]` when present; otherwise it is detected:
 | macOS | `$MACOSX_DEPLOYMENT_TARGET` |
 | Windows | only the app's `[min_versions]` |
 
-The platform tools repeat the check on their own: the Gradle plugin
-loader compares `android` against each variant's resolved `minSdk`, and
+The platform tools repeat the check on their own: the `dev.istmo.app`
+Gradle plugin compares `android` against each variant's resolved `minSdk`, and
 the generated `istmo-plugins.yml` adds an Xcode pre-build script that
 compares `ios` against `IPHONEOS_DEPLOYMENT_TARGET`.
 
@@ -284,8 +284,8 @@ them as files next to their native sources; nothing goes in
 
 | File | Merged into | By |
 |---|---|---|
-| `native/android/AndroidManifest.xml` | every variant's manifest | Gradle plugin loader (AGP 8.3+) |
-| `native/android/res/` | app resources | Gradle plugin loader |
+| `native/android/AndroidManifest.xml` | every variant's manifest | `dev.istmo.app` Gradle plugin |
+| `native/android/res/` | app resources | `dev.istmo.app` Gradle plugin |
 | `native/ios/Info.plist.fragment` | app `Info.plist` | `istmo-build` |
 | `native/ios/App.entitlements.fragment` | app `.entitlements` | `istmo-build` |
 

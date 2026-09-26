@@ -277,7 +277,7 @@ la app si existe; si no, se detecta:
 | Windows | sólo el `[min_versions]` de la app |
 
 Las herramientas de cada plataforma repiten la comprobación: el plugin
-de Gradle compara `android` contra el `minSdk` resuelto de cada
+de Gradle `dev.istmo.app` compara `android` contra el `minSdk` resuelto de cada
 variante, y el `istmo-plugins.yml` generado agrega un script de
 pre-build en Xcode que compara `ios` contra
 `IPHONEOS_DEPLOYMENT_TARGET`.
@@ -290,8 +290,8 @@ incluyen como archivos junto a sus fuentes nativas; no van en
 
 | Archivo | Se mergea en | Lo hace |
 |---|---|---|
-| `native/android/AndroidManifest.xml` | el manifest de cada variante | plugin de Gradle (AGP 8.3+) |
-| `native/android/res/` | recursos de la app | plugin de Gradle |
+| `native/android/AndroidManifest.xml` | el manifest de cada variante | plugin de Gradle `dev.istmo.app` |
+| `native/android/res/` | recursos de la app | plugin de Gradle `dev.istmo.app` |
 | `native/ios/Info.plist.fragment` | `Info.plist` de la app | `istmo-build` |
 | `native/ios/App.entitlements.fragment` | `.entitlements` de la app | `istmo-build` |
 
