@@ -4,6 +4,7 @@ Cargo.lock
 *.swo
 .DS_Store
 .claude/settings.local.json
+.kotlin/
 
 # Repo-root SPM artefacts. `Package.swift` at the root vends
 # `IstmoRuntime` under `runtime/ios/Sources/`; `swift build`/`swift test`

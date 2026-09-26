@@ -77,12 +77,12 @@ class FilePickerBackendImpl(
         val intent = buildOpenIntent(config, multi = false)
         val result = launch(openDocumentLauncher, intent)
         val uri = result.data?.data ?: return null
-        takePersistable(uri, config.filter.mime_types.contains("*/*") || config.filter.mime_types.isEmpty())
+        takePersistable(uri, config.filter.mimeTypes.contains("*/*") || config.filter.mimeTypes.isEmpty())
         return registerAndDescribe(uri)
     }
 
     override suspend fun pick_files(config: PickConfig): List<PickedFile> {
-        val intent = buildOpenIntent(config, multi = config.allow_multiple)
+        val intent = buildOpenIntent(config, multi = config.allowMultiple)
         val result = launch(openDocumentLauncher, intent)
         val data = result.data ?: return emptyList()
         val clip = data.clipData
@@ -100,8 +100,8 @@ class FilePickerBackendImpl(
     override suspend fun save_file(config: SaveConfig): PickedFile? {
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = config.mime_type ?: "application/octet-stream"
-            config.suggested_name?.let { putExtra(Intent.EXTRA_TITLE, it) }
+            type = config.mimeType ?: "application/octet-stream"
+            config.suggestedName?.let { putExtra(Intent.EXTRA_TITLE, it) }
         }
         val result = launch(createDocumentLauncher, intent)
         val uri = result.data?.data ?: return null
@@ -147,7 +147,7 @@ class FilePickerBackendImpl(
     // ------------------------------------------------------------- helpers
 
     private fun buildOpenIntent(config: PickConfig, multi: Boolean): Intent {
-        val mimes = config.filter.mime_types.ifEmpty { listOf("*/*") }
+        val mimes = config.filter.mimeTypes.ifEmpty { listOf("*/*") }
         return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = mimes.first()
@@ -198,7 +198,7 @@ class FilePickerBackendImpl(
         val id = IstmoRuntime.allocHandleId(PLUGIN_ID)
         files[id] = uri
         val (name, size, mime) = describe(uri)
-        return PickedFile(display_name = name, mime_type = mime, size = size, handle = id)
+        return PickedFile(displayName = name, mimeType = mime, size = size?.toULong(), handle = id)
     }
 
     private fun describe(uri: Uri): Triple<String, Long?, String?> {

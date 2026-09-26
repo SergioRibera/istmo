@@ -41,7 +41,7 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
     }
 
     public func pick_files(config: PickConfig) async throws -> [PickedFile] {
-        let urls = try await present(config: config, multi: config.allow_multiple, save: false, saveConfig: nil)
+        let urls = try await present(config: config, multi: config.allowMultiple, save: false, saveConfig: nil)
         return urls.map(register(url:))
     }
 
@@ -101,7 +101,7 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
             files[id] = Entry(url: url, scopeActive: scopeActive)
         }
         let (name, size, mime) = describe(url: url)
-        return PickedFile(display_name: name, mime_type: mime, size: size, handle: id)
+        return PickedFile(displayName: name, mimeType: mime, size: size, handle: id)
     }
 
     private func describe(url: URL) -> (String, UInt64?, String?) {
@@ -132,9 +132,9 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
                 }
                 let picker: UIDocumentPickerViewController
                 if save, let saveConfig {
-                    // Save picker: write suggested_name to a temp URL first so we
+                    // Save picker: write suggestedName to a temp URL first so we
                     // can hand it to `forExporting:` and get "Save As" semantics.
-                    let name = saveConfig.suggested_name ?? "untitled"
+                    let name = saveConfig.suggestedName ?? "untitled"
                     let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(name)
                     try? Data().write(to: tmp)
                     if #available(iOS 14.0, *) {
@@ -162,8 +162,8 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
     private static func utTypes(from filter: FileFilter?) -> [UTType] {
         guard let filter else { return [.item] }
         var out: [UTType] = []
-        out.append(contentsOf: filter.uti_types.compactMap(UTType.init(_:)))
-        out.append(contentsOf: filter.mime_types.compactMap(UTType.init(mimeType:)))
+        out.append(contentsOf: filter.utiTypes.compactMap(UTType.init(_:)))
+        out.append(contentsOf: filter.mimeTypes.compactMap(UTType.init(mimeType:)))
         out.append(contentsOf: filter.extensions.compactMap(UTType.init(filenameExtension:)))
         return out.isEmpty ? [.item] : out
     }
