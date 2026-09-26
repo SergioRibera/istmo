@@ -136,8 +136,10 @@ if !share.capabilities().await?.send {
 
 ## Wire the backend
 
-The backend needs an `Activity`, a view controller or a window, so it
-is not auto-registered.
+On mobile the generated `IstmoPluginRegistry` registers the backend:
+Android hands it the host `ComponentActivity` (`IstmoGameActivity` is
+one), iOS presents from the key window. Desktop apps register it
+themselves (below).
 
 :::caution[Android package]
 The plugin's Kotlin sources import the generated types from
@@ -156,25 +158,19 @@ On iOS nothing is needed: the generated Swift and the plugin's
 `istmo-plugins.yml`.
 :::
 
-**Android** — in `Activity.onCreate`:
+**Android** — use `IstmoGameActivity` (or call `IstmoHost.onCreate(this)`
+from your own `ComponentActivity`):
 
 ```kotlin
-val backend = ShareBackendImpl(this)
-IstmoRuntime.registerHandler(ShareDispatcher.PLUGIN_ID, ShareDispatcher(backend, ShareCodecsImpl()))
+class MainActivity : IstmoGameActivity()
 ```
 
-The Gradle plugin loader merges the plugin's `AndroidManifest.xml`
+`dev.istmo.app` merges the plugin's `AndroidManifest.xml`
 (`FileProvider`, chooser callback receiver, receiver activity) and
 `res/xml/istmo_share_paths.xml` (AGP 8.3+).
 
-**iOS**:
-
-```swift
-IstmoRuntime.shared.registerHandler(
-    ShareDispatcher.PLUGIN_ID,
-    ShareDispatcher(backend: ShareBackendImpl(), codecs: ShareCodecsImpl())
-)
-```
+**iOS** — nothing to wire: `IstmoApp.run()` (or
+`IstmoPluginRegistry.registerAll()`) registers `ShareBackendImpl()`.
 
 `istmo-build` adds `NSPhotoLibraryAddUsageDescription` to the app's
 `Info.plist` (required by the "Save Image" action); reword it with

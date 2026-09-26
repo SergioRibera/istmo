@@ -16,7 +16,7 @@ section is optional; an empty file is legal.
 | `[[gradle]]`         | array of tables   | plugin, app | Extra Gradle dependencies (shared across all plugins in the crate) |
 | `[[swift_package]]`  | array of tables   | plugin, app | Extra SwiftPM packages                        |
 | `[[remote_override]]`| array of tables   | app         | Force a specific plugin to the `:remote` process |
-| `[app]`              | table             | app         | App-side Kotlin/Swift codegen configuration   |
+| `[app]`              | table             | app         | App identity and Kotlin/Swift codegen configuration |
 | `[min_versions]`     | table             | plugin, app | Minimum OS versions (requirements / app floor) |
 
 Unknown top-level keys are rejected — expect a build-time error if you
@@ -58,10 +58,20 @@ from_version = "1.5.0"
   default. Apps can override via `[[remote_override]]`.
 - **`auto_register`** *(optional, bool, default `true`)* — whether
   `emit_app` should include this plugin in the generated
-  `IstmoPluginRegistry.registerAll(...)`. Set to `false` when the
-  plugin's `BackendImpl` / `FactoryImpl` needs a non-standard
-  constructor and the app author must register the dispatcher
-  manually. See [Auto-registration](/istmo/build-scripts/auto-register/).
+  `IstmoPluginRegistry`. Set to `false` when the backend's construction
+  varies per app (an API key, a view the app owns) and the app author
+  must register the dispatcher manually. See
+  [Auto-registration](/istmo/build-scripts/auto-register/).
+- **`android_backend`** *(optional, string)* — fully-qualified Kotlin
+  class the registry hands to the dispatcher. Default: `<T>BackendImpl`
+  / `<T>FactoryImpl` in the app's codegen package.
+- **`android_backend_arg`** *(optional, default `"context"`)* — what
+  that class's constructor receives: `"context"`, `"activity"`
+  (`androidx.activity.ComponentActivity`) or a fully-qualified
+  `Activity` subclass (`"androidx.fragment.app.FragmentActivity"`).
+- **`ios_backend`** *(optional, string)* — Swift type the registry
+  constructs with no arguments. Default: `<T>BackendImpl` /
+  `<T>FactoryImpl`.
 - **`[[plugin.gradle]]`** — Gradle deps scoped to this plugin. Merged
   with any top-level `[[gradle]]`.
 - **`[[plugin.swift_package]]`** — SwiftPM deps scoped to this plugin.
@@ -141,19 +151,35 @@ constraints will land alongside the first plugin that needs them.
 
 ---
 
-## `[app]` — app-side codegen
+## `[app]` — app identity and codegen
 
 Every field is optional. Defaults in comments:
 
 ```toml
 [app]
-android         = true                             # default: true (skipped if no ./android)
-android_package = "com.myapp.gen"                  # default: "<gradle namespace>.gen"
-ios             = true                             # default: true (skipped if no ./ios)
-ios_app_dir     = "MyApp"                          # default: single ./ios/* subdir
-ios_plugins_subdir = "Plugins"                     # default: "Plugins"
-auto_register   = true                             # default: true (emit IstmoPluginRegistry)
+# Identity — applied by the `dev.istmo.app` Gradle plugin and the
+# generated `ios/.istmo/Istmo.xcconfig` (see Native projects).
+id      = "com.myapp"            # applicationId + PRODUCT_BUNDLE_IDENTIFIER (default: left to the native projects)
+name    = "My App"               # launcher label / CFBundleDisplayName (default: crate name)
+version = "1.2.0"                # versionName / MARKETING_VERSION (default: Cargo package.version)
+build   = 12                     # versionCode / CURRENT_PROJECT_VERSION, 1..=2100000000 (default: 1)
+icon    = "assets/icon.png"      # source image for the launcher icons (default: none)
+
+# Codegen
+android         = true           # default: true (skipped if no ./android)
+android_package = "com.myapp.gen" # default: "<gradle namespace>.gen"
+ios             = true           # default: true (skipped if no ./ios)
+ios_app_dir     = "MyApp"        # default: single ./ios/* subdir
+ios_plugins_subdir = "Plugins"   # default: "Plugins"
+auto_register   = true           # default: true (register plugins in IstmoPluginRegistry)
+rust_entry      = true           # default: detected (`#[istmo::mobile_app]` in src/); emits IstmoApp.run()
 ```
+
+`id` must be a reverse-DNS identifier (`com.example.app`: two or more
+dot-separated segments of ASCII letters, digits and `_`, each starting
+with a letter). `[min_versions] android` / `ios` are the app's `minSdk`
+and deployment target. How each value reaches Gradle and Xcode is
+described in [Native projects](/istmo/build-scripts/native-projects/).
 
 ### `[[app.plugin]]`
 
@@ -315,8 +341,16 @@ from_version = "7.0.0"
 
 ```toml
 [app]
+id              = "com.myapp"
+name            = "My App"
+build           = 3
+icon            = "assets/icon.png"
 android_package = "com.myapp.gen"
 ios_app_dir     = "MyApp"
+
+[min_versions]
+android = 24
+ios     = "15.0"
 
 [[app.plugin]]
 id   = "istmo.echo"
@@ -334,6 +368,10 @@ deployment = "remote"
 - **Unknown plugin key** → `istmo.toml unknown key "plugin.foo"`.
 - **Wrong type** → `istmo.toml key "plugin.id" expected string`.
 - **Missing required key** → `istmo.toml missing required key "plugin.id"`.
+- **Invalid value** → `istmo.toml key "app.id" = "demo" (expected a
+  reverse-DNS id such as com.example.app)`.
 
 All errors are reported at `build.rs` time — the build stops before
-any code is generated.
+any code is generated. The `[app]` section is validated as strictly as
+the rest: a misspelled key such as `andorid_package` is an error, not a
+silently ignored setting.

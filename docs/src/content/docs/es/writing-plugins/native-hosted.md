@@ -136,8 +136,7 @@ una vez desde tu `Activity.onCreate` / `App.init`:
 ```kotlin
 // Android
 override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoRuntime.instance.start(this)
-    IstmoPluginRegistry.registerAll(applicationContext)
+    IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry (o heredá de IstmoGameActivity)
     super.onCreate(savedInstanceState)
 }
 ```

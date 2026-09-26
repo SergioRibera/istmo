@@ -15,11 +15,16 @@ runtime/
 │   ├── gradle.properties    # runtimeGroup / runtimeArtifact / runtimeVersion
 │   └── src/main/java/dev/istmo/runtime/
 │       ├── Bincode.kt
+│       ├── IstmoActivities.kt       # IstmoGameActivity / IstmoNativeActivity
+│       ├── IstmoHost.kt             # runtime start + generated registry lookup
+│       ├── IstmoPluginRegistrant.kt
 │       ├── IstmoRuntime.kt
 │       └── PluginHandler.kt
+├── gradle-plugin/           # `dev.istmo.app` (and the legacy `dev.istmo.plugin-loader`)
 └── ios/
     └── Sources/IstmoRuntime/     # source set consumed by the root Package.swift
         ├── Bincode.swift
+        ├── IstmoApp.swift        # IstmoApp.run(registerPlugins:entry:)
         ├── IstmoRuntime.swift
         ├── IstmoTransport.swift
         ├── PluginException.swift
@@ -98,6 +103,24 @@ includeBuild("../../runtime/android") {
 The rest of the app's `build.gradle.kts` still writes
 `implementation("dev.istmo:istmo-runtime:0.1.0")`; the
 substitution swaps the resolved artefact for the local project.
+
+### Gradle plugin
+
+Apps apply `dev.istmo.app` next to `com.android.application`: it builds
+the Rust crate with cargo for every ABI, links every istmo plugin the
+crate depends on, applies `istmo.toml` `[app]` and registers the
+`istmoDoctor` task. From a checkout, resolve it through a composite
+build:
+
+```kotlin
+// settings.gradle.kts
+pluginManagement {
+    includeBuild("../../runtime/gradle-plugin")
+}
+```
+
+See the [Native projects](https://sergioribera.rs/istmo/build-scripts/native-projects/)
+guide.
 
 ## Consuming from Swift
 

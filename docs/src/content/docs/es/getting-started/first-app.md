@@ -66,29 +66,38 @@ en lugar de las carpetas de proyecto de plataforma.
 
 ## Auto-registración por default
 
-El `Activity` de Android y el `main.swift` de iOS generados ya llaman a
-`IstmoPluginRegistry.registerAll(...)` por vos:
+La activity de Android y el `main.swift` de iOS son de una línea: los
+entry points del runtime arrancan `IstmoRuntime` y registran cada plugin
+mediante el `IstmoPluginRegistry` generado antes de que corra tu entry
+point de Rust:
 
 ```kotlin
 // android/app/src/main/kotlin/<pkg>/<Name>Activity.kt
-override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoRuntime.instance.start(this)
-    IstmoPluginRegistry.registerAll(applicationContext)
-    super.onCreate(savedInstanceState)
-}
+class MainActivity : IstmoGameActivity()
 ```
 
 ```swift
 // ios/<Name>App/main.swift
-try IstmoRuntime.shared.start()
-IstmoPluginRegistry.registerAll()
-_ = istmo_run_ios()
+import IstmoRuntime
+
+IstmoApp.run()
 ```
 
 Cada plugin cuyo `istmo.toml` declara `auto_register = true` (el
-default) queda registrado con esa sola llamada. Ver
+default) queda registrado, incluidos los plugins cuyo backend Android
+necesita la activity host. Ver
 [Auto-registración](/istmo/es/build-scripts/auto-register/) para el
 mecanismo.
+
+## Una sola fuente de verdad
+
+El id, nombre, versión, número de build, ícono y versiones mínimas de
+SO de la app viven en `istmo.toml`; el plugin de Gradle `dev.istmo.app`
+y los settings de Xcode generados los aplican, y ese mismo plugin y la
+fase pre-build de Xcode corren cargo por vos. Si falta algo, `cargo
+build` imprime avisos `istmo doctor:` y `./gradlew istmoDoctor` revisa
+el toolchain. Ver
+[Proyectos nativos](/istmo/es/build-scripts/native-projects/).
 
 ## Córrelo
 
