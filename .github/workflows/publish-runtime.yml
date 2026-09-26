@@ -1,8 +1,9 @@
 name: publish-runtime
 
-# Publishes two Kotlin artefacts to the GitHub Packages Maven registry
-# as part of every release:
-#   * `dev.istmo:istmo-runtime:<version>`        — the AAR + sources JAR
+# Publishes two Kotlin artefacts to Maven Central (Sonatype Central
+# Portal) as part of every release:
+#   * `dev.istmo:istmo-runtime:<version>`        — the AAR + sources +
+#     Javadoc JARs
 #   * `dev.istmo:istmo-gradle-plugin:<version>`  — the `dev.istmo.app`
 #     Gradle plugin: builds the app's Rust crate with cargo, links every
 #     istmo plugin it depends on and applies istmo.toml `[app]`.
@@ -25,6 +26,18 @@ name: publish-runtime
 # `runtime/android/gradle.properties` and
 # `runtime/gradle-plugin/gradle.properties` on trunk keep whatever
 # baseline SemVer they declared before the release.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   * `MAVEN_CENTRAL_USERNAME`  — Central Portal user token username
+#     (https://central.sonatype.com/account → "Generate User Token").
+#   * `MAVEN_CENTRAL_PASSWORD`  — the paired token password.
+#   * `MAVEN_SIGNING_KEY`       — ASCII-armored GPG private key (the
+#     full `-----BEGIN PGP PRIVATE KEY BLOCK-----` block). Export with
+#     `gpg --armor --export-secret-keys <keyid>`.
+#   * `MAVEN_SIGNING_PASSWORD`  — passphrase for the key.
+#
+# The `dev.istmo` namespace must be verified on Central Portal before
+# the first successful publish; the workflow fails with a 403 otherwise.
 
 on:
   push:
@@ -42,9 +55,6 @@ on:
         required: false
         default: false
         type: boolean
-
-permissions:
-  packages: write   # publish to GitHub Packages Maven registry
 
 jobs:
   publish:
@@ -102,21 +112,30 @@ jobs:
         working-directory: runtime/gradle-plugin
         run: gradle --no-daemon jar
 
-      - name: Publish runtime to GitHub Packages
+      # `com.vanniktech.maven.publish` reads Sonatype credentials and
+      # the GPG signing key from these Gradle properties (via the
+      # `ORG_GRADLE_PROJECT_*` env-var convention). The key must be the
+      # full ASCII-armored private key body; `signingInMemoryKeyId` is
+      # optional when the key file contains a single secret key.
+      - name: Publish runtime to Maven Central
         if: ${{ !inputs.dry_run }}
         working-directory: runtime/android
         env:
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gradle --no-daemon publishReleasePublicationToGitHubPackagesRepository
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.MAVEN_SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+        run: gradle --no-daemon publishAndReleaseToMavenCentral --no-configuration-cache
 
-      - name: Publish Gradle plugin to GitHub Packages
+      - name: Publish Gradle plugin to Maven Central
         if: ${{ !inputs.dry_run }}
         working-directory: runtime/gradle-plugin
         env:
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gradle --no-daemon publishAllPublicationsToGitHubPackagesRepository
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.MAVEN_SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+        run: gradle --no-daemon publishAndReleaseToMavenCentral --no-configuration-cache
 
       - name: Summary
         env:
@@ -129,8 +148,8 @@ jobs:
             if [ "$DRY_RUN" = "true" ]; then
               echo "**Dry run** — Gradle assembled, nothing published."
             else
-              echo "* Kotlin runtime: [\`dev.istmo:istmo-runtime:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
-              echo "* Gradle plugin \`dev.istmo.app\`: [\`dev.istmo:istmo-gradle-plugin:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
+              echo "* Kotlin runtime: [\`dev.istmo:istmo-runtime:$VERSION\`](https://central.sonatype.com/artifact/dev.istmo/istmo-runtime/$VERSION)"
+              echo "* Gradle plugin \`dev.istmo.app\`: [\`dev.istmo:istmo-gradle-plugin:$VERSION\`](https://central.sonatype.com/artifact/dev.istmo/istmo-gradle-plugin/$VERSION)"
               echo "* Swift: \`.package(url: \"https://github.com/SergioRibera/istmo.git\", from: \"$VERSION\")\` (resolved from the git tag directly)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

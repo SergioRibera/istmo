@@ -1,7 +1,10 @@
+import com.vanniktech.maven.publish.GradlePublishPlugin
+import com.vanniktech.maven.publish.SonatypeHost
+
 plugins {
     `kotlin-dsl`
     `java-gradle-plugin`
-    `maven-publish`
+    id("com.vanniktech.maven.publish") version "0.30.0"
 }
 
 val pluginGroup: String by project
@@ -38,43 +41,38 @@ gradlePlugin {
     }
 }
 
-publishing {
-    publications.withType<MavenPublication>().configureEach {
-        pom {
-            name.set("istmo-gradle-plugin")
-            description.set(
-                "Gradle plugin for istmo apps (`dev.istmo.app`): builds the Rust crate with cargo for every ABI, links every istmo plugin it depends on and applies istmo.toml [app].",
-            )
-            url.set("https://github.com/SergioRibera/istmo")
-            licenses {
-                license {
-                    name.set("MIT OR Apache-2.0")
-                    url.set("https://spdx.org/licenses/MIT.html")
-                }
-            }
-            scm {
-                url.set("https://github.com/SergioRibera/istmo")
-                connection.set("scm:git:https://github.com/SergioRibera/istmo.git")
-                developerConnection.set("scm:git:git@github.com:SergioRibera/istmo.git")
-            }
-            developers {
-                developer {
-                    id.set("SergioRibera")
-                    name.set("Sergio Ribera")
-                }
+mavenPublishing {
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
+    signAllPublications()
+
+    coordinates(pluginGroup, pluginArtifact, pluginVersion)
+
+    // GradlePublishPlugin bundles the plugin marker + main artifact
+    // and generates both sources and javadoc jars — required for
+    // Maven Central acceptance.
+    configure(GradlePublishPlugin())
+
+    pom {
+        name.set("istmo-gradle-plugin")
+        description.set(
+            "Gradle plugin for istmo apps (`dev.istmo.app`): builds the Rust crate with cargo for every ABI, links every istmo plugin it depends on and applies istmo.toml [app].",
+        )
+        url.set("https://github.com/SergioRibera/istmo")
+        licenses {
+            license {
+                name.set("MIT OR Apache-2.0")
+                url.set("https://spdx.org/licenses/MIT.html")
             }
         }
-    }
-
-    repositories {
-        maven {
-            name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/SergioRibera/istmo")
-            credentials {
-                username = System.getenv("GITHUB_ACTOR")
-                    ?: providers.gradleProperty("gpr.user").orNull
-                password = System.getenv("GITHUB_TOKEN")
-                    ?: providers.gradleProperty("gpr.key").orNull
+        scm {
+            url.set("https://github.com/SergioRibera/istmo")
+            connection.set("scm:git:https://github.com/SergioRibera/istmo.git")
+            developerConnection.set("scm:git:git@github.com:SergioRibera/istmo.git")
+        }
+        developers {
+            developer {
+                id.set("SergioRibera")
+                name.set("Sergio Ribera")
             }
         }
     }

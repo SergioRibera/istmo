@@ -1,7 +1,10 @@
+import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
+import com.vanniktech.maven.publish.SonatypeHost
+
 plugins {
     id("com.android.library") version "8.2.2"
     id("org.jetbrains.kotlin.android") version "1.9.24"
-    `maven-publish`
+    id("com.vanniktech.maven.publish") version "0.30.0"
 }
 
 val runtimeGroup: String by project
@@ -25,68 +28,47 @@ android {
         jvmTarget = "17"
     }
 
-    publishing {
-        singleVariant("release") {
-            withSourcesJar()
-        }
-    }
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     // `IstmoGameActivity` only: apps that use it declare games-activity
+    // (and its AppCompatActivity supertype's appcompat artifact)
     // themselves, so the runtime does not force it on everyone else.
     compileOnly("androidx.games:games-activity:4.4.0")
+    compileOnly("androidx.appcompat:appcompat:1.7.0")
 }
 
-publishing {
-    publications {
-        register<MavenPublication>("release") {
-            groupId = runtimeGroup
-            artifactId = runtimeArtifact
-            version = runtimeVersion
+mavenPublishing {
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
+    signAllPublications()
 
-            afterEvaluate {
-                from(components["release"])
-            }
+    coordinates(runtimeGroup, runtimeArtifact, runtimeVersion)
 
-            pom {
-                name.set("istmo-runtime")
-                description.set(
-                    "Kotlin-side runtime for the istmo framework — JNI transport pump, wire codec, plugin dispatcher registry.",
-                )
-                url.set("https://github.com/SergioRibera/istmo")
-                licenses {
-                    license {
-                        name.set("MIT OR Apache-2.0")
-                        url.set("https://spdx.org/licenses/MIT.html")
-                    }
-                }
-                scm {
-                    url.set("https://github.com/SergioRibera/istmo")
-                    connection.set("scm:git:https://github.com/SergioRibera/istmo.git")
-                    developerConnection.set("scm:git:git@github.com:SergioRibera/istmo.git")
-                }
-                developers {
-                    developer {
-                        id.set("SergioRibera")
-                        name.set("Sergio Ribera")
-                    }
-                }
+    configure(AndroidSingleVariantLibrary(variant = "release", sourcesJar = true, publishJavadocJar = true))
+
+    pom {
+        name.set("istmo-runtime")
+        description.set(
+            "Kotlin-side runtime for the istmo framework — JNI transport pump, wire codec, plugin dispatcher registry.",
+        )
+        url.set("https://github.com/SergioRibera/istmo")
+        licenses {
+            license {
+                name.set("MIT OR Apache-2.0")
+                url.set("https://spdx.org/licenses/MIT.html")
             }
         }
-    }
-
-    repositories {
-        maven {
-            name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/SergioRibera/istmo")
-            credentials {
-                username = System.getenv("GITHUB_ACTOR")
-                    ?: providers.gradleProperty("gpr.user").orNull
-                password = System.getenv("GITHUB_TOKEN")
-                    ?: providers.gradleProperty("gpr.key").orNull
+        scm {
+            url.set("https://github.com/SergioRibera/istmo")
+            connection.set("scm:git:https://github.com/SergioRibera/istmo.git")
+            developerConnection.set("scm:git:git@github.com:SergioRibera/istmo.git")
+        }
+        developers {
+            developer {
+                id.set("SergioRibera")
+                name.set("Sergio Ribera")
             }
         }
     }
