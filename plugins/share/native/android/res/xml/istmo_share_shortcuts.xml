@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Direct-share binding for istmo.share. Reference it from the app's
+  launcher activity to enable ShareClient::set_share_targets:
+
+    <meta-data android:name="android.app.shortcuts"
+               android:resource="@xml/istmo_share_shortcuts" />
+
+  Apps that already ship a shortcuts XML copy the <share-target> below
+  into theirs instead (an activity takes a single shortcuts resource).
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="dev.istmo.plugins.share.ShareTarget">
+        <data android:mimeType="text/*" />
+        <data android:mimeType="image/*" />
+        <data android:mimeType="video/*" />
+        <data android:mimeType="application/*" />
+        <category android:name="dev.istmo.share.category.DIRECT_SHARE" />
+    </share-target>
+</shortcuts>

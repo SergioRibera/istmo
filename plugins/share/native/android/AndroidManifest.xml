@@ -24,12 +24,14 @@
             android:name="dev.istmo.plugins.share.ShareTargetChosenReceiver"
             android:exported="false" />
 
-        <!-- Receiving shares. Inert until the app opts in with the
-             dev.istmo.share.RECEIVE meta-data and adds intent filters
-             (see ShareReceiverActivity). -->
+        <!-- Receiving shares. Not exported and without intent filters:
+             unreachable until the app declares the
+             dev.istmo.plugins.share.ShareTarget activity-alias (see
+             ShareReceiverActivity). The app never redeclares this
+             element, so the merger has nothing to reconcile. -->
         <activity
             android:name="dev.istmo.plugins.share.ShareReceiverActivity"
-            android:exported="true"
+            android:exported="false"
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />

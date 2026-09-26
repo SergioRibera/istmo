@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.webkit.MimeTypeMap
@@ -13,6 +14,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import dev.istmo.runtime.BackendException
 import dev.istmo.runtime.ShareBackend
 import dev.istmo.runtime.ShareCapabilities
@@ -21,6 +25,7 @@ import dev.istmo.runtime.ShareFile
 import dev.istmo.runtime.ShareFileSource
 import dev.istmo.runtime.ShareOutcome
 import dev.istmo.runtime.ShareRequest
+import dev.istmo.runtime.ShareTarget
 import java.io.File
 import java.util.UUID
 import kotlin.coroutines.resume
@@ -44,7 +49,14 @@ import kotlinx.coroutines.withContext
  * The chosen target is reported through an `IntentSender` callback
  * ([ShareTargetChosenReceiver]); Android never reports whether the
  * target actually completed, so the best outcome is
- * `ShareOutcome.TargetChosen`.
+ * `ShareOutcome.TargetChosen`. The system chooser cannot be closed
+ * programmatically: cancelling the Rust call resolves it, but the sheet
+ * stays until the user leaves it.
+ *
+ * Direct-share targets ([set_share_targets]) are published as
+ * long-lived sharing shortcuts in the [DIRECT_SHARE_CATEGORY] category,
+ * which `res/xml/istmo_share_shortcuts.xml` binds to the app's
+ * `dev.istmo.plugins.share.ShareTarget` activity-alias.
  *
  * Construct inside `Activity.onCreate` (the result launcher must be
  * registered before `STARTED`) and register the dispatcher:
@@ -111,8 +123,54 @@ class ShareBackendImpl(
         richPreview = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
         reportsCompletion = false,
         reportsTarget = true,
-        receive = true,
+        receive = ShareReceiverActivity.isReceiveEnabled(context),
+        directShare = ShareReceiverActivity.isReceiveEnabled(context),
+        dismissOnCancel = false,
     )
+
+    override suspend fun staging_dir(): String = withContext(Dispatchers.IO) {
+        if (!outgoingRoot.isDirectory && !outgoingRoot.mkdirs()) {
+            throw BackendException(ShareError.Io("cannot create ${outgoingRoot.path}"))
+        }
+        outgoingRoot.absolutePath
+    }
+
+    override suspend fun set_share_targets(targets: List<ShareTarget>) {
+        if (!ShareReceiverActivity.isReceiveEnabled(context)) {
+            throw BackendException(
+                ShareError.Unsupported("declare the dev.istmo.plugins.share.ShareTarget activity-alias to receive shares"),
+            )
+        }
+        withContext(Dispatchers.IO) {
+            val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                ?: Intent(Intent.ACTION_MAIN).setPackage(context.packageName)
+            val max = ShortcutManagerCompat.getMaxShortcutCountPerActivity(context)
+            val shortcuts = targets.take(max).mapIndexed { rank, target ->
+                ShortcutInfoCompat.Builder(context, SHORTCUT_PREFIX + target.id)
+                    .setShortLabel(target.label)
+                    .setLongLived(true)
+                    .setRank(rank)
+                    .setCategories(setOf(DIRECT_SHARE_CATEGORY))
+                    .setIntent(Intent(launch).setAction(Intent.ACTION_MAIN))
+                    .apply { target.icon?.let { icon -> loadIcon(icon)?.let(::setIcon) } }
+                    .build()
+            }
+            // Replace only the plugin's shortcuts; the app's own stay.
+            val ours = ShortcutManagerCompat.getDynamicShortcuts(context)
+                .map { it.id }
+                .filter { it.startsWith(SHORTCUT_PREFIX) }
+            ShortcutManagerCompat.removeDynamicShortcuts(context, ours)
+            shortcuts.forEach { ShortcutManagerCompat.pushDynamicShortcut(context, it) }
+        }
+    }
+
+    private fun loadIcon(file: ShareFile): IconCompat? {
+        val bitmap = when (val source = file.source) {
+            is ShareFileSource.Path -> BitmapFactory.decodeFile(source.value)
+            is ShareFileSource.Bytes -> BitmapFactory.decodeByteArray(source.value, 0, source.value.size)
+        } ?: return null
+        return IconCompat.createWithAdaptiveBitmap(bitmap)
+    }
 
     // ------------------------------------------------------------- intent
 
@@ -225,6 +283,12 @@ class ShareBackendImpl(
     companion object {
         /** Must match `android:authorities` in the plugin manifest. */
         const val AUTHORITY_SUFFIX = ".istmo.share.files"
+
+        /** Must match `<share-target><category>` in `istmo_share_shortcuts.xml`. */
+        const val DIRECT_SHARE_CATEGORY = "dev.istmo.share.category.DIRECT_SHARE"
+
+        /** Prefixes the plugin's shortcut ids so the app's own shortcuts are left alone. */
+        const val SHORTCUT_PREFIX = "istmo.share/"
 
         private const val CHOSEN_REQUEST_CODE = 0x15_70_5E
         private const val CHOSEN_GRACE_MS = 500L

@@ -1,6 +1,8 @@
 package dev.istmo.plugins.share
 
 import android.app.Activity
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -20,44 +22,50 @@ import java.util.concurrent.Executors
 /**
  * Entry point for content other apps share into this one.
  *
- * Declared by the plugin manifest without intent filters, so the app is
- * not a share target until it opts in by adding, in its own
- * `AndroidManifest.xml`:
+ * The plugin manifest declares this activity **not exported** and
+ * without intent filters, so nothing can reach it until the app opts
+ * in with an `activity-alias` in its own `AndroidManifest.xml`:
  *
  * ```xml
- * <application>
- *   <meta-data android:name="dev.istmo.share.RECEIVE" android:value="true" />
- *   <activity android:name="dev.istmo.plugins.share.ShareReceiverActivity" android:exported="true">
- *     <intent-filter>
- *       <action android:name="android.intent.action.SEND" />
- *       <action android:name="android.intent.action.SEND_MULTIPLE" />
- *       <category android:name="android.intent.category.DEFAULT" />
- *       <data android:mimeType="text/*" />
- *       <data android:mimeType="image/*" />
- *     </intent-filter>
- *   </activity>
- * </application>
+ * <activity-alias
+ *     android:name="dev.istmo.plugins.share.ShareTarget"
+ *     android:targetActivity="dev.istmo.plugins.share.ShareReceiverActivity"
+ *     android:exported="true">
+ *   <intent-filter>
+ *     <action android:name="android.intent.action.SEND" />
+ *     <action android:name="android.intent.action.SEND_MULTIPLE" />
+ *     <category android:name="android.intent.category.DEFAULT" />
+ *     <data android:mimeType="text/*" />
+ *     <data android:mimeType="image/*" />
+ *   </intent-filter>
+ * </activity-alias>
  * ```
  *
- * Without the `RECEIVE` meta-data the activity finishes immediately.
+ * The alias is an element the app owns outright, so the manifest merger
+ * never has to reconcile the app's attributes with the plugin's (the
+ * plugin manifest is merged with the highest priority, which would
+ * otherwise win every conflict). The alias name is fixed: direct-share
+ * shortcuts target it.
  *
  * Each share is copied into `cacheDir/istmo-share/incoming/<uuid>/`
  * while the sender's read grant is still valid, published on the
  * `istmo.share.incoming` early-event queue (buffered until Rust
  * subscribes), and the app's launcher activity is brought to front.
+ * Entries older than [INCOMING_RETENTION_MS] are pruned first.
  */
 class ShareReceiverActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val shareIntent = intent
-        if (!receiveEnabled() || shareIntent == null || !isShareAction(shareIntent.action)) {
+        if (shareIntent == null || !isShareAction(shareIntent.action)) {
             finish()
             return
         }
         val referrer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) referrer?.host else null
         IO.execute {
             try {
+                pruneIncoming(File(cacheDir, INCOMING_DIR))
                 publish(read(shareIntent, referrer))
             } finally {
                 runOnUiThread {
@@ -68,20 +76,16 @@ class ShareReceiverActivity : Activity() {
         }
     }
 
-    private fun receiveEnabled(): Boolean {
-        val info = try {
-            packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
-        } catch (_: PackageManager.NameNotFoundException) {
-            return false
-        }
-        return info.metaData?.getBoolean(RECEIVE_META_DATA, false) == true
-    }
-
     private fun read(intent: Intent, referrer: String?): IncomingShare {
         val rawText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
         val isUrl = rawText != null && Patterns.WEB_URL.matcher(rawText.trim()).matches()
-        val dir = File(cacheDir, "istmo-share/incoming/${UUID.randomUUID()}")
+        val dir = File(cacheDir, "$INCOMING_DIR/${UUID.randomUUID()}")
         val files = streams(intent).mapNotNull { copy(it, dir) }
+        val shortcutId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            intent.getStringExtra(Intent.EXTRA_SHORTCUT_ID)
+        } else {
+            null
+        }
         return IncomingShare(
             text = if (isUrl) null else rawText,
             url = if (isUrl) rawText?.trim() else null,
@@ -89,6 +93,7 @@ class ShareReceiverActivity : Activity() {
             files = files,
             sourceApp = referrer,
             receivedAtMs = System.currentTimeMillis().toULong(),
+            targetId = shortcutId?.removePrefix(ShareBackendImpl.SHORTCUT_PREFIX),
         )
     }
 
@@ -157,8 +162,8 @@ class ShareReceiverActivity : Activity() {
         action == Intent.ACTION_SEND || action == Intent.ACTION_SEND_MULTIPLE
 
     companion object {
-        /** App-level meta-data that opts the app into receiving shares. */
-        const val RECEIVE_META_DATA = "dev.istmo.share.RECEIVE"
+        /** The opt-in alias the app declares; direct-share shortcuts target it. */
+        const val ALIAS_CLASS = "dev.istmo.plugins.share.ShareTarget"
 
         /** Mirrors `istmo_share::INCOMING_CHANNEL`. */
         const val INCOMING_CHANNEL = "istmo.share.incoming"
@@ -166,6 +171,24 @@ class ShareReceiverActivity : Activity() {
         /** Mirrors `istmo_share::INCOMING_QUEUE_CAPACITY`. */
         const val INCOMING_QUEUE_CAPACITY = 8
 
+        /** Mirrors `istmo_share::INCOMING_RETENTION` (7 days). */
+        const val INCOMING_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
+
+        private const val INCOMING_DIR = "istmo-share/incoming"
+
         private val IO = Executors.newSingleThreadExecutor()
+
+        /** `true` when the app declared the [ALIAS_CLASS] activity-alias. */
+        fun isReceiveEnabled(context: Context): Boolean = try {
+            context.packageManager.getActivityInfo(ComponentName(context.packageName, ALIAS_CLASS), 0)
+            true
+        } catch (_: PackageManager.NameNotFoundException) {
+            false
+        }
+
+        internal fun pruneIncoming(root: File) {
+            val cutoff = System.currentTimeMillis() - INCOMING_RETENTION_MS
+            root.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.deleteRecursively() }
+        }
     }
 }
