@@ -2,21 +2,13 @@ package dev.istmo.gradle
 
 import com.android.build.api.AndroidPluginVersion
 import com.android.build.api.variant.AndroidComponentsExtension
-import com.android.build.api.variant.Variant
 import com.android.build.gradle.BaseExtension
-import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.tomlj.Toml
-import org.w3c.dom.Element
 import java.io.File
-import javax.xml.parsers.DocumentBuilderFactory
-import javax.xml.transform.OutputKeys
-import javax.xml.transform.TransformerFactory
-import javax.xml.transform.dom.DOMSource
-import javax.xml.transform.stream.StreamResult
 
 open class IstmoLoaderExtension(project: Project) {
     val workspaceRoot: Property<File> =
@@ -25,25 +17,6 @@ open class IstmoLoaderExtension(project: Project) {
     val excludePlugins: ListProperty<String> =
         project.objects.listProperty(String::class.java).convention(emptyList())
 }
-
-/**
- * One istmo plugin crate linked into the app.
- *
- * @property nativeDir `native/android/` — Kotlin sources.
- * @property manifest `native/android/AndroidManifest.xml` when present:
- *   merged into every variant's manifest (providers, receivers,
- *   intent filters, permissions, `<queries>`).
- * @property resDir `native/android/res/` when present: added as a
- *   resource source directory (e.g. `xml/file_paths.xml`).
- * @property minAndroidApi `[min_versions] android` from `istmo.toml`.
- */
-data class LinkedPlugin(
-    val crateName: String,
-    val nativeDir: File,
-    val manifest: File?,
-    val resDir: File?,
-    val minAndroidApi: Int?,
-)
 
 /**
  * Auto-linking Gradle plugin for istmo apps. Walks upward from the
@@ -63,6 +36,10 @@ data class LinkedPlugin(
  *   than the variant's `minSdk`.
  *
  * No files are copied.
+ *
+ * Superseded by `dev.istmo.app`, which also builds the Rust library,
+ * links plugins from crates.io / git (not just workspace members) and
+ * applies `[app]` from `istmo.toml`.
  */
 class IstmoLoaderPlugin : Plugin<Project> {
 
@@ -86,7 +63,7 @@ class IstmoLoaderPlugin : Plugin<Project> {
             // build-type overlay wired in `afterEvaluate` below.
             variantManifests = components.pluginVersion >= AndroidPluginVersion(8, 3)
             components.onVariants(components.selector().all()) { variant ->
-                wireVariant(variant, linked.value, variantManifests)
+                PluginLinking.wireVariant(variant, linked.value, variantManifests, "istmo-plugin-loader")
             }
         }
 
@@ -146,15 +123,6 @@ class IstmoLoaderPlugin : Plugin<Project> {
         return discoverPlugins(root, ext, readConsumerDeps(consumerCargo))
     }
 
-    private fun wireVariant(variant: Variant, plugins: List<LinkedPlugin>, variantManifests: Boolean) {
-        if (plugins.isEmpty()) return
-        checkMinSdk(variant, plugins)
-        if (!variantManifests) return
-        for (manifest in plugins.mapNotNull { it.manifest }) {
-            variant.sources.manifests.addStaticManifestFile(manifest.absolutePath)
-        }
-    }
-
     /**
      * AGP < 8.3: combine every plugin manifest into one overlay and
      * register it as the manifest of each build type whose source set
@@ -165,7 +133,7 @@ class IstmoLoaderPlugin : Plugin<Project> {
         val manifests = plugins.mapNotNull { it.manifest }
         if (manifests.isEmpty()) return
         val overlay = project.layout.buildDirectory.file("istmo/plugin-manifests/AndroidManifest.xml").get().asFile
-        writeCombinedManifest(manifests, overlay)
+        PluginLinking.writeCombinedManifest(manifests, overlay)
         for (buildType in android.buildTypes) {
             val sourceSet = android.sourceSets.getByName(buildType.name)
             val own = sourceSet.manifest.srcFile
@@ -178,62 +146,6 @@ class IstmoLoaderPlugin : Plugin<Project> {
             }
             sourceSet.manifest.srcFile(overlay)
         }
-    }
-
-    /**
-     * Concatenate the children of every `<manifest>` (and of every
-     * `<application>`) in [sources] into a single manifest at [dest].
-     */
-    private fun writeCombinedManifest(sources: List<File>, dest: File) {
-        val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
-        val builder = factory.newDocumentBuilder()
-        val out = builder.newDocument()
-        val root = out.createElement("manifest")
-        root.setAttributeNS(XMLNS_NS, "xmlns:android", ANDROID_NS)
-        root.setAttributeNS(XMLNS_NS, "xmlns:tools", TOOLS_NS)
-        out.appendChild(root)
-        val application = out.createElement("application")
-        for (source in sources) {
-            val doc = builder.parse(source)
-            val children = doc.documentElement.childNodes
-            for (i in 0 until children.length) {
-                val child = children.item(i) as? Element ?: continue
-                if (child.tagName == "application") {
-                    val appChildren = child.childNodes
-                    for (j in 0 until appChildren.length) {
-                        val appChild = appChildren.item(j) as? Element ?: continue
-                        application.appendChild(out.importNode(appChild, true))
-                    }
-                } else {
-                    root.appendChild(out.importNode(child, true))
-                }
-            }
-        }
-        root.appendChild(application)
-        dest.parentFile.mkdirs()
-        val transformer = TransformerFactory.newInstance().newTransformer().apply {
-            setOutputProperty(OutputKeys.INDENT, "yes")
-        }
-        dest.outputStream().use { transformer.transform(DOMSource(out), StreamResult(it)) }
-    }
-
-    private fun checkMinSdk(variant: Variant, plugins: List<LinkedPlugin>) {
-        val minSdk = try {
-            variant.minSdk.apiLevel
-        } catch (_: LinkageError) {
-            // `Variant.minSdk` replaced `minSdkVersion` in AGP 8.1.
-            @Suppress("DEPRECATION")
-            variant.minSdkVersion.apiLevel
-        }
-        val violations = plugins.filter { (it.minAndroidApi ?: 0) > minSdk }
-        if (violations.isEmpty()) return
-        val report = violations.joinToString("\n") {
-            "  - ${it.crateName} requires minSdk >= ${it.minAndroidApi}"
-        }
-        throw GradleException(
-            "istmo-plugin-loader: variant '${variant.name}' has minSdk $minSdk, but:\n$report\n" +
-                "Raise minSdk or drop the plugin.",
-        )
     }
 
     private fun resolveWorkspaceRoot(project: Project, ext: IstmoLoaderExtension): File? {
@@ -381,11 +293,5 @@ class IstmoLoaderPlugin : Plugin<Project> {
             }
         }
         return candidates.filter { it.isDirectory }
-    }
-
-    private companion object {
-        const val XMLNS_NS = "http://www.w3.org/2000/xmlns/"
-        const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
-        const val TOOLS_NS = "http://schemas.android.com/tools"
     }
 }

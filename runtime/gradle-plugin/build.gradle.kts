@@ -29,6 +29,13 @@ java {
 
 gradlePlugin {
     plugins {
+        create("istmoApp") {
+            id = "dev.istmo.app"
+            implementationClass = "dev.istmo.gradle.IstmoAppPlugin"
+            displayName = "istmo app"
+            description =
+                "Builds the app's Rust crate with cargo for every ABI, links every istmo plugin it depends on (Kotlin sources, manifests, resources, Gradle dependencies) and applies istmo.toml [app] (application id, version, minSdk, label, icon)."
+        }
         create("istmoPluginLoader") {
             id = "dev.istmo.plugin-loader"
             implementationClass = "dev.istmo.gradle.IstmoLoaderPlugin"
