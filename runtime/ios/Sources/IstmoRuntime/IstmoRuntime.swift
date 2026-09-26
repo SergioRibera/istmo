@@ -12,6 +12,9 @@ public final class IstmoRuntime {
 
     private var handlers: [String: PluginHandler] = [:]
 
+    /// Swift-hosted calls in flight, so `onCancel` can cancel them.
+    private var inFlight: [UInt64: Task<Void, Never>] = [:]
+
     private var handleOwners: [UInt64: String] = [:]
     private var nextGlobalHandleId: UInt64 = 1
 
@@ -228,16 +231,28 @@ public final class IstmoRuntime {
             istmo_ios_submit_response(callId, false, nil, 0)
             return
         }
-        Task {
+        let task = Task {
+            defer { self.queue.async { self.inFlight.removeValue(forKey: callId) } }
             do {
                 let out = try await handler.handleCall(instanceId: instanceId, method: method, payload: payload)
                 Self.submitResponse(callId: callId, ok: true, payload: out)
             } catch let e as PluginException {
                 Self.submitResponse(callId: callId, ok: false, payload: e.payload)
+            } catch is CancellationError {
+                // The Rust caller dropped the call; nobody awaits a reply.
             } catch {
                 NSLog("IstmoRuntime: handleCall failed plugin=\(pluginId) method=\(method): \(error)")
                 istmo_ios_submit_response(callId, false, nil, 0)
             }
+        }
+        queue.async { self.inFlight[callId] = task }
+    }
+
+    /// Cancel the Swift `Task` serving `callId`. Backends observe it
+    /// through `Task.isCancelled` / `withTaskCancellationHandler`.
+    fileprivate func handleCancel(callId: UInt64) {
+        queue.async {
+            self.inFlight.removeValue(forKey: callId)?.cancel()
         }
     }
 
@@ -299,8 +314,8 @@ private enum Trampolines {
         runtime.handleCall(callId: callId, pluginId: pluginId, instanceId: instanceId, method: method, payload: payload)
     }
 
-    static let onCancel: @convention(c) (UnsafeMutableRawPointer?, UInt64) -> Void = { _, callId in
-        NSLog("IstmoRuntime: onCancel call_id=\(callId) — Swift-hosted dispatch cancelled")
+    static let onCancel: @convention(c) (UnsafeMutableRawPointer?, UInt64) -> Void = { ctx, callId in
+        ctxRuntime(ctx)?.handleCancel(callId: callId)
     }
 
     static let onCreateInstance: @convention(c) (
