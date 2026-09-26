@@ -1,23 +1,47 @@
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Waker};
 
-use istmo_core::Runtime;
+use istmo_core::{CancelToken, Runtime};
 use istmo_share::{
     IncomingFile, IncomingShare, Share, ShareCapabilities, ShareClient, ShareError, ShareFile,
-    ShareFileSource, ShareHost, ShareInbox, ShareOutcome, SharePreview, ShareRequest,
+    ShareFileSource, ShareHost, ShareInbox, ShareOutcome, SharePreview, ShareRequest, ShareTarget,
 };
 
-/// Records every request and answers with a fixed outcome.
+/// Records every request and answers with a fixed outcome. Requests
+/// with the subject `"hang"` wait for cancellation instead.
 #[derive(Debug, Clone, Default)]
 struct RecordingBackend {
     seen: Arc<Mutex<Vec<ShareRequest>>>,
+    targets: Arc<Mutex<Vec<ShareTarget>>>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl Share for RecordingBackend {
-    async fn share(&self, request: ShareRequest) -> Result<ShareOutcome, ShareError> {
+    async fn share(
+        &self,
+        cancel: CancelToken,
+        request: ShareRequest,
+    ) -> Result<ShareOutcome, ShareError> {
         request.validate()?;
+        if request.subject.as_deref() == Some("hang") {
+            cancel.cancelled().await;
+            self.cancelled.store(true, Ordering::SeqCst);
+            return Ok(ShareOutcome::Dismissed);
+        }
         let target = request.subject.clone();
         self.seen.lock().expect("seen").push(request);
         Ok(ShareOutcome::Shared(target))
+    }
+
+    async fn staging_dir(&self) -> Result<String, ShareError> {
+        Ok(std::env::temp_dir().display().to_string())
+    }
+
+    async fn set_share_targets(&self, targets: Vec<ShareTarget>) -> Result<(), ShareError> {
+        *self.targets.lock().expect("targets") = targets;
+        Ok(())
     }
 
     async fn capabilities(&self) -> Result<ShareCapabilities, ShareError> {
@@ -155,6 +179,37 @@ fn linux_backend_declines_and_reports_no_capabilities() {
         .expect("backend");
     let caps = pollster::block_on(backend.capabilities()).expect("capabilities");
     assert_eq!(caps, ShareCapabilities::default());
-    let err = pollster::block_on(backend.share(ShareRequest::text("hi"))).expect_err("unsupported");
+    let err = pollster::block_on(backend.share(CancelToken::new(), ShareRequest::text("hi")))
+        .expect_err("unsupported");
     assert!(matches!(err, ShareError::Unsupported(_)));
+}
+
+#[test]
+fn dropping_the_client_future_cancels_the_backend() {
+    let backend = RecordingBackend::default();
+    let (_rt, client) = build_runtime(backend.clone());
+    {
+        let mut call = std::pin::pin!(client.share(ShareRequest::text("x").with_subject("hang")));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+    }
+    for _ in 0..200 {
+        if backend.cancelled.load(Ordering::SeqCst) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("backend never observed the cancellation");
+}
+
+#[test]
+fn share_targets_round_trip() {
+    let backend = RecordingBackend::default();
+    let (_rt, client) = build_runtime(backend.clone());
+    let targets = vec![
+        ShareTarget::new("chat-1", "Family"),
+        ShareTarget::new("chat-2", "Work").with_icon(ShareFile::bytes("w.png", vec![1])),
+    ];
+    pollster::block_on(client.set_share_targets(targets.clone())).expect("set");
+    assert_eq!(*backend.targets.lock().expect("targets"), targets);
 }

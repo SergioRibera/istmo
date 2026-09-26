@@ -56,6 +56,7 @@ mod inbox;
 
 pub use inbox::{INCOMING_CHANNEL, INCOMING_QUEUE_CAPACITY, IncomingStream, ShareInbox};
 
+use istmo_core::CancelToken;
 use istmo_macros::{message, plugin};
 
 /// Wire identifier for the share plugin.
@@ -356,9 +357,17 @@ pub struct ShareCapabilities {
     pub reports_completion: bool,
     /// The chosen target is reported.
     pub reports_target: bool,
-    /// The app can be a share destination on this platform (subject to
-    /// packaging: Share Extension on Apple, MSIX on Windows).
+    /// The app can be a share destination right now: on Windows this
+    /// requires build 19041+ and package identity, on Apple a Share
+    /// Extension, on Android the opt-in `activity-alias`.
     pub receive: bool,
+    /// [`Share::set_share_targets`] feeds the system's direct-share
+    /// row (Android sharing shortcuts, iOS share-sheet suggestions).
+    pub direct_share: bool,
+    /// Dropping a pending [`ShareClient::share`] future closes the
+    /// sheet. `false` where the platform offers no way to dismiss it
+    /// (Android chooser, Windows share UI) — the call still resolves.
+    pub dismiss_on_cancel: bool,
 }
 
 /// Errors surfaced by [`Share`] methods.
@@ -437,6 +446,43 @@ pub struct IncomingShare {
     pub source_app: Option<String>,
     /// Receive time, milliseconds since the Unix epoch.
     pub received_at_ms: Option<u64>,
+    /// [`ShareTarget::id`] when the user picked one of the app's
+    /// direct-share targets.
+    pub target_id: Option<String>,
+}
+
+/// A direct-share destination inside the app (a chat, a folder, a
+/// contact) offered in the system share sheet's suggestion row.
+///
+/// Android publishes them as long-lived sharing shortcuts; iOS donates
+/// `INSendMessageIntent` interactions. Shares sent to a target arrive
+/// with [`IncomingShare::target_id`] set.
+#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShareTarget {
+    /// Stable id, returned in [`IncomingShare::target_id`].
+    pub id: String,
+    /// Name shown under the icon.
+    pub label: String,
+    /// Square PNG/JPEG icon.
+    pub icon: Option<ShareFile>,
+}
+
+impl ShareTarget {
+    #[must_use]
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            icon: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_icon(mut self, icon: ShareFile) -> Self {
+        self.icon = Some(icon);
+        self
+    }
 }
 
 /// The plugin trait.
@@ -448,11 +494,59 @@ pub struct IncomingShare {
 pub trait Share {
     /// Present the share sheet for `request` and resolve with what the
     /// user did.
-    async fn share(&self, request: ShareRequest) -> Result<ShareOutcome, ShareError>;
+    ///
+    /// Dropping the client future cancels the call and closes the sheet
+    /// where [`ShareCapabilities::dismiss_on_cancel`] says the platform
+    /// allows it.
+    async fn share(
+        &self,
+        cancel: CancelToken,
+        request: ShareRequest,
+    ) -> Result<ShareOutcome, ShareError>;
 
     /// Report what this platform supports, so apps can hide the share
     /// button or render their own UI (Linux).
     async fn capabilities(&self) -> Result<ShareCapabilities, ShareError>;
+
+    /// Directory where Rust may write files to share, inside the
+    /// backend's shareable roots (the `FileProvider` cache on Android).
+    /// The backend prunes it: after a day on mobile, when the backend is
+    /// dropped on desktop.
+    async fn staging_dir(&self) -> Result<String, ShareError>;
+
+    /// Replace the app's direct-share targets. An empty list clears
+    /// them. [`ShareError::Unsupported`] where
+    /// [`ShareCapabilities::direct_share`] is `false`.
+    async fn set_share_targets(&self, targets: Vec<ShareTarget>) -> Result<(), ShareError>;
+}
+
+/// How long received files stay in app-owned storage when the app
+/// never calls [`ShareInbox::cleanup`]. Every backend prunes entries
+/// older than this whenever a new share arrives.
+pub const INCOMING_RETENTION: std::time::Duration =
+    std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Keep only the final path component and replace characters Windows
+/// rejects, so a hostile or sloppy name cannot escape a staging dir.
+#[must_use]
+pub(crate) fn sanitize_file_name(name: &str) -> String {
+    let base = std::path::Path::new(name)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("shared");
+    let cleaned: String = base
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    if cleaned.trim_matches('.').is_empty() {
+        "shared".to_owned()
+    } else {
+        cleaned
+    }
 }
 
 /// Minimal extension → MIME table for the types people share most.

@@ -41,18 +41,50 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP, WM_NCDESTROY};
 use windows::core::{HSTRING, IInspectable, Interface, factory};
 
-use super::ShareJob;
+use istmo_core::CancelToken;
+use windows::Foundation::Metadata::ApiInformation;
+use windows::Win32::Foundation::APPMODEL_ERROR_NO_PACKAGE;
+use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
+
+use super::{ShareJob, until_cancelled};
 use crate::{IncomingFile, IncomingShare, ShareCapabilities, ShareError, ShareInbox, ShareOutcome};
 
-pub(super) const CAPABILITIES: ShareCapabilities = ShareCapabilities {
-    send: true,
-    files: true,
-    mixed_content: true,
-    rich_preview: true,
-    reports_completion: true,
-    reports_target: true,
-    receive: true,
-};
+pub(super) fn capabilities() -> ShareCapabilities {
+    ShareCapabilities {
+        send: true,
+        files: true,
+        mixed_content: true,
+        rich_preview: true,
+        reports_completion: true,
+        reports_target: true,
+        receive: can_receive(),
+        direct_share: false,
+        dismiss_on_cancel: false,
+    }
+}
+
+/// Share-target activation for desktop apps needs Windows 10 2004
+/// (build 19041, `UniversalApiContract` v10) and package identity (MSIX
+/// or a sparse package).
+pub(super) fn can_receive() -> bool {
+    has_package_identity() && share_target_supported()
+}
+
+fn share_target_supported() -> bool {
+    ensure_winrt();
+    ApiInformation::IsApiContractPresentByMajor(
+        &HSTRING::from("Windows.Foundation.UniversalApiContract"),
+        10,
+    )
+    .unwrap_or(false)
+}
+
+fn has_package_identity() -> bool {
+    let mut len = 0_u32;
+    // SAFETY: querying the required length only; no buffer is passed.
+    let status = unsafe { GetCurrentPackageFullName(&raw mut len, None) };
+    status != APPMODEL_ERROR_NO_PACKAGE
+}
 
 pub(super) const UNSUPPORTED_REASON: &str = "";
 
@@ -143,7 +175,11 @@ impl Backend {
         Ok(Self { hooks })
     }
 
-    pub(super) async fn present(&self, job: ShareJob) -> Result<ShareOutcome, ShareError> {
+    pub(super) async fn present(
+        &self,
+        job: ShareJob,
+        cancel: &CancelToken,
+    ) -> Result<ShareOutcome, ShareError> {
         let (_, window) = job.window;
         let hwnd = window
             .hwnd()
@@ -178,9 +214,18 @@ impl Backend {
                 .remove(&id);
             return Err(ShareError::Backend(format!("PostMessageW: {err}")));
         }
-        rx.recv_async()
-            .await
-            .map_err(|_| ShareError::Backend("share UI closed without reporting".to_owned()))?
+        let Some(reply) = until_cancelled(cancel, rx.recv_async()).await else {
+            // Windows offers no way to close the share UI. Drop the job
+            // if the window has not picked it up yet; otherwise the UI
+            // stays until the user dismisses it and its events go
+            // nowhere.
+            jobs()
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&id);
+            return Ok(ShareOutcome::Dismissed);
+        };
+        reply.map_err(|_| ShareError::Backend("share UI closed without reporting".to_owned()))?
     }
 }
 
@@ -395,7 +440,9 @@ fn fill(package: &DataPackage, job: &PreparedJob) -> windows::core::Result<bool>
 /// Call once at startup. Returns `Ok(false)` when the app was launched
 /// normally (or is not packaged).
 pub fn take_share_target_activation(inbox: &ShareInbox) -> Result<bool, ShareError> {
-    ensure_winrt();
+    if !can_receive() {
+        return Ok(false);
+    }
     let Ok(args) = AppInstance::GetActivatedEventArgs() else {
         return Ok(false);
     };
@@ -470,18 +517,18 @@ fn read_view(view: &DataPackageView) -> Result<IncomingShare, ShareError> {
         files,
         source_app: None,
         received_at_ms: None,
+        target_id: None,
     })
 }
 
 fn copy_items(view: &DataPackageView) -> Result<Vec<IncomingFile>, ShareError> {
-    let dest_dir = std::env::temp_dir()
-        .join("istmo-share")
-        .join("incoming")
-        .join(format!(
-            "{}-{}",
-            std::process::id(),
-            NEXT_JOB.fetch_add(1, Ordering::Relaxed)
-        ));
+    let incoming_root = std::env::temp_dir().join("istmo-share").join("incoming");
+    super::prune_stale_entries(&incoming_root, crate::INCOMING_RETENTION);
+    let dest_dir = incoming_root.join(format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT_JOB.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&dest_dir)
         .map_err(|err| ShareError::Io(format!("{}: {err}", dest_dir.display())))?;
     let folder = StorageFolder::GetFolderFromPathAsync(&HSTRING::from(dest_dir.as_os_str()))

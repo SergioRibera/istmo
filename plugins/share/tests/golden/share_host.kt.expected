@@ -12,6 +12,12 @@ interface ShareBackend {
 
      // Throw BackendException(ShareError) for domain errors.
     suspend fun capabilities(): ShareCapabilities
+
+     // Throw BackendException(ShareError) for domain errors.
+    suspend fun staging_dir(): String
+
+     // Throw BackendException(ShareError) for domain errors.
+    suspend fun set_share_targets(targets: List<ShareTarget>): Unit
 }
 
 /// Reader / writer per `Named` type referenced by the `Share` contract.
@@ -50,6 +56,9 @@ interface ShareCodecs {
 
     fun readShareRequest(bytes: ByteArray, offset: Int): Bincode.Decoded<ShareRequest>
     fun writeShareRequest(out: ByteArrayOutputStream, value: ShareRequest)
+
+    fun readShareTarget(bytes: ByteArray, offset: Int): Bincode.Decoded<ShareTarget>
+    fun writeShareTarget(out: ByteArrayOutputStream, value: ShareTarget)
 }
 
 /// Decodes wire calls, invokes `ShareBackend`, encodes the response.
@@ -87,6 +96,33 @@ class ShareDispatcher(
                     val out = ByteArrayOutputStream()
                     codecs.writeShareCapabilities(out, result)
                     PluginResult.Unary(out.toByteArray())
+                } catch (e: BackendException) {
+                    val err = e.error as? ShareError ?: throw e
+                    val errOut = ByteArrayOutputStream()
+                    codecs.writeShareError(errOut, err)
+                    throw PluginException(errOut.toByteArray())
+                }
+            }
+            "staging_dir" -> {
+                try {
+                    val result = backend.staging_dir()
+                    val out = ByteArrayOutputStream()
+                    Bincode.writeString(out, result)
+                    PluginResult.Unary(out.toByteArray())
+                } catch (e: BackendException) {
+                    val err = e.error as? ShareError ?: throw e
+                    val errOut = ByteArrayOutputStream()
+                    codecs.writeShareError(errOut, err)
+                    throw PluginException(errOut.toByteArray())
+                }
+            }
+            "set_share_targets" -> {
+                try {
+                    var cursor = 0
+                    val d_targets = Bincode.readVec(payload, cursor) { p, o -> codecs.readShareTarget(p, o) }; cursor = d_targets.consumed
+                    val targets = d_targets.value
+                    backend.set_share_targets(targets)
+                    PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
                     val err = e.error as? ShareError ?: throw e
                     val errOut = ByteArrayOutputStream()

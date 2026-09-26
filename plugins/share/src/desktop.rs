@@ -26,14 +26,20 @@
 //!     .finish();
 //! ```
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
+use std::time::{Duration, SystemTime};
 
 use istmo_window::{NativeWindow, WindowId, WindowRegistry};
 
+use istmo_core::CancelToken;
+
 use crate::{
     Share, ShareCapabilities, ShareError, ShareFile, ShareFileSource, ShareOutcome, ShareRequest,
+    ShareTarget, sanitize_file_name,
 };
 
 #[cfg(any(target_os = "macos", test))]
@@ -56,7 +62,7 @@ use windows as platform;
 pub use windows::take_share_target_activation;
 
 #[cfg(target_os = "macos")]
-pub use macos::drain_app_group_inbox;
+pub use macos::{drain_app_group_inbox, observe_app_group_handoffs};
 
 /// Desktop [`Share`] backend. Cheap to clone; clones share state.
 #[derive(Debug, Clone)]
@@ -123,9 +129,13 @@ impl DesktopShare {
 }
 
 impl Share for DesktopShare {
-    async fn share(&self, request: ShareRequest) -> Result<ShareOutcome, ShareError> {
+    async fn share(
+        &self,
+        cancel: CancelToken,
+        request: ShareRequest,
+    ) -> Result<ShareOutcome, ShareError> {
         request.validate()?;
-        if !platform::CAPABILITIES.send {
+        if !platform::capabilities().send {
             return Err(ShareError::Unsupported(
                 platform::UNSUPPORTED_REASON.to_owned(),
             ));
@@ -143,11 +153,68 @@ impl Share for DesktopShare {
             thumbnail,
             window,
         };
-        self.inner.platform.present(job).await
+        self.inner.platform.present(job, &cancel).await
     }
 
     async fn capabilities(&self) -> Result<ShareCapabilities, ShareError> {
-        Ok(platform::CAPABILITIES)
+        Ok(platform::capabilities())
+    }
+
+    async fn staging_dir(&self) -> Result<String, ShareError> {
+        let root = &self.inner.staging.root;
+        std::fs::create_dir_all(root).map_err(|e| io_error(root, &e))?;
+        Ok(root.display().to_string())
+    }
+
+    async fn set_share_targets(&self, _targets: Vec<ShareTarget>) -> Result<(), ShareError> {
+        Err(ShareError::Unsupported(
+            "desktop share sheets have no direct-share row".to_owned(),
+        ))
+    }
+}
+
+/// Run `fut` until it finishes or `cancel` fires, whichever comes
+/// first. `None` means cancelled.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub(crate) async fn until_cancelled<F: Future>(cancel: &CancelToken, fut: F) -> Option<F::Output> {
+    let mut fut = std::pin::pin!(fut);
+    let mut cancelled = std::pin::pin!(cancel.cancelled());
+    std::future::poll_fn(|cx| {
+        if let Poll::Ready(output) = fut.as_mut().poll(cx) {
+            return Poll::Ready(Some(output));
+        }
+        cancelled.as_mut().poll(cx).map(|()| None)
+    })
+    .await
+}
+
+/// Delete entries of `dir` last modified more than `max_age` ago.
+/// Received files the app never cleaned up go this way.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub(crate) fn prune_stale_entries(dir: &Path, max_age: Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.filter_map(Result::ok) {
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > max_age);
+        if !stale {
+            continue;
+        }
+        let path = entry.path();
+        let removed = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(err) = removed {
+            tracing::warn!(?err, entry = %path.display(), "pruning stale share entry");
+        }
     }
 }
 
@@ -230,28 +297,6 @@ impl Staging {
 impl Drop for Staging {
     fn drop(&mut self) {
         self.purge();
-    }
-}
-
-/// Keep only the final path component and drop characters Windows
-/// rejects, so a hostile or sloppy name cannot escape the staging dir.
-fn sanitize_file_name(name: &str) -> String {
-    let base = Path::new(name)
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or("shared");
-    let cleaned: String = base
-        .chars()
-        .map(|c| match c {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
-            c if c.is_control() => '_',
-            c => c,
-        })
-        .collect();
-    if cleaned.trim_matches('.').is_empty() {
-        "shared".to_owned()
-    } else {
-        cleaned
     }
 }
 

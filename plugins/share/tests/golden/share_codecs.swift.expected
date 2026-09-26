@@ -132,7 +132,9 @@ public final class ShareCodecsImpl: ShareCodecs {
         let reportsCompletion = try Bincode.readBool(&c)
         let reportsTarget = try Bincode.readBool(&c)
         let receive = try Bincode.readBool(&c)
-        return ShareCapabilities(send: send, files: files, mixedContent: mixedContent, richPreview: richPreview, reportsCompletion: reportsCompletion, reportsTarget: reportsTarget, receive: receive)
+        let directShare = try Bincode.readBool(&c)
+        let dismissOnCancel = try Bincode.readBool(&c)
+        return ShareCapabilities(send: send, files: files, mixedContent: mixedContent, richPreview: richPreview, reportsCompletion: reportsCompletion, reportsTarget: reportsTarget, receive: receive, directShare: directShare, dismissOnCancel: dismissOnCancel)
     }
 
     public func writeShareCapabilities(_ out: inout Data, _ value: ShareCapabilities) {
@@ -143,6 +145,8 @@ public final class ShareCodecsImpl: ShareCodecs {
         Bincode.writeBool(&out, value.reportsCompletion)
         Bincode.writeBool(&out, value.reportsTarget)
         Bincode.writeBool(&out, value.receive)
+        Bincode.writeBool(&out, value.directShare)
+        Bincode.writeBool(&out, value.dismissOnCancel)
     }
 
     public func readShareError(_ c: inout Bincode.Cursor) throws -> ShareError {
@@ -206,7 +210,8 @@ public final class ShareCodecsImpl: ShareCodecs {
         let files = try Bincode.readVec(&c) { try readIncomingFile(&$0) }
         let sourceApp = try Bincode.readOption(&c) { try Bincode.readString(&$0) }
         let receivedAtMs = try Bincode.readOption(&c) { try Bincode.readVarintU64(&$0) }
-        return IncomingShare(text: text, url: url, subject: subject, files: files, sourceApp: sourceApp, receivedAtMs: receivedAtMs)
+        let targetId = try Bincode.readOption(&c) { try Bincode.readString(&$0) }
+        return IncomingShare(text: text, url: url, subject: subject, files: files, sourceApp: sourceApp, receivedAtMs: receivedAtMs, targetId: targetId)
     }
 
     public func writeIncomingShare(_ out: inout Data, _ value: IncomingShare) {
@@ -216,5 +221,19 @@ public final class ShareCodecsImpl: ShareCodecs {
         Bincode.writeVec(&out, value.files) { self.writeIncomingFile(&$0, $1) }
         Bincode.writeOption(&out, value.sourceApp) { Bincode.writeString(&$0, $1) }
         Bincode.writeOption(&out, value.receivedAtMs) { Bincode.writeVarintU64(&$0, $1) }
+        Bincode.writeOption(&out, value.targetId) { Bincode.writeString(&$0, $1) }
+    }
+
+    public func readShareTarget(_ c: inout Bincode.Cursor) throws -> ShareTarget {
+        let id = try Bincode.readString(&c)
+        let label = try Bincode.readString(&c)
+        let icon = try Bincode.readOption(&c) { try readShareFile(&$0) }
+        return ShareTarget(id: id, label: label, icon: icon)
+    }
+
+    public func writeShareTarget(_ out: inout Data, _ value: ShareTarget) {
+        Bincode.writeString(&out, value.id)
+        Bincode.writeString(&out, value.label)
+        Bincode.writeOption(&out, value.icon) { self.writeShareFile(&$0, $1) }
     }
 }

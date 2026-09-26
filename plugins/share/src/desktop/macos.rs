@@ -11,8 +11,10 @@
 //!   quiet service cannot leave the backend busy forever.
 
 use std::cell::RefCell;
+use std::ffi::c_void;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime};
@@ -25,20 +27,30 @@ use objc2_app_kit::{
     NSSharingService, NSSharingServiceDelegate, NSSharingServicePicker,
     NSSharingServicePickerDelegate, NSView,
 };
+use objc2_core_foundation::{
+    CFDictionary, CFNotificationCenter, CFNotificationName, CFNotificationSuspensionBehavior,
+    CFString,
+};
 use objc2_foundation::{NSArray, NSError, NSPoint, NSRect, NSRectEdge, NSSize, NSString, NSURL};
 
-use super::ShareJob;
+use istmo_core::CancelToken;
+
+use super::{ShareJob, until_cancelled};
 use crate::{ShareCapabilities, ShareError, ShareInbox, ShareOutcome, ShareRect};
 
-pub(super) const CAPABILITIES: ShareCapabilities = ShareCapabilities {
-    send: true,
-    files: true,
-    mixed_content: true,
-    rich_preview: false,
-    reports_completion: true,
-    reports_target: true,
-    receive: true,
-};
+pub(super) const fn capabilities() -> ShareCapabilities {
+    ShareCapabilities {
+        send: true,
+        files: true,
+        mixed_content: true,
+        rich_preview: false,
+        reports_completion: true,
+        reports_target: true,
+        receive: true,
+        direct_share: false,
+        dismiss_on_cancel: true,
+    }
+}
 
 pub(super) const UNSUPPORTED_REASON: &str = "";
 
@@ -61,7 +73,11 @@ impl Backend {
         Ok(Self)
     }
 
-    pub(super) async fn present(&self, job: ShareJob) -> Result<ShareOutcome, ShareError> {
+    pub(super) async fn present(
+        &self,
+        job: ShareJob,
+        cancel: &CancelToken,
+    ) -> Result<ShareOutcome, ShareError> {
         let (_, window) = job.window;
         let NativeWindow::AppKit { ns_view } = window else {
             return Err(ShareError::NoPresenter(format!(
@@ -91,8 +107,18 @@ impl Backend {
                 drop(tx.send(Err(err)));
             }
         });
-        rx.recv_async()
-            .await
+        let Some(reply) = until_cancelled(cancel, rx.recv_async()).await else {
+            // The caller dropped the share: close the picker. Its
+            // delegate reports a `nil` service, which clears ACTIVE.
+            DispatchQueue::main().exec_async(|| {
+                let picker = ACTIVE.with(|active| active.borrow().as_ref().map(|(p, _)| p.clone()));
+                if let Some(picker) = picker {
+                    picker.close();
+                }
+            });
+            return Ok(ShareOutcome::Dismissed);
+        };
+        reply
             .map_err(|_| ShareError::Backend("share picker closed without reporting".to_owned()))?
     }
 }
@@ -289,5 +315,61 @@ pub fn drain_app_group_inbox(group_id: &str, inbox: &ShareInbox) -> Result<usize
         .join(group_id)
         .join("istmo-share/inbox");
     let dest = home.join("Library/Caches/istmo-share/incoming");
+    super::prune_stale_entries(&dest, crate::INCOMING_RETENTION);
     super::handoff::drain_dir(&inbox_dir, &dest, inbox)
+}
+
+/// App Groups whose hand-off notification this process observes.
+static OBSERVED_GROUPS: Mutex<Vec<(String, ShareInbox)>> = Mutex::new(Vec::new());
+
+/// Drain App Group `group_id` whenever the Share Extension commits a share.
+///
+/// Works while the app is running (the extension posts a Darwin
+/// notification). Call once at startup, alongside an initial
+/// [`drain_app_group_inbox`]; the extension also launches the app when
+/// it is not running, which then drains at startup.
+pub fn observe_app_group_handoffs(group_id: &str, inbox: &ShareInbox) -> Result<(), ShareError> {
+    let center = CFNotificationCenter::darwin_notify_center()
+        .ok_or_else(|| ShareError::Backend("Darwin notify center unavailable".to_owned()))?;
+    let name = CFString::from_str(&format!("{group_id}.istmo-share.handoff"));
+    {
+        let mut groups = OBSERVED_GROUPS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if groups.iter().any(|(group, _)| group == group_id) {
+            return Ok(());
+        }
+        groups.push((group_id.to_owned(), inbox.clone()));
+    }
+    // SAFETY: the observer is the address of a static (never freed), the
+    // callback matches CFNotificationCallback and only touches
+    // `OBSERVED_GROUPS`, and the Darwin center ignores `object`.
+    unsafe {
+        center.add_observer(
+            (&raw const OBSERVED_GROUPS).cast(),
+            Some(on_handoff),
+            Some(&name),
+            std::ptr::null(),
+            CFNotificationSuspensionBehavior::DeliverImmediately,
+        );
+    }
+    Ok(())
+}
+
+unsafe extern "C-unwind" fn on_handoff(
+    _center: *mut CFNotificationCenter,
+    _observer: *mut c_void,
+    _name: *const CFNotificationName,
+    _object: *const c_void,
+    _info: *const CFDictionary,
+) {
+    let groups = OBSERVED_GROUPS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    for (group, inbox) in groups {
+        if let Err(err) = drain_app_group_inbox(&group, &inbox) {
+            tracing::warn!(%err, group, "draining share inbox after hand-off");
+        }
+    }
 }

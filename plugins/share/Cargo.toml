@@ -39,10 +39,12 @@ windows = { version = "0.62", features = [
     "ApplicationModel_DataTransfer_ShareTarget",
     "Foundation",
     "Foundation_Collections",
+    "Foundation_Metadata",
     "Storage",
     "Storage_Search",
     "Storage_Streams",
     "Win32_Foundation",
+    "Win32_Storage_Packaging_Appx",
     "Win32_System_WinRT",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
@@ -70,6 +72,12 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSView",
 ] }
 dispatch2 = { version = "0.3", default-features = false, features = ["std", "objc2"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "CFDictionary",
+    "CFNotificationCenter",
+    "CFString",
+] }
 
 [build-dependencies]
 istmo-build = { workspace = true }

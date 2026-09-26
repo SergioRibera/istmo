@@ -26,6 +26,7 @@ struct Manifest {
     files: Vec<ManifestFile>,
     source_app: Option<String>,
     received_at_ms: Option<u64>,
+    target_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +96,7 @@ fn read_entry(dir: &Path, dest_root: &Path) -> Result<IncomingShare, ShareError>
         files,
         source_app: manifest.source_app,
         received_at_ms: manifest.received_at_ms,
+        target_id: manifest.target_id,
     })
 }
 
@@ -138,7 +140,7 @@ mod tests {
         std::fs::write(entry.join("photo.png"), b"png").expect("file");
         std::fs::write(
             entry.join("share.json"),
-            br#"{"text":"look","url":null,"subject":"Hi","files":[{"file":"photo.png","name":"Photo.png","mimeType":"image/png"},{"file":"../../escape","name":"x"}],"sourceApp":null,"receivedAtMs":42}"#,
+            br#"{"text":"look","url":null,"subject":"Hi","files":[{"file":"photo.png","name":"Photo.png","mimeType":"image/png"},{"file":"../../escape","name":"x"}],"sourceApp":null,"receivedAtMs":42,"targetId":"chat-7"}"#,
         )
         .expect("manifest");
         std::fs::create_dir_all(inbox_dir.join("B2.partial")).expect("partial");
@@ -153,6 +155,7 @@ mod tests {
         assert_eq!(share.text.as_deref(), Some("look"));
         assert_eq!(share.subject.as_deref(), Some("Hi"));
         assert_eq!(share.received_at_ms, Some(42));
+        assert_eq!(share.target_id.as_deref(), Some("chat-7"));
         assert_eq!(share.files.len(), 1, "escaping entry must be ignored");
         let file = &share.files[0];
         assert_eq!(file.name, "Photo.png");

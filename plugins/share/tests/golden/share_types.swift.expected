@@ -89,8 +89,10 @@ public struct ShareCapabilities {
     public let reportsCompletion: Bool
     public let reportsTarget: Bool
     public let receive: Bool
+    public let directShare: Bool
+    public let dismissOnCancel: Bool
 
-    public init(send: Bool, files: Bool, mixedContent: Bool, richPreview: Bool, reportsCompletion: Bool, reportsTarget: Bool, receive: Bool) {
+    public init(send: Bool, files: Bool, mixedContent: Bool, richPreview: Bool, reportsCompletion: Bool, reportsTarget: Bool, receive: Bool, directShare: Bool, dismissOnCancel: Bool) {
         self.send = send
         self.files = files
         self.mixedContent = mixedContent
@@ -98,6 +100,8 @@ public struct ShareCapabilities {
         self.reportsCompletion = reportsCompletion
         self.reportsTarget = reportsTarget
         self.receive = receive
+        self.directShare = directShare
+        self.dismissOnCancel = dismissOnCancel
     }
 }
 
@@ -132,13 +136,27 @@ public struct IncomingShare {
     public let files: [IncomingFile]
     public let sourceApp: String?
     public let receivedAtMs: UInt64?
+    public let targetId: String?
 
-    public init(text: String?, url: String?, subject: String?, files: [IncomingFile], sourceApp: String?, receivedAtMs: UInt64?) {
+    public init(text: String?, url: String?, subject: String?, files: [IncomingFile], sourceApp: String?, receivedAtMs: UInt64?, targetId: String?) {
         self.text = text
         self.url = url
         self.subject = subject
         self.files = files
         self.sourceApp = sourceApp
         self.receivedAtMs = receivedAtMs
+        self.targetId = targetId
+    }
+}
+
+public struct ShareTarget {
+    public let id: String
+    public let label: String
+    public let icon: ShareFile?
+
+    public init(id: String, label: String, icon: ShareFile?) {
+        self.id = id
+        self.label = label
+        self.icon = icon
     }
 }

@@ -22,6 +22,19 @@ public final class ShareClient: Share {
         let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "capabilities", payload: payload)
         return try Bincode.decode(bytes) as ShareCapabilities
     }
+
+    public func staging_dir() async throws -> String {
+        let payload = Data()
+        let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "staging_dir", payload: payload)
+        return try Bincode.decode(bytes) as String
+    }
+
+    public func set_share_targets(targets: [ShareTarget]) async throws -> Void {
+        var payload = Data()
+        Bincode.encode(&payload, targets)
+        let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "set_share_targets", payload: payload)
+        return try Bincode.decode(bytes) as Void
+    }
 }
 
 /// Swift-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.

@@ -53,7 +53,9 @@ data class ShareCapabilities(
     val richPreview: Boolean,
     val reportsCompletion: Boolean,
     val reportsTarget: Boolean,
-    val receive: Boolean
+    val receive: Boolean,
+    val directShare: Boolean,
+    val dismissOnCancel: Boolean
 )
 
 sealed class ShareError {
@@ -79,5 +81,12 @@ data class IncomingShare(
     val subject: String?,
     val files: List<IncomingFile>,
     val sourceApp: String?,
-    val receivedAtMs: ULong?
+    val receivedAtMs: ULong?,
+    val targetId: String?
+)
+
+data class ShareTarget(
+    val id: String,
+    val label: String,
+    val icon: ShareFile?
 )

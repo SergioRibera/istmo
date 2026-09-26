@@ -12,6 +12,10 @@ public protocol ShareBackend: AnyObject {
     func share(request: ShareRequest) async throws -> ShareOutcome
     /// Throw `ShareError` to surface a typed domain error.
     func capabilities() async throws -> ShareCapabilities
+    /// Throw `ShareError` to surface a typed domain error.
+    func staging_dir() async throws -> String
+    /// Throw `ShareError` to surface a typed domain error.
+    func set_share_targets(targets: [ShareTarget]) async throws -> Void
 }
 
 /// Reader / writer per `Named` type referenced by the `Share` contract.
@@ -40,6 +44,8 @@ public protocol ShareCodecs {
     func writeShareRect(_ out: inout Data, _ value: ShareRect)
     func readShareRequest(_ c: inout Bincode.Cursor) throws -> ShareRequest
     func writeShareRequest(_ out: inout Data, _ value: ShareRequest)
+    func readShareTarget(_ c: inout Bincode.Cursor) throws -> ShareTarget
+    func writeShareTarget(_ out: inout Data, _ value: ShareTarget)
 }
 
 /// Decodes wire calls, invokes `ShareBackend`, encodes the response.
@@ -76,6 +82,28 @@ public final class ShareDispatcher: PluginHandler {
                 var out = Data()
                 codecs.writeShareCapabilities(&out, result)
                 return out
+            } catch let err as ShareError {
+                var errOut = Data()
+                codecs.writeShareError(&errOut, err)
+                throw PluginException(payload: errOut)
+            }
+        case "staging_dir":
+            do {
+                let result = try await backend.staging_dir()
+                var out = Data()
+                Bincode.writeString(&out, result)
+                return out
+            } catch let err as ShareError {
+                var errOut = Data()
+                codecs.writeShareError(&errOut, err)
+                throw PluginException(payload: errOut)
+            }
+        case "set_share_targets":
+            do {
+                var c = Bincode.Cursor(payload)
+                let targets = try Bincode.readVec(&c) { try codecs.readShareTarget(&$0) }
+                try await backend.set_share_targets(targets: targets)
+                return Data()
             } catch let err as ShareError {
                 var errOut = Data()
                 codecs.writeShareError(&errOut, err)

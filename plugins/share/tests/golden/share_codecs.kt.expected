@@ -211,7 +211,13 @@ class ShareCodecsImpl : ShareCodecs {
         val d_receive = Bincode.readBool(bytes, cursor)
         cursor = d_receive.consumed
         val receive = d_receive.value
-        return Bincode.Decoded(ShareCapabilities(send = send, files = files, mixedContent = mixedContent, richPreview = richPreview, reportsCompletion = reportsCompletion, reportsTarget = reportsTarget, receive = receive), cursor)
+        val d_directShare = Bincode.readBool(bytes, cursor)
+        cursor = d_directShare.consumed
+        val directShare = d_directShare.value
+        val d_dismissOnCancel = Bincode.readBool(bytes, cursor)
+        cursor = d_dismissOnCancel.consumed
+        val dismissOnCancel = d_dismissOnCancel.value
+        return Bincode.Decoded(ShareCapabilities(send = send, files = files, mixedContent = mixedContent, richPreview = richPreview, reportsCompletion = reportsCompletion, reportsTarget = reportsTarget, receive = receive, directShare = directShare, dismissOnCancel = dismissOnCancel), cursor)
     }
 
     override fun writeShareCapabilities(out: ByteArrayOutputStream, value: ShareCapabilities) {
@@ -222,6 +228,8 @@ class ShareCodecsImpl : ShareCodecs {
         Bincode.writeBool(out, value.reportsCompletion)
         Bincode.writeBool(out, value.reportsTarget)
         Bincode.writeBool(out, value.receive)
+        Bincode.writeBool(out, value.directShare)
+        Bincode.writeBool(out, value.dismissOnCancel)
     }
 
     override fun readShareError(bytes: ByteArray, offset: Int): Bincode.Decoded<ShareError> {
@@ -344,7 +352,10 @@ class ShareCodecsImpl : ShareCodecs {
         val d_receivedAtMs = Bincode.readOption(bytes, cursor) { p, o -> Bincode.readVarintU64(p, o).let { Bincode.Decoded(it.value.toULong(), it.consumed) } }
         cursor = d_receivedAtMs.consumed
         val receivedAtMs = d_receivedAtMs.value
-        return Bincode.Decoded(IncomingShare(text = text, url = url, subject = subject, files = files, sourceApp = sourceApp, receivedAtMs = receivedAtMs), cursor)
+        val d_targetId = Bincode.readOption(bytes, cursor) { p, o -> Bincode.readString(p, o) }
+        cursor = d_targetId.consumed
+        val targetId = d_targetId.value
+        return Bincode.Decoded(IncomingShare(text = text, url = url, subject = subject, files = files, sourceApp = sourceApp, receivedAtMs = receivedAtMs, targetId = targetId), cursor)
     }
 
     override fun writeIncomingShare(out: ByteArrayOutputStream, value: IncomingShare) {
@@ -354,5 +365,26 @@ class ShareCodecsImpl : ShareCodecs {
         Bincode.writeVec(out, value.files) { s, v -> writeIncomingFile(s, v) }
         Bincode.writeOption(out, value.sourceApp) { s, v -> Bincode.writeString(s, v) }
         Bincode.writeOption(out, value.receivedAtMs) { s, v -> Bincode.writeVarintU64(s, v.toLong()) }
+        Bincode.writeOption(out, value.targetId) { s, v -> Bincode.writeString(s, v) }
+    }
+
+    override fun readShareTarget(bytes: ByteArray, offset: Int): Bincode.Decoded<ShareTarget> {
+        var cursor = offset
+        val d_id = Bincode.readString(bytes, cursor)
+        cursor = d_id.consumed
+        val id = d_id.value
+        val d_label = Bincode.readString(bytes, cursor)
+        cursor = d_label.consumed
+        val label = d_label.value
+        val d_icon = Bincode.readOption(bytes, cursor) { p, o -> readShareFile(p, o) }
+        cursor = d_icon.consumed
+        val icon = d_icon.value
+        return Bincode.Decoded(ShareTarget(id = id, label = label, icon = icon), cursor)
+    }
+
+    override fun writeShareTarget(out: ByteArrayOutputStream, value: ShareTarget) {
+        Bincode.writeString(out, value.id)
+        Bincode.writeString(out, value.label)
+        Bincode.writeOption(out, value.icon) { s, v -> writeShareFile(s, v) }
     }
 }
