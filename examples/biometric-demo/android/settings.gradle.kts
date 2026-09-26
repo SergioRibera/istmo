@@ -4,8 +4,8 @@ pluginManagement {
         mavenCentral()
         gradlePluginPortal()
     }
-    // Pull in the istmo plugin loader (`dev.istmo.plugin-loader`) from
-    // the checked-out repo — no maven publish needed for local demos.
+    // `dev.istmo.app` from the checked-out repo — no maven publish needed
+    // for local demos.
     includeBuild("../../../runtime/gradle-plugin")
 }
 

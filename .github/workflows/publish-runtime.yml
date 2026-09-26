@@ -3,10 +3,9 @@ name: publish-runtime
 # Publishes two Kotlin artefacts to the GitHub Packages Maven registry
 # as part of every release:
 #   * `dev.istmo:istmo-runtime:<version>`        — the AAR + sources JAR
-#   * `dev.istmo:istmo-plugin-loader:<version>`  — a Gradle plugin that
-#     auto-injects every istmo plugin's `native/android/` directory into
-#     the consuming app's Kotlin source set (the Flutter-style
-#     auto-linker for Android hosts).
+#   * `dev.istmo:istmo-gradle-plugin:<version>`  — the `dev.istmo.app`
+#     Gradle plugin: builds the app's Rust crate with cargo, links every
+#     istmo plugin it depends on and applies istmo.toml `[app]`.
 #
 # * The **primary trigger** is a pushed `v<SemVer>` tag — that is how
 #   `cargo-release` cuts a release. The workflow reads the SemVer from
@@ -99,7 +98,7 @@ jobs:
         working-directory: runtime/android
         run: gradle --no-daemon assembleRelease
 
-      - name: Assemble plugin-loader JAR
+      - name: Assemble Gradle plugin JAR
         working-directory: runtime/gradle-plugin
         run: gradle --no-daemon jar
 
@@ -111,7 +110,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gradle --no-daemon publishReleasePublicationToGitHubPackagesRepository
 
-      - name: Publish plugin-loader to GitHub Packages
+      - name: Publish Gradle plugin to GitHub Packages
         if: ${{ !inputs.dry_run }}
         working-directory: runtime/gradle-plugin
         env:
@@ -131,7 +130,7 @@ jobs:
               echo "**Dry run** — Gradle assembled, nothing published."
             else
               echo "* Kotlin runtime: [\`dev.istmo:istmo-runtime:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
-              echo "* Kotlin plugin loader: [\`dev.istmo:istmo-plugin-loader:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
+              echo "* Gradle plugin \`dev.istmo.app\`: [\`dev.istmo:istmo-gradle-plugin:$VERSION\`](https://github.com/SergioRibera/istmo/packages)"
               echo "* Swift: \`.package(url: \"https://github.com/SergioRibera/istmo.git\", from: \"$VERSION\")\` (resolved from the git tag directly)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

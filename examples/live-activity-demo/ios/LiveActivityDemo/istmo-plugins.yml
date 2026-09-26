@@ -2,7 +2,8 @@
 # Include this file from your app's `project.yml`:
 #   include:
 #     - path: LiveActivityDemo/istmo-plugins.yml
-# xcodegen merges the entries below into your app target.
+# xcodegen merges the entries below into your app target; values set
+# in project.yml take precedence over the ones here.
 targets:
   LiveActivityDemo:
     sources:
@@ -12,3 +13,22 @@ targets:
         createIntermediateGroups: true
         excludes:
           - "*.fragment"
+    settings:
+      base:
+        ISTMO_LIB_NAME: "live_activity_demo"
+        LIBRARY_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(PROJECT_DIR)/build/rust/$(PLATFORM_NAME)/$(CURRENT_ARCH)"
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-llive_activity_demo"
+        ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+        MARKETING_VERSION: "0.1.1"
+        CURRENT_PROJECT_VERSION: "1"
+        ISTMO_DISPLAY_NAME: "live-activity-demo"
+        PRODUCT_BUNDLE_IDENTIFIER: "dev.istmo.liveactivitydemo"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.1"
+    preBuildScripts:
+      - name: istmo cargo build
+        basedOnDependencyAnalysis: false
+        script: '"${PROJECT_DIR}/.istmo/build-rust.sh"'

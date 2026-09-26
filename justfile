@@ -130,6 +130,9 @@ rust-mobile-ios-bootstrap:
     if [[ "$(uname -s)" != "Darwin" ]]; then
         echo "rust-mobile-ios-bootstrap: macOS required"; exit 1
     fi
+    # build.rs writes ios/.istmo/ and RustMobileDemo/istmo-plugins.yml,
+    # which project.yml includes.
+    cargo check -p rust-mobile-demo
     cd {{rmd_ios_project_dir}} && xcodegen generate
 
 rust-mobile-ios-build:

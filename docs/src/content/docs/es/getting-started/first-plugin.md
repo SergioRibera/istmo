@@ -164,8 +164,7 @@ registración del dispatcher.
 ```kotlin
 // Android — Activity onCreate
 override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoRuntime.instance.start(this)
-    IstmoPluginRegistry.registerAll(applicationContext)
+    IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry (o heredá de IstmoGameActivity)
     super.onCreate(savedInstanceState)
 }
 ```

@@ -30,6 +30,8 @@
 //! - [`extract`] — parse a plugin crate's `src/lib.rs` into a
 //!   [`Contract`].
 //! - [`manifest`] — parse and emit `istmo.toml` metadata.
+//! - [`app_config`] — the app crate's `[app]` section: codegen targets
+//!   and app identity (id, name, version, build, icon).
 //! - [`handover`] — hex-encoded metadata piped between plugin
 //!   `build.rs`es and consuming apps via `DEP_*` env vars.
 //! - [`kotlin`] / [`kotlin_client`] / [`kotlin_host`] / [`kotlin_types`]
@@ -50,15 +52,20 @@
 
 #![doc(html_root_url = "https://docs.rs/istmo-build")]
 
+pub mod android_project;
+pub mod app_config;
+pub mod app_icon;
 pub mod apple_plist;
 pub mod contract;
 pub mod desktop;
 pub mod doc_extract;
+pub mod doctor;
 pub mod emit_app;
 pub mod entitlements;
 pub mod extract;
 pub mod handover;
 pub mod ios;
+pub mod ios_project;
 pub mod kotlin;
 pub mod kotlin_client;
 pub mod kotlin_host;
@@ -74,6 +81,9 @@ pub mod swift_host;
 pub mod swift_types;
 pub mod worker;
 
+pub use crate::app_config::{
+    AppConfig, AppId, AppIdentity, AppMetadata, AppPluginOpts, CrateInfo, Platform, Role,
+};
 pub use crate::apple_plist::{
     ENTITLEMENTS_FRAGMENT, INFO_PLIST_FRAGMENT, MergeWarning, PlistFragmentError, PlistFragments,
 };
@@ -90,14 +100,14 @@ pub use crate::doc_extract::{
     extract_message_docs, render_types_mdx, write_types_mdx,
 };
 pub use crate::emit_app::{
-    AppOpts, AppPluginOpts, Platform, Role, detect_android_package, detect_ios_app_dir, emit_app,
-    emit_app_with,
+    AppOpts, detect_android_package, detect_ios_app_dir, emit_app, emit_app_with,
 };
 pub use crate::entitlements::{EntitlementValue, IosEntitlements};
 pub use crate::extract::{ExtractError, extract_contract};
 pub use crate::handover::{
-    CONTRACT_KEY, HandoverError, MANIFEST_KEY, NATIVE_DEPS_KEY, collect_dep_contracts,
-    collect_dep_manifests, collect_dep_native_deps, deserialize_contract, deserialize_manifest,
+    CONTRACT_KEY, HandoverError, MANIFEST_KEY, NATIVE_DEPS_KEY, NativePlatform,
+    collect_dep_contracts, collect_dep_manifests, collect_dep_manifests_by_links,
+    collect_dep_native_deps, collect_dep_native_dirs, deserialize_contract, deserialize_manifest,
     deserialize_native_deps, emit_contract, emit_manifest, emit_native_deps, serialize_contract,
     serialize_manifest, serialize_native_deps,
 };
@@ -110,10 +120,11 @@ pub use crate::kotlin_client::generate_kotlin_client;
 pub use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
 pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
 pub use crate::manifest::{
-    AndroidServiceSpec, Deployment, InfoPlistEntry, InfoPlistValue, IosBackgroundKindSpec,
-    IosBackgroundSpec, IosContinuousModeSpec, Manifest, ManifestError, PluginEntry, RemoteOverride,
-    ResolvedWiring, WindowsManifestFragment, emit, emit_from, emit_manifest_metadata,
-    emit_manifest_metadata_with_contract, emit_wiring_env, emit_with, resolve_wiring,
+    AndroidBackendArg, AndroidServiceSpec, Deployment, InfoPlistEntry, InfoPlistValue,
+    IosBackgroundKindSpec, IosBackgroundSpec, IosContinuousModeSpec, Manifest, ManifestError,
+    PluginEntry, RemoteOverride, ResolvedWiring, WindowsManifestFragment, emit, emit_from,
+    emit_manifest_metadata, emit_manifest_metadata_with_contract, emit_wiring_env, emit_with,
+    resolve_wiring,
 };
 pub use crate::min_versions::{
     FloorSource, InvalidOsVersion, MinVersionPlatform, MinVersionViolation, MinVersions, OsVersion,

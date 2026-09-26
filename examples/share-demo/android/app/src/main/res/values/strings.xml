@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">istmo share demo</string>
     <string name="share_target_label">istmo share demo</string>
 </resources>

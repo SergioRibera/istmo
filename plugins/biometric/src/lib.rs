@@ -62,23 +62,14 @@
 //!
 //! # Registration
 //!
-//! Android's `BiometricPrompt` needs a `FragmentActivity`, so
-//! auto-registration is disabled. Register the reference backends by
-//! hand:
+//! The generated `IstmoPluginRegistry` registers the reference backends.
+//! Android's `BiometricPrompt` needs a `FragmentActivity`, so the
+//! registry hands the backend the host activity — `IstmoGameActivity`
+//! (a `GameActivity`, hence a `FragmentActivity`) works out of the box.
+//! An app with its own activity calls, from `onCreate`:
 //!
 //! ```kotlin
-//! // Inside FragmentActivity.onCreate (GameActivity / AppCompatActivity)
-//! IstmoRuntime.registerHandler(
-//!     BiometricDispatcher.PLUGIN_ID,
-//!     BiometricDispatcher(BiometricBackendImpl(this), BiometricCodecsImpl()),
-//! )
-//! ```
-//!
-//! ```swift
-//! IstmoRuntime.shared.registerHandler(
-//!     BiometricDispatcher.PLUGIN_ID,
-//!     BiometricDispatcher(backend: BiometricBackendImpl(), codecs: BiometricCodecsImpl())
-//! )
+//! IstmoHost.onCreate(this) // or IstmoHost.registerPlugins(this)
 //! ```
 //!
 //! # iOS `Info.plist`

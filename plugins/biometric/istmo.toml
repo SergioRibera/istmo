@@ -4,10 +4,11 @@ client_type = "::istmo_biometric::BiometricClient"
 # Prompts are system UI owned by the foreground app process; a remote
 # (`:remote`) process has no window to anchor them to.
 default_deployment = "local"
-# Android's `BiometricPrompt` needs a `FragmentActivity`, so the backend
-# cannot follow the `<T>BackendImpl(context)` auto-registration
-# convention. Register the dispatcher manually (see the crate docs).
-auto_register = false
+# Android's `BiometricPrompt` needs a `FragmentActivity`: the generated
+# registry hands the host activity to the backend (`IstmoGameActivity` is
+# one) and skips the plugin when registering without an activity.
+android_backend = "dev.istmo.plugins.biometric.BiometricBackendImpl"
+android_backend_arg = "androidx.fragment.app.FragmentActivity"
 
 # Ships `USE_BIOMETRIC` in its own manifest; the manifest merger adds it
 # to the app automatically.

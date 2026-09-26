@@ -9,6 +9,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.google.androidgamesdk.GameActivity
 import dev.istmo.plugins.pen.PenCaptureView
 import dev.istmo.plugins.pen.PenFactoryImpl
+import dev.istmo.runtime.IstmoHost
 import dev.istmo.runtime.IstmoRuntime
 import dev.istmo.runtime.PenCodecsImpl
 import dev.istmo.runtime.PenDispatcher
@@ -32,11 +33,12 @@ class PenDemoActivity : GameActivity() {
     private lateinit var penView: PenCaptureView
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        val runtime = IstmoRuntime
-        check(runtime.start("pen_demo")) { "IstmoRuntime.start() failed" }
+        // Starts the runtime; istmo-pen opts out of auto-registration because
+        // its factory needs the capture view, registered right below.
+        IstmoHost.onCreate(this)
 
         penView = PenCaptureView(this)
-        runtime.registerHandler(
+        IstmoRuntime.registerHandler(
             PenDispatcher.PLUGIN_ID,
             PenDispatcher(PenFactoryImpl(penView), PenCodecsImpl()),
         )
@@ -80,6 +82,6 @@ class PenDemoActivity : GameActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        IstmoRuntime.shutdown()
+        IstmoHost.onDestroy(this)
     }
 }

@@ -19,7 +19,6 @@ dependencies {
     // 8.3 is the first AGP exposing `Variant.sources.manifests`; the
     // plugin degrades gracefully (warning) when applied on older AGPs.
     compileOnly("com.android.tools.build:gradle:8.3.2")
-    implementation("org.tomlj:tomlj:1.1.1")
 }
 
 java {
@@ -29,12 +28,12 @@ java {
 
 gradlePlugin {
     plugins {
-        create("istmoPluginLoader") {
-            id = "dev.istmo.plugin-loader"
-            implementationClass = "dev.istmo.gradle.IstmoLoaderPlugin"
-            displayName = "istmo plugin loader"
+        create("istmoApp") {
+            id = "dev.istmo.app"
+            implementationClass = "dev.istmo.gradle.IstmoAppPlugin"
+            displayName = "istmo app"
             description =
-                "Auto-injects Kotlin sources, manifest fragments and resources from every istmo plugin declared in the workspace Cargo.toml into the app's Android build, and enforces each plugin's minimum Android API level."
+                "Builds the app's Rust crate with cargo for every ABI, links every istmo plugin it depends on (Kotlin sources, manifests, resources, Gradle dependencies) and applies istmo.toml [app] (application id, version, minSdk, label, icon)."
         }
     }
 }
@@ -42,9 +41,9 @@ gradlePlugin {
 publishing {
     publications.withType<MavenPublication>().configureEach {
         pom {
-            name.set("istmo-plugin-loader")
+            name.set("istmo-gradle-plugin")
             description.set(
-                "Gradle plugin that discovers `plugins/*/native/android/` directories from the enclosing Cargo workspace and adds them to the consumer app's Kotlin source set — the Android equivalent of Flutter's plugin auto-linking.",
+                "Gradle plugin for istmo apps (`dev.istmo.app`): builds the Rust crate with cargo for every ABI, links every istmo plugin it depends on and applies istmo.toml [app].",
             )
             url.set("https://github.com/SergioRibera/istmo")
             licenses {

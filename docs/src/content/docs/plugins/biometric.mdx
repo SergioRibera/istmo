@@ -213,45 +213,35 @@ macOS.
 
 ## Wire it up
 
-The plugin sets `auto_register = false`: `BiometricPrompt` needs a
-`FragmentActivity`, which the registry's `BackendImpl(context)`
-convention cannot provide.
+The generated `IstmoPluginRegistry` registers the plugin on both
+platforms. `BiometricPrompt` needs a `FragmentActivity`, so the plugin
+declares `android_backend_arg = "androidx.fragment.app.FragmentActivity"`
+and the registry hands the backend the host activity.
 
 ### Android
 
-The Activity must be a `FragmentActivity` — `AppCompatActivity` or
-`GameActivity` (enable the facade's `game-activity` feature), not
-`NativeActivity`:
+The Activity must be a `FragmentActivity` — `IstmoGameActivity` (enable
+the facade's `game-activity` feature) or your own `AppCompatActivity`
+calling `IstmoHost.onCreate(this)`, not `NativeActivity`:
 
 ```kotlin
-class MainActivity : GameActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        check(IstmoRuntime.start("my_app"))
-        IstmoRuntime.registerHandler(
-            BiometricDispatcher.PLUGIN_ID,
-            BiometricDispatcher(BiometricBackendImpl(this), BiometricCodecsImpl()),
-        )
-        super.onCreate(savedInstanceState)
-    }
-}
+class MainActivity : IstmoGameActivity()
 ```
 
-Add `implementation("androidx.biometric:biometric:1.1.0")`; its manifest
-brings the `USE_BIOMETRIC` permission.
+`dev.istmo.app` adds `androidx.biometric:biometric` from the plugin's
+`istmo.toml`; its manifest brings the `USE_BIOMETRIC` permission.
 
 Before API 30 the Keystore cannot bind a per-use key to the device
 credential, so `BiometricOrDeviceCredential` secrets use a key that
 stays unlocked for a few seconds after any unlock (10 by default).
-Tune it with `BiometricBackendImpl(this, credentialValiditySeconds = 5)`.
+Tune it by registering the backend yourself —
+`BiometricBackendImpl(this, credentialValiditySeconds = 5)` — with
+`[[app.plugin]] id = "istmo.biometric"` / `auto_register = false`.
 
 ### iOS
 
-```swift
-IstmoRuntime.shared.registerHandler(
-    BiometricDispatcher.PLUGIN_ID,
-    BiometricDispatcher(backend: BiometricBackendImpl(), codecs: BiometricCodecsImpl())
-)
-```
+Nothing to wire: `IstmoApp.run()` (or `IstmoPluginRegistry.registerAll()`)
+registers `BiometricBackendImpl()`.
 
 iOS terminates apps that use Face ID without `NSFaceIDUsageDescription`.
 The plugin declares a default through `[plugin.info_plist]`; localise it

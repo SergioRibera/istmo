@@ -20,7 +20,7 @@
 //! that needs a newer OS than the app targets fails the build with a
 //! message naming the plugin, the platform and both versions.
 //!
-//! The Gradle plugin loader repeats the Android check against the
+//! The `dev.istmo.app` Gradle plugin repeats the Android check against the
 //! resolved `minSdk` of the variant being built, and the generated
 //! xcodegen fragment repeats the Apple checks inside Xcode, so the
 //! guarantee holds even when `cargo` runs with a stale environment.

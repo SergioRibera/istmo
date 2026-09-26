@@ -43,10 +43,11 @@
 //!
 //! # Auto-registration
 //!
-//! Backends need an `Activity` on Android and a top view controller on
-//! iOS to present the picker, so bespoke construction is required.
-//! Auto-registration is disabled — wire the backend manually in your
-//! app's plugin registry.
+//! The generated `IstmoPluginRegistry` registers the mobile backends:
+//! Android hands the backend the host `ComponentActivity`
+//! (`IstmoGameActivity` is one) to launch the picker contracts, iOS
+//! presents from the top view controller. Desktop apps register
+//! [`DesktopFilePicker`] themselves.
 
 #![doc(html_root_url = "https://docs.rs/istmo-file-picker")]
 

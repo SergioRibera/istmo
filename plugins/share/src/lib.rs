@@ -35,8 +35,12 @@
 //!
 //! The native backends need an `Activity` (Android), a presenting view
 //! controller (iOS) or a registered window (desktop), so the plugin is
-//! pinned to `default_deployment = "local"` and auto-registration is
-//! disabled — wire the backend manually.
+//! pinned to `default_deployment = "local"`.
+//!
+//! On mobile the generated `IstmoPluginRegistry` registers it: Android
+//! hands the backend the host `ComponentActivity` (`IstmoGameActivity`
+//! is one), iOS presents from the key window. Desktop apps register
+//! [`DesktopShare`] through `ShareHost` themselves.
 
 #![doc(html_root_url = "https://docs.rs/istmo-share")]
 
