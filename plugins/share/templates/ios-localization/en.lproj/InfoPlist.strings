@@ -1,0 +1,2 @@
+/* Shown when the user picks "Save Image" / "Save Video" in the share sheet. */
+"NSPhotoLibraryAddUsageDescription" = "Save shared images and videos to your photo library.";

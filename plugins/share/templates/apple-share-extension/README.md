@@ -85,6 +85,10 @@ App `Info.plist`:
 target through the istmo xcodegen fragment):
 
 ```swift
+// At launch: drain right away whenever the extension commits a share
+// while the app process is alive.
+IstmoShareInbox.observeHandoffs()
+
 func sceneDidBecomeActive(_ scene: UIScene) {
     IstmoShareInbox.drain()
 }
@@ -100,7 +104,37 @@ func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
 
 ```rust
 let inbox = istmo_share::ShareInbox::acquire()?;
-istmo_share::desktop::drain_app_group_inbox("group.com.example.myapp", &inbox)?;
+let group = "group.com.example.myapp";
+istmo_share::desktop::drain_app_group_inbox(group, &inbox)?;
+istmo_share::desktop::observe_app_group_handoffs(group, &inbox)?;
 ```
 
-Call it at startup and whenever the app becomes active.
+## How the extension wakes the app
+
+After writing a share, the extension:
+
+1. posts the Darwin notification `<group>.istmo-share.handoff` — a
+   running app (`observeHandoffs` / `observe_app_group_handoffs`)
+   drains immediately;
+2. iOS: opens `<ISTMO_SHARE_URL_SCHEME>://istmo-share` through the
+   responder chain, which brings a suspended or terminated app to the
+   foreground; macOS: launches the app in the background if it is not
+   running.
+
+If both fail the share is not lost: it stays in the App Group until the
+app's next activation drain.
+
+## 5. Optional: share-sheet suggestions (direct share)
+
+`ShareClient::set_share_targets` donates `INSendMessageIntent`
+interactions so iOS suggests your conversations in the share sheet. It
+needs, in the app's `Info.plist`:
+
+```xml
+<key>NSUserActivityTypes</key>
+<array><string>INSendMessageIntent</string></array>
+```
+
+The template's `Info.plist` already lists `INSendMessageIntent` under
+`IntentsSupported`, and the extension forwards the picked
+conversation as `IncomingShare::target_id`.

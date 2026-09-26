@@ -1,0 +1,2 @@
+/* Se muestra cuando el usuario elige "Guardar imagen" / "Guardar video" en el menú de compartir. */
+"NSPhotoLibraryAddUsageDescription" = "Guarda las imágenes y videos compartidos en tu fototeca.";

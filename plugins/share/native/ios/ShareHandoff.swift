@@ -28,6 +28,27 @@ public enum IstmoShareHandoff {
     /// Host part of the wake-up URL: `<scheme>://istmo-share`.
     public static let wakeHost = "istmo-share"
 
+    /// Darwin notification posted after every committed entry, so a
+    /// running app drains immediately. Scoped by App Group so unrelated
+    /// apps using istmo do not wake each other.
+    public static func handoffNotificationName(appGroup: String) -> String {
+        "\(appGroup).istmo-share.handoff"
+    }
+
+    /// Extension side: tell a running containing app that a share is
+    /// waiting. Works whether or not the app is in the foreground, as
+    /// long as its process is alive.
+    public static func postHandoff(appGroup: String) {
+        let name = handoffNotificationName(appGroup: appGroup) as CFString
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName(name),
+            nil,
+            nil,
+            true
+        )
+    }
+
     public struct Manifest: Codable {
         public var text: String?
         public var url: String?
@@ -35,15 +56,19 @@ public enum IstmoShareHandoff {
         public var files: [File]
         public var sourceApp: String?
         public var receivedAtMs: UInt64?
+        /// `conversationIdentifier` of the donated share target the user
+        /// picked, if any.
+        public var targetId: String?
 
         public init(text: String? = nil, url: String? = nil, subject: String? = nil, files: [File] = [],
-                    sourceApp: String? = nil, receivedAtMs: UInt64? = nil) {
+                    sourceApp: String? = nil, receivedAtMs: UInt64? = nil, targetId: String? = nil) {
             self.text = text
             self.url = url
             self.subject = subject
             self.files = files
             self.sourceApp = sourceApp
             self.receivedAtMs = receivedAtMs
+            self.targetId = targetId
         }
     }
 

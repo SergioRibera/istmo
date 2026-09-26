@@ -9,6 +9,9 @@ import LinkPresentation
 #if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
 #endif
+#if canImport(Intents)
+import Intents
+#endif
 
 /// Reference `UIActivityViewController` backend for `istmo.share`.
 ///
@@ -24,7 +27,14 @@ import UniformTypeIdentifiers
 /// presenting; outgoing copies older than a day are pruned on every
 /// share. On iPad the sheet is a popover anchored on
 /// `ShareRequest.anchor.rect` (key-window points), or on the centre of
-/// the key window when no anchor is given.
+/// the key window when no anchor is given. Cancelling the Rust call
+/// dismisses the sheet.
+///
+/// Direct-share targets are donated as `INSendMessageIntent`
+/// interactions, which iOS shows in the share sheet's suggestion row.
+/// That needs `INSendMessageIntent` in the app's `NSUserActivityTypes`
+/// and a Share Extension that lists it under `IntentsSupported` (see
+/// `templates/apple-share-extension`).
 public final class ShareBackendImpl: ShareBackend {
 
     private let presenter: () -> AnyObject?
@@ -41,6 +51,10 @@ public final class ShareBackendImpl: ShareBackend {
         #endif
     }
 
+    /// Donation group, so replacing targets never touches the app's
+    /// other donated interactions.
+    private static let donationGroup = "dev.istmo.share.targets"
+
     public func capabilities() async throws -> ShareCapabilities {
         #if canImport(UIKit)
         ShareCapabilities(
@@ -50,15 +64,89 @@ public final class ShareBackendImpl: ShareBackend {
             richPreview: true,
             reportsCompletion: true,
             reportsTarget: true,
-            receive: true
+            receive: IstmoShareHandoff.configuredAppGroup() != nil,
+            directShare: Self.directShareConfigured(),
+            dismissOnCancel: true
         )
         #else
         ShareCapabilities(
             send: false, files: false, mixedContent: false, richPreview: false,
-            reportsCompletion: false, reportsTarget: false, receive: false
+            reportsCompletion: false, reportsTarget: false, receive: false,
+            directShare: false, dismissOnCancel: false
         )
         #endif
     }
+
+    public func staging_dir() async throws -> String {
+        let root = OutgoingStaging().root
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        } catch {
+            throw ShareError.io("\(root.path): \(error.localizedDescription)")
+        }
+        return root.path
+    }
+
+    public func set_share_targets(targets: [ShareTarget]) async throws {
+        #if canImport(Intents) && canImport(UIKit)
+        guard Self.directShareConfigured() else {
+            throw ShareError.unsupported("add INSendMessageIntent to NSUserActivityTypes to donate share targets")
+        }
+        do {
+            try await INInteraction.delete(with: Self.donationGroup)
+            for target in targets {
+                let interaction = INInteraction(intent: try Self.messageIntent(for: target), response: nil)
+                interaction.direction = .outgoing
+                interaction.groupIdentifier = Self.donationGroup
+                try await interaction.donate()
+            }
+        } catch let error as ShareError {
+            throw error
+        } catch {
+            throw ShareError.backend(error.localizedDescription)
+        }
+        #else
+        throw ShareError.unsupported("share-sheet suggestions need UIKit and Intents")
+        #endif
+    }
+
+    private static func directShareConfigured() -> Bool {
+        let types = Bundle.main.object(forInfoDictionaryKey: "NSUserActivityTypes") as? [String] ?? []
+        return types.contains("INSendMessageIntent")
+    }
+
+    #if canImport(Intents) && canImport(UIKit)
+    private static func messageIntent(for target: ShareTarget) throws -> INSendMessageIntent {
+        let name = INSpeakableString(spokenPhrase: target.label)
+        let intent: INSendMessageIntent
+        if #available(iOS 14.0, *) {
+            intent = INSendMessageIntent(
+                recipients: nil, outgoingMessageType: .outgoingMessageText, content: nil,
+                speakableGroupName: name, conversationIdentifier: target.id,
+                serviceName: nil, sender: nil, attachments: nil
+            )
+        } else {
+            intent = INSendMessageIntent(
+                recipients: nil, content: nil, speakableGroupName: name,
+                conversationIdentifier: target.id, serviceName: nil, sender: nil
+            )
+        }
+        if let icon = target.icon {
+            let data: Data
+            switch icon.source {
+            case .path(let path):
+                guard let loaded = FileManager.default.contents(atPath: path) else {
+                    throw ShareError.notFound(path)
+                }
+                data = loaded
+            case .bytes(let bytes):
+                data = bytes
+            }
+            intent.setImage(INImage(imageData: data), forParameterNamed: \.speakableGroupName)
+        }
+        return intent
+    }
+    #endif
 
     public func share(request: ShareRequest) async throws -> ShareOutcome {
         #if canImport(UIKit)
@@ -110,28 +198,43 @@ public final class ShareBackendImpl: ShareBackend {
         guard let host = presenter() as? UIViewController else {
             throw ShareError.noPresenter("no view controller to present UIActivityViewController from")
         }
-        return try await withCheckedThrowingContinuation { cont in
-            let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
-            controller.completionWithItemsHandler = { activityType, completed, _, error in
-                if let error = error {
-                    cont.resume(throwing: ShareError.backend(error.localizedDescription))
-                } else if completed {
-                    cont.resume(returning: .shared(activityType?.rawValue))
-                } else {
-                    cont.resume(returning: .dismissed)
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let once = OnceContinuation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { cont in
+                once.install(cont)
+                if Task.isCancelled {
+                    once.resume(.success(.dismissed))
+                    return
                 }
-            }
-            if let popover = controller.popoverPresentationController {
-                let view: UIView = host.view.window ?? host.view
-                popover.sourceView = view
-                if let rect = anchor?.rect {
-                    popover.sourceRect = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
-                } else {
-                    popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
-                    popover.permittedArrowDirections = []
+                controller.completionWithItemsHandler = { activityType, completed, _, error in
+                    if let error = error {
+                        once.resume(.failure(ShareError.backend(error.localizedDescription)))
+                    } else if completed {
+                        once.resume(.success(.shared(activityType?.rawValue)))
+                    } else {
+                        once.resume(.success(.dismissed))
+                    }
                 }
+                if let popover = controller.popoverPresentationController {
+                    let view: UIView = host.view.window ?? host.view
+                    popover.sourceView = view
+                    if let rect = anchor?.rect {
+                        popover.sourceRect = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
+                    } else {
+                        popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
+                        popover.permittedArrowDirections = []
+                    }
+                }
+                host.present(controller, animated: true)
             }
-            host.present(controller, animated: true)
+        } onCancel: {
+            // The Rust caller dropped the share: close the sheet. A
+            // programmatic dismissal does not fire the completion handler.
+            DispatchQueue.main.async {
+                controller.dismiss(animated: true)
+                once.resume(.success(.dismissed))
+            }
         }
     }
 
@@ -170,6 +273,27 @@ public final class ShareBackendImpl: ShareBackend {
 }
 
 #if canImport(UIKit)
+/// Resumes a continuation exactly once — the sheet's completion handler
+/// and a cancellation can race.
+final class OnceContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<ShareOutcome, Error>?
+
+    func install(_ continuation: CheckedContinuation<ShareOutcome, Error>) {
+        lock.lock()
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func resume(_ result: Result<ShareOutcome, Error>) {
+        lock.lock()
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+}
+
 /// Plain-text item that also feeds the mail subject and, when no link is
 /// shared, the rich preview header.
 final class TextItemSource: NSObject, UIActivityItemSource {

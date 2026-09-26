@@ -11,6 +11,9 @@
 
 import Foundation
 import UniformTypeIdentifiers
+#if canImport(Intents)
+import Intents
+#endif
 #if canImport(UIKit)
 import UIKit
 typealias PlatformViewController = UIViewController
@@ -49,6 +52,11 @@ final class ShareViewController: PlatformViewController {
             }
             let entry = try IstmoShareHandoff.beginEntry(appGroup: group)
             var manifest = IstmoShareHandoff.Manifest(receivedAtMs: IstmoShareHandoff.nowMs())
+            #if canImport(Intents) && canImport(UIKit)
+            // Set when the user picked one of the app's donated
+            // share-sheet suggestions (ShareClient::set_share_targets).
+            manifest.targetId = (context.intent as? INSendMessageIntent)?.conversationIdentifier
+            #endif
             let items = context.inputItems.compactMap { $0 as? NSExtensionItem }
             for item in items {
                 if manifest.subject == nil {
@@ -62,6 +70,7 @@ final class ShareViewController: PlatformViewController {
                 }
             }
             try IstmoShareHandoff.commit(entry: entry, manifest: manifest)
+            IstmoShareHandoff.postHandoff(appGroup: group)
             wakeContainingApp()
             context.completeRequest(returningItems: nil)
         } catch {
@@ -129,11 +138,20 @@ final class ShareViewController: PlatformViewController {
         }
     }
 
-    /// iOS: open `<scheme>://istmo-share` so the app drains the inbox
-    /// right away. Share extensions cannot call `UIApplication.open`
-    /// directly; walking the responder chain to the shared application
-    /// is the established workaround. When it fails, the app still
-    /// drains on its next activation.
+    /// Bring the containing app up so it drains the inbox now. The
+    /// Darwin notification posted before this already covers an app
+    /// whose process is alive; this handles one that is not running.
+    ///
+    /// iOS: extensions may not call `UIApplication.open` (it does not
+    /// compile in an extension target), and the old
+    /// `perform("openURL:")` trick stopped working in iOS 18. Walking the
+    /// responder chain to the application object and invoking
+    /// `openURL:options:completionHandler:` through its implementation
+    /// still works. When it fails, the app drains on its next
+    /// activation.
+    ///
+    /// macOS: launch the containing app in the background if it is not
+    /// running; it drains at startup.
     private func wakeContainingApp() {
         #if canImport(UIKit)
         guard let scheme = Bundle.main.object(forInfoDictionaryKey: IstmoShareHandoff.urlSchemeInfoKey) as? String,
@@ -141,14 +159,36 @@ final class ShareViewController: PlatformViewController {
               let url = URL(string: "\(scheme)://\(IstmoShareHandoff.wakeHost)") else {
             return
         }
+        openThroughResponderChain(url)
+        #else
+        // .../MyApp.app/Contents/PlugIns/Share.appex → .../MyApp.app
+        let appURL = Bundle.main.bundleURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        guard let bundleId = Bundle(url: appURL)?.bundleIdentifier,
+              NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).isEmpty else {
+            return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
+        #endif
+    }
+
+    #if canImport(UIKit)
+    private func openThroughResponderChain(_ url: URL) {
+        typealias OpenURL = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, AnyObject?) -> Void
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
         var responder: UIResponder? = self
         while let current = responder {
-            if let application = current as? UIApplication {
-                application.open(url, options: [:], completionHandler: nil)
+            if current is UIApplication, current.responds(to: selector) {
+                let open = unsafeBitCast(current.method(for: selector), to: OpenURL.self)
+                open(current, selector, url as NSURL, NSDictionary(), nil)
                 return
             }
             responder = current.next
         }
-        #endif
     }
+    #endif
 }

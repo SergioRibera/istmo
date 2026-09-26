@@ -28,6 +28,12 @@
 	<dict>
 		<key>NSExtensionAttributes</key>
 		<dict>
+			<!-- Lets iOS route donated share-sheet suggestions
+			     (ShareClient::set_share_targets) to this extension. -->
+			<key>IntentsSupported</key>
+			<array>
+				<string>INSendMessageIntent</string>
+			</array>
 			<!-- What the extension accepts. Tighten or widen to taste:
 			     https://developer.apple.com/documentation/bundleresources/information_property_list/nsextension/nsextensionattributes/nsextensionactivationrule -->
 			<key>NSExtensionActivationRule</key>
