@@ -77,11 +77,20 @@ class IstmoAppPlugin : Plugin<Project> {
         val variantManifests = components.pluginVersion >= AndroidPluginVersion(8, 3)
         var metadata: IstmoMetadata? = null
 
+        val doctorRequested = project.gradle.startParameter.taskNames.any { it.substringAfterLast(':') == "istmoDoctor" }
         components.finalizeDsl { android ->
             val crateDir = extension.crateDir.orNull ?: androidRoot.parentFile
             val abis = abisOf(android, extension)
-            val loaded = MetadataStore(androidRoot, crateDir, toolchain)
-                .load(rustTarget(abis.first()), android.defaultConfig.minSdk ?: DEFAULT_MIN_SDK)
+            val store = MetadataStore(androidRoot, crateDir, toolchain)
+            val loaded = try {
+                store.load(rustTarget(abis.first()), android.defaultConfig.minSdk ?: DEFAULT_MIN_SDK)
+            } catch (error: GradleException) {
+                // Let `istmoDoctor` report what is broken instead of failing
+                // the configuration it needs.
+                if (!doctorRequested) throw error
+                project.logger.warn("$TAG: ${error.message}")
+                return@finalizeDsl
+            }
             metadata = loaded
             applyIdentity(project, android, loaded.app, androidRoot)
             linkPlugins(project, android, loaded.plugins, variantManifests)
@@ -203,7 +212,7 @@ class IstmoAppPlugin : Plugin<Project> {
             val buildTypeName = buildType.name
             val profile = extension.profiles.get()[buildTypeName] ?: if (buildTypeName == "debug") "dev" else "release"
             val jniRoot = project.layout.buildDirectory.dir("istmo/jniLibs/$buildTypeName")
-            android.sourceSets.getByName(buildTypeName).jniLibs.srcDir(jniRoot)
+            android.sourceSets.getByName(buildTypeName).jniLibs.srcDir(jniRoot.get().asFile)
             val tasks = abis.map { abi ->
                 val target = rustTarget(abi)
                 project.tasks.register("cargoBuild${buildTypeName.capitalized()}${abiTaskSuffix(abi)}", CargoBuildTask::class.java) {
