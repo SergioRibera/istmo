@@ -598,3 +598,32 @@ impl Dispatch for SeedHost {
         self.0.dispatch(instance_id, method, payload, cancel)
     }
 }
+
+#[test]
+fn dropping_a_local_call_cancels_the_in_process_host() {
+    use std::future::Future;
+    use std::task::{Context, Waker};
+
+    let saw_cancel = Arc::new(AtomicBool::new(false));
+    let init = Runtime::mock()
+        .host(CooperativeDispatch {
+            saw_cancel: Arc::clone(&saw_cancel),
+        })
+        .finish();
+    {
+        let mut call = std::pin::pin!(
+            init.runtime
+                .call(CooperativeDispatch::PLUGIN_ID, None, "wait", Vec::new())
+                .expect("call")
+        );
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+    }
+    for _ in 0..200 {
+        if saw_cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("in-process host never saw the cancellation");
+}

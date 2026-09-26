@@ -345,6 +345,7 @@ impl Runtime {
             call_id,
             receiver: Some(rx),
             runtime: Arc::downgrade(self),
+            local_host: hosted,
         })
     }
 
@@ -423,6 +424,7 @@ impl Runtime {
             call_id,
             receiver: Some(rx),
             runtime: Arc::downgrade(self),
+            local_host: hosted,
         })
     }
 
@@ -568,6 +570,18 @@ impl Runtime {
         self.routing.remove_pending(call_id.get());
         let envelope = Envelope::new(Frame::Cancel { call_id });
         self.send_outbound(envelope)
+    }
+
+    /// Cancel a call served by a host registered in this runtime: the
+    /// host's [`CancelToken`] fires and its eventual response is
+    /// discarded.
+    fn cancel_local_call(&self, call_id: CallId) {
+        self.routing.remove_pending(call_id.get());
+        // The token is registered synchronously before `call` returns;
+        // a missing entry means the host already finished.
+        if let Some(token) = lock(&self.cancelled_hosted).get(&call_id) {
+            token.cancel();
+        }
     }
 
     /// Ask the peer to close a live stream.
@@ -1110,6 +1124,10 @@ pub struct CallHandle {
     call_id: CallId,
     receiver: Option<oneshot::Receiver<CallResult>>,
     runtime: Weak<Runtime>,
+    /// The call is served by a host registered in this runtime, so a
+    /// drop cancels it in-process instead of sending a `Cancel` frame
+    /// the peer knows nothing about.
+    local_host: bool,
 }
 
 impl CallHandle {
@@ -1160,7 +1178,11 @@ impl Drop for CallHandle {
             return;
         }
         if let Some(rt) = self.runtime.upgrade() {
-            drop(rt.cancel_call(self.call_id));
+            if self.local_host {
+                rt.cancel_local_call(self.call_id);
+            } else {
+                drop(rt.cancel_call(self.call_id));
+            }
         }
     }
 }
