@@ -247,7 +247,7 @@ pub fn emit_app_with(opts: AppOpts) {
         }
     }
 
-    // Registries are emitted even when empty: `IstmoActivity` and the
+    // Registries are emitted even when empty: `IstmoHost` and the
     // generated `IstmoApp.run()` reference them unconditionally.
     if android_active {
         match android_package.as_deref() {
@@ -257,6 +257,9 @@ pub fn emit_app_with(opts: AppOpts) {
             }
             None => {}
         }
+        // Set by the `dev.istmo.app` Gradle plugin to force a rewrite of
+        // `android/.istmo/istmo.json` when it bootstraps the metadata.
+        println!("cargo:rerun-if-env-changed=ISTMO_METADATA_REFRESH");
         if std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "android") {
             sync_android_project(
                 &android_root,
