@@ -1,0 +1,63 @@
+# xcodegen spec for the biometric demo (iOS side).
+#
+# Generate the .xcodeproj with:
+#
+#   cd examples/biometric-demo/ios && xcodegen generate
+#
+# `cargo build -p biometric-demo` (also run by the `build-rust.sh`
+# pre-build phase) regenerates `BiometricDemo/istmo-plugins.yml`, which
+# links the plugin's reference `BiometricBackendImpl.swift`, the
+# generated dispatcher / types / codecs under `BiometricDemo/Plugins/`,
+# and patches `NSFaceIDUsageDescription` into `Info.plist`.
+
+name: BiometricDemo
+
+include:
+  - path: BiometricDemo/istmo-plugins.yml
+
+options:
+  bundleIdPrefix: dev.istmo.biometricdemo
+  deploymentTarget:
+    iOS: 14.0
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+packages:
+  # Root `Package.swift` vends `IstmoRuntime`; three directories up from
+  # `examples/biometric-demo/ios/`.
+  IstmoRuntime:
+    path: ../../..
+
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+    IPHONEOS_DEPLOYMENT_TARGET: 14.0
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    LIBRARY_SEARCH_PATHS:
+      - $(inherited)
+      - $(PROJECT_DIR)/build/rust/$(PLATFORM_NAME)/$(CURRENT_ARCH)
+    OTHER_LDFLAGS:
+      - $(inherited)
+      - -lbiometric_demo
+
+targets:
+  BiometricDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: BiometricDemo
+    info:
+      path: BiometricDemo/Info.plist
+    dependencies:
+      - package: IstmoRuntime
+        product: IstmoRuntime
+      - sdk: LocalAuthentication.framework
+    preBuildScripts:
+      - name: cargo build biometric-demo (staticlib per arch)
+        path: build-rust.sh
+        runOnlyWhenInstalling: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.istmo.biometricdemo.BiometricDemo
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO

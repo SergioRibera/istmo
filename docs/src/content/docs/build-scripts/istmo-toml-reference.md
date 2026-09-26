@@ -78,6 +78,18 @@ from_version = "1.5.0"
   `requires_network` for `processing`; `continuous_mode` (`audio` |
   `location` | `voip` | `external_accessory` | `bluetooth_central` |
   `bluetooth_peripheral`) for `continuous`.
+- **`[plugin.info_plist]`** *(optional, table)* — top-level `Info.plist`
+  entries the plugin needs on iOS (usage descriptions, capability
+  flags). Keys are `Info.plist` keys; values are strings or booleans:
+  ```toml
+  [plugin.info_plist]
+  NSFaceIDUsageDescription = "Authenticate to unlock protected content."
+  ```
+  `emit_app` merges the entries of every plugin (first declaration
+  wins on conflicting values, with a build warning), applies the app's
+  [`[app.info_plist]`](#appinfo_plist) overrides and writes them into
+  the `Info.plist` managed block and the `Info.plist.background.xml`
+  sidecar.
 
 ## `[[plugin]]` — array form
 
@@ -160,6 +172,30 @@ role      = "client"
 
 Match rule: `id` takes precedence, then `type`. Either matches by
 string equality.
+
+### `[app.info_plist]`
+
+Overrides (or adds) `Info.plist` entries on top of the ones declared by
+plugins through `[plugin.info_plist]` — typically to localise a usage
+description:
+
+```toml
+[app.info_plist]
+NSFaceIDUsageDescription = "Use Face ID to open your vault."
+```
+
+Entries land between the managed markers of the app's `Info.plist`,
+shared with `[plugin.ios_background]`:
+
+```xml
+<dict>
+    <!-- istmo:background:start -->
+    <!-- istmo:background:end -->
+</dict>
+```
+
+Without the markers, copy the entries from the generated
+`Info.plist.background.xml` sidecar by hand.
 
 ## `[[remote_override]]`
 

@@ -1,0 +1,88 @@
+[package]
+name = "istmo-biometric"
+version = "0.1.1-alpha.2"
+description = "Cross-platform biometric authentication plugin for the istmo framework — BiometricPrompt on Android, LocalAuthentication on iOS/macOS, Windows Hello on Windows, fprintd on Linux."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "biometric", "face-id", "fingerprint", "windows-hello"]
+categories = ["authentication", "api-bindings"]
+links = "istmo_biometric"
+
+[features]
+default = []
+codegen = ["dep:istmo-build"]
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+bincode = { workspace = true }
+istmo-build = { workspace = true, optional = true }
+
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+flume = { workspace = true }
+tracing = { workspace = true }
+raw-window-handle = { version = "0.6", default-features = false }
+
+# Touch ID through LocalAuthentication.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSError", "NSString"] }
+objc2-local-authentication = { version = "0.3", default-features = false, features = ["std", "block2", "LABiometryType", "LAContext", "LADomainState", "LAError"] }
+# Keychain items guarded by `SecAccessControl` for biometric-bound secrets.
+core-foundation = "0.10"
+security-framework = { version = "3", default-features = false }
+security-framework-sys = { version = "2", default-features = false, features = ["OSX_10_15"] }
+
+# Windows Hello through WinRT `UserConsentVerifier`.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Security_Credentials",
+    "Security_Credentials_UI",
+    "Security_Cryptography",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_System_WinRT",
+    "Win32_Devices_BiometricFramework",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-future = { version = "0.3", default-features = false, features = ["std"] }
+# Vault encryption under a key derived from a Windows Hello signature.
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+
+# fprintd over the system D-Bus.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+futures-lite = { version = "2", default-features = false, features = ["std"] }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+pollster = { workspace = true }
+flume = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_safety_doc = "allow"
+redundant_pub_crate = "allow"

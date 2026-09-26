@@ -1,6 +1,6 @@
 use istmo_build::{
-    Deployment, GradleScope, Manifest, NativeDeps, deserialize_native_deps, resolve_wiring,
-    serialize_native_deps,
+    Deployment, GradleScope, InfoPlistEntry, InfoPlistValue, Manifest, NativeDeps,
+    deserialize_native_deps, resolve_wiring, serialize_native_deps,
 };
 
 #[test]
@@ -278,4 +278,60 @@ default_deployment = "sandbox"
     let msg = format!("{err}");
     assert!(msg.contains("`sandbox`"), "got {msg}");
     assert!(msg.contains("expected `local` or `remote`"), "got {msg}");
+}
+
+#[test]
+fn plugin_info_plist_parses_strings_and_bools_and_survives_bincode_roundtrip() {
+    let src = r#"
+[plugin]
+id = "istmo.biometric"
+
+[plugin.info_plist]
+NSFaceIDUsageDescription = "Unlock <secrets> & more"
+ITSAppUsesNonExemptEncryption = false
+"#;
+    let m = Manifest::parse(src).expect("parse");
+    let entries = &m.plugins[0].info_plist;
+    assert_eq!(
+        entries,
+        &vec![
+            InfoPlistEntry {
+                key: "NSFaceIDUsageDescription".to_owned(),
+                value: InfoPlistValue::String("Unlock <secrets> & more".to_owned()),
+            },
+            InfoPlistEntry {
+                key: "ITSAppUsesNonExemptEncryption".to_owned(),
+                value: InfoPlistValue::Bool(false),
+            },
+        ]
+    );
+    assert_eq!(
+        entries[0].render(),
+        "<key>NSFaceIDUsageDescription</key>\n<string>Unlock &lt;secrets&gt; &amp; more</string>\n"
+    );
+    assert_eq!(
+        entries[1].render(),
+        "<key>ITSAppUsesNonExemptEncryption</key>\n<false/>\n"
+    );
+
+    let hex = istmo_build::handover::serialize_manifest(&m).expect("serialize");
+    let back = istmo_build::handover::deserialize_manifest(&hex).expect("deserialize");
+    assert_eq!(back.plugins[0].info_plist, m.plugins[0].info_plist);
+}
+
+#[test]
+fn plugin_info_plist_rejects_non_scalar_values() {
+    let src = r#"
+[plugin]
+id = "istmo.biometric"
+
+[plugin.info_plist]
+NSFaceIDUsageDescription = 42
+"#;
+    let err = Manifest::parse(src).expect_err("must fail");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("plugin.info_plist.NSFaceIDUsageDescription"),
+        "got {msg}"
+    );
 }

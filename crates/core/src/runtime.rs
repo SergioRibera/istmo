@@ -288,6 +288,7 @@ impl Runtime {
             call_id,
             receiver: Some(rx),
             runtime: Arc::downgrade(self),
+            hosted,
         })
     }
 
@@ -366,6 +367,7 @@ impl Runtime {
             call_id,
             receiver: Some(rx),
             runtime: Arc::downgrade(self),
+            hosted,
         })
     }
 
@@ -416,8 +418,7 @@ impl Runtime {
     ///
     /// [`IstmoError::ChannelClosed`] when the outbound pump is gone.
     pub fn release_native_handle(&self, handle_id: NativeHandleId) -> Result<(), IstmoError> {
-        let hooks: Vec<NativeHandleReleaseHook> =
-            lock(&self.native_handle_release_hooks).clone();
+        let hooks: Vec<NativeHandleReleaseHook> = lock(&self.native_handle_release_hooks).clone();
         for hook in &hooks {
             hook(handle_id);
         }
@@ -512,6 +513,17 @@ impl Runtime {
         self.routing.remove_pending(call_id.get());
         let envelope = Envelope::new(Frame::Cancel { call_id });
         self.send_outbound(envelope)
+    }
+
+    /// Cancel a call served by a host registered on this runtime: trips
+    /// the [`CancelToken`] handed to the hosted dispatch instead of
+    /// sending [`Frame::Cancel`] to the peer, which never saw the call.
+    fn cancel_hosted_local_call(&self, call_id: CallId) {
+        self.routing.remove_pending(call_id.get());
+        let token = lock(&self.cancelled_hosted).get(&call_id).cloned();
+        if let Some(token) = token {
+            token.cancel();
+        }
     }
 
     /// Ask the peer to close a live stream.
@@ -1054,6 +1066,9 @@ pub struct CallHandle {
     call_id: CallId,
     receiver: Option<oneshot::Receiver<CallResult>>,
     runtime: Weak<Runtime>,
+    /// Served by a host registered on this runtime rather than by the
+    /// peer — decides where a drop-cancel is delivered.
+    hosted: bool,
 }
 
 impl CallHandle {
@@ -1104,7 +1119,11 @@ impl Drop for CallHandle {
             return;
         }
         if let Some(rt) = self.runtime.upgrade() {
-            drop(rt.cancel_call(self.call_id));
+            if self.hosted {
+                rt.cancel_hosted_local_call(self.call_id);
+            } else {
+                drop(rt.cancel_call(self.call_id));
+            }
         }
     }
 }

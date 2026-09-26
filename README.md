@@ -43,7 +43,7 @@ The `istmo` facade re-exports:
 Platform-specific transports (`istmo-android`, `istmo-ios`) are pulled
 in automatically by target-cfg. Community plugins ship as separate
 crates (`istmo-google-sign-in`, `istmo-data-store`,
-`istmo-live-activity`).
+`istmo-live-activity`, `istmo-biometric`).
 
 ### Kotlin — Gradle (Android)
 
