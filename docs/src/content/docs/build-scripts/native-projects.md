@@ -189,7 +189,7 @@ spelled out:
 Everything `build.rs` generates is rebuilt on each build and can be
 ignored:
 
-```gitignore
+```text
 android/.istmo/
 ios/.istmo/
 android/app/src/main/java/dev/istmo/generated/

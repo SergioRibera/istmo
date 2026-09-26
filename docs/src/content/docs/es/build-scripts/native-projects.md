@@ -192,7 +192,7 @@ explicado:
 Todo lo que genera `build.rs` se reconstruye en cada build y se puede
 ignorar:
 
-```gitignore
+```text
 android/.istmo/
 ios/.istmo/
 android/app/src/main/java/dev/istmo/generated/
