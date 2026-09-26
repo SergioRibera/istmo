@@ -75,6 +75,7 @@ dispatch2 = { version = "0.3", default-features = false, features = ["std", "obj
 istmo-build = { workspace = true }
 
 [dev-dependencies]
+istmo-build = { workspace = true }
 istmo-window = { workspace = true }
 pollster = { workspace = true }
 flume = { workspace = true }
