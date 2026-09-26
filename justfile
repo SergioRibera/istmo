@@ -31,6 +31,7 @@ mount := "-v $(pwd):/src -v $HOME/.android:/root/.android -v gradle-cache:/root/
 android-demo: (build "android-demo") (install "android-demo") (run "android-demo")
 pen-demo: (build "pen-demo") (install "pen-demo") (run "pen-demo")
 biometric-demo: (build "biometric-demo") (install "biometric-demo") (run "biometric-demo")
+share-demo: (build "share-demo") (install "share-demo") (run "share-demo")
 data-store: (build "data-store-demo") (install "data-store-demo") (run "data-store-demo")
 android-multi: (build "android-multi") (install "android-multi") (run "android-multi")
 rust-mobile-demo: (build "rust-mobile-demo") (install "rust-mobile-demo") (run "rust-mobile-demo")
@@ -198,6 +199,7 @@ run name:
         android-multi) component="dev.istmo.multi/dev.istmo.multi.MainActivity" ;;
         rust-mobile-demo) component="dev.istmo.rustdemo/dev.istmo.rustdemo.RustMobileActivity" ;;
         biometric-demo) component="dev.istmo.biometricdemo/dev.istmo.biometricdemo.BiometricDemoActivity" ;;
+        share-demo) component="dev.istmo.sharedemo/dev.istmo.sharedemo.ShareDemoActivity" ;;
         *) echo "just run: no launcher configured for '{{name}}'"; exit 1 ;;
     esac
     adb shell am start -n "$component"

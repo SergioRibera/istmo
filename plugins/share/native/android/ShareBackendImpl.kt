@@ -152,7 +152,7 @@ class ShareBackendImpl(
                     .setRank(rank)
                     .setCategories(setOf(DIRECT_SHARE_CATEGORY))
                     .setIntent(Intent(launch).setAction(Intent.ACTION_MAIN))
-                    .apply { target.icon?.let { icon -> loadIcon(icon)?.let(::setIcon) } }
+                    .apply { target.icon?.let(::loadIcon)?.let { setIcon(it) } }
                     .build()
             }
             // Replace only the plugin's shortcuts; the app's own stay.

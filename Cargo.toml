@@ -24,6 +24,7 @@ members = [
     "examples/data-store-demo",
     "examples/live-activity-demo",
     "examples/pen-demo",
+    "examples/share-demo",
     "examples/biometric-demo",
 ]
 
