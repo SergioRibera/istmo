@@ -345,7 +345,7 @@ impl Runtime {
             call_id,
             receiver: Some(rx),
             runtime: Arc::downgrade(self),
-            local_host: hosted,
+            hosted,
         })
     }
 
@@ -424,7 +424,7 @@ impl Runtime {
             call_id,
             receiver: Some(rx),
             runtime: Arc::downgrade(self),
-            local_host: hosted,
+            hosted,
         })
     }
 
@@ -572,14 +572,13 @@ impl Runtime {
         self.send_outbound(envelope)
     }
 
-    /// Cancel a call served by a host registered in this runtime: the
-    /// host's [`CancelToken`] fires and its eventual response is
-    /// discarded.
-    fn cancel_local_call(&self, call_id: CallId) {
+    /// Cancel a call served by a host registered on this runtime: trips
+    /// the [`CancelToken`] handed to the hosted dispatch instead of
+    /// sending [`Frame::Cancel`] to the peer, which never saw the call.
+    fn cancel_hosted_local_call(&self, call_id: CallId) {
         self.routing.remove_pending(call_id.get());
-        // The token is registered synchronously before `call` returns;
-        // a missing entry means the host already finished.
-        if let Some(token) = lock(&self.cancelled_hosted).get(&call_id) {
+        let token = lock(&self.cancelled_hosted).get(&call_id).cloned();
+        if let Some(token) = token {
             token.cancel();
         }
     }
@@ -1124,10 +1123,9 @@ pub struct CallHandle {
     call_id: CallId,
     receiver: Option<oneshot::Receiver<CallResult>>,
     runtime: Weak<Runtime>,
-    /// The call is served by a host registered in this runtime, so a
-    /// drop cancels it in-process instead of sending a `Cancel` frame
-    /// the peer knows nothing about.
-    local_host: bool,
+    /// Served by a host registered on this runtime rather than by the
+    /// peer — decides where a drop-cancel is delivered.
+    hosted: bool,
 }
 
 impl CallHandle {
@@ -1178,8 +1176,8 @@ impl Drop for CallHandle {
             return;
         }
         if let Some(rt) = self.runtime.upgrade() {
-            if self.local_host {
-                rt.cancel_local_call(self.call_id);
+            if self.hosted {
+                rt.cancel_hosted_local_call(self.call_id);
             } else {
                 drop(rt.cancel_call(self.call_id));
             }

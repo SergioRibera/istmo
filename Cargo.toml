@@ -17,12 +17,14 @@ members = [
     "plugins/google-sign-in",
     "plugins/data-store",
     "plugins/file-picker",
+    "plugins/biometric",
     "plugins/live-activity",
     "plugins/istmo-pen",
     "plugins/share",
     "examples/data-store-demo",
     "examples/live-activity-demo",
     "examples/pen-demo",
+    "examples/biometric-demo",
 ]
 
 [workspace.package]
@@ -80,6 +82,7 @@ istmo-live-activity = { path = "plugins/live-activity", version = "0.1.1-alpha.2
 istmo-pen = { path = "plugins/istmo-pen", version = "0.1.1-alpha.2" }
 istmo-file-picker = { path = "plugins/file-picker", version = "0.1.1-alpha.2" }
 istmo-share = { path = "plugins/share", version = "0.1.1-alpha.2" }
+istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.2" }
 
 [package]
 name = "istmo"

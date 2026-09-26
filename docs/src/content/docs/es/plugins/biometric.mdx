@@ -1,0 +1,305 @@
+---
+title: Biometric
+description: Autenticación biométrica y secretos protegidos por biometría en Android, iOS, macOS, Windows y Linux desde un único trait de Rust.
+sidebar:
+  order: 4
+---
+
+import PluginTypes from '../../../../generated/plugins/biometric-types.mdx';
+
+`istmo-biometric` comprueba si el dispositivo puede verificar a su
+usuario, muestra el prompt biométrico del sistema y guarda secretos
+pequeños cifrados con material de clave que el SO sólo libera tras una
+verificación exitosa. La API de Rust es la misma en todas partes:
+
+| Plataforma | Backend                                          | Hosteado en |
+| ---------- | ------------------------------------------------ | ----------- |
+| Android    | `androidx.biometric` (`BiometricPrompt`)         | Kotlin      |
+| iOS        | `LocalAuthentication` (Face ID / Touch ID)       | Swift       |
+| macOS      | `LocalAuthentication` (Touch ID)                 | Rust        |
+| Windows    | Windows Hello (`UserConsentVerifier`)            | Rust        |
+| Linux      | `fprintd` sobre el D-Bus del sistema             | Rust        |
+
+## Instalación
+
+```toml
+[dependencies]
+istmo-biometric = "0.1"
+```
+
+## Comprobar disponibilidad
+
+`availability` nunca muestra UI. Usalo para decidir si ofrecer un botón
+"desbloquear con Face ID":
+
+```rust
+use istmo_biometric::{AuthPolicy, BiometricClient};
+
+let biometric = BiometricClient::acquire()?;
+let availability = biometric.availability(AuthPolicy::BiometricStrong).await?;
+if availability.is_available() {
+    // availability.kinds: [Fingerprint], [Face], …
+}
+if availability.vault_available {
+    // store_secret / read_secret van a funcionar en este dispositivo.
+}
+```
+
+`kinds` viene de la plataforma: Face ID / Touch ID / Optic ID en Apple,
+features de `PackageManager` en Android, el Windows Biometric Framework
+en Windows y siempre `[Fingerprint]` en Linux (fprintd sólo maneja
+lectores de huellas). `vault_available` es `false` en dispositivos sin
+credencial de bloqueo, en binarios de macOS sin el entitlement del
+keychain y en Linux salvo que la app active la bóveda del keyring.
+
+## Detectar cambios de enrolamiento
+
+`enrollment_state` devuelve un token opaco que cambia cuando se agregan
+o quitan huellas o rostros. Guardalo después de loguear al usuario y
+pedí tus propias credenciales de nuevo cuando cambie — eso cierra el
+agujero de "alguien agregó su huella al teléfono de la víctima":
+
+```rust
+let current = biometric.enrollment_state().await?;
+if stored_token.is_some() && current != stored_token {
+    // Reautenticar con la contraseña de la cuenta y guardar `current`.
+}
+```
+
+| Plataforma  | Token                                                                              |
+| ----------- | ---------------------------------------------------------------------------------- |
+| iOS / macOS | Hash biométrico de `LADomainState` (`evaluatedPolicyDomainState` antes de iOS 18 / macOS 15) |
+| Android     | Generación aleatoria de una clave centinela del Keystore que el SO invalida al cambiar el enrolamiento; se genera una nueva la primera vez que se observa el cambio |
+| Linux       | Los nombres de los dedos enrolados — re-enrolar el mismo dedo no se detecta       |
+| Windows     | Siempre `None`: Windows Hello no expone el estado de enrolamiento                  |
+
+`None` también significa que no hay biometría enrolada. Los tokens sólo
+son comparables en el mismo dispositivo e instalación de la app.
+
+## Autenticar
+
+```rust
+use istmo_biometric::{AuthPolicy, AuthPrompt, BiometricError};
+
+let prompt = AuthPrompt::new("Desbloquear", "Confirmá que sos vos para abrir tus notas")
+    .subtitle("Notas")
+    .cancel_label("Ahora no")
+    .policy(AuthPolicy::BiometricOrDeviceCredential);
+
+match biometric.authenticate(prompt).await {
+    Ok(method) => println!("verificado con {method:?}"),
+    Err(err) => match BiometricError::try_from(err) {
+        Ok(BiometricError::UserCancelled) => {}
+        Ok(domain) => eprintln!("{domain}"),
+        Err(transport) => eprintln!("error del runtime: {transport}"),
+    },
+}
+```
+
+Las llamadas del cliente devuelven `istmo_core::IstmoError`;
+`BiometricError::try_from` recupera el error de dominio tipado y
+devuelve intactos los errores de transporte.
+
+Soltar el future cancela la llamada y cierra el prompt
+(`cancelAuthentication` en Android, `LAContext.invalidate` en Apple,
+`VerifyStop` en fprintd). Windows Hello sólo ofrece una cancelación
+best-effort.
+
+:::caution
+Un `authenticate` exitoso es una barrera de UI: en un dispositivo
+rooteado o con jailbreak el callback de éxito se puede falsificar.
+Protegé los secretos reales con la bóveda de abajo.
+:::
+
+## Secretos protegidos por biometría
+
+```rust
+let prompt = AuthPrompt::new("Desbloquear", "Leer tu token de API");
+
+biometric
+    .store_secret("api.token".into(), token.into_bytes(), prompt.clone())
+    .await?;
+let token = biometric.read_secret("api.token".into(), prompt).await?;
+biometric.delete_secret("api.token".into()).await?;
+let stored = biometric.has_secret("api.token".into()).await?; // sin UI
+```
+
+Los alias tienen de 1 a 64 caracteres ASCII: letras, dígitos, `.`, `_`
+o `-`; validalos de antemano con `SecretAlias::try_from`.
+
+| Plataforma | Cómo se protege el secreto                                                                    |
+| ---------- | --------------------------------------------------------------------------------------------- |
+| Android    | Clave AES-256-GCM del Keystore usable sólo a través de `BiometricPrompt.CryptoObject`          |
+| iOS        | Ítem del Keychain con `SecAccessControl` (`.biometryCurrentSet` o `.userPresence`)             |
+| macOS      | Igual que iOS, en el keychain de data-protection — [sólo apps firmadas](#macos-los-secretos-requieren-una-app-firmada) |
+| Windows    | Clave AES-256-GCM derivada (HKDF) de la firma de una credencial de Windows Hello               |
+| Linux      | Sólo opt-in: ítem del keyring de Secret Service detrás de fprintd ([barrera de UI](#linux-bóveda-en-el-keyring-con-barrera-de-ui)) |
+
+Android y Windows también verifican al usuario al guardar, así que
+`store_secret` muestra el prompt allí. Con una política sólo
+biométrica, registrar un dedo o rostro nuevo destruye la clave: Android
+reporta `KeyInvalidated` y Apple deja de encontrar el ítem
+(`SecretNotFound`).
+
+Windows crea la clave de Hello en el primer `store_secret` de un alias y
+después firma con ella, así que ese primer guardado muestra Hello dos
+veces.
+
+### Linux: bóveda en el keyring con barrera de UI
+
+fprintd no tiene material de clave al que atar un secreto, así que Linux
+no tiene una bóveda real. Las apps que acepten una garantía más débil
+pueden activar una:
+
+```rust
+DesktopBiometric::default().with_ui_gated_vault()
+```
+
+Los secretos van entonces al keyring de Secret Service del usuario
+(GNOME Keyring, KWallet, KeePassXC, …) y cada `store_secret` /
+`read_secret` exige antes una huella válida. Es una **barrera de UI, no
+un vínculo criptográfico**: cualquier proceso del mismo usuario puede
+leer el ítem del keyring sin tocar el lector. Sin el opt-in los métodos
+de la bóveda devuelven `UnsupportedOperation`.
+
+### macOS: los secretos requieren una app firmada
+
+En macOS la bóveda vive en el **keychain de data-protection**, el único
+keychain que aplica el control de acceso biométrico. macOS sólo deja
+usarlo a apps firmadas con un Team ID que llevan el entitlement
+`keychain-access-groups`, que es restringido: tiene que otorgarlo un
+provisioning profile embebido.
+
+Sin él, todas las llamadas a la bóveda (`store_secret`, `read_secret`,
+`has_secret`, `delete_secret`) fallan con
+`BiometricError::UnsupportedOperation` (`errSecMissingEntitlement`).
+Eso incluye los binarios lanzados con `cargo run` y los firmados ad-hoc
+(`codesign -s -`). `availability` y `authenticate` no tocan el keychain
+y funcionan sin firma.
+
+Para habilitarlo:
+
+1. Creá un App ID con la capability **Keychain Sharing** y un
+   provisioning profile para él (en Xcode, *Signing & Capabilities → +
+   Keychain Sharing* hace ambas cosas).
+2. Declará el access group en tu archivo de entitlements:
+
+   ```xml title="MyApp.entitlements"
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+       <key>keychain-access-groups</key>
+       <array>
+           <string>TEAMID.com.example.myapp</string>
+       </array>
+   </dict>
+   </plist>
+   ```
+
+3. Empaquetá el binario como `.app`, embebé el profile y firmá con tu
+   certificado Apple Development o Developer ID:
+
+   ```sh
+   cp MyApp.provisionprofile MyApp.app/Contents/embedded.provisionprofile
+   codesign --force --options runtime \
+       --entitlements MyApp.entitlements \
+       --sign "Developer ID Application: Example Inc (TEAMID)" \
+       MyApp.app
+   ```
+
+Las apps de iOS siempre se firman con un profile, así que esto sólo
+aplica a macOS.
+
+## Tipos del wire
+
+<PluginTypes />
+
+## Conectarlo
+
+El plugin declara `auto_register = false`: `BiometricPrompt` necesita
+una `FragmentActivity`, que la convención `BackendImpl(context)` del
+registry no puede proveer.
+
+### Android
+
+La Activity tiene que ser una `FragmentActivity` — `AppCompatActivity`
+o `GameActivity` (activá el feature `game-activity` del facade), no
+`NativeActivity`:
+
+```kotlin
+class MainActivity : GameActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        check(IstmoRuntime.start("my_app"))
+        IstmoRuntime.registerHandler(
+            BiometricDispatcher.PLUGIN_ID,
+            BiometricDispatcher(BiometricBackendImpl(this), BiometricCodecsImpl()),
+        )
+        super.onCreate(savedInstanceState)
+    }
+}
+```
+
+Agregá `implementation("androidx.biometric:biometric:1.1.0")`; su
+manifest aporta el permiso `USE_BIOMETRIC`.
+
+Antes de la API 30 el Keystore no puede atar una clave de uso único a la
+credencial del dispositivo, así que los secretos
+`BiometricOrDeviceCredential` usan una clave que queda desbloqueada unos
+segundos después de cualquier desbloqueo (10 por defecto). Ajustalo con
+`BiometricBackendImpl(this, credentialValiditySeconds = 5)`.
+
+### iOS
+
+```swift
+IstmoRuntime.shared.registerHandler(
+    BiometricDispatcher.PLUGIN_ID,
+    BiometricDispatcher(backend: BiometricBackendImpl(), codecs: BiometricCodecsImpl())
+)
+```
+
+iOS termina las apps que usan Face ID sin `NSFaceIDUsageDescription`.
+El plugin declara un valor por defecto con `[plugin.info_plist]`;
+localizalo en el `istmo.toml` de tu app:
+
+```toml
+[app.info_plist]
+NSFaceIDUsageDescription = "Usá Face ID para abrir tu bóveda."
+```
+
+`emit_app` lo escribe entre los marcadores
+`<!-- istmo:background:start -->` / `<!-- istmo:background:end -->` de
+tu `Info.plist` (ver
+[`[app.info_plist]`](/istmo/es/build-scripts/istmo-toml-reference/#appinfo_plist)).
+
+### Escritorio
+
+```rust
+use istmo_biometric::{BiometricHost, DesktopBiometric};
+
+runtime.register_host(BiometricHost::new(
+    DesktopBiometric::default()
+        .with_parent_window(&window)
+        .with_ui_gated_vault(), // sólo Linux, ver arriba
+));
+```
+
+- `with_parent_window` mantiene los diálogos de Windows Hello —
+  incluidos los de credenciales de la bóveda — delante de tu ventana. Se
+  ignora en macOS y Linux.
+- `with_fprintd_user("alice")` hace que Linux verifique las huellas de
+  otro usuario (la política polkit de fprintd sólo lo permite a llamadores
+  privilegiados). Se ignora en el resto.
+
+En Linux no hay prompt del sistema: indicale al usuario que toque el
+lector mientras `authenticate` está pendiente.
+
+## Ejemplo
+
+[`examples/biometric-demo`](https://github.com/sergioribera/istmo/tree/main/examples/biometric-demo)
+corre la misma UI de egui en escritorio (`cargo run -p biometric-demo`),
+Android (`just biometric-demo`) e iOS (`xcodegen` + Xcode), cubriendo
+disponibilidad, autenticación con cancelación y la bóveda. Con
+`cargo run` en macOS los botones de la bóveda devuelven
+`UnsupportedOperation` hasta que
+[firmes la app](#macos-los-secretos-requieren-una-app-firmada).

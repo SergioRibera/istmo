@@ -43,7 +43,8 @@ The app contributes:
 
 Reference plugins: [`google-sign-in`](/istmo/plugins/google-sign-in/),
 [`data-store`](/istmo/plugins/data-store/),
-[`live-activity`](/istmo/plugins/live-activity/).
+[`live-activity`](/istmo/plugins/live-activity/). [`biometric`](/istmo/plugins/biometric/)
+mixes both: native-hosted on Android / iOS, Rust-hosted on desktop.
 
 ## Rust-hosted
 

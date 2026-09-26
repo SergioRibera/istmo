@@ -1,0 +1,6 @@
+[app]
+android_package = "dev.istmo.runtime"
+
+# Overrides the plugin's default Face ID usage description.
+[app.info_plist]
+NSFaceIDUsageDescription = "The istmo biometric demo uses Face ID to unlock its vault."

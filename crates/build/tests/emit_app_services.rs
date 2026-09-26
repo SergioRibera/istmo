@@ -70,6 +70,7 @@ fn emit_app_writes_kotlin_service_class_and_sidecar() {
     let sidecar_body = fs::read_to_string(&sidecar).unwrap();
     assert!(sidecar_body.contains("<service"));
     assert!(sidecar_body.contains("com.example.app.gen.SyncForegroundService"));
+    assert_well_formed_comments(&sidecar_body);
     assert!(sidecar_body.contains("android:foregroundServiceType=\"dataSync\""));
 
     let _ = fs::remove_dir_all(&root);
@@ -104,6 +105,7 @@ fn emit_app_writes_swift_bgtask_and_sidecar() {
     let sidecar_body = fs::read_to_string(&sidecar).unwrap();
     assert!(sidecar_body.contains("BGTaskSchedulerPermittedIdentifiers"));
     assert!(sidecar_body.contains("com.myapp.sync.refresh"));
+    assert_well_formed_comments(&sidecar_body);
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -209,6 +211,98 @@ fn emit_app_patches_ios_info_plist_between_markers() {
     assert!(managed.contains("com.myapp.sync.refresh"));
 
     let _ = fs::remove_dir_all(&root);
+}
+
+const INFO_PLIST_MANIFEST: &str = r#"
+[plugin]
+id = "istmo.biometric"
+
+[plugin.info_plist]
+NSFaceIDUsageDescription = "Plugin default reason"
+"#;
+
+const OTHER_INFO_PLIST_MANIFEST: &str = r#"
+[plugin]
+id = "istmo.other"
+
+[plugin.info_plist]
+NSFaceIDUsageDescription = "Conflicting reason"
+UIFileSharingEnabled = true
+"#;
+
+#[test]
+fn emit_app_merges_plugin_info_plist_entries_with_app_overrides() {
+    let root = scratch_root("ios-info-plist");
+    let ios_root = root.join("ios");
+    fs::create_dir_all(ios_root.join("MyApp")).unwrap();
+    fs::create_dir_all(ios_root.join("MyApp.xcodeproj")).unwrap();
+    let plist_path = ios_root.join("MyApp/Info.plist");
+    fs::write(
+        &plist_path,
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <!-- istmo:background:start -->
+    <!-- istmo:background:end -->
+</dict>
+</plist>
+"#,
+    )
+    .unwrap();
+
+    let emit = |app_toml: &str| {
+        fs::write(root.join("istmo.toml"), app_toml).unwrap();
+        let mut opts = AppOpts::default();
+        opts.root = Some(root.clone());
+        opts.ios_root = Some(ios_root.clone());
+        opts.android = Some(false);
+        opts.extra_manifests = vec![
+            Manifest::parse(INFO_PLIST_MANIFEST).unwrap(),
+            Manifest::parse(OTHER_INFO_PLIST_MANIFEST).unwrap(),
+        ];
+        opts.extra_contracts = vec![dummy_contract()];
+        emit_app_with(opts);
+        fs::read_to_string(&plist_path).unwrap()
+    };
+
+    // First plugin wins on conflicting keys; unrelated keys are kept.
+    let patched = emit("[app]\n");
+    assert!(
+        patched.contains(
+            "<key>NSFaceIDUsageDescription</key>\n<string>Plugin default reason</string>"
+        )
+    );
+    assert!(!patched.contains("Conflicting reason"));
+    assert!(patched.contains("<key>UIFileSharingEnabled</key>\n<true/>"));
+    let sidecar = fs::read_to_string(ios_root.join("MyApp/Info.plist.background.xml")).unwrap();
+    assert!(sidecar.contains("Plugin default reason"));
+    assert_well_formed_comments(&sidecar);
+
+    // `[app.info_plist]` overrides the plugin default.
+    let patched = emit("[app]\n\n[app.info_plist]\nNSFaceIDUsageDescription = \"App reason\"\n");
+    assert!(patched.contains("<string>App reason</string>"));
+    assert!(!patched.contains("Plugin default reason"));
+    assert_eq!(patched.matches("NSFaceIDUsageDescription").count(), 1);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// XML comments do not nest: every `<!--` must be closed by `-->`
+/// before the next `<!--` opens, and `--` may not appear inside.
+fn assert_well_formed_comments(xml: &str) {
+    let mut rest = xml;
+    while let Some(open) = rest.find("<!--") {
+        let after = &rest[open + 4..];
+        let close = after
+            .find("-->")
+            .unwrap_or_else(|| panic!("unterminated comment in:\n{xml}"));
+        let body = &after[..close];
+        assert!(
+            !body.contains("<!--") && !body.contains("--"),
+            "malformed comment `{body}` in:\n{xml}"
+        );
+        rest = &after[close + 3..];
+    }
 }
 
 fn dummy_contract() -> istmo_build::Contract {

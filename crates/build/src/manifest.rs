@@ -31,6 +31,7 @@ const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "swift_package",
     "android_service",
     "ios_background",
+    "info_plist",
 ];
 
 const KNOWN_ANDROID_SERVICE_KEYS: &[&str] = &[
@@ -95,6 +96,87 @@ pub struct PluginEntry {
     /// shim declaration. When present, [`emit_app`](crate::emit_app())
     /// materialises the Swift class and the `Info.plist` fragment.
     pub ios_background: Option<IosBackgroundSpec>,
+
+    /// `Info.plist` entries the plugin requires on iOS — usage
+    /// descriptions such as `NSFaceIDUsageDescription`, capability
+    /// flags, … [`emit_app`](crate::emit_app()) merges them into the
+    /// consuming app's `Info.plist` (between the istmo markers) and
+    /// into the `Info.plist.background.xml` sidecar. Apps override
+    /// individual values through `[app.info_plist]`.
+    pub info_plist: Vec<InfoPlistEntry>,
+}
+
+/// Scalar value of an [`InfoPlistEntry`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+pub enum InfoPlistValue {
+    String(String),
+    Bool(bool),
+}
+
+/// One top-level `<key>` / value pair contributed to an iOS app's
+/// `Info.plist`, declared under `[plugin.info_plist]` (plugin crates)
+/// or `[app.info_plist]` (apps, where it overrides plugin defaults).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+pub struct InfoPlistEntry {
+    pub key: String,
+    pub value: InfoPlistValue,
+}
+
+impl InfoPlistEntry {
+    /// Render the entry as the `<key>…</key>` + value element pair that
+    /// goes inside the root `<dict>` of an `Info.plist`.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let value = match &self.value {
+            InfoPlistValue::String(s) => format!("<string>{}</string>", xml_escape(s)),
+            InfoPlistValue::Bool(true) => "<true/>".to_owned(),
+            InfoPlistValue::Bool(false) => "<false/>".to_owned(),
+        };
+        format!("<key>{}</key>\n{value}\n", xml_escape(&self.key))
+    }
+
+    /// Parse every key of an `info_plist` TOML table. `context` is the
+    /// dotted path used in error messages (`plugin.info_plist`,
+    /// `app.info_plist`).
+    pub fn parse_table(
+        table: &dyn toml_edit::TableLike,
+        context: &str,
+    ) -> Result<Vec<Self>, ManifestError> {
+        table
+            .iter()
+            .map(|(key, item)| {
+                let value = match item {
+                    Item::Value(Value::String(s)) => InfoPlistValue::String(s.value().clone()),
+                    Item::Value(Value::Boolean(b)) => InfoPlistValue::Bool(*b.value()),
+                    _ => {
+                        return Err(ManifestError::TypeMismatch {
+                            key: format!("{context}.{key}"),
+                            expected: "string or boolean",
+                        });
+                    }
+                };
+                Ok(Self {
+                    key: key.to_owned(),
+                    value,
+                })
+            })
+            .collect()
+    }
+}
+
+fn xml_escape(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -426,6 +508,13 @@ fn parse_plugin_entry(
         )?)?),
         None => None,
     };
+    let info_plist = match table.get("info_plist") {
+        Some(item) => InfoPlistEntry::parse_table(
+            expect_table(item, "plugin.info_plist")?,
+            "plugin.info_plist",
+        )?,
+        None => Vec::new(),
+    };
     Ok(PluginEntry {
         id,
         client_type,
@@ -433,6 +522,7 @@ fn parse_plugin_entry(
         auto_register,
         android_service,
         ios_background,
+        info_plist,
     })
 }
 

@@ -173,7 +173,8 @@ IstmoRuntime.shared.registerHandler(
 ```
 
 `istmo-build` adds `NSPhotoLibraryAddUsageDescription` to the app's
-`Info.plist` (required by the "Save Image" action). Localise it with
+`Info.plist` (required by the "Save Image" action); reword it with
+`[app.info_plist]` in the app's `istmo.toml`. Localise it with
 `InfoPlist.strings` — ready-made `en` / `es` files live in
 `plugins/share/templates/ios-localization`.
 

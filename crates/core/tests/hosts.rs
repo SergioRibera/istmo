@@ -599,31 +599,48 @@ impl Dispatch for SeedHost {
     }
 }
 
-#[test]
-fn dropping_a_local_call_cancels_the_in_process_host() {
-    use std::future::Future;
-    use std::task::{Context, Waker};
+struct ParkUntilCancelled {
+    observed: flume::Sender<()>,
+}
 
-    let saw_cancel = Arc::new(AtomicBool::new(false));
-    let init = Runtime::mock()
-        .host(CooperativeDispatch {
-            saw_cancel: Arc::clone(&saw_cancel),
+impl Dispatch for ParkUntilCancelled {
+    fn plugin_id(&self) -> &'static str {
+        "test.park"
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        _instance_id: Option<InstanceId>,
+        _method: &'a str,
+        _payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        Box::pin(async move {
+            cancel.cancelled().await;
+            self.observed.send(()).expect("test still listening");
+            Ok(Outcome::Ok(Vec::new()))
         })
-        .finish();
-    {
-        let mut call = std::pin::pin!(
-            init.runtime
-                .call(CooperativeDispatch::PLUGIN_ID, None, "wait", Vec::new())
-                .expect("call")
-        );
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(call.as_mut().poll(&mut cx).is_pending());
     }
-    for _ in 0..200 {
-        if saw_cancel.load(Ordering::SeqCst) {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    panic!("in-process host never saw the cancellation");
+}
+
+#[test]
+fn dropping_a_locally_hosted_call_trips_its_cancel_token() {
+    let init = Runtime::mock();
+    let rt: Arc<Runtime> = init.runtime;
+    let outbound = init.outbound;
+    let (observed, cancelled) = flume::bounded(1);
+    rt.register_host(ParkUntilCancelled { observed });
+
+    let handle = rt
+        .call("test.park", None, "park", Vec::new())
+        .expect("call dispatched");
+    drop(handle);
+
+    cancelled
+        .recv_timeout(Duration::from_secs(1))
+        .expect("hosted dispatch observed the cancellation");
+    assert!(
+        outbound.try_recv().is_err(),
+        "a locally hosted call must not leak a Cancel frame to the peer"
+    );
 }

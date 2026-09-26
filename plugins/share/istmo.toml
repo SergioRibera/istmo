@@ -4,6 +4,12 @@ client_type = "::istmo_share::ShareClient"
 default_deployment = "local"
 auto_register = false
 
+# UIActivityViewController's "Save Image" / "Save Video" actions crash
+# the app when this usage string is missing. Apps reword it through
+# `[app.info_plist]` and localise it with `InfoPlist.strings`.
+[plugin.info_plist]
+NSPhotoLibraryAddUsageDescription = "Save shared images and videos to your photo library."
+
 # FileProvider (`androidx.core.content.FileProvider`) exposes shared
 # files as `content://` URIs.
 [[gradle]]

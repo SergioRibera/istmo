@@ -107,6 +107,30 @@ AsyncStream { continuation in
 }
 ```
 
+## Cancelling native-hosted calls
+
+Dropping the future of a unary call served by Kotlin or Swift sends
+`Frame::Cancel` to the native runtime, which cancels the call's
+coroutine (`Job.cancel()`) or `Task` (`Task.cancel()`). React to it
+with the platform's own mechanism and the call ends without a
+response:
+
+```kotlin
+override suspend fun authenticate(prompt: AuthPrompt): AuthMethod =
+    suspendCancellableCoroutine { cont ->
+        cont.invokeOnCancellation { /* dismiss the dialog */ }
+        // ...
+    }
+```
+
+```swift
+func authenticate(prompt: AuthPrompt) async throws -> AuthMethod {
+    try await withTaskCancellationHandler {
+        // ...
+    } onCancel: { /* dismiss the dialog */ }
+}
+```
+
 ## Services and workers
 
 `#[istmo::service]` and `#[istmo::worker]` adapters bridge the token

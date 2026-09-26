@@ -107,6 +107,30 @@ AsyncStream { continuation in
 }
 ```
 
+## Cancelar llamadas native-hosted
+
+Soltar el future de una llamada unaria atendida por Kotlin o Swift
+envía `Frame::Cancel` al runtime nativo, que cancela la corrutina
+(`Job.cancel()`) o la `Task` (`Task.cancel()`) de la llamada.
+Reaccioná con el mecanismo propio de la plataforma; la llamada termina
+sin respuesta:
+
+```kotlin
+override suspend fun authenticate(prompt: AuthPrompt): AuthMethod =
+    suspendCancellableCoroutine { cont ->
+        cont.invokeOnCancellation { /* cerrar el diálogo */ }
+        // ...
+    }
+```
+
+```swift
+func authenticate(prompt: AuthPrompt) async throws -> AuthMethod {
+    try await withTaskCancellationHandler {
+        // ...
+    } onCancel: { /* cerrar el diálogo */ }
+}
+```
+
 ## Services y workers
 
 Los adapters `#[istmo::service]` y `#[istmo::worker]` bridge el token
