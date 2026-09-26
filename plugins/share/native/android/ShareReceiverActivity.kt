@@ -26,6 +26,10 @@ import java.util.concurrent.Executors
  * without intent filters, so nothing can reach it until the app opts
  * in with an `activity-alias` in its own `AndroidManifest.xml`:
  *
+ * (Concrete mime types shown below; Android also accepts wildcards
+ * such as `text/&#42;` or `image/&#42;` — spelled out here because
+ * Kotlin's block-comment tokenizer nests on the raw `/&#42;` sequence.)
+ *
  * ```xml
  * <activity-alias
  *     android:name="dev.istmo.plugins.share.ShareTarget"
@@ -35,8 +39,8 @@ import java.util.concurrent.Executors
  *     <action android:name="android.intent.action.SEND" />
  *     <action android:name="android.intent.action.SEND_MULTIPLE" />
  *     <category android:name="android.intent.category.DEFAULT" />
- *     <data android:mimeType="text/*" />
- *     <data android:mimeType="image/*" />
+ *     <data android:mimeType="text/plain" />
+ *     <data android:mimeType="image/png" />
  *   </intent-filter>
  * </activity-alias>
  * ```
