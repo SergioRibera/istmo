@@ -100,7 +100,9 @@ Which parts of the API the current platform supports.
 | `rich_preview` | `richPreview` | `bool` | [`SharePreview`] is honoured. |
 | `reports_completion` | `reportsCompletion` | `bool` | [`ShareOutcome::Shared`] / [`ShareOutcome::Dismissed`] can be reported. |
 | `reports_target` | `reportsTarget` | `bool` | The chosen target is reported. |
-| `receive` | `receive` | `bool` | The app can be a share destination on this platform (subject to packaging: Share Extension on Apple, MSIX on Windows). |
+| `receive` | `receive` | `bool` | The app can be a share destination right now: on Windows this requires build 19041+ and package identity, on Apple a Share Extension, on Android the opt-in `activity-alias`. |
+| `direct_share` | `directShare` | `bool` | [`Share::set_share_targets`] feeds the system's direct-share row (Android sharing shortcuts, iOS share-sheet suggestions). |
+| `dismiss_on_cancel` | `dismissOnCancel` | `bool` | Dropping a pending [`ShareClient::share`] future closes the sheet. `false` where the platform offers no way to dismiss it (Android chooser, Windows share UI) — the call still resolves. |
 
 ### `ShareError`
 
@@ -139,3 +141,19 @@ Content another app shared into this one.
 | `files` | `files` | `Vec<IncomingFile>` | — |
 | `source_app` | `sourceApp` | `Option<String>` | Sending app when the platform reveals it (Android referrer, Windows package family name). |
 | `received_at_ms` | `receivedAtMs` | `Option<u64>` | Receive time, milliseconds since the Unix epoch. |
+| `target_id` | `targetId` | `Option<String>` | [`ShareTarget::id`] when the user picked one of the app's direct-share targets. |
+
+### `ShareTarget`
+
+A direct-share destination inside the app (a chat, a folder, a
+contact) offered in the system share sheet's suggestion row.
+
+Android publishes them as long-lived sharing shortcuts; iOS donates
+`INSendMessageIntent` interactions. Shares sent to a target arrive
+with [`IncomingShare::target_id`] set.
+
+| Field | Wire | Type | Description |
+| ----- | ---- | ---- | ----------- |
+| `id` | `id` | `String` | Stable id, returned in [`IncomingShare::target_id`]. |
+| `label` | `label` | `String` | Name shown under the icon. |
+| `icon` | `icon` | `Option<ShareFile>` | Square PNG/JPEG icon. |

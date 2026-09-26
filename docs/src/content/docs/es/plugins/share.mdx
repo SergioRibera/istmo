@@ -16,7 +16,7 @@ apps comparten *hacia* la tuya como un stream de `IncomingShare`.
 | Android | chooser `ACTION_SEND(_MULTIPLE)` + `FileProvider` | intent filters `ACTION_SEND` (opt-in) | API 22 |
 | iOS | `UIActivityViewController` | Share Extension + App Group | 13.0 |
 | macOS | `NSSharingServicePicker` | Share Extension + App Group | 10.15 |
-| Windows | `DataTransferManager` | Share Target (sólo MSIX) | 10.0.16299 |
+| Windows | `DataTransferManager` | Share Target (identidad de paquete) | 10.0.16299 (recibir: 10.0.19041) |
 | Linux | — | lo maneja la app | — |
 
 Los mínimos están declarados en el `[min_versions]` del plugin y se
@@ -77,13 +77,29 @@ match share.share(request).await.map_err(ShareError::from)? {
   antes al cache.
 - `ShareFile::bytes` — contenido en memoria; se escribe a un archivo
   temporal con el nombre `name` antes de compartir.
-- `ShareFile::from_picked` (feature `file-picker`) — un archivo de
-  `istmo-file-picker`: la ruta real si el picker la expone, o el
-  contenido si no (SAF en Android).
+- `ShareFile::from_picked(&share, &picker, &file)` (feature
+  `file-picker`) — un archivo de `istmo-file-picker`: la ruta real si
+  el picker la expone; si no (SAF en Android), el contenido se copia
+  por streaming, a través del descriptor del picker, al `staging_dir()`
+  del backend, con memoria constante, y se comparte desde ahí.
 
 Los destinos pueden leer los archivos después de que `share` resuelve,
 así que las copias temporales se conservan un día en móvil y, en
 desktop, hasta que se destruye el `DesktopShare` (o `purge_staged()`).
+
+### Cancelar
+
+Si se suelta el future de `share` (por ejemplo, se cierra la pantalla
+que lo abrió), la llamada se cancela. Donde
+`capabilities().dismiss_on_cancel` es `true`, el menú también se
+cierra:
+
+| Plataforma | Al soltar el future |
+| ---------- | ------------------- |
+| iOS | cierra el `UIActivityViewController` |
+| macOS | cierra el `NSSharingServicePicker` (no un servicio ya en curso) |
+| Android | resuelve la llamada; la app no puede cerrar el chooser del sistema |
+| Windows | resuelve la llamada; la app no puede cerrar la UI de compartir |
 
 ### Anclaje
 
@@ -161,6 +177,8 @@ IstmoRuntime.shared.registerHandler(
 
 `istmo-build` agrega `NSPhotoLibraryAddUsageDescription` al
 `Info.plist` de la app (lo exige la acción "Guardar imagen").
+Localízalo con `InfoPlist.strings`: hay archivos `en` / `es` listos en
+`plugins/share/templates/ios-localization`.
 
 **Desktop** — registra cada ventana una vez en el registry compartido
 de `istmo-window`, desde su hilo de UI:
@@ -198,14 +216,22 @@ while let Ok(share) = incoming.recv_async().await {
 }
 ```
 
-Recibir es opt-in en todas las plataformas.
+Los archivos recibidos son copias propiedad de la app. Si la app nunca
+llama a `ShareInbox::cleanup`, cada backend borra las copias con más de
+`INCOMING_RETENTION` (7 días) cuando llega el siguiente share.
 
-**Android** — agrega al `AndroidManifest.xml` de la app:
+Recibir es opt-in en todas las plataformas; `capabilities().receive`
+indica si la instalación actual está configurada para ello.
+
+**Android** — declara un `activity-alias` en el `AndroidManifest.xml`
+de la app. El nombre es fijo:
 
 ```xml
 <application>
-  <meta-data android:name="dev.istmo.share.RECEIVE" android:value="true" />
-  <activity android:name="dev.istmo.plugins.share.ShareReceiverActivity" android:exported="true">
+  <activity-alias
+      android:name="dev.istmo.plugins.share.ShareTarget"
+      android:targetActivity="dev.istmo.plugins.share.ShareReceiverActivity"
+      android:exported="true">
     <intent-filter>
       <action android:name="android.intent.action.SEND" />
       <action android:name="android.intent.action.SEND_MULTIPLE" />
@@ -213,18 +239,44 @@ Recibir es opt-in en todas las plataformas.
       <data android:mimeType="text/*" />
       <data android:mimeType="image/*" />
     </intent-filter>
-  </activity>
+  </activity-alias>
 </application>
 ```
 
+La `ShareReceiverActivity` del plugin no está exportada ni tiene
+intent filters, así que nada la alcanza sin el alias. Como el alias es
+un elemento que sólo declara la app, el merger de manifests nunca tiene
+que conciliar los atributos de la app con los del plugin (el manifest
+del plugin se mergea con la prioridad más alta y ganaría cualquier
+conflicto).
+
 **iOS / macOS** — agrega un target Share Extension a partir de
 `plugins/share/templates/apple-share-extension` (paso a paso en su
-`README.md`) y vacía el inbox del App Group: `IstmoShareInbox.drain()`
-en iOS, `istmo_share::desktop::drain_app_group_inbox(group, &inbox)` en
-macOS.
+`README.md`) y vacía el inbox del App Group:
 
-**Windows** — sólo las apps empaquetadas como MSIX pueden ser destino.
-Decláralo en `Package.appxmanifest`:
+```swift
+// iOS, al arrancar
+IstmoShareInbox.observeHandoffs()   // vacía apenas la extensión escribe
+// …y IstmoShareInbox.drain() al activarse / con la URL de despertar
+```
+
+```rust
+// macOS, al arrancar
+istmo_share::desktop::drain_app_group_inbox(group, &inbox)?;
+istmo_share::desktop::observe_app_group_handoffs(group, &inbox)?;
+```
+
+La extensión publica una notificación Darwin que la app en ejecución
+escucha, y despierta a la app si no está corriendo: en iOS abriendo
+`<scheme>://istmo-share` (vía la cadena de responders, que sigue
+funcionando en iOS 18), en macOS lanzándola en segundo plano. Si ambas
+fallan, el share espera en el App Group hasta la próxima activación.
+
+**Windows** — Windows 10 2004 (build 19041) o superior, y la app
+necesita identidad de paquete: un paquete MSIX, o un sparse package
+para una app sin empaquetar. `capabilities().receive` comprueba ambas
+cosas en tiempo de ejecución. Declara el destino en
+`Package.appxmanifest`:
 
 ```xml
 <Extensions>
@@ -248,6 +300,31 @@ istmo_share::desktop::take_share_target_activation(&ShareInbox::acquire()?)?;
 **Linux** — no hay un estándar para ser destino. Pasa los archivos de
 tu handler `MimeType` del `.desktop` o de la línea de comandos al mismo
 stream con `ShareInbox::publish`.
+
+### Direct share
+
+Ofrece destinos propios de la app (chats, carpetas, contactos) en la
+fila de sugerencias del menú de compartir. Lo que se comparte a uno de
+ellos llega con `IncomingShare::target_id`.
+
+```rust
+use istmo_share::{ShareFile, ShareTarget};
+
+share
+    .set_share_targets(vec![
+        ShareTarget::new("chat-42", "Familia").with_icon(ShareFile::path(avatar)),
+        ShareTarget::new("chat-7", "Trabajo"),
+    ])
+    .await?; // una lista vacía los borra
+```
+
+| Plataforma | Mecanismo | Configuración extra |
+| ---------- | --------- | ------------------- |
+| Android | sharing shortcuts long-lived | el alias `ShareTarget` de arriba, más `<meta-data android:name="android.app.shortcuts" android:resource="@xml/istmo_share_shortcuts" />` en la activity launcher (o copia su `<share-target>` a tu propio XML de shortcuts) |
+| iOS | `INSendMessageIntent` donados | `INSendMessageIntent` en `NSUserActivityTypes` de la app; el template de la extensión ya declara `IntentsSupported` |
+| macOS, Windows, Linux | — | `ShareError::Unsupported` |
+
+`capabilities().direct_share` indica si la configuración está hecha.
 
 ## Tipos de wire
 
