@@ -1,5 +1,6 @@
 package dev.istmo.gradle
 
+import com.android.build.api.AndroidPluginVersion
 import com.android.build.api.variant.AndroidComponentsExtension
 import com.android.build.api.variant.Variant
 import com.android.build.gradle.BaseExtension
@@ -9,7 +10,13 @@ import org.gradle.api.Project
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.tomlj.Toml
+import org.w3c.dom.Element
 import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
+import javax.xml.transform.OutputKeys
+import javax.xml.transform.TransformerFactory
+import javax.xml.transform.dom.DOMSource
+import javax.xml.transform.stream.StreamResult
 
 open class IstmoLoaderExtension(project: Project) {
     val workspaceRoot: Property<File> =
@@ -48,8 +55,10 @@ data class LinkedPlugin(
  * - adds every existing directory to the Android app's `main` Kotlin
  *   source set;
  * - merges each plugin's `native/android/AndroidManifest.xml` into
- *   every variant's manifest and adds `native/android/res/` as a
- *   resource directory (AGP 8.3+ Variant API);
+ *   every variant's manifest — through the Variant API on AGP 8.3+, or,
+ *   on older AGPs, by combining them into one overlay registered as
+ *   each build type's manifest;
+ * - adds each plugin's `native/android/res/` as a resource directory;
  * - fails the build when a plugin's `[min_versions] android` is newer
  *   than the variant's `minSdk`.
  *
@@ -66,14 +75,18 @@ class IstmoLoaderPlugin : Plugin<Project> {
         // plugin list itself is resolved lazily inside the callback so
         // the `istmo { … }` extension is fully configured by then.
         val linked: Lazy<List<LinkedPlugin>> = lazy { resolveLinkedPlugins(project, extension) }
+        var variantManifests = false
         project.pluginManager.withPlugin("com.android.application") {
             val components = project.extensions.findByType(AndroidComponentsExtension::class.java)
             if (components == null) {
-                project.logger.warn("istmo-plugin-loader: androidComponents extension not found; manifest/res merging disabled.")
+                project.logger.warn("istmo-plugin-loader: androidComponents extension not found; minSdk checks disabled.")
                 return@withPlugin
             }
+            // `Sources.manifests` landed in AGP 8.3; older AGPs get the
+            // build-type overlay wired in `afterEvaluate` below.
+            variantManifests = components.pluginVersion >= AndroidPluginVersion(8, 3)
             components.onVariants(components.selector().all()) { variant ->
-                wireVariant(project, variant, linked.value)
+                wireVariant(variant, linked.value, variantManifests)
             }
         }
 
@@ -101,8 +114,8 @@ class IstmoLoaderPlugin : Plugin<Project> {
                 )
                 return@afterEvaluate
             }
-            val consumerDeps = readConsumerDeps(consumerCargo)
-            val dirs = discoverPlugins(root, extension, consumerDeps).map { it.nativeDir }
+            val plugins = linked.value
+            val dirs = plugins.map { it.nativeDir }
             if (dirs.isEmpty()) {
                 project.logger.info("istmo-plugin-loader: no plugin native/android directories to link.")
                 return@afterEvaluate
@@ -112,6 +125,13 @@ class IstmoLoaderPlugin : Plugin<Project> {
             val existing = mainSourceSet.java.srcDirs.toMutableSet()
             existing.addAll(dirs)
             mainSourceSet.java.setSrcDirs(existing)
+
+            // `res/` through the classic source-set DSL: works on every AGP.
+            plugins.mapNotNull { it.resDir }.forEach { mainSourceSet.res.srcDir(it) }
+
+            if (!variantManifests) {
+                wireLegacyManifestOverlay(project, android, plugins)
+            }
 
             val names = dirs.joinToString(", ") { it.parentFile.name }
             project.logger.lifecycle(
@@ -126,26 +146,75 @@ class IstmoLoaderPlugin : Plugin<Project> {
         return discoverPlugins(root, ext, readConsumerDeps(consumerCargo))
     }
 
-    private fun wireVariant(project: Project, variant: Variant, plugins: List<LinkedPlugin>) {
+    private fun wireVariant(variant: Variant, plugins: List<LinkedPlugin>, variantManifests: Boolean) {
         if (plugins.isEmpty()) return
         checkMinSdk(variant, plugins)
-        for (plugin in plugins) {
-            plugin.manifest?.let { manifest ->
-                try {
-                    variant.sources.manifests.addStaticManifestFile(manifest.absolutePath)
-                } catch (_: LinkageError) {
-                    // `Sources.manifests` landed in AGP 8.3. Older AGPs
-                    // keep working; the author merges by hand.
-                    project.logger.warn(
-                        "istmo-plugin-loader: AGP < 8.3 cannot merge ${manifest.path}; " +
-                            "copy its <application> children into your AndroidManifest.xml or upgrade AGP.",
-                    )
+        if (!variantManifests) return
+        for (manifest in plugins.mapNotNull { it.manifest }) {
+            variant.sources.manifests.addStaticManifestFile(manifest.absolutePath)
+        }
+    }
+
+    /**
+     * AGP < 8.3: combine every plugin manifest into one overlay and
+     * register it as the manifest of each build type whose source set
+     * has none. Build-type manifests are merged above `main`, exactly
+     * like `addStaticManifestFile` overlays on newer AGPs.
+     */
+    private fun wireLegacyManifestOverlay(project: Project, android: BaseExtension, plugins: List<LinkedPlugin>) {
+        val manifests = plugins.mapNotNull { it.manifest }
+        if (manifests.isEmpty()) return
+        val overlay = project.layout.buildDirectory.file("istmo/plugin-manifests/AndroidManifest.xml").get().asFile
+        writeCombinedManifest(manifests, overlay)
+        for (buildType in android.buildTypes) {
+            val sourceSet = android.sourceSets.getByName(buildType.name)
+            val own = sourceSet.manifest.srcFile
+            if (own.isFile && own.canonicalFile != overlay.canonicalFile) {
+                project.logger.warn(
+                    "istmo-plugin-loader: build type '${buildType.name}' has its own ${own.path}; " +
+                        "merge ${overlay.path} into it by hand or upgrade to AGP 8.3+.",
+                )
+                continue
+            }
+            sourceSet.manifest.srcFile(overlay)
+        }
+    }
+
+    /**
+     * Concatenate the children of every `<manifest>` (and of every
+     * `<application>`) in [sources] into a single manifest at [dest].
+     */
+    private fun writeCombinedManifest(sources: List<File>, dest: File) {
+        val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+        val builder = factory.newDocumentBuilder()
+        val out = builder.newDocument()
+        val root = out.createElement("manifest")
+        root.setAttributeNS(XMLNS_NS, "xmlns:android", ANDROID_NS)
+        root.setAttributeNS(XMLNS_NS, "xmlns:tools", TOOLS_NS)
+        out.appendChild(root)
+        val application = out.createElement("application")
+        for (source in sources) {
+            val doc = builder.parse(source)
+            val children = doc.documentElement.childNodes
+            for (i in 0 until children.length) {
+                val child = children.item(i) as? Element ?: continue
+                if (child.tagName == "application") {
+                    val appChildren = child.childNodes
+                    for (j in 0 until appChildren.length) {
+                        val appChild = appChildren.item(j) as? Element ?: continue
+                        application.appendChild(out.importNode(appChild, true))
+                    }
+                } else {
+                    root.appendChild(out.importNode(child, true))
                 }
             }
-            plugin.resDir?.let { res ->
-                variant.sources.res?.addStaticSourceDirectory(res.absolutePath)
-            }
         }
+        root.appendChild(application)
+        dest.parentFile.mkdirs()
+        val transformer = TransformerFactory.newInstance().newTransformer().apply {
+            setOutputProperty(OutputKeys.INDENT, "yes")
+        }
+        dest.outputStream().use { transformer.transform(DOMSource(out), StreamResult(it)) }
     }
 
     private fun checkMinSdk(variant: Variant, plugins: List<LinkedPlugin>) {
@@ -312,5 +381,11 @@ class IstmoLoaderPlugin : Plugin<Project> {
             }
         }
         return candidates.filter { it.isDirectory }
+    }
+
+    private companion object {
+        const val XMLNS_NS = "http://www.w3.org/2000/xmlns/"
+        const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
+        const val TOOLS_NS = "http://schemas.android.com/tools"
     }
 }
