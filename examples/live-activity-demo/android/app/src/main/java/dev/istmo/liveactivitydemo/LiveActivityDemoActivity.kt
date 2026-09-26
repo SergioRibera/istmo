@@ -3,6 +3,7 @@ package dev.istmo.liveactivitydemo
 import android.app.NativeActivity
 import android.os.Bundle
 import dev.istmo.plugins.liveactivity.LiveActivityBackendImpl
+import dev.istmo.runtime.IstmoHost
 import dev.istmo.runtime.IstmoRuntime
 import dev.istmo.runtime.LiveActivityCodecsImpl
 import dev.istmo.runtime.LiveActivityDispatcher
@@ -12,15 +13,14 @@ class LiveActivityDemoActivity : NativeActivity() {
     private lateinit var liveActivityBackend: LiveActivityBackendImpl
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        val runtime = IstmoRuntime
-        check(runtime.start("live_activity_demo")) {
-            "IstmoRuntime.start() failed — pump did not initialise"
-        }
+        // Starts the runtime. istmo.toml turns off auto-registration for
+        // istmo.live_activity: the backend below carries the demo's handler.
+        IstmoHost.onCreate(this)
 
         liveActivityBackend = LiveActivityBackendImpl(applicationContext).apply {
             register(TimerLiveActivityHandler(this@LiveActivityDemoActivity))
         }
-        runtime.registerHandler(
+        IstmoRuntime.registerHandler(
             LiveActivityDispatcher.PLUGIN_ID,
             LiveActivityDispatcher(liveActivityBackend, LiveActivityCodecsImpl()),
         )
@@ -30,7 +30,7 @@ class LiveActivityDemoActivity : NativeActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        IstmoRuntime.shutdown()
+        IstmoHost.onDestroy(this)
     }
 }
 

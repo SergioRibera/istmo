@@ -1,4 +1,9 @@
 [app]
+# App identity: applied to Gradle by `dev.istmo.app` and to Xcode through
+# the generated `ios/.istmo/Istmo.xcconfig`. The version comes from
+# Cargo.toml.
+id = "dev.istmo.sharedemo"
+name = "istmo share demo"
 # The plugin's reference Kotlin imports the generated types from
 # `dev.istmo.runtime`.
 android_package = "dev.istmo.runtime"
@@ -6,3 +11,6 @@ android_package = "dev.istmo.runtime"
 # Rewords istmo.share's default photo-library usage string.
 [app.info_plist]
 NSPhotoLibraryAddUsageDescription = "The istmo share demo saves shared images to your photo library."
+
+[min_versions]
+android = 26

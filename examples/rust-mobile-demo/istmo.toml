@@ -1,4 +1,17 @@
 [app]
+# App identity: applied to Gradle by `dev.istmo.app` and to Xcode through
+# the generated `ios/.istmo/Istmo.xcconfig`. The version comes from
+# Cargo.toml. `id` is left out on purpose: the Google Sign-In clients are
+# registered for different Android / iOS ids, which stay in the native
+# projects.
+name = "rust-mobile-demo"
+# The backends are app-owned and need this app's activity callbacks
+# (permission results, legacy activity results): registered by hand.
+auto_register = false
 # Keep generated Kotlin next to the hand-written backend implementations that
 # already live under `dev.istmo.runtime`.
 android_package = "dev.istmo.runtime"
+
+[min_versions]
+android = 26
+ios = "14.0"

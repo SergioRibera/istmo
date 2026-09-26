@@ -25,7 +25,7 @@ examples/rust-mobile-demo/
 └── android/
     ├── build.gradle.kts / settings.gradle.kts / gradle.properties
     └── app/
-        ├── build.gradle.kts        — istmoCargoLib + native deps
+        ├── build.gradle.kts        — `dev.istmo.app` (cargo build, plugins, `[app]`) + native deps
         └── src/main/
             ├── AndroidManifest.xml — NativeActivity subclass + POST_NOTIFICATIONS
             └── java/dev/istmo/
@@ -51,7 +51,8 @@ examples/rust-mobile-demo/
    Manager backing store lives in Play Services; an image without them
    returns `NoCredentialException` for every call.
 3. **`rustup target add aarch64-linux-android`** (or the ABI you're
-   building for).
+   building for). `./gradlew istmoDoctor` lists anything else the
+   toolchain is missing.
 
 ## Building
 
@@ -77,8 +78,8 @@ just rust-mobile-demo
 
 1. Android launches `dev.istmo.rustdemo.RustMobileActivity`
    (a `NativeActivity` subclass declared in the manifest).
-2. `RustMobileActivity.onCreate` calls `IstmoRuntime.start()` *before*
-   `super.onCreate()`. `IstmoRuntime`:
+2. `RustMobileActivity.onCreate` calls `IstmoHost.onCreate(this)` *before*
+   `super.onCreate()`, which starts `IstmoRuntime`:
    - `System.loadLibrary("rust_mobile_demo")` — loads the cdylib the
      manifest's `android.app.lib_name` metadata also references.
    - `nativeStart(...)` — resolves `__istmo_configure_runtime` (emitted

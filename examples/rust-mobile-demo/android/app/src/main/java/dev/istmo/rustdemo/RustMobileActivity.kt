@@ -10,6 +10,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import dev.istmo.runtime.AdMobCodecsImpl
 import dev.istmo.runtime.AdMobDispatcher
 import dev.istmo.runtime.AdMobFactoryImpl
+import dev.istmo.runtime.IstmoHost
 import dev.istmo.runtime.IstmoRuntime
 import dev.istmo.runtime.NotificationsBackendImpl
 import dev.istmo.runtime.NotificationsCodecsImpl
@@ -27,10 +28,10 @@ class RustMobileActivity : NativeActivity() {
     private lateinit var signInFactory: SignInFactoryImpl
 
     override fun onCreate(savedInstanceState: Bundle?) {
-
+        // Starts the runtime. The backends are app-owned and need this
+        // activity's callbacks, so istmo.toml turns auto-registration off.
+        IstmoHost.onCreate(this)
         val runtime = IstmoRuntime
-        val ok = runtime.start("rust_mobile_demo")
-        check(ok) { "IstmoRuntime.start() failed — pump did not initialise" }
 
         permissionsBackend = PermissionsBackendImpl(this)
         signInFactory = SignInFactoryImpl(this)
@@ -97,7 +98,7 @@ class RustMobileActivity : NativeActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        IstmoRuntime.shutdown()
+        IstmoHost.onDestroy(this)
     }
 }
 

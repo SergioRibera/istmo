@@ -1,2 +1,16 @@
 [app]
+# App identity: applied to Gradle by `dev.istmo.app` and to Xcode through
+# the generated `ios/.istmo/Istmo.xcconfig`. The version comes from
+# Cargo.toml.
+id = "dev.istmo.liveactivitydemo"
+name = "live-activity-demo"
 android_package = "dev.istmo.runtime"
+
+# The demo builds the backend itself to attach its timer handler.
+[[app.plugin]]
+id = "istmo.live_activity"
+auto_register = false
+
+[min_versions]
+android = 26
+ios = "16.1"

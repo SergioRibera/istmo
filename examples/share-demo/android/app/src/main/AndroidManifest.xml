@@ -6,7 +6,8 @@
          loader; this file only opts in to what the app wants. -->
     <application
         android:allowBackup="false"
-        android:label="@string/app_name"
+        android:label="${istmoLabel}"
+        android:icon="${istmoIcon}"
         android:hasCode="true"
         android:theme="@style/Theme.AppCompat.NoActionBar">
 

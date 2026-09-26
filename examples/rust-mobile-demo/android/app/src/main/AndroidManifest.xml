@@ -9,7 +9,8 @@
 
     <application
         android:allowBackup="false"
-        android:label="rust-mobile-demo"
+        android:label="${istmoLabel}"
+        android:icon="${istmoIcon}"
         android:hasCode="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <!-- AdMob app id (production). Manifest metadata must match the

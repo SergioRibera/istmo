@@ -1,6 +1,15 @@
 [app]
+# App identity: applied to Gradle by `dev.istmo.app` and to Xcode through
+# the generated `ios/.istmo/Istmo.xcconfig`. The version comes from
+# Cargo.toml.
+id = "dev.istmo.biometricdemo"
+name = "istmo biometric demo"
 android_package = "dev.istmo.runtime"
 
 # Overrides the plugin's default Face ID usage description.
 [app.info_plist]
 NSFaceIDUsageDescription = "The istmo biometric demo uses Face ID to unlock its vault."
+
+[min_versions]
+android = 26
+ios = "14.0"
