@@ -121,6 +121,24 @@ if !share.capabilities().await?.send {
 El backend necesita una `Activity`, un view controller o una ventana,
 así que no se auto-registra.
 
+:::caution[Paquete de Android]
+Las fuentes Kotlin del plugin importan los tipos generados desde
+`dev.istmo.runtime` (`ShareBackend`, `ShareRequest`, `ShareCodecsImpl`,
+…), igual que el resto de los plugins oficiales. Por defecto
+`istmo-build` los genera en `<namespace>.gen`, así que la app tiene que
+fijar el paquete en su `istmo.toml`; si no, las fuentes del plugin no
+compilan:
+
+```toml
+[app]
+android_package = "dev.istmo.runtime"
+```
+
+En iOS no hace falta nada: el Swift generado y las fuentes
+`native/ios/` del plugin entran al target de la app a través de
+`istmo-plugins.yml`.
+:::
+
 **Android** — en `Activity.onCreate`:
 
 ```kotlin
