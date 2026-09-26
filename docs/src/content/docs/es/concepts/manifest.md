@@ -106,6 +106,14 @@ runtime local.
   versión (`PROTOCOL_VERSION` en `istmo-core`).
 - **Wiring del runtime.** Invocación de la macro `istmo::runtime!`,
   no TOML.
+- **Entradas de los manifiestos de plataforma.** Providers, receivers,
+  intent filters, claves de `Info.plist` y entitlements van como
+  archivos junto a las fuentes nativas
+  (`native/android/AndroidManifest.xml`,
+  `native/ios/Info.plist.fragment`, …) y se mergean en la app — ver
+  [fragmentos de manifiestos nativos](/istmo/es/build-scripts/istmo-toml-reference/#fragmentos-de-manifiestos-nativos).
+  Las versiones mínimas del SO sí van en el manifest, bajo
+  [`[min_versions]`](/istmo/es/build-scripts/istmo-toml-reference/#min_versions).
 
 Mantener la frontera explícita significa que nunca persigues un cambio
 en dos archivos.

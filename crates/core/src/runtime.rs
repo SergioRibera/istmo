@@ -183,6 +183,18 @@ impl std::fmt::Debug for Runtime {
 
 static GLOBAL: OnceLock<Arc<Runtime>> = OnceLock::new();
 
+/// Early events submitted by the platform before [`Runtime::init`]
+/// ran — e.g. a share intent or deep link delivered to an `Activity`
+/// whose `onCreate` executes before Rust boots. Replayed in order by
+/// [`Runtime::init`].
+static PRE_START_EARLY_EVENTS: Mutex<Vec<(String, EarlyEventKind, Vec<u8>)>> =
+    Mutex::new(Vec::new());
+
+/// Upper bound on [`PRE_START_EARLY_EVENTS`]; the oldest entry is
+/// dropped on overflow so a runtime that never starts cannot grow it
+/// without bound.
+pub const PRE_START_EARLY_EVENT_CAPACITY: usize = 64;
+
 impl Runtime {
     /// Build a runtime and install it as the process-global singleton.
     ///
@@ -199,7 +211,52 @@ impl Runtime {
         GLOBAL
             .set(init.runtime.clone())
             .map_err(|_| IstmoError::RuntimeAlreadyStarted)?;
+        let pending = std::mem::take(&mut *lock(&PRE_START_EARLY_EVENTS));
+        for (channel, kind, payload) in pending {
+            init.runtime
+                .dispatch_inbound(Envelope::new(Frame::EarlyEvent {
+                    channel,
+                    kind,
+                    payload,
+                }))?;
+        }
         Ok(init)
+    }
+
+    /// Deliver an early event to the process-global runtime, or buffer
+    /// it until [`Runtime::init`] runs.
+    ///
+    /// Platform transports route `publishEarlyQueue` /
+    /// `publishEarlyLatest` through this so events raised before Rust
+    /// boots (cold-start intents, share hand-offs) are not lost. At
+    /// most [`PRE_START_EARLY_EVENT_CAPACITY`] events are buffered.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Runtime::dispatch_inbound`] returns once the runtime
+    /// exists.
+    // The lock must stay held across the `GLOBAL` check so `init`
+    // cannot drain the buffer between the check and the push.
+    #[allow(clippy::significant_drop_tightening)]
+    pub fn submit_early_event(
+        channel: String,
+        kind: EarlyEventKind,
+        payload: Vec<u8>,
+    ) -> Result<(), IstmoError> {
+        let mut pending = lock(&PRE_START_EARLY_EVENTS);
+        if let Some(runtime) = GLOBAL.get() {
+            drop(pending);
+            return runtime.dispatch_inbound(Envelope::new(Frame::EarlyEvent {
+                channel,
+                kind,
+                payload,
+            }));
+        }
+        if pending.len() == PRE_START_EARLY_EVENT_CAPACITY {
+            pending.remove(0);
+        }
+        pending.push((channel, kind, payload));
+        Ok(())
     }
 
     /// Return a clone of the process-global runtime.

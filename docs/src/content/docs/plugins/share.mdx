@@ -1,0 +1,331 @@
+---
+title: Share
+description: Send text, links and files through the OS share sheet, and receive what other apps share into yours — Android, iOS, macOS, Windows.
+sidebar:
+  order: 4
+---
+
+import PluginTypes from '../../../generated/plugins/share-types.mdx';
+
+`istmo-share` opens the platform share sheet with any mix of text, a
+link, a subject and files, and delivers content shared *into* the app
+as a stream of `IncomingShare` values.
+
+| Platform | Send | Receive | Minimum |
+| -------- | ---- | ------- | ------- |
+| Android | `ACTION_SEND(_MULTIPLE)` chooser + `FileProvider` | `ACTION_SEND` intent filters (opt-in) | API 22 |
+| iOS | `UIActivityViewController` | Share Extension + App Group | 13.0 |
+| macOS | `NSSharingServicePicker` | Share Extension + App Group | 10.15 |
+| Windows | `DataTransferManager` | Share Target (package identity) | 10.0.16299 (receive: 10.0.19041) |
+| Linux | — | app-driven | — |
+
+The minimums are declared in the plugin's `[min_versions]` and checked
+at build time (see [istmo.toml reference](/istmo/build-scripts/istmo-toml-reference/#min_versions)).
+
+A runnable demo covering every feature lives in
+[`examples/share-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/share-demo)
+(`just share-demo` builds, installs and launches it on an Android device).
+
+## Install
+
+```toml
+[dependencies]
+istmo-share = "0.1"
+# Optional: `ShareFile::from_picked` for files from istmo-file-picker.
+# istmo-share = { version = "0.1", features = ["file-picker"] }
+```
+
+## Send
+
+```rust
+use istmo_share::{ShareClient, ShareError, ShareFile, ShareOutcome, SharePreview, ShareRequest};
+
+let share = ShareClient::from_runtime(&runtime)?;
+
+let request = ShareRequest::text("Trip photos")
+    .with_url("https://example.com/trip")
+    .with_subject("Our trip")
+    .with_file(ShareFile::path("/data/user/0/app/files/beach.jpg"))
+    .with_file(ShareFile::bytes("itinerary.pdf", pdf_bytes))
+    .with_preview(SharePreview {
+        title: Some("Our trip".into()),
+        thumbnail: Some(ShareFile::path(thumb_path)),
+        fetch_link_metadata: false,
+    });
+
+match share.share(request).await.map_err(ShareError::from)? {
+    ShareOutcome::Shared(target) => tracing::info!("shared via {target:?}"),
+    ShareOutcome::TargetChosen(app) => tracing::info!("sent to {app}"),
+    ShareOutcome::Dismissed => {}
+    ShareOutcome::Unknown => {}
+}
+```
+
+`ShareError::from` decodes the plugin's own error from the client's
+`IstmoError`.
+
+### What each platform reports
+
+| Platform | Picked a target | Completed | Dismissed |
+| -------- | --------------- | --------- | --------- |
+| Android | `TargetChosen(component)` | not reported | `Unknown` |
+| iOS | — | `Shared(activity type)` | `Dismissed` |
+| macOS | `TargetChosen(title)` if the service stays silent for 60 s | `Shared(service title)` | `Dismissed` |
+| Windows 11 | — | `Shared(app user model id)` | `Dismissed` |
+| Windows 10 | — | `Shared(app user model id)` | `Unknown` (resolves right after the UI opens) |
+
+### Files
+
+- `ShareFile::path` — an existing file. On Android it must live under
+  the app's files or cache directory; anything else is copied to the
+  cache first.
+- `ShareFile::bytes` — in-memory contents, written to a temporary file
+  named after `name` before sharing.
+- `ShareFile::from_picked(&share, &picker, &file)` (feature
+  `file-picker`) — a file from `istmo-file-picker`: the real path when
+  the picker exposes one; otherwise (Android SAF) the contents are
+  streamed through the picker's file descriptor into the backend's
+  `staging_dir()`, in constant memory, and shared from there.
+
+Receivers may read files after `share` resolves, so staged copies are
+kept for a day on mobile and until `DesktopShare` drops (or
+`purge_staged()`) on desktop.
+
+### Cancelling
+
+Drop the `share` future (e.g. the screen that opened it goes away) and
+the call is cancelled. Where `capabilities().dismiss_on_cancel` is
+`true` the sheet closes too:
+
+| Platform | Dropping the future |
+| -------- | ------------------- |
+| iOS | dismisses `UIActivityViewController` |
+| macOS | closes `NSSharingServicePicker` (not a service already running) |
+| Android | resolves the call; the system chooser cannot be closed by the app |
+| Windows | resolves the call; the share UI cannot be closed by the app |
+
+### Anchors
+
+iPad and macOS show the sheet as a popover. Pass the rectangle of the
+share button, in window points with the origin top-left:
+
+```rust
+use istmo_share::{ShareAnchor, ShareRect};
+
+let request = request.with_anchor(ShareAnchor {
+    window_id: Some(1), // desktop: id in the istmo-window registry
+    rect: Some(ShareRect { x: 320.0, y: 40.0, width: 44.0, height: 44.0 }),
+});
+```
+
+Without an anchor the sheet is centred in the window.
+
+### Linux
+
+freedesktop.org has no share portal, so the Linux backend returns
+`ShareError::Unsupported` and `capabilities()` reports every flag as
+`false`. Render your own targets instead (copy to clipboard, open a
+`mailto:` link through the `OpenURI` portal, …). Flutter's `share_plus`
+takes a similar stance: `mailto:` for text, files unsupported.
+
+```rust
+if !share.capabilities().await?.send {
+    show_in_app_share_menu();
+}
+```
+
+## Wire the backend
+
+The backend needs an `Activity`, a view controller or a window, so it
+is not auto-registered.
+
+:::caution[Android package]
+The plugin's Kotlin sources import the generated types from
+`dev.istmo.runtime` (`ShareBackend`, `ShareRequest`, `ShareCodecsImpl`,
+…), like every other official plugin. `istmo-build` generates them into
+`<namespace>.gen` by default, so the app must pin the package in its
+`istmo.toml` or the plugin sources do not compile:
+
+```toml
+[app]
+android_package = "dev.istmo.runtime"
+```
+
+On iOS nothing is needed: the generated Swift and the plugin's
+`native/ios/` sources both land in the app target through
+`istmo-plugins.yml`.
+:::
+
+**Android** — in `Activity.onCreate`:
+
+```kotlin
+val backend = ShareBackendImpl(this)
+IstmoRuntime.registerHandler(ShareDispatcher.PLUGIN_ID, ShareDispatcher(backend, ShareCodecsImpl()))
+```
+
+The Gradle plugin loader merges the plugin's `AndroidManifest.xml`
+(`FileProvider`, chooser callback receiver, receiver activity) and
+`res/xml/istmo_share_paths.xml` (AGP 8.3+).
+
+**iOS**:
+
+```swift
+IstmoRuntime.shared.registerHandler(
+    ShareDispatcher.PLUGIN_ID,
+    ShareDispatcher(backend: ShareBackendImpl(), codecs: ShareCodecsImpl())
+)
+```
+
+`istmo-build` adds `NSPhotoLibraryAddUsageDescription` to the app's
+`Info.plist` (required by the "Save Image" action); reword it with
+`[app.info_plist]` in the app's `istmo.toml`. Localise it with
+`InfoPlist.strings` — ready-made `en` / `es` files live in
+`plugins/share/templates/ios-localization`.
+
+**Desktop** — register each window once in the shared
+`istmo-window` registry, from its UI thread:
+
+```rust
+use istmo_share::{DesktopShare, ShareClient, ShareHost};
+use istmo_window::{WindowId, WindowRegistry};
+
+WindowRegistry::global().register(WindowId(1), &window)?;
+let init = Runtime::init(config)?
+    .expects::<ShareClient>()
+    .host(ShareHost::new(DesktopShare::with_global_registry()?))
+    .finish();
+```
+
+On Windows the backend subclasses the window to run the share UI on
+its thread; do not block that thread while awaiting `share`.
+
+## Receive
+
+Shared content arrives through `ShareInbox`. Shares received before
+the app subscribes (cold start from the share sheet) are buffered.
+
+```rust
+use istmo_share::ShareInbox;
+
+let inbox = ShareInbox::acquire()?;
+let incoming = inbox.stream();
+while let Ok(share) = incoming.recv_async().await {
+    for file in &share.files {
+        import(&file.path, &file.name)?; // app-owned copy
+    }
+    ShareInbox::cleanup(&share)?;
+}
+```
+
+Received files are copies the app owns. If the app never calls
+`ShareInbox::cleanup`, every backend deletes copies older than
+`INCOMING_RETENTION` (7 days) when the next share arrives.
+
+Receiving is opt-in on every platform; `capabilities().receive` tells
+whether the current install is set up for it.
+
+**Android** — declare an `activity-alias` in the app's
+`AndroidManifest.xml`. The name is fixed:
+
+```xml
+<application>
+  <activity-alias
+      android:name="dev.istmo.plugins.share.ShareTarget"
+      android:targetActivity="dev.istmo.plugins.share.ShareReceiverActivity"
+      android:exported="true">
+    <intent-filter>
+      <action android:name="android.intent.action.SEND" />
+      <action android:name="android.intent.action.SEND_MULTIPLE" />
+      <category android:name="android.intent.category.DEFAULT" />
+      <data android:mimeType="text/*" />
+      <data android:mimeType="image/*" />
+    </intent-filter>
+  </activity-alias>
+</application>
+```
+
+The plugin's own `ShareReceiverActivity` is not exported and has no
+intent filters, so nothing reaches it without the alias. Because the
+alias is an element only the app declares, the manifest merger never
+has to reconcile the app's attributes with the plugin's — the plugin
+manifest is merged with the highest priority and would win any such
+conflict.
+
+**iOS / macOS** — add a Share Extension target from
+`plugins/share/templates/apple-share-extension` (step-by-step in its
+`README.md`), then drain the App Group inbox:
+
+```swift
+// iOS, at launch
+IstmoShareInbox.observeHandoffs()   // drains as soon as the extension writes
+// …and IstmoShareInbox.drain() on activation / wake-up URL
+```
+
+```rust
+// macOS, at startup
+istmo_share::desktop::drain_app_group_inbox(group, &inbox)?;
+istmo_share::desktop::observe_app_group_handoffs(group, &inbox)?;
+```
+
+The extension posts a Darwin notification the running app observes,
+and wakes an app that is not running: on iOS by opening
+`<scheme>://istmo-share` (through the responder chain, which still
+works on iOS 18), on macOS by launching it in the background. If both
+fail the share waits in the App Group for the next activation.
+
+**Windows** — Windows 10 2004 (build 19041) or later, and the app needs
+package identity: an MSIX package, or a sparse package for an
+otherwise unpackaged app. `capabilities().receive` checks both at
+runtime. Declare the target in `Package.appxmanifest`:
+
+```xml
+<Extensions>
+  <uap:Extension Category="windows.shareTarget">
+    <uap:ShareTarget Description="Share to MyApp">
+      <uap:SupportedFileTypes><uap:SupportsAnyFileType /></uap:SupportedFileTypes>
+      <uap:DataFormat>Text</uap:DataFormat>
+      <uap:DataFormat>URI</uap:DataFormat>
+      <uap:DataFormat>StorageItems</uap:DataFormat>
+    </uap:ShareTarget>
+  </uap:Extension>
+</Extensions>
+```
+
+Windows starts a new instance for each share; at startup:
+
+```rust
+istmo_share::desktop::take_share_target_activation(&ShareInbox::acquire()?)?;
+```
+
+**Linux** — no share-target standard. Feed files from your `.desktop`
+`MimeType` handler or command line into the same stream with
+`ShareInbox::publish`.
+
+### Direct share
+
+Offer the app's own destinations (chats, folders, contacts) in the
+share sheet's suggestion row. Shares sent to one arrive with
+`IncomingShare::target_id` set.
+
+```rust
+use istmo_share::{ShareFile, ShareTarget};
+
+share
+    .set_share_targets(vec![
+        ShareTarget::new("chat-42", "Family").with_icon(ShareFile::path(avatar)),
+        ShareTarget::new("chat-7", "Work"),
+    ])
+    .await?; // an empty list clears them
+```
+
+| Platform | Mechanism | Extra setup |
+| -------- | --------- | ----------- |
+| Android | long-lived sharing shortcuts | the `ShareTarget` alias above, plus `<meta-data android:name="android.app.shortcuts" android:resource="@xml/istmo_share_shortcuts" />` on the launcher activity (or copy its `<share-target>` into your own shortcuts XML) |
+| iOS | donated `INSendMessageIntent` | `INSendMessageIntent` in the app's `NSUserActivityTypes`; the extension template already declares `IntentsSupported` |
+| macOS, Windows, Linux | — | `ShareError::Unsupported` |
+
+`capabilities().direct_share` reports whether the setup is in place.
+
+## Wire types
+
+<PluginTypes />

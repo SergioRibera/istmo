@@ -314,3 +314,62 @@ fn dummy_contract() -> istmo_build::Contract {
         types: vec![],
     }
 }
+
+#[test]
+fn emit_app_merges_plugin_plist_fragments_into_marked_info_plist() {
+    let root = scratch_root("ios-plist-fragments");
+    let ios_root = root.join("ios");
+    let app_dir = ios_root.join("MyApp");
+    fs::create_dir_all(&app_dir).unwrap();
+    fs::write(
+        app_dir.join("Info.plist"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n\
+         \t<key>CFBundleName</key>\n\t<string>MyApp</string>\n\
+         \t<!-- istmo:plugins:start -->\n\t<!-- istmo:plugins:end -->\n</dict>\n</plist>\n",
+    )
+    .unwrap();
+
+    let plugin_dir = root.join("plugin-native-ios");
+    fs::create_dir_all(&plugin_dir).unwrap();
+    fs::write(
+        plugin_dir.join("Info.plist.fragment"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
+         <key>NSPhotoLibraryAddUsageDescription</key><string>Save shared images</string>\
+         <key>CFBundleName</key><string>Ignored</string>\
+         </dict></plist>\n",
+    )
+    .unwrap();
+    fs::write(
+        plugin_dir.join("App.entitlements.fragment"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
+         <key>com.apple.security.application-groups</key>\
+         <array><string>group.$(PRODUCT_BUNDLE_IDENTIFIER)</string></array>\
+         </dict></plist>\n",
+    )
+    .unwrap();
+
+    let mut opts = AppOpts::default();
+    opts.root = Some(root.clone());
+    opts.ios_root = Some(ios_root.clone());
+    opts.ios_app_dir = Some("MyApp".to_owned());
+    opts.android = Some(false);
+    opts.extra_contracts.push(dummy_contract());
+    opts.extra_native_ios_dirs = vec![("ISTMO_SHARE".to_owned(), plugin_dir.clone())];
+    emit_app_with(opts);
+
+    let info = fs::read_to_string(app_dir.join("Info.plist")).unwrap();
+    assert!(info.contains("NSPhotoLibraryAddUsageDescription"), "{info}");
+    assert!(!info.contains("Ignored"), "app keys must win: {info}");
+    assert!(app_dir.join("Info.plist.plugins.xml").is_file());
+
+    let sidecar = fs::read_to_string(app_dir.join("MyApp.entitlements.plugins.xml")).unwrap();
+    assert!(
+        sidecar.contains("com.apple.security.application-groups"),
+        "{sidecar}"
+    );
+
+    let yaml = fs::read_to_string(app_dir.join("istmo-plugins.yml")).unwrap();
+    assert!(yaml.contains("\"*.fragment\""), "{yaml}");
+
+    let _ = fs::remove_dir_all(&root);
+}

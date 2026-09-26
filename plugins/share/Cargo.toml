@@ -1,0 +1,105 @@
+[package]
+name = "istmo-share"
+version = "0.1.1-alpha.2"
+description = "Cross-platform share plugin for the istmo framework — send and receive text, links and files through the Android chooser, UIActivityViewController, NSSharingServicePicker and Windows DataTransferManager."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["istmo", "share", "share-sheet", "intent", "mobile"]
+categories = ["gui", "api-bindings"]
+links = "istmo_share"
+
+[features]
+default = []
+codegen = ["dep:istmo-build"]
+# `ShareFile::from_picked` for files picked with istmo-file-picker.
+file-picker = ["dep:istmo-file-picker"]
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+bincode = { workspace = true }
+flume = { workspace = true }
+tracing = { workspace = true }
+istmo-build = { workspace = true, optional = true }
+istmo-file-picker = { workspace = true, optional = true }
+
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+istmo-window = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "ApplicationModel",
+    "ApplicationModel_Activation",
+    "ApplicationModel_DataTransfer",
+    "ApplicationModel_DataTransfer_ShareTarget",
+    "Foundation",
+    "Foundation_Collections",
+    "Foundation_Metadata",
+    "Storage",
+    "Storage_Search",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_Storage_Packaging_Appx",
+    "Win32_System_WinRT",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-collections = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Share Extension hand-off manifest (`share.json`).
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSError",
+    "NSGeometry",
+    "NSObject",
+    "NSString",
+    "NSURL",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSResponder",
+    "NSSharingService",
+    "NSView",
+] }
+dispatch2 = { version = "0.3", default-features = false, features = ["std", "objc2"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "CFDictionary",
+    "CFNotificationCenter",
+    "CFString",
+] }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+istmo-build = { workspace = true }
+istmo-window = { workspace = true }
+pollster = { workspace = true }
+flume = { workspace = true }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_safety_doc = "allow"
+redundant_pub_crate = "allow"

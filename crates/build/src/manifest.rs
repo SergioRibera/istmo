@@ -5,6 +5,7 @@ use bincode::{Decode, Encode};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use crate::handover::{emit_contract, emit_manifest, emit_native_deps};
+use crate::min_versions::{MinVersions, OsVersion};
 use crate::native_deps::{GradleCoord, GradleDep, GradleScope, NativeDeps, SwiftPackageDep};
 
 const KNOWN_KEYS: &[&str] = &[
@@ -13,8 +14,11 @@ const KNOWN_KEYS: &[&str] = &[
     "swift_package",
     "remote_override",
     "windows_manifest_fragment",
+    "min_versions",
     "app",
 ];
+
+const KNOWN_MIN_VERSION_KEYS: &[&str] = &["android", "ios", "macos", "windows"];
 
 const KNOWN_WINDOWS_MANIFEST_KEYS: &[&str] = &["name", "xml"];
 
@@ -245,6 +249,12 @@ pub struct Manifest {
     pub remote_overrides: Vec<RemoteOverride>,
 
     pub windows_manifest_fragments: Vec<WindowsManifestFragment>,
+
+    /// Oldest OS releases the crate supports (`[min_versions]`). On a
+    /// plugin crate these are requirements checked against every
+    /// consuming app; on an app crate they are the floor the app ships
+    /// to.
+    pub min_versions: MinVersions,
 }
 
 impl Manifest {
@@ -294,11 +304,16 @@ impl Manifest {
                 windows_manifest_fragments.push(parse_windows_manifest_fragment(entry)?);
             }
         }
+        let min_versions = match doc.get("min_versions") {
+            Some(item) => parse_min_versions(expect_table(item, "min_versions")?)?,
+            None => MinVersions::default(),
+        };
         Ok(Self {
             plugins,
             native_deps,
             remote_overrides,
             windows_manifest_fragments,
+            min_versions,
         })
     }
 
@@ -353,6 +368,11 @@ pub enum ManifestError {
     UnknownContinuousMode {
         value: String,
     },
+
+    InvalidVersion {
+        key: String,
+        value: String,
+    },
 }
 
 impl std::fmt::Display for ManifestError {
@@ -383,6 +403,11 @@ impl std::fmt::Display for ManifestError {
                 "istmo.toml key `plugin.ios_background.continuous_mode` = `{value}` \
                  (expected `audio`, `location`, `voip`, `external_accessory`, \
                  `bluetooth_central` or `bluetooth_peripheral`)"
+            ),
+            Self::InvalidVersion { key, value } => write!(
+                f,
+                "istmo.toml key `{key}` = `{value}` (expected an API level integer for \
+                 `android`, or a `major[.minor[.patch]]` string)"
             ),
         }
     }
@@ -634,6 +659,57 @@ fn parse_ios_background(
         class_name,
         task_identifier,
         kind,
+    })
+}
+
+fn parse_min_versions(table: &dyn toml_edit::TableLike) -> Result<MinVersions, ManifestError> {
+    for (name, _) in table.iter() {
+        if !KNOWN_MIN_VERSION_KEYS.contains(&name) {
+            return Err(ManifestError::UnknownKey {
+                key: format!("min_versions.{name}"),
+            });
+        }
+    }
+    let android = match table.get("android") {
+        Some(item) => {
+            let api = expect_integer(item, "min_versions.android")?;
+            Some(
+                u32::try_from(api).map_err(|_| ManifestError::InvalidVersion {
+                    key: "min_versions.android".to_owned(),
+                    value: api.to_string(),
+                })?,
+            )
+        }
+        None => None,
+    };
+    let os_version = |key: &'static str| -> Result<Option<OsVersion>, ManifestError> {
+        let Some(item) = table.get(key) else {
+            return Ok(None);
+        };
+        let full_key = format!("min_versions.{key}");
+        let literal = match item {
+            Item::Value(Value::String(s)) => s.value().clone(),
+            Item::Value(Value::Integer(i)) => i.value().to_string(),
+            _ => {
+                return Err(ManifestError::TypeMismatch {
+                    key: full_key,
+                    expected: "version string",
+                });
+            }
+        };
+        literal
+            .parse()
+            .map(Some)
+            .map_err(|_| ManifestError::InvalidVersion {
+                key: full_key,
+                value: literal,
+            })
+    };
+    Ok(MinVersions {
+        android,
+        ios: os_version("ios")?,
+        macos: os_version("macos")?,
+        windows: os_version("windows")?,
     })
 }
 
@@ -913,6 +989,13 @@ pub fn emit_with(app: crate::emit_app::AppOpts) {
     }
     let app_toml = manifest_exists.then_some(manifest_path);
     let _ = emit_wiring_env(app_toml);
+    let app_manifest = app_toml.and_then(|path| Manifest::from_path(path).ok());
+    let app_root = app.root.clone().unwrap_or_else(|| PathBuf::from("."));
+    crate::min_versions::enforce_min_versions(
+        &crate::handover::collect_dep_manifests(),
+        app_manifest.as_ref(),
+        &app_root,
+    );
     crate::emit_app::emit_app_with(app);
 }
 

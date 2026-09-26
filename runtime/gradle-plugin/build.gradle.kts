@@ -16,7 +16,9 @@ version = pluginVersion
 // with consumer builds that enforce `FAIL_ON_PROJECT_REPOS`.
 
 dependencies {
-    compileOnly("com.android.tools.build:gradle:8.2.2")
+    // 8.3 is the first AGP exposing `Variant.sources.manifests`; the
+    // plugin degrades gracefully (warning) when applied on older AGPs.
+    compileOnly("com.android.tools.build:gradle:8.3.2")
     implementation("org.tomlj:tomlj:1.1.1")
 }
 
@@ -32,7 +34,7 @@ gradlePlugin {
             implementationClass = "dev.istmo.gradle.IstmoLoaderPlugin"
             displayName = "istmo plugin loader"
             description =
-                "Auto-injects Kotlin sources from every istmo plugin declared in the workspace Cargo.toml into the app's Android source set."
+                "Auto-injects Kotlin sources, manifest fragments and resources from every istmo plugin declared in the workspace Cargo.toml into the app's Android build, and enforces each plugin's minimum Android API level."
         }
     }
 }

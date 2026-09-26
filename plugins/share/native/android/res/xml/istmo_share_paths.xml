@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Roots IstmoShareFileProvider may expose. Only files the share
+     backend explicitly grants are ever reachable. -->
+<paths>
+    <cache-path name="istmo_share_cache" path="." />
+    <files-path name="istmo_share_files" path="." />
+</paths>

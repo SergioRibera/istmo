@@ -60,8 +60,8 @@ pub use crate::protocol::{
 };
 pub use crate::routing::{CallResult, InstanceEntry, RoutingTables, StreamMessage};
 pub use crate::runtime::{
-    CallHandle, DEFAULT_OUTBOUND_CAPACITY, NativeHandleReleaseHook, RemoteEnvelopeSink, Runtime,
-    RuntimeConfig, RuntimeInit, StreamHandle,
+    CallHandle, DEFAULT_OUTBOUND_CAPACITY, NativeHandleReleaseHook, PRE_START_EARLY_EVENT_CAPACITY,
+    RemoteEnvelopeSink, Runtime, RuntimeConfig, RuntimeInit, StreamHandle,
 };
 pub use crate::typed_stream::{StreamItem, TypedStream};
 

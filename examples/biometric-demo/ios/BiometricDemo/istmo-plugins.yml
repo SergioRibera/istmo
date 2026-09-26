@@ -10,3 +10,5 @@ targets:
         name: ISTMO_BIOMETRIC
         type: group
         createIntermediateGroups: true
+        excludes:
+          - "*.fragment"

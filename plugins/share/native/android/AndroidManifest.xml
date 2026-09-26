@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  istmo.share — merged into every variant's manifest by the istmo Gradle
+  plugin loader (AGP 8.3+). Only adds components; no application-level
+  attributes, so it never overrides the app's own settings.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- content:// URIs for outgoing files. Authority must match
+             ShareBackendImpl.AUTHORITY_SUFFIX. -->
+        <provider
+            android:name="dev.istmo.plugins.share.IstmoShareFileProvider"
+            android:authorities="${applicationId}.istmo.share.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/istmo_share_paths" />
+        </provider>
+
+        <!-- Chooser callback reporting the picked target. -->
+        <receiver
+            android:name="dev.istmo.plugins.share.ShareTargetChosenReceiver"
+            android:exported="false" />
+
+        <!-- Receiving shares. Not exported and without intent filters:
+             unreachable until the app declares the
+             dev.istmo.plugins.share.ShareTarget activity-alias (see
+             ShareReceiverActivity). The app never redeclares this
+             element, so the merger has nothing to reconcile. -->
+        <activity
+            android:name="dev.istmo.plugins.share.ShareReceiverActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+    </application>
+</manifest>

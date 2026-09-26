@@ -130,16 +130,32 @@ const fn platform_capabilities() -> PenCapabilities {
             target_os = "macos",
             target_os = "linux"
         )),
-        tilt: cfg!(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        tilt: cfg!(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux"
+        )),
         azimuth: false,
         altitude: false,
-        twist: cfg!(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        twist: cfg!(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux"
+        )),
         tangential_pressure: cfg!(target_os = "macos"),
-        hover: cfg!(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        hover: cfg!(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux"
+        )),
         predicted: false,
         coalesced: cfg!(target_os = "windows"),
         button_count,
-        eraser: cfg!(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        eraser: cfg!(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux"
+        )),
     }
 }
 

@@ -1,0 +1,8 @@
+[app]
+# The plugin's reference Kotlin imports the generated types from
+# `dev.istmo.runtime`.
+android_package = "dev.istmo.runtime"
+
+# Rewords istmo.share's default photo-library usage string.
+[app.info_plist]
+NSPhotoLibraryAddUsageDescription = "The istmo share demo saves shared images to your photo library."

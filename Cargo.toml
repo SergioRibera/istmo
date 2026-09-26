@@ -8,6 +8,7 @@ members = [
     "crates/ios",
     "crates/plugins",
     "crates/plugins-schema",
+    "crates/window",
     "examples/android-demo",
     "examples/android-multi/crates/app",
     "examples/android-multi/crates/widget",
@@ -19,9 +20,11 @@ members = [
     "plugins/biometric",
     "plugins/live-activity",
     "plugins/istmo-pen",
+    "plugins/share",
     "examples/data-store-demo",
     "examples/live-activity-demo",
     "examples/pen-demo",
+    "examples/share-demo",
     "examples/biometric-demo",
 ]
 
@@ -72,11 +75,14 @@ istmo-android = { path = "crates/android", version = "0.1.1-alpha.2" }
 istmo-ios = { path = "crates/ios", version = "0.1.1-alpha.2" }
 istmo-plugins = { path = "crates/plugins", version = "0.1.1-alpha.2" }
 istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.1.1-alpha.2" }
+istmo-window = { path = "crates/window", version = "0.1.1-alpha.2" }
 
 istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.1.1-alpha.2" }
 istmo-data-store = { path = "plugins/data-store", version = "0.1.1-alpha.2" }
 istmo-live-activity = { path = "plugins/live-activity", version = "0.1.1-alpha.2" }
 istmo-pen = { path = "plugins/istmo-pen", version = "0.1.1-alpha.2" }
+istmo-file-picker = { path = "plugins/file-picker", version = "0.1.1-alpha.2" }
+istmo-share = { path = "plugins/share", version = "0.1.1-alpha.2" }
 istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.2" }
 
 [package]

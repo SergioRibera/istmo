@@ -18,9 +18,8 @@ use std::sync::{Arc, Mutex};
 
 use flume::{Receiver, Sender};
 use istmo_core::Runtime;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-use raw_window_handle::RawWindowHandle;
-use raw_window_handle::{HandleError, HasWindowHandle};
+use istmo_window::{NativeWindow, WindowId, WindowListener, WindowRegistry};
+use raw_window_handle::HasWindowHandle;
 
 use crate::{PenError, PenEvent, PenHoverEvent};
 
@@ -75,6 +74,11 @@ impl WindowState {
 /// One publisher per app; each open window is registered under a stable
 /// integer id that must match the [`PenConfig::window_id`](crate::PenConfig::window_id)
 /// used when constructing the matching [`PenClient`](crate::PenClient).
+///
+/// Windows can be registered directly ([`Self::register_window`]) or
+/// through a shared [`WindowRegistry`] the publisher follows via
+/// [`Self::follow_registry`], so apps that also use other window-aware
+/// plugins register each window only once.
 #[derive(Debug)]
 pub struct PenPublisher {
     runtime: Arc<Runtime>,
@@ -106,14 +110,31 @@ impl PenPublisher {
     /// currently only records the mapping (backend lands in a later
     /// milestone). Fails only when the raw handle cannot be resolved.
     pub fn register_window(&self, id: u64, window: impl HasWindowHandle) -> Result<(), PenError> {
-        let handle = window
-            .window_handle()
-            .map_err(|err: HandleError| PenError::Backend(err.to_string()))?;
+        let native =
+            NativeWindow::from_window(&window).map_err(|err| PenError::Backend(err.to_string()))?;
+        self.attach(id, native)
+    }
+
+    /// Subscribe to `registry`: every window registered there (now or
+    /// later) is attached under the same id, and unregistering it there
+    /// detaches it here.
+    pub fn follow_registry(self: &Arc<Self>, registry: &WindowRegistry) -> Result<(), PenError> {
+        let listener: Arc<dyn WindowListener> = Arc::clone(self) as Arc<dyn WindowListener>;
+        registry
+            .add_listener(&listener)
+            .map_err(|err| PenError::Backend(err.to_string()))
+    }
+
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos")),
+        allow(unused_variables, clippy::unnecessary_wraps)
+    )]
+    fn attach(&self, id: u64, native: NativeWindow) -> Result<(), PenError> {
         let state = Arc::new(WindowState::new());
 
         #[cfg(target_os = "windows")]
-        if let RawWindowHandle::Win32(win32) = handle.as_raw() {
-            let attachment = windows::attach_hwnd(win32.hwnd, Arc::clone(&state))
+        if let Some(hwnd) = native.hwnd() {
+            let attachment = windows::attach_hwnd(hwnd, Arc::clone(&state))
                 .map_err(|err| PenError::Backend(err.to_string()))?;
             match state.windows_attachment.lock() {
                 Ok(mut guard) => *guard = Some(attachment),
@@ -121,17 +142,14 @@ impl PenPublisher {
             }
         }
         #[cfg(target_os = "macos")]
-        if let RawWindowHandle::AppKit(appkit) = handle.as_raw() {
-            let attachment = macos::attach_view(appkit.ns_view, Arc::clone(&state))
+        if let Some(ns_view) = native.ns_view() {
+            let attachment = macos::attach_view(ns_view, Arc::clone(&state))
                 .map_err(|err| PenError::Backend(err.to_string()))?;
             match state.macos_attachment.lock() {
                 Ok(mut guard) => *guard = Some(attachment),
                 Err(poisoned) => *poisoned.into_inner() = Some(attachment),
             }
         }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        let _ = handle;
-
         let mut guard = match self.windows.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -289,5 +307,15 @@ impl PenPublisher {
             Err(poisoned) => poisoned.into_inner(),
         };
         guard.get(&id).cloned()
+    }
+}
+
+impl WindowListener for PenPublisher {
+    fn window_registered(&self, id: WindowId, window: NativeWindow) -> Result<(), String> {
+        self.attach(id.0, window).map_err(|err| err.to_string())
+    }
+
+    fn window_unregistered(&self, id: WindowId) {
+        self.unregister_window(id.0);
     }
 }

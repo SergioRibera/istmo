@@ -20,6 +20,10 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Table, Value};
 
+use crate::apple_plist::{
+    ENTITLEMENTS_FRAGMENT, INFO_PLIST_FRAGMENT, PLUGINS_MARK_END, PLUGINS_MARK_START,
+    PlistFragments, app_keys_outside_block,
+};
 use crate::contract::Contract;
 use crate::handover::{collect_dep_contracts, collect_dep_manifests};
 use crate::ios::{BackgroundKind, ContinuousMode, IosBackgroundContract, generate_ios_background};
@@ -30,6 +34,7 @@ use crate::manifest::{
     AndroidServiceSpec, InfoPlistEntry, IosBackgroundKindSpec, IosBackgroundSpec,
     IosContinuousModeSpec, Manifest, PluginEntry,
 };
+use crate::min_versions::OsVersion;
 use crate::plugin_registry::{
     RegistryEntry, generate_kotlin_plugin_registry, generate_swift_plugin_registry,
 };
@@ -93,6 +98,10 @@ pub struct AppOpts {
     /// and for apps that ship plugin scaffolding inline instead of
     /// through a dedicated plugin crate.
     pub extra_manifests: Vec<Manifest>,
+    /// Additional `(name, native/ios dir)` pairs merged with those found
+    /// via the `DEP_*_ISTMO_NATIVE_IOS` handover. Same purpose as
+    /// [`Self::extra_manifests`].
+    pub extra_native_ios_dirs: Vec<(String, PathBuf)>,
     pub per_plugin: HashMap<String, AppPluginOpts>,
     pub seed_backends: bool,
     /// Emit `IstmoPluginRegistry.kt` / `.swift` files that construct
@@ -288,7 +297,18 @@ pub fn emit_app_with(opts: AppOpts) {
     }
     if ios_active {
         if let Some(app_dir) = ios_app_dir.as_deref() {
-            emit_ios_plugins_fragment(&ios_root, app_dir);
+            let mut native_dirs = dep_native_ios_dirs();
+            native_dirs.extend(
+                opts.extra_native_ios_dirs
+                    .iter()
+                    .map(|(name, dir)| (name.clone(), dir.display().to_string())),
+            );
+            let ios_min = dep_manifests
+                .iter()
+                .filter_map(|m| m.min_versions.ios.map(|v| (v, m.primary_id().to_owned())))
+                .max_by_key(|(v, _)| *v);
+            emit_ios_plugins_fragment(&ios_root, app_dir, &native_dirs, ios_min.as_ref());
+            emit_ios_plist_fragments(&ios_root, app_dir, &native_dirs);
         }
     }
 
@@ -747,29 +767,44 @@ import dev.istmo.runtime.PluginResult\n";
     format!("package {package}\n\n{imports}{coroutine_imports}\n{body}")
 }
 
-/// Discover every istmo plugin's `native/ios/` directory advertised
-/// through the `DEP_*_ISTMO_NATIVE_IOS` env-var handover, and write a
-/// small `istmo-plugins.yml` xcodegen fragment into the consumer's iOS
-/// app directory. Consumers' `project.yml` picks it up via `include: [
-/// istmo-plugins.yml ]` and merges the extra `sources:` entries into
-/// their app target.
-///
-/// The Android equivalent — auto-injecting Kotlin source dirs into
-/// `sourceSets["main"]` — is handled by the standalone Gradle plugin
-/// `dev.istmo:istmo-plugin-loader` on the runtime side; xcodegen has
-/// nothing equivalent to a Gradle plugin, so we emit a fragment file
-/// instead.
-fn emit_ios_plugins_fragment(ios_root: &Path, app_dir: &str) {
+/// Every istmo plugin's `native/ios/` directory advertised through the
+/// `DEP_*_ISTMO_NATIVE_IOS` env-var handover, as `(links-name, dir)`
+/// pairs sorted by name so generated output is deterministic.
+fn dep_native_ios_dirs() -> Vec<(String, String)> {
     let mut entries: Vec<(String, String)> = std::env::vars()
         .filter_map(|(k, v)| {
             let stripped = k.strip_prefix("DEP_")?.strip_suffix("_ISTMO_NATIVE_IOS")?;
             Some((stripped.to_owned(), v))
         })
         .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+/// Write a small `istmo-plugins.yml` xcodegen fragment into the
+/// consumer's iOS app directory. Consumers' `project.yml` picks it up
+/// via `include: [ istmo-plugins.yml ]` and merges the extra `sources:`
+/// entries into their app target.
+///
+/// When any plugin declares `[min_versions] ios`, the fragment also
+/// adds a pre-build script that fails the Xcode build if
+/// `IPHONEOS_DEPLOYMENT_TARGET` is older — the Xcode-side twin of the
+/// check `istmo-build` runs from Cargo.
+///
+/// The Android equivalent — auto-injecting Kotlin source dirs into
+/// `sourceSets["main"]` — is handled by the standalone Gradle plugin
+/// `dev.istmo:istmo-plugin-loader` on the runtime side; xcodegen has
+/// nothing equivalent to a Gradle plugin, so we emit a fragment file
+/// instead.
+fn emit_ios_plugins_fragment(
+    ios_root: &Path,
+    app_dir: &str,
+    entries: &[(String, String)],
+    ios_min: Option<&(OsVersion, String)>,
+) {
     if entries.is_empty() {
         return;
     }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     let fragment_dir = ios_root.join(app_dir);
     let mut yaml = String::new();
@@ -781,7 +816,7 @@ fn emit_ios_plugins_fragment(ios_root: &Path, app_dir: &str) {
     yaml.push_str("targets:\n");
     yaml.push_str(&format!("  {app_dir}:\n"));
     yaml.push_str("    sources:\n");
-    for (name, dir) in &entries {
+    for (name, dir) in entries {
         // xcodegen resolves `path:` relative to the file that
         // declares it. Prefer a repo-relative path so the fragment is
         // portable across machines / CI runners; fall back to the
@@ -791,10 +826,113 @@ fn emit_ios_plugins_fragment(ios_root: &Path, app_dir: &str) {
         yaml.push_str(&format!("        name: {name}\n"));
         yaml.push_str("        type: group\n");
         yaml.push_str("        createIntermediateGroups: true\n");
+        yaml.push_str("        excludes:\n");
+        yaml.push_str("          - \"*.fragment\"\n");
+    }
+    if let Some((min, plugin)) = ios_min {
+        yaml.push_str("    preBuildScripts:\n");
+        yaml.push_str("      - name: istmo minimum iOS version\n");
+        yaml.push_str("        basedOnDependencyAnalysis: false\n");
+        yaml.push_str("        script: |\n");
+        yaml.push_str(&format!("          required=\"{min}\"\n"));
+        yaml.push_str("          actual=\"${IPHONEOS_DEPLOYMENT_TARGET:-0}\"\n");
+        yaml.push_str(
+            "          lowest=$(printf '%s\\n%s\\n' \"$required\" \"$actual\" | sort -t. -k1,1n -k2,2n -k3,3n | head -n1)\n",
+        );
+        yaml.push_str("          if [ \"$lowest\" != \"$required\" ]; then\n");
+        yaml.push_str(&format!(
+            "            echo \"error: istmo plugin {plugin} requires iOS >= $required, but IPHONEOS_DEPLOYMENT_TARGET is $actual\"\n"
+        ));
+        yaml.push_str("            exit 1\n");
+        yaml.push_str("          fi\n");
     }
 
     let dest = fragment_dir.join("istmo-plugins.yml");
     write_if_changed(&dest, &yaml);
+}
+
+/// Merge every plugin's `Info.plist.fragment` / `App.entitlements.fragment`
+/// and write them into the app (see [`crate::apple_plist`]).
+fn emit_ios_plist_fragments(ios_root: &Path, app_dir: &str, entries: &[(String, String)]) {
+    let app_path = ios_root.join(app_dir);
+    let info_plist = app_path.join("Info.plist");
+    merge_plist_fragments(
+        entries,
+        INFO_PLIST_FRAGMENT,
+        &info_plist,
+        &app_path.join("Info.plist.plugins.xml"),
+    );
+    let entitlements = find_entitlements(&app_path)
+        .unwrap_or_else(|| app_path.join(format!("{app_dir}.entitlements")));
+    let sidecar = entitlements.with_extension("entitlements.plugins.xml");
+    merge_plist_fragments(entries, ENTITLEMENTS_FRAGMENT, &entitlements, &sidecar);
+}
+
+fn find_entitlements(app_path: &Path) -> Option<PathBuf> {
+    let mut found: Vec<PathBuf> = fs::read_dir(app_path)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "entitlements"))
+        .collect();
+    found.sort();
+    found.into_iter().next()
+}
+
+fn merge_plist_fragments(
+    entries: &[(String, String)],
+    fragment_name: &str,
+    target: &Path,
+    sidecar: &Path,
+) {
+    let mut fragments = PlistFragments::default();
+    for (name, dir) in entries {
+        let path = Path::new(dir).join(fragment_name);
+        if !path.is_file() {
+            continue;
+        }
+        println!("cargo:rerun-if-changed={}", path.display());
+        if let Err(err) = fragments.add_file(name, &path) {
+            println!("cargo::warning=istmo-build: {err}");
+        }
+    }
+    if fragments.is_empty() {
+        return;
+    }
+    if let Ok(source) = fs::read_to_string(target) {
+        fragments.remove_app_keys(&app_keys_outside_block(&source));
+    }
+    for warning in fragments.warnings() {
+        println!(
+            "cargo::warning=istmo-build: {}: {warning}",
+            target.display()
+        );
+    }
+    let body = match fragments.render_body() {
+        Ok(body) => body,
+        Err(err) => {
+            println!("cargo::warning=istmo-build: {err}");
+            return;
+        }
+    };
+    // Marker labels without their `<!-- -->` wrapper: XML comments do
+    // not nest.
+    let (start, end) = (
+        marker_label(PLUGINS_MARK_START),
+        marker_label(PLUGINS_MARK_END),
+    );
+    write_if_changed(
+        sidecar,
+        &format!(
+            "<!-- GENERATED by istmo-build - DO NOT EDIT. -->\n\
+             <!-- Copy the entries below into the <dict> of {}, or add the -->\n\
+             <!-- comment markers `{start}` / `{end}` inside it -->\n\
+             <!-- so istmo-build keeps the file in sync automatically. -->\n\
+             {body}",
+            target.display()
+        ),
+    );
+    patch_marker_file(target, PLUGINS_MARK_START, PLUGINS_MARK_END, &[body]);
 }
 
 /// Return `target` expressed relative to `base` when both share a

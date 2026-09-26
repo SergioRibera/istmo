@@ -10,3 +10,5 @@ targets:
         name: ISTMO_DATA_STORE
         type: group
         createIntermediateGroups: true
+        excludes:
+          - "*.fragment"
