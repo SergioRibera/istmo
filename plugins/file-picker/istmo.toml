@@ -2,4 +2,7 @@
 id = "istmo.file_picker"
 client_type = "::istmo_file_picker::FilePickerClient"
 default_deployment = "local"
-auto_register = false
+# The pickers are activity-result contracts: the backend takes the host
+# `ComponentActivity` from the generated registry.
+android_backend = "dev.istmo.plugins.filepicker.FilePickerBackendImpl"
+android_backend_arg = "activity"

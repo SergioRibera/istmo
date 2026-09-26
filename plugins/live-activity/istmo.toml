@@ -1,4 +1,6 @@
 [plugin]
 id = "istmo.live_activity"
 client_type = "::istmo_live_activity::LiveActivityClient"
+# Reference backend shipped in `native/android/`.
+android_backend = "dev.istmo.plugins.liveactivity.LiveActivityBackendImpl"
 

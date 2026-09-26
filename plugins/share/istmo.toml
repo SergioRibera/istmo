@@ -2,7 +2,10 @@
 id = "istmo.share"
 client_type = "::istmo_share::ShareClient"
 default_deployment = "local"
-auto_register = false
+# The backend registers an ActivityResultLauncher, so it takes the host
+# `ComponentActivity` from the generated registry.
+android_backend = "dev.istmo.plugins.share.ShareBackendImpl"
+android_backend_arg = "activity"
 
 # UIActivityViewController's "Save Image" / "Save Video" actions crash
 # the app when this usage string is missing. Apps reword it through
