@@ -103,6 +103,13 @@ class routes through the `:remote` bridge instead of the local runtime.
 - **Wire versioning.** The protocol carries its own version byte
   (`PROTOCOL_VERSION` in `istmo-core`).
 - **Runtime wiring.** `istmo::runtime!` macro invocation, not TOML.
+- **Platform manifest entries.** Providers, receivers, intent filters,
+  `Info.plist` keys and entitlements ship as files next to the native
+  sources (`native/android/AndroidManifest.xml`,
+  `native/ios/Info.plist.fragment`, …) and are merged into the app —
+  see [native manifest fragments](/istmo/build-scripts/istmo-toml-reference/#native-manifest-fragments).
+  Minimum OS versions do live in the manifest, under
+  [`[min_versions]`](/istmo/build-scripts/istmo-toml-reference/#min_versions).
 
 Keeping the boundary explicit means you never chase a change through
 two files.
