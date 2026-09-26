@@ -56,6 +56,7 @@ pub mod android_project;
 pub mod app_config;
 pub mod app_icon;
 pub mod apple_plist;
+pub mod assets;
 pub mod contract;
 pub mod desktop;
 pub mod doc_extract;
@@ -87,6 +88,7 @@ pub use crate::app_config::{
 pub use crate::apple_plist::{
     ENTITLEMENTS_FRAGMENT, INFO_PLIST_FRAGMENT, MergeWarning, PlistFragmentError, PlistFragments,
 };
+pub use crate::assets::{AssetResolveError, AssetsPayload, ResolvedAsset, resolve_assets};
 pub use crate::contract::{
     Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
 };
@@ -105,11 +107,12 @@ pub use crate::emit_app::{
 pub use crate::entitlements::{EntitlementValue, IosEntitlements};
 pub use crate::extract::{ExtractError, extract_contract};
 pub use crate::handover::{
-    CONTRACT_KEY, HandoverError, MANIFEST_KEY, NATIVE_DEPS_KEY, NativePlatform,
-    collect_dep_contracts, collect_dep_manifests, collect_dep_manifests_by_links,
-    collect_dep_native_deps, collect_dep_native_dirs, deserialize_contract, deserialize_manifest,
-    deserialize_native_deps, emit_contract, emit_manifest, emit_native_deps, serialize_contract,
-    serialize_manifest, serialize_native_deps,
+    ASSETS_KEY, CONTRACT_KEY, HandoverError, MANIFEST_KEY, NATIVE_DEPS_KEY, NativePlatform,
+    collect_dep_assets, collect_dep_contracts, collect_dep_manifests, collect_dep_manifests_by_links,
+    collect_dep_native_deps, collect_dep_native_dirs, deserialize_assets, deserialize_contract,
+    deserialize_manifest, deserialize_native_deps, emit_assets, emit_contract, emit_manifest,
+    emit_native_deps, serialize_assets, serialize_contract, serialize_manifest,
+    serialize_native_deps,
 };
 pub use crate::ios::{
     BackgroundKind, ContinuousMode, IosBackgroundArtifacts, IosBackgroundContract,
@@ -120,7 +123,7 @@ pub use crate::kotlin_client::generate_kotlin_client;
 pub use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
 pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
 pub use crate::manifest::{
-    AndroidBackendArg, AndroidServiceSpec, Deployment, InfoPlistEntry, InfoPlistValue,
+    AndroidBackendArg, AndroidServiceSpec, AssetEntry, Deployment, InfoPlistEntry, InfoPlistValue,
     IosBackgroundKindSpec, IosBackgroundSpec, IosContinuousModeSpec, Manifest, ManifestError,
     PluginEntry, RemoteOverride, ResolvedWiring, WindowsManifestFragment, emit, emit_from,
     emit_manifest_metadata, emit_manifest_metadata_with_contract, emit_wiring_env, emit_with,

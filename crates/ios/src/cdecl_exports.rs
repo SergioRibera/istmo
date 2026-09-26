@@ -109,6 +109,8 @@ pub extern "C" fn istmo_ios_start(callbacks: IstmoIosCallbacks) -> bool {
 fn start(callbacks: IstmoIosCallbacks) -> Result<(), IosRuntimeError> {
     let init = Runtime::init(RuntimeConfig::inline())?;
     let init = __istmo_configure_runtime(init);
+    crate::assets::install();
+    crate::path::install_from_bundle();
     let handles = pump::spawn(callbacks, init.outbound);
     state::install(RuntimeState {
         pump_shutdown: std::sync::Mutex::new(Some(handles.shutdown)),

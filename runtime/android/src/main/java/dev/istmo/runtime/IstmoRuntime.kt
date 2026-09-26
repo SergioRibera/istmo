@@ -50,10 +50,39 @@ object IstmoRuntime {
         return start()
     }
 
+    /**
+     * Preferred entry point: loads the Rust cdylib, starts the runtime
+     * and immediately wires the platform Context so `istmo::assets` and
+     * `istmo::path` are usable from the first call. Equivalent to
+     * calling [start], then [installContext].
+     */
+    fun start(context: android.content.Context, libraryName: String): Boolean {
+        val ok = start(libraryName)
+        if (ok) installContext(context)
+        return ok
+    }
+
     fun start(): Boolean {
         val ok = nativeStart(IstmoRuntime::class.java)
         synchronized(pendingEarlyQueue) { flushPendingEarlyQueueLocked() }
         return ok
+    }
+
+    /**
+     * Attach the app's [android.content.Context] so `istmo::assets` and
+     * `istmo::path` can serve reads from the APK's asset table and the
+     * per-app directories. Call once on startup, typically from
+     * `Application.onCreate` right after [start].
+     */
+    fun installContext(context: android.content.Context) {
+        nativeInstallAssets(context.assets)
+        val external = context.getExternalFilesDir(null)?.absolutePath ?: ""
+        nativeInstallPaths(
+            context.filesDir.absolutePath,
+            context.cacheDir.absolutePath,
+            context.noBackupFilesDir.absolutePath,
+            external,
+        )
     }
 
     /**
@@ -285,6 +314,13 @@ object IstmoRuntime {
     external fun nativeSubmitEarlyQueue(channel: String, capacity: Int, payload: ByteArray)
 
     external fun nativeInjectEnvelope(bytes: ByteArray)
+    external fun nativeInstallAssets(assetManager: android.content.res.AssetManager)
+    external fun nativeInstallPaths(
+        filesDir: String,
+        cacheDir: String,
+        noBackupFilesDir: String,
+        externalFilesDir: String,
+    )
     external fun nativeShutdown()
 
     private val EMPTY_PAYLOAD = ByteArray(0)

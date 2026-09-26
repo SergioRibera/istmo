@@ -41,6 +41,7 @@ const KNOWN_APP_KEYS: &[&str] = &[
     "version",
     "build",
     "icon",
+    "assets_dir",
 ];
 
 const KNOWN_APP_PLUGIN_KEYS: &[&str] = &["id", "type", "role", "platforms", "auto_register"];
@@ -159,6 +160,12 @@ pub struct AppConfig {
     pub per_plugin: HashMap<String, AppPluginOpts>,
     pub info_plist: Vec<InfoPlistEntry>,
     pub identity: AppIdentity,
+    /// Desktop asset root, baked into the binary via
+    /// `cargo::rustc-env=ISTMO_APP_ASSETS_DIR`. Used as the second tier
+    /// in the runtime resolution chain after the `ISTMO_ASSETS_DIR`
+    /// env override. Absolute paths are used verbatim; relative paths
+    /// are resolved against the crate root at emit time.
+    pub assets_dir: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -230,6 +237,7 @@ impl AppConfig {
                 build: table.get("build").map(parse_build_number).transpose()?,
                 icon: string("icon", "app.icon")?.map(PathBuf::from),
             },
+            assets_dir: string("assets_dir", "app.assets_dir")?.map(PathBuf::from),
         })
     }
 }

@@ -7,10 +7,12 @@ use istmo_core::{
     StreamEndReason, StreamId,
 };
 use jni::JNIEnv;
-use jni::objects::{JByteArray, JClass, JString};
+use jni::objects::{JByteArray, JClass, JObject, JString};
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong};
 
+use crate::assets;
 use crate::error::AndroidRuntimeError;
+use crate::path as path_provider;
 use crate::pump;
 use crate::state::{self, RuntimeState};
 
@@ -319,6 +321,57 @@ fn inject_envelope<'local>(
 ) -> Result<(), AndroidRuntimeError> {
     let payload = env.convert_byte_array(bytes)?;
     Runtime::global()?.inject_wire_envelope(&payload)?;
+    Ok(())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeInstallAssets<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    assets: JObject<'local>,
+) {
+    if let Err(err) = assets::install_from_java(&mut env, &assets) {
+        tracing::error!(?err, "istmo nativeInstallAssets failed");
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    files_dir: JString<'local>,
+    cache_dir: JString<'local>,
+    no_backup_dir: JString<'local>,
+    external_files_dir: JString<'local>,
+) {
+    match install_paths(&mut env, files_dir, cache_dir, no_backup_dir, external_files_dir) {
+        Ok(()) => {}
+        Err(err) => tracing::error!(?err, "istmo nativeInstallPaths failed"),
+    }
+}
+
+fn install_paths<'local>(
+    env: &mut JNIEnv<'local>,
+    files: JString<'local>,
+    cache: JString<'local>,
+    no_backup: JString<'local>,
+    external_files: JString<'local>,
+) -> Result<(), AndroidRuntimeError> {
+    let files: String = env.get_string(&files)?.into();
+    let cache: String = env.get_string(&cache)?.into();
+    let no_backup: String = env.get_string(&no_backup)?.into();
+    let external = if external_files.is_null() {
+        None
+    } else {
+        let s: String = env.get_string(&external_files)?.into();
+        if s.is_empty() { None } else { Some(std::path::PathBuf::from(s)) }
+    };
+    path_provider::install_from_dirs(
+        std::path::PathBuf::from(files),
+        std::path::PathBuf::from(cache),
+        std::path::PathBuf::from(no_backup),
+        external,
+    );
     Ok(())
 }
 

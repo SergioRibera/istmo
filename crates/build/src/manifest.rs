@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use bincode::{Decode, Encode};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
-use crate::handover::{emit_contract, emit_manifest, emit_native_deps};
+use crate::assets::{AssetsPayload, resolve_assets};
+use crate::handover::{emit_assets, emit_contract, emit_manifest, emit_native_deps};
 use crate::min_versions::{MinVersions, OsVersion};
 use crate::native_deps::{GradleCoord, GradleDep, GradleScope, NativeDeps, SwiftPackageDep};
 
@@ -16,7 +17,10 @@ const KNOWN_KEYS: &[&str] = &[
     "windows_manifest_fragment",
     "min_versions",
     "app",
+    "assets",
 ];
+
+const KNOWN_ASSET_KEYS: &[&str] = &["path"];
 
 const KNOWN_MIN_VERSION_KEYS: &[&str] = &["android", "ios", "macos", "windows"];
 
@@ -289,6 +293,23 @@ pub struct WindowsManifestFragment {
     pub xml: String,
 }
 
+/// A single `[[assets]]` entry as declared in an `istmo.toml`.
+///
+/// The [`path`](AssetEntry::path) field accepts three shapes, resolved
+/// at build time by [`crate::assets::resolve_assets`]:
+///
+/// - A single-file path (`"assets/schema.sql"`).
+/// - A directory path (trailing `/` optional) — walked recursively.
+/// - A glob pattern (contains `*`, `?` or `[`) — matched against the
+///   crate root via `globset`.
+///
+/// Paths are always relative to the manifest's directory unless
+/// absolute.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+pub struct AssetEntry {
+    pub path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Manifest {
     pub plugins: Vec<PluginEntry>,
@@ -304,6 +325,12 @@ pub struct Manifest {
     /// consuming app; on an app crate they are the floor the app ships
     /// to.
     pub min_versions: MinVersions,
+
+    /// Assets declared by the crate at the top-level `[[assets]]`
+    /// section. Every plugin id in this manifest can address them via
+    /// `istmo::assets::plugin(id).read(...)`; the app addresses its own
+    /// entries via `istmo::assets::read(...)`.
+    pub assets: Vec<AssetEntry>,
 }
 
 impl Manifest {
@@ -357,12 +384,19 @@ impl Manifest {
             Some(item) => parse_min_versions(expect_table(item, "min_versions")?)?,
             None => MinVersions::default(),
         };
+        let mut assets = Vec::new();
+        if let Some(item) = doc.get("assets") {
+            for entry in expect_array_of_tables(item, "assets")? {
+                assets.push(parse_asset_entry(entry, "assets")?);
+            }
+        }
         Ok(Self {
             plugins,
             native_deps,
             remote_overrides,
             windows_manifest_fragments,
             min_versions,
+            assets,
         })
     }
 
@@ -819,6 +853,28 @@ fn parse_windows_manifest_fragment(
     Ok(WindowsManifestFragment { name, xml })
 }
 
+fn parse_asset_entry(table: &Table, context: &'static str) -> Result<AssetEntry, ManifestError> {
+    for (name, _) in table {
+        if !KNOWN_ASSET_KEYS.contains(&name) {
+            return Err(ManifestError::UnknownKey {
+                key: format!("{context}.{name}"),
+            });
+        }
+    }
+    let path_item = table.get("path").ok_or(ManifestError::Missing {
+        key: "assets.path",
+    })?;
+    let path = expect_string(path_item, "assets.path")?.to_owned();
+    if path.is_empty() {
+        return Err(ManifestError::InvalidValue {
+            key: "assets.path".to_owned(),
+            value: path,
+            expected: "a non-empty path, directory or glob",
+        });
+    }
+    Ok(AssetEntry { path })
+}
+
 fn parse_remote_override(table: &Table) -> Result<RemoteOverride, ManifestError> {
     for (name, _) in table {
         if !KNOWN_OVERRIDE_KEYS.contains(&name) {
@@ -1029,6 +1085,21 @@ pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
     emit_manifest(&manifest);
     let ids: Vec<&str> = manifest.plugin_ids().collect();
     println!("cargo:PLUGIN_IDS={}", ids.join(","));
+
+    if !manifest.assets.is_empty() {
+        let crate_root = path.parent().unwrap_or_else(|| Path::new("."));
+        let resolved = resolve_assets(&manifest.assets, crate_root).unwrap_or_else(|err| {
+            panic!("istmo-build: {err}");
+        });
+        for asset in &resolved {
+            println!("cargo:rerun-if-changed={}", asset.source_abs.display());
+        }
+        let payload = AssetsPayload {
+            plugin_ids: manifest.plugin_ids().map(str::to_owned).collect(),
+            resolved,
+        };
+        emit_assets(&payload);
+    }
 
     // Advertise the plugin crate's `native/<platform>/` directories so
     // consuming apps' `emit_app` can copy the reference Kotlin / Swift
@@ -1564,6 +1635,55 @@ kind = "refresh"
                 key: "plugin.ios_background.interval_minutes"
             }
         ));
+    }
+
+    #[test]
+    fn parses_top_level_assets_section() {
+        let src = r#"
+[plugin]
+id = "istmo.example"
+
+[[assets]]
+path = "assets/img/"
+
+[[assets]]
+path = "assets/schema.sql"
+
+[[assets]]
+path = "assets/**/*.png"
+"#;
+        let m = Manifest::parse(src).expect("parse");
+        assert_eq!(m.assets.len(), 3);
+        assert_eq!(m.assets[0].path, "assets/img/");
+        assert_eq!(m.assets[1].path, "assets/schema.sql");
+        assert_eq!(m.assets[2].path, "assets/**/*.png");
+    }
+
+    #[test]
+    fn unknown_asset_key_is_reported() {
+        let src = r#"
+[[assets]]
+path = "x"
+weight = 3
+"#;
+        let err = Manifest::parse(src).expect_err("must fail");
+        match err {
+            ManifestError::UnknownKey { key } => assert_eq!(key, "assets.weight"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_asset_path_is_rejected() {
+        let src = r#"
+[[assets]]
+path = ""
+"#;
+        let err = Manifest::parse(src).expect_err("must fail");
+        match err {
+            ManifestError::InvalidValue { key, .. } => assert_eq!(key, "assets.path"),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]

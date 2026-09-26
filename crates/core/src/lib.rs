@@ -37,9 +37,11 @@
 
 mod sync;
 
+pub mod assets;
 pub mod codec;
 pub mod dispatch;
 pub mod early_events;
+pub mod path;
 pub mod error;
 pub mod main_thread;
 pub mod message;

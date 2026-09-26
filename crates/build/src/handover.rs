@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use bincode::config::Configuration;
 use bincode::error::{DecodeError, EncodeError};
 
+use crate::assets::AssetsPayload;
 use crate::contract::Contract;
 use crate::manifest::Manifest;
 use crate::native_deps::NativeDeps;
@@ -14,6 +15,8 @@ pub const CONTRACT_KEY: &str = "CONTRACT";
 pub const NATIVE_DEPS_KEY: &str = "NATIVE_DEPS";
 
 pub const MANIFEST_KEY: &str = "ISTMO_MANIFEST";
+
+pub const ASSETS_KEY: &str = "ISTMO_ASSETS";
 
 #[derive(Debug)]
 pub enum HandoverError {
@@ -93,6 +96,41 @@ pub fn deserialize_manifest(hex: &str) -> Result<Manifest, HandoverError> {
 pub fn emit_manifest(manifest: &Manifest) {
     let payload = serialize_manifest(manifest).expect("serialize istmo manifest");
     println!("cargo:{MANIFEST_KEY}={payload}");
+}
+
+pub fn serialize_assets(payload: &AssetsPayload) -> Result<String, HandoverError> {
+    let bytes = bincode::encode_to_vec(payload, CODEC).map_err(HandoverError::Encode)?;
+    Ok(hex_encode(&bytes))
+}
+
+pub fn deserialize_assets(hex: &str) -> Result<AssetsPayload, HandoverError> {
+    let bytes = hex_decode(hex)?;
+    let (payload, _) = bincode::decode_from_slice::<AssetsPayload, _>(&bytes, CODEC)
+        .map_err(HandoverError::Decode)?;
+    Ok(payload)
+}
+
+pub fn emit_assets(payload: &AssetsPayload) {
+    let encoded = serialize_assets(payload).expect("serialize istmo assets payload");
+    println!("cargo:{ASSETS_KEY}={encoded}");
+}
+
+/// Every dep-advertised assets bundle as `(links, payload)` pairs
+/// sorted by `links` for deterministic output.
+#[must_use]
+pub fn collect_dep_assets() -> Vec<(String, AssetsPayload)> {
+    let mut out: Vec<(String, AssetsPayload)> = collect_env_payloads(ASSETS_KEY)
+        .into_iter()
+        .filter_map(|(var, payload)| match deserialize_assets(&payload) {
+            Ok(p) => Some((links_name(&var, ASSETS_KEY), p)),
+            Err(err) => {
+                println!("cargo::warning=istmo assets handover decode failed for {var}: {err}");
+                None
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
 }
 
 #[must_use]

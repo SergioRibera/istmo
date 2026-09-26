@@ -100,6 +100,7 @@ impl IosProject {
         app: &AppMetadata,
         plugin_dirs: &[(String, PathBuf)],
         plugin_min_ios: Option<&(OsVersion, String)>,
+        asset_dirs: &[PathBuf],
     ) {
         let fragment_dir = self.app_path();
         let relative = |target: &Path| {
@@ -120,7 +121,8 @@ impl IosProject {
             .icon
             .as_ref()
             .map(|_| relative(&self.generated_dir().join(ASSET_CATALOG_DIR)));
-        if !plugin_dirs.is_empty() || icon_catalog.is_some() {
+        let has_sources = !plugin_dirs.is_empty() || icon_catalog.is_some() || !asset_dirs.is_empty();
+        if has_sources {
             yaml.push_str("    sources:\n");
         }
         for (name, dir) in plugin_dirs {
@@ -135,6 +137,15 @@ impl IosProject {
         }
         if let Some(catalog) = icon_catalog {
             writeln!(yaml, "      - path: {}", yaml_string(&catalog)).ok();
+        }
+        // Asset folders — `type: folder` means "blue folder reference".
+        // Xcode auto-includes them in the Resources build phase and
+        // preserves the on-disk hierarchy inside the bundle so
+        // `Bundle.main.bundlePath + "/<key>"` resolves at runtime.
+        for dir in asset_dirs {
+            writeln!(yaml, "      - path: {}", yaml_string(&relative(dir))).ok();
+            yaml.push_str("        type: folder\n");
+            yaml.push_str("        buildPhase: resources\n");
         }
 
         yaml.push_str("    settings:\n");

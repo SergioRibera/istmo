@@ -33,6 +33,8 @@ jni = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", default-features = false }
+ndk = { version = "0.9", default-features = false }
+ndk-sys = "0.6"
 
 [lints.rust]
 missing_debug_implementations = "warn"

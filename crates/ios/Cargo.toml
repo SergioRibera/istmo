@@ -18,6 +18,10 @@ bincode = { workspace = true }
 flume = { workspace = true }
 tracing = { workspace = true }
 
+[target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSFileManager", "NSPathUtilities", "NSString", "NSURL", "NSArray"] }
+
 [dev-dependencies]
 pollster = { workspace = true }
 

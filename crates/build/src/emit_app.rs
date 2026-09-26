@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::android_project::{AndroidPlugin, AndroidProject};
 use crate::app_config::{AppConfig, AppMetadata, AppPluginOpts, CrateInfo, Platform, Role};
 use crate::app_icon::AppIcon;
+use crate::assets::resolve_assets;
 use crate::apple_plist::{
     ENTITLEMENTS_FRAGMENT, INFO_PLIST_FRAGMENT, PLUGINS_MARK_END, PLUGINS_MARK_START,
     PlistFragments, app_keys_outside_block,
@@ -28,8 +29,8 @@ use crate::apple_plist::{
 use crate::contract::Contract;
 use crate::doctor::Doctor;
 use crate::handover::{
-    NativePlatform, collect_dep_contracts, collect_dep_manifests_by_links, collect_dep_native_deps,
-    collect_dep_native_dirs,
+    NativePlatform, collect_dep_assets, collect_dep_contracts, collect_dep_manifests_by_links,
+    collect_dep_native_deps, collect_dep_native_dirs,
 };
 use crate::ios::{BackgroundKind, ContinuousMode, IosBackgroundContract, generate_ios_background};
 use crate::ios_project::IosProject;
@@ -158,6 +159,17 @@ pub fn emit_app_with(opts: AppOpts) {
     let rust_entry = app_config
         .rust_entry
         .unwrap_or_else(|| app.krate.declares_mobile_app());
+
+    let desktop_staging = sync_assets(
+        &root,
+        app_manifest.as_ref(),
+        android_active.then_some(android_root.as_path()),
+        ios_active
+            .then(|| ios_app_dir.as_deref())
+            .flatten()
+            .map(|dir| (ios_root.as_path(), dir, ios_plugins_subdir.as_str())),
+    );
+    emit_runtime_env(&app, &app_config, &root, desktop_staging.as_deref());
     let icon = app.icon.as_ref().map(|path| {
         println!("cargo:rerun-if-changed={}", path.display());
         AppIcon::open(path).unwrap_or_else(|err| panic!("istmo-build: `[app] icon`: {err}"))
@@ -274,8 +286,15 @@ pub fn emit_app_with(opts: AppOpts) {
         if let Some(app_dir) = ios_app_dir.as_deref() {
             let mut native_dirs = collect_dep_native_dirs(NativePlatform::Ios);
             native_dirs.extend(opts.extra_native_ios_dirs.iter().cloned());
+            let project = IosProject::new(&ios_root, app_dir);
+            let app_assets_dir = project.app_path().join("Assets");
+            let plugin_assets_dir = project.app_path().join(&ios_plugins_subdir).join("Assets");
+            let asset_dirs: Vec<PathBuf> = [app_assets_dir, plugin_assets_dir]
+                .into_iter()
+                .filter(|p| p.is_dir())
+                .collect();
             sync_ios_project(
-                &IosProject::new(&ios_root, app_dir),
+                &project,
                 &IosSync {
                     app: &app,
                     icon: icon.as_ref(),
@@ -284,6 +303,7 @@ pub fn emit_app_with(opts: AppOpts) {
                     registry: &swift_registry,
                     native_dirs: &native_dirs,
                     dep_manifests: &dep_manifests,
+                    asset_dirs: &asset_dirs,
                 },
             );
         }
@@ -382,6 +402,7 @@ struct IosSync<'a> {
     registry: &'a [RegistryEntry],
     native_dirs: &'a [(String, PathBuf)],
     dep_manifests: &'a [Manifest],
+    asset_dirs: &'a [PathBuf],
 }
 
 /// Write the iOS side: plugin registry, `IstmoApp.run()` entry,
@@ -410,7 +431,12 @@ fn sync_ios_project(project: &IosProject, sync: &IosSync<'_>) {
         .iter()
         .filter_map(|m| m.min_versions.ios.map(|v| (v, m.primary_id().to_owned())))
         .max_by_key(|(v, _)| *v);
-    project.write_xcodegen_fragment(sync.app, sync.native_dirs, plugin_min_ios.as_ref());
+    project.write_xcodegen_fragment(
+        sync.app,
+        sync.native_dirs,
+        plugin_min_ios.as_ref(),
+        sync.asset_dirs,
+    );
     emit_ios_plist_fragments(project.root(), project.app_dir(), sync.native_dirs);
 }
 
@@ -1080,6 +1106,191 @@ pub fn detect_android_package(android_root: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Bake runtime environment variables used by `istmo::path` and the
+/// desktop `istmo::assets` backend at compile time.
+///
+/// Emits:
+/// - `ISTMO_APP_BUNDLE_ID` — sourced from `[app] id` in `istmo.toml`
+///   with a `CARGO_PKG_NAME` fallback. `istmo::path` reads this to
+///   derive per-app subdirectories on Linux, macOS and Windows.
+/// - `ISTMO_APP_ASSETS_DIR` — set only when `[app] assets_dir` is
+///   present. Relative paths resolve against the crate root; absolute
+///   paths pass through verbatim. Used as tier 2 in the desktop asset
+///   resolution chain (after the runtime `ISTMO_ASSETS_DIR` override,
+///   before the `<exe_dir>/assets/` scan).
+fn emit_runtime_env(
+    app: &AppMetadata,
+    config: &AppConfig,
+    root: &Path,
+    desktop_staging: Option<&Path>,
+) {
+    let bundle_id = app
+        .id
+        .as_ref()
+        .map(|id| id.as_str().to_owned())
+        .unwrap_or_else(|| app.krate.package.clone());
+    println!("cargo::rustc-env=ISTMO_APP_BUNDLE_ID={bundle_id}");
+    // Priority: `[app] assets_dir` beats the auto-staged OUT_DIR
+    // directory. The runtime `ISTMO_ASSETS_DIR` env var still overrides
+    // both at read time.
+    let assets_dir = config
+        .assets_dir
+        .as_ref()
+        .map(|dir| {
+            if dir.is_absolute() {
+                dir.clone()
+            } else {
+                root.join(dir)
+            }
+        })
+        .or_else(|| desktop_staging.map(Path::to_path_buf));
+    if let Some(dir) = assets_dir {
+        println!("cargo::rustc-env=ISTMO_APP_ASSETS_DIR={}", dir.display());
+    }
+}
+
+/// Stage every dependency + app-declared asset into the platform trees
+/// so the runtime backends can serve them at read time.
+///
+/// - Android: files are placed under
+///   `<android_root>/app/src/main/assets/plugin:<id>/…` for plugin
+///   assets, and directly under `<android_root>/app/src/main/assets/`
+///   for the app's own entries. Gradle's asset merger picks them up on
+///   the next build.
+/// - iOS: files are placed under
+///   `<ios_root>/<app_dir>/<plugins_subdir>/Assets/plugin:<id>/…` and
+///   `<ios_root>/<app_dir>/Assets/`. The consumer's xcodegen project
+///   needs a `sources:` folder-reference pointing at those directories
+///   (added in a follow-up).
+/// - Desktop: no staging — callers point `ISTMO_ASSETS_DIR` (runtime)
+///   or `[app] assets_dir` (build-time) at their preferred install
+///   root.
+fn sync_assets(
+    root: &Path,
+    app_manifest: Option<&Manifest>,
+    android_dir: Option<&Path>,
+    ios: Option<(&Path, &str, &str)>,
+) -> Option<PathBuf> {
+    let dep_assets = collect_dep_assets();
+    let app_assets = app_manifest.map_or_else(Vec::new, |manifest| {
+        resolve_assets(&manifest.assets, root).unwrap_or_else(|err| {
+            panic!("istmo-build: resolving [app] assets: {err}");
+        })
+    });
+
+    if let Some(android_root) = android_dir {
+        let android_assets = android_root.join("app/src/main/assets");
+        for asset in &app_assets {
+            let target = android_assets.join(&asset.bundle_path);
+            install_asset(&asset.source_abs, &target);
+        }
+        for (_links, payload) in &dep_assets {
+            for asset in &payload.resolved {
+                for id in &payload.plugin_ids {
+                    let target = android_assets
+                        .join(format!("plugin:{id}"))
+                        .join(&asset.bundle_path);
+                    install_asset(&asset.source_abs, &target);
+                }
+            }
+        }
+    }
+
+    if let Some((ios_root, app_dir, plugins_subdir)) = ios {
+        let assets_root = ios_root.join(app_dir).join(plugins_subdir).join("Assets");
+        let app_root = ios_root.join(app_dir).join("Assets");
+        for asset in &app_assets {
+            let target = app_root.join(&asset.bundle_path);
+            install_asset(&asset.source_abs, &target);
+        }
+        for (_links, payload) in &dep_assets {
+            for asset in &payload.resolved {
+                for id in &payload.plugin_ids {
+                    let target = assets_root
+                        .join(format!("plugin:{id}"))
+                        .join(&asset.bundle_path);
+                    install_asset(&asset.source_abs, &target);
+                }
+            }
+        }
+    }
+
+    for (_links, payload) in &dep_assets {
+        for asset in &payload.resolved {
+            println!("cargo:rerun-if-changed={}", asset.source_abs.display());
+        }
+    }
+    for asset in &app_assets {
+        println!("cargo:rerun-if-changed={}", asset.source_abs.display());
+    }
+
+    stage_desktop_assets(&app_assets, &dep_assets)
+}
+
+/// Materialise every dependency + app asset under `OUT_DIR/istmo_assets/`
+/// so `cargo run` on desktop can serve plugin-owned assets without the
+/// user hand-copying them into a sibling `assets/` directory.
+///
+/// The staged root is returned to [`emit_runtime_env`], which bakes it
+/// into `ISTMO_APP_ASSETS_DIR` (unless `[app] assets_dir` overrides).
+/// Returns `None` when there is nothing to stage — keeps clean-source
+/// projects free of `OUT_DIR` clutter.
+fn stage_desktop_assets(
+    app_assets: &[crate::assets::ResolvedAsset],
+    dep_assets: &[(String, crate::assets::AssetsPayload)],
+) -> Option<PathBuf> {
+    if app_assets.is_empty() && dep_assets.iter().all(|(_, p)| p.resolved.is_empty()) {
+        return None;
+    }
+    let out_dir = std::env::var_os("OUT_DIR").map(PathBuf::from)?;
+    let staging = out_dir.join("istmo_assets");
+    let _ = fs::remove_dir_all(&staging);
+    for asset in app_assets {
+        let target = staging.join(&asset.bundle_path);
+        install_asset(&asset.source_abs, &target);
+    }
+    for (_links, payload) in dep_assets {
+        for asset in &payload.resolved {
+            for id in &payload.plugin_ids {
+                let target = staging
+                    .join(format!("plugin:{id}"))
+                    .join(&asset.bundle_path);
+                install_asset(&asset.source_abs, &target);
+            }
+        }
+    }
+    Some(staging)
+}
+
+/// Materialise a single asset at `target` by preferring a symlink and
+/// falling back to a copy when the platform refuses.
+///
+/// Windows / Docker cross-mounts routinely reject `symlink_file`; the
+/// copy path keeps builds reproducible even when large payloads live
+/// upstream. `rerun-if-changed` still points at the upstream source so
+/// Cargo re-runs the sync on future upstream edits.
+fn install_asset(source: &Path, target: &Path) {
+    if let Some(parent) = target.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::remove_file(target);
+    #[cfg(unix)]
+    if std::os::unix::fs::symlink(source, target).is_ok() {
+        return;
+    }
+    #[cfg(windows)]
+    if std::os::windows::fs::symlink_file(source, target).is_ok() {
+        return;
+    }
+    if let Err(err) = fs::copy(source, target) {
+        println!(
+            "cargo::warning=istmo-build: failed to copy asset `{}` → `{}`: {err}",
+            source.display(),
+            target.display()
+        );
+    }
 }
 
 fn extract_namespace(source: &str) -> Option<String> {

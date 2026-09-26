@@ -13,8 +13,10 @@
 
 #![doc(html_root_url = "https://docs.rs/istmo-ios")]
 
+pub mod assets;
 pub mod entrypoint;
 pub mod error;
+pub mod path;
 
 mod cdecl_exports;
 mod pump;
