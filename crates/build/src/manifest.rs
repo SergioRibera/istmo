@@ -32,6 +32,9 @@ const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "android_service",
     "ios_background",
     "info_plist",
+    "android_backend",
+    "android_backend_arg",
+    "ios_backend",
 ];
 
 const KNOWN_ANDROID_SERVICE_KEYS: &[&str] = &[
@@ -104,6 +107,52 @@ pub struct PluginEntry {
     /// into the `Info.plist.background.xml` sidecar. Apps override
     /// individual values through `[app.info_plist]`.
     pub info_plist: Vec<InfoPlistEntry>,
+
+    /// Fully-qualified Kotlin class handed to the generated dispatcher
+    /// by `IstmoPluginRegistry` (the backend, or the factory for
+    /// stateful plugins). Defaults to `<T>BackendImpl` / `<T>FactoryImpl`
+    /// in the app's codegen package.
+    pub android_backend: Option<String>,
+
+    /// What that class's constructor receives.
+    pub android_backend_arg: AndroidBackendArg,
+
+    /// Swift type handed to the generated dispatcher. Defaults to
+    /// `<T>BackendImpl` / `<T>FactoryImpl`.
+    pub ios_backend: Option<String>,
+}
+
+/// Constructor argument of a plugin's Android backend, declared as
+/// `android_backend_arg` in the plugin's `istmo.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
+pub enum AndroidBackendArg {
+    /// `android.content.Context` (`"context"`, the default).
+    #[default]
+    Context,
+    /// The host activity, typed as the given fully-qualified `Activity`
+    /// subclass. `"activity"` means `androidx.activity.ComponentActivity`.
+    /// The registry skips the plugin when it is registered without an
+    /// activity (e.g. from a `Service`).
+    Activity(String),
+}
+
+impl AndroidBackendArg {
+    const COMPONENT_ACTIVITY: &str = "androidx.activity.ComponentActivity";
+
+    fn parse(literal: &str) -> Result<Self, ManifestError> {
+        match literal {
+            "context" => Ok(Self::Context),
+            "activity" => Ok(Self::Activity(Self::COMPONENT_ACTIVITY.to_owned())),
+            class if class.contains('.') && !class.starts_with('.') && !class.ends_with('.') => {
+                Ok(Self::Activity(class.to_owned()))
+            }
+            other => Err(ManifestError::InvalidValue {
+                key: "plugin.android_backend_arg".to_owned(),
+                value: other.to_owned(),
+                expected: "`context`, `activity` or a fully-qualified Activity subclass",
+            }),
+        }
+    }
 }
 
 /// Scalar value of an [`InfoPlistEntry`].
@@ -373,6 +422,15 @@ pub enum ManifestError {
         key: String,
         value: String,
     },
+
+    /// A key holds a value of the right type that is not one of the
+    /// accepted ones (`[app] id = "not a bundle id"`, an unknown
+    /// platform name, …).
+    InvalidValue {
+        key: String,
+        value: String,
+        expected: &'static str,
+    },
 }
 
 impl std::fmt::Display for ManifestError {
@@ -408,6 +466,14 @@ impl std::fmt::Display for ManifestError {
                 f,
                 "istmo.toml key `{key}` = `{value}` (expected an API level integer for \
                  `android`, or a `major[.minor[.patch]]` string)"
+            ),
+            Self::InvalidValue {
+                key,
+                value,
+                expected,
+            } => write!(
+                f,
+                "istmo.toml key `{key}` = `{value}` (expected {expected})"
             ),
         }
     }
@@ -515,6 +581,16 @@ fn parse_plugin_entry(
         )?,
         None => Vec::new(),
     };
+    let optional_string = |key: &'static str, full: &'static str| {
+        table
+            .get(key)
+            .map(|item| expect_string(item, full).map(str::to_owned))
+            .transpose()
+    };
+    let android_backend_arg = match table.get("android_backend_arg") {
+        Some(item) => AndroidBackendArg::parse(expect_string(item, "plugin.android_backend_arg")?)?,
+        None => AndroidBackendArg::default(),
+    };
     Ok(PluginEntry {
         id,
         client_type,
@@ -523,6 +599,9 @@ fn parse_plugin_entry(
         android_service,
         ios_background,
         info_plist,
+        android_backend: optional_string("android_backend", "plugin.android_backend")?,
+        android_backend_arg,
+        ios_backend: optional_string("ios_backend", "plugin.ios_backend")?,
     })
 }
 
@@ -850,7 +929,7 @@ fn parse_swift_package(
     })
 }
 
-fn expect_array_of_tables<'a>(
+pub(crate) fn expect_array_of_tables<'a>(
     item: &'a Item,
     key: &'static str,
 ) -> Result<&'a ArrayOfTables, ManifestError> {
@@ -861,7 +940,10 @@ fn expect_array_of_tables<'a>(
         })
 }
 
-fn expect_string<'a>(item: &'a Item, key: &'static str) -> Result<&'a str, ManifestError> {
+pub(crate) fn expect_string<'a>(
+    item: &'a Item,
+    key: &'static str,
+) -> Result<&'a str, ManifestError> {
     match item {
         Item::Value(Value::String(s)) => Ok(s.value().as_str()),
         _ => Err(ManifestError::TypeMismatch {
@@ -871,7 +953,7 @@ fn expect_string<'a>(item: &'a Item, key: &'static str) -> Result<&'a str, Manif
     }
 }
 
-fn expect_bool(item: &Item, key: &'static str) -> Result<bool, ManifestError> {
+pub(crate) fn expect_bool(item: &Item, key: &'static str) -> Result<bool, ManifestError> {
     match item {
         Item::Value(Value::Boolean(b)) => Ok(*b.value()),
         _ => Err(ManifestError::TypeMismatch {
@@ -881,7 +963,7 @@ fn expect_bool(item: &Item, key: &'static str) -> Result<bool, ManifestError> {
     }
 }
 
-fn expect_integer(item: &Item, key: &'static str) -> Result<i64, ManifestError> {
+pub(crate) fn expect_integer(item: &Item, key: &'static str) -> Result<i64, ManifestError> {
     match item {
         Item::Value(Value::Integer(i)) => Ok(*i.value()),
         _ => Err(ManifestError::TypeMismatch {
@@ -891,7 +973,7 @@ fn expect_integer(item: &Item, key: &'static str) -> Result<i64, ManifestError> 
     }
 }
 
-fn expect_table<'a>(
+pub(crate) fn expect_table<'a>(
     item: &'a Item,
     key: &'static str,
 ) -> Result<&'a dyn toml_edit::TableLike, ManifestError> {

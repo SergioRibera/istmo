@@ -18,15 +18,21 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toml_edit::{DocumentMut, Item, Table, Value};
-
+use crate::android_project::{AndroidPlugin, AndroidProject};
+use crate::app_config::{AppConfig, AppMetadata, AppPluginOpts, CrateInfo, Platform, Role};
+use crate::app_icon::AppIcon;
 use crate::apple_plist::{
     ENTITLEMENTS_FRAGMENT, INFO_PLIST_FRAGMENT, PLUGINS_MARK_END, PLUGINS_MARK_START,
     PlistFragments, app_keys_outside_block,
 };
 use crate::contract::Contract;
-use crate::handover::{collect_dep_contracts, collect_dep_manifests};
+use crate::doctor::Doctor;
+use crate::handover::{
+    NativePlatform, collect_dep_contracts, collect_dep_manifests_by_links, collect_dep_native_deps,
+    collect_dep_native_dirs,
+};
 use crate::ios::{BackgroundKind, ContinuousMode, IosBackgroundContract, generate_ios_background};
+use crate::ios_project::IosProject;
 use crate::kotlin_client::generate_kotlin_client;
 use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
 use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
@@ -34,53 +40,14 @@ use crate::manifest::{
     AndroidServiceSpec, InfoPlistEntry, IosBackgroundKindSpec, IosBackgroundSpec,
     IosContinuousModeSpec, Manifest, PluginEntry,
 };
-use crate::min_versions::OsVersion;
 use crate::plugin_registry::{
-    RegistryEntry, generate_kotlin_plugin_registry, generate_swift_plugin_registry,
+    KOTLIN_REGISTRY_PACKAGE, RegistryEntry, generate_kotlin_plugin_registry,
+    generate_swift_app_entry, generate_swift_plugin_registry,
 };
 use crate::service::{ServiceContract, generate_android_service};
 use crate::swift::generate_swift_client;
 use crate::swift_host::generate_swift_host;
 use crate::swift_types::{generate_swift_codecs, generate_swift_types};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Platform {
-    Android,
-    Ios,
-}
-
-impl Platform {
-    fn parse(literal: &str) -> Option<Self> {
-        match literal {
-            "android" => Some(Self::Android),
-            "ios" => Some(Self::Ios),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    Host,
-    Client,
-}
-
-impl Role {
-    fn parse(literal: &str) -> Option<Self> {
-        match literal {
-            "host" => Some(Self::Host),
-            "client" => Some(Self::Client),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct AppPluginOpts {
-    pub role: Option<Role>,
-    pub platforms: Option<Vec<Platform>>,
-    pub auto_register: Option<bool>,
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct AppOpts {
@@ -130,30 +97,8 @@ pub fn emit_app_with(opts: AppOpts) {
     let ios_root = opts.ios_root.clone().unwrap_or_else(|| root.join("ios"));
 
     let manifest_path = root.join("istmo.toml");
-    let (app_config, manifest_source) = if manifest_path.exists() {
-        match fs::read_to_string(&manifest_path) {
-            Ok(text) => match text.parse::<DocumentMut>() {
-                Ok(doc) => (parse_app_config(&doc), Some(text)),
-                Err(err) => {
-                    println!(
-                        "cargo::warning=istmo-build: failed to parse {}: {err}",
-                        manifest_path.display()
-                    );
-                    (AppConfig::default(), None)
-                }
-            },
-            Err(err) => {
-                println!(
-                    "cargo::warning=istmo-build: failed to read {}: {err}",
-                    manifest_path.display()
-                );
-                (AppConfig::default(), None)
-            }
-        }
-    } else {
-        (AppConfig::default(), None)
-    };
-    let _ = manifest_source;
+    let app_config = AppConfig::from_path(&manifest_path)
+        .unwrap_or_else(|err| panic!("istmo-build: {}: {err}", manifest_path.display()));
 
     let android_enabled = opts.android.or(app_config.android).unwrap_or(true);
     let ios_enabled = opts.ios.or(app_config.ios).unwrap_or(true);
@@ -180,7 +125,7 @@ pub fn emit_app_with(opts: AppOpts) {
         .or_else(|| app_config.ios_plugins_subdir.clone())
         .unwrap_or_else(|| "Plugins".to_owned());
 
-    let mut per_plugin = app_config.per_plugin;
+    let mut per_plugin = app_config.per_plugin.clone();
     for (k, v) in opts.per_plugin.clone() {
         per_plugin.insert(k, v);
     }
@@ -188,17 +133,35 @@ pub fn emit_app_with(opts: AppOpts) {
     let mut contracts = collect_dep_contracts();
     contracts.extend(opts.extra_contracts.iter().cloned());
 
-    if contracts.is_empty() {
-        return;
-    }
-
-    let mut dep_manifests = collect_dep_manifests();
+    let dep_manifests_by_links = collect_dep_manifests_by_links();
+    let mut dep_manifests: Vec<Manifest> = dep_manifests_by_links
+        .iter()
+        .map(|(_, manifest)| manifest.clone())
+        .collect();
     dep_manifests.extend(opts.extra_manifests.iter().cloned());
-    let plugin_auto_register: HashMap<String, bool> = dep_manifests
+    let plugin_entries: HashMap<&str, &PluginEntry> = dep_manifests
         .iter()
         .flat_map(|m| m.plugins.iter())
-        .map(|p| (p.id.clone(), p.auto_register))
+        .map(|p| (p.id.as_str(), p))
         .collect();
+
+    let app_manifest = manifest_path.is_file().then(|| {
+        Manifest::from_path(&manifest_path)
+            .unwrap_or_else(|err| panic!("istmo-build: {}: {err}", manifest_path.display()))
+    });
+    let app = resolve_app_metadata(
+        &root,
+        &app_config,
+        app_manifest.as_ref(),
+        opts.lib_name.as_ref(),
+    );
+    let rust_entry = app_config
+        .rust_entry
+        .unwrap_or_else(|| app.krate.declares_mobile_app());
+    let icon = app.icon.as_ref().map(|path| {
+        println!("cargo:rerun-if-changed={}", path.display());
+        AppIcon::open(path).unwrap_or_else(|err| panic!("istmo-build: `[app] icon`: {err}"))
+    });
 
     let app_auto_register = opts
         .auto_register
@@ -226,10 +189,13 @@ pub fn emit_app_with(opts: AppOpts) {
                 ps
             });
 
-        let plugin_declared_auto = plugin_auto_register
-            .get(contract.plugin_id.as_str())
-            .copied()
-            .unwrap_or(true);
+        let plugin_entry = plugin_entries.get(contract.plugin_id.as_str()).copied();
+        let plugin_declared_auto = plugin_entry.is_none_or(|p| p.auto_register);
+        let registry_entry =
+            RegistryEntry::from_contract(contract).map(|entry| match plugin_entry {
+                Some(plugin) => entry.with_plugin(plugin),
+                None => entry,
+            });
         let app_override = overrides.and_then(|o| o.auto_register);
         let auto_register_this = app_auto_register
             && plugin_declared_auto
@@ -251,9 +217,7 @@ pub fn emit_app_with(opts: AppOpts) {
                     };
                     emit_kotlin(&android_root, pkg, contract, role, opts.seed_backends);
                     if auto_register_this {
-                        if let Some(entry) = RegistryEntry::from_contract(contract) {
-                            kotlin_registry.push(entry);
-                        }
+                        kotlin_registry.extend(registry_entry.clone());
                     }
                 }
                 Platform::Ios => {
@@ -276,47 +240,53 @@ pub fn emit_app_with(opts: AppOpts) {
                         opts.seed_backends,
                     );
                     if auto_register_this {
-                        if let Some(entry) = RegistryEntry::from_contract(contract) {
-                            swift_registry.push(entry);
-                        }
+                        swift_registry.extend(registry_entry.clone());
                     }
                 }
             }
         }
     }
 
-    if android_active && app_auto_register {
-        if let Some(pkg) = android_package.as_deref() {
-            emit_kotlin_registry(&android_root, pkg, &kotlin_registry);
+    // Registries are emitted even when empty: `IstmoActivity` and the
+    // generated `IstmoApp.run()` reference them unconditionally.
+    if android_active {
+        match android_package.as_deref() {
+            Some(pkg) => emit_kotlin_registry(&android_root, pkg, &kotlin_registry),
+            None if kotlin_registry.is_empty() => {
+                emit_kotlin_registry(&android_root, KOTLIN_REGISTRY_PACKAGE, &[]);
+            }
+            None => {}
         }
-    }
-    if ios_active && app_auto_register {
-        if let Some(app_dir) = ios_app_dir.as_deref() {
-            emit_swift_registry(&ios_root, app_dir, &ios_plugins_subdir, &swift_registry);
+        if std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "android") {
+            sync_android_project(
+                &android_root,
+                &app,
+                icon.as_ref(),
+                &dep_manifests_by_links,
+                app_manifest.as_ref(),
+            );
         }
     }
     if ios_active {
         if let Some(app_dir) = ios_app_dir.as_deref() {
-            let mut native_dirs = dep_native_ios_dirs();
-            native_dirs.extend(
-                opts.extra_native_ios_dirs
-                    .iter()
-                    .map(|(name, dir)| (name.clone(), dir.display().to_string())),
+            let mut native_dirs = collect_dep_native_dirs(NativePlatform::Ios);
+            native_dirs.extend(opts.extra_native_ios_dirs.iter().cloned());
+            sync_ios_project(
+                &IosProject::new(&ios_root, app_dir),
+                &IosSync {
+                    app: &app,
+                    icon: icon.as_ref(),
+                    rust_entry,
+                    plugins_subdir: &ios_plugins_subdir,
+                    registry: &swift_registry,
+                    native_dirs: &native_dirs,
+                    dep_manifests: &dep_manifests,
+                },
             );
-            let ios_min = dep_manifests
-                .iter()
-                .filter_map(|m| m.min_versions.ios.map(|v| (v, m.primary_id().to_owned())))
-                .max_by_key(|(v, _)| *v);
-            emit_ios_plugins_fragment(&ios_root, app_dir, &native_dirs, ios_min.as_ref());
-            emit_ios_plist_fragments(&ios_root, app_dir, &native_dirs);
         }
     }
 
-    let lib_name = opts
-        .lib_name
-        .clone()
-        .or_else(default_lib_name)
-        .unwrap_or_else(|| "istmo_app".to_owned());
+    let lib_name = app.krate.lib_name.clone();
 
     emit_service_and_background(
         &dep_manifests,
@@ -333,9 +303,119 @@ pub fn emit_app_with(opts: AppOpts) {
         },
     );
 
+    Doctor::new(
+        &app,
+        android_active.then_some(android_root.as_path()),
+        ios_app_dir
+            .as_deref()
+            .filter(|_| ios_active)
+            .map(|dir| (ios_root.as_path(), dir)),
+    )
+    .report();
+
     println!("cargo:rerun-if-changed=build.rs");
     if manifest_path.exists() {
         println!("cargo:rerun-if-changed=istmo.toml");
+    }
+}
+
+fn resolve_app_metadata(
+    root: &Path,
+    config: &AppConfig,
+    app_manifest: Option<&Manifest>,
+    lib_name: Option<&String>,
+) -> AppMetadata {
+    let mut krate = CrateInfo::from_build_env(root);
+    if let Some(lib_name) = lib_name {
+        krate.lib_name.clone_from(lib_name);
+    }
+    let min_versions = app_manifest.map(|m| m.min_versions).unwrap_or_default();
+    AppMetadata::resolve(&config.identity, &min_versions, krate)
+}
+
+/// Write `android/.istmo/` for the `dev.istmo.app` Gradle plugin.
+fn sync_android_project(
+    android_root: &Path,
+    app: &AppMetadata,
+    icon: Option<&AppIcon>,
+    dep_manifests_by_links: &[(String, Manifest)],
+    app_manifest: Option<&Manifest>,
+) {
+    let project = AndroidProject::new(android_root);
+    let plugins = AndroidPlugin::link(
+        &collect_dep_native_dirs(NativePlatform::Android),
+        dep_manifests_by_links,
+    );
+    let mut deps = collect_dep_native_deps();
+    if let Some(manifest) = app_manifest {
+        deps.merge(manifest.native_deps.clone());
+    }
+    for conflict in deps.conflicts() {
+        println!(
+            "cargo::warning=istmo-build: Gradle dependency {}:{} requested at several versions; \
+             using {} (dropped {})",
+            conflict.key.group,
+            conflict.key.artifact,
+            conflict.picked,
+            conflict.discarded.join(", "),
+        );
+    }
+    write_if_changed(
+        &project.metadata_path(),
+        &project.render_metadata(app, &plugins, &deps),
+    );
+    if let Some(icon) = icon {
+        project
+            .write_icon(icon)
+            .unwrap_or_else(|err| panic!("istmo-build: {err}"));
+    }
+}
+
+struct IosSync<'a> {
+    app: &'a AppMetadata,
+    icon: Option<&'a AppIcon>,
+    rust_entry: bool,
+    plugins_subdir: &'a str,
+    registry: &'a [RegistryEntry],
+    native_dirs: &'a [(String, PathBuf)],
+    dep_manifests: &'a [Manifest],
+}
+
+/// Write the iOS side: plugin registry, `IstmoApp.run()` entry,
+/// `ios/.istmo/`, the xcodegen fragment and the merged plist fragments.
+fn sync_ios_project(project: &IosProject, sync: &IosSync<'_>) {
+    let plugins_dir = project.app_path().join(sync.plugins_subdir);
+    write_if_changed(
+        &plugins_dir.join("IstmoPluginRegistry.swift"),
+        &generate_swift_plugin_registry(sync.registry),
+    );
+    let entry = plugins_dir.join("IstmoMain.swift");
+    if sync.rust_entry {
+        write_if_changed(&entry, &generate_swift_app_entry());
+    } else {
+        remove_generated(&entry);
+    }
+
+    project.write_generated(sync.app);
+    if let Some(icon) = sync.icon {
+        project
+            .write_icon(icon)
+            .unwrap_or_else(|err| panic!("istmo-build: {err}"));
+    }
+    let plugin_min_ios = sync
+        .dep_manifests
+        .iter()
+        .filter_map(|m| m.min_versions.ios.map(|v| (v, m.primary_id().to_owned())))
+        .max_by_key(|(v, _)| *v);
+    project.write_xcodegen_fragment(sync.app, sync.native_dirs, plugin_min_ios.as_ref());
+    emit_ios_plist_fragments(project.root(), project.app_dir(), sync.native_dirs);
+}
+
+/// Delete a file istmo-build generated earlier and no longer emits.
+/// Files without the generated header are left alone.
+fn remove_generated(path: &Path) {
+    if fs::read_to_string(path).is_ok_and(|text| text.contains("GENERATED by istmo-build")) {
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -349,12 +429,6 @@ struct ServiceEmitOpts<'a> {
     ios_plugins_subdir: &'a str,
     ios_info_plist_overrides: &'a [InfoPlistEntry],
     lib_name: &'a str,
-}
-
-fn default_lib_name() -> Option<String> {
-    std::env::var("CARGO_PKG_NAME")
-        .ok()
-        .map(|n| n.replace('-', "_"))
 }
 
 fn emit_service_and_background(dep_manifests: &[Manifest], opts: ServiceEmitOpts<'_>) {
@@ -635,28 +709,22 @@ fn join_fragments(fragments: &[String]) -> String {
     out
 }
 
-fn emit_kotlin_registry(android_root: &Path, package: &str, entries: &[RegistryEntry]) {
-    let pkg_path = package.replace('.', "/");
-    let dest = android_root
-        .join("app/src/main/java")
-        .join(pkg_path)
+fn emit_kotlin_registry(android_root: &Path, codegen_package: &str, entries: &[RegistryEntry]) {
+    let java_root = android_root.join("app/src/main/java");
+    let dest = java_root
+        .join(KOTLIN_REGISTRY_PACKAGE.replace('.', "/"))
         .join("IstmoPluginRegistry.kt");
-    let src = generate_kotlin_plugin_registry(package, entries);
-    write_if_changed(&dest, &src);
-}
-
-fn emit_swift_registry(
-    ios_root: &Path,
-    app_dir: &str,
-    plugins_subdir: &str,
-    entries: &[RegistryEntry],
-) {
-    let dest = ios_root
-        .join(app_dir)
-        .join(plugins_subdir)
-        .join("IstmoPluginRegistry.swift");
-    let src = generate_swift_plugin_registry(entries);
-    write_if_changed(&dest, &src);
+    write_if_changed(
+        &dest,
+        &generate_kotlin_plugin_registry(codegen_package, entries),
+    );
+    // Before 0.2 the registry lived in the codegen package.
+    let legacy = java_root
+        .join(codegen_package.replace('.', "/"))
+        .join("IstmoPluginRegistry.kt");
+    if legacy != dest {
+        remove_generated(&legacy);
+    }
 }
 
 fn cargo_manifest_dir() -> PathBuf {
@@ -767,93 +835,9 @@ import dev.istmo.runtime.PluginResult\n";
     format!("package {package}\n\n{imports}{coroutine_imports}\n{body}")
 }
 
-/// Every istmo plugin's `native/ios/` directory advertised through the
-/// `DEP_*_ISTMO_NATIVE_IOS` env-var handover, as `(links-name, dir)`
-/// pairs sorted by name so generated output is deterministic.
-fn dep_native_ios_dirs() -> Vec<(String, String)> {
-    let mut entries: Vec<(String, String)> = std::env::vars()
-        .filter_map(|(k, v)| {
-            let stripped = k.strip_prefix("DEP_")?.strip_suffix("_ISTMO_NATIVE_IOS")?;
-            Some((stripped.to_owned(), v))
-        })
-        .collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    entries
-}
-
-/// Write a small `istmo-plugins.yml` xcodegen fragment into the
-/// consumer's iOS app directory. Consumers' `project.yml` picks it up
-/// via `include: [ istmo-plugins.yml ]` and merges the extra `sources:`
-/// entries into their app target.
-///
-/// When any plugin declares `[min_versions] ios`, the fragment also
-/// adds a pre-build script that fails the Xcode build if
-/// `IPHONEOS_DEPLOYMENT_TARGET` is older — the Xcode-side twin of the
-/// check `istmo-build` runs from Cargo.
-///
-/// The Android equivalent — auto-injecting Kotlin source dirs into
-/// `sourceSets["main"]` — is handled by the standalone Gradle plugin
-/// `dev.istmo:istmo-plugin-loader` on the runtime side; xcodegen has
-/// nothing equivalent to a Gradle plugin, so we emit a fragment file
-/// instead.
-fn emit_ios_plugins_fragment(
-    ios_root: &Path,
-    app_dir: &str,
-    entries: &[(String, String)],
-    ios_min: Option<&(OsVersion, String)>,
-) {
-    if entries.is_empty() {
-        return;
-    }
-
-    let fragment_dir = ios_root.join(app_dir);
-    let mut yaml = String::new();
-    yaml.push_str("# GENERATED by istmo-build — DO NOT EDIT.\n");
-    yaml.push_str("# Include this file from your app's `project.yml`:\n");
-    yaml.push_str("#   include:\n");
-    yaml.push_str(&format!("#     - path: {app_dir}/istmo-plugins.yml\n"));
-    yaml.push_str("# xcodegen merges the entries below into your app target.\n");
-    yaml.push_str("targets:\n");
-    yaml.push_str(&format!("  {app_dir}:\n"));
-    yaml.push_str("    sources:\n");
-    for (name, dir) in entries {
-        // xcodegen resolves `path:` relative to the file that
-        // declares it. Prefer a repo-relative path so the fragment is
-        // portable across machines / CI runners; fall back to the
-        // absolute path if the plugin lives outside the workspace.
-        let display = relativise(&fragment_dir, Path::new(dir)).unwrap_or_else(|| dir.clone());
-        yaml.push_str(&format!("      - path: \"{display}\"\n"));
-        yaml.push_str(&format!("        name: {name}\n"));
-        yaml.push_str("        type: group\n");
-        yaml.push_str("        createIntermediateGroups: true\n");
-        yaml.push_str("        excludes:\n");
-        yaml.push_str("          - \"*.fragment\"\n");
-    }
-    if let Some((min, plugin)) = ios_min {
-        yaml.push_str("    preBuildScripts:\n");
-        yaml.push_str("      - name: istmo minimum iOS version\n");
-        yaml.push_str("        basedOnDependencyAnalysis: false\n");
-        yaml.push_str("        script: |\n");
-        yaml.push_str(&format!("          required=\"{min}\"\n"));
-        yaml.push_str("          actual=\"${IPHONEOS_DEPLOYMENT_TARGET:-0}\"\n");
-        yaml.push_str(
-            "          lowest=$(printf '%s\\n%s\\n' \"$required\" \"$actual\" | sort -t. -k1,1n -k2,2n -k3,3n | head -n1)\n",
-        );
-        yaml.push_str("          if [ \"$lowest\" != \"$required\" ]; then\n");
-        yaml.push_str(&format!(
-            "            echo \"error: istmo plugin {plugin} requires iOS >= $required, but IPHONEOS_DEPLOYMENT_TARGET is $actual\"\n"
-        ));
-        yaml.push_str("            exit 1\n");
-        yaml.push_str("          fi\n");
-    }
-
-    let dest = fragment_dir.join("istmo-plugins.yml");
-    write_if_changed(&dest, &yaml);
-}
-
 /// Merge every plugin's `Info.plist.fragment` / `App.entitlements.fragment`
 /// and write them into the app (see [`crate::apple_plist`]).
-fn emit_ios_plist_fragments(ios_root: &Path, app_dir: &str, entries: &[(String, String)]) {
+fn emit_ios_plist_fragments(ios_root: &Path, app_dir: &str, entries: &[(String, PathBuf)]) {
     let app_path = ios_root.join(app_dir);
     let info_plist = app_path.join("Info.plist");
     merge_plist_fragments(
@@ -880,14 +864,14 @@ fn find_entitlements(app_path: &Path) -> Option<PathBuf> {
 }
 
 fn merge_plist_fragments(
-    entries: &[(String, String)],
+    entries: &[(String, PathBuf)],
     fragment_name: &str,
     target: &Path,
     sidecar: &Path,
 ) {
     let mut fragments = PlistFragments::default();
     for (name, dir) in entries {
-        let path = Path::new(dir).join(fragment_name);
+        let path = dir.join(fragment_name);
         if !path.is_file() {
             continue;
         }
@@ -939,7 +923,7 @@ fn merge_plist_fragments(
 /// prefix, using `..` segments for the ascent. Returns `None` when the
 /// paths cannot be canonicalised (missing entries) so the caller can
 /// fall back to the absolute path.
-fn relativise(base: &Path, target: &Path) -> Option<String> {
+pub(crate) fn relativise(base: &Path, target: &Path) -> Option<String> {
     let base = fs::canonicalize(base).ok()?;
     let target = fs::canonicalize(target).ok()?;
     let base_components: Vec<_> = base.components().collect();
@@ -960,7 +944,7 @@ fn relativise(base: &Path, target: &Path) -> Option<String> {
     Some(out.to_string_lossy().into_owned())
 }
 
-fn write_if_changed(dest: &Path, contents: &str) {
+pub(crate) fn write_if_changed(dest: &Path, contents: &str) {
     let run = || -> std::io::Result<()> {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
@@ -1155,110 +1139,6 @@ pub fn detect_ios_app_dir(ios_root: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-#[derive(Debug, Clone, Default)]
-struct AppConfig {
-    android: Option<bool>,
-    android_package: Option<String>,
-    ios: Option<bool>,
-    ios_app_dir: Option<String>,
-    ios_plugins_subdir: Option<String>,
-    auto_register: Option<bool>,
-    per_plugin: HashMap<String, AppPluginOpts>,
-    info_plist: Vec<InfoPlistEntry>,
-}
-
-fn parse_app_config(doc: &DocumentMut) -> AppConfig {
-    let mut cfg = AppConfig::default();
-    let Some(app_item) = doc.get("app") else {
-        return cfg;
-    };
-    let Some(app_table) = app_item.as_table() else {
-        println!("cargo::warning=istmo-build: `[app]` expected table");
-        return cfg;
-    };
-    if let Some(v) = app_table.get("android").and_then(item_bool) {
-        cfg.android = Some(v);
-    }
-    if let Some(v) = app_table.get("android_package").and_then(item_str) {
-        cfg.android_package = Some(v.to_owned());
-    }
-    if let Some(v) = app_table.get("ios").and_then(item_bool) {
-        cfg.ios = Some(v);
-    }
-    if let Some(v) = app_table.get("ios_app_dir").and_then(item_str) {
-        cfg.ios_app_dir = Some(v.to_owned());
-    }
-    if let Some(v) = app_table.get("ios_plugins_subdir").and_then(item_str) {
-        cfg.ios_plugins_subdir = Some(v.to_owned());
-    }
-    if let Some(v) = app_table.get("auto_register").and_then(item_bool) {
-        cfg.auto_register = Some(v);
-    }
-    if let Some(table) = app_table.get("info_plist").and_then(Item::as_table_like) {
-        match InfoPlistEntry::parse_table(table, "app.info_plist") {
-            Ok(entries) => cfg.info_plist = entries,
-            Err(err) => println!("cargo::warning=istmo-build: {err}"),
-        }
-    }
-    if let Some(item) = app_table.get("plugin") {
-        if let Some(array) = item.as_array_of_tables() {
-            for entry in array {
-                if let Some((key, opts)) = parse_plugin_entry(entry) {
-                    cfg.per_plugin.insert(key, opts);
-                }
-            }
-        } else if let Some(table) = item.as_table() {
-            if let Some((key, opts)) = parse_plugin_entry(table) {
-                cfg.per_plugin.insert(key, opts);
-            }
-        }
-    }
-    cfg
-}
-
-fn parse_plugin_entry(table: &Table) -> Option<(String, AppPluginOpts)> {
-    let key = table
-        .get("id")
-        .and_then(item_str)
-        .or_else(|| table.get("type").and_then(item_str))?;
-    let role = table.get("role").and_then(item_str).and_then(Role::parse);
-    let platforms = table.get("platforms").and_then(|item| {
-        let array = item.as_array()?;
-        let mut out = Vec::new();
-        for v in array {
-            if let Value::String(s) = v {
-                if let Some(p) = Platform::parse(s.value().as_str()) {
-                    out.push(p);
-                }
-            }
-        }
-        Some(out)
-    });
-    let auto_register = table.get("auto_register").and_then(item_bool);
-    Some((
-        key.to_owned(),
-        AppPluginOpts {
-            role,
-            platforms,
-            auto_register,
-        },
-    ))
-}
-
-fn item_str(item: &Item) -> Option<&str> {
-    match item {
-        Item::Value(Value::String(s)) => Some(s.value().as_str()),
-        _ => None,
-    }
-}
-
-fn item_bool(item: &Item) -> Option<bool> {
-    match item {
-        Item::Value(Value::Boolean(b)) => Some(*b.value()),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1290,39 +1170,6 @@ mod tests {
             extract_manifest_package(xml).as_deref(),
             Some("dev.istmo.legacy")
         );
-    }
-
-    #[test]
-    fn parses_app_section_full() {
-        let toml = r#"
-[app]
-android_package = "com.example.app.generated"
-ios_app_dir = "MyApp"
-
-[[app.plugin]]
-id = "istmo.echo"
-role = "client"
-platforms = ["android"]
-"#;
-        let doc: DocumentMut = toml.parse().unwrap();
-        let cfg = parse_app_config(&doc);
-        assert_eq!(
-            cfg.android_package.as_deref(),
-            Some("com.example.app.generated")
-        );
-        assert_eq!(cfg.ios_app_dir.as_deref(), Some("MyApp"));
-        let per = cfg.per_plugin.get("istmo.echo").unwrap();
-        assert_eq!(per.role, Some(Role::Client));
-        assert_eq!(per.platforms.as_deref(), Some(&[Platform::Android][..]));
-    }
-
-    #[test]
-    fn parses_platform_flags() {
-        let toml = "[app]\nandroid = false\nios = true\n";
-        let doc: DocumentMut = toml.parse().unwrap();
-        let cfg = parse_app_config(&doc);
-        assert_eq!(cfg.android, Some(false));
-        assert_eq!(cfg.ios, Some(true));
     }
 
     #[test]

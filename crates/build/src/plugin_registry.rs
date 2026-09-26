@@ -1,20 +1,28 @@
 //! Generators for `IstmoPluginRegistry` — a single Kotlin `object` /
 //! Swift `enum` that registers every eligible plugin dispatcher with
-//! the runtime in one call.
+//! the runtime in one call — and for the Swift `IstmoApp.run()` entry.
 //!
-//! Emitted only for plugins that:
+//! The Kotlin registry always lives at
+//! [`KOTLIN_REGISTRY_CLASS`] so `dev.istmo.runtime.IstmoActivity` can
+//! find it without configuration, the way Flutter's embedding finds
+//! `GeneratedPluginRegistrant`.
 //!
-//! - are **stateless** (contract has no `init` config type — stateful
-//!   plugins need a per-instance factory the registry does not model);
-//! - have `auto_register = true` in their `istmo.toml` (default);
-//! - are not overridden `auto_register = false` at the app level.
-//!
-//! Plugins whose backend needs a non-default constructor opt out and
-//! register the dispatcher manually.
+//! Emitted only for plugins that have `auto_register = true` in their
+//! `istmo.toml` (default) and are not overridden `auto_register = false`
+//! at the app level. A plugin whose Android backend needs the host
+//! activity declares `android_backend_arg = "activity"` (or the
+//! concrete `Activity` subclass) instead of opting out.
 
 use std::fmt::Write as _;
 
 use crate::contract::Contract;
+use crate::manifest::{AndroidBackendArg, PluginEntry};
+
+/// Package of the generated Kotlin registry.
+pub const KOTLIN_REGISTRY_PACKAGE: &str = "dev.istmo.generated";
+
+/// Fully-qualified name of the generated Kotlin registry.
+pub const KOTLIN_REGISTRY_CLASS: &str = "dev.istmo.generated.IstmoPluginRegistry";
 
 /// One plugin's participation in the auto-registration codegen.
 #[derive(Debug, Clone)]
@@ -25,6 +33,13 @@ pub struct RegistryEntry {
     /// implementing the generated `<T>Factory` interface. Stateless
     /// plugins register their `<T>BackendImpl` directly.
     pub stateful: bool,
+    /// Fully-qualified Kotlin class passed to the dispatcher; `None`
+    /// means `<T>BackendImpl` / `<T>FactoryImpl` in the codegen package.
+    pub android_class: Option<String>,
+    pub android_arg: AndroidBackendArg,
+    /// Swift type passed to the dispatcher; `None` means
+    /// `<T>BackendImpl` / `<T>FactoryImpl`.
+    pub ios_class: Option<String>,
 }
 
 impl RegistryEntry {
@@ -34,60 +49,131 @@ impl RegistryEntry {
             plugin_id: contract.plugin_id.clone(),
             type_name: contract.type_name.clone(),
             stateful: contract.init.is_some(),
+            android_class: None,
+            android_arg: AndroidBackendArg::Context,
+            ios_class: None,
         })
+    }
+
+    /// Apply the backend overrides the plugin declares in its
+    /// `istmo.toml`.
+    #[must_use]
+    pub fn with_plugin(mut self, plugin: &PluginEntry) -> Self {
+        self.android_class.clone_from(&plugin.android_backend);
+        self.android_arg = plugin.android_backend_arg.clone();
+        self.ios_class.clone_from(&plugin.ios_backend);
+        self
+    }
+
+    fn default_class(&self) -> String {
+        let suffix = if self.stateful {
+            "FactoryImpl"
+        } else {
+            "BackendImpl"
+        };
+        format!("{}{suffix}", self.type_name)
+    }
+
+    fn write_kotlin(&self, out: &mut String, codegen_package: &str) {
+        let ty = &self.type_name;
+        let backend = self
+            .android_class
+            .clone()
+            .unwrap_or_else(|| format!("{codegen_package}.{}", self.default_class()));
+        let (indent, arg) = match &self.android_arg {
+            AndroidBackendArg::Context => ("        ", "context"),
+            AndroidBackendArg::Activity(class) => {
+                writeln!(
+                    out,
+                    "        hostActivity<{class}>(context, \"{}\")?.let {{ activity ->",
+                    self.plugin_id
+                )
+                .ok();
+                ("            ", "activity")
+            }
+        };
+        writeln!(out, "{indent}IstmoRuntime.registerHandler(").ok();
+        writeln!(
+            out,
+            "{indent}    {codegen_package}.{ty}Dispatcher.PLUGIN_ID,"
+        )
+        .ok();
+        writeln!(out, "{indent}    {codegen_package}.{ty}Dispatcher(").ok();
+        writeln!(out, "{indent}        {backend}({arg}),").ok();
+        writeln!(out, "{indent}        {codegen_package}.{ty}CodecsImpl(),").ok();
+        writeln!(out, "{indent}    ),").ok();
+        writeln!(out, "{indent})").ok();
+        if matches!(self.android_arg, AndroidBackendArg::Activity(_)) {
+            out.push_str("        }\n");
+        }
     }
 }
 
-/// Emit `IstmoPluginRegistry.kt`.
+/// Emit `IstmoPluginRegistry.kt` in [`KOTLIN_REGISTRY_PACKAGE`].
 ///
-/// The `package` argument is prepended verbatim as `package <package>`;
-/// callers pass the app's target codegen package (usually
-/// `<gradle namespace>.gen`).
+/// `codegen_package` is the package the per-plugin dispatchers, codecs
+/// and default backends were generated into (`[app] android_package`).
 #[must_use]
-pub fn generate_kotlin_plugin_registry(package: &str, entries: &[RegistryEntry]) -> String {
+pub fn generate_kotlin_plugin_registry(codegen_package: &str, entries: &[RegistryEntry]) -> String {
+    let needs_activity = entries
+        .iter()
+        .any(|e| matches!(e.android_arg, AndroidBackendArg::Activity(_)));
     let mut out = String::new();
-    writeln!(&mut out, "package {package}\n").ok();
+    writeln!(&mut out, "package {KOTLIN_REGISTRY_PACKAGE}\n").ok();
     out.push_str("// GENERATED by istmo-build - DO NOT EDIT.\n");
-    out.push_str("// Registers every plugin dispatcher whose backend follows the\n");
-    out.push_str("// default construction convention `<T>BackendImpl(context)`. Plugins\n");
-    out.push_str("// with bespoke construction opt out via `auto_register = false` in\n");
-    out.push_str("// `istmo.toml`.\n\n");
+    out.push_str("// Registers every auto-registered plugin dispatcher with the istmo\n");
+    out.push_str("// runtime. `IstmoActivity` calls it before the Rust entry point runs;\n");
+    out.push_str("// hosts with their own activity call `registerAll(this)` from\n");
+    out.push_str("// `onCreate`. Plugins with bespoke construction opt out via\n");
+    out.push_str("// `auto_register = false` in `istmo.toml`.\n\n");
+    if needs_activity {
+        out.push_str("import android.app.Activity\n");
+    }
     out.push_str("import android.content.Context\n");
+    if needs_activity {
+        out.push_str("import android.util.Log\n");
+    }
+    out.push_str("import dev.istmo.runtime.IstmoPluginRegistrant\n");
     out.push_str("import dev.istmo.runtime.IstmoRuntime\n\n");
-    out.push_str("object IstmoPluginRegistry {\n");
-    out.push_str("    fun registerAll(context: Context, runtime: IstmoRuntime = IstmoRuntime) {\n");
+    out.push_str("object IstmoPluginRegistry : IstmoPluginRegistrant {\n");
+    out.push_str("    override fun registerAll(context: Context) {\n");
     if entries.is_empty() {
         out.push_str("        // No auto-registerable plugins in this build.\n");
     }
     for entry in entries {
-        let ty = &entry.type_name;
-        let host_arg = if entry.stateful {
-            format!("{ty}FactoryImpl(context)")
-        } else {
-            format!("{ty}BackendImpl(context)")
-        };
-        writeln!(&mut out, "        runtime.registerHandler(").ok();
-        writeln!(&mut out, "            {ty}Dispatcher.PLUGIN_ID,").ok();
-        writeln!(&mut out, "            {ty}Dispatcher(").ok();
-        writeln!(&mut out, "                {host_arg},").ok();
-        writeln!(&mut out, "                {ty}CodecsImpl(),").ok();
-        writeln!(&mut out, "            ),").ok();
-        writeln!(&mut out, "        )").ok();
+        entry.write_kotlin(&mut out, codegen_package);
     }
     out.push_str("    }\n");
+    if needs_activity {
+        out.push_str(KOTLIN_HOST_ACTIVITY_HELPER);
+    }
     out.push_str("}\n");
     out
 }
+
+const KOTLIN_HOST_ACTIVITY_HELPER: &str = r#"
+    private inline fun <reified A : Activity> hostActivity(context: Context, pluginId: String): A? {
+        if (context !is Activity) {
+            Log.w(TAG, "$pluginId needs an Activity; skipped when registering from ${context.javaClass.name}")
+            return null
+        }
+        return context as? A ?: throw IllegalStateException(
+            "istmo plugin $pluginId needs its host activity to extend ${A::class.java.name}, " +
+                "but ${context.javaClass.name} does not",
+        )
+    }
+
+    private const val TAG = "istmo"
+"#;
 
 /// Emit `IstmoPluginRegistry.swift`.
 #[must_use]
 pub fn generate_swift_plugin_registry(entries: &[RegistryEntry]) -> String {
     let mut out = String::new();
     out.push_str("// GENERATED by istmo-build - DO NOT EDIT.\n");
-    out.push_str("// Registers every plugin dispatcher whose backend follows the\n");
-    out.push_str("// default construction convention `<T>BackendImpl()`. Plugins with\n");
-    out.push_str("// bespoke construction opt out via `auto_register = false` in\n");
-    out.push_str("// `istmo.toml`.\n\n");
+    out.push_str("// Registers every auto-registered plugin dispatcher with the istmo\n");
+    out.push_str("// runtime. Plugins with bespoke construction opt out via\n");
+    out.push_str("// `auto_register = false` in `istmo.toml`.\n\n");
     out.push_str("import Foundation\n");
     out.push_str("import IstmoRuntime\n\n");
     out.push_str("enum IstmoPluginRegistry {\n");
@@ -97,22 +183,49 @@ pub fn generate_swift_plugin_registry(entries: &[RegistryEntry]) -> String {
     }
     for entry in entries {
         let ty = &entry.type_name;
-        let (host_label, host_ctor) = if entry.stateful {
-            ("factory", format!("{ty}FactoryImpl()"))
-        } else {
-            ("backend", format!("{ty}BackendImpl()"))
-        };
-        writeln!(&mut out, "        runtime.register(").ok();
-        writeln!(&mut out, "            pluginId: {ty}Dispatcher.pluginId,").ok();
-        writeln!(&mut out, "            dispatcher: {ty}Dispatcher(").ok();
-        writeln!(&mut out, "                {host_label}: {host_ctor},").ok();
-        writeln!(&mut out, "                codecs: {ty}CodecsImpl(),").ok();
-        writeln!(&mut out, "            )").ok();
+        let label = if entry.stateful { "factory" } else { "backend" };
+        let class = entry
+            .ios_class
+            .clone()
+            .unwrap_or_else(|| entry.default_class());
+        writeln!(&mut out, "        runtime.registerHandler(").ok();
+        writeln!(&mut out, "            {ty}Dispatcher.PLUGIN_ID,").ok();
+        writeln!(
+            &mut out,
+            "            {ty}Dispatcher({label}: {class}(), codecs: {ty}CodecsImpl())"
+        )
+        .ok();
         writeln!(&mut out, "        )").ok();
     }
     out.push_str("    }\n");
     out.push_str("}\n");
     out
+}
+
+/// Emit `IstmoMain.swift`, the `IstmoApp.run()` entry for Rust-driven apps.
+///
+/// It starts the runtime, registers every plugin and hands control to
+/// the crate's `#[istmo::mobile_app]` entry point (`istmo_run_ios`), so
+/// an app's `main.swift` is the single line `IstmoApp.run()`.
+///
+/// Only emitted for crates that export that entry point: the
+/// `@_silgen_name` declaration is an undefined symbol otherwise.
+#[must_use]
+pub fn generate_swift_app_entry() -> String {
+    "// GENERATED by istmo-build - DO NOT EDIT.\n\
+     import IstmoRuntime\n\
+     \n\
+     @_silgen_name(\"istmo_run_ios\")\n\
+     private func istmo_run_ios() -> Int32\n\
+     \n\
+     extension IstmoApp {\n\
+     \x20   /// Start the runtime, register every auto-registered plugin and run\n\
+     \x20   /// the crate's `#[istmo::mobile_app]` entry point.\n\
+     \x20   static func run() -> Never {\n\
+     \x20       run(registerPlugins: { IstmoPluginRegistry.registerAll() }, entry: istmo_run_ios)\n\
+     \x20   }\n\
+     }\n"
+    .to_owned()
 }
 
 #[cfg(test)]
@@ -130,6 +243,17 @@ mod tests {
         }
     }
 
+    fn entry(type_name: &str, stateful: bool) -> RegistryEntry {
+        RegistryEntry {
+            plugin_id: format!("acme.{}", type_name.to_lowercase()),
+            type_name: type_name.into(),
+            stateful,
+            android_class: None,
+            android_arg: AndroidBackendArg::Context,
+            ios_class: None,
+        }
+    }
+
     #[test]
     fn stateless_contract_becomes_entry() {
         let c = stateless("acme.foo", "Foo");
@@ -137,6 +261,7 @@ mod tests {
         assert_eq!(entry.plugin_id, "acme.foo");
         assert_eq!(entry.type_name, "Foo");
         assert!(!entry.stateful);
+        assert_eq!(entry.android_arg, AndroidBackendArg::Context);
     }
 
     #[test]
@@ -148,67 +273,69 @@ mod tests {
     }
 
     #[test]
-    fn kotlin_registry_uses_factory_for_stateful() {
-        let entries = vec![RegistryEntry {
-            plugin_id: "acme.a".into(),
-            type_name: "A".into(),
-            stateful: true,
-        }];
-        let src = generate_kotlin_plugin_registry("com.example.gen", &entries);
-        assert!(src.contains("AFactoryImpl(context)"));
-        assert!(!src.contains("ABackendImpl(context)"));
+    fn kotlin_registry_lives_in_fixed_package() {
+        let src = generate_kotlin_plugin_registry("com.example.gen", &[]);
+        assert!(src.starts_with("package dev.istmo.generated\n"));
+        assert!(src.contains("object IstmoPluginRegistry : IstmoPluginRegistrant"));
+        assert!(src.contains("No auto-registerable"));
+        assert!(!src.contains("hostActivity"));
     }
 
     #[test]
-    fn empty_registry_kotlin_is_valid_kotlin() {
-        let src = generate_kotlin_plugin_registry("com.example.gen", &[]);
-        assert!(src.contains("package com.example.gen"));
-        assert!(src.contains("object IstmoPluginRegistry"));
-        assert!(src.contains("No auto-registerable"));
+    fn kotlin_registry_uses_factory_for_stateful() {
+        let src = generate_kotlin_plugin_registry("com.example.gen", &[entry("A", true)]);
+        assert!(src.contains("com.example.gen.AFactoryImpl(context)"));
+        assert!(!src.contains("ABackendImpl"));
     }
 
     #[test]
     fn kotlin_registry_iterates_entries() {
-        let entries = vec![
-            RegistryEntry {
-                plugin_id: "acme.a".into(),
-                type_name: "A".into(),
-                stateful: false,
-            },
-            RegistryEntry {
-                plugin_id: "acme.b".into(),
-                type_name: "B".into(),
-                stateful: false,
-            },
-        ];
-        let src = generate_kotlin_plugin_registry("com.example.gen", &entries);
-        assert!(src.contains("ADispatcher.PLUGIN_ID"));
-        assert!(src.contains("ABackendImpl(context)"));
-        assert!(src.contains("BDispatcher.PLUGIN_ID"));
-        assert!(src.contains("BBackendImpl(context)"));
+        let src = generate_kotlin_plugin_registry(
+            "com.example.gen",
+            &[entry("A", false), entry("B", false)],
+        );
+        assert!(src.contains("com.example.gen.ADispatcher.PLUGIN_ID"));
+        assert!(src.contains("com.example.gen.ABackendImpl(context)"));
+        assert!(src.contains("com.example.gen.BCodecsImpl()"));
     }
 
     #[test]
-    fn swift_registry_iterates_entries() {
-        let entries = vec![RegistryEntry {
-            plugin_id: "acme.a".into(),
-            type_name: "A".into(),
-            stateful: false,
-        }];
-        let src = generate_swift_plugin_registry(&entries);
+    fn kotlin_registry_passes_host_activity() {
+        let mut share = entry("Share", false);
+        share.android_class = Some("dev.istmo.plugins.share.ShareBackendImpl".into());
+        share.android_arg =
+            AndroidBackendArg::Activity("androidx.activity.ComponentActivity".into());
+        let src = generate_kotlin_plugin_registry("dev.istmo.runtime", &[share]);
+        assert!(src.contains(
+            "hostActivity<androidx.activity.ComponentActivity>(context, \"acme.share\")?.let { activity ->"
+        ));
+        assert!(src.contains("dev.istmo.plugins.share.ShareBackendImpl(activity),"));
+        assert!(src.contains("private inline fun <reified A : Activity> hostActivity"));
+        assert!(src.contains("import android.app.Activity"));
+    }
+
+    #[test]
+    fn swift_registry_calls_register_handler() {
+        let src = generate_swift_plugin_registry(&[entry("A", false)]);
         assert!(src.contains("enum IstmoPluginRegistry"));
-        assert!(src.contains("ADispatcher.pluginId"));
-        assert!(src.contains("backend: ABackendImpl()"));
+        assert!(src.contains("runtime.registerHandler("));
+        assert!(src.contains("ADispatcher.PLUGIN_ID,"));
+        assert!(src.contains("ADispatcher(backend: ABackendImpl(), codecs: ACodecsImpl())"));
     }
 
     #[test]
-    fn swift_registry_uses_factory_for_stateful() {
-        let entries = vec![RegistryEntry {
-            plugin_id: "acme.a".into(),
-            type_name: "A".into(),
-            stateful: true,
-        }];
-        let src = generate_swift_plugin_registry(&entries);
-        assert!(src.contains("factory: AFactoryImpl()"));
+    fn swift_registry_uses_factory_and_override() {
+        let mut a = entry("A", true);
+        a.ios_class = Some("CustomFactory".into());
+        let src = generate_swift_plugin_registry(&[a]);
+        assert!(src.contains("ADispatcher(factory: CustomFactory(), codecs: ACodecsImpl())"));
+    }
+
+    #[test]
+    fn swift_app_entry_wraps_rust_entry_point() {
+        let src = generate_swift_app_entry();
+        assert!(src.contains("@_silgen_name(\"istmo_run_ios\")"));
+        assert!(src.contains("    static func run() -> Never {\n"));
+        assert!(src.contains("entry: istmo_run_ios"));
     }
 }

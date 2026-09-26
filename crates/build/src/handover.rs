@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use bincode::config::Configuration;
 use bincode::error::{DecodeError, EncodeError};
 
@@ -95,16 +97,70 @@ pub fn emit_manifest(manifest: &Manifest) {
 
 #[must_use]
 pub fn collect_dep_manifests() -> Vec<Manifest> {
-    collect_env_payloads(MANIFEST_KEY)
+    collect_dep_manifests_by_links()
+        .into_iter()
+        .map(|(_, manifest)| manifest)
+        .collect()
+}
+
+/// Like [`collect_dep_manifests`], paired with the `links` name of the
+/// plugin crate that advertised each manifest (the `<LINKS>` in
+/// `DEP_<LINKS>_ISTMO_MANIFEST`), sorted by that name.
+#[must_use]
+pub fn collect_dep_manifests_by_links() -> Vec<(String, Manifest)> {
+    let mut out: Vec<(String, Manifest)> = collect_env_payloads(MANIFEST_KEY)
         .into_iter()
         .filter_map(|(var, payload)| match deserialize_manifest(&payload) {
-            Ok(m) => Some(m),
+            Ok(m) => Some((links_name(&var, MANIFEST_KEY), m)),
             Err(err) => {
                 println!("cargo::warning=istmo handover decode failed for {var}: {err}");
                 None
             }
         })
-        .collect()
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Platform directory a plugin crate ships under `native/`, advertised
+/// by [`emit_manifest_metadata`](crate::emit_manifest_metadata) as
+/// `DEP_<LINKS>_ISTMO_NATIVE_<PLATFORM>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePlatform {
+    Android,
+    Ios,
+    Macos,
+}
+
+impl NativePlatform {
+    const fn env_key(self) -> &'static str {
+        match self {
+            Self::Android => "ISTMO_NATIVE_ANDROID",
+            Self::Ios => "ISTMO_NATIVE_IOS",
+            Self::Macos => "ISTMO_NATIVE_MACOS",
+        }
+    }
+}
+
+/// Every dependency's `native/<platform>/` directory as `(links, dir)`
+/// pairs sorted by `links` name so generated output is deterministic.
+#[must_use]
+pub fn collect_dep_native_dirs(platform: NativePlatform) -> Vec<(String, PathBuf)> {
+    let key = platform.env_key();
+    let mut out: Vec<(String, PathBuf)> = collect_env_payloads(key)
+        .into_iter()
+        .map(|(var, dir)| (links_name(&var, key), PathBuf::from(dir)))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+fn links_name(var: &str, key: &str) -> String {
+    var.strip_prefix("DEP_")
+        .and_then(|rest| rest.strip_suffix(key))
+        .and_then(|rest| rest.strip_suffix('_'))
+        .unwrap_or(var)
+        .to_owned()
 }
 
 #[must_use]
@@ -231,6 +287,21 @@ mod tests {
         let hex = "DEADBEEF";
         let err = deserialize_contract(hex).expect_err("bincode decode should fail");
         assert!(matches!(err, HandoverError::Decode(_)));
+    }
+
+    #[test]
+    fn links_name_strips_prefix_and_key() {
+        assert_eq!(
+            links_name("DEP_ISTMO_SHARE_ISTMO_MANIFEST", MANIFEST_KEY),
+            "ISTMO_SHARE"
+        );
+        assert_eq!(
+            links_name(
+                "DEP_PEN_ISTMO_NATIVE_ANDROID",
+                NativePlatform::Android.env_key()
+            ),
+            "PEN"
+        );
     }
 
     #[test]

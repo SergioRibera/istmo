@@ -376,3 +376,33 @@ NSFaceIDUsageDescription = 42
         "got {msg}"
     );
 }
+
+#[test]
+fn parses_backend_overrides() {
+    use istmo_build::AndroidBackendArg;
+    let manifest = Manifest::parse(
+        "[plugin]\nid = \"istmo.biometric\"\n\
+         android_backend = \"dev.istmo.plugins.biometric.BiometricBackendImpl\"\n\
+         android_backend_arg = \"androidx.fragment.app.FragmentActivity\"\n\
+         ios_backend = \"BiometricBackendImpl\"\n",
+    )
+    .unwrap();
+    let plugin = &manifest.plugins[0];
+    assert_eq!(
+        plugin.android_backend.as_deref(),
+        Some("dev.istmo.plugins.biometric.BiometricBackendImpl")
+    );
+    assert_eq!(
+        plugin.android_backend_arg,
+        AndroidBackendArg::Activity("androidx.fragment.app.FragmentActivity".to_owned())
+    );
+    assert_eq!(plugin.ios_backend.as_deref(), Some("BiometricBackendImpl"));
+
+    let activity =
+        Manifest::parse("[plugin]\nid = \"a\"\nandroid_backend_arg = \"activity\"\n").unwrap();
+    assert_eq!(
+        activity.plugins[0].android_backend_arg,
+        AndroidBackendArg::Activity("androidx.activity.ComponentActivity".to_owned())
+    );
+    assert!(Manifest::parse("[plugin]\nid = \"a\"\nandroid_backend_arg = \"fragment\"\n").is_err());
+}
