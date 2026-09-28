@@ -1,6 +1,6 @@
 [package]
 name = "biometric-demo"
-version = "0.1.1-alpha.2"
+version = "0.1.1-alpha.3"
 description = "Multi-platform istmo demo — the same Rust code checks biometrics, authenticates and keeps biometric-bound secrets on desktop, Android and iOS."
 publish = false
 edition.workspace = true

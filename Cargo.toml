@@ -68,26 +68,26 @@ syn = { version = "2", default-features = false, features = [
 jni = { version = "0.21", default-features = false }
 toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
-istmo-core = { path = "crates/core", version = "0.1.1-alpha.2" }
-istmo-build = { path = "crates/build", version = "0.1.1-alpha.2" }
-istmo-macros = { path = "crates/macros", version = "0.1.1-alpha.2" }
-istmo-android = { path = "crates/android", version = "0.1.1-alpha.2" }
-istmo-ios = { path = "crates/ios", version = "0.1.1-alpha.2" }
-istmo-plugins = { path = "crates/plugins", version = "0.1.1-alpha.2" }
-istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.1.1-alpha.2" }
-istmo-window = { path = "crates/window", version = "0.1.1-alpha.2" }
+istmo-core = { path = "crates/core", version = "0.1.1-alpha.3" }
+istmo-build = { path = "crates/build", version = "0.1.1-alpha.3" }
+istmo-macros = { path = "crates/macros", version = "0.1.1-alpha.3" }
+istmo-android = { path = "crates/android", version = "0.1.1-alpha.3" }
+istmo-ios = { path = "crates/ios", version = "0.1.1-alpha.3" }
+istmo-plugins = { path = "crates/plugins", version = "0.1.1-alpha.3" }
+istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.1.1-alpha.3" }
+istmo-window = { path = "crates/window", version = "0.1.1-alpha.3" }
 
-istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.1.1-alpha.2" }
-istmo-data-store = { path = "plugins/data-store", version = "0.1.1-alpha.2" }
-istmo-live-activity = { path = "plugins/live-activity", version = "0.1.1-alpha.2" }
-istmo-pen = { path = "plugins/istmo-pen", version = "0.1.1-alpha.2" }
-istmo-file-picker = { path = "plugins/file-picker", version = "0.1.1-alpha.2" }
-istmo-share = { path = "plugins/share", version = "0.1.1-alpha.2" }
-istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.2" }
+istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.1.1-alpha.3" }
+istmo-data-store = { path = "plugins/data-store", version = "0.1.1-alpha.3" }
+istmo-live-activity = { path = "plugins/live-activity", version = "0.1.1-alpha.3" }
+istmo-pen = { path = "plugins/istmo-pen", version = "0.1.1-alpha.3" }
+istmo-file-picker = { path = "plugins/file-picker", version = "0.1.1-alpha.3" }
+istmo-share = { path = "plugins/share", version = "0.1.1-alpha.3" }
+istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.3" }
 
 [package]
 name = "istmo"
-version = "0.1.1-alpha.2"
+version = "0.1.1-alpha.3"
 description = "Rust ↔ mobile native interop framework — write shared Rust code, ship it to Android + iOS through a typed plugin contract."
 edition.workspace = true
 rust-version.workspace = true
@@ -119,7 +119,7 @@ bincode = { workspace = true }
 # and let facade features pick the activity flavor (see the
 # `native-activity` / `game-activity` features above). Cargo forbids
 # overriding workspace `default-features` from an inheriting crate.
-istmo-android = { path = "crates/android", version = "0.1.1-alpha.2", default-features = false }
+istmo-android = { path = "crates/android", version = "0.1.1-alpha.3", default-features = false }
 
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))'.dependencies]
 istmo-ios = { workspace = true }

@@ -1,6 +1,6 @@
 [package]
 name = "istmo-share"
-version = "0.1.1-alpha.2"
+version = "0.1.1-alpha.3"
 description = "Cross-platform share plugin for the istmo framework — send and receive text, links and files through the Android chooser, UIActivityViewController, NSSharingServicePicker and Windows DataTransferManager."
 edition.workspace = true
 rust-version.workspace = true

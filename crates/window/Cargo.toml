@@ -1,6 +1,6 @@
 [package]
 name = "istmo-window"
-version = "0.1.1-alpha.2"
+version = "0.1.1-alpha.3"
 description = "Process-wide registry of native desktop windows shared by istmo plugins that need an HWND / NSView anchor."
 edition.workspace = true
 rust-version.workspace = true

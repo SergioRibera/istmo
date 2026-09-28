@@ -1,6 +1,6 @@
 [package]
 name = "share-demo"
-version = "0.1.1-alpha.2"
+version = "0.1.1-alpha.3"
 description = "Multi-platform istmo demo — the same Rust code sends text, links and files through the OS share sheet and receives what other apps share into it."
 publish = false
 edition.workspace = true

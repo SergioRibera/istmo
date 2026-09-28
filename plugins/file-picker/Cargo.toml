@@ -1,6 +1,6 @@
 [package]
 name = "istmo-file-picker"
-version = "0.1.1-alpha.2"
+version = "0.1.1-alpha.3"
 description = "Cross-platform file-picker plugin for the istmo framework — SAF on Android, UIDocumentPicker on iOS, NSOpenPanel on macOS, IFileOpenDialog on Windows, XDG portal on Linux."
 edition.workspace = true
 rust-version.workspace = true
