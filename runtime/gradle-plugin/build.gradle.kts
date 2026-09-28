@@ -1,4 +1,5 @@
-import com.vanniktech.maven.publish.GradlePublishPlugin
+import com.vanniktech.maven.publish.GradlePlugin
+import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
@@ -47,10 +48,12 @@ mavenPublishing {
 
     coordinates(pluginGroup, pluginArtifact, pluginVersion)
 
-    // GradlePublishPlugin bundles the plugin marker + main artifact
-    // and generates both sources and javadoc jars — required for
-    // Maven Central acceptance.
-    configure(GradlePublishPlugin())
+    // GradlePlugin bundles the plugin marker + main artifact and
+    // generates sources and (empty) javadoc jars — required for Maven
+    // Central acceptance. GradlePublishPlugin would need
+    // `com.gradle.plugin-publish` applied and targets the Gradle
+    // Plugin Portal instead.
+    configure(GradlePlugin(javadocJar = JavadocJar.Empty(), sourcesJar = true))
 
     pom {
         name.set("istmo-gradle-plugin")
