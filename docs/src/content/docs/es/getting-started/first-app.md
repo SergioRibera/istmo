@@ -92,7 +92,7 @@ mecanismo.
 ## Una sola fuente de verdad
 
 El id, nombre, versión, número de build, ícono y versiones mínimas de
-SO de la app viven en `istmo.toml`; el plugin de Gradle `dev.istmo.app`
+SO de la app viven en `istmo.toml`; el plugin de Gradle `io.github.sergioribera.istmo`
 y los settings de Xcode generados los aplican, y ese mismo plugin y la
 fase pre-build de Xcode corren cargo por vos. Si falta algo, `cargo
 build` imprime avisos `istmo doctor:` y `./gradlew istmoDoctor` revisa

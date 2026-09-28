@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   istmo.share — merged into every variant's manifest by the istmo Gradle
-  plugin `dev.istmo.app`. Only adds components; no application-level
+  plugin `io.github.sergioribera.istmo`. Only adds components; no application-level
   attributes, so it never overrides the app's own settings.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">

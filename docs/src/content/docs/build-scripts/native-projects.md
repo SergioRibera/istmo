@@ -12,7 +12,7 @@ them in sync:
 | Piece | Runs | Does |
 | --- | --- | --- |
 | `build.rs` → `istmo_build::emit()` | every `cargo build` / `cargo check` | codegen, plugin metadata, app identity, doctor warnings |
-| `dev.istmo.app` Gradle plugin | every Gradle build | builds the Rust crate, links plugins, applies `[app]` |
+| `io.github.sergioribera.istmo` Gradle plugin | every Gradle build | builds the Rust crate, links plugins, applies `[app]` |
 | `istmo-plugins.yml` + `ios/.istmo/build-rust.sh` | every Xcode build | builds the Rust crate, links plugins, applies `[app]` |
 
 `istmo.toml` is the single source of truth. The native manifests
@@ -46,7 +46,7 @@ Apply the plugin to the app module:
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("dev.istmo.app")
+    id("io.github.sergioribera.istmo")
 }
 
 android {
@@ -72,7 +72,7 @@ and reference the placeholders from the manifest:
 </application>
 ```
 
-`dev.istmo.app` then:
+`io.github.sergioribera.istmo` then:
 
 - **builds the crate** with `cargo build --target <triple> --profile <p>`
   for every ABI in `abiFilters` (default `arm64-v8a` + `x86_64`) and
@@ -160,7 +160,7 @@ spelled out:
 
 - **`cargo build`** — `build.rs` prints `istmo doctor:` warnings: a
   missing `cdylib` / `staticlib` crate type, `android/app` without
-  `dev.istmo.app`, a manifest that ignores `${istmoLabel}` /
+  `io.github.sergioribera.istmo`, a manifest that ignores `${istmoLabel}` /
   `${istmoIcon}`, a `project.yml` without the fragment, an `Info.plist`
   that hardcodes the version. A malformed or misspelled `istmo.toml` key
   fails the build.

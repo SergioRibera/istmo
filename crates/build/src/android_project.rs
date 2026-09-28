@@ -1,5 +1,5 @@
 //! `android/.istmo/` — what an app's `build.rs` hands to the
-//! `dev.istmo.app` Gradle plugin.
+//! `io.github.sergioribera.istmo` Gradle plugin.
 //!
 //! [`ANDROID_METADATA_FILE`] lists every linked plugin (its
 //! `native/android/` sources, manifest, resources and minimum API

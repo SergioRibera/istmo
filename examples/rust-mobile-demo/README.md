@@ -25,7 +25,7 @@ examples/rust-mobile-demo/
 └── android/
     ├── build.gradle.kts / settings.gradle.kts / gradle.properties
     └── app/
-        ├── build.gradle.kts        — `dev.istmo.app` (cargo build, plugins, `[app]`) + native deps
+        ├── build.gradle.kts        — `io.github.sergioribera.istmo` (cargo build, plugins, `[app]`) + native deps
         └── src/main/
             ├── AndroidManifest.xml — NativeActivity subclass + POST_NOTIFICATIONS
             └── java/dev/istmo/

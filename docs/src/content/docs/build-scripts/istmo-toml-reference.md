@@ -157,7 +157,7 @@ Every field is optional. Defaults in comments:
 
 ```toml
 [app]
-# Identity — applied by the `dev.istmo.app` Gradle plugin and the
+# Identity — applied by the `io.github.sergioribera.istmo` Gradle plugin and the
 # generated `ios/.istmo/Istmo.xcconfig` (see Native projects).
 id      = "com.myapp"            # applicationId + PRODUCT_BUNDLE_IDENTIFIER (default: left to the native projects)
 name    = "My App"               # launcher label / CFBundleDisplayName (default: crate name)
@@ -271,7 +271,7 @@ own `[min_versions]` when present; otherwise it is detected:
 | macOS | `$MACOSX_DEPLOYMENT_TARGET` |
 | Windows | only the app's `[min_versions]` |
 
-The platform tools repeat the check on their own: the `dev.istmo.app`
+The platform tools repeat the check on their own: the `io.github.sergioribera.istmo`
 Gradle plugin compares `android` against each variant's resolved `minSdk`, and
 the generated `istmo-plugins.yml` adds an Xcode pre-build script that
 compares `ios` against `IPHONEOS_DEPLOYMENT_TARGET`.
@@ -284,8 +284,8 @@ them as files next to their native sources; nothing goes in
 
 | File | Merged into | By |
 |---|---|---|
-| `native/android/AndroidManifest.xml` | every variant's manifest | `dev.istmo.app` Gradle plugin |
-| `native/android/res/` | app resources | `dev.istmo.app` Gradle plugin |
+| `native/android/AndroidManifest.xml` | every variant's manifest | `io.github.sergioribera.istmo` Gradle plugin |
+| `native/android/res/` | app resources | `io.github.sergioribera.istmo` Gradle plugin |
 | `native/ios/Info.plist.fragment` | app `Info.plist` | `istmo-build` |
 | `native/ios/App.entitlements.fragment` | app `.entitlements` | `istmo-build` |
 

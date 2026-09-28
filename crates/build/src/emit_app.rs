@@ -269,7 +269,7 @@ pub fn emit_app_with(opts: AppOpts) {
             }
             None => {}
         }
-        // Set by the `dev.istmo.app` Gradle plugin to force a rewrite of
+        // Set by the `io.github.sergioribera.istmo` Gradle plugin to force a rewrite of
         // `android/.istmo/istmo.json` when it bootstraps the metadata.
         println!("cargo:rerun-if-env-changed=ISTMO_METADATA_REFRESH");
         if std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "android") {
@@ -356,7 +356,7 @@ fn resolve_app_metadata(
     AppMetadata::resolve(&config.identity, &min_versions, krate)
 }
 
-/// Write `android/.istmo/` for the `dev.istmo.app` Gradle plugin.
+/// Write `android/.istmo/` for the `io.github.sergioribera.istmo` Gradle plugin.
 fn sync_android_project(
     android_root: &Path,
     app: &AppMetadata,

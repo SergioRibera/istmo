@@ -12,7 +12,7 @@ mantienen sincronizados:
 | Pieza | Corre | Hace |
 | --- | --- | --- |
 | `build.rs` → `istmo_build::emit()` | en cada `cargo build` / `cargo check` | codegen, metadata de plugins, identidad de la app, avisos del doctor |
-| Plugin de Gradle `dev.istmo.app` | en cada build de Gradle | compila el crate Rust, linkea plugins, aplica `[app]` |
+| Plugin de Gradle `io.github.sergioribera.istmo` | en cada build de Gradle | compila el crate Rust, linkea plugins, aplica `[app]` |
 | `istmo-plugins.yml` + `ios/.istmo/build-rust.sh` | en cada build de Xcode | compila el crate Rust, linkea plugins, aplica `[app]` |
 
 `istmo.toml` es la única fuente de verdad. Los manifests nativos
@@ -47,7 +47,7 @@ Aplicá el plugin al módulo de la app:
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("dev.istmo.app")
+    id("io.github.sergioribera.istmo")
 }
 
 android {
@@ -73,7 +73,7 @@ y referenciá los placeholders desde el manifest:
 </application>
 ```
 
-Con eso, `dev.istmo.app`:
+Con eso, `io.github.sergioribera.istmo`:
 
 - **compila el crate** con `cargo build --target <triple> --profile <p>`
   para cada ABI de `abiFilters` (default `arm64-v8a` + `x86_64`) y cada
@@ -162,7 +162,7 @@ Los errores de setup se reportan donde ya estás mirando, con el arreglo
 explicado:
 
 - **`cargo build`**: `build.rs` imprime avisos `istmo doctor:`: falta el
-  crate type `cdylib` / `staticlib`, `android/app` sin `dev.istmo.app`,
+  crate type `cdylib` / `staticlib`, `android/app` sin `io.github.sergioribera.istmo`,
   un manifest que ignora `${istmoLabel}` / `${istmoIcon}`, un
   `project.yml` sin el fragmento, un `Info.plist` con la versión
   hardcodeada. Una clave de `istmo.toml` mal escrita o con el tipo

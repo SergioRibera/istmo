@@ -4,7 +4,7 @@ pluginManagement {
         mavenCentral()
         gradlePluginPortal()
     }
-    // `dev.istmo.app` from the checked-out repo — no maven publish needed
+    // `io.github.sergioribera.istmo` from the checked-out repo — no maven publish needed
     // for local demos.
     includeBuild("../../../runtime/gradle-plugin")
 }
@@ -14,15 +14,6 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven {
-            url = uri("https://maven.pkg.github.com/SergioRibera/istmo")
-            credentials {
-                username = System.getenv("GITHUB_ACTOR")
-                    ?: providers.gradleProperty("gpr.user").orNull
-                password = System.getenv("GITHUB_TOKEN")
-                    ?: providers.gradleProperty("gpr.key").orNull
-            }
-        }
     }
 }
 
@@ -31,7 +22,7 @@ include(":app")
 
 includeBuild("../../../runtime/android") {
     dependencySubstitution {
-        substitute(module("dev.istmo:istmo-runtime"))
+        substitute(module("io.github.sergioribera:istmo-runtime"))
             .using(project(":"))
     }
 }

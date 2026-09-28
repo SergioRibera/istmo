@@ -32,7 +32,7 @@ java {
 gradlePlugin {
     plugins {
         create("istmoApp") {
-            id = "dev.istmo.app"
+            id = "io.github.sergioribera.istmo"
             implementationClass = "dev.istmo.gradle.IstmoAppPlugin"
             displayName = "istmo app"
             description =

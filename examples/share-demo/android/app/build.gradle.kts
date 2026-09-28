@@ -4,7 +4,7 @@ plugins {
     // Builds the Rust crate for every ABI and build type, links the istmo
     // plugins it depends on and applies istmo.toml `[app]` (id, version,
     // minSdk, label, icon).
-    id("dev.istmo.app")
+    id("io.github.sergioribera.istmo")
 }
 
 android {
@@ -53,9 +53,9 @@ android {
 }
 
 dependencies {
-    implementation("dev.istmo:istmo-runtime:0.1.0")
+    implementation("io.github.sergioribera:istmo-runtime:0.1.0")
     // Plugin dependencies (`androidx.core` for istmo-share's FileProvider
-    // and direct share) come from the plugins' istmo.toml via dev.istmo.app.
+    // and direct share) come from the plugins' istmo.toml via io.github.sergioribera.istmo.
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     // ShareBackendImpl registers an ActivityResultLauncher, so the host

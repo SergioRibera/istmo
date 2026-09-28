@@ -4,7 +4,7 @@
 //! It covers what the build script can see — the crate, its
 //! `istmo.toml` and the native project files. Toolchain checks (cargo on
 //! `PATH`, installed Rust targets, the Android NDK) live where the build
-//! is driven from: the `dev.istmo.app` Gradle plugin (`istmoDoctor`
+//! is driven from: the `io.github.sergioribera.istmo` Gradle plugin (`istmoDoctor`
 //! task) and the generated Xcode `build-rust.sh`.
 
 use std::fs;
@@ -78,20 +78,24 @@ impl<'a> Doctor<'a> {
         let Some(gradle) = gradle else {
             return;
         };
-        if !gradle.contains("dev.istmo.app") {
+        if !gradle.contains("io.github.sergioribera.istmo") {
             let message = if gradle.contains("dev.istmo.plugin-loader") {
                 "android/app applies `dev.istmo.plugin-loader`, which was removed; replace it \
-                 with `id(\"dev.istmo.app\")` and drop the hand-written cargo tasks, which the \
-                 new plugin replaces"
+                 with `id(\"io.github.sergioribera.istmo\")` and drop the hand-written cargo \
+                 tasks, which the new plugin replaces"
+            } else if gradle.contains("dev.istmo.app") {
+                "android/app applies `dev.istmo.app`, which was renamed to \
+                 `io.github.sergioribera.istmo` when the runtime moved to Maven Central; \
+                 update the `plugins {}` block"
             } else {
                 "android/app does not apply the istmo Gradle plugin; add \
-                 `id(\"dev.istmo.app\")` to its `plugins {}` block so the Rust library, plugin \
-                 sources, manifests and dependencies are wired in"
+                 `id(\"io.github.sergioribera.istmo\")` to its `plugins {}` block so the Rust \
+                 library, plugin sources, manifests and dependencies are wired in"
             };
             findings.push(Finding {
                 message: message.to_owned(),
             });
-            // The `${istmo*}` manifest placeholders only exist with `dev.istmo.app`.
+            // The `${istmo*}` manifest placeholders only exist with the istmo plugin.
             return;
         }
         let Ok(manifest) = fs::read_to_string(android.join("app/src/main/AndroidManifest.xml"))
@@ -217,7 +221,7 @@ mod tests {
         let text: Vec<&str> = findings.iter().map(|f| f.message.as_str()).collect();
         assert_eq!(findings.len(), 2, "{text:#?}");
         assert!(text[0].contains("cdylib"));
-        assert!(text[1].contains("id(\"dev.istmo.app\")"));
+        assert!(text[1].contains("id(\"io.github.sergioribera.istmo\")"));
     }
 
     #[test]
@@ -238,7 +242,7 @@ mod tests {
         let root = temp_dir("android-manifest");
         write(
             &root.join("app/build.gradle.kts"),
-            "plugins { id(\"dev.istmo.app\") }",
+            "plugins { id(\"io.github.sergioribera.istmo\") }",
         );
         write(
             &root.join("app/src/main/AndroidManifest.xml"),
@@ -257,7 +261,7 @@ mod tests {
         let root = temp_dir("android-clean");
         write(
             &root.join("app/build.gradle.kts"),
-            "plugins { id(\"dev.istmo.app\") }",
+            "plugins { id(\"io.github.sergioribera.istmo\") }",
         );
         write(
             &root.join("app/src/main/AndroidManifest.xml"),

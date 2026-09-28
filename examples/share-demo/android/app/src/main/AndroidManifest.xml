@@ -3,7 +3,7 @@
 
     <!-- istmo.share's own manifest (FileProvider, chooser callback,
          ShareReceiverActivity) is merged in by the istmo Gradle plugin
-         (`dev.istmo.app`); this file only opts in to what the app wants. -->
+         (`io.github.sergioribera.istmo`); this file only opts in to what the app wants. -->
     <application
         android:allowBackup="false"
         android:label="${istmoLabel}"

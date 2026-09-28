@@ -1,5 +1,5 @@
 [app]
-# App identity: applied to Gradle by `dev.istmo.app` and to Xcode through
+# App identity: applied to Gradle by `io.github.sergioribera.istmo` and to Xcode through
 # the generated `ios/.istmo/Istmo.xcconfig`. The version comes from
 # Cargo.toml. `id` is left out on purpose: the Google Sign-In clients are
 # registered for different Android / iOS ids, which stay in the native

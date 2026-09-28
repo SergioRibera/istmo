@@ -4,7 +4,7 @@
 //! - `Istmo.xcconfig` carries the app identity from `[app]` (bundle id,
 //!   version, build number, display name, deployment target, app icon)
 //!   plus the linker settings for the Rust static library. It is the
-//!   Xcode twin of what the `dev.istmo.app` Gradle plugin applies on
+//!   Xcode twin of what the `io.github.sergioribera.istmo` Gradle plugin applies on
 //!   Android, and plays the role of Flutter's `Generated.xcconfig`.
 //! - `build-rust.sh` is the pre-build phase that runs cargo for every
 //!   architecture Xcode builds and stages `lib<crate>.a`.

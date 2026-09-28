@@ -4,7 +4,7 @@ plugins {
     // Builds the Rust crate for every ABI and build type, links the istmo
     // plugins it depends on and applies istmo.toml `[app]` (id, version,
     // minSdk, label, icon).
-    id("dev.istmo.app")
+    id("io.github.sergioribera.istmo")
 }
 
 android {
@@ -53,7 +53,7 @@ android {
 }
 
 dependencies {
-    implementation("dev.istmo:istmo-runtime:0.1.0")
+    implementation("io.github.sergioribera:istmo-runtime:0.1.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

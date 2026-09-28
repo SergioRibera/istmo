@@ -7,7 +7,7 @@
 //!   `[[app.plugin]]`, …).
 //! - **Identity** — the app id, display name, version, build number and
 //!   launcher icon. `istmo.toml` is the single source of truth for them:
-//!   the Gradle plugin (`dev.istmo.app`) applies them to the Android
+//!   the Gradle plugin (`io.github.sergioribera.istmo`) applies them to the Android
 //!   project and the generated `ios/.istmo/Istmo.xcconfig` to the Xcode
 //!   project, so neither `build.gradle.kts` nor `project.yml` repeat them.
 //!

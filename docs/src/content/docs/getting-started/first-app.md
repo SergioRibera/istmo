@@ -93,7 +93,7 @@ mechanism.
 ## One source of truth
 
 The app id, name, version, build number, icon and minimum OS versions
-live in `istmo.toml`; the `dev.istmo.app` Gradle plugin and the
+live in `istmo.toml`; the `io.github.sergioribera.istmo` Gradle plugin and the
 generated Xcode settings apply them, and the same Gradle plugin and Xcode
 pre-build phase run cargo for you. If something is missing, `cargo
 build` prints `istmo doctor:` warnings and `./gradlew istmoDoctor`

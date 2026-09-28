@@ -2,11 +2,12 @@ name: publish-runtime
 
 # Publishes two Kotlin artefacts to Maven Central (Sonatype Central
 # Portal) as part of every release:
-#   * `dev.istmo:istmo-runtime:<version>`        — the AAR + sources +
-#     Javadoc JARs
-#   * `dev.istmo:istmo-gradle-plugin:<version>`  — the `dev.istmo.app`
-#     Gradle plugin: builds the app's Rust crate with cargo, links every
-#     istmo plugin it depends on and applies istmo.toml `[app]`.
+#   * `io.github.sergioribera:istmo-runtime:<version>`        — the AAR
+#     + sources + Javadoc JARs
+#   * `io.github.sergioribera:istmo-gradle-plugin:<version>`  — the
+#     `io.github.sergioribera.istmo` Gradle plugin: builds the app's
+#     Rust crate with cargo, links every istmo plugin it depends on and
+#     applies istmo.toml `[app]`.
 #
 # * The **primary trigger** is a pushed `v<SemVer>` tag — that is how
 #   `cargo-release` cuts a release. The workflow reads the SemVer from
@@ -36,8 +37,10 @@ name: publish-runtime
 #     `gpg --armor --export-secret-keys <keyid>`.
 #   * `MAVEN_SIGNING_PASSWORD`  — passphrase for the key.
 #
-# The `dev.istmo` namespace must be verified on Central Portal before
-# the first successful publish; the workflow fails with a 403 otherwise.
+# The `io.github.sergioribera` namespace must be verified on Central
+# Portal before the first successful publish (verified via GitHub push,
+# no DNS TXT record needed for `io.github.<user>` namespaces); the
+# workflow fails with a 403 otherwise.
 
 on:
   push:
@@ -148,8 +151,8 @@ jobs:
             if [ "$DRY_RUN" = "true" ]; then
               echo "**Dry run** — Gradle assembled, nothing published."
             else
-              echo "* Kotlin runtime: [\`dev.istmo:istmo-runtime:$VERSION\`](https://central.sonatype.com/artifact/dev.istmo/istmo-runtime/$VERSION)"
-              echo "* Gradle plugin \`dev.istmo.app\`: [\`dev.istmo:istmo-gradle-plugin:$VERSION\`](https://central.sonatype.com/artifact/dev.istmo/istmo-gradle-plugin/$VERSION)"
+              echo "* Kotlin runtime: [\`io.github.sergioribera:istmo-runtime:$VERSION\`](https://central.sonatype.com/artifact/io.github.sergioribera/istmo-runtime/$VERSION)"
+              echo "* Gradle plugin \`io.github.sergioribera.istmo\`: [\`io.github.sergioribera:istmo-gradle-plugin:$VERSION\`](https://central.sonatype.com/artifact/io.github.sergioribera/istmo-gradle-plugin/$VERSION)"
               echo "* Swift: \`.package(url: \"https://github.com/SergioRibera/istmo.git\", from: \"$VERSION\")\` (resolved from the git tag directly)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
