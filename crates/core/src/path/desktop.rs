@@ -133,11 +133,55 @@ fn home_dir() -> Option<PathBuf> {
     {
         env_path("USERPROFILE")
             .or_else(|| env_path("HOMEDRIVE").zip(env_path("HOMEPATH")).map(join_pair))
+            .or_else(|| env_path("USERNAME").map(|user| PathBuf::from("C:\\Users").join(user)))
     }
     #[cfg(not(target_os = "windows"))]
     {
-        env_path("HOME")
+        env_path("HOME").or_else(home_from_subprocess)
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn home_from_subprocess() -> Option<PathBuf> {
+    if let Some(user) = std::env::var_os("USER").filter(|v| !v.is_empty()) {
+        return Some(user_home_root().join(user));
+    }
+    if let Some(root) = home_from_id() {
+        return Some(root);
+    }
+    home_from_whoami()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn user_home_root() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from("/Users")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        PathBuf::from("/home")
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn home_from_id() -> Option<PathBuf> {
+    let out = std::process::Command::new("id").arg("-u").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let uid: i32 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+    (uid == 0).then(|| PathBuf::from("/root"))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn home_from_whoami() -> Option<PathBuf> {
+    let out = std::process::Command::new("whoami").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let user = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (!user.is_empty()).then(|| user_home_root().join(user))
 }
 
 #[cfg(target_os = "windows")]

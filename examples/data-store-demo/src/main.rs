@@ -9,12 +9,17 @@ fn main() -> Result<(), eframe::Error> {
     use std::sync::{Arc, Mutex};
 
     use data_store_demo::app::{self, DemoApp, SharedState};
-    use data_store_demo::emulator;
     use istmo_core::{Runtime, RuntimeInit};
-    use istmo_data_store::{DataStoreClient, DataStoreConfig};
+    use istmo_data_store::{
+        DataStoreClient, DataStoreConfig, DataStoreHost, DesktopDataStoreFactory,
+    };
 
     let RuntimeInit { runtime, outbound } = Runtime::mock();
-    emulator::spawn(Arc::clone(&runtime), outbound);
+    runtime.register_host(DataStoreHost::new(DesktopDataStoreFactory));
+    // Local hosts short-circuit and never enqueue outbound envelopes,
+    // but keep the receiver alive so any accidental send does not hit
+    // `SendError` on a closed channel.
+    std::thread::spawn(move || while outbound.recv().is_ok() {});
 
     let config = DataStoreConfig::new(app::namespace());
     let client = pollster::block_on(DataStoreClient::from_runtime_with(&runtime, config))

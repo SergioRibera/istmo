@@ -1,14 +1,5 @@
 pub mod app;
 
-#[cfg(not(any(
-    target_os = "android",
-    target_os = "ios",
-    target_os = "tvos",
-    target_os = "watchos",
-    target_os = "visionos",
-)))]
-pub mod emulator;
-
 use istmo_data_store::DataStoreClient;
 
 istmo::runtime!(

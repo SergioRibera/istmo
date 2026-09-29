@@ -15,6 +15,12 @@
 #[cfg(feature = "codegen")]
 pub mod codegen;
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub mod desktop;
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use desktop::{DesktopDataStore, DesktopDataStoreFactory};
+
 use istmo_macros::{message, plugin};
 
 /// Wire identifier for the data-store plugin.
