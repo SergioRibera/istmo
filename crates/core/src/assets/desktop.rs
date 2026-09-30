@@ -35,11 +35,38 @@ use super::{AssetBackend, AssetReader, AssetScope};
 const RUNTIME_ENV: &str = "ISTMO_ASSETS_DIR";
 
 /// The build-time env var — `option_env!` so unset means "not baked".
+/// Captured in `istmo-core`'s compile environment; the consuming app
+/// overrides it via [`set_app_assets`] so `emit_app`'s
+/// `cargo::rustc-env=ISTMO_APP_ASSETS_DIR=…` (which only applies to the
+/// app crate) is actually observed.
 const BUILD_TIME_DIR: Option<&str> = option_env!("ISTMO_APP_ASSETS_DIR");
 
 /// The crate root baked in at compile time — used as the last-resort
-/// fallback for `cargo run` dev flows.
+/// fallback for `cargo run` dev flows. Same caveat as
+/// [`BUILD_TIME_DIR`]: this resolves to `istmo-core`'s manifest dir
+/// unless the app crate calls [`set_app_assets`] (which
+/// `istmo::runtime!` does automatically).
 const CRATE_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
+
+struct AppAssetsOverride {
+    build_time_dir: Option<&'static str>,
+    manifest_dir: &'static str,
+}
+
+static APP_ASSETS_OVERRIDE: OnceLock<AppAssetsOverride> = OnceLock::new();
+
+/// Override the build-time asset-directory strings used by
+/// [`resolve_root`].
+///
+/// Called by `istmo::runtime!`-generated code so `option_env!` /
+/// `env!` are evaluated in the app crate's compile environment
+/// instead of `istmo-core`'s. Idempotent — the first call wins.
+pub fn set_app_assets(build_time_dir: Option<&'static str>, manifest_dir: &'static str) {
+    let _ = APP_ASSETS_OVERRIDE.set(AppAssetsOverride {
+        build_time_dir,
+        manifest_dir,
+    });
+}
 
 /// Filesystem-rooted [`AssetBackend`] implementation.
 ///
@@ -115,12 +142,17 @@ fn annotate(err: io::Error, path: &Path) -> io::Error {
 }
 
 fn resolve_root() -> PathBuf {
+    let (build_time, manifest) = APP_ASSETS_OVERRIDE
+        .get()
+        .map(|o| (o.build_time_dir, o.manifest_dir))
+        .unwrap_or((BUILD_TIME_DIR, CRATE_MANIFEST_DIR));
+
     if let Some(raw) = std::env::var_os(RUNTIME_ENV)
         && !raw.is_empty()
     {
         return PathBuf::from(raw);
     }
-    if let Some(baked) = BUILD_TIME_DIR
+    if let Some(baked) = build_time
         && !baked.is_empty()
     {
         return PathBuf::from(baked);
@@ -133,7 +165,7 @@ fn resolve_root() -> PathBuf {
             return candidate;
         }
     }
-    PathBuf::from(CRATE_MANIFEST_DIR).join("assets")
+    PathBuf::from(manifest).join("assets")
 }
 
 #[cfg(test)]

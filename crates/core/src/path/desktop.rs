@@ -11,13 +11,40 @@
 //! [File System Basics]: https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/FileSystemOverview/FileSystemOverview.html
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use super::PlatformPaths;
 
 /// The bundle id baked into the binary at build time by
-/// `emit_app` — falls back to `CARGO_PKG_NAME` when unset.
+/// `emit_app` — falls back to `CARGO_PKG_NAME` when unset. Values
+/// captured here reflect *`istmo-core`'s* compile environment;
+/// the consuming app overrides them via [`set_app_info`] (called
+/// automatically from the `istmo::runtime!` macro so the constants
+/// expand at the app crate site).
 const BAKED_BUNDLE_ID: Option<&str> = option_env!("ISTMO_APP_BUNDLE_ID");
 const CARGO_CRATE_NAME: &str = env!("CARGO_PKG_NAME");
+
+struct AppInfoOverride {
+    bundle_id: Option<&'static str>,
+    crate_name: &'static str,
+}
+
+static APP_INFO_OVERRIDE: OnceLock<AppInfoOverride> = OnceLock::new();
+
+/// Override the app-identity strings used by [`default_paths`].
+///
+/// The `istmo::runtime!` macro forwards `option_env!("ISTMO_APP_BUNDLE_ID")`
+/// and `env!("CARGO_PKG_NAME")` from the **app crate**'s compile
+/// environment — otherwise `default_paths` would resolve the bundle id
+/// out of `istmo-core`'s own compile and end up under
+/// `<data_home>/istmo-core/`. Idempotent — the first call wins so tests
+/// that install a stub before the macro fires stay in control.
+pub fn set_app_info(bundle_id: Option<&'static str>, crate_name: &'static str) {
+    let _ = APP_INFO_OVERRIDE.set(AppInfoOverride {
+        bundle_id,
+        crate_name,
+    });
+}
 
 /// Build the default [`PlatformPaths`] for the running desktop OS.
 ///
@@ -25,7 +52,11 @@ const CARGO_CRATE_NAME: &str = env!("CARGO_PKG_NAME");
 /// to it on first lookup.
 #[must_use]
 pub fn default_paths() -> PlatformPaths {
-    let id = BAKED_BUNDLE_ID.unwrap_or(CARGO_CRATE_NAME);
+    let (baked, cargo) = APP_INFO_OVERRIDE
+        .get()
+        .map(|o| (o.bundle_id, o.crate_name))
+        .unwrap_or((BAKED_BUNDLE_ID, CARGO_CRATE_NAME));
+    let id = baked.unwrap_or(cargo);
     resolve_for_os(id)
 }
 

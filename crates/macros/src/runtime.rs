@@ -81,11 +81,64 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
         #[allow(unused_imports)]
         pub use ::istmo::ios::entrypoint::*;
 
+        // Forward the app crate's compile-time identity into
+        // istmo-core. `env!` / `option_env!` expand at *this* crate
+        // (where `emit_app` set `ISTMO_APP_BUNDLE_ID` /
+        // `ISTMO_APP_ASSETS_DIR`) instead of istmo-core's — otherwise
+        // desktop paths resolve under `istmo-core/` and asset lookup
+        // falls back to istmo-core's own manifest dir.
+        //
+        // The setters run twice: once from a static initializer so
+        // desktop binaries that call `Runtime::init` directly (never
+        // touching `__istmo_configure_runtime`) still get the correct
+        // paths, and once from `__istmo_configure_runtime` so mobile
+        // bootstraps that skip the static-initializer path on some
+        // odd linker configuration still win.
+        // `OnceLock` de-duplicates transparently.
+        const _: () = {
+            extern "C" fn __istmo_install_app_info() {
+                ::istmo::__private::set_app_info(
+                    ::core::option_env!("ISTMO_APP_BUNDLE_ID"),
+                    ::core::env!("CARGO_PKG_NAME"),
+                );
+                ::istmo::__private::set_app_assets(
+                    ::core::option_env!("ISTMO_APP_ASSETS_DIR"),
+                    ::core::env!("CARGO_MANIFEST_DIR"),
+                );
+            }
+
+            #[used]
+            #[cfg_attr(
+                any(target_os = "linux", target_os = "android"),
+                unsafe(link_section = ".init_array")
+            )]
+            #[cfg_attr(
+                any(
+                    target_os = "macos",
+                    target_os = "ios",
+                    target_os = "tvos",
+                    target_os = "watchos",
+                    target_os = "visionos",
+                ),
+                unsafe(link_section = "__DATA,__mod_init_func")
+            )]
+            #[cfg_attr(target_os = "windows", unsafe(link_section = ".CRT$XCU"))]
+            static __ISTMO_INIT_APP_INFO: extern "C" fn() = __istmo_install_app_info;
+        };
+
         #[doc(hidden)]
         #[unsafe(no_mangle)]
         pub fn __istmo_configure_runtime(
             init: ::istmo::RuntimeInit,
         ) -> ::istmo::RuntimeInit {
+            ::istmo::__private::set_app_info(
+                ::core::option_env!("ISTMO_APP_BUNDLE_ID"),
+                ::core::env!("CARGO_PKG_NAME"),
+            );
+            ::istmo::__private::set_app_assets(
+                ::core::option_env!("ISTMO_APP_ASSETS_DIR"),
+                ::core::env!("CARGO_MANIFEST_DIR"),
+            );
             init
                 #(#expects_calls)*
                 #(#remote_calls)*

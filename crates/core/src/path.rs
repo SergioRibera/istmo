@@ -31,6 +31,8 @@ use std::sync::OnceLock;
 mod desktop;
 
 pub use desktop::default_paths;
+#[doc(hidden)]
+pub use desktop::set_app_info;
 
 /// The full set of well-known directories a platform backend hands to
 /// the runtime.

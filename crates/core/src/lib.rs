@@ -71,4 +71,12 @@ pub use crate::typed_stream::{StreamItem, TypedStream};
 pub mod __private {
     pub use pollster::block_on;
     pub use tracing;
+
+    /// Setter for the app-identity strings used by desktop path
+    /// resolution — called by `istmo::runtime!`-generated code so
+    /// `env!("CARGO_PKG_NAME")` / `option_env!("ISTMO_APP_BUNDLE_ID")`
+    /// resolve against the app crate's compile environment. See
+    /// [`crate::path::desktop::set_app_info`].
+    pub use crate::assets::set_app_assets;
+    pub use crate::path::set_app_info;
 }

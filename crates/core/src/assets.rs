@@ -311,6 +311,8 @@ fn normalise_key(path: &Path) -> io::Result<String> {
 
 #[doc(hidden)]
 pub use desktop::DesktopAssetBackend;
+#[doc(hidden)]
+pub use desktop::set_app_assets;
 
 #[cfg(test)]
 mod tests {
