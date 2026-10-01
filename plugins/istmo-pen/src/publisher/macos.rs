@@ -66,6 +66,34 @@ unsafe impl objc2::Encode for NsPoint {
         objc2::Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct NsSize {
+    width: f64,
+    height: f64,
+}
+
+// SAFETY: `NsSize` matches `CGSize` — two `CGFloat`s, `f64` on 64-bit Apple.
+unsafe impl objc2::Encode for NsSize {
+    const ENCODING: objc2::Encoding =
+        objc2::Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct NsRect {
+    origin: NsPoint,
+    size: NsSize,
+}
+
+// SAFETY: `NsRect` matches `CGRect`: `{origin: CGPoint, size: CGSize}`.
+unsafe impl objc2::Encode for NsRect {
+    const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+        "CGRect",
+        &[NsPoint::ENCODING, NsSize::ENCODING],
+    );
+}
+
 /// Book-keeping returned from [`attach_view`] and stashed on the
 /// [`WindowState`](super::WindowState) so [`detach_view`] can drop the
 /// entry when the app unregisters the window.
@@ -258,6 +286,29 @@ fn is_tablet_backed(event: *mut AnyObject) -> bool {
     subtype == NS_EVENT_SUBTYPE_TABLET_POINT
 }
 
+/// Convert NSWindow-space `y` (origin bottom-left) to content-view-space
+/// `y` (origin top-left) by subtracting from the content view's frame
+/// height. Falls back to the original `y` if the window / contentView
+/// chain cannot be resolved — nil-window events were already filtered
+/// at `dispatch_event`, so this fallback should not fire in practice,
+/// but keeping it defensive avoids a crash from a half-torn-down event.
+fn unsafe_flip_y_in_window(event: *mut AnyObject, y: f64) -> f64 {
+    // SAFETY: NSEvent / NSWindow / NSView message sends against live
+    // Objective-C receivers.
+    unsafe {
+        let window: *mut AnyObject = msg_send![event, window];
+        if window.is_null() {
+            return y;
+        }
+        let content_view: *mut AnyObject = msg_send![window, contentView];
+        if content_view.is_null() {
+            return y;
+        }
+        let frame: NsRect = msg_send![content_view, frame];
+        frame.size.height - y
+    }
+}
+
 fn handle_mouse_from_tablet(
     event: *mut AnyObject,
     ns_type: u64,
@@ -318,6 +369,15 @@ fn decode_sample(event: *mut AnyObject, clock: &Arc<AttachClock>) -> PenSample {
     // methods are documented in AppKit.
     unsafe {
         let location: NsPoint = msg_send![event, locationInWindow];
+        // Flip y so the published sample uses the top-left origin every
+        // other platform (and consumer code) assumes.
+        // `locationInWindow` is in NSWindow base-space (origin
+        // bottom-left). Query the window's content view frame height to
+        // perform the flip; this assumes the content view fills the
+        // window (true for freya today — windowed OS chrome does not sit
+        // between the content view and the frame edge in the apps that
+        // host this plugin).
+        let flipped_y = unsafe_flip_y_in_window(event, location.y);
         let pressure: f32 = msg_send![event, pressure];
         let tilt: NsPoint = msg_send![event, tilt];
         let rotation: f32 = msg_send![event, rotation];
@@ -356,7 +416,7 @@ fn decode_sample(event: *mut AnyObject, clock: &Arc<AttachClock>) -> PenSample {
 
         PenSample {
             x: location.x as f32,
-            y: location.y as f32,
+            y: flipped_y as f32,
             pressure,
             tilt_x,
             tilt_y,
