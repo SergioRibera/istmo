@@ -151,7 +151,21 @@ impl PenPublisher {
         allow(unused_variables, clippy::unnecessary_wraps)
     )]
     fn attach(&self, id: u64, native: NativeWindow) -> Result<(), PenError> {
-        let state = Arc::new(WindowState::new());
+        // Reuse an existing state entry when the id was pre-registered
+        // (e.g. via `register_window_id` so a `PenClient` could claim
+        // its receivers before the real window handle was available).
+        // Replacing the state here would strand the client's taken
+        // receivers against senders that are about to be dropped —
+        // which is exactly what caused Wayland samples to vanish
+        // silently when the symbolic registration happened pre-attach.
+        let state = {
+            let guard = match self.windows.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            guard.get(&id).map(Arc::clone)
+        };
+        let state = state.unwrap_or_else(|| Arc::new(WindowState::new()));
 
         #[cfg(target_os = "windows")]
         if let Some(hwnd) = native.hwnd() {

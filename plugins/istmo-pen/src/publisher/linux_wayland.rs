@@ -278,8 +278,11 @@ impl Dispatch<ZwpTabletSeatV2, ()> for PumpState {
         _qh: &QueueHandle<Self>,
     ) {
         if let zwp_tablet_seat_v2::Event::ToolAdded { id } = event {
-            let tool_id = (state.clock.tool_id_alloc.fetch_add(1, Ordering::Relaxed) & 0xFFFF_FFFF)
-                as u32;
+            let tool_id = (state
+                .clock
+                .tool_id_alloc
+                .fetch_add(1, Ordering::Relaxed)
+                & 0xFFFF_FFFF) as u32;
             state.tools.insert(id.id(), ToolState::new(tool_id));
         }
     }
@@ -307,11 +310,22 @@ impl Dispatch<ZwpTabletToolV2, ()> for PumpState {
     ) {
         use zwp_tablet_tool_v2::Event as E;
         let id = proxy.id();
+        // Lazily ensure a tool entry — the `tool_added` route via
+        // `event_created_child!` creates the child proxy but libwayland
+        // can race the parent-dispatch delivery past our bookkeeping;
+        // creating the row on first use closes the gap.
+        if !pump.tools.contains_key(&id) {
+            let tool_id = (pump
+                .clock
+                .tool_id_alloc
+                .fetch_add(1, Ordering::Relaxed)
+                & 0xFFFF_FFFF) as u32;
+            pump.tools.insert(id.clone(), ToolState::new(tool_id));
+        }
+        let tool = pump.tools.get_mut(&id).expect("just inserted");
         match event {
             E::Type { tool_type } => {
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    tool.kind = map_tool_type(tool_type);
-                }
+                tool.kind = map_tool_type(tool_type);
             }
             E::ProximityIn { surface: _, .. } => {
                 // Surface focus-matching is intentionally dropped: our
@@ -325,83 +339,67 @@ impl Dispatch<ZwpTabletToolV2, ()> for PumpState {
                 // publisher shape treating every `proximity_in` as
                 // ours is correct. Multi-window routing lands with the
                 // per-surface id handshake in a follow-up.
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    tool.in_proximity = true;
-                    tool.on_target_surface = true;
-                }
+                tool.in_proximity = true;
+                tool.on_target_surface = true;
             }
             E::ProximityOut => {
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    tool.in_proximity = false;
-                }
+                tool.in_proximity = false;
             }
             E::Down { .. } => {
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    tool.in_contact = true;
-                }
+                tool.in_contact = true;
             }
             E::Up => {
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    tool.in_contact = false;
-                }
+                tool.in_contact = false;
             }
             E::Motion { x, y } => {
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    tool.x = x as f32;
-                    tool.y = y as f32;
-                    tool.pending_axis = true;
-                }
+                tool.x = x as f32;
+                tool.y = y as f32;
+                tool.pending_axis = true;
             }
             E::Pressure { pressure } => {
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    tool.pressure = (pressure as f32) / 65535.0;
-                    tool.pending_axis = true;
-                }
+                tool.pressure = (pressure as f32) / 65535.0;
+                tool.pending_axis = true;
             }
             E::Distance { distance } => {
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    tool.distance = (distance as f32) / 65535.0;
-                    tool.pending_axis = true;
-                }
+                tool.distance = (distance as f32) / 65535.0;
+                tool.pending_axis = true;
             }
             E::Tilt { tilt_x, tilt_y } => {
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    tool.tilt_x = (tilt_x as f32).to_radians();
-                    tool.tilt_y = (tilt_y as f32).to_radians();
-                    tool.pending_axis = true;
-                }
+                tool.tilt_x = (tilt_x as f32).to_radians();
+                tool.tilt_y = (tilt_y as f32).to_radians();
+                tool.pending_axis = true;
             }
             E::Rotation { degrees } => {
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    tool.twist = (degrees as f32).to_radians();
-                    tool.pending_axis = true;
-                }
+                tool.twist = (degrees as f32).to_radians();
+                tool.pending_axis = true;
             }
             E::Button {
                 state: btn_state, ..
             } => {
-                if let Some(tool) = pump.tools.get_mut(&id) {
-                    // Barrel buttons collapse to bit 1 for now — the
-                    // XInput2 backend will do the same, and consumer
-                    // code treats the bitmap as opaque beyond "any
-                    // extra button is pressed".
-                    let bit = 1u32 << 1;
-                    let pressed = matches!(btn_state, WEnum::Value(ToolButtonState::Pressed));
-                    let next = if pressed {
-                        tool.buttons | bit
-                    } else {
-                        tool.buttons & !bit
-                    };
-                    if next != tool.buttons {
-                        tool.changed_buttons |= tool.buttons ^ next;
-                        tool.buttons = next;
-                    }
+                // Barrel buttons collapse to bit 1 for now — the
+                // XInput2 backend will do the same, and consumer
+                // code treats the bitmap as opaque beyond "any
+                // extra button is pressed".
+                let bit = 1u32 << 1;
+                let pressed = matches!(btn_state, WEnum::Value(ToolButtonState::Pressed));
+                let next = if pressed {
+                    tool.buttons | bit
+                } else {
+                    tool.buttons & !bit
+                };
+                if next != tool.buttons {
+                    tool.changed_buttons |= tool.buttons ^ next;
+                    tool.buttons = next;
                 }
             }
             E::Frame { .. } => {
+                // Drop the live `tool` borrow before `flush_frame`
+                // re-borrows `pump` to access state + clock senders.
+                let _ = tool;
                 flush_frame(pump, &id);
             }
             E::Removed => {
+                let _ = tool;
                 pump.tools.remove(&id);
                 proxy.destroy();
             }
