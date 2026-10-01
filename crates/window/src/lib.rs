@@ -30,7 +30,9 @@ use std::num::{NonZeroIsize, NonZeroU32, NonZeroUsize};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
-use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle};
+use raw_window_handle::{
+    HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
+};
 
 /// App-chosen identifier for a registered window.
 ///
@@ -62,22 +64,44 @@ pub enum NativeWindow {
     AppKit { ns_view: NonZeroUsize },
     /// iOS `UIView*`.
     UiKit { ui_view: NonZeroUsize },
-    /// Wayland `wl_surface*`.
-    Wayland { surface: NonZeroUsize },
-    /// X11 window id (Xlib).
-    Xlib { window: std::ffi::c_ulong },
-    /// X11 window id (XCB).
-    Xcb { window: NonZeroU32 },
+    /// Wayland `wl_surface*` paired with the compositor's `wl_display*`.
+    /// Linux pen / tablet backends need the display to open a secondary
+    /// protocol connection; keep both pointers side-by-side so
+    /// downstream code never has to recover one from the other.
+    Wayland {
+        surface: NonZeroUsize,
+        display: NonZeroUsize,
+    },
+    /// X11 window id paired with the Xlib `Display*` the app opened.
+    /// The display pointer is required — a window id alone is not
+    /// enough to send XInput2 selects against the server.
+    Xlib {
+        window: std::ffi::c_ulong,
+        display: NonZeroUsize,
+    },
+    /// X11 window id paired with the XCB `xcb_connection_t*`.
+    Xcb {
+        window: NonZeroU32,
+        connection: NonZeroUsize,
+    },
     /// Registered without a platform handle — the id exists so lookups
     /// succeed, but backends needing a real window cannot use it.
     Detached,
 }
 
 impl NativeWindow {
-    /// Resolve the platform window behind `window`.
-    pub fn from_window(window: &impl HasWindowHandle) -> Result<Self, WindowError> {
-        let handle = window.window_handle().map_err(WindowError::Handle)?;
-        Self::try_from(handle.as_raw())
+    /// Resolve the platform window behind `window`. The display handle
+    /// is required on Linux (Wayland surface alone is useless without
+    /// the matching `wl_display`; XInput2 selects need the Xlib
+    /// `Display*` or an XCB connection). Non-Linux variants ignore the
+    /// display payload.
+    pub fn from_window<W>(window: &W) -> Result<Self, WindowError>
+    where
+        W: HasWindowHandle + HasDisplayHandle,
+    {
+        let window_handle = window.window_handle().map_err(WindowError::Handle)?;
+        let display_handle = window.display_handle().map_err(WindowError::Handle)?;
+        Self::try_from((window_handle.as_raw(), display_handle.as_raw()))
     }
 
     /// The `HWND` on Windows.
@@ -108,21 +132,39 @@ impl NativeWindow {
     }
 }
 
-impl TryFrom<RawWindowHandle> for NativeWindow {
+impl TryFrom<(RawWindowHandle, RawDisplayHandle)> for NativeWindow {
     type Error = WindowError;
 
-    fn try_from(raw: RawWindowHandle) -> Result<Self, Self::Error> {
+    fn try_from(
+        (window, display): (RawWindowHandle, RawDisplayHandle),
+    ) -> Result<Self, Self::Error> {
         let addr = |ptr: NonNull<c_void>| NonZeroUsize::new(ptr.as_ptr() as usize);
-        let window = match raw {
-            RawWindowHandle::Win32(h) => Some(Self::Win32 { hwnd: h.hwnd }),
-            RawWindowHandle::AppKit(h) => addr(h.ns_view).map(|ns_view| Self::AppKit { ns_view }),
-            RawWindowHandle::UiKit(h) => addr(h.ui_view).map(|ui_view| Self::UiKit { ui_view }),
-            RawWindowHandle::Wayland(h) => addr(h.surface).map(|surface| Self::Wayland { surface }),
-            RawWindowHandle::Xlib(h) => Some(Self::Xlib { window: h.window }),
-            RawWindowHandle::Xcb(h) => Some(Self::Xcb { window: h.window }),
+        let addr_opt = |ptr: Option<NonNull<c_void>>| ptr.and_then(addr);
+        let resolved = match (window, display) {
+            (RawWindowHandle::Win32(w), _) => Some(Self::Win32 { hwnd: w.hwnd }),
+            (RawWindowHandle::AppKit(w), _) => addr(w.ns_view).map(|ns_view| Self::AppKit { ns_view }),
+            (RawWindowHandle::UiKit(w), _) => addr(w.ui_view).map(|ui_view| Self::UiKit { ui_view }),
+            (RawWindowHandle::Wayland(w), RawDisplayHandle::Wayland(d)) => {
+                match (addr(w.surface), addr(d.display)) {
+                    (Some(surface), Some(display)) => Some(Self::Wayland { surface, display }),
+                    _ => None,
+                }
+            }
+            (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => {
+                addr_opt(d.display).map(|display| Self::Xlib {
+                    window: w.window,
+                    display,
+                })
+            }
+            (RawWindowHandle::Xcb(w), RawDisplayHandle::Xcb(d)) => {
+                addr_opt(d.connection).map(|connection| Self::Xcb {
+                    window: w.window,
+                    connection,
+                })
+            }
             _ => None,
         };
-        window.ok_or(WindowError::UnsupportedHandle)
+        resolved.ok_or(WindowError::UnsupportedHandle)
     }
 }
 
@@ -199,12 +241,12 @@ impl WindowRegistry {
     }
 
     /// Register `window` under `id`, replacing any previous window with
-    /// the same id.
-    pub fn register(
-        &self,
-        id: WindowId,
-        window: &impl HasWindowHandle,
-    ) -> Result<NativeWindow, WindowError> {
+    /// the same id. Requires both window and display handle traits —
+    /// Linux pen backends read the display pointer; non-Linux ignore it.
+    pub fn register<W>(&self, id: WindowId, window: &W) -> Result<NativeWindow, WindowError>
+    where
+        W: HasWindowHandle + HasDisplayHandle,
+    {
         let native = NativeWindow::from_window(window)?;
         self.register_native(id, native)?;
         Ok(native)

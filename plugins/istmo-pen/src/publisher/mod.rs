@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use flume::{Receiver, Sender};
 use istmo_core::Runtime;
 use istmo_window::{NativeWindow, WindowId, WindowListener, WindowRegistry};
-use raw_window_handle::HasWindowHandle;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{PenError, PenEvent, PenHoverEvent};
 
@@ -109,7 +109,10 @@ impl PenPublisher {
     /// intercepts `WM_POINTER*` messages; on other desktop OSes it
     /// currently only records the mapping (backend lands in a later
     /// milestone). Fails only when the raw handle cannot be resolved.
-    pub fn register_window(&self, id: u64, window: impl HasWindowHandle) -> Result<(), PenError> {
+    pub fn register_window<W>(&self, id: u64, window: W) -> Result<(), PenError>
+    where
+        W: HasWindowHandle + HasDisplayHandle,
+    {
         let native =
             NativeWindow::from_window(&window).map_err(|err| PenError::Backend(err.to_string()))?;
         self.attach(id, native)
