@@ -31,6 +31,10 @@ mod macos;
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod linux_wayland;
+#[cfg(target_os = "linux")]
+mod linux_xinput2;
 
 /// Per-registered-window state kept by the publisher.
 ///
@@ -40,16 +44,26 @@ mod linux;
 /// their backends land.
 #[derive(Debug)]
 struct WindowState {
-    #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        allow(dead_code)
+    )]
     events_tx: Sender<PenEvent>,
     events_rx: Mutex<Option<Receiver<PenEvent>>>,
-    #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        allow(dead_code)
+    )]
     hover_tx: Sender<PenHoverEvent>,
     hover_rx: Mutex<Option<Receiver<PenHoverEvent>>>,
     #[cfg(target_os = "windows")]
     windows_attachment: Mutex<Option<windows::WindowAttachment>>,
     #[cfg(target_os = "macos")]
     macos_attachment: Mutex<Option<macos::WindowAttachment>>,
+    #[cfg(target_os = "linux")]
+    linux_wayland_attachment: Mutex<Option<linux_wayland::WaylandAttachment>>,
+    #[cfg(target_os = "linux")]
+    linux_xinput2_attachment: Mutex<Option<linux_xinput2::XInputAttachment>>,
 }
 
 impl WindowState {
@@ -65,6 +79,10 @@ impl WindowState {
             windows_attachment: Mutex::new(None),
             #[cfg(target_os = "macos")]
             macos_attachment: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            linux_wayland_attachment: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            linux_xinput2_attachment: Mutex::new(None),
         }
     }
 }
@@ -129,7 +147,7 @@ impl PenPublisher {
     }
 
     #[cfg_attr(
-        not(any(target_os = "windows", target_os = "macos")),
+        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
         allow(unused_variables, clippy::unnecessary_wraps)
     )]
     fn attach(&self, id: u64, native: NativeWindow) -> Result<(), PenError> {
@@ -151,6 +169,42 @@ impl PenPublisher {
             match state.macos_attachment.lock() {
                 Ok(mut guard) => *guard = Some(attachment),
                 Err(poisoned) => *poisoned.into_inner() = Some(attachment),
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            match native {
+                NativeWindow::Wayland { surface, display } => {
+                    let attachment =
+                        linux_wayland::attach_wayland(surface, display, Arc::clone(&state))
+                            .map_err(|err| PenError::Backend(err.to_string()))?;
+                    match state.linux_wayland_attachment.lock() {
+                        Ok(mut guard) => *guard = Some(attachment),
+                        Err(poisoned) => *poisoned.into_inner() = Some(attachment),
+                    }
+                }
+                NativeWindow::Xlib { window, display } => {
+                    let attachment =
+                        linux_xinput2::attach_xlib(window, display, Arc::clone(&state))
+                            .map_err(|err| PenError::Backend(err.to_string()))?;
+                    match state.linux_xinput2_attachment.lock() {
+                        Ok(mut guard) => *guard = Some(attachment),
+                        Err(poisoned) => *poisoned.into_inner() = Some(attachment),
+                    }
+                }
+                NativeWindow::Xcb { window, connection } => {
+                    let attachment =
+                        linux_xinput2::attach_xcb(window, connection, Arc::clone(&state))
+                            .map_err(|err| PenError::Backend(err.to_string()))?;
+                    match state.linux_xinput2_attachment.lock() {
+                        Ok(mut guard) => *guard = Some(attachment),
+                        Err(poisoned) => *poisoned.into_inner() = Some(attachment),
+                    }
+                }
+                // Non-Linux variants or `Detached` land here on Linux
+                // builds — the symbolic id still maps, backends simply
+                // never fire.
+                _ => {}
             }
         }
         let mut guard = match self.windows.lock() {
