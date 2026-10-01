@@ -36,7 +36,9 @@ use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContent
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_client::{delegate_noop, Connection, Dispatch, Proxy, QueueHandle, WEnum};
+use wayland_client::{
+    delegate_noop, event_created_child, Connection, Dispatch, Proxy, QueueHandle, WEnum,
+};
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_manager_v2::ZwpTabletManagerV2;
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_pad_v2::ZwpTabletPadV2;
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::{
@@ -281,6 +283,16 @@ impl Dispatch<ZwpTabletSeatV2, ()> for PumpState {
             state.tools.insert(id.id(), ToolState::new(tool_id));
         }
     }
+
+    // Opcodes of `zwp_tablet_seat_v2` events that carry a `new_id`:
+    //   0 → tablet_added  (zwp_tablet_v2)
+    //   1 → tool_added    (zwp_tablet_tool_v2)
+    //   2 → pad_added     (zwp_tablet_pad_v2)
+    event_created_child!(PumpState, ZwpTabletSeatV2, [
+        0 => (ZwpTabletV2, ()),
+        1 => (ZwpTabletToolV2, ()),
+        2 => (ZwpTabletPadV2, ()),
+    ]);
 }
 
 impl Dispatch<ZwpTabletToolV2, ()> for PumpState {
