@@ -313,11 +313,21 @@ impl Dispatch<ZwpTabletToolV2, ()> for PumpState {
                     tool.kind = map_tool_type(tool_type);
                 }
             }
-            E::ProximityIn { surface, .. } => {
-                let is_target = surface.id().as_ptr().cast::<()>() == pump.target_surface;
+            E::ProximityIn { surface: _, .. } => {
+                // Surface focus-matching is intentionally dropped: our
+                // secondary `Backend::from_foreign_display` connection
+                // keeps an independent proxy cache from the host app's
+                // libwayland, so comparing the `proximity_in.surface`
+                // proxy pointer against the raw-window-handle pointer
+                // never matches. The compositor only delivers
+                // tablet-tool events for surfaces owned by this
+                // client (= the host app), so for the single-window
+                // publisher shape treating every `proximity_in` as
+                // ours is correct. Multi-window routing lands with the
+                // per-surface id handshake in a follow-up.
                 if let Some(tool) = pump.tools.get_mut(&id) {
                     tool.in_proximity = true;
-                    tool.on_target_surface = is_target;
+                    tool.on_target_surface = true;
                 }
             }
             E::ProximityOut => {
