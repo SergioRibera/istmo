@@ -49,6 +49,7 @@ libc = "0.2"
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+x11rb = { version = "0.13", features = ["xinput", "allow-unsafe-code"] }
 
 [build-dependencies]
 istmo-build = { workspace = true }
