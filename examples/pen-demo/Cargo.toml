@@ -23,7 +23,7 @@ path = "src/main.rs"
 # no Java-side hook — hence the facade opt-in.
 istmo = { path = "../..", default-features = false, features = ["game-activity"] }
 istmo-core = { workspace = true }
-istmo-pen = { workspace = true }
+istmo-pen = { workspace = true, features = ["libinput_fallback"] }
 bincode = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }

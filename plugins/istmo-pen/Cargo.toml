@@ -16,6 +16,12 @@ links = "istmo_pen"
 [features]
 default = []
 codegen = ["dep:istmo-build"]
+# Linux-only: expose the process-wide libinput seat pump
+# (`PenPublisher::install_libinput`). Off by default — standard Wayland
+# / X11 apps get stylus events via the compositor-protocol backends
+# (`linux_wayland` / `linux_xinput2`). Opt in from kiosk builds that
+# have logind seat access or raw `/dev/input/*` permissions.
+libinput_fallback = ["dep:input", "dep:libc"]
 
 [dependencies]
 istmo-core = { workspace = true }
@@ -44,8 +50,8 @@ objc2 = "0.6"
 block2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-input = "0.9"
-libc = "0.2"
+input = { version = "0.9", optional = true }
+libc = { version = "0.2", optional = true }
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }

@@ -331,7 +331,7 @@ impl PenPublisher {
     /// remains usable regardless: apps can catch the error and fall
     /// back to sourcing samples themselves (e.g. from a compositor
     /// tablet protocol).
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "libinput_fallback"))]
     pub fn install_libinput(self: &Arc<Self>) -> Result<(), String> {
         linux::install_libinput(self)
     }

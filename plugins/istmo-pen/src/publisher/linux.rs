@@ -34,8 +34,10 @@
 //! [`super::PenPublisher::push_hover`] for the escape hatch used by
 //! compositor integrations.
 
+#[cfg(feature = "libinput_fallback")]
 pub(super) use libinput_backend::install_libinput;
 
+#[cfg(feature = "libinput_fallback")]
 mod libinput_backend {
     use std::collections::HashMap;
     use std::fs::OpenOptions;
