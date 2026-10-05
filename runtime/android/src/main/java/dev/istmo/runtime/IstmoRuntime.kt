@@ -194,7 +194,18 @@ object IstmoRuntime {
 
     private suspend fun pumpStream(callId: Long, flow: kotlinx.coroutines.flow.Flow<ByteArray>) {
         try {
-            flow.collect { bytes -> nativeSubmitEvent(callId, bytes) }
+            // `Unconfined` keeps the collector on the thread that emitted
+            // the item instead of hopping onto a `Dispatchers.Default`
+            // worker per sample. For high-rate streams (stylus input, pen
+            // hover) the per-event scheduler hop was adding tens of ms of
+            // visible latency on Android — the native-side submit is a
+            // short JNI + bincode push that is safe to run inline from
+            // the emitter's thread. Downstream consumers already run on
+            // dedicated Rust OS threads, so the native call never blocks
+            // on UI work.
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Unconfined) {
+                flow.collect { bytes -> nativeSubmitEvent(callId, bytes) }
+            }
             nativeSubmitStreamEnd(callId, STREAM_END_COMPLETE, null)
         } catch (e: kotlinx.coroutines.CancellationException) {
             nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
