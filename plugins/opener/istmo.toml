@@ -1,0 +1,11 @@
+[plugin]
+id = "istmo.opener"
+client_type = "::istmo_opener::OpenerClient"
+default_deployment = "local"
+# Starting an ACTION_VIEW activity needs a Context.
+android_backend = "dev.istmo.plugins.opener.OpenerBackendImpl"
+android_backend_arg = "context"
+
+[min_versions]
+android = 21
+ios = "13.0"
