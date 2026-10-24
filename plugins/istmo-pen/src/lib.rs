@@ -166,6 +166,25 @@ pub struct PenButtonChange {
     pub changed: u32,
 }
 
+/// A stylus shortcut gesture.
+#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PenGestureKind {
+    /// Apple Pencil 2 / Pro double tap; the primary barrel button
+    /// clicked while hovering on Android styluses (S Pen and alike).
+    DoubleTap,
+    /// Apple Pencil Pro squeeze.
+    Squeeze,
+}
+
+/// Payload of [`PenEvent::Gesture`]. A struct so the variant keeps the
+/// single-payload shape the Kotlin / Swift codegen models.
+#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PenGesture {
+    pub kind: PenGestureKind,
+}
+
 /// A contact-phase event fired while the tool is touching the surface.
 #[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
@@ -182,6 +201,9 @@ pub enum PenEvent {
     Cancel(PenSample),
     /// Barrel button state changed.
     ButtonChanged(PenButtonChange),
+    /// The user asked for the stylus shortcut (switch tool, palette).
+    /// Apps decide what it does; it never draws.
+    Gesture(PenGesture),
 }
 
 /// A hover-phase event fired while the tool is proximate but not

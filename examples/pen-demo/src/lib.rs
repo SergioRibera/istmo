@@ -84,6 +84,7 @@ fn apply_event(event: PenEvent, ink: &std::sync::Arc<SharedInk>) {
                 ink.toggle_color_menu();
             }
         }
+        PenEvent::Gesture(_) => ink.toggle_color_menu(),
     }
 }
 

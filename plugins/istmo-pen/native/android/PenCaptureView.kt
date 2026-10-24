@@ -5,6 +5,8 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import dev.istmo.runtime.PenButtonChange
+import dev.istmo.runtime.PenGesture
+import dev.istmo.runtime.PenGestureKind
 import dev.istmo.runtime.PenCapabilities
 import dev.istmo.runtime.PenEvent
 import dev.istmo.runtime.PenHoverEvent
@@ -123,6 +125,15 @@ open class PenCaptureView @JvmOverloads constructor(
                 PenHoverEvent.Move(sample(event, event.eventTime)),
             )
             MotionEvent.ACTION_HOVER_EXIT -> emitHover(PenHoverEvent.ProximityLeave)
+            // The barrel button clicked away from the screen is the stylus
+            // shortcut (what Apple Pencil does with a double tap).
+            MotionEvent.ACTION_BUTTON_PRESS -> {
+                if (event.actionButton == MotionEvent.BUTTON_STYLUS_PRIMARY) {
+                    emit(PenEvent.Gesture(PenGesture(kind = PenGestureKind.DoubleTap)))
+                } else {
+                    return super.onGenericMotionEvent(event)
+                }
+            }
             else -> return super.onGenericMotionEvent(event)
         }
         return true

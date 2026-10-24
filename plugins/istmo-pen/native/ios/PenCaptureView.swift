@@ -41,6 +41,10 @@ public final class PenCaptureView: UIView {
             action: #selector(handleHover(_:)),
         )
         addGestureRecognizer(hoverGesture)
+
+        let pencil = UIPencilInteraction()
+        pencil.delegate = self
+        addInteraction(pencil)
     }
 
     @available(*, unavailable)
@@ -207,4 +211,27 @@ public final class PenCaptureView: UIView {
     }
 }
 
+#endif
+
+#if canImport(UIKit)
+/// Apple Pencil double tap (2nd gen, Pro) and squeeze (Pro) surface as
+/// `PenEvent.gesture`; the app decides what they do.
+extension PenCaptureView: UIPencilInteractionDelegate {
+    @available(iOS, introduced: 12.1, deprecated: 17.5)
+    public func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
+        eventsContinuation.yield(.gesture(PenGesture(kind: .doubleTap)))
+    }
+
+    @available(iOS 17.5, *)
+    public func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
+        eventsContinuation.yield(.gesture(PenGesture(kind: .doubleTap)))
+    }
+
+    @available(iOS 17.5, *)
+    public func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        if squeeze.phase == .ended {
+            eventsContinuation.yield(.gesture(PenGesture(kind: .squeeze)))
+        }
+    }
+}
 #endif
