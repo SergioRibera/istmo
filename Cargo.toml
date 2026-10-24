@@ -21,6 +21,7 @@ members = [
     "plugins/live-activity",
     "plugins/istmo-pen",
     "plugins/share",
+    "plugins/barcode-scanner",
     "examples/data-store-demo",
     "examples/live-activity-demo",
     "examples/pen-demo",
