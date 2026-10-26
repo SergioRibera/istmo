@@ -27,23 +27,21 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use wayland_backend::client::{Backend, ObjectId};
-use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContents};
+use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{
-    delegate_noop, event_created_child, Connection, Dispatch, Proxy, QueueHandle, WEnum,
+    Connection, Dispatch, Proxy, QueueHandle, WEnum, delegate_noop, event_created_child,
 };
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_manager_v2::ZwpTabletManagerV2;
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_pad_v2::ZwpTabletPadV2;
-use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::{
-    self, ZwpTabletSeatV2,
-};
+use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::{self, ZwpTabletSeatV2};
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::{
     self, ButtonState as ToolButtonState, Type as ToolType, ZwpTabletToolV2,
 };
@@ -128,10 +126,12 @@ pub(super) fn attach_wayland(
 
     std::thread::Builder::new()
         .name("istmo-pen-wayland".into())
-        .spawn(move || loop {
-            if let Err(err) = event_queue.blocking_dispatch(&mut pump_state) {
-                eprintln!("istmo-pen: wayland pump exited: {err}");
-                break;
+        .spawn(move || {
+            loop {
+                if let Err(err) = event_queue.blocking_dispatch(&mut pump_state) {
+                    eprintln!("istmo-pen: wayland pump exited: {err}");
+                    break;
+                }
             }
         })
         .map_err(|err| AttachError::ThreadSpawn(err.to_string()))?;
@@ -278,11 +278,8 @@ impl Dispatch<ZwpTabletSeatV2, ()> for PumpState {
         _qh: &QueueHandle<Self>,
     ) {
         if let zwp_tablet_seat_v2::Event::ToolAdded { id } = event {
-            let tool_id = (state
-                .clock
-                .tool_id_alloc
-                .fetch_add(1, Ordering::Relaxed)
-                & 0xFFFF_FFFF) as u32;
+            let tool_id =
+                (state.clock.tool_id_alloc.fetch_add(1, Ordering::Relaxed) & 0xFFFF_FFFF) as u32;
             state.tools.insert(id.id(), ToolState::new(tool_id));
         }
     }
@@ -315,11 +312,8 @@ impl Dispatch<ZwpTabletToolV2, ()> for PumpState {
         // can race the parent-dispatch delivery past our bookkeeping;
         // creating the row on first use closes the gap.
         if !pump.tools.contains_key(&id) {
-            let tool_id = (pump
-                .clock
-                .tool_id_alloc
-                .fetch_add(1, Ordering::Relaxed)
-                & 0xFFFF_FFFF) as u32;
+            let tool_id =
+                (pump.clock.tool_id_alloc.fetch_add(1, Ordering::Relaxed) & 0xFFFF_FFFF) as u32;
             pump.tools.insert(id.clone(), ToolState::new(tool_id));
         }
         let tool = pump.tools.get_mut(&id).expect("just inserted");
@@ -451,7 +445,10 @@ fn flush_frame(pump: &mut PumpState, id: &ObjectId) {
             predicted: Vec::new(),
         }));
     } else if tool.pending_axis && tool.in_proximity {
-        let _ = pump.state.hover_tx.send(PenHoverEvent::Move(sample.clone()));
+        let _ = pump
+            .state
+            .hover_tx
+            .send(PenHoverEvent::Move(sample.clone()));
     }
     if tool.changed_buttons != 0 {
         let _ = pump

@@ -82,11 +82,7 @@ impl DesktopFilePicker {
         let weak = Arc::downgrade(&self.inner);
         runtime.install_native_handle_release_hook(Arc::new(move |id| {
             if let Some(inner) = weak.upgrade() {
-                inner
-                    .files
-                    .lock()
-                    .expect("files map")
-                    .remove(&id.get());
+                inner.files.lock().expect("files map").remove(&id.get());
             }
         }));
     }
@@ -99,11 +95,7 @@ impl DesktopFilePicker {
 
     fn alloc(&self, path: PathBuf) -> NativeHandleId {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        self.inner
-            .files
-            .lock()
-            .expect("files map")
-            .insert(id, path);
+        self.inner.files.lock().expect("files map").insert(id, path);
         NativeHandleId::new(id)
     }
 
@@ -214,10 +206,7 @@ fn run_save(config: &SaveConfig) -> Option<PathBuf> {
 // ------------------------------------------------------------------ FilePicker impl
 
 impl FilePicker for DesktopFilePicker {
-    async fn pick_file(
-        &self,
-        config: PickConfig,
-    ) -> Result<Option<PickedFile>, FilePickerError> {
+    async fn pick_file(&self, config: PickConfig) -> Result<Option<PickedFile>, FilePickerError> {
         let Some(path) = run_pick_single(&config) else {
             return Ok(None);
         };
@@ -225,10 +214,7 @@ impl FilePicker for DesktopFilePicker {
         Ok(Some(picked_from_path(&path, handle)))
     }
 
-    async fn pick_files(
-        &self,
-        config: PickConfig,
-    ) -> Result<Vec<PickedFile>, FilePickerError> {
+    async fn pick_files(&self, config: PickConfig) -> Result<Vec<PickedFile>, FilePickerError> {
         let paths = run_pick_multi(&config);
         Ok(self
             .alloc_many(paths)
@@ -237,10 +223,7 @@ impl FilePicker for DesktopFilePicker {
             .collect())
     }
 
-    async fn save_file(
-        &self,
-        config: SaveConfig,
-    ) -> Result<Option<PickedFile>, FilePickerError> {
+    async fn save_file(&self, config: SaveConfig) -> Result<Option<PickedFile>, FilePickerError> {
         let Some(path) = run_save(&config) else {
             return Ok(None);
         };
@@ -259,10 +242,7 @@ impl FilePicker for DesktopFilePicker {
         Ok(Some(picked_from_path(&path, handle)))
     }
 
-    async fn open_read(
-        &self,
-        file: NativeHandleId,
-    ) -> Result<RawFileHandle, FilePickerError> {
+    async fn open_read(&self, file: NativeHandleId) -> Result<RawFileHandle, FilePickerError> {
         let path = self.lookup(file)?;
         let f = map_io(std::fs::File::open(&path), "open_read")?;
         Ok(RawFileHandle {
@@ -270,10 +250,7 @@ impl FilePicker for DesktopFilePicker {
         })
     }
 
-    async fn open_write(
-        &self,
-        file: NativeHandleId,
-    ) -> Result<RawFileHandle, FilePickerError> {
+    async fn open_write(&self, file: NativeHandleId) -> Result<RawFileHandle, FilePickerError> {
         let path = self.lookup(file)?;
         let f = map_io(
             std::fs::OpenOptions::new()
@@ -287,10 +264,7 @@ impl FilePicker for DesktopFilePicker {
         })
     }
 
-    async fn path(
-        &self,
-        file: NativeHandleId,
-    ) -> Result<Option<String>, FilePickerError> {
+    async fn path(&self, file: NativeHandleId) -> Result<Option<String>, FilePickerError> {
         let path = self.lookup(file)?;
         Ok(Some(path.to_string_lossy().into_owned()))
     }

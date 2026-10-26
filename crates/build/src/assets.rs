@@ -162,12 +162,10 @@ fn walk_dir(
             error,
         })?;
         let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| AssetResolveError::Io {
-                path: path.clone(),
-                error,
-            })?;
+        let file_type = entry.file_type().map_err(|error| AssetResolveError::Io {
+            path: path.clone(),
+            error,
+        })?;
         if file_type.is_dir() {
             walk_dir(&path, root, out)?;
         } else if file_type.is_file() {
@@ -218,12 +216,10 @@ fn walk_glob(
             error,
         })?;
         let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| AssetResolveError::Io {
-                path: path.clone(),
-                error,
-            })?;
+        let file_type = entry.file_type().map_err(|error| AssetResolveError::Io {
+            path: path.clone(),
+            error,
+        })?;
         if file_type.is_dir() {
             walk_glob(&path, root, matcher, out)?;
             continue;

@@ -88,10 +88,8 @@ struct NsRect {
 
 // SAFETY: `NsRect` matches `CGRect`: `{origin: CGPoint, size: CGSize}`.
 unsafe impl objc2::Encode for NsRect {
-    const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
-        "CGRect",
-        &[NsPoint::ENCODING, NsSize::ENCODING],
-    );
+    const ENCODING: objc2::Encoding =
+        objc2::Encoding::Struct("CGRect", &[NsPoint::ENCODING, NsSize::ENCODING]);
 }
 
 /// Book-keeping returned from [`attach_view`] and stashed on the

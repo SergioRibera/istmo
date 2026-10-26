@@ -236,16 +236,14 @@ impl std::error::Error for FilePickerError {}
 pub trait FilePicker {
     /// Present a single-file picker. `Ok(None)` when the user cancels.
     #[owned]
-    async fn pick_file(&self, config: PickConfig)
-        -> Result<Option<PickedFile>, FilePickerError>;
+    async fn pick_file(&self, config: PickConfig) -> Result<Option<PickedFile>, FilePickerError>;
 
     /// Present a multi-file picker. Empty `Vec` when the user cancels.
     ///
     /// Backends without native multi-select semantics may fall back to
     /// single-select and return a one-element vec.
     #[owned]
-    async fn pick_files(&self, config: PickConfig)
-        -> Result<Vec<PickedFile>, FilePickerError>;
+    async fn pick_files(&self, config: PickConfig) -> Result<Vec<PickedFile>, FilePickerError>;
 
     /// Present a save-file picker. `Ok(None)` when the user cancels.
     ///
@@ -253,18 +251,15 @@ pub trait FilePicker {
     /// backend created via `ACTION_CREATE_DOCUMENT`; write to it via
     /// [`FilePicker::open_write`].
     #[owned]
-    async fn save_file(&self, config: SaveConfig)
-        -> Result<Option<PickedFile>, FilePickerError>;
+    async fn save_file(&self, config: SaveConfig) -> Result<Option<PickedFile>, FilePickerError>;
 
     /// Open the picked resource for reading, returning a native fd /
     /// `HANDLE`. Prefer wrapping the result with [`PickedFileReader`].
-    async fn open_read(&self, file: NativeHandleId)
-        -> Result<RawFileHandle, FilePickerError>;
+    async fn open_read(&self, file: NativeHandleId) -> Result<RawFileHandle, FilePickerError>;
 
     /// Open the picked resource for writing, returning a native fd /
     /// `HANDLE`. Prefer wrapping the result with [`PickedFileWriter`].
-    async fn open_write(&self, file: NativeHandleId)
-        -> Result<RawFileHandle, FilePickerError>;
+    async fn open_write(&self, file: NativeHandleId) -> Result<RawFileHandle, FilePickerError>;
 
     /// Real filesystem path when the backend can produce one, otherwise
     /// `Ok(None)`.
@@ -274,6 +269,5 @@ pub trait FilePicker {
     ///   (i.e. while the [`NativeHandle`](istmo_core::NativeHandle) is
     ///   alive).
     /// * Android → always `None`; SAF `content://` URIs are not paths.
-    async fn path(&self, file: NativeHandleId)
-        -> Result<Option<String>, FilePickerError>;
+    async fn path(&self, file: NativeHandleId) -> Result<Option<String>, FilePickerError>;
 }

@@ -163,7 +163,11 @@ fn home_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         env_path("USERPROFILE")
-            .or_else(|| env_path("HOMEDRIVE").zip(env_path("HOMEPATH")).map(join_pair))
+            .or_else(|| {
+                env_path("HOMEDRIVE")
+                    .zip(env_path("HOMEPATH"))
+                    .map(join_pair)
+            })
             .or_else(|| env_path("USERNAME").map(|user| PathBuf::from("C:\\Users").join(user)))
     }
     #[cfg(not(target_os = "windows"))]

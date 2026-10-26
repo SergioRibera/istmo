@@ -121,7 +121,8 @@ impl IosProject {
             .icon
             .as_ref()
             .map(|_| relative(&self.generated_dir().join(ASSET_CATALOG_DIR)));
-        let has_sources = !plugin_dirs.is_empty() || icon_catalog.is_some() || !asset_dirs.is_empty();
+        let has_sources =
+            !plugin_dirs.is_empty() || icon_catalog.is_some() || !asset_dirs.is_empty();
         if has_sources {
             yaml.push_str("    sources:\n");
         }

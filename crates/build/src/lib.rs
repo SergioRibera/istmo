@@ -108,11 +108,11 @@ pub use crate::entitlements::{EntitlementValue, IosEntitlements};
 pub use crate::extract::{ExtractError, extract_contract};
 pub use crate::handover::{
     ASSETS_KEY, CONTRACT_KEY, HandoverError, MANIFEST_KEY, NATIVE_DEPS_KEY, NativePlatform,
-    collect_dep_assets, collect_dep_contracts, collect_dep_manifests, collect_dep_manifests_by_links,
-    collect_dep_native_deps, collect_dep_native_dirs, deserialize_assets, deserialize_contract,
-    deserialize_manifest, deserialize_native_deps, emit_assets, emit_contract, emit_manifest,
-    emit_native_deps, serialize_assets, serialize_contract, serialize_manifest,
-    serialize_native_deps,
+    collect_dep_assets, collect_dep_contracts, collect_dep_manifests,
+    collect_dep_manifests_by_links, collect_dep_native_deps, collect_dep_native_dirs,
+    deserialize_assets, deserialize_contract, deserialize_manifest, deserialize_native_deps,
+    emit_assets, emit_contract, emit_manifest, emit_native_deps, serialize_assets,
+    serialize_contract, serialize_manifest, serialize_native_deps,
 };
 pub use crate::ios::{
     BackgroundKind, ContinuousMode, IosBackgroundArtifacts, IosBackgroundContract,

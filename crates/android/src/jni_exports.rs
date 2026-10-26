@@ -344,7 +344,13 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths<'l
     no_backup_dir: JString<'local>,
     external_files_dir: JString<'local>,
 ) {
-    match install_paths(&mut env, files_dir, cache_dir, no_backup_dir, external_files_dir) {
+    match install_paths(
+        &mut env,
+        files_dir,
+        cache_dir,
+        no_backup_dir,
+        external_files_dir,
+    ) {
         Ok(()) => {}
         Err(err) => tracing::error!(?err, "istmo nativeInstallPaths failed"),
     }
@@ -364,7 +370,11 @@ fn install_paths<'local>(
         None
     } else {
         let s: String = env.get_string(&external_files)?.into();
-        if s.is_empty() { None } else { Some(std::path::PathBuf::from(s)) }
+        if s.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(s))
+        }
     };
     path_provider::install_from_dirs(
         std::path::PathBuf::from(files),

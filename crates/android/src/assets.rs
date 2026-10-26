@@ -98,11 +98,7 @@ mod imp {
             // SAFETY: `self.asset` is a valid `AAsset*` owned by this
             // wrapper; `buf` is a valid mutable slice.
             let n = unsafe {
-                ndk_sys::AAsset_read(
-                    self.asset.as_ptr(),
-                    buf.as_mut_ptr().cast(),
-                    buf.len(),
-                )
+                ndk_sys::AAsset_read(self.asset.as_ptr(), buf.as_mut_ptr().cast(), buf.len())
             };
             if n < 0 {
                 Err(io::Error::other("AAsset_read returned negative"))

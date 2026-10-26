@@ -40,10 +40,7 @@ impl TempFileBackend {
             *n += 1;
             id
         };
-        self.files
-            .lock()
-            .expect("files map")
-            .insert(id, path);
+        self.files.lock().expect("files map").insert(id, path);
         NativeHandleId::new(id)
     }
 
@@ -58,10 +55,7 @@ impl TempFileBackend {
 }
 
 impl FilePicker for TempFileBackend {
-    async fn pick_file(
-        &self,
-        _config: PickConfig,
-    ) -> Result<Option<PickedFile>, FilePickerError> {
+    async fn pick_file(&self, _config: PickConfig) -> Result<Option<PickedFile>, FilePickerError> {
         std::fs::write(&self.path, self.seed_contents)
             .map_err(|e| FilePickerError::Io(e.to_string()))?;
         let size = std::fs::metadata(&self.path)
@@ -81,17 +75,11 @@ impl FilePicker for TempFileBackend {
         }))
     }
 
-    async fn pick_files(
-        &self,
-        config: PickConfig,
-    ) -> Result<Vec<PickedFile>, FilePickerError> {
+    async fn pick_files(&self, config: PickConfig) -> Result<Vec<PickedFile>, FilePickerError> {
         Ok(self.pick_file(config).await?.into_iter().collect())
     }
 
-    async fn save_file(
-        &self,
-        _config: SaveConfig,
-    ) -> Result<Option<PickedFile>, FilePickerError> {
+    async fn save_file(&self, _config: SaveConfig) -> Result<Option<PickedFile>, FilePickerError> {
         std::fs::write(&self.path, b"").map_err(|e| FilePickerError::Io(e.to_string()))?;
         let display_name = self
             .path
@@ -107,10 +95,7 @@ impl FilePicker for TempFileBackend {
         }))
     }
 
-    async fn open_read(
-        &self,
-        file: NativeHandleId,
-    ) -> Result<RawFileHandle, FilePickerError> {
+    async fn open_read(&self, file: NativeHandleId) -> Result<RawFileHandle, FilePickerError> {
         let path = self.lookup(file)?;
         let f = std::fs::File::open(&path).map_err(|e| FilePickerError::Io(e.to_string()))?;
         Ok(RawFileHandle {
@@ -118,10 +103,7 @@ impl FilePicker for TempFileBackend {
         })
     }
 
-    async fn open_write(
-        &self,
-        file: NativeHandleId,
-    ) -> Result<RawFileHandle, FilePickerError> {
+    async fn open_write(&self, file: NativeHandleId) -> Result<RawFileHandle, FilePickerError> {
         let path = self.lookup(file)?;
         let f = std::fs::OpenOptions::new()
             .write(true)
@@ -133,10 +115,7 @@ impl FilePicker for TempFileBackend {
         })
     }
 
-    async fn path(
-        &self,
-        file: NativeHandleId,
-    ) -> Result<Option<String>, FilePickerError> {
+    async fn path(&self, file: NativeHandleId) -> Result<Option<String>, FilePickerError> {
         let path = self.lookup(file)?;
         Ok(Some(path.to_string_lossy().into_owned()))
     }
@@ -183,8 +162,10 @@ fn build_runtime(backend: TempFileBackend) -> (Arc<Runtime>, FilePickerClient) {
 #[test]
 fn pick_and_read_round_trip() {
     let path = tmp("read");
-    let (_rt, picker) =
-        build_runtime(TempFileBackend::new(path.clone(), b"hello from mock backend"));
+    let (_rt, picker) = build_runtime(TempFileBackend::new(
+        path.clone(),
+        b"hello from mock backend",
+    ));
 
     let picked = pollster::block_on(picker.pick_file_owned(PickConfig::default()))
         .expect("pick_file")
@@ -224,8 +205,7 @@ fn save_and_write_round_trip() {
 #[test]
 fn path_lookup_returns_stored_path() {
     let path = tmp("path");
-    let (_rt, picker) =
-        build_runtime(TempFileBackend::new(path.clone(), b"content"));
+    let (_rt, picker) = build_runtime(TempFileBackend::new(path.clone(), b"content"));
 
     let picked = pollster::block_on(picker.pick_file_owned(PickConfig::default()))
         .expect("pick_file")
@@ -242,8 +222,7 @@ fn path_lookup_returns_stored_path() {
 #[test]
 fn seek_from_start_after_read() {
     let path = tmp("seek");
-    let (_rt, picker) =
-        build_runtime(TempFileBackend::new(path.clone(), b"first-second-third"));
+    let (_rt, picker) = build_runtime(TempFileBackend::new(path.clone(), b"first-second-third"));
 
     let picked = Arc::new(
         pollster::block_on(picker.pick_file_owned(PickConfig::default()))
@@ -257,9 +236,7 @@ fn seek_from_start_after_read() {
     assert_eq!(&prefix, b"first");
 
     use std::io::Seek;
-    reader
-        .seek(std::io::SeekFrom::Start(0))
-        .expect("rewind");
+    reader.seek(std::io::SeekFrom::Start(0)).expect("rewind");
     let mut whole = String::new();
     reader.read_to_string(&mut whole).expect("read all");
     assert_eq!(whole, "first-second-third");

@@ -21,11 +21,11 @@ use std::path::{Path, PathBuf};
 use crate::android_project::{AndroidPlugin, AndroidProject};
 use crate::app_config::{AppConfig, AppMetadata, AppPluginOpts, CrateInfo, Platform, Role};
 use crate::app_icon::AppIcon;
-use crate::assets::resolve_assets;
 use crate::apple_plist::{
     ENTITLEMENTS_FRAGMENT, INFO_PLIST_FRAGMENT, PLUGINS_MARK_END, PLUGINS_MARK_START,
     PlistFragments, app_keys_outside_block,
 };
+use crate::assets::resolve_assets;
 use crate::contract::Contract;
 use crate::doctor::Doctor;
 use crate::handover::{

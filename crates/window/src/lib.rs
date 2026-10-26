@@ -142,8 +142,12 @@ impl TryFrom<(RawWindowHandle, RawDisplayHandle)> for NativeWindow {
         let addr_opt = |ptr: Option<NonNull<c_void>>| ptr.and_then(addr);
         let resolved = match (window, display) {
             (RawWindowHandle::Win32(w), _) => Some(Self::Win32 { hwnd: w.hwnd }),
-            (RawWindowHandle::AppKit(w), _) => addr(w.ns_view).map(|ns_view| Self::AppKit { ns_view }),
-            (RawWindowHandle::UiKit(w), _) => addr(w.ui_view).map(|ui_view| Self::UiKit { ui_view }),
+            (RawWindowHandle::AppKit(w), _) => {
+                addr(w.ns_view).map(|ns_view| Self::AppKit { ns_view })
+            }
+            (RawWindowHandle::UiKit(w), _) => {
+                addr(w.ui_view).map(|ui_view| Self::UiKit { ui_view })
+            }
             (RawWindowHandle::Wayland(w), RawDisplayHandle::Wayland(d)) => {
                 match (addr(w.surface), addr(d.display)) {
                     (Some(surface), Some(display)) => Some(Self::Wayland { surface, display }),

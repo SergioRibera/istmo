@@ -861,9 +861,9 @@ fn parse_asset_entry(table: &Table, context: &'static str) -> Result<AssetEntry,
             });
         }
     }
-    let path_item = table.get("path").ok_or(ManifestError::Missing {
-        key: "assets.path",
-    })?;
+    let path_item = table
+        .get("path")
+        .ok_or(ManifestError::Missing { key: "assets.path" })?;
     let path = expect_string(path_item, "assets.path")?.to_owned();
     if path.is_empty() {
         return Err(ManifestError::InvalidValue {

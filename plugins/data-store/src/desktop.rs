@@ -348,9 +348,7 @@ fn load(path: &Path) -> Result<HashMap<String, StoredValue>, DataStoreError> {
     }
     let (values, _) =
         bincode::decode_from_slice::<HashMap<String, StoredValue>, _>(&bytes, config::standard())
-            .map_err(|err| {
-            DataStoreError::Corrupted(format!("decode {}: {err}", path.display()))
-        })?;
+            .map_err(|err| DataStoreError::Corrupted(format!("decode {}: {err}", path.display())))?;
     Ok(values)
 }
 
@@ -400,10 +398,8 @@ mod tests {
 
     #[test]
     fn roundtrip_persists_across_reopen() {
-        let dir = std::env::temp_dir().join(format!(
-            "istmo-data-store-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("istmo-data-store-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("roundtrip.bin");

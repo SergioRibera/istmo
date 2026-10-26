@@ -40,17 +40,17 @@
 use std::collections::HashMap;
 use std::ffi::c_ulong;
 use std::num::{NonZeroU32, NonZeroUsize};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use x11rb::connection::Connection;
+use x11rb::protocol::Event;
 use x11rb::protocol::xinput::{
     ConnectionExt as _, DeviceClassData, DeviceType, EventMask, Fp1616, Fp3232, HierarchyMask,
     XIDeviceInfo, XIEventMask,
 };
 use x11rb::protocol::xproto::{Atom, ConnectionExt as _, Window};
-use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
 
 use super::WindowState;
@@ -114,12 +114,9 @@ pub(super) fn attach_xcb(
     attach_window(window_id, state)
 }
 
-fn attach_window(
-    window: Window,
-    state: Arc<WindowState>,
-) -> Result<XInputAttachment, AttachError> {
-    let (conn, _screen) = RustConnection::connect(None)
-        .map_err(|err| AttachError::ConnectFailed(err.to_string()))?;
+fn attach_window(window: Window, state: Arc<WindowState>) -> Result<XInputAttachment, AttachError> {
+    let (conn, _screen) =
+        RustConnection::connect(None).map_err(|err| AttachError::ConnectFailed(err.to_string()))?;
 
     // XI2 handshake. 2.0 is enough for `XI_Motion` + `XI_ButtonPress`.
     let version = conn
@@ -156,12 +153,14 @@ fn attach_window(
 
     std::thread::Builder::new()
         .name("istmo-pen-xinput2".into())
-        .spawn(move || loop {
-            match conn.wait_for_event() {
-                Ok(event) => handle_event(&conn, &mut pump_state, event),
-                Err(err) => {
-                    eprintln!("istmo-pen: xinput2 pump exited: {err}");
-                    break;
+        .spawn(move || {
+            loop {
+                match conn.wait_for_event() {
+                    Ok(event) => handle_event(&conn, &mut pump_state, event),
+                    Err(err) => {
+                        eprintln!("istmo-pen: xinput2 pump exited: {err}");
+                        break;
+                    }
                 }
             }
         })
@@ -442,7 +441,8 @@ fn refresh_devices(conn: &RustConnection, pump: &mut PumpState) {
     };
     pump.devices = devices;
     // Drop tool state for devices that vanished.
-    pump.tools.retain(|dev_id, _| pump.devices.contains_key(dev_id));
+    pump.tools
+        .retain(|dev_id, _| pump.devices.contains_key(dev_id));
     ids.sort_unstable();
     ids.dedup();
     let _ = select_events(conn, pump.window, &ids);
