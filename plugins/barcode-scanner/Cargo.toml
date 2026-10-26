@@ -1,6 +1,6 @@
 [package]
 name = "istmo-barcode-scanner"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.3"
 description = "Cross-platform barcode and QR scanner plugin for the istmo framework — Google code scanner on Android, AVFoundation on iOS."
 edition.workspace = true
 rust-version.workspace = true
