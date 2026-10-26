@@ -1,6 +1,6 @@
 [package]
 name = "istmo-opener"
-version = "0.1.0-alpha.3"
+version = "0.1.1-alpha.4"
 description = "Open URLs with the system for the istmo framework — browser, mail, maps and files via Android intents, UIApplication.open and the desktop opener."
 edition.workspace = true
 rust-version.workspace = true
