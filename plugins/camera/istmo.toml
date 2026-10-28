@@ -1,0 +1,41 @@
+[plugin]
+id = "istmo.camera"
+client_type = "::istmo_camera::CameraClient"
+default_deployment = "local"
+# CameraX binds to a `LifecycleOwner`; we need the host Activity.
+android_backend = "dev.istmo.plugins.camera.CameraFactoryImpl"
+android_backend_arg = "activity"
+
+[plugin.info_plist]
+NSCameraUsageDescription = "Access the camera to capture images and video frames in real time."
+# Only required if the app also enables microphone capture through this plugin;
+# apps can still override the whole table from their own `[app.info_plist]`.
+NSMicrophoneUsageDescription = "Capture audio alongside camera frames when the app requests it."
+
+# CameraX core + lifecycle + video. Downstream apps don't need to add anything
+# to `android/app/build.gradle` on top of this.
+[[gradle]]
+group = "androidx.camera"
+artifact = "camera-core"
+version = "1.3.4"
+
+[[gradle]]
+group = "androidx.camera"
+artifact = "camera-camera2"
+version = "1.3.4"
+
+[[gradle]]
+group = "androidx.camera"
+artifact = "camera-lifecycle"
+version = "1.3.4"
+
+[[gradle]]
+group = "androidx.camera"
+artifact = "camera-video"
+version = "1.3.4"
+
+[min_versions]
+# CameraX requires 21; concurrent-camera needs 30+ but degrades gracefully.
+android = 21
+# AVCaptureMultiCamSession requires 13.0+.
+ios = "13.0"
