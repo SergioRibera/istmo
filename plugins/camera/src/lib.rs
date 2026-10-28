@@ -48,6 +48,12 @@ pub mod codegen;
 
 pub mod desktop;
 
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "desktop"
+))]
+pub use desktop::{DesktopCamera, DesktopCameraFactory};
+
 use std::sync::Arc;
 
 use istmo_core::{IstmoError, NativeHandle, NativeHandleId, TypedStream};

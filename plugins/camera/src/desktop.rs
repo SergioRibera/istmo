@@ -1,69 +1,34 @@
-//! Minimal desktop stub so apps can compile against `istmo-camera`
-//! on Linux / macOS / Windows without pulling in a real backend.
+//! Desktop host for the camera plugin.
 //!
-//! Every method returns [`CameraError::Backend`] with a short
-//! "unsupported" message. Swap this for a real backend (e.g.
-//! `nokhwa`) in a downstream crate; the plugin surface is identical.
+//! Pure-Rust capture backed by [`nokhwa`]:
+//! - Linux → V4L2
+//! - macOS → AVFoundation (through `nokhwa-bindings-macos`)
+//! - Windows → Media Foundation
+//!
+//! Gated behind the `desktop` feature so mobile builds don't drag the
+//! native-capture dep. On a non-desktop target the module compiles to
+//! an empty surface — the Rust-hosted path is for apps that run
+//! outside Android / iOS.
+//!
+//! The host owns one Tokio-free dispatch map keyed by
+//! [`NativeHandleId`]; each session carries a background capture
+//! thread (`nokhwa::CallbackCamera`) feeding frames through a
+//! bounded `flume` channel. Backpressure matches the mobile backend:
+//! the oldest frame is dropped when the consumer falls behind and
+//! the delivered `CameraFrame` carries a non-zero `dropped_before`.
+//!
+//! ```ignore
+//! use std::sync::Arc;
+//! use istmo_camera::{DesktopCamera, CameraInitConfig};
+//! let host = Arc::new(DesktopCamera::new(CameraInitConfig::default()));
+//! // Register with the runtime via the host-side helper (see docs).
+//! ```
 
-#![cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#![cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "desktop"
+))]
 
-use crate::{
-    AccessStatus, Camera, CameraControls, CameraDevice, CameraError, CameraFrame, CameraSession,
-    ConcurrentSupport, NativeHandleId, SessionConfig, StillCaptureRequest, StillPhoto,
-    AppliedControls,
-};
+mod backend;
 
-/// Zero-cost placeholder host. Returns [`CameraError::Backend`] from
-/// every call.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct DesktopCamera;
-
-const UNSUPPORTED: &str = "camera backend unsupported on this desktop target";
-
-#[allow(clippy::missing_errors_doc)]
-impl Camera for DesktopCamera {
-    async fn devices(&self) -> Result<Vec<CameraDevice>, CameraError> {
-        Err(CameraError::Backend(UNSUPPORTED.into()))
-    }
-
-    async fn concurrent_support(&self) -> Result<ConcurrentSupport, CameraError> {
-        Err(CameraError::Backend(UNSUPPORTED.into()))
-    }
-
-    async fn access_status(&self) -> Result<AccessStatus, CameraError> {
-        Ok(AccessStatus::Denied)
-    }
-
-    async fn request_access(&self) -> Result<AccessStatus, CameraError> {
-        Ok(AccessStatus::Denied)
-    }
-
-    async fn open(&self, _config: SessionConfig) -> Result<CameraSession, CameraError> {
-        Err(CameraError::Backend(UNSUPPORTED.into()))
-    }
-
-    async fn close(&self, _session: NativeHandleId) -> Result<(), CameraError> {
-        Err(CameraError::SessionClosed)
-    }
-
-    fn frames(&self, _session: NativeHandleId) -> flume::Receiver<CameraFrame> {
-        let (_tx, rx) = flume::bounded(0);
-        rx
-    }
-
-    async fn apply_controls(
-        &self,
-        _session: NativeHandleId,
-        _controls: CameraControls,
-    ) -> Result<AppliedControls, CameraError> {
-        Err(CameraError::Backend(UNSUPPORTED.into()))
-    }
-
-    async fn capture_still(
-        &self,
-        _session: NativeHandleId,
-        _request: StillCaptureRequest,
-    ) -> Result<StillPhoto, CameraError> {
-        Err(CameraError::Backend(UNSUPPORTED.into()))
-    }
-}
+pub use backend::{DesktopCamera, DesktopCameraFactory};

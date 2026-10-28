@@ -16,13 +16,26 @@ links = "istmo_camera"
 [features]
 default = []
 codegen = ["dep:istmo-build"]
+# Enables the pure-Rust `nokhwa`-backed desktop host.
+# Mobile crates leave this off — Kotlin / Swift backends do the real
+# capture there.
+desktop = ["dep:nokhwa"]
 
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 bincode = { workspace = true }
 flume = { workspace = true }
+tracing = { workspace = true }
 istmo-build = { workspace = true, optional = true }
+
+# Desktop capture backend — V4L2 on Linux, AVFoundation on macOS,
+# Media Foundation on Windows. Opt-in via the `desktop` feature so
+# mobile targets don't drag it in.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+# Drop `decoding` (mozjpeg-sys) — desktop ships raw frames; MJPEG stays
+# a camera's own capture format, we don't decode on CPU.
+nokhwa = { version = "0.10", default-features = false, features = ["input-native", "output-threaded"], optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }
