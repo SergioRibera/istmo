@@ -1,11 +1,12 @@
 package dev.istmo.plugins.camera
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.os.Build
 import android.util.Range
 import android.util.Size
 import androidx.activity.ComponentActivity
@@ -29,15 +30,12 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -45,12 +43,7 @@ import kotlinx.coroutines.withContext
  * CameraX-backed implementation of [CameraBackend]. Enumerates every
  * camera the OS exposes, drives one or more concurrent sessions, and
  * fans analyzer frames out through a per-session [MutableSharedFlow]
- * sized by [CameraInitConfig.frame_pool_depth].
- *
- * This is a *reference* implementation — apps are free to replace it
- * (e.g. to swap `ImageAnalysis` for a `VideoCapture` recording
- * pipeline). The public method set must match [CameraBackend]
- * exactly; everything else is private.
+ * sized by [CameraInitConfig.framePoolDepth].
  */
 class CameraBackendImpl(
     private val activity: ComponentActivity,
@@ -63,9 +56,10 @@ class CameraBackendImpl(
     private val sequence = ConcurrentHashMap<Long, AtomicLong>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val cameraManager by lazy {
-        activity.getSystemService(ComponentActivity.CAMERA_SERVICE) as CameraManager
+        activity.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     }
-    private val poolDepth: Int = if (config.frame_pool_depth > 0u) config.frame_pool_depth.toInt() else 3
+    private val poolDepth: Int =
+        if (config.framePoolDepth > 0u) config.framePoolDepth.toInt() else 3
 
     // ---- Discovery -------------------------------------------------
 
@@ -76,17 +70,22 @@ class CameraBackendImpl(
     }
 
     override suspend fun concurrent_support(): ConcurrentSupport {
-        val pairs = runCatching { cameraManager.concurrentCameraIds }
-            .getOrDefault(emptySet())
-            .filter { it.size >= 2 }
-            .map { ids ->
-                val list = ids.toList()
-                ConcurrentPair(primary = list[0], secondary = list[1])
+        val pairs: List<ConcurrentPair> =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                runCatching { cameraManager.concurrentCameraIds }
+                    .getOrDefault(emptySet())
+                    .filter { it.size >= 2 }
+                    .map { ids ->
+                        val list = ids.toList()
+                        ConcurrentPair(primary = list[0], secondary = list[1])
+                    }
+            } else {
+                emptyList()
             }
         return ConcurrentSupport(
-            max_concurrent = if (pairs.isEmpty()) 1u else 2u,
-            approved_pairs = pairs,
-            any_combination = false,
+            maxConcurrent = if (pairs.isEmpty()) 1u else 2u,
+            approvedPairs = pairs,
+            anyCombination = false,
         )
     }
 
@@ -116,7 +115,7 @@ class CameraBackendImpl(
     override suspend fun open(config: SessionConfig): CameraSession = withContext(Dispatchers.Main) {
         val provider = awaitProvider()
         val selector = CameraSelector.Builder().addCameraFilter { cams ->
-            cams.filter { Camera2CameraInfo.from(it).cameraId == config.device_id }
+            cams.filter { Camera2CameraInfo.from(it).cameraId == config.deviceId }
         }.build()
 
         val targetSize = config.resolution?.let { Size(it.width.toInt(), it.height.toInt()) }
@@ -133,10 +132,10 @@ class CameraBackendImpl(
         }.build()
         val analysisBuilder = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setOutputImageFormat(outputFormat(config.pixel_format))
+            .setOutputImageFormat(outputFormat(config.pixelFormat))
             .apply {
                 resolutionSelector?.let { setResolutionSelector(it) }
-                config.target_fps?.let { fps ->
+                config.targetFps?.let { fps ->
                     Camera2Interop.Extender(this).setCaptureRequestOption(
                         android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
                         Range(fps.toInt(), fps.toInt()),
@@ -145,7 +144,7 @@ class CameraBackendImpl(
             }
         val analysis = analysisBuilder.build()
 
-        val handleId = IstmoRuntime.allocHandleId("istmo.camera.session")
+        val handleId: Long = IstmoRuntime.allocHandleId("istmo.camera.session")
         val flow = MutableSharedFlow<CameraFrame>(
             replay = 0,
             extraBufferCapacity = poolDepth,
@@ -155,9 +154,9 @@ class CameraBackendImpl(
         droppedCounter[handleId] = AtomicLong(0)
         sequence[handleId] = AtomicLong(0)
 
-        if (config.emit_frames) {
+        if (config.emitFrames) {
             analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { image ->
-                emitFrame(handleId, image, config.pixel_format)
+                emitFrame(handleId, image, config.pixelFormat)
             }
         }
 
@@ -165,17 +164,17 @@ class CameraBackendImpl(
         val state = SessionState(camera, preview, analysis, provider)
         sessions[handleId] = state
 
-        applyInitialControls(state, config.initial_controls)
+        applyInitialControls(state, config.initialControls)
 
         val negotiatedSize = analysis.resolutionInfo?.resolution ?: Size(0, 0)
-        val negotiatedFps = config.target_fps ?: 30u
+        val negotiatedFps = config.targetFps ?: 30u
         CameraSession(
             session = handleId,
             negotiated = NegotiatedFormat(
                 resolution = Resolution(negotiatedSize.width.toUInt(), negotiatedSize.height.toUInt()),
-                pixel_format = config.pixel_format,
+                pixelFormat = config.pixelFormat,
                 fps = negotiatedFps,
-                rotation_degrees = analysis.resolutionInfo?.rotationDegrees?.toUShort() ?: 0u,
+                rotationDegrees = analysis.resolutionInfo?.rotationDegrees?.toUShort() ?: 0u,
             ),
         )
     }
@@ -190,7 +189,7 @@ class CameraBackendImpl(
     }
 
     override fun frames(session: Long): Flow<CameraFrame> =
-        frames[session]?.asSharedFlow()?.filter { true } ?: emptyFlow()
+        frames[session]?.asSharedFlow() ?: emptyFlow()
 
     override fun releaseNativeHandle(handleId: Long) {
         scope.launch { close(handleId) }
@@ -208,20 +207,18 @@ class CameraBackendImpl(
 
         controls.torch?.let { ctrl.enableTorch(it) }
         controls.zoom?.let { ctrl.setZoomRatio(it) }
-        controls.exposure_compensation_ev?.let {
+        controls.exposureCompensationEv?.let {
             val step = info.exposureState.exposureCompensationStep.toFloat()
             if (step > 0f) ctrl.setExposureCompensationIndex((it / step).toInt())
         }
-        // Focus / white balance / flash leave the device alone unless
-        // explicitly set — CameraX picks sensible defaults.
 
         AppliedControls(
             zoom = info.zoomState.value?.zoomRatio ?: 1f,
             torch = info.torchState.value == androidx.camera.core.TorchState.ON,
             focus = controls.focus ?: FocusMode.ContinuousVideo,
-            exposure_compensation_ev = info.exposureState.exposureCompensationIndex.toFloat()
+            exposureCompensationEv = info.exposureState.exposureCompensationIndex.toFloat()
                 * info.exposureState.exposureCompensationStep.toFloat(),
-            white_balance = controls.white_balance ?: WhiteBalanceMode.Auto,
+            whiteBalance = controls.whiteBalance ?: WhiteBalanceMode.Auto,
             flash = controls.flash ?: FlashMode.Off,
         )
     }
@@ -230,10 +227,6 @@ class CameraBackendImpl(
         session: Long,
         request: StillCaptureRequest,
     ): StillPhoto {
-        // Still capture via `ImageCapture` use-case is left as an
-        // app-side exercise — bind an `ImageCapture` into the same
-        // session on open() when the app needs it, call takePicture,
-        // and convert the result to `StillPhoto` here.
         throw BackendException(CameraError.Backend("capture_still: wire ImageCapture use-case"))
     }
 
@@ -265,13 +258,13 @@ class CameraBackendImpl(
             val (planes, bytes) = extractPlanes(image)
             val frame = CameraFrame(
                 seq = seq.toULong(),
-                timestamp_ns = image.imageInfo.timestamp.toULong(),
+                timestampNs = image.imageInfo.timestamp.toULong(),
                 resolution = Resolution(image.width.toUInt(), image.height.toUInt()),
-                rotation_degrees = image.imageInfo.rotationDegrees.toUShort(),
-                pixel_format = format,
+                rotationDegrees = image.imageInfo.rotationDegrees.toUShort(),
+                pixelFormat = format,
                 planes = planes,
                 bytes = bytes,
-                dropped_before = dropped.toUInt(),
+                droppedBefore = dropped.toUInt(),
             )
             if (!flow.tryEmit(frame)) {
                 droppedCounter[session]?.incrementAndGet()
@@ -293,8 +286,8 @@ class CameraBackendImpl(
             planes.add(
                 FramePlane(
                     offset = offset.toUInt(),
-                    row_stride = p.rowStride.toUInt(),
-                    pixel_stride = p.pixelStride.toUInt(),
+                    rowStride = p.rowStride.toUInt(),
+                    pixelStride = p.pixelStride.toUInt(),
                     width = image.width.toUInt(),
                     height = image.height.toUInt(),
                 )
@@ -324,40 +317,47 @@ class CameraBackendImpl(
             CameraCharacteristics.LENS_FACING_EXTERNAL -> CameraFacing.External
             else -> CameraFacing.Unknown
         }
-        val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+        val focalLengths: List<Float> = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
             ?.toList() ?: emptyList()
-        val maxZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
-        val caps = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toSet() ?: emptySet()
-        val flash = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+        val maxZoom: Float = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+        val caps: Set<Int> = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+            ?.toSet() ?: emptySet()
+        val flash: Boolean = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
         val maxStillRect: Rect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: Rect()
+
+        // Logical multi-camera physical ids require API 28 +
+        // reflection-safe constant resolution. Skip for the demo; a
+        // full-fat backend reads them from
+        // `CameraCharacteristics.LOGICAL_MULTI_CAMERA_PHYSICAL_IDS`
+        // with an API gate.
+        val physicalSensors: List<String> = emptyList()
 
         return CameraDevice(
             id = id,
             label = "Camera $id ($facing)",
             facing = facing,
             lens = inferLens(focalLengths, caps),
-            physical_sensors = chars.get(CameraCharacteristics.LOGICAL_MULTI_CAMERA_PHYSICAL_IDS)
-                ?.toList() ?: emptyList(),
+            physicalSensors = physicalSensors,
             capabilities = CameraCapabilities(
-                min_zoom = 1f,
-                max_zoom = maxZoom,
-                optical_zoom_steps = emptyList(),
-                focal_lengths_mm = focalLengths,
-                supports_flash = flash,
-                supports_torch = flash,
-                supports_autofocus = true,
-                supports_manual_focus = CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in caps,
-                supports_ois = (chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.size ?: 0) > 1,
-                supports_eis = (chars.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)?.size ?: 0) > 1,
-                supports_hdr = CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW in caps,
-                supports_depth = CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_DEPTH_OUTPUT in caps,
-                supports_raw = CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW in caps,
-                max_still_resolution = Resolution(
+                minZoom = 1f,
+                maxZoom = maxZoom,
+                opticalZoomSteps = emptyList(),
+                focalLengthsMm = focalLengths,
+                supportsFlash = flash,
+                supportsTorch = flash,
+                supportsAutofocus = true,
+                supportsManualFocus = CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in caps,
+                supportsOis = (chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.size ?: 0) > 1,
+                supportsEis = (chars.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)?.size ?: 0) > 1,
+                supportsHdr = CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW in caps,
+                supportsDepth = CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_DEPTH_OUTPUT in caps,
+                supportsRaw = CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW in caps,
+                maxStillResolution = Resolution(
                     width = maxStillRect.width().toUInt(),
                     height = maxStillRect.height().toUInt(),
                 ),
             ),
-            supported_formats = emptyList(), // populate from StreamConfigurationMap as needed.
+            supportedFormats = emptyList(),
         )
     }
 
