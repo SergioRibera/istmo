@@ -14,10 +14,13 @@ use istmo_camera::{CameraClient, CameraInitConfig};
 
 // On Android/iOS the facade's `istmo::runtime!` macro bootstraps the
 // runtime + auto-wires every plugin declared through `istmo.toml`.
+// The macro only accepts bare / single-segment paths in `plugins:` —
+// qualified paths like `istmo_camera::CameraClient` fail to parse,
+// so `CameraClient` has to be in scope via `use` above.
 // Desktop/web stays on the hand-rolled bootstrap below.
 #[cfg(any(target_os = "android", target_os = "ios"))]
 istmo::runtime!(
-    plugins: [istmo_camera::CameraClient],
+    plugins: [CameraClient],
 );
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
