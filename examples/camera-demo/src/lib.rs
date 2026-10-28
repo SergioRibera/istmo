@@ -1,5 +1,6 @@
-//! Shared library crate so `main.rs` (native) and the wasm entry
-//! point can both pull in [`CameraApp`] without duplicating code.
+//! Shared library crate so `main.rs` (native), the wasm entry point,
+//! and the Android `#[istmo::mobile_app]` entry can all pull in
+//! [`CameraApp`] without duplicating code.
 
 #![doc(html_root_url = "https://docs.rs/camera-demo")]
 
@@ -10,15 +11,26 @@ pub use app::CameraApp;
 use std::sync::Arc;
 
 use istmo_camera::{CameraClient, CameraInitConfig};
+
+// On Android/iOS the facade's `istmo::runtime!` macro bootstraps the
+// runtime + auto-wires every plugin declared through `istmo.toml`.
+// Desktop/web stays on the hand-rolled bootstrap below.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+istmo::runtime!(
+    plugins: [istmo_camera::CameraClient],
+);
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use istmo_core::{Runtime, RuntimeConfig, RuntimeInit};
 
-/// Build the runtime, register the correct host for the target, and
-/// return a ready-to-call [`CameraClient`] wrapped in `Arc` so it can
-/// be cloned into every open session.
+/// Build the runtime (desktop + web only), register the correct host
+/// for the target, and return a ready-to-call [`CameraClient`]
+/// wrapped in `Arc` so it can be cloned into every open session.
 ///
 /// # Errors
 /// Returns the runtime bring-up error. The platform-specific host
 /// registration is infallible.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn bootstrap() -> Result<Arc<CameraClient>, Box<dyn std::error::Error>> {
     let RuntimeInit { runtime, outbound } = Runtime::init(RuntimeConfig::inline())?;
     register_host(&runtime);
@@ -39,13 +51,13 @@ pub async fn bootstrap() -> Result<Arc<CameraClient>, Box<dyn std::error::Error>
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-fn register_host(runtime: &Arc<Runtime>) {
+fn register_host(runtime: &Arc<istmo_core::Runtime>) {
     use istmo_camera::{CameraHost, DesktopCameraFactory};
     runtime.register_host(CameraHost::new(DesktopCameraFactory));
 }
 
 #[cfg(target_arch = "wasm32")]
-fn register_host(runtime: &Arc<Runtime>) {
+fn register_host(runtime: &Arc<istmo_core::Runtime>) {
     use istmo_camera::{CameraHost, WebCameraFactory};
     runtime.register_host(CameraHost::new(WebCameraFactory));
 }
@@ -95,3 +107,68 @@ pub fn wasm_start() {
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
+
+// -------------------------------------------------------------------
+// Android entry — the facade's `#[istmo::mobile_app]` macro expands
+// the ndk `android_main` entry point around this fn. `istmo::runtime!`
+// (above) auto-registered the `CameraClient`; here we hand the client
+// to eframe through winit's android-game-activity path.
+// -------------------------------------------------------------------
+
+#[cfg(target_os = "android")]
+#[istmo::mobile_app]
+fn mobile_main() {
+    android_logger::init_once(
+        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+    );
+    log::info!("camera-demo mobile_main");
+
+    // Resolve the client on a background thread so the main thread
+    // can hand off to eframe immediately. Any `block_on` inside the
+    // app loop then hits a hot runtime.
+    let client_slot: Arc<std::sync::Mutex<Option<Arc<CameraClient>>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let client_slot_bg = Arc::clone(&client_slot);
+    std::thread::spawn(move || {
+        match pollster::block_on(CameraClient::acquire_with(CameraInitConfig::default())) {
+            Ok(client) => {
+                *client_slot_bg.lock().expect("client slot") = Some(Arc::new(client));
+            }
+            Err(err) => log::error!("CameraClient::acquire_with failed: {err:?}"),
+        }
+    });
+
+    let android_app = istmo::android::android_app()
+        .expect("android_main should have stashed the AndroidApp handle");
+    let event_loop_builder: Option<
+        Box<dyn FnOnce(&mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>)>,
+    > = Some(Box::new(move |builder| {
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+        builder.with_android_app(android_app);
+    }));
+
+    let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Wgpu,
+        event_loop_builder,
+        ..Default::default()
+    };
+
+    if let Err(err) = eframe::run_native(
+        "camera-demo",
+        options,
+        Box::new(move |_cc| {
+            // Spin briefly until the background thread finishes
+            // `acquire_with`. On a cold boot the handshake is a few
+            // hundred ms; on warm starts it's immediate.
+            let client = loop {
+                if let Some(c) = client_slot.lock().expect("client slot").clone() {
+                    break c;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            };
+            Ok(Box::new(CameraApp::new(client)))
+        }),
+    ) {
+        log::error!("eframe exited: {err:?}");
+    }
+}

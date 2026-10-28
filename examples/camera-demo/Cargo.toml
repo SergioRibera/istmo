@@ -17,6 +17,11 @@ name = "camera-demo"
 path = "src/main.rs"
 
 [dependencies]
+# The facade gives us `#[istmo::mobile_app]` + `istmo::runtime!` +
+# `istmo::android::android_app`. `game-activity` is on by default so
+# the Android build sits on `IstmoGameActivity` — a ComponentActivity,
+# which `istmo-camera`'s backend needs for `ActivityResultContracts`.
+istmo = { path = "../..", default-features = false, features = ["game-activity"] }
 istmo-core = { workspace = true }
 istmo-camera = { workspace = true }
 bincode = { workspace = true }
@@ -32,6 +37,14 @@ eframe = { version = "0.29", default-features = false, features = ["glow", "defa
 env_logger = "0.11"
 istmo-camera = { workspace = true, features = ["desktop"] }
 
+# Android — GameActivity + wgpu through the android-game-activity
+# feature set; CameraX / native-side plumbing arrives through
+# `istmo-camera`'s Kotlin backend.
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.29", default-features = false, features = ["wgpu", "default_fonts", "android-game-activity"] }
+winit = { version = "0.30", default-features = false, features = ["android-game-activity"] }
+android_logger = "0.14"
+
 # Browser target: eframe wasm_bindgen entry + the web backend.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts"] }
@@ -41,6 +54,9 @@ console_error_panic_hook = "0.1"
 console_log = "1"
 web-sys = { version = "0.3", features = ["Document", "Element", "HtmlCanvasElement", "Window"] }
 istmo-camera = { workspace = true, features = ["web"] }
+
+[build-dependencies]
+istmo-build = { workspace = true }
 
 [lints.rust]
 missing_debug_implementations = "warn"

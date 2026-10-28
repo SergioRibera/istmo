@@ -1,0 +1,16 @@
+[app]
+# App identity: applied to Gradle by `io.github.sergioribera.istmo` and
+# to Xcode through the generated `ios/.istmo/Istmo.xcconfig`. Version
+# comes from Cargo.toml.
+id = "dev.istmo.cameraDemo"
+name = "istmo-camera demo"
+# Generated Kotlin lands next to the hand-written backend
+# implementations shipped by the camera plugin under
+# `dev.istmo.plugins.camera`.
+android_package = "dev.istmo.runtime"
+
+[min_versions]
+# CameraX ships CameraController features we rely on from API 24; the
+# camera plugin itself bumps `targetSdk` to 34 through Gradle.
+android = 26
+ios = "13.0"
