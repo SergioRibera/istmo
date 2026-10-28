@@ -32,6 +32,15 @@ data class IstmoMetadata(
     val plugins: List<LinkedPlugin>,
     val gradle: List<GradleDependency>,
 ) {
+    /**
+     * Paths the file names that do not exist here. Absolute paths written
+     * from another checkout, or from a container that mounts the sources
+     * elsewhere, stop resolving when the build runs from this one.
+     */
+    fun missingPaths(): List<File> =
+        (listOf(manifestPath) + plugins.flatMap { listOfNotNull(it.nativeDir, it.manifest, it.resDir) })
+            .filterNot(File::exists)
+
     companion object {
         const val SCHEMA = 1
 
@@ -87,8 +96,9 @@ data class IstmoMetadata(
 
 /**
  * Loads [IstmoMetadata] for the crate at [crateDir], refreshing it first
- * with `cargo check` when it is missing or older than the files that
- * decide the plugin set (`Cargo.toml`, `Cargo.lock`, `istmo.toml`).
+ * with `cargo check` when it is missing, older than the files that
+ * decide the plugin set (`Cargo.toml`, `Cargo.lock`, `istmo.toml`), or
+ * names paths that do not exist from this checkout.
  */
 internal class MetadataStore(
     private val androidRoot: File,
@@ -98,14 +108,32 @@ internal class MetadataStore(
     val file: File = File(androidRoot, IstmoMetadata.RELATIVE_PATH)
 
     fun load(rustTarget: String, minSdk: Int): IstmoMetadata {
-        if (isStale()) refresh(rustTarget, minSdk)
+        if (isStale() || pointsElsewhere()) refresh(rustTarget, minSdk)
         if (!file.isFile) {
             throw GradleException(
                 "istmo: `cargo check` did not write ${file.path}. Make sure the crate's build.rs calls " +
                     "`istmo_build::emit()` and that istmo-build matches this Gradle plugin's version.",
             )
         }
-        return IstmoMetadata.parse(file)
+        val metadata = IstmoMetadata.parse(file)
+        val missing = metadata.missingPaths()
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "istmo: ${file.path} still names paths that do not exist after refreshing it:\n" +
+                    missing.joinToString("\n") { "  ${it.path}" },
+            )
+        }
+        return metadata
+    }
+
+    /** The file was written where the sources live at another path. */
+    private fun pointsElsewhere(): Boolean {
+        val missing = runCatching { IstmoMetadata.parse(file).missingPaths() }.getOrElse { return true }
+        if (missing.isEmpty()) return false
+        toolchain.project.logger.lifecycle(
+            "istmo: ${file.path} points at ${missing.first().path}, which does not exist here",
+        )
+        return true
     }
 
     private fun isStale(): Boolean {
