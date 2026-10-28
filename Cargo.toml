@@ -24,6 +24,7 @@ members = [
     "plugins/barcode-scanner",
     "plugins/opener",
     "plugins/camera",
+    "examples/camera-demo",
     "examples/data-store-demo",
     "examples/live-activity-demo",
     "examples/pen-demo",
