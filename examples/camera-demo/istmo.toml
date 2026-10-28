@@ -2,7 +2,7 @@
 # App identity: applied to Gradle by `io.github.sergioribera.istmo` and
 # to Xcode through the generated `ios/.istmo/Istmo.xcconfig`. Version
 # comes from Cargo.toml.
-id = "dev.istmo.cameraDemo"
+id = "dev.istmo.camerademo"
 name = "istmo-camera demo"
 # Generated Kotlin lands next to the hand-written backend
 # implementations shipped by the camera plugin under

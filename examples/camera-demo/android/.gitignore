@@ -1,0 +1,17 @@
+# Gradle / IDE artifacts
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.cxx/
+
+# Build artefacts must NEVER live under src/. Legacy path from an earlier
+# justfile revision that copied .so files here directly — kept as a
+# safety net so a stale build doesn't accidentally ship with the APK.
+app/src/main/jniLibs/
+
+# Gradle wrapper jar — not committed. `just` recipes use the system
+# gradle inside the docker image.
+gradle/wrapper/gradle-wrapper.jar

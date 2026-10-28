@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- CameraX enumerates every exposed sensor through
+         `CameraManager`; the runtime prompt is driven from the
+         plugin's Rust-facing `request_access` method. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="true" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
+    <application
+        android:allowBackup="true"
+        android:label="${istmoLabel}"
+        android:icon="${istmoIcon}"
+        android:hasCode="true"
+        android:theme="@style/Theme.AppCompat.NoActionBar">
+        <!-- `CameraDemoActivity` is a one-liner `IstmoGameActivity`
+             subclass. `IstmoGameActivity.onCreate` boots the runtime
+             + runs `IstmoPluginRegistry.registerAll(this, runtime)` —
+             the camera plugin's `CameraFactoryImpl` is auto-wired
+             with the Activity (`android_backend_arg = "activity"` in
+             its own `istmo.toml`). `android_main` fires right
+             after. -->
+        <activity
+            android:name="dev.istmo.camerademo.CameraDemoActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|keyboardHidden|screenSize">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="camera_demo" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

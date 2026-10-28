@@ -35,6 +35,7 @@ share-demo: (build "share-demo") (install "share-demo") (run "share-demo")
 data-store: (build "data-store-demo") (install "data-store-demo") (run "data-store-demo")
 android-multi: (build "android-multi") (install "android-multi") (run "android-multi")
 rust-mobile-demo: (build "rust-mobile-demo") (install "rust-mobile-demo") (run "rust-mobile-demo")
+camera-demo: (build "camera-demo") (install "camera-demo") (run "camera-demo")
 
 # ---- iOS demo (macOS-only) ------------------------------------------
 #
@@ -203,6 +204,7 @@ run name:
         rust-mobile-demo) component="dev.istmo.rustdemo/dev.istmo.rustdemo.RustMobileActivity" ;;
         biometric-demo) component="dev.istmo.biometricdemo/dev.istmo.biometricdemo.BiometricDemoActivity" ;;
         share-demo) component="dev.istmo.sharedemo/dev.istmo.sharedemo.ShareDemoActivity" ;;
+        camera-demo) component="dev.istmo.camerademo/dev.istmo.camerademo.CameraDemoActivity" ;;
         *) echo "just run: no launcher configured for '{{name}}'"; exit 1 ;;
     esac
     adb shell am start -n "$component"

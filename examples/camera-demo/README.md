@@ -7,8 +7,9 @@ Single eframe + egui app that runs the `istmo-camera` plugin on:
 - **Browser** — wasm32-unknown-unknown. Pure Rust (`WebCamera` via
   `web-sys` + `getUserMedia`).
 
-Mobile targets ship the same `app.rs`; wiring the Android / iOS
-scaffold mirrors `examples/rust-mobile-demo` and is deferred for now.
+- **Android** — eframe + wgpu through `IstmoGameActivity`. Same
+  `app.rs`; the generated `CameraDispatcher.kt` + the plugin's
+  `CameraFactoryImpl.kt` are auto-wired by `IstmoPluginRegistry`.
 
 ## Run on desktop
 
@@ -25,6 +26,34 @@ cargo run -p camera-demo --release
   the `/dev/video*` nodes.
 - Pick a camera in the left panel, press **open**, drag the zoom
   slider, toggle torch (where supported).
+
+## Install on Android
+
+The project's docker image carries the SDK + NDK + Rust Android
+targets. From the repo root, one command builds, installs, and
+launches on an attached device:
+
+```sh
+just camera-demo
+```
+
+(Expands to `build camera-demo` → `install camera-demo` → `run camera-demo`,
+mirroring `just pen-demo` / `just data-store`.)
+
+Watch logs:
+
+```sh
+adb logcat -s camera-demo istmo.camera RustStdoutStderr
+```
+
+Without docker: install the Android SDK (API 34), NDK r26 or later,
+and `rustup target add aarch64-linux-android`. The istmo gradle
+plugin invokes cargo for every ABI listed in
+`android/app/build.gradle.kts` → `abiFilters` (default `arm64-v8a`).
+
+The permission prompt fires the first time the app opens a session
+(`request_access` on the Rust side → `ActivityResultContracts.RequestPermission`
+on the Kotlin side).
 
 ## Run in the browser
 
