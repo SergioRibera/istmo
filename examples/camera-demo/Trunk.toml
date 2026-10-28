@@ -1,0 +1,17 @@
+[build]
+target = "index.html"
+release = false
+# Public URL root — change to the subpath if you deploy under
+# `/camera-demo/` on a static host.
+public_url = "/"
+
+[watch]
+ignore = ["android", "ios", "dist"]
+
+[serve]
+address = "0.0.0.0"
+port = 8080
+# `getUserMedia` requires a secure origin. Localhost counts as
+# secure, but testing on another device on the LAN usually does
+# not — tunnel via `cloudflared tunnel --url http://localhost:8080`
+# or `localhost.run` to get an HTTPS URL.

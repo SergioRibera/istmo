@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <title>istmo-camera demo</title>
+    <link data-trunk rel="rust" data-wasm-opt="z" data-type="main" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #121216;
+        overflow: hidden;
+        font-family:
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        color: #eaeaea;
+      }
+      #camera {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        touch-action: none;
+      }
+      #loading {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #888;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="camera"></canvas>
+    <div id="loading">loading…</div>
+    <script type="module">
+      // Trunk emits an `init(wasm)` module next to this file; the
+      // generated glue removes the overlay once the wasm entry point
+      // completes.
+      const overlay = document.getElementById("loading");
+      new MutationObserver(() => {
+        if (document.querySelector("canvas#camera").clientHeight > 0) {
+          overlay?.remove();
+        }
+      }).observe(document.body, {
+        attributes: true,
+        subtree: true,
+        childList: true,
+      });
+    </script>
+  </body>
+</html>
