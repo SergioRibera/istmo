@@ -47,12 +47,16 @@
 pub mod codegen;
 
 pub mod desktop;
+pub mod web;
 
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "desktop"
 ))]
 pub use desktop::{DesktopCamera, DesktopCameraFactory};
+
+#[cfg(all(target_arch = "wasm32", feature = "web"))]
+pub use web::{WebCamera, WebCameraFactory};
 
 use std::sync::Arc;
 

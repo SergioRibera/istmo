@@ -20,6 +20,9 @@ codegen = ["dep:istmo-build"]
 # Mobile crates leave this off — Kotlin / Swift backends do the real
 # capture there.
 desktop = ["dep:nokhwa"]
+# Enables the wasm32 host built on `web-sys` + `getUserMedia`. See
+# `src/web.rs` — currently a stub + roadmap.
+web = []
 
 [dependencies]
 istmo-core = { workspace = true }

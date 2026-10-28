@@ -176,6 +176,48 @@ For high-resolution preview-only pipelines, open the session with
 copy fires per frame. (The native widget rendering path is the
 app's responsibility.)
 
+## Desktop (Linux, macOS, Windows)
+
+Pure-Rust host behind the `desktop` feature:
+
+```toml
+[dependencies]
+istmo-camera = { version = "0.1", features = ["desktop"] }
+```
+
+Backed by [`nokhwa`](https://docs.rs/nokhwa) — V4L2 on Linux,
+AVFoundation on macOS, Media Foundation on Windows. Supports
+`PixelFormat::Rgba8` and `PixelFormat::Bgra8` (nokhwa decodes the
+camera's native YUYV / NV12 / RAWRGB stream into packed 32-bit).
+Other formats return `CameraError::FormatUnsupported` on `open()`.
+
+Register the host with the runtime:
+
+```rust
+use istmo::Runtime;
+use istmo_camera::{CameraHost, DesktopCameraFactory};
+
+let runtime = Runtime::init(/* ... */)?;
+runtime.register_host(CameraHost::new(DesktopCameraFactory));
+```
+
+NixOS builds pull the backend's C deps through `nix develop` —
+`v4l-utils`, `libclang`, `gcc` and `nasm` are already in the
+project's `flake.nix` devshell.
+
+## Web (wasm32)
+
+Scaffold shipped behind the `web` feature. The surface matches
+desktop + mobile; the backend is a stub until the real
+`web-sys::MediaDevices` pipeline lands. See `src/web.rs` for the
+roadmap (MediaStreamTrackProcessor vs. canvas + rAF, constraint
+API, permission mapping).
+
+```toml
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+istmo-camera = { version = "0.1", features = ["web"] }
+```
+
 ## Native layer
 
 Reference backends live under `native/{android,ios}/`:
