@@ -20,15 +20,23 @@ codegen = ["dep:istmo-build"]
 # Mobile crates leave this off — Kotlin / Swift backends do the real
 # capture there.
 desktop = ["dep:nokhwa"]
-# Enables the wasm32 host built on `web-sys` + `getUserMedia`. See
-# `src/web.rs` — currently a stub + roadmap.
-web = []
+# Enables the wasm32 host built on `web-sys` + `getUserMedia`.
+# Downstream apps targeting `wasm32-unknown-unknown` turn this on;
+# the `[target]`-gated deps are inert on every other target.
+web = [
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:js-sys",
+    "dep:send_wrapper",
+    "dep:web-sys",
+]
 
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 bincode = { workspace = true }
 flume = { workspace = true }
+oneshot = { workspace = true }
 tracing = { workspace = true }
 istmo-build = { workspace = true, optional = true }
 
@@ -39,6 +47,45 @@ istmo-build = { workspace = true, optional = true }
 # Drop `decoding` (mozjpeg-sys) — desktop ships raw frames; MJPEG stays
 # a camera's own capture format, we don't decode on CPU.
 nokhwa = { version = "0.10", default-features = false, features = ["input-native", "output-threaded"], optional = true }
+
+# Browser capture backend — pure wasm32, uses `navigator.mediaDevices`
+# directly through `web-sys`. Gated behind the `web` feature.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+# `send_wrapper` lets us satisfy the plugin surface's `Send + Sync`
+# bounds even though web-sys types are `!Send` + `!Sync`. Safe here
+# because `wasm32-unknown-unknown` is single-threaded.
+send_wrapper = { version = "0.6", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "CanvasRenderingContext2d",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlVideoElement",
+    "ImageData",
+    "MediaDeviceInfo",
+    "MediaDeviceKind",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamConstraints",
+    "MediaStreamTrack",
+    "MediaTrackCapabilities",
+    "MediaTrackConstraintSet",
+    "MediaTrackConstraints",
+    "MediaTrackSettings",
+    "Navigator",
+    "Node",
+    "Performance",
+    "Permissions",
+    "PermissionDescriptor",
+    "PermissionName",
+    "PermissionState",
+    "PermissionStatus",
+    "Window",
+] }
 
 [build-dependencies]
 istmo-build = { workspace = true }
