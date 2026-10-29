@@ -113,7 +113,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             device.unlockForConfiguration()
         }
 
-        let handleId = IstmoRuntime.shared.allocHandleId("istmo.camera.session")
+        let handleId = IstmoRuntime.shared.allocHandleId(pluginId: "istmo.camera")
         let (stream, continuation) = AsyncStream<CameraFrame>.makeStream(
             bufferingPolicy: .bufferingOldest(Int(max(config.frame_pool_depth, 1)))
         )

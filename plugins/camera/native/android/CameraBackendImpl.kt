@@ -144,7 +144,7 @@ class CameraBackendImpl(
             }
         val analysis = analysisBuilder.build()
 
-        val handleId: Long = IstmoRuntime.allocHandleId("istmo.camera.session")
+        val handleId: Long = IstmoRuntime.allocHandleId("istmo.camera")
         val flow = MutableSharedFlow<CameraFrame>(
             replay = 0,
             extraBufferCapacity = poolDepth,
@@ -154,14 +154,15 @@ class CameraBackendImpl(
         droppedCounter[handleId] = AtomicLong(0)
         sequence[handleId] = AtomicLong(0)
 
+        val analyzer = Executors.newSingleThreadExecutor()
         if (config.emitFrames) {
-            analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { image ->
+            analysis.setAnalyzer(analyzer) { image ->
                 emitFrame(handleId, image, config.pixelFormat)
             }
         }
 
         val camera = provider.bindToLifecycle(activity, selector, preview, analysis)
-        val state = SessionState(camera, preview, analysis, provider)
+        val state = SessionState(camera, preview, analysis, analyzer, provider)
         sessions[handleId] = state
 
         applyInitialControls(state, config.initialControls)
@@ -182,6 +183,8 @@ class CameraBackendImpl(
     override suspend fun close(session: Long) = withContext(Dispatchers.Main) {
         val state = sessions.remove(session) ?: return@withContext
         state.provider.unbind(state.preview, state.analysis)
+        state.analysis.clearAnalyzer()
+        state.analyzer.shutdown()
         frames.remove(session)
         droppedCounter.remove(session)
         sequence.remove(session)
@@ -236,6 +239,7 @@ class CameraBackendImpl(
         val camera: androidx.camera.core.Camera,
         val preview: Preview,
         val analysis: ImageAnalysis,
+        val analyzer: java.util.concurrent.ExecutorService,
         val provider: ProcessCameraProvider,
     )
 

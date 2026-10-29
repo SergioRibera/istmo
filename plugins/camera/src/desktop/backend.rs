@@ -8,11 +8,11 @@
 //! stream in a `broadcast` on the app side.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
-use istmo_core::NativeHandleId;
+use istmo_core::{NativeHandleId, Runtime};
 use nokhwa::CallbackCamera;
 use nokhwa::pixel_format::RgbAFormat;
 use nokhwa::query;
@@ -34,11 +34,17 @@ use crate::{
 /// Each open session owns its own `nokhwa` capture thread and feeds
 /// frames into a shared [`flume::Receiver<CameraFrame>`] handed to
 /// subscribers via [`Camera::frames`].
+/// Session ids handed out by every [`DesktopCamera`] in the process. Release
+/// hooks see every [`NativeHandleId`] the runtime frees, so ids must not
+/// repeat across instances.
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Debug)]
 pub struct DesktopCamera {
     config: CameraInitConfig,
-    sessions: Mutex<HashMap<NativeHandleId, SessionEntry>>,
-    next_session: AtomicU64,
+    sessions: Arc<Mutex<HashMap<NativeHandleId, SessionEntry>>>,
+    /// Set once the runtime release hook for this instance is installed.
+    release_hook: OnceLock<()>,
 }
 
 /// Live session state. `CallbackCamera` keeps its capture thread
@@ -65,13 +71,38 @@ impl DesktopCamera {
     pub fn new(config: CameraInitConfig) -> Self {
         Self {
             config,
-            sessions: Mutex::new(HashMap::new()),
-            next_session: AtomicU64::new(1),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            release_hook: OnceLock::new(),
         }
     }
 
-    fn alloc_id(&self) -> NativeHandleId {
-        NativeHandleId::new(self.next_session.fetch_add(1, Ordering::Relaxed))
+    fn alloc_id() -> NativeHandleId {
+        NativeHandleId::new(NEXT_SESSION.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Close a session when the client drops its [`crate::SessionHandle`]
+    /// without calling `close`. The runtime only forwards that release to
+    /// its hooks; there is no transport pump to route it back here.
+    fn install_release_hook(&self) {
+        self.release_hook.get_or_init(|| {
+            let Ok(runtime) = Runtime::global() else {
+                tracing::warn!(
+                    target: "istmo.camera.desktop",
+                    "no runtime; dropped sessions stay open until close"
+                );
+                return;
+            };
+            let sessions: Weak<Mutex<HashMap<NativeHandleId, SessionEntry>>> =
+                Arc::downgrade(&self.sessions);
+            runtime.install_native_handle_release_hook(Arc::new(move |id| {
+                let Some(sessions) = sessions.upgrade() else {
+                    return;
+                };
+                let entry = sessions.lock().expect("sessions mutex").remove(&id);
+                // Dropping the entry stops the capture thread and frees the device.
+                drop(entry);
+            }));
+        });
     }
 
     fn pool_depth(&self) -> usize {
@@ -125,8 +156,8 @@ impl Camera for DesktopCamera {
         }
 
         let (tx, rx) = flume::bounded::<CameraFrame>(self.pool_depth());
-        let dropped = std::sync::Arc::new(AtomicU64::new(0));
-        let seq = std::sync::Arc::new(AtomicU64::new(0));
+        let dropped = Arc::new(AtomicU64::new(0));
+        let seq = Arc::new(AtomicU64::new(0));
         let pixel_format = config.pixel_format;
 
         let index = resolve_index(&config.device_id)?;
@@ -176,7 +207,8 @@ impl Camera for DesktopCamera {
             rotation_degrees: 0,
         };
 
-        let id = self.alloc_id();
+        self.install_release_hook();
+        let id = Self::alloc_id();
         self.sessions.lock().expect("sessions mutex").insert(
             id,
             SessionEntry {
@@ -282,8 +314,8 @@ impl Camera for DesktopCamera {
             .camera
             .last_frame()
             .map_err(|err| CameraError::Backend(err.to_string()))?;
-        let dropped = std::sync::Arc::new(AtomicU64::new(0));
-        let seq = std::sync::Arc::new(AtomicU64::new(0));
+        let dropped = Arc::new(AtomicU64::new(0));
+        let seq = Arc::new(AtomicU64::new(0));
         let frame = buffer_to_frame(&buffer, entry.pixel_format, &seq, &dropped)
             .map_err(CameraError::Backend)?;
         Ok(StillPhoto {
