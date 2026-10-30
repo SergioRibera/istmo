@@ -57,6 +57,7 @@ pub mod app_config;
 pub mod app_icon;
 pub mod apple_plist;
 pub mod assets;
+pub mod builtins;
 pub mod contract;
 pub mod desktop;
 pub mod doc_extract;
