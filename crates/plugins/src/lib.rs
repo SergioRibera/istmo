@@ -36,6 +36,7 @@ pub mod safe_area;
 pub mod service;
 pub mod system_info;
 pub mod task_scheduler;
+pub mod theme_preference;
 pub mod worker;
 
 pub use crate::activity_results::{
@@ -81,5 +82,9 @@ pub use crate::service::{
 pub use crate::task_scheduler::{
     ExistingWorkPolicy, TASK_SCHEDULER_PLUGIN_ID, TaskHandle, TaskRequest, TaskScheduler,
     TaskSchedulerClient, TaskSchedulerError, TaskSchedulerHost,
+};
+pub use crate::theme_preference::{
+    Color, ColorScheme, THEME_PREFERENCE_CHANNEL, THEME_PREFERENCE_PLUGIN_ID, ThemePreference,
+    ThemePreferenceClient, ThemePreferenceStream,
 };
 pub use crate::worker::{Constraints, NetworkKind, TaskOutcome, WorkerContext};
