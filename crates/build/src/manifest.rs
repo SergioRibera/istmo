@@ -36,6 +36,7 @@ const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "android_service",
     "ios_background",
     "info_plist",
+    "android_permissions",
     "android_backend",
     "android_backend_arg",
     "ios_backend",
@@ -124,6 +125,19 @@ pub struct PluginEntry {
     /// Swift type handed to the generated dispatcher. Defaults to
     /// `<T>BackendImpl` / `<T>FactoryImpl`.
     pub ios_backend: Option<String>,
+
+    /// `android.permission.*` identifiers emitted as `<uses-permission>`
+    /// entries in the consuming app's `AndroidManifest.xml` when this
+    /// plugin is wired through `istmo::runtime!`. The app's build.rs
+    /// aggregates this list across every wired plugin (walked via
+    /// `DEP_*_ISTMO_MANIFEST`) — zero manifest entries from istmo for
+    /// plugins the app does not use.
+    ///
+    /// Plugins that offer both a zero-permission and a permission-gated
+    /// surface should split into two plugin types (e.g. `NetworkOnline`
+    /// vs `NetworkState`) rather than toggle inside one plugin. The
+    /// wired-plugin set is the authoritative capability granularity.
+    pub android_permissions: Vec<String>,
 }
 
 /// Constructor argument of a plugin's Android backend, declared as
@@ -615,6 +629,10 @@ fn parse_plugin_entry(
         )?,
         None => Vec::new(),
     };
+    let android_permissions = match table.get("android_permissions") {
+        Some(item) => expect_array_of_strings(item, "plugin.android_permissions")?,
+        None => Vec::new(),
+    };
     let optional_string = |key: &'static str, full: &'static str| {
         table
             .get(key)
@@ -636,6 +654,7 @@ fn parse_plugin_entry(
         android_backend: optional_string("android_backend", "plugin.android_backend")?,
         android_backend_arg,
         ios_backend: optional_string("ios_backend", "plugin.ios_backend")?,
+        android_permissions,
     })
 }
 
@@ -994,6 +1013,26 @@ pub(crate) fn expect_array_of_tables<'a>(
             key: key.to_owned(),
             expected: "array of tables ([[…]])",
         })
+}
+
+pub(crate) fn expect_array_of_strings(
+    item: &Item,
+    key: &'static str,
+) -> Result<Vec<String>, ManifestError> {
+    let array = item.as_array().ok_or_else(|| ManifestError::TypeMismatch {
+        key: key.to_owned(),
+        expected: "array of strings",
+    })?;
+    array
+        .iter()
+        .map(|v| match v {
+            Value::String(s) => Ok(s.value().clone()),
+            _ => Err(ManifestError::TypeMismatch {
+                key: key.to_owned(),
+                expected: "array of strings",
+            }),
+        })
+        .collect()
 }
 
 pub(crate) fn expect_string<'a>(
