@@ -14,7 +14,7 @@
 //! downstream filter can report "known builtin, nothing to inject"
 //! without a second lookup table.
 
-use crate::manifest::{AndroidBackendArg, Deployment, PluginEntry};
+use crate::manifest::PluginEntry;
 
 /// Returns one [`PluginEntry`] per first-party plugin bundled with
 /// `istmo-plugins`.
@@ -28,11 +28,7 @@ pub fn entries() -> Vec<PluginEntry> {
         ("istmo.lifecycle", "::istmo_plugins::AppLifecycle", &[][..]),
         ("istmo.deeplinks", "::istmo_plugins::DeepLinks", &[][..]),
         ("istmo.safe_area", "::istmo_plugins::SafeArea", &[][..]),
-        (
-            "istmo.system_info",
-            "::istmo_plugins::SystemInfo",
-            &[][..],
-        ),
+        ("istmo.system_info", "::istmo_plugins::SystemInfo", &[][..]),
         (
             "istmo.device_info",
             "::istmo_plugins::DeviceInfoClient",
@@ -68,15 +64,8 @@ pub fn entries() -> Vec<PluginEntry> {
     .map(|(id, client_type, perms)| PluginEntry {
         id: id.to_owned(),
         client_type: Some(client_type.to_owned()),
-        default_deployment: Deployment::Local,
-        auto_register: true,
-        android_service: None,
-        ios_background: None,
-        info_plist: Vec::new(),
-        android_backend: None,
-        android_backend_arg: AndroidBackendArg::default(),
-        ios_backend: None,
         android_permissions: perms.iter().map(|&s| s.to_owned()).collect(),
+        ..PluginEntry::default()
     })
     .collect()
 }
@@ -126,8 +115,7 @@ mod tests {
     #[test]
     fn lookup_by_client_type_handles_both_forms() {
         assert_eq!(
-            find_by_client_type("::istmo_plugins::NetworkStateClient")
-                .map(|e| e.id),
+            find_by_client_type("::istmo_plugins::NetworkStateClient").map(|e| e.id),
             Some("istmo.network_state".to_owned())
         );
         assert_eq!(

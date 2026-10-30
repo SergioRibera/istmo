@@ -62,8 +62,9 @@ const KNOWN_IOS_BACKGROUND_KEYS: &[&str] = &[
 
 const KNOWN_OVERRIDE_KEYS: &[&str] = &["plugin", "deployment"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Encode, Decode)]
 pub enum Deployment {
+    #[default]
     Local,
 
     Remote,
@@ -75,6 +76,24 @@ impl Deployment {
             "local" => Some(Self::Local),
             "remote" => Some(Self::Remote),
             _ => None,
+        }
+    }
+}
+
+impl Default for PluginEntry {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            client_type: None,
+            default_deployment: Deployment::Local,
+            auto_register: true,
+            android_service: None,
+            ios_background: None,
+            info_plist: Vec::new(),
+            android_backend: None,
+            android_backend_arg: AndroidBackendArg::default(),
+            ios_backend: None,
+            android_permissions: Vec::new(),
         }
     }
 }

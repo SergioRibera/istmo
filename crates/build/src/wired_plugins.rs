@@ -209,11 +209,19 @@ fn dedup_preserve_order(items: Vec<String>) -> Vec<String> {
     seen
 }
 
-/// Cross-reference the `wired_paths` extracted from app source
-/// against the full set of known plugins (builtins + every
-/// standalone plugin reachable through `DEP_*_ISTMO_MANIFEST`) and
-/// return only the entries that actually appear in the app's
-/// `istmo::runtime!` invocation.
+/// Cross-reference the `wired_paths` with every known plugin set.
+///
+/// The known set is builtins + every standalone plugin reachable
+/// through `DEP_*_ISTMO_MANIFEST`. An entry is kept only if it
+/// appears in the app's `istmo::runtime!` invocation OR the
+/// auto-wiring env vars (`ISTMO_AUTO_PLUGINS`, `ISTMO_AUTO_REMOTE`)
+/// that [`crate::manifest::emit_wiring_env`] populates.
+///
+/// The env-var union is critical: a transitive dep's `build.rs` may
+/// register a plugin that the app itself never names in `runtime!`.
+/// Trusting only the syn-extracted idents would under-report the
+/// wired set and strip a permission the auto-wired plugin needs at
+/// runtime.
 ///
 /// Matching is by the client-type's last `::`-separated segment —
 /// `FooClient` written in the app's source matches
@@ -228,7 +236,10 @@ pub fn resolve_wired_entries(
     dep_manifests: &[Manifest],
     wired_paths: &[String],
 ) -> Vec<PluginEntry> {
-    let wanted: Vec<&str> = wired_paths.iter().map(|p| last_segment(p)).collect();
+    let mut all_paths: Vec<String> = wired_paths.to_vec();
+    all_paths.extend(paths_from_auto_env("ISTMO_AUTO_PLUGINS"));
+    all_paths.extend(paths_from_auto_env("ISTMO_AUTO_REMOTE"));
+    let wanted: Vec<&str> = all_paths.iter().map(|p| last_segment(p)).collect();
 
     let mut all: Vec<PluginEntry> = builtins::entries();
     for m in dep_manifests {
@@ -256,6 +267,99 @@ pub fn resolve_wired_entries(
 
 fn last_segment(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path).trim()
+}
+
+fn paths_from_auto_env(key: &str) -> Vec<String> {
+    std::env::var(key)
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Serialize the `<uses-permission>` entries from the resolved
+/// plugin set into an Android manifest fragment ready for Android
+/// Gradle Plugin's manifest merger.
+///
+/// Output shape:
+///
+/// ```xml
+/// <?xml version="1.0" encoding="utf-8"?>
+/// <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+///   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+/// </manifest>
+/// ```
+///
+/// Returns an empty document (zero `<uses-permission>` children) when
+/// no entry declares any permission; downstream Gradle integration
+/// can skip inclusion in that case to avoid an empty merge
+/// contribution.
+#[must_use]
+pub fn render_android_permissions_manifest(entries: &[PluginEntry]) -> String {
+    let mut perms: Vec<&str> = entries
+        .iter()
+        .flat_map(|e| e.android_permissions.iter().map(String::as_str))
+        .collect();
+    perms.sort_unstable();
+    perms.dedup();
+
+    let mut out = String::new();
+    out.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+    out.push_str(
+        "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n",
+    );
+    for perm in &perms {
+        out.push_str("    <uses-permission android:name=\"");
+        out.push_str(&xml_escape(perm));
+        out.push_str("\"/>\n");
+    }
+    out.push_str("</manifest>\n");
+    out
+}
+
+/// Write [`render_android_permissions_manifest`] to a conventional
+/// path under the app's Android project (`<android_app_dir>/src/main/
+/// istmo-permissions.xml`). Creates the directory tree if needed.
+///
+/// `android_app_dir` is the `android/app/` directory of the consuming
+/// Gradle project.
+///
+/// # Errors
+///
+/// Returns the underlying `io::Error` when directory creation or the
+/// write itself fails.
+pub fn write_android_permissions_sidecar(
+    android_app_dir: impl AsRef<Path>,
+    entries: &[PluginEntry],
+) -> io::Result<std::path::PathBuf> {
+    let dest = android_app_dir
+        .as_ref()
+        .join("src")
+        .join("main")
+        .join("istmo-permissions.xml");
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&dest, render_android_permissions_manifest(entries))?;
+    Ok(dest)
+}
+
+fn xml_escape(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -380,5 +484,47 @@ mod tests {
     fn resolve_empty_wired_list_yields_empty() {
         let selected = resolve_wired_entries(&[], &[]);
         assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn render_empty_manifest_has_no_permissions() {
+        let out = render_android_permissions_manifest(&[]);
+        assert!(out.contains("<manifest"));
+        assert!(!out.contains("<uses-permission"));
+    }
+
+    #[test]
+    fn render_sorts_and_dedupes() {
+        let a = PluginEntry {
+            id: "a".into(),
+            android_permissions: vec!["android.permission.INTERNET".into()],
+            ..PluginEntry::default()
+        };
+        let b = PluginEntry {
+            id: "b".into(),
+            android_permissions: vec![
+                "android.permission.ACCESS_NETWORK_STATE".into(),
+                "android.permission.INTERNET".into(),
+            ],
+            ..PluginEntry::default()
+        };
+        let out = render_android_permissions_manifest(&[a, b]);
+        // Alphabetical: ACCESS_NETWORK_STATE before INTERNET
+        let network_pos = out.find("ACCESS_NETWORK_STATE").unwrap();
+        let internet_pos = out.find("INTERNET").unwrap();
+        assert!(network_pos < internet_pos);
+        // INTERNET appears exactly once (not duplicated)
+        assert_eq!(out.matches("INTERNET").count(), 1);
+    }
+
+    #[test]
+    fn render_escapes_xml_specials() {
+        let entry = PluginEntry {
+            id: "x".into(),
+            android_permissions: vec!["a&b<c".into()],
+            ..PluginEntry::default()
+        };
+        let out = render_android_permissions_manifest(&[entry]);
+        assert!(out.contains("a&amp;b&lt;c"));
     }
 }
