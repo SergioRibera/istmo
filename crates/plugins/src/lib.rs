@@ -36,6 +36,7 @@ pub mod notifications;
 pub mod permissions;
 pub mod safe_area;
 pub mod service;
+pub mod storage_info;
 pub mod system_info;
 pub mod task_scheduler;
 pub mod theme_preference;
@@ -77,6 +78,10 @@ pub use crate::permissions::{
 };
 pub use crate::safe_area::{
     EdgeInsets, SAFE_AREA_CHANNEL, SafeArea, SafeAreaInsets, SafeAreaStream,
+};
+pub use crate::storage_info::{
+    ExternalMedium, ExternalStorage, STORAGE_INFO_CHANNEL, STORAGE_INFO_PLUGIN_ID, StorageInfo,
+    StorageInfoClient, StorageInfoStream,
 };
 pub use crate::system_info::{
     CalendarSystem, Formats, FormatsStream, LayoutDirection, Locale, LocaleStream,
