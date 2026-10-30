@@ -217,6 +217,17 @@ fn dedup_preserve_order(items: Vec<String>) -> Vec<String> {
 /// auto-wiring env vars (`ISTMO_AUTO_PLUGINS`, `ISTMO_AUTO_REMOTE`)
 /// that [`crate::manifest::emit_wiring_env`] populates.
 ///
+/// Facade re-exports (`use istmo::plugins::NetworkStateClient` vs.
+/// `use istmo_plugins::NetworkStateClient` vs. the fully-qualified
+/// `::istmo_plugins::NetworkStateClient`) all resolve the same way:
+/// the last `::`-separated segment is the match key, so the user's
+/// `plugins: [NetworkStateClient]` only has to agree on the
+/// identifier, not the module path.
+///
+/// Plugins whose `client_type` is `None` ship unconditionally:
+/// they expose no client surface the app can list in `runtime!`,
+/// so their presence in a dep manifest is itself the opt-in signal.
+///
 /// The env-var union is critical: a transitive dep's `build.rs` may
 /// register a plugin that the app itself never names in `runtime!`.
 /// Trusting only the syn-extracted idents would under-report the
