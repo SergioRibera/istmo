@@ -35,6 +35,8 @@ objc2 = "0.6"
 windows-sys = { version = "0.60", default-features = false, features = [
     "Win32_Foundation",
     "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Power",
     "Win32_System_Time",
     "Win32_System_SystemInformation",
 ] }

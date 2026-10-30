@@ -38,6 +38,8 @@ pub mod permissions;
 pub mod safe_area;
 pub mod service;
 pub mod storage_info;
+#[cfg(feature = "desktop-publisher")]
+pub mod storage_info_publisher;
 pub mod system_info;
 pub mod task_scheduler;
 pub mod theme_preference;
