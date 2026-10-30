@@ -27,6 +27,7 @@
 
 pub mod activity_results;
 pub mod admob;
+pub mod battery_state;
 pub mod deeplinks;
 pub mod device_info;
 pub mod lifecycle;
@@ -51,6 +52,10 @@ pub use crate::admob::slot::{
 pub use crate::admob::{
     ADMOB_PLUGIN_ID, AdError, AdMob, AdMobClient, AdMobConfig, AdMobHost, Banner, BannerRect,
     BannerRequest, Interstitial, InterstitialOutcome, Rewarded, RewardedOutcome,
+};
+pub use crate::battery_state::{
+    BATTERY_STATE_CHANNEL, BATTERY_STATE_PLUGIN_ID, BatteryState, BatteryStateClient,
+    BatteryStateStream, ChargingState, PowerSource, ThermalState,
 };
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
 pub use crate::device_info::{
