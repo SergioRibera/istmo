@@ -17,9 +17,11 @@
 use crate::manifest::{AndroidBackendArg, Deployment, PluginEntry};
 
 /// Returns one [`PluginEntry`] per first-party plugin bundled with
-/// `istmo-plugins`. Only `id`, `client_type`, `android_permissions`
-/// and `info_plist` are meaningful; the remaining fields are set to
-/// their [`PluginEntry`] defaults.
+/// `istmo-plugins`.
+///
+/// Only `id`, `client_type`, `android_permissions` and `info_plist`
+/// are meaningful; the remaining fields are set to their
+/// [`PluginEntry`] defaults.
 #[must_use]
 pub fn entries() -> Vec<PluginEntry> {
     [
@@ -85,9 +87,11 @@ pub fn find(plugin_id: &str) -> Option<PluginEntry> {
     entries().into_iter().find(|e| e.id == plugin_id)
 }
 
-/// Lookup a builtin entry by its fully-qualified client type path
-/// (e.g. `::istmo_plugins::NetworkStateClient`). Accepts both the
-/// `::`-rooted form and the shorter `istmo_plugins::X` form.
+/// Lookup a builtin entry by its fully-qualified client type path.
+///
+/// Accepts both the `::`-rooted form
+/// (`::istmo_plugins::NetworkStateClient`) and the shorter
+/// `istmo_plugins::X` form.
 #[must_use]
 pub fn find_by_client_type(path: &str) -> Option<PluginEntry> {
     let normalised = path.trim_start_matches("::");
