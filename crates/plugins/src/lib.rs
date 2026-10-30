@@ -30,6 +30,7 @@ pub mod admob;
 pub mod deeplinks;
 pub mod device_info;
 pub mod lifecycle;
+pub mod network_state;
 pub mod notifications;
 pub mod permissions;
 pub mod safe_area;
@@ -57,6 +58,10 @@ pub use crate::device_info::{
     FormFactor, ScreenInfo,
 };
 pub use crate::lifecycle::{AppLifecycle, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream};
+pub use crate::network_state::{
+    LinkKind, NETWORK_STATE_CHANNEL, NETWORK_STATE_PLUGIN_ID, NetworkState, NetworkStateClient,
+    NetworkStateStream,
+};
 pub use crate::notifications::{
     NOTIFICATIONS_PLUGIN_ID, NotificationError, NotificationHandle, NotificationImportance,
     NotificationRequest, Notifications, NotificationsClient, NotificationsHost,
