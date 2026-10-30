@@ -2,16 +2,18 @@
 //!
 //! Call [`SystemInfoPublisher::install`] once at startup and tick from
 //! an event loop (or on OS change notifications). Linux reads env +
-//! `/etc/localtime`; macOS calls Foundation via `objc2`; Windows and
-//! WebAssembly are stubbed and expect an OS-level bridge from the
-//! surrounding runtime (same shape as `SafeAreaPublisher`'s Kotlin /
-//! Swift side).
+//! `/etc/localtime`; macOS calls Foundation via `objc2`; Windows uses
+//! `GetUserDefaultLocaleName` + `GetDynamicTimeZoneInformation` +
+//! `GetLocaleInfoEx` via `windows-sys`. WebAssembly / BSDs still
+//! expect an OS-level bridge from the surrounding runtime.
 //!
 //! Values are coarse by design — accurate wall-clock offset / DST on
 //! Linux requires a tz database crate (`chrono-tz`, `time-tz`); this
 //! sampler reports the IANA id and leaves offset at `0, is_dst =
 //! false` so downstream can resolve precisely with the tz library of
-//! its choice.
+//! its choice. Windows reports IANA-shaped `TimeZoneKeyName` which
+//! may be a Windows id — downstream can map via CLDR
+//! `windowsZones.xml`.
 
 use std::sync::{Arc, Weak};
 
@@ -100,11 +102,20 @@ fn sample() -> Option<Sample> {
     {
         apple::sample()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+    #[cfg(target_os = "windows")]
     {
-        // Windows / WASM / BSDs: no pure-Rust path yet. Wire a native
-        // bridge (same pattern as Android / iOS plugin backends) and
-        // publish directly via `Runtime::publish_early_latest`.
+        windows::sample()
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    )))]
+    {
+        // WASM / BSDs: no pure-Rust path yet. Wire a native bridge
+        // (same pattern as Android / iOS plugin backends) and publish
+        // directly via `Runtime::publish_early_latest`.
         None
     }
 }
@@ -405,5 +416,169 @@ mod apple {
             (language, region),
             ("en", Some("US" | "AU" | "CA" | "NZ" | "PH")) | ("es", Some("MX" | "US"))
         )
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+mod windows {
+    use windows_sys::Win32::Globalization::{
+        GetLocaleInfoEx, GetUserDefaultLocaleName, LOCALE_IFIRSTDAYOFWEEK, LOCALE_NAME_MAX_LENGTH,
+        LOCALE_SDECIMAL, LOCALE_SINTLSYMBOL, LOCALE_STHOUSAND, LOCALE_STIMEFORMAT,
+    };
+    use windows_sys::Win32::System::Time::{
+        DYNAMIC_TIME_ZONE_INFORMATION, GetDynamicTimeZoneInformation,
+    };
+
+    use super::super::{
+        CalendarSystem, Formats, Locale, TimeZone,
+        tables::{
+            canonicalize_tag, currency_for_region, direction_from_language,
+            measurement_for_region, parse_bcp47, temperature_for_region,
+        },
+    };
+    use super::Sample;
+
+    pub(super) fn sample() -> Option<Sample> {
+        let bcp47 = user_default_locale().unwrap_or_else(|| "en-US".to_owned());
+        let (language, script, region) = parse_bcp47(&bcp47);
+        let canonical = canonicalize_tag(&language, script.as_deref(), region.as_deref());
+        let direction = direction_from_language(&language);
+
+        let locale = Locale {
+            bcp47: canonical.clone(),
+            language: language.clone(),
+            region: region.clone(),
+            script,
+            direction,
+        };
+
+        let (tz_id, offset_seconds, is_dst, abbreviation) = timezone_info();
+        let timezone = TimeZone {
+            id: tz_id,
+            offset_seconds,
+            is_dst,
+            abbreviation,
+        };
+
+        let decimal_separator =
+            locale_string(&bcp47, LOCALE_SDECIMAL).unwrap_or_else(|| ".".into());
+        let group_separator =
+            locale_string(&bcp47, LOCALE_STHOUSAND).unwrap_or_else(|| ",".into());
+        let currency_code = locale_string(&bcp47, LOCALE_SINTLSYMBOL)
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+            .or_else(|| currency_for_region(region.as_deref()).map(str::to_owned));
+        let uses_24h = locale_string(&bcp47, LOCALE_STIMEFORMAT)
+            .map(|fmt| fmt.contains('H') && !fmt.contains('h'))
+            .unwrap_or(false);
+        let first_day_of_week = locale_integer(&bcp47, LOCALE_IFIRSTDAYOFWEEK)
+            .map(|v| u8::try_from((v + 1) % 7 + 1).unwrap_or(1))
+            .unwrap_or(1);
+
+        let formats = Formats {
+            uses_24h,
+            first_day_of_week,
+            measurement: measurement_for_region(region.as_deref()),
+            temperature_unit: temperature_for_region(region.as_deref()),
+            currency_code,
+            decimal_separator,
+            group_separator,
+            calendar: CalendarSystem::Gregorian,
+        };
+
+        Some(Sample {
+            locale,
+            timezone,
+            formats,
+        })
+    }
+
+    fn user_default_locale() -> Option<String> {
+        let mut buf = [0u16; LOCALE_NAME_MAX_LENGTH as usize];
+        // SAFETY: Win32 call writes up to `buf.len()` wide chars into `buf`
+        // or returns 0 on failure.
+        let written = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) };
+        if written <= 0 {
+            return None;
+        }
+        wide_to_string(&buf[..(written as usize).saturating_sub(1)])
+    }
+
+    fn locale_string(locale: &str, lctype: u32) -> Option<String> {
+        let wide_locale = to_wide_z(locale);
+        // SAFETY: First call with cchData = 0 asks for the required buffer
+        // size. Second call fills a correctly-sized buffer.
+        let needed =
+            unsafe { GetLocaleInfoEx(wide_locale.as_ptr(), lctype, std::ptr::null_mut(), 0) };
+        if needed <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; needed as usize];
+        let written = unsafe {
+            GetLocaleInfoEx(wide_locale.as_ptr(), lctype, buf.as_mut_ptr(), needed)
+        };
+        if written <= 0 {
+            return None;
+        }
+        wide_to_string(&buf[..(written as usize).saturating_sub(1)])
+    }
+
+    fn locale_integer(locale: &str, lctype: u32) -> Option<i32> {
+        const LOCALE_RETURN_NUMBER: u32 = 0x2000_0000;
+        let wide_locale = to_wide_z(locale);
+        let mut value: i32 = 0;
+        // SAFETY: With LOCALE_RETURN_NUMBER OR'd into LCType, GetLocaleInfoEx
+        // writes a single i32 into the provided buffer (cast as *mut u16).
+        let written = unsafe {
+            GetLocaleInfoEx(
+                wide_locale.as_ptr(),
+                lctype | LOCALE_RETURN_NUMBER,
+                (&raw mut value).cast::<u16>(),
+                (std::mem::size_of::<i32>() / std::mem::size_of::<u16>()) as i32,
+            )
+        };
+        if written <= 0 {
+            return None;
+        }
+        Some(value)
+    }
+
+    fn timezone_info() -> (String, i32, bool, String) {
+        let mut info: DYNAMIC_TIME_ZONE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: Writes DYNAMIC_TIME_ZONE_INFORMATION fields; return value
+        // tells whether we're in standard (TIME_ZONE_ID_STANDARD = 1) or
+        // daylight (TIME_ZONE_ID_DAYLIGHT = 2) time.
+        let kind = unsafe { GetDynamicTimeZoneInformation(&raw mut info) };
+        let is_dst = kind == 2;
+        let bias_minutes = info.Bias
+            + if is_dst {
+                info.DaylightBias
+            } else {
+                info.StandardBias
+            };
+        let offset_seconds = -(bias_minutes as i32) * 60;
+        let id = wide_to_string(&info.TimeZoneKeyName).unwrap_or_else(|| "UTC".into());
+        let abbreviation = if is_dst {
+            wide_to_string(&info.DaylightName).unwrap_or_default()
+        } else {
+            wide_to_string(&info.StandardName).unwrap_or_default()
+        };
+        (id, offset_seconds, is_dst, abbreviation)
+    }
+
+    fn to_wide_z(s: &str) -> Vec<u16> {
+        let mut v: Vec<u16> = s.encode_utf16().collect();
+        v.push(0);
+        v
+    }
+
+    fn wide_to_string(wide: &[u16]) -> Option<String> {
+        let end = wide.iter().position(|&c| c == 0).unwrap_or(wide.len());
+        let slice = &wide[..end];
+        if slice.is_empty() {
+            return None;
+        }
+        String::from_utf16(slice).ok()
     }
 }

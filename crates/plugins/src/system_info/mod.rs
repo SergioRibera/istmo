@@ -224,10 +224,28 @@ mod clock {
         {
             apple()
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+        #[cfg(target_os = "windows")]
+        {
+            windows()
+        }
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows"
+        )))]
         {
             None
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[allow(unsafe_code)]
+    fn windows() -> Option<u64> {
+        use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+        // SAFETY: `GetTickCount64` is a non-blocking accessor returning
+        // milliseconds since boot, no pointer parameters.
+        Some(unsafe { GetTickCount64() })
     }
 
     #[cfg(target_os = "linux")]

@@ -65,6 +65,15 @@ fn enrich(mut base: DeviceInfo) -> DeviceInfo {
             base.os_version = Some(v);
         }
     }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(bytes) = windows::ram_total_bytes() {
+            base.ram_total_bytes = Some(bytes);
+        }
+        if let Some(v) = windows::os_version() {
+            base.os_version = Some(v);
+        }
+    }
     base
 }
 
@@ -119,5 +128,41 @@ mod apple {
             let c_str = core::ffi::CStr::from_ptr(bytes);
             c_str.to_str().ok().map(ToOwned::to_owned)
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+mod windows {
+    use windows_sys::Win32::System::SystemInformation::{
+        GetVersionExW, GlobalMemoryStatusEx, MEMORYSTATUSEX, OSVERSIONINFOW,
+    };
+
+    pub(super) fn ram_total_bytes() -> Option<u64> {
+        let mut info: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        info.dwLength = u32::try_from(std::mem::size_of::<MEMORYSTATUSEX>()).ok()?;
+        // SAFETY: `GlobalMemoryStatusEx` fills `info` when `dwLength`
+        // matches `size_of::<MEMORYSTATUSEX>()`.
+        let ok = unsafe { GlobalMemoryStatusEx(&raw mut info) };
+        if ok == 0 {
+            return None;
+        }
+        Some(info.ullTotalPhys)
+    }
+
+    pub(super) fn os_version() -> Option<String> {
+        let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
+        info.dwOSVersionInfoSize =
+            u32::try_from(std::mem::size_of::<OSVERSIONINFOW>()).ok()?;
+        // SAFETY: `GetVersionExW` is deprecated but still writes the
+        // version fields when passed a correctly-sized struct.
+        let ok = unsafe { GetVersionExW(&raw mut info) };
+        if ok == 0 {
+            return None;
+        }
+        Some(format!(
+            "{}.{}.{}",
+            info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber
+        ))
     }
 }
