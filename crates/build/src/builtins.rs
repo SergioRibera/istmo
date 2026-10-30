@@ -98,8 +98,7 @@ pub fn find_by_client_type(path: &str) -> Option<PluginEntry> {
     entries().into_iter().find(|e| {
         e.client_type
             .as_deref()
-            .map(|ct| ct.trim_start_matches("::") == normalised)
-            .unwrap_or(false)
+            .is_some_and(|ct| ct.trim_start_matches("::") == normalised)
     })
 }
 
