@@ -16,6 +16,8 @@
 //! - [`activity_results`] — Android `startActivityForResult` /
 //!   `ActivityResultLauncher` equivalent.
 //! - [`safe_area`] — safe-area insets published by the host UI layer.
+//! - [`system_info`] — locale, time zone, formatting preferences and
+//!   the device wall clock.
 //! - [`admob`] — Google AdMob banner / interstitial / rewarded ads.
 //! - [`service`] — long-running background service control channel.
 //! - [`worker`] — one-shot scheduled task hooks.
@@ -26,11 +28,13 @@
 pub mod activity_results;
 pub mod admob;
 pub mod deeplinks;
+pub mod device_info;
 pub mod lifecycle;
 pub mod notifications;
 pub mod permissions;
 pub mod safe_area;
 pub mod service;
+pub mod system_info;
 pub mod task_scheduler;
 pub mod worker;
 
@@ -47,6 +51,10 @@ pub use crate::admob::{
     BannerRequest, Interstitial, InterstitialOutcome, Rewarded, RewardedOutcome,
 };
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
+pub use crate::device_info::{
+    DEVICE_INFO_CHANNEL, DEVICE_INFO_PLUGIN_ID, DeviceInfo, DeviceInfoClient, DeviceInfoStream,
+    FormFactor, ScreenInfo,
+};
 pub use crate::lifecycle::{AppLifecycle, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream};
 pub use crate::notifications::{
     NOTIFICATIONS_PLUGIN_ID, NotificationError, NotificationHandle, NotificationImportance,
@@ -58,6 +66,12 @@ pub use crate::permissions::{
 };
 pub use crate::safe_area::{
     EdgeInsets, SAFE_AREA_CHANNEL, SafeArea, SafeAreaInsets, SafeAreaStream,
+};
+pub use crate::system_info::{
+    CalendarSystem, Formats, FormatsStream, LayoutDirection, Locale, LocaleStream,
+    MeasurementSystem, SYSTEM_INFO_FORMATS_CHANNEL, SYSTEM_INFO_LOCALE_CHANNEL,
+    SYSTEM_INFO_PLUGIN_ID, SYSTEM_INFO_TIMEZONE_CHANNEL, SystemInfo, TemperatureUnit, TimeZone,
+    TimeZoneStream,
 };
 pub use crate::service::{
     NotificationSpec, SERVICE_CONTROL_PLUGIN_ID, ServiceContext, ServiceControl,
