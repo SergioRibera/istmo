@@ -57,9 +57,7 @@ impl CapabilitiesClient {
     }
 
     pub fn current(&self) -> Result<Option<Capabilities>, IstmoError> {
-        self.slot
-            .peek()
-            .map_or(Ok(None), |b| decode(&b).map(Some))
+        self.slot.peek().map_or(Ok(None), |b| decode(&b).map(Some))
     }
 
     /// Returns [`current`](Self::current) if present, otherwise the

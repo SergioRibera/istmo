@@ -116,8 +116,8 @@ mod linux {
     use super::super::{
         CalendarSystem, Formats, Locale, TimeZone,
         tables::{
-            canonicalize_tag, currency_for_region, direction_from_language,
-            measurement_for_region, parse_bcp47, temperature_for_region,
+            canonicalize_tag, currency_for_region, direction_from_language, measurement_for_region,
+            parse_bcp47, temperature_for_region,
         },
     };
     use super::Sample;
@@ -155,7 +155,11 @@ mod linux {
             calendar: CalendarSystem::Gregorian,
         };
 
-        Sample { locale, timezone, formats }
+        Sample {
+            locale,
+            timezone,
+            formats,
+        }
     }
 
     fn read_env_locale() -> String {
@@ -198,10 +202,14 @@ mod linux {
     /// use Sunday; Middle East uses Saturday.
     fn first_day_of_week_for(region: Option<&str>) -> u8 {
         match region {
-            Some("US" | "CA" | "MX" | "BR" | "AR" | "CL" | "CO" | "PE" | "VE" | "JP" | "KR"
-            | "CN" | "TW" | "HK" | "IL" | "ZA" | "PH" | "TH") => 7,
-            Some("AF" | "BH" | "DZ" | "EG" | "IQ" | "JO" | "KW" | "LY" | "OM" | "QA" | "SA"
-            | "SD" | "SY" | "YE") => 6,
+            Some(
+                "US" | "CA" | "MX" | "BR" | "AR" | "CL" | "CO" | "PE" | "VE" | "JP" | "KR" | "CN"
+                | "TW" | "HK" | "IL" | "ZA" | "PH" | "TH",
+            ) => 7,
+            Some(
+                "AF" | "BH" | "DZ" | "EG" | "IQ" | "JO" | "KW" | "LY" | "OM" | "QA" | "SA" | "SD"
+                | "SY" | "YE",
+            ) => 6,
             _ => 1,
         }
     }
@@ -223,8 +231,8 @@ mod apple {
     use super::super::{
         CalendarSystem, Formats, Locale, MeasurementSystem, TimeZone,
         tables::{
-            canonicalize_tag, currency_for_region, direction_from_language,
-            measurement_for_region, parse_bcp47, temperature_for_region,
+            canonicalize_tag, currency_for_region, direction_from_language, measurement_for_region,
+            parse_bcp47, temperature_for_region,
         },
     };
     use super::Sample;
@@ -265,8 +273,7 @@ mod apple {
         let (first_day_of_week, calendar_system) = unsafe { autoupdating_calendar() }
             .map(|c| {
                 let fw: isize = unsafe { msg_send![c, firstWeekday] };
-                let id = unsafe { calendar_identifier(c) }
-                    .unwrap_or_else(|| "gregorian".into());
+                let id = unsafe { calendar_identifier(c) }.unwrap_or_else(|| "gregorian".into());
                 (apple_weekday_to_iso(fw), calendar_from_id(&id))
             })
             .unwrap_or((1, CalendarSystem::Gregorian));
@@ -297,7 +304,11 @@ mod apple {
             calendar: calendar_system,
         };
 
-        Some(Sample { locale, timezone, formats })
+        Some(Sample {
+            locale,
+            timezone,
+            formats,
+        })
     }
 
     unsafe fn autoupdating_locale() -> Option<*mut AnyObject> {
@@ -380,8 +391,9 @@ mod apple {
             "gregorian" => CalendarSystem::Gregorian,
             "buddhist" => CalendarSystem::Buddhist,
             "japanese" => CalendarSystem::Japanese,
-            "islamic" | "islamic-civil" | "islamic-umalqura" | "islamic-tbla"
-            | "islamic-rgsa" => CalendarSystem::Islamic,
+            "islamic" | "islamic-civil" | "islamic-umalqura" | "islamic-tbla" | "islamic-rgsa" => {
+                CalendarSystem::Islamic
+            }
             "hebrew" => CalendarSystem::Hebrew,
             "persian" => CalendarSystem::Persian,
             other => CalendarSystem::Other(other.to_owned()),
@@ -391,8 +403,7 @@ mod apple {
     fn locale_has_am_pm(language: &str, region: Option<&str>) -> bool {
         matches!(
             (language, region),
-            ("en", Some("US" | "AU" | "CA" | "NZ" | "PH"))
-                | ("es", Some("MX" | "US"))
+            ("en", Some("US" | "AU" | "CA" | "NZ" | "PH")) | ("es", Some("MX" | "US"))
         )
     }
 }

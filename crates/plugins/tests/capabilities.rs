@@ -26,7 +26,10 @@ fn publish(rt: &std::sync::Arc<Runtime>, caps: &Capabilities) {
 fn current_or_default_returns_zero_before_publish() {
     let init = Runtime::mock();
     let plugin = CapabilitiesClient::from_runtime(&init.runtime).expect("declared");
-    assert_eq!(plugin.current_or_default().unwrap(), Capabilities::default());
+    assert_eq!(
+        plugin.current_or_default().unwrap(),
+        Capabilities::default()
+    );
 }
 
 #[test]

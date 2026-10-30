@@ -1,7 +1,8 @@
 use istmo_core::{Runtime, codec};
 use istmo_plugins::{
-    CalendarSystem, Formats, LayoutDirection, Locale, MeasurementSystem, SYSTEM_INFO_FORMATS_CHANNEL,
-    SYSTEM_INFO_LOCALE_CHANNEL, SYSTEM_INFO_TIMEZONE_CHANNEL, SystemInfo, TemperatureUnit, TimeZone,
+    CalendarSystem, Formats, LayoutDirection, Locale, MeasurementSystem,
+    SYSTEM_INFO_FORMATS_CHANNEL, SYSTEM_INFO_LOCALE_CHANNEL, SYSTEM_INFO_TIMEZONE_CHANNEL,
+    SystemInfo, TemperatureUnit, TimeZone,
 };
 
 fn sample_locale() -> Locale {

@@ -345,15 +345,18 @@ impl FormatsStream {
 }
 
 fn peek_locale(slot: &LatestValueSlot) -> Result<Option<Locale>, IstmoError> {
-    slot.peek().map_or(Ok(None), |b| decode_locale(&b).map(Some))
+    slot.peek()
+        .map_or(Ok(None), |b| decode_locale(&b).map(Some))
 }
 
 fn peek_timezone(slot: &LatestValueSlot) -> Result<Option<TimeZone>, IstmoError> {
-    slot.peek().map_or(Ok(None), |b| decode_timezone(&b).map(Some))
+    slot.peek()
+        .map_or(Ok(None), |b| decode_timezone(&b).map(Some))
 }
 
 fn peek_formats(slot: &LatestValueSlot) -> Result<Option<Formats>, IstmoError> {
-    slot.peek().map_or(Ok(None), |b| decode_formats(&b).map(Some))
+    slot.peek()
+        .map_or(Ok(None), |b| decode_formats(&b).map(Some))
 }
 
 fn decode_locale(bytes: &[u8]) -> Result<Locale, IstmoError> {

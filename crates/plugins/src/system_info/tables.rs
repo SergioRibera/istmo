@@ -127,10 +127,7 @@ pub fn parse_bcp47(tag: &str) -> (String, Option<String>, Option<String>) {
     let mut script = None;
     let mut region = None;
     for part in parts {
-        if script.is_none()
-            && part.len() == 4
-            && part.chars().all(|c| c.is_ascii_alphabetic())
-        {
+        if script.is_none() && part.len() == 4 && part.chars().all(|c| c.is_ascii_alphabetic()) {
             let mut s = String::with_capacity(4);
             for (i, c) in part.chars().enumerate() {
                 if i == 0 {
@@ -145,10 +142,7 @@ pub fn parse_bcp47(tag: &str) -> (String, Option<String>, Option<String>) {
             && part.chars().all(|c| c.is_ascii_alphabetic())
         {
             region = Some(part.to_ascii_uppercase());
-        } else if region.is_none()
-            && part.len() == 3
-            && part.chars().all(|c| c.is_ascii_digit())
-        {
+        } else if region.is_none() && part.len() == 3 && part.chars().all(|c| c.is_ascii_digit()) {
             region = Some(part.to_string());
         }
     }
@@ -185,15 +179,27 @@ mod tests {
 
     #[test]
     fn measurement_derivation() {
-        assert_eq!(measurement_for_region(Some("US")), MeasurementSystem::UsCustomary);
-        assert_eq!(measurement_for_region(Some("GB")), MeasurementSystem::UkImperial);
-        assert_eq!(measurement_for_region(Some("AR")), MeasurementSystem::Metric);
+        assert_eq!(
+            measurement_for_region(Some("US")),
+            MeasurementSystem::UsCustomary
+        );
+        assert_eq!(
+            measurement_for_region(Some("GB")),
+            MeasurementSystem::UkImperial
+        );
+        assert_eq!(
+            measurement_for_region(Some("AR")),
+            MeasurementSystem::Metric
+        );
         assert_eq!(measurement_for_region(None), MeasurementSystem::Metric);
     }
 
     #[test]
     fn temperature_derivation() {
-        assert_eq!(temperature_for_region(Some("US")), TemperatureUnit::Fahrenheit);
+        assert_eq!(
+            temperature_for_region(Some("US")),
+            TemperatureUnit::Fahrenheit
+        );
         assert_eq!(temperature_for_region(Some("GB")), TemperatureUnit::Celsius);
         assert_eq!(temperature_for_region(None), TemperatureUnit::Celsius);
     }

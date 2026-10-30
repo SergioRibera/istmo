@@ -1,5 +1,5 @@
 use istmo_core::{Runtime, codec};
-use istmo_plugins::{NETWORK_STATE_CHANNEL, LinkKind, NetworkState, NetworkStateClient};
+use istmo_plugins::{LinkKind, NETWORK_STATE_CHANNEL, NetworkState, NetworkStateClient};
 
 fn sample() -> NetworkState {
     NetworkState {

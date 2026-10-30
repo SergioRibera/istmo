@@ -84,6 +84,11 @@ pub use crate::permissions::{
 pub use crate::safe_area::{
     EdgeInsets, SAFE_AREA_CHANNEL, SafeArea, SafeAreaInsets, SafeAreaStream,
 };
+pub use crate::service::{
+    NotificationSpec, SERVICE_CONTROL_PLUGIN_ID, ServiceContext, ServiceControl,
+    ServiceControlClient, ServiceControlError, ServiceControlHost, StopNotifier, WakeLock,
+    WakelockToken, stop_channel,
+};
 pub use crate::storage_info::{
     ExternalMedium, ExternalStorage, STORAGE_INFO_CHANNEL, STORAGE_INFO_PLUGIN_ID, StorageInfo,
     StorageInfoClient, StorageInfoStream,
@@ -93,11 +98,6 @@ pub use crate::system_info::{
     MeasurementSystem, SYSTEM_INFO_FORMATS_CHANNEL, SYSTEM_INFO_LOCALE_CHANNEL,
     SYSTEM_INFO_PLUGIN_ID, SYSTEM_INFO_TIMEZONE_CHANNEL, SystemInfo, TemperatureUnit, TimeZone,
     TimeZoneStream,
-};
-pub use crate::service::{
-    NotificationSpec, SERVICE_CONTROL_PLUGIN_ID, ServiceContext, ServiceControl,
-    ServiceControlClient, ServiceControlError, ServiceControlHost, StopNotifier, WakeLock,
-    WakelockToken, stop_channel,
 };
 pub use crate::task_scheduler::{
     ExistingWorkPolicy, TASK_SCHEDULER_PLUGIN_ID, TaskHandle, TaskRequest, TaskScheduler,

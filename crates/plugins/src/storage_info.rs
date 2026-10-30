@@ -68,9 +68,7 @@ impl StorageInfoClient {
     }
 
     pub fn current(&self) -> Result<Option<StorageInfo>, IstmoError> {
-        self.slot
-            .peek()
-            .map_or(Ok(None), |b| decode(&b).map(Some))
+        self.slot.peek().map_or(Ok(None), |b| decode(&b).map(Some))
     }
 
     #[must_use]
