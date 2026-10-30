@@ -7,11 +7,11 @@
 //! - error decode via `From<IstmoError>` recovers the typed variant.
 
 use istmo_camera::{
-    AccessStatus, AppliedControls, Camera, CameraCapabilities, CameraControls, CameraDevice,
-    CameraError, CameraFacing, CameraFrame, CameraInitConfig, CameraSession, ConcurrentPair,
-    ConcurrentSupport, FlashMode, FocusMode, FramePlane, LensKind, NegotiatedFormat, PixelFormat,
-    Resolution, SessionConfig, StillCaptureRequest, StillPhoto, SupportedFormat, WhiteBalanceMode,
-    CAMERA_PLUGIN_ID,
+    AccessStatus, AppliedControls, CAMERA_PLUGIN_ID, Camera, CameraCapabilities, CameraControls,
+    CameraDevice, CameraError, CameraFacing, CameraFrame, CameraInitConfig, CameraSession,
+    ConcurrentPair, ConcurrentSupport, FlashMode, FocusMode, FramePlane, LensKind,
+    NegotiatedFormat, PixelFormat, Resolution, SessionConfig, StillCaptureRequest, StillPhoto,
+    SupportedFormat, WhiteBalanceMode,
 };
 use istmo_core::IstmoError;
 
@@ -19,11 +19,9 @@ fn roundtrip<T>(value: &T) -> T
 where
     T: bincode::Encode + bincode::Decode<()> + PartialEq + std::fmt::Debug,
 {
-    let encoded = bincode::encode_to_vec(value, bincode::config::standard())
-        .expect("encode");
+    let encoded = bincode::encode_to_vec(value, bincode::config::standard()).expect("encode");
     let (decoded, _) =
-        bincode::decode_from_slice::<T, _>(&encoded, bincode::config::standard())
-            .expect("decode");
+        bincode::decode_from_slice::<T, _>(&encoded, bincode::config::standard()).expect("decode");
     assert_eq!(value, &decoded, "round-trip failed");
     decoded
 }
@@ -248,8 +246,8 @@ fn access_status_roundtrip() {
 #[test]
 fn error_decode_from_plugin_bytes() {
     let original = CameraError::DeviceNotFound("cam-7".into());
-    let payload = bincode::encode_to_vec(&original, bincode::config::standard())
-        .expect("encode error");
+    let payload =
+        bincode::encode_to_vec(&original, bincode::config::standard()).expect("encode error");
     let wire = IstmoError::PluginError { bytes: payload };
     let decoded: CameraError = CameraError::from(wire);
     assert_eq!(decoded, original);
@@ -293,8 +291,7 @@ fn _assert_trait_surface<T: Camera>(t: &T) {
         let _: Result<AccessStatus, CameraError> = t.request_access().await;
     };
     let _o: &dyn Fn() -> _ = &|| async {
-        let _: Result<CameraSession, CameraError> =
-            t.open(SessionConfig::new("x")).await;
+        let _: Result<CameraSession, CameraError> = t.open(SessionConfig::new("x")).await;
     };
     let _f: &dyn Fn() -> _ = &|| {
         let _: flume::Receiver<CameraFrame> = t.frames(id);

@@ -108,7 +108,9 @@ impl WebCamera {
 
 impl Default for WebCamera {
     fn default() -> Self {
-        Self::new(CameraInitConfig { frame_pool_depth: 3 })
+        Self::new(CameraInitConfig {
+            frame_pool_depth: 3,
+        })
     }
 }
 
@@ -163,10 +165,7 @@ impl Camera for WebCamera {
     }
 
     async fn open(&self, config: SessionConfig) -> Result<CameraSession, CameraError> {
-        if !matches!(
-            config.pixel_format,
-            PixelFormat::Rgba8 | PixelFormat::Bgra8
-        ) {
+        if !matches!(config.pixel_format, PixelFormat::Rgba8 | PixelFormat::Bgra8) {
             return Err(CameraError::FormatUnsupported);
         }
 
@@ -203,9 +202,10 @@ impl Camera for WebCamera {
         let track = {
             let sessions = self.sessions.borrow();
             let entry = sessions.get(&session).ok_or(CameraError::SessionClosed)?;
-            SendWrapper::new(first_video_track(&entry.stream).ok_or_else(|| {
-                CameraError::Backend("stream has no video track".into())
-            })?)
+            SendWrapper::new(
+                first_video_track(&entry.stream)
+                    .ok_or_else(|| CameraError::Backend("stream has no video track".into()))?,
+            )
         };
 
         relay(move || apply_controls_impl(track, controls)).await
@@ -359,13 +359,18 @@ async fn access_status_impl() -> Result<AccessStatus, CameraError> {
     Reflect::set(&descriptor, &"name".into(), &"camera".into())
         .map_err(|err| CameraError::Backend(js_err(err)))?;
     let promise = permissions.query(&descriptor).map_err(|err| {
-        CameraError::Backend(format!("permissions.query('camera') rejected: {}", js_err(err)))
+        CameraError::Backend(format!(
+            "permissions.query('camera') rejected: {}",
+            js_err(err)
+        ))
     })?;
     let status: PermissionStatus = JsFuture::from(promise)
         .await
         .map_err(|err| CameraError::Backend(js_err(err)))?
         .dyn_into()
-        .map_err(|_| CameraError::Backend("permissions.query returned non-PermissionStatus".into()))?;
+        .map_err(|_| {
+            CameraError::Backend("permissions.query returned non-PermissionStatus".into())
+        })?;
     Ok(match status.state() {
         PermissionState::Granted => AccessStatus::Granted,
         PermissionState::Denied => AccessStatus::Denied,
@@ -565,7 +570,14 @@ fn media_devices() -> Result<web_sys::MediaDevices, CameraError> {
 fn install_dom(
     document: &Document,
     stream: &MediaStream,
-) -> Result<(HtmlVideoElement, HtmlCanvasElement, CanvasRenderingContext2d), CameraError> {
+) -> Result<
+    (
+        HtmlVideoElement,
+        HtmlCanvasElement,
+        CanvasRenderingContext2d,
+    ),
+    CameraError,
+> {
     let video: HtmlVideoElement = document
         .create_element("video")
         .map_err(|err| CameraError::Backend(js_err(err)))?

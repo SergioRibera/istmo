@@ -8,8 +8,8 @@
 //! stream in a `broadcast` on the app side.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::SystemTime;
 
 use istmo_core::{NativeHandleId, Runtime};
@@ -120,8 +120,7 @@ impl Default for DesktopCamera {
 #[allow(clippy::missing_errors_doc)]
 impl Camera for DesktopCamera {
     async fn devices(&self) -> Result<Vec<CameraDevice>, CameraError> {
-        let infos = query(ApiBackend::Auto)
-            .map_err(|err| CameraError::Backend(err.to_string()))?;
+        let infos = query(ApiBackend::Auto).map_err(|err| CameraError::Backend(err.to_string()))?;
         Ok(infos.into_iter().map(describe_device).collect())
     }
 
@@ -148,10 +147,7 @@ impl Camera for DesktopCamera {
     }
 
     async fn open(&self, config: SessionConfig) -> Result<CameraSession, CameraError> {
-        if !matches!(
-            config.pixel_format,
-            PixelFormat::Rgba8 | PixelFormat::Bgra8
-        ) {
+        if !matches!(config.pixel_format, PixelFormat::Rgba8 | PixelFormat::Bgra8) {
             return Err(CameraError::FormatUnsupported);
         }
 
@@ -168,19 +164,22 @@ impl Camera for DesktopCamera {
         let seq_cb = seq.clone();
         let fmt_cb = pixel_format;
 
-        let mut camera = CallbackCamera::new(index.clone(), requested, move |buffer| {
-            match buffer_to_frame(&buffer, fmt_cb, &seq_cb, &dropped_cb) {
-                Ok(frame) => {
-                    if tx_cb.try_send(frame).is_err() {
-                        dropped_cb.fetch_add(1, Ordering::Relaxed);
+        let mut camera =
+            CallbackCamera::new(
+                index.clone(),
+                requested,
+                move |buffer| match buffer_to_frame(&buffer, fmt_cb, &seq_cb, &dropped_cb) {
+                    Ok(frame) => {
+                        if tx_cb.try_send(frame).is_err() {
+                            dropped_cb.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
-                }
-                Err(err) => {
-                    tracing::warn!(target: "istmo.camera.desktop", %err, "frame decode failed");
-                }
-            }
-        })
-        .map_err(|err| CameraError::Backend(err.to_string()))?;
+                    Err(err) => {
+                        tracing::warn!(target: "istmo.camera.desktop", %err, "frame decode failed");
+                    }
+                },
+            )
+            .map_err(|err| CameraError::Backend(err.to_string()))?;
 
         if let Some(fps) = config.target_fps {
             // Best-effort — nokhwa silently clamps when the camera
@@ -257,9 +256,7 @@ impl Camera for DesktopCamera {
         controls: CameraControls,
     ) -> Result<AppliedControls, CameraError> {
         let mut guard = self.sessions.lock().expect("sessions mutex");
-        let entry = guard
-            .get_mut(&session)
-            .ok_or(CameraError::SessionClosed)?;
+        let entry = guard.get_mut(&session).ok_or(CameraError::SessionClosed)?;
 
         if let Some(zoom) = controls.zoom {
             // Convert to nokhwa integer zoom. Many V4L2 drivers expose
@@ -307,9 +304,7 @@ impl Camera for DesktopCamera {
         _request: StillCaptureRequest,
     ) -> Result<StillPhoto, CameraError> {
         let mut guard = self.sessions.lock().expect("sessions mutex");
-        let entry = guard
-            .get_mut(&session)
-            .ok_or(CameraError::SessionClosed)?;
+        let entry = guard.get_mut(&session).ok_or(CameraError::SessionClosed)?;
         let buffer = entry
             .camera
             .last_frame()
@@ -375,14 +370,14 @@ fn resolve_index(device_id: &str) -> Result<CameraIndex, CameraError> {
 
 fn requested_format(config: &SessionConfig) -> RequestedFormat<'static> {
     let kind = match (config.resolution, config.target_fps) {
-        (Some(res), Some(fps)) => RequestedFormatType::Closest(
-            nokhwa::utils::CameraFormat::new_from(
+        (Some(res), Some(fps)) => {
+            RequestedFormatType::Closest(nokhwa::utils::CameraFormat::new_from(
                 res.width,
                 res.height,
                 nokhwa::utils::FrameFormat::YUYV,
                 fps,
-            ),
-        ),
+            ))
+        }
         (Some(_), None) | (None, _) => RequestedFormatType::AbsoluteHighestFrameRate,
     };
     RequestedFormat::new::<RgbAFormat>(kind)

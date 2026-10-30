@@ -57,9 +57,7 @@ impl CameraApp {
     }
 
     fn refresh_devices(&mut self) {
-        match pollster::block_on(self.client.devices())
-            .map_err(CameraError::from)
-        {
+        match pollster::block_on(self.client.devices()).map_err(CameraError::from) {
             Ok(devices) => {
                 if self.selected.is_none() && !devices.is_empty() {
                     self.selected = Some(0);
@@ -72,9 +70,7 @@ impl CameraApp {
     }
 
     fn refresh_access(&mut self) {
-        match pollster::block_on(self.client.access_status())
-            .map_err(CameraError::from)
-        {
+        match pollster::block_on(self.client.access_status()).map_err(CameraError::from) {
             Ok(status) => {
                 self.access = status;
             }
@@ -83,9 +79,7 @@ impl CameraApp {
     }
 
     fn request_access(&mut self) {
-        match pollster::block_on(self.client.request_access())
-            .map_err(CameraError::from)
-        {
+        match pollster::block_on(self.client.request_access()).map_err(CameraError::from) {
             Ok(status) => {
                 self.access = status;
                 if matches!(status, AccessStatus::Granted) {
@@ -98,24 +92,24 @@ impl CameraApp {
 
     fn open_selected(&mut self) {
         let Some(idx) = self.selected else { return };
-        let Some(dev) = self.devices.get(idx) else { return };
+        let Some(dev) = self.devices.get(idx) else {
+            return;
+        };
         let cfg = SessionConfig::new(&dev.id).with_pixel_format(PixelFormat::Rgba8);
 
         match pollster::block_on(self.client.open_session(cfg)) {
-            Ok(session) => {
-                match session.frames() {
-                    Ok(rx) => {
-                        self.frames_rx = Some(rx);
-                        self.stats = FrameStats::default();
-                        self.session = Some(session);
-                        self.error = None;
-                    }
-                    Err(err) => {
-                        self.error = Some(render_err(&err));
-                        let _ = pollster::block_on(session.close());
-                    }
+            Ok(session) => match session.frames() {
+                Ok(rx) => {
+                    self.frames_rx = Some(rx);
+                    self.stats = FrameStats::default();
+                    self.session = Some(session);
+                    self.error = None;
                 }
-            }
+                Err(err) => {
+                    self.error = Some(render_err(&err));
+                    let _ = pollster::block_on(session.close());
+                }
+            },
             Err(err) => self.error = Some(render_err(&err)),
         }
     }
@@ -222,11 +216,7 @@ impl eframe::App for CameraApp {
                 ui.separator();
                 for (idx, dev) in self.devices.iter().enumerate() {
                     let selected = self.selected == Some(idx);
-                    let label = format!(
-                        "{} ({:?})",
-                        truncate(&dev.label, 28),
-                        dev.facing
-                    );
+                    let label = format!("{} ({:?})", truncate(&dev.label, 28), dev.facing);
                     if ui.selectable_label(selected, label).clicked() {
                         self.selected = Some(idx);
                     }
@@ -295,11 +285,7 @@ impl eframe::App for CameraApp {
 
 /// Lifted so it can be exercised both from a bg thread (native) and
 /// inline inside `update` (wasm).
-fn update_texture(
-    ctx: &Context,
-    slot: &mut Option<TextureHandle>,
-    frame: &CameraFrame,
-) {
+fn update_texture(ctx: &Context, slot: &mut Option<TextureHandle>, frame: &CameraFrame) {
     let width = frame.resolution.width as usize;
     let height = frame.resolution.height as usize;
     if frame.bytes.len() < width * height * 4 {

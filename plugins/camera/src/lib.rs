@@ -702,7 +702,9 @@ impl SessionHandle {
     /// been released, or any transport-level failure wrapped as
     /// [`CameraError::Backend`].
     pub fn frames(&self) -> Result<TypedStream<CameraFrame>, CameraError> {
-        self.client.frames(self.session.id()).map_err(CameraError::from)
+        self.client
+            .frames(self.session.id())
+            .map_err(CameraError::from)
     }
 
     /// Apply control changes. See [`Camera::apply_controls`].
@@ -778,10 +780,7 @@ pub trait CameraClientExt {
 }
 
 impl CameraClientExt for Arc<CameraClient> {
-    async fn open_session(
-        &self,
-        config: SessionConfig,
-    ) -> Result<SessionHandle, CameraError> {
+    async fn open_session(&self, config: SessionConfig) -> Result<SessionHandle, CameraError> {
         let session = self.open_owned(config).await.map_err(CameraError::from)?;
         Ok(SessionHandle {
             client: Arc::clone(self),

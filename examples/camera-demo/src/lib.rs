@@ -45,9 +45,7 @@ pub async fn bootstrap() -> Result<Arc<CameraClient>, Box<dyn std::error::Error>
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || while outbound.recv().is_ok() {});
     #[cfg(target_arch = "wasm32")]
-    wasm_bindgen_futures::spawn_local(async move {
-        while outbound.recv_async().await.is_ok() {}
-    });
+    wasm_bindgen_futures::spawn_local(async move { while outbound.recv_async().await.is_ok() {} });
 
     let client = CameraClient::acquire_with(CameraInitConfig::default()).await?;
     Ok(Arc::new(client))
