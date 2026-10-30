@@ -22,7 +22,8 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::manifest::{
-    InfoPlistEntry, ManifestError, expect_bool, expect_integer, expect_string, expect_table,
+    AndroidPermission, InfoPlistEntry, ManifestError, expect_bool, expect_integer, expect_string,
+    expect_table, parse_android_permissions,
 };
 use crate::min_versions::{MinVersions, OsVersion};
 
@@ -35,6 +36,7 @@ const KNOWN_APP_KEYS: &[&str] = &[
     "auto_register",
     "rust_entry",
     "info_plist",
+    "android_permissions",
     "plugin",
     "id",
     "name",
@@ -159,6 +161,11 @@ pub struct AppConfig {
     pub rust_entry: Option<bool>,
     pub per_plugin: HashMap<String, AppPluginOpts>,
     pub info_plist: Vec<InfoPlistEntry>,
+    /// `android.permission.*` entries declared by the app itself,
+    /// outside of any plugin — forced into the generated sidecar on
+    /// top of the wired-plugin set. Useful when the app's own
+    /// (non-plugin) code uses an Android permission.
+    pub android_permissions: Vec<AndroidPermission>,
     pub identity: AppIdentity,
     /// Desktop asset root, baked into the binary via
     /// `cargo::rustc-env=ISTMO_APP_ASSETS_DIR`. Used as the second tier
@@ -218,6 +225,10 @@ impl AppConfig {
             )?,
             None => Vec::new(),
         };
+        let android_permissions = match table.get("android_permissions") {
+            Some(item) => parse_android_permissions(item, "app.android_permissions")?,
+            None => Vec::new(),
+        };
         Ok(Self {
             android: boolean("android", "app.android")?,
             android_package: string("android_package", "app.android_package")?,
@@ -228,6 +239,7 @@ impl AppConfig {
             rust_entry: boolean("rust_entry", "app.rust_entry")?,
             per_plugin: parse_per_plugin(table.get("plugin"))?,
             info_plist,
+            android_permissions,
             identity: AppIdentity {
                 id: string("id", "app.id")?
                     .map(|id| AppId::try_from(id.as_str()))

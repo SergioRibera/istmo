@@ -311,7 +311,14 @@ pub fn emit_app_with(opts: AppOpts) {
 
     let lib_name = app.krate.lib_name.clone();
 
-    let wired_entries = resolve_wired_plugin_entries(&root, &dep_manifests);
+    let mut wired_entries = resolve_wired_plugin_entries(&root, &dep_manifests);
+    if !app_config.android_permissions.is_empty() {
+        wired_entries.push(crate::manifest::PluginEntry {
+            id: "app.android_permissions".to_owned(),
+            android_permissions: app_config.android_permissions.clone(),
+            ..crate::manifest::PluginEntry::default()
+        });
+    }
     if android_active {
         emit_wired_android_permissions(&android_root, &wired_entries);
     }
