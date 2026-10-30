@@ -35,10 +35,7 @@ fn write_runtime_src(root: &std::path::Path, body: &str) {
 fn wired_builtin_emits_matching_permission_sidecar() {
     let root = scratch_root("builtin-wired");
     let android_root = seed_android_project(&root);
-    write_runtime_src(
-        &root,
-        "istmo::runtime!(plugins: [NetworkStateClient]);\n",
-    );
+    write_runtime_src(&root, "istmo::runtime!(plugins: [NetworkStateClient]);\n");
 
     let mut opts = AppOpts::default();
     opts.root = Some(root.clone());
@@ -49,7 +46,11 @@ fn wired_builtin_emits_matching_permission_sidecar() {
     emit_app_with(opts);
 
     let sidecar = android_root.join("app/src/main/istmo-permissions.xml");
-    assert!(sidecar.is_file(), "sidecar missing at {}", sidecar.display());
+    assert!(
+        sidecar.is_file(),
+        "sidecar missing at {}",
+        sidecar.display()
+    );
     let body = fs::read_to_string(&sidecar).unwrap();
     assert!(
         body.contains("android.permission.ACCESS_NETWORK_STATE"),

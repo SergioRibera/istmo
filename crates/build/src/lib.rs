@@ -78,10 +78,10 @@ pub mod native_deps;
 pub mod plugin_registry;
 pub mod rust;
 pub mod service;
-pub mod wired_plugins;
 pub mod swift;
 pub mod swift_host;
 pub mod swift_types;
+pub mod wired_plugins;
 pub mod worker;
 
 pub use crate::app_config::{

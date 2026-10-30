@@ -663,10 +663,7 @@ const IOS_MARK_END: &str = "<!-- istmo:background:end -->";
 /// actually wires (plus env-var auto-wiring). Only these plugins
 /// contribute permissions, `Info.plist` entries, Android service
 /// shims and iOS background shims to the generated app surfaces.
-fn resolve_wired_plugin_entries(
-    root: &Path,
-    dep_manifests: &[Manifest],
-) -> Vec<PluginEntry> {
+fn resolve_wired_plugin_entries(root: &Path, dep_manifests: &[Manifest]) -> Vec<PluginEntry> {
     let candidates = ["src/lib.rs", "src/main.rs"];
     let mut wired_paths: Vec<String> = Vec::new();
     for rel in candidates {
@@ -701,9 +698,7 @@ fn emit_wired_android_permissions(android_root: &Path, wired: &[PluginEntry]) {
     if let Err(err) =
         crate::wired_plugins::write_android_permissions_sidecar(&android_app_dir, wired)
     {
-        println!(
-            "cargo::warning=istmo-build: failed to write istmo-permissions.xml: {err}"
-        );
+        println!("cargo::warning=istmo-build: failed to write istmo-permissions.xml: {err}");
     }
 }
 

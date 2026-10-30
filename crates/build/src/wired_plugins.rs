@@ -60,9 +60,7 @@ impl From<syn::Error> for WiredError {
 /// Read `source_path`, parse it with `syn`, and return the
 /// de-duplicated list of plugin paths the file wires through
 /// `istmo::runtime!`.
-pub fn extract_wired_plugin_ids(
-    source_path: impl AsRef<Path>,
-) -> Result<Vec<String>, WiredError> {
+pub fn extract_wired_plugin_ids(source_path: impl AsRef<Path>) -> Result<Vec<String>, WiredError> {
     let source = fs::read_to_string(source_path.as_ref())?;
     let file: File = syn::parse_file(&source)?;
     Ok(extract_from_file(&file))
@@ -138,7 +136,12 @@ fn visit_macro(mac: &Macro, out: &mut Vec<String>) {
 }
 
 fn is_runtime_macro(mac: &Macro) -> bool {
-    let segments: Vec<_> = mac.path.segments.iter().map(|s| s.ident.to_string()).collect();
+    let segments: Vec<_> = mac
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
     match segments.len() {
         0 => false,
         1 => segments[0] == "runtime",
@@ -323,9 +326,7 @@ pub fn render_android_permissions_manifest(entries: &[PluginEntry]) -> String {
 
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
-    out.push_str(
-        "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n",
-    );
+    out.push_str("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n");
     for perm in &perms {
         out.push_str("    <uses-permission android:name=\"");
         out.push_str(&xml_escape(&perm.name));
@@ -400,10 +401,7 @@ mod tests {
     #[test]
     fn qualified_paths() {
         let s = "istmo::runtime!(plugins: [a::b::FooClient, crate::bar::BazClient]);";
-        assert_eq!(
-            extract(s),
-            vec!["a::b::FooClient", "crate::bar::BazClient"]
-        );
+        assert_eq!(extract(s), vec!["a::b::FooClient", "crate::bar::BazClient"]);
     }
 
     #[test]
@@ -486,10 +484,8 @@ mod tests {
 
     #[test]
     fn resolve_handles_qualified_path() {
-        let selected = resolve_wired_entries(
-            &[],
-            &vec!["::istmo_plugins::BatteryStateClient".to_owned()],
-        );
+        let selected =
+            resolve_wired_entries(&[], &vec!["::istmo_plugins::BatteryStateClient".to_owned()]);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].id, "istmo.battery_state");
     }
