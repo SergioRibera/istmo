@@ -41,12 +41,22 @@ internal object PluginLinking {
      * use [writeCombinedManifest] as a build-type overlay) and enforce each
      * plugin's minimum API level.
      */
-    fun wireVariant(variant: Variant, plugins: List<LinkedPlugin>, variantManifests: Boolean, tag: String) {
-        if (plugins.isEmpty()) return
-        checkMinSdk(variant, plugins, tag)
+    fun wireVariant(
+        variant: Variant,
+        plugins: List<LinkedPlugin>,
+        variantManifests: Boolean,
+        permissionsSidecar: File?,
+        tag: String,
+    ) {
+        if (plugins.isNotEmpty()) {
+            checkMinSdk(variant, plugins, tag)
+        }
         if (!variantManifests) return
         for (manifest in plugins.mapNotNull { it.manifest }) {
             variant.sources.manifests.addStaticManifestFile(manifest.absolutePath)
+        }
+        permissionsSidecar?.let {
+            variant.sources.manifests.addStaticManifestFile(it.absolutePath)
         }
     }
 

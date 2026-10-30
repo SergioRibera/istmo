@@ -103,7 +103,13 @@ class IstmoAppPlugin : Plugin<Project> {
         }
 
         components.onVariants(components.selector().all()) { variant ->
-            PluginLinking.wireVariant(variant, metadata?.plugins.orEmpty(), variantManifests, TAG)
+            PluginLinking.wireVariant(
+                variant,
+                metadata?.plugins.orEmpty(),
+                variantManifests,
+                istmoPermissionsSidecar(project),
+                TAG,
+            )
         }
 
         project.tasks.register("istmoDoctor") {
@@ -171,7 +177,8 @@ class IstmoAppPlugin : Plugin<Project> {
         if (variantManifests) return
         // AGP < 8.3 has no per-variant manifest sources: merge the plugin
         // manifests into one overlay used as each build type's manifest.
-        val manifests = plugins.mapNotNull { it.manifest }
+        val manifests = plugins.mapNotNull { it.manifest }.toMutableList()
+        istmoPermissionsSidecar(project)?.let { manifests.add(it) }
         if (manifests.isEmpty()) return
         val overlay = project.layout.buildDirectory.file("istmo/plugin-manifests/AndroidManifest.xml").get().asFile
         PluginLinking.writeCombinedManifest(manifests, overlay)
@@ -185,6 +192,18 @@ class IstmoAppPlugin : Plugin<Project> {
             }
             android.sourceSets.getByName(buildType.name).manifest.srcFile(overlay)
         }
+    }
+
+    /**
+     * `app/src/main/istmo-permissions.xml` is emitted by istmo-build when the
+     * app wires one or more plugins that declare `android_permissions`. The
+     * file is a plain `<manifest>` fragment with `<uses-permission>` children
+     * — fed into the same overlay / AGP 8.3+ variant manifest merger as every
+     * plugin's own `AndroidManifest.xml` snippet.
+     */
+    internal fun istmoPermissionsSidecar(project: Project): File? {
+        val file = project.file("src/main/istmo-permissions.xml")
+        return if (file.isFile) file else null
     }
 
     private fun addDependencies(project: Project, dependencies: List<GradleDependency>) {

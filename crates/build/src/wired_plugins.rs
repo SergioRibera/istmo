@@ -249,11 +249,15 @@ pub fn resolve_wired_entries(
     let mut selected = Vec::new();
     let mut seen_ids = Vec::new();
     for entry in all {
-        let Some(client_type) = entry.client_type.as_deref() else {
-            continue;
+        let keep = match entry.client_type.as_deref() {
+            // Plugins with no client type carry no wire-level surface
+            // the app can `runtime!`-list — include unconditionally
+            // so service-only / background-only plugins ship when
+            // present, matching pre-filter behavior.
+            None => true,
+            Some(ct) => wanted.contains(&last_segment(ct)),
         };
-        let suffix = last_segment(client_type);
-        if !wanted.contains(&suffix) {
+        if !keep {
             continue;
         }
         if seen_ids.contains(&entry.id) {
