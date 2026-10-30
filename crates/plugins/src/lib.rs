@@ -28,6 +28,7 @@
 pub mod activity_results;
 pub mod admob;
 pub mod battery_state;
+pub mod capabilities;
 pub mod deeplinks;
 pub mod device_info;
 pub mod lifecycle;
@@ -57,6 +58,10 @@ pub use crate::admob::{
 pub use crate::battery_state::{
     BATTERY_STATE_CHANNEL, BATTERY_STATE_PLUGIN_ID, BatteryState, BatteryStateClient,
     BatteryStateStream, ChargingState, PowerSource, ThermalState,
+};
+pub use crate::capabilities::{
+    CAPABILITIES_CHANNEL, CAPABILITIES_PLUGIN_ID, Capabilities, CapabilitiesClient,
+    CapabilitiesStream,
 };
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
 pub use crate::device_info::{
