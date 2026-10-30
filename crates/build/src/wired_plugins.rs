@@ -25,6 +25,9 @@ use std::path::Path;
 use proc_macro2::{Delimiter, Spacing, TokenTree};
 use syn::{Block, Expr, File, Item, Macro, Stmt};
 
+use crate::builtins;
+use crate::manifest::{Manifest, PluginEntry};
+
 #[derive(Debug)]
 pub enum WiredError {
     Io(io::Error),
@@ -206,6 +209,55 @@ fn dedup_preserve_order(items: Vec<String>) -> Vec<String> {
     seen
 }
 
+/// Cross-reference the `wired_paths` extracted from app source
+/// against the full set of known plugins (builtins + every
+/// standalone plugin reachable through `DEP_*_ISTMO_MANIFEST`) and
+/// return only the entries that actually appear in the app's
+/// `istmo::runtime!` invocation.
+///
+/// Matching is by the client-type's last `::`-separated segment —
+/// `FooClient` written in the app's source matches
+/// `::istmo_plugins::FooClient` as well as a dep-manifest plugin
+/// whose `client_type` ends with `::FooClient`. Collisions on the
+/// last segment are rare in istmo plugin surfaces; if two plugins
+/// both end in `FooClient`, both will be included, which is the
+/// safe default (over-include permissions rather than silently
+/// drop one).
+#[must_use]
+pub fn resolve_wired_entries(
+    dep_manifests: &[Manifest],
+    wired_paths: &[String],
+) -> Vec<PluginEntry> {
+    let wanted: Vec<&str> = wired_paths.iter().map(|p| last_segment(p)).collect();
+
+    let mut all: Vec<PluginEntry> = builtins::entries();
+    for m in dep_manifests {
+        all.extend(m.plugins.iter().cloned());
+    }
+
+    let mut selected = Vec::new();
+    let mut seen_ids = Vec::new();
+    for entry in all {
+        let Some(client_type) = entry.client_type.as_deref() else {
+            continue;
+        };
+        let suffix = last_segment(client_type);
+        if !wanted.contains(&suffix) {
+            continue;
+        }
+        if seen_ids.contains(&entry.id) {
+            continue;
+        }
+        seen_ids.push(entry.id.clone());
+        selected.push(entry);
+    }
+    selected
+}
+
+fn last_segment(path: &str) -> &str {
+    path.rsplit("::").next().unwrap_or(path).trim()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +345,40 @@ mod tests {
     fn non_istmo_runtime_macro_ignored() {
         let s = "tokio::runtime!(plugins: [NotMine]);";
         assert!(extract(s).is_empty());
+    }
+
+    #[test]
+    fn resolve_matches_builtin_by_last_segment() {
+        let selected = resolve_wired_entries(
+            &[],
+            &vec!["NetworkStateClient".to_owned(), "SystemInfo".to_owned()],
+        );
+        let ids: Vec<_> = selected.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.contains(&"istmo.network_state"));
+        assert!(ids.contains(&"istmo.system_info"));
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn resolve_handles_qualified_path() {
+        let selected = resolve_wired_entries(
+            &[],
+            &vec!["::istmo_plugins::BatteryStateClient".to_owned()],
+        );
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, "istmo.battery_state");
+    }
+
+    #[test]
+    fn resolve_excludes_unwired_builtins() {
+        let selected = resolve_wired_entries(&[], &vec!["SystemInfo".to_owned()]);
+        let ids: Vec<_> = selected.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["istmo.system_info"]);
+    }
+
+    #[test]
+    fn resolve_empty_wired_list_yields_empty() {
+        let selected = resolve_wired_entries(&[], &[]);
+        assert!(selected.is_empty());
     }
 }
