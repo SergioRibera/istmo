@@ -314,11 +314,11 @@ fn paths_from_auto_env(key: &str) -> Vec<String> {
 /// contribution.
 #[must_use]
 pub fn render_android_permissions_manifest(entries: &[PluginEntry]) -> String {
-    let mut perms: Vec<&str> = entries
+    let mut perms: Vec<&crate::manifest::AndroidPermission> = entries
         .iter()
-        .flat_map(|e| e.android_permissions.iter().map(String::as_str))
+        .flat_map(|e| e.android_permissions.iter())
         .collect();
-    perms.sort_unstable();
+    perms.sort();
     perms.dedup();
 
     let mut out = String::new();
@@ -328,8 +328,14 @@ pub fn render_android_permissions_manifest(entries: &[PluginEntry]) -> String {
     );
     for perm in &perms {
         out.push_str("    <uses-permission android:name=\"");
-        out.push_str(&xml_escape(perm));
-        out.push_str("\"/>\n");
+        out.push_str(&xml_escape(&perm.name));
+        out.push('"');
+        if let Some(max_sdk) = perm.max_sdk_version {
+            out.push_str(" android:maxSdkVersion=\"");
+            out.push_str(&max_sdk.to_string());
+            out.push('"');
+        }
+        out.push_str("/>\n");
     }
     out.push_str("</manifest>\n");
     out
@@ -510,16 +516,17 @@ mod tests {
 
     #[test]
     fn render_sorts_and_dedupes() {
+        use crate::manifest::AndroidPermission;
         let a = PluginEntry {
             id: "a".into(),
-            android_permissions: vec!["android.permission.INTERNET".into()],
+            android_permissions: vec![AndroidPermission::new("android.permission.INTERNET")],
             ..PluginEntry::default()
         };
         let b = PluginEntry {
             id: "b".into(),
             android_permissions: vec![
-                "android.permission.ACCESS_NETWORK_STATE".into(),
-                "android.permission.INTERNET".into(),
+                AndroidPermission::new("android.permission.ACCESS_NETWORK_STATE"),
+                AndroidPermission::new("android.permission.INTERNET"),
             ],
             ..PluginEntry::default()
         };
@@ -534,12 +541,29 @@ mod tests {
 
     #[test]
     fn render_escapes_xml_specials() {
+        use crate::manifest::AndroidPermission;
         let entry = PluginEntry {
             id: "x".into(),
-            android_permissions: vec!["a&b<c".into()],
+            android_permissions: vec![AndroidPermission::new("a&b<c")],
             ..PluginEntry::default()
         };
         let out = render_android_permissions_manifest(&[entry]);
         assert!(out.contains("a&amp;b&lt;c"));
+    }
+
+    #[test]
+    fn render_includes_max_sdk_version() {
+        use crate::manifest::AndroidPermission;
+        let entry = PluginEntry {
+            id: "x".into(),
+            android_permissions: vec![AndroidPermission::with_max_sdk(
+                "android.permission.WRITE_EXTERNAL_STORAGE",
+                28,
+            )],
+            ..PluginEntry::default()
+        };
+        let out = render_android_permissions_manifest(&[entry]);
+        assert!(out.contains("android:maxSdkVersion=\"28\""));
+        assert!(out.contains("WRITE_EXTERNAL_STORAGE"));
     }
 }

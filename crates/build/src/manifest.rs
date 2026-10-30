@@ -156,7 +156,60 @@ pub struct PluginEntry {
     /// surface should split into two plugin types (e.g. `NetworkOnline`
     /// vs `NetworkState`) rather than toggle inside one plugin. The
     /// wired-plugin set is the authoritative capability granularity.
-    pub android_permissions: Vec<String>,
+    pub android_permissions: Vec<AndroidPermission>,
+}
+
+/// One `<uses-permission>` entry contributed to the consuming app's
+/// `AndroidManifest.xml`.
+///
+/// TOML forms:
+///
+/// ```toml
+/// # short — permission name only
+/// android_permissions = ["android.permission.ACCESS_NETWORK_STATE"]
+///
+/// # long — inline table with optional qualifier(s)
+/// android_permissions = [
+///     "android.permission.ACCESS_NETWORK_STATE",
+///     { name = "android.permission.WRITE_EXTERNAL_STORAGE", max_sdk_version = 28 },
+/// ]
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+pub struct AndroidPermission {
+    pub name: String,
+    /// Maps to `android:maxSdkVersion` — the permission is only
+    /// requested on devices up to and including this API level.
+    pub max_sdk_version: Option<u32>,
+}
+
+impl AndroidPermission {
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            max_sdk_version: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_max_sdk(name: impl Into<String>, max_sdk_version: u32) -> Self {
+        Self {
+            name: name.into(),
+            max_sdk_version: Some(max_sdk_version),
+        }
+    }
+}
+
+impl From<&str> for AndroidPermission {
+    fn from(name: &str) -> Self {
+        Self::new(name)
+    }
+}
+
+impl From<String> for AndroidPermission {
+    fn from(name: String) -> Self {
+        Self::new(name)
+    }
 }
 
 /// Constructor argument of a plugin's Android backend, declared as
@@ -649,7 +702,7 @@ fn parse_plugin_entry(
         None => Vec::new(),
     };
     let android_permissions = match table.get("android_permissions") {
-        Some(item) => expect_array_of_strings(item, "plugin.android_permissions")?,
+        Some(item) => parse_android_permissions(item, "plugin.android_permissions")?,
         None => Vec::new(),
     };
     let optional_string = |key: &'static str, full: &'static str| {
@@ -1034,24 +1087,93 @@ pub(crate) fn expect_array_of_tables<'a>(
         })
 }
 
-pub(crate) fn expect_array_of_strings(
+const KNOWN_PERMISSION_KEYS: &[&str] = &["name", "max_sdk_version"];
+
+const RECOGNIZED_PERMISSION_PREFIXES: &[&str] = &[
+    "android.permission.",
+    "com.android.vending.",
+    "com.google.android.",
+];
+
+pub(crate) fn parse_android_permissions(
     item: &Item,
     key: &'static str,
-) -> Result<Vec<String>, ManifestError> {
+) -> Result<Vec<AndroidPermission>, ManifestError> {
     let array = item.as_array().ok_or_else(|| ManifestError::TypeMismatch {
         key: key.to_owned(),
-        expected: "array of strings",
+        expected: "array of strings or inline tables ({ name, max_sdk_version })",
     })?;
-    array
-        .iter()
-        .map(|v| match v {
-            Value::String(s) => Ok(s.value().clone()),
-            _ => Err(ManifestError::TypeMismatch {
-                key: key.to_owned(),
-                expected: "array of strings",
-            }),
-        })
-        .collect()
+    let mut out = Vec::with_capacity(array.len());
+    for value in array {
+        let perm = match value {
+            Value::String(s) => AndroidPermission::new(s.value().clone()),
+            Value::InlineTable(table) => {
+                for (ident, _) in &*table {
+                    if !KNOWN_PERMISSION_KEYS.contains(&ident) {
+                        return Err(ManifestError::UnknownKey {
+                            key: format!("{key}.{ident}"),
+                        });
+                    }
+                }
+                let name_val = table.get("name").ok_or(ManifestError::Missing {
+                    key: "plugin.android_permissions.name",
+                })?;
+                let name = match name_val {
+                    Value::String(s) => s.value().clone(),
+                    _ => {
+                        return Err(ManifestError::TypeMismatch {
+                            key: format!("{key}.name"),
+                            expected: "string",
+                        });
+                    }
+                };
+                let max_sdk_version = match table.get("max_sdk_version") {
+                    None => None,
+                    Some(Value::Integer(n)) => {
+                        let raw = *n.value();
+                        if raw < 0 {
+                            return Err(ManifestError::TypeMismatch {
+                                key: format!("{key}.max_sdk_version"),
+                                expected: "non-negative integer",
+                            });
+                        }
+                        Some(u32::try_from(raw).map_err(|_| ManifestError::TypeMismatch {
+                            key: format!("{key}.max_sdk_version"),
+                            expected: "non-negative integer",
+                        })?)
+                    }
+                    _ => {
+                        return Err(ManifestError::TypeMismatch {
+                            key: format!("{key}.max_sdk_version"),
+                            expected: "non-negative integer",
+                        });
+                    }
+                };
+                AndroidPermission {
+                    name,
+                    max_sdk_version,
+                }
+            }
+            _ => {
+                return Err(ManifestError::TypeMismatch {
+                    key: key.to_owned(),
+                    expected: "string or inline table",
+                });
+            }
+        };
+        if !RECOGNIZED_PERMISSION_PREFIXES
+            .iter()
+            .any(|prefix| perm.name.starts_with(prefix))
+        {
+            println!(
+                "cargo::warning=istmo-build: {key} entry `{}` uses an unrecognised prefix \
+                 (expected `android.permission.*`, `com.android.vending.*` or `com.google.android.*`)",
+                perm.name
+            );
+        }
+        out.push(perm);
+    }
+    Ok(out)
 }
 
 pub(crate) fn expect_string<'a>(

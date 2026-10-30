@@ -14,7 +14,7 @@
 //! downstream filter can report "known builtin, nothing to inject"
 //! without a second lookup table.
 
-use crate::manifest::PluginEntry;
+use crate::manifest::{AndroidPermission, PluginEntry};
 
 /// Returns one [`PluginEntry`] per first-party plugin bundled with
 /// `istmo-plugins`.
@@ -64,7 +64,7 @@ pub fn entries() -> Vec<PluginEntry> {
     .map(|(id, client_type, perms)| PluginEntry {
         id: id.to_owned(),
         client_type: Some(client_type.to_owned()),
-        android_permissions: perms.iter().map(|&s| s.to_owned()).collect(),
+        android_permissions: perms.iter().map(|&s| AndroidPermission::new(s)).collect(),
         ..PluginEntry::default()
     })
     .collect()
@@ -102,7 +102,7 @@ mod tests {
             entry
                 .android_permissions
                 .iter()
-                .any(|p| p == "android.permission.ACCESS_NETWORK_STATE")
+                .any(|p| p.name == "android.permission.ACCESS_NETWORK_STATE")
         );
     }
 
