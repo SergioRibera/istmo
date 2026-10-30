@@ -37,6 +37,8 @@ pub mod notifications;
 pub mod permissions;
 pub mod safe_area;
 pub mod service;
+#[cfg(feature = "desktop-publisher")]
+pub mod battery_state_publisher;
 pub mod storage_info;
 #[cfg(feature = "desktop-publisher")]
 pub mod storage_info_publisher;
