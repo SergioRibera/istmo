@@ -37,6 +37,8 @@ pub mod lifecycle;
 pub mod network_state;
 #[cfg(feature = "desktop-publisher")]
 pub mod network_state_publisher;
+#[cfg(feature = "desktop-publisher")]
+pub mod theme_preference_publisher;
 pub mod notifications;
 pub mod permissions;
 pub mod safe_area;
