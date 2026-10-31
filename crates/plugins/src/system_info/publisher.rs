@@ -433,8 +433,8 @@ mod windows {
     use super::super::{
         CalendarSystem, Formats, Locale, TimeZone,
         tables::{
-            canonicalize_tag, currency_for_region, direction_from_language,
-            measurement_for_region, parse_bcp47, temperature_for_region,
+            canonicalize_tag, currency_for_region, direction_from_language, measurement_for_region,
+            parse_bcp47, temperature_for_region,
         },
     };
     use super::Sample;
@@ -463,8 +463,7 @@ mod windows {
 
         let decimal_separator =
             locale_string(&bcp47, LOCALE_SDECIMAL).unwrap_or_else(|| ".".into());
-        let group_separator =
-            locale_string(&bcp47, LOCALE_STHOUSAND).unwrap_or_else(|| ",".into());
+        let group_separator = locale_string(&bcp47, LOCALE_STHOUSAND).unwrap_or_else(|| ",".into());
         let currency_code = locale_string(&bcp47, LOCALE_SINTLSYMBOL)
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty())
@@ -515,9 +514,8 @@ mod windows {
             return None;
         }
         let mut buf = vec![0u16; needed as usize];
-        let written = unsafe {
-            GetLocaleInfoEx(wide_locale.as_ptr(), lctype, buf.as_mut_ptr(), needed)
-        };
+        let written =
+            unsafe { GetLocaleInfoEx(wide_locale.as_ptr(), lctype, buf.as_mut_ptr(), needed) };
         if written <= 0 {
             return None;
         }

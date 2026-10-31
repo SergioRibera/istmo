@@ -152,8 +152,7 @@ mod windows {
 
     pub(super) fn os_version() -> Option<String> {
         let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
-        info.dwOSVersionInfoSize =
-            u32::try_from(std::mem::size_of::<OSVERSIONINFOW>()).ok()?;
+        info.dwOSVersionInfoSize = u32::try_from(std::mem::size_of::<OSVERSIONINFOW>()).ok()?;
         // SAFETY: `GetVersionExW` is deprecated but still writes the
         // version fields when passed a correctly-sized struct.
         let ok = unsafe { GetVersionExW(&raw mut info) };
