@@ -1,6 +1,6 @@
 [package]
 name = "istmo-camera"
-version = "0.1.1-alpha.4"
+version = "0.1.1-alpha.5"
 description = "Cross-platform camera plugin for the istmo framework — enumerate devices, stream frames in real time, and drive controls through a typed Rust surface."
 edition.workspace = true
 rust-version.workspace = true

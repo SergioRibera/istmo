@@ -1,6 +1,6 @@
 [package]
 name = "camera-demo"
-version = "0.1.1-alpha.4"
+version = "0.1.1-alpha.5"
 description = "Shared Rust camera demo for istmo-camera — single eframe + egui app that runs natively on Linux/macOS/Windows and in the browser via wasm32."
 publish = false
 edition.workspace = true
