@@ -13,11 +13,11 @@
 //!
 //! Native sides push updates when the user changes OS settings
 //! (`Intent.ACTION_LOCALE_CHANGED` on Android,
-//! `NSCurrentLocaleDidChangeNotification` on iOS/macOS, etc.). The
-//! `desktop-publisher` feature exposes [`SystemInfoPublisher`] — a
-//! pure-Rust sampler for Linux / macOS that attached desktop apps can
-//! drive from their event loop; Windows + Web are stubbed and expect
-//! an OS-level bridge.
+//! `NSCurrentLocaleDidChangeNotification` on iOS/macOS, etc.).
+//! Desktop targets (Linux / macOS / Windows) expose
+//! [`SystemInfoPublisher`] — a pure-Rust sampler that attached
+//! desktop apps can drive from their event loop; Web is stubbed and
+//! expects an OS-level bridge.
 //!
 //! `now_utc_millis` is pure Rust (`SystemTime::now()`); every other
 //! value needs the platform to publish.
@@ -32,10 +32,10 @@ use istmo_macros::message;
 
 pub mod tables;
 
-#[cfg(feature = "desktop-publisher")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod publisher;
 
-#[cfg(feature = "desktop-publisher")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use publisher::SystemInfoPublisher;
 
 pub const SYSTEM_INFO_PLUGIN_ID: &str = "istmo.system_info";

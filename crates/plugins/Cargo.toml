@@ -15,10 +15,6 @@ categories = ["os", "api-bindings"]
 [features]
 default = []
 winit-publisher = []
-# Pure-Rust `SystemInfoPublisher` sampler for desktops. Linux reads env
-# + /etc/localtime; macOS calls Foundation via objc2. Windows + WASM
-# require an OS-level bridge from the surrounding runtime.
-desktop-publisher = []
 
 [dependencies]
 istmo-core = { workspace = true }

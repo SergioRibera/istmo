@@ -28,25 +28,25 @@
 pub mod activity_results;
 pub mod admob;
 pub mod battery_state;
-#[cfg(feature = "desktop-publisher")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod battery_state_publisher;
 pub mod capabilities;
 pub mod deeplinks;
 pub mod device_info;
 pub mod lifecycle;
 pub mod network_state;
-#[cfg(feature = "desktop-publisher")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod network_state_publisher;
-#[cfg(feature = "desktop-publisher")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod theme_preference_publisher;
-#[cfg(feature = "desktop-publisher")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod capabilities_publisher;
 pub mod notifications;
 pub mod permissions;
 pub mod safe_area;
 pub mod service;
 pub mod storage_info;
-#[cfg(feature = "desktop-publisher")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod storage_info_publisher;
 pub mod system_info;
 pub mod task_scheduler;

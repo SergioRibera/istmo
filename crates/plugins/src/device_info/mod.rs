@@ -7,9 +7,9 @@
 //! library; everything else is best-effort and may be absent in the
 //! Rust-side fallback until the platform publishes.
 //!
-//! The `desktop-publisher` feature on this crate exposes
+//! Desktop targets (Linux / macOS / Windows) expose
 //! [`DeviceInfoPublisher`] which emits the Rust-known snapshot + any
-//! Linux / macOS values it can resolve without a system dep.
+//! platform values it can resolve without a system dep.
 
 use std::sync::Arc;
 
@@ -18,10 +18,10 @@ use istmo_core::early_events::LatestValueSlot;
 use istmo_core::{IstmoError, Plugin, Runtime, codec};
 use istmo_macros::message;
 
-#[cfg(feature = "desktop-publisher")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod publisher;
 
-#[cfg(feature = "desktop-publisher")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use publisher::DeviceInfoPublisher;
 
 pub const DEVICE_INFO_PLUGIN_ID: &str = "istmo.device_info";
