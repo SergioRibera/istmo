@@ -149,12 +149,12 @@ mod windows {
         GetAdaptersAddresses, IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_PPP,
         IF_TYPE_TUNNEL, IF_TYPE_WWANPP, IF_TYPE_WWANPP2, IP_ADAPTER_ADDRESSES_LH,
     };
+    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
     use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
 
     use super::{LinkKind, NetworkState};
 
     const GAA_FLAG_INCLUDE_PREFIX: u32 = 0x0010;
-    const IF_OPER_STATUS_UP: u32 = 1;
 
     pub(super) fn sample() -> Option<NetworkState> {
         let mut size: u32 = 15 * 1024;
@@ -188,7 +188,7 @@ mod windows {
         while !ptr_cur.is_null() {
             // SAFETY: pointer walk through linked list filled by Win32.
             let adapter = unsafe { &*ptr_cur };
-            if adapter.OperStatus == IF_OPER_STATUS_UP {
+            if adapter.OperStatus == IfOperStatusUp {
                 online = true;
                 let adapter_link = match adapter.IfType {
                     IF_TYPE_IEEE80211 => LinkKind::Wifi,
