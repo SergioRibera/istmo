@@ -423,9 +423,10 @@ mod apple {
 #[allow(unsafe_code)]
 mod windows {
     use windows_sys::Win32::Globalization::{
-        GetLocaleInfoEx, GetUserDefaultLocaleName, LOCALE_IFIRSTDAYOFWEEK, LOCALE_NAME_MAX_LENGTH,
-        LOCALE_SDECIMAL, LOCALE_SINTLSYMBOL, LOCALE_STHOUSAND, LOCALE_STIMEFORMAT,
+        GetLocaleInfoEx, GetUserDefaultLocaleName, LOCALE_IFIRSTDAYOFWEEK, LOCALE_SDECIMAL,
+        LOCALE_SINTLSYMBOL, LOCALE_STHOUSAND, LOCALE_STIMEFORMAT,
     };
+    use windows_sys::Win32::System::SystemServices::LOCALE_NAME_MAX_LENGTH;
     use windows_sys::Win32::System::Time::{
         DYNAMIC_TIME_ZONE_INFORMATION, GetDynamicTimeZoneInformation,
     };

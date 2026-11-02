@@ -112,7 +112,7 @@ mod unix {
     type libc_fsfilcnt = libc_ulong;
 
     unsafe extern "C" {
-        fn statvfs(path: *const i8, buf: *mut Statvfs) -> i32;
+        fn statvfs(path: *const std::ffi::c_char, buf: *mut Statvfs) -> i32;
     }
 
     #[allow(clippy::unnecessary_cast)]
