@@ -379,12 +379,20 @@ class ShareCodecsImpl : ShareCodecs {
         val d_icon = Bincode.readOption(bytes, cursor) { p, o -> readShareFile(p, o) }
         cursor = d_icon.consumed
         val icon = d_icon.value
-        return Bincode.Decoded(ShareTarget(id = id, label = label, icon = icon), cursor)
+        val d_uri = Bincode.readOption(bytes, cursor) { p, o -> Bincode.readString(p, o) }
+        cursor = d_uri.consumed
+        val uri = d_uri.value
+        val d_launcherOnly = Bincode.readBool(bytes, cursor)
+        cursor = d_launcherOnly.consumed
+        val launcherOnly = d_launcherOnly.value
+        return Bincode.Decoded(ShareTarget(id = id, label = label, icon = icon, uri = uri, launcherOnly = launcherOnly), cursor)
     }
 
     override fun writeShareTarget(out: ByteArrayOutputStream, value: ShareTarget) {
         Bincode.writeString(out, value.id)
         Bincode.writeString(out, value.label)
         Bincode.writeOption(out, value.icon) { s, v -> writeShareFile(s, v) }
+        Bincode.writeOption(out, value.uri) { s, v -> Bincode.writeString(s, v) }
+        Bincode.writeBool(out, value.launcherOnly)
     }
 }

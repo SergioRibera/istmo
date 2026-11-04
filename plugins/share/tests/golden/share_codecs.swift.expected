@@ -228,12 +228,16 @@ public final class ShareCodecsImpl: ShareCodecs {
         let id = try Bincode.readString(&c)
         let label = try Bincode.readString(&c)
         let icon = try Bincode.readOption(&c) { try readShareFile(&$0) }
-        return ShareTarget(id: id, label: label, icon: icon)
+        let uri = try Bincode.readOption(&c) { try Bincode.readString(&$0) }
+        let launcherOnly = try Bincode.readBool(&c)
+        return ShareTarget(id: id, label: label, icon: icon, uri: uri, launcherOnly: launcherOnly)
     }
 
     public func writeShareTarget(_ out: inout Data, _ value: ShareTarget) {
         Bincode.writeString(&out, value.id)
         Bincode.writeString(&out, value.label)
         Bincode.writeOption(&out, value.icon) { self.writeShareFile(&$0, $1) }
+        Bincode.writeOption(&out, value.uri) { Bincode.writeString(&$0, $1) }
+        Bincode.writeBool(&out, value.launcherOnly)
     }
 }

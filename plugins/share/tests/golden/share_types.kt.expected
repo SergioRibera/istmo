@@ -88,5 +88,7 @@ data class IncomingShare(
 data class ShareTarget(
     val id: String,
     val label: String,
-    val icon: ShareFile?
+    val icon: ShareFile?,
+    val uri: String?,
+    val launcherOnly: Boolean
 )

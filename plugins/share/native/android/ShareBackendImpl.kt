@@ -56,7 +56,9 @@ import kotlinx.coroutines.withContext
  * Direct-share targets ([set_share_targets]) are published as
  * long-lived sharing shortcuts in the [DIRECT_SHARE_CATEGORY] category,
  * which `res/xml/istmo_share_shortcuts.xml` binds to the app's
- * `dev.istmo.plugins.share.ShareTarget` activity-alias.
+ * `dev.istmo.plugins.share.ShareTarget` activity-alias. Launcher-only
+ * targets skip that category: they are plain launcher shortcuts and
+ * need no alias. Tapping any of them in the launcher opens its `uri`.
  *
  * Construct inside `Activity.onCreate` (the result launcher must be
  * registered before `STARTED`) and register the dispatcher:
@@ -136,7 +138,7 @@ class ShareBackendImpl(
     }
 
     override suspend fun set_share_targets(targets: List<ShareTarget>) {
-        if (!ShareReceiverActivity.isReceiveEnabled(context)) {
+        if (targets.any { !it.launcherOnly } && !ShareReceiverActivity.isReceiveEnabled(context)) {
             throw BackendException(
                 ShareError.Unsupported("declare the dev.istmo.plugins.share.ShareTarget activity-alias to receive shares"),
             )
@@ -144,15 +146,24 @@ class ShareBackendImpl(
         withContext(Dispatchers.IO) {
             val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
                 ?: Intent(Intent.ACTION_MAIN).setPackage(context.packageName)
+            val appIcon = IconCompat.createWithResource(context, context.applicationInfo.icon)
             val max = ShortcutManagerCompat.getMaxShortcutCountPerActivity(context)
             val shortcuts = targets.take(max).mapIndexed { rank, target ->
+                // The launcher tap opens the target's deep link, else the app.
+                val open = target.uri
+                    ?.let { Intent(Intent.ACTION_VIEW, Uri.parse(it)).setPackage(context.packageName) }
+                    ?: Intent(launch).setAction(Intent.ACTION_MAIN)
                 ShortcutInfoCompat.Builder(context, SHORTCUT_PREFIX + target.id)
                     .setShortLabel(target.label)
-                    .setLongLived(true)
                     .setRank(rank)
-                    .setCategories(setOf(DIRECT_SHARE_CATEGORY))
-                    .setIntent(Intent(launch).setAction(Intent.ACTION_MAIN))
-                    .apply { target.icon?.let(::loadIcon)?.let { setIcon(it) } }
+                    .setIntent(open)
+                    .setIcon(target.icon?.let(::loadIcon) ?: appIcon)
+                    .apply {
+                        if (!target.launcherOnly) {
+                            setLongLived(true)
+                            setCategories(setOf(DIRECT_SHARE_CATEGORY))
+                        }
+                    }
                     .build()
             }
             // Replace only the plugin's shortcuts; the app's own stay.

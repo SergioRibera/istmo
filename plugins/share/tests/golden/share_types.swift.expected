@@ -153,10 +153,14 @@ public struct ShareTarget {
     public let id: String
     public let label: String
     public let icon: ShareFile?
+    public let uri: String?
+    public let launcherOnly: Bool
 
-    public init(id: String, label: String, icon: ShareFile?) {
+    public init(id: String, label: String, icon: ShareFile?, uri: String?, launcherOnly: Bool) {
         self.id = id
         self.label = label
         self.icon = icon
+        self.uri = uri
+        self.launcherOnly = launcherOnly
     }
 }

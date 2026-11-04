@@ -88,8 +88,10 @@ public final class ShareBackendImpl: ShareBackend {
     }
 
     public func set_share_targets(targets: [ShareTarget]) async throws {
+        // Launcher-only targets are Android launcher shortcuts; nothing to donate.
+        let targets = targets.filter { !$0.launcherOnly }
         #if canImport(Intents) && canImport(UIKit)
-        guard Self.directShareConfigured() else {
+        guard targets.isEmpty || Self.directShareConfigured() else {
             throw ShareError.unsupported("add INSendMessageIntent to NSUserActivityTypes to donate share targets")
         }
         do {

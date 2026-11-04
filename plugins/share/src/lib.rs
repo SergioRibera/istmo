@@ -461,6 +461,12 @@ pub struct IncomingShare {
 /// Android publishes them as long-lived sharing shortcuts; iOS donates
 /// `INSendMessageIntent` interactions. Shares sent to a target arrive
 /// with [`IncomingShare::target_id`] set.
+///
+/// Android also lists them in the launcher's long-press menu. Tapping
+/// one there opens [`ShareTarget::uri`] as a deep link, or just the app
+/// without it. A [`ShareTarget::launcher_only`] target is only that
+/// launcher shortcut: it stays out of the share sheet and needs no
+/// receive alias.
 #[message(bincode = "::bincode", crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShareTarget {
@@ -470,6 +476,10 @@ pub struct ShareTarget {
     pub label: String,
     /// Square PNG/JPEG icon.
     pub icon: Option<ShareFile>,
+    /// Deep link the launcher shortcut opens.
+    pub uri: Option<String>,
+    /// Only a launcher shortcut, never a share-sheet target.
+    pub launcher_only: bool,
 }
 
 impl ShareTarget {
@@ -479,12 +489,28 @@ impl ShareTarget {
             id: id.into(),
             label: label.into(),
             icon: None,
+            uri: None,
+            launcher_only: false,
         }
     }
 
     #[must_use]
     pub fn with_icon(mut self, icon: ShareFile) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Open `uri` when the launcher shortcut is tapped.
+    #[must_use]
+    pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
+        self.uri = Some(uri.into());
+        self
+    }
+
+    /// Publish only the launcher shortcut, not a share-sheet target.
+    #[must_use]
+    pub const fn launcher_only(mut self) -> Self {
+        self.launcher_only = true;
         self
     }
 }
@@ -518,9 +544,11 @@ pub trait Share {
     /// dropped on desktop.
     async fn staging_dir(&self) -> Result<String, ShareError>;
 
-    /// Replace the app's direct-share targets. An empty list clears
-    /// them. [`ShareError::Unsupported`] where
-    /// [`ShareCapabilities::direct_share`] is `false`.
+    /// Replace the app's direct-share targets and launcher shortcuts.
+    /// An empty list clears them. [`ShareError::Unsupported`] where
+    /// [`ShareCapabilities::direct_share`] is `false`, unless every target
+    /// is [`ShareTarget::launcher_only`] on Android. Apple skips
+    /// launcher-only targets.
     async fn set_share_targets(&self, targets: Vec<ShareTarget>) -> Result<(), ShareError>;
 }
 
