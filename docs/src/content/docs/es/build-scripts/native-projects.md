@@ -29,7 +29,8 @@ build   = 12                    # versionCode / CFBundleVersion (default 1)
 # version = "1.2.0"             # default: `package.version` de Cargo.toml
 
 [app.icon]
-image = "assets/icon.png"       # ícono de iOS + mipmaps legacy de Android
+image   = "assets/icon.png"     # ícono de iOS + mipmaps legacy de Android
+desktop = "assets/icon-tile.png" # ventana + ícono del .exe de Windows (default: image)
 
 [app.icon.android]              # ícono adaptativo, Android 8+ (API 26)
 foreground = "assets/icon-foreground.xml"  # vector drawable .xml, o un .png de 432 px
@@ -47,7 +48,7 @@ suyos.
 
 ### Ícono de launcher: `[app.icon]`
 
-Las dos claves son opcionales; poné las que necesiten tus plataformas.
+Todas las claves son opcionales; poné las que necesiten tus plataformas.
 
 - `image` — una imagen cuadrada (se recomienda 1024 px). Sale de ahí el
   app icon set de iOS (aplanado sobre blanco: la App Store rechaza alfa)
@@ -66,6 +67,34 @@ con el mismo nombre de recurso que los PNG legacy, así que `${istmoIcon}`
 sigue siendo `@mipmap/istmo_launcher` y Android elige el adaptativo en
 API 26+. Sin `image`, los dispositivos anteriores a Android 8 quedan sin
 ícono (el build avisa si `[min_versions] android` es menor a 26).
+
+## Escritorio
+
+Al compilar para escritorio, `istmo_build::emit()` usa
+`[app.icon] desktop` (o `image` si no está): en escritorio nadie recorta
+el ícono, así que `desktop` tiene que apuntar a una imagen ya con su
+forma.
+
+- **Ícono de la ventana.** Se deja un PNG de 256 px en `OUT_DIR`;
+  `istmo::app_icon!()` se expande a `Option<&'static [u8]>` con sus bytes
+  (`None` en mobile o sin ícono). Pasáselo a tu toolkit de UI, por
+  ejemplo Freya:
+
+  ```rust
+  let mut window = WindowConfig::new(app);
+  if let Some(png) = istmo::app_icon!() {
+      window = window.with_icon(LaunchConfig::window_icon(png));
+  }
+  ```
+
+  Los compositores Wayland ignoran el ícono de la ventana y usan la
+  entrada `.desktop` que coincide con el app id.
+- **Ejecutable de Windows.** Se compila un `.ico` con varias resoluciones
+  (16–256 px) dentro del `.exe` mediante un `.rc` generado
+  ([`embed-resource`](https://crates.io/crates/embed-resource): `rc.exe`
+  en MSVC, `windres` / `llvm-rc` al compilar cruzado). El mismo paso
+  embebe el manifiesto de aplicación armado con todos los
+  `[[windows_manifest_fragment]]` (ver la referencia de `istmo.toml`).
 
 ## Android
 

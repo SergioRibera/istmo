@@ -613,6 +613,7 @@ image = "assets/icon.png"
             build: Some(7),
             icon: IconConfig {
                 image: Some(PathBuf::from("icon.png")),
+                desktop: None,
                 android: None,
             },
         };

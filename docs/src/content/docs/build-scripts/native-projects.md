@@ -29,7 +29,8 @@ build   = 12                    # versionCode / CFBundleVersion (default 1)
 # version = "1.2.0"             # default: Cargo.toml `package.version`
 
 [app.icon]
-image = "assets/icon.png"       # iOS app icon + legacy Android mipmaps
+image   = "assets/icon.png"     # iOS app icon + legacy Android mipmaps
+desktop = "assets/icon-tile.png" # window + Windows .exe icon (default: image)
 
 [app.icon.android]              # adaptive icon, Android 8+ (API 26)
 foreground = "assets/icon-foreground.xml"  # vector drawable .xml, or a 432 px .png
@@ -46,7 +47,7 @@ different identifiers — the native projects keep theirs.
 
 ### Launcher icon: `[app.icon]`
 
-Both keys are optional; set the ones your platforms need.
+Every key is optional; set the ones your platforms need.
 
 - `image` — one square image (1024 px recommended). It becomes the iOS
   app icon set (flattened onto white: the App Store rejects alpha) and
@@ -65,6 +66,33 @@ the same resource name as the legacy PNGs, so `${istmoIcon}` stays
 `@mipmap/istmo_launcher` and Android picks the adaptive one on API 26+.
 Without `image`, devices below Android 8 get no launcher icon (the
 build warns when `[min_versions] android` is below 26).
+
+## Desktop
+
+When building for a desktop target, `istmo_build::emit()` takes
+`[app.icon] desktop` (or `image` when unset) — desktops never mask
+icons, so point `desktop` at an already shaped image:
+
+- **Window icon.** A 256 px PNG is staged in `OUT_DIR`;
+  `istmo::app_icon!()` expands to `Option<&'static [u8]>` with its
+  bytes (`None` on mobile or without an icon). Hand it to your UI
+  toolkit, e.g. Freya:
+
+  ```rust
+  let mut window = WindowConfig::new(app);
+  if let Some(png) = istmo::app_icon!() {
+      window = window.with_icon(LaunchConfig::window_icon(png));
+  }
+  ```
+
+  Wayland compositors ignore window icons and use the `.desktop` entry
+  matching the app id instead.
+- **Windows executable.** A multi-resolution `.ico` (16–256 px) is
+  compiled into the `.exe` through a generated `.rc`
+  ([`embed-resource`](https://crates.io/crates/embed-resource): `rc.exe`
+  on MSVC, `windres` / `llvm-rc` when cross-compiling). The same step
+  embeds the application manifest composed from every
+  `[[windows_manifest_fragment]]` (see the `istmo.toml` reference).
 
 ## Android
 

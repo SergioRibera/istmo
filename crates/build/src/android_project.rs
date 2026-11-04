@@ -189,6 +189,7 @@ mod tests {
             id: Some(AppId::try_from("dev.istmo.demo").unwrap()),
             icon: IconConfig {
                 image: icon.then(|| PathBuf::from("icon.png")),
+                desktop: None,
                 android: None,
             },
             ..AppIdentity::default()

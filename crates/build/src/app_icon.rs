@@ -2,6 +2,9 @@
 //!
 //! - `image` — one square source image for the iOS asset-catalog app
 //!   icon set and the legacy Android `mipmap-*dpi` PNGs.
+//! - `desktop` — the desktop variant (window icon, Windows `.exe` icon);
+//!   defaults to `image`. Desktops never mask icons, so a full-bleed
+//!   mobile source usually wants a shaped sibling here.
 //! - `[app.icon.android]` — the layers of an Android adaptive icon
 //!   (API 26+), written next to the legacy PNGs under the same
 //!   `istmo_launcher` resource name so it takes over on every device
@@ -12,8 +15,9 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
+use image::codecs::ico::{IcoEncoder, IcoFrame};
 use image::imageops::FilterType;
-use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+use image::{DynamicImage, ExtendedColorType, ImageFormat, Rgb, RgbImage};
 use toml_edit::Item;
 
 use crate::manifest::{ManifestError, expect_string, expect_table};
@@ -41,6 +45,10 @@ const ADAPTIVE_EDGE_DENOMINATOR: u32 = 4;
 
 /// Colour resource holding a solid adaptive icon background.
 const ANDROID_BACKGROUND_COLOR_FILE: &str = "values/istmo_launcher_background.xml";
+
+/// Frames of the Windows `.ico`: shell list views, title bars,
+/// taskbar, Start, Explorer large icons.
+const WINDOWS_ICO_EDGES: &[u32] = &[16, 24, 32, 48, 64, 256];
 
 /// Xcode 14+ derives every size from one 1024 pt universal image.
 const IOS_ICON_EDGE: u32 = 1024;
@@ -149,6 +157,28 @@ impl AppIcon {
         )
     }
 
+    /// Write a square PNG of `edge` pixels, keeping transparency.
+    pub fn write_png(&self, dest: &Path, edge: u32) -> Result<(), IconError> {
+        write_bytes_if_changed(dest, &encode_png(&self.resized(edge))?)
+    }
+
+    /// Write a multi-resolution Windows `.ico` (PNG-compressed frames).
+    pub fn write_ico(&self, dest: &Path) -> Result<(), IconError> {
+        let frames = WINDOWS_ICO_EDGES
+            .iter()
+            .map(|edge| {
+                let rgba = self.resized(*edge).to_rgba8();
+                IcoFrame::as_png(rgba.as_raw(), *edge, *edge, ExtendedColorType::Rgba8)
+                    .map_err(IconError::Encode)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut bytes = Vec::new();
+        IcoEncoder::new(&mut bytes)
+            .encode_images(&frames)
+            .map_err(IconError::Encode)?;
+        write_bytes_if_changed(dest, &bytes)
+    }
+
     fn resized(&self, edge: u32) -> DynamicImage {
         self.image.resize_exact(edge, edge, FilterType::Lanczos3)
     }
@@ -161,6 +191,9 @@ pub struct IconConfig {
     /// Square source image for the iOS app icon and the legacy Android
     /// mipmaps.
     pub image: Option<PathBuf>,
+    /// Desktop source image (window icon, Windows `.exe` icon); falls
+    /// back to `image`.
+    pub desktop: Option<PathBuf>,
     /// `[app.icon.android]`: Android adaptive icon layers.
     pub android: Option<AdaptiveIconConfig>,
 }
@@ -203,7 +236,7 @@ enum LayerSlot {
     Monochrome,
 }
 
-const KNOWN_ICON_KEYS: &[&str] = &["image", "android"];
+const KNOWN_ICON_KEYS: &[&str] = &["image", "desktop", "android"];
 const KNOWN_ADAPTIVE_ICON_KEYS: &[&str] = &["foreground", "background", "monochrome"];
 
 impl IconConfig {
@@ -213,7 +246,7 @@ impl IconConfig {
             .as_table_like()
             .ok_or_else(|| ManifestError::TypeMismatch {
                 key: "app.icon".to_owned(),
-                expected: "table ([app.icon] with `image` and/or [app.icon.android])",
+                expected: "table ([app.icon] with `image` / `desktop` and/or [app.icon.android])",
             })?;
         for (name, _) in table.iter() {
             if !KNOWN_ICON_KEYS.contains(&name) {
@@ -227,6 +260,10 @@ impl IconConfig {
                 .get("image")
                 .map(|item| expect_string(item, "app.icon.image").map(PathBuf::from))
                 .transpose()?,
+            desktop: table
+                .get("desktop")
+                .map(|item| expect_string(item, "app.icon.desktop").map(PathBuf::from))
+                .transpose()?,
             android: table
                 .get("android")
                 .map(AdaptiveIconConfig::parse)
@@ -239,6 +276,7 @@ impl IconConfig {
     pub fn rooted(&self, root: &Path) -> Self {
         Self {
             image: self.image.as_ref().map(|image| root.join(image)),
+            desktop: self.desktop.as_ref().map(|desktop| root.join(desktop)),
             android: self.android.as_ref().map(|android| android.rooted(root)),
         }
     }
@@ -247,6 +285,12 @@ impl IconConfig {
     #[must_use]
     pub const fn has_android_launcher(&self) -> bool {
         self.image.is_some() || self.android.is_some()
+    }
+
+    /// Source image for desktop targets: `desktop`, else `image`.
+    #[must_use]
+    pub fn desktop_source(&self) -> Option<&Path> {
+        self.desktop.as_deref().or(self.image.as_deref())
     }
 
     /// Every source file, for `cargo:rerun-if-changed`.
@@ -261,7 +305,11 @@ impl IconConfig {
                 .chain(android.monochrome.as_ref())
                 .map(IconLayer::path)
         });
-        self.image.as_deref().into_iter().chain(android)
+        self.image
+            .as_deref()
+            .into_iter()
+            .chain(self.desktop.as_deref())
+            .chain(android)
     }
 }
 
@@ -642,6 +690,28 @@ monochrome = "assets/mono.PNG"
     }
 
     #[test]
+    fn desktop_source_falls_back_to_image() {
+        let mut icon = parse("[icon]\nimage = \"a.png\"\n").unwrap();
+        assert_eq!(icon.desktop_source(), Some(Path::new("a.png")));
+        icon.desktop = Some(PathBuf::from("b.png"));
+        assert_eq!(icon.desktop_source(), Some(Path::new("b.png")));
+    }
+
+    #[test]
+    fn writes_multi_resolution_ico() {
+        let dir = temp_dir("ico");
+        let dest = dir.join("app.ico");
+        icon().write_ico(&dest).unwrap();
+        let decoded =
+            image::load_from_memory_with_format(&fs::read(&dest).unwrap(), ImageFormat::Ico)
+                .unwrap();
+        // The decoder picks the largest frame.
+        assert_eq!(decoded.width(), 256);
+        let bytes = fs::read(&dest).unwrap();
+        assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 6);
+    }
+
+    #[test]
     fn every_icon_key_is_optional() {
         assert_eq!(parse("[icon]\n").unwrap(), IconConfig::default());
     }
@@ -691,6 +761,7 @@ monochrome = "assets/mono.PNG"
     fn rooted_anchors_every_layer() {
         let icon = IconConfig {
             image: Some(PathBuf::from("icon.png")),
+            desktop: Some(PathBuf::from("tile.png")),
             android: Some(AdaptiveIconConfig {
                 foreground: IconLayer::Vector(PathBuf::from("fg.xml")),
                 background: IconBackground::Layer(IconLayer::Png(PathBuf::from("bg.png"))),
@@ -703,6 +774,7 @@ monochrome = "assets/mono.PNG"
             sources,
             [
                 Path::new("/app/icon.png"),
+                Path::new("/app/tile.png"),
                 Path::new("/app/fg.xml"),
                 Path::new("/app/bg.png"),
                 Path::new("/app/mono.xml"),

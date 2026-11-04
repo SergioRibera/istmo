@@ -18,6 +18,7 @@ section is optional; an empty file is legal.
 | `[[remote_override]]`| array of tables   | app         | Force a specific plugin to the `:remote` process |
 | `[app]`              | table             | app         | App identity and Kotlin/Swift codegen configuration |
 | `[min_versions]`     | table             | plugin, app | Minimum OS versions (requirements / app floor) |
+| `[[windows_manifest_fragment]]` | array of tables | plugin, app | Entries of the Windows application manifest |
 
 Unknown top-level keys are rejected — expect a build-time error if you
 typo a section.
@@ -175,7 +176,8 @@ rust_entry      = true           # default: detected (`#[istmo::mobile_app]` in 
 
 # Launcher icon (see Native projects). Every key is optional.
 [app.icon]
-image = "assets/icon.png"        # iOS app icon + legacy Android mipmaps (default: none)
+image   = "assets/icon.png"      # iOS app icon + legacy Android mipmaps (default: none)
+desktop = "assets/tile.png"      # window icon + Windows .exe icon (default: image)
 
 [app.icon.android]               # adaptive icon, API 26+ (default: none)
 foreground = "assets/fg.xml"     # required: vector drawable .xml or .png
@@ -315,6 +317,28 @@ the app's `<dict>`:
 Without markers, the merged keys are written to a sidecar
 (`Info.plist.plugins.xml`, `<App>.entitlements.plugins.xml`) to copy by
 hand.
+
+### `[[windows_manifest_fragment]]`
+
+Windows application-manifest entries do live in `istmo.toml` (plugin or
+app). Each `xml` is a direct child of `<assembly>`:
+
+```toml
+[[windows_manifest_fragment]]
+name = "dpi_aware"
+xml  = """
+<application xmlns="urn:schemas-microsoft-com:asm.v3">
+  <windowsSettings>
+    <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+  </windowsSettings>
+</application>
+"""
+```
+
+When the app builds for Windows, `istmo-build` keeps one fragment per
+`name` (first declaration wins), wraps them in an `<assembly>` and
+embeds the result: `/MANIFEST:EMBED /MANIFESTINPUT:` on MSVC, an
+`RT_MANIFEST` resource next to the `.exe` icon on GNU.
 
 ## Full example (plugin crate)
 

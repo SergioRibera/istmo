@@ -21,7 +21,8 @@ quote = { workspace = true }
 plist = { version = "1.7", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+embed-resource = "3.0"
 globset = { version = "0.4", default-features = false }
 
 [lints]

@@ -75,7 +75,7 @@
 #![doc(html_root_url = "https://docs.rs/istmo")]
 
 pub use istmo_core::*;
-pub use istmo_macros::{message, mobile_app, plugin, runtime, service, stream, worker};
+pub use istmo_macros::{app_icon, message, mobile_app, plugin, runtime, service, stream, worker};
 
 /// First-party plugin surfaces (lifecycle, deep links, permissions,
 /// notifications, ad slots, safe-area, …).

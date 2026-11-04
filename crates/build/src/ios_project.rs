@@ -381,6 +381,7 @@ mod tests {
                 build: Some(12),
                 icon: crate::app_icon::IconConfig {
                     image: icon.then(|| PathBuf::from("icon.png")),
+                    desktop: None,
                     android: None,
                 },
                 ..AppIdentity::default()

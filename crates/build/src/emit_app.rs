@@ -49,6 +49,7 @@ use crate::service::{ServiceContract, generate_android_service};
 use crate::swift::generate_swift_client;
 use crate::swift_host::generate_swift_host;
 use crate::swift_types::{generate_swift_codecs, generate_swift_types};
+use crate::windows_resources::{WindowsResources, WindowsToolchain, compose_manifest};
 
 #[derive(Debug, Clone, Default)]
 pub struct AppOpts {
@@ -88,6 +89,11 @@ pub fn emit_app() {
     emit_app_with(AppOpts::default());
 }
 
+/// Window icon staged in `OUT_DIR` for `istmo::app_icon!()`.
+const DESKTOP_ICON_PNG: &str = "istmo-app-icon.png";
+/// Large enough for HiDPI title bars and the Windows taskbar.
+const DESKTOP_ICON_EDGE: u32 = 256;
+
 pub fn emit_app_with(opts: AppOpts) {
     let root = opts.root.clone().unwrap_or_else(cargo_manifest_dir);
 
@@ -103,6 +109,22 @@ pub fn emit_app_with(opts: AppOpts) {
 
     let android_enabled = opts.android.or(app_config.android).unwrap_or(true);
     let ios_enabled = opts.ios.or(app_config.ios).unwrap_or(true);
+
+    let dep_manifests_by_links = collect_dep_manifests_by_links();
+    let app_manifest = manifest_path.is_file().then(|| {
+        Manifest::from_path(&manifest_path)
+            .unwrap_or_else(|err| panic!("istmo-build: {}: {err}", manifest_path.display()))
+    });
+    let app = resolve_app_metadata(
+        &root,
+        &app_config,
+        app_manifest.as_ref(),
+        opts.lib_name.as_ref(),
+    );
+    for source in app.icon.source_files() {
+        println!("cargo:rerun-if-changed={}", source.display());
+    }
+    emit_desktop_icon(&app, &dep_manifests_by_links, app_manifest.as_ref());
 
     let android_active = android_enabled && android_root.is_dir();
     let ios_active = ios_enabled && ios_root.is_dir();
@@ -134,7 +156,6 @@ pub fn emit_app_with(opts: AppOpts) {
     let mut contracts = collect_dep_contracts();
     contracts.extend(opts.extra_contracts.iter().cloned());
 
-    let dep_manifests_by_links = collect_dep_manifests_by_links();
     let mut dep_manifests: Vec<Manifest> = dep_manifests_by_links
         .iter()
         .map(|(_, manifest)| manifest.clone())
@@ -146,16 +167,6 @@ pub fn emit_app_with(opts: AppOpts) {
         .map(|p| (p.id.as_str(), p))
         .collect();
 
-    let app_manifest = manifest_path.is_file().then(|| {
-        Manifest::from_path(&manifest_path)
-            .unwrap_or_else(|err| panic!("istmo-build: {}: {err}", manifest_path.display()))
-    });
-    let app = resolve_app_metadata(
-        &root,
-        &app_config,
-        app_manifest.as_ref(),
-        opts.lib_name.as_ref(),
-    );
     let rust_entry = app_config
         .rust_entry
         .unwrap_or_else(|| app.krate.declares_mobile_app());
@@ -170,9 +181,6 @@ pub fn emit_app_with(opts: AppOpts) {
             .map(|dir| (ios_root.as_path(), dir, ios_plugins_subdir.as_str())),
     );
     emit_runtime_env(&app, &app_config, &root, desktop_staging.as_deref());
-    for source in app.icon.source_files() {
-        println!("cargo:rerun-if-changed={}", source.display());
-    }
     if app.icon.image.is_none()
         && app.icon.android.is_some()
         && app.min_android.is_some_and(|sdk| sdk < 26)
@@ -1171,6 +1179,47 @@ pub fn detect_android_package(android_root: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Desktop targets: stage the window icon PNG behind
+/// `ISTMO_APP_ICON_PNG` (read by `istmo::app_icon!()`), and on Windows
+/// link the `.exe` icon and the composed application manifest.
+fn emit_desktop_icon(
+    app: &AppMetadata,
+    dep_manifests_by_links: &[(String, Manifest)],
+    app_manifest: Option<&Manifest>,
+) {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if matches!(target_os.as_str(), "android" | "ios") {
+        return;
+    }
+    let Some(out_dir) = std::env::var_os("OUT_DIR").map(PathBuf::from) else {
+        return;
+    };
+    let icon = app.icon.desktop_source().map(|path| {
+        AppIcon::open(path).unwrap_or_else(|err| panic!("istmo-build: `[app.icon] desktop`: {err}"))
+    });
+    if let Some(icon) = &icon {
+        let png = out_dir.join(DESKTOP_ICON_PNG);
+        icon.write_png(&png, DESKTOP_ICON_EDGE)
+            .unwrap_or_else(|err| panic!("istmo-build: {err}"));
+        println!("cargo::rustc-env=ISTMO_APP_ICON_PNG={}", png.display());
+    }
+    if target_os != "windows" {
+        return;
+    }
+    let fragments = dep_manifests_by_links
+        .iter()
+        .map(|(_, manifest)| manifest)
+        .chain(app_manifest)
+        .flat_map(|manifest| &manifest.windows_manifest_fragments);
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    WindowsResources {
+        icon: icon.as_ref(),
+        manifest: compose_manifest(fragments),
+    }
+    .emit(&out_dir, WindowsToolchain::from(target_env.as_str()))
+    .unwrap_or_else(|err| panic!("istmo-build: {err}"));
 }
 
 /// Bake runtime environment variables used by `istmo::path` and the

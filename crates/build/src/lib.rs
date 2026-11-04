@@ -81,6 +81,7 @@ pub mod service;
 pub mod swift;
 pub mod swift_host;
 pub mod swift_types;
+pub mod windows_resources;
 pub mod wired_plugins;
 pub mod worker;
 

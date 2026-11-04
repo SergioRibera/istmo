@@ -17,6 +17,7 @@ sección es opcional; un archivo vacío es legal.
 | `[[swift_package]]`  | array de tables   | plugin, app | Paquetes SwiftPM extras                       |
 | `[[remote_override]]`| array de tables   | app         | Fuerza un plugin específico al proceso `:remote` |
 | `[app]`              | tabla             | app         | Identidad de la app y configuración del codegen Kotlin/Swift |
+| `[[windows_manifest_fragment]]` | array de tables | plugin, app | Entradas del manifiesto de aplicación de Windows |
 | `[min_versions]`     | tabla             | plugin, app | Versiones mínimas del SO (requisitos / piso de la app) |
 
 Claves top-level desconocidas se rechazan — espera un error de build
@@ -177,7 +178,8 @@ rust_entry      = true           # default: detectado (`#[istmo::mobile_app]` en
 
 # Ícono de launcher (ver Proyectos nativos). Todas las claves son opcionales.
 [app.icon]
-image = "assets/icon.png"        # ícono de iOS + mipmaps legacy de Android (default: ninguno)
+image   = "assets/icon.png"      # ícono de iOS + mipmaps legacy de Android (default: ninguno)
+desktop = "assets/tile.png"      # ícono de ventana + del .exe de Windows (default: image)
 
 [app.icon.android]               # ícono adaptativo, API 26+ (default: ninguno)
 foreground = "assets/fg.xml"     # obligatoria: vector drawable .xml o .png
@@ -321,6 +323,29 @@ dentro del `<dict>` de la app:
 Sin marcadores, las claves se escriben en un archivo aparte
 (`Info.plist.plugins.xml`, `<App>.entitlements.plugins.xml`) para
 copiarlas a mano.
+
+### `[[windows_manifest_fragment]]`
+
+Las entradas del manifiesto de aplicación de Windows sí van en
+`istmo.toml` (de plugin o de app). Cada `xml` es hijo directo de
+`<assembly>`:
+
+```toml
+[[windows_manifest_fragment]]
+name = "dpi_aware"
+xml  = """
+<application xmlns="urn:schemas-microsoft-com:asm.v3">
+  <windowsSettings>
+    <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+  </windowsSettings>
+</application>
+"""
+```
+
+Cuando la app compila para Windows, `istmo-build` deja un fragmento por
+`name` (gana la primera declaración), los envuelve en un `<assembly>` y
+embebe el resultado: `/MANIFEST:EMBED /MANIFESTINPUT:` en MSVC, un
+recurso `RT_MANIFEST` junto al ícono del `.exe` en GNU.
 
 ## Ejemplo completo (crate plugin)
 

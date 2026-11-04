@@ -212,3 +212,34 @@ pub fn runtime(input: TokenStream) -> TokenStream {
         Err(err) => err.into_compile_error().into(),
     }
 }
+
+/// The app's desktop icon as PNG bytes, for the window icon.
+///
+/// `istmo_build::emit()` stages a 256 px PNG from `[app.icon]`
+/// (`desktop`, else `image`) when building for a desktop target and
+/// points `ISTMO_APP_ICON_PNG` at it. Expands to an
+/// `Option<&'static [u8]>`: `Some` with the embedded bytes, `None` on
+/// Android / iOS or when the app sets no icon.
+///
+/// # Example
+///
+/// ```ignore
+/// if let Some(png) = istmo::app_icon!() {
+///     window = window.with_icon(LaunchConfig::window_icon(png));
+/// }
+/// ```
+#[proc_macro]
+pub fn app_icon(input: TokenStream) -> TokenStream {
+    if let Some(token) = proc_macro2::TokenStream::from(input).into_iter().next() {
+        return syn::Error::new(token.span(), "`app_icon!()` takes no arguments")
+            .into_compile_error()
+            .into();
+    }
+    match std::env::var("ISTMO_APP_ICON_PNG") {
+        Ok(path) if !path.is_empty() => quote::quote! {
+            ::core::option::Option::Some(::core::include_bytes!(#path) as &'static [u8])
+        },
+        _ => quote::quote! { ::core::option::Option::<&'static [u8]>::None },
+    }
+    .into()
+}
