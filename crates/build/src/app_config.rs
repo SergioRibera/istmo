@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Table, Value};
 
+use crate::app_icon::IconConfig;
 use crate::manifest::{
     AndroidPermission, InfoPlistEntry, ManifestError, expect_bool, expect_integer, expect_string,
     expect_table, parse_android_permissions,
@@ -143,8 +144,8 @@ pub struct AppIdentity {
     pub version: Option<String>,
     /// Monotonic build number (`versionCode` / `CFBundleVersion`).
     pub build: Option<u32>,
-    /// Launcher icon source image, relative to the crate root.
-    pub icon: Option<PathBuf>,
+    /// `[app.icon]`, paths relative to the crate root.
+    pub icon: IconConfig,
 }
 
 /// Parsed `[app]` section.
@@ -247,7 +248,11 @@ impl AppConfig {
                 name: string("name", "app.name")?,
                 version: string("version", "app.version")?,
                 build: table.get("build").map(parse_build_number).transpose()?,
-                icon: string("icon", "app.icon")?.map(PathBuf::from),
+                icon: table
+                    .get("icon")
+                    .map(IconConfig::parse)
+                    .transpose()?
+                    .unwrap_or_default(),
             },
             assets_dir: string("assets_dir", "app.assets_dir")?.map(PathBuf::from),
         })
@@ -447,8 +452,8 @@ pub struct AppMetadata {
     pub name: String,
     pub version: String,
     pub build: u32,
-    /// Absolute path of the icon source image.
-    pub icon: Option<PathBuf>,
+    /// `[app.icon]` with absolute paths.
+    pub icon: IconConfig,
     pub min_android: Option<u32>,
     pub min_ios: Option<OsVersion>,
     pub krate: CrateInfo,
@@ -468,10 +473,7 @@ impl AppMetadata {
                 .clone()
                 .unwrap_or_else(|| krate.version.clone()),
             build: identity.build.unwrap_or(1),
-            icon: identity
-                .icon
-                .as_ref()
-                .map(|icon| krate.manifest_dir.join(icon)),
+            icon: identity.icon.rooted(&krate.manifest_dir),
             min_android: min_versions.android,
             min_ios: min_versions.ios,
             krate,
@@ -528,7 +530,9 @@ id = "dev.istmo.demo"
 name = "istmo demo"
 version = "1.2.3"
 build = 42
-icon = "assets/icon.png"
+
+[app.icon]
+image = "assets/icon.png"
 "#,
         )
         .unwrap();
@@ -536,7 +540,11 @@ icon = "assets/icon.png"
         assert_eq!(cfg.identity.name.as_deref(), Some("istmo demo"));
         assert_eq!(cfg.identity.version.as_deref(), Some("1.2.3"));
         assert_eq!(cfg.identity.build, Some(42));
-        assert_eq!(cfg.identity.icon, Some(PathBuf::from("assets/icon.png")));
+        assert_eq!(
+            cfg.identity.icon.image,
+            Some(PathBuf::from("assets/icon.png"))
+        );
+        assert!(cfg.identity.icon.android.is_none());
     }
 
     #[test]
@@ -593,7 +601,7 @@ icon = "assets/icon.png"
         assert_eq!(meta.version, "0.3.0");
         assert_eq!(meta.build, 1);
         assert!(meta.id.is_none());
-        assert!(meta.icon.is_none());
+        assert_eq!(meta.icon, IconConfig::default());
     }
 
     #[test]
@@ -603,7 +611,10 @@ icon = "assets/icon.png"
             name: Some("Example".to_owned()),
             version: Some("2.0.0".to_owned()),
             build: Some(7),
-            icon: Some(PathBuf::from("icon.png")),
+            icon: IconConfig {
+                image: Some(PathBuf::from("icon.png")),
+                android: None,
+            },
         };
         let min = MinVersions {
             android: Some(26),
@@ -613,7 +624,10 @@ icon = "assets/icon.png"
         assert_eq!(meta.name, "Example");
         assert_eq!(meta.version, "2.0.0");
         assert_eq!(meta.build, 7);
-        assert_eq!(meta.icon, Some(PathBuf::from("/work/my-app/icon.png")));
+        assert_eq!(
+            meta.icon.image,
+            Some(PathBuf::from("/work/my-app/icon.png"))
+        );
         assert_eq!(meta.min_android, Some(26));
     }
 }

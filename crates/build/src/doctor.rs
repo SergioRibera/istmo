@@ -102,9 +102,9 @@ impl<'a> Doctor<'a> {
         else {
             return;
         };
-        if self.app.icon.is_some() && !manifest.contains("${istmoIcon}") {
+        if self.app.icon.has_android_launcher() && !manifest.contains("${istmoIcon}") {
             findings.push(Finding {
-                message: "`[app] icon` is set but AndroidManifest.xml does not use it; set \
+                message: "`[app.icon]` is set but AndroidManifest.xml does not use it; set \
                           `android:icon=\"${istmoIcon}\"` on <application>"
                     .to_owned(),
             });
@@ -190,7 +190,10 @@ mod tests {
     fn app(crate_types: &[&str], icon: bool) -> AppMetadata {
         AppMetadata::resolve(
             &AppIdentity {
-                icon: icon.then(|| PathBuf::from("icon.png")),
+                icon: crate::app_icon::IconConfig {
+                    image: icon.then(|| PathBuf::from("icon.png")),
+                    android: None,
+                },
                 ..AppIdentity::default()
             },
             &MinVersions::default(),

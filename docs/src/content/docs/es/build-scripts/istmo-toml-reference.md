@@ -165,7 +165,6 @@ id      = "com.myapp"            # applicationId + PRODUCT_BUNDLE_IDENTIFIER (de
 name    = "Mi App"               # label del launcher / CFBundleDisplayName (default: nombre del crate)
 version = "1.2.0"                # versionName / MARKETING_VERSION (default: package.version de Cargo)
 build   = 12                     # versionCode / CURRENT_PROJECT_VERSION, 1..=2100000000 (default: 1)
-icon    = "assets/icon.png"      # imagen fuente de los íconos de launcher (default: ninguno)
 
 # Codegen
 android         = true           # default: true (skipped si no hay ./android)
@@ -175,6 +174,15 @@ ios_app_dir     = "MyApp"        # default: único subdir ./ios/*
 ios_plugins_subdir = "Plugins"   # default: "Plugins"
 auto_register   = true           # default: true (registrar plugins en IstmoPluginRegistry)
 rust_entry      = true           # default: detectado (`#[istmo::mobile_app]` en src/); emite IstmoApp.run()
+
+# Ícono de launcher (ver Proyectos nativos). Todas las claves son opcionales.
+[app.icon]
+image = "assets/icon.png"        # ícono de iOS + mipmaps legacy de Android (default: ninguno)
+
+[app.icon.android]               # ícono adaptativo, API 26+ (default: ninguno)
+foreground = "assets/fg.xml"     # obligatoria: vector drawable .xml o .png
+background = "#EFE6D4"           # obligatoria: #RRGGBB / #AARRGGBB, .xml o .png
+monochrome = "assets/mono.xml"   # ícono temático, Android 13+ (default: ninguno)
 ```
 
 `id` tiene que ser un identificador reverse-DNS (`com.example.app`: dos
@@ -350,9 +358,11 @@ from_version = "7.0.0"
 id              = "com.myapp"
 name            = "Mi App"
 build           = 3
-icon            = "assets/icon.png"
 android_package = "com.myapp.gen"
 ios_app_dir     = "MyApp"
+
+[app.icon]
+image = "assets/icon.png"
 
 [min_versions]
 android = 24

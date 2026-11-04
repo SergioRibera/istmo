@@ -119,6 +119,7 @@ impl IosProject {
 
         let icon_catalog = app
             .icon
+            .image
             .as_ref()
             .map(|_| relative(&self.generated_dir().join(ASSET_CATALOG_DIR)));
         let has_sources =
@@ -244,7 +245,7 @@ fn build_settings(app: &AppMetadata) -> Vec<(&'static str, SettingValue)> {
             SettingValue::Scalar(min.to_string()),
         ));
     }
-    if app.icon.is_some() {
+    if app.icon.image.is_some() {
         settings.push((
             "ASSETCATALOG_COMPILER_APPICON_NAME",
             SettingValue::Scalar(IOS_APP_ICON_SET.to_owned()),
@@ -378,7 +379,10 @@ mod tests {
                 id: Some(AppId::try_from("dev.istmo.demo").unwrap()),
                 name: Some("Demo \"App\"".into()),
                 build: Some(12),
-                icon: icon.then(|| PathBuf::from("icon.png")),
+                icon: crate::app_icon::IconConfig {
+                    image: icon.then(|| PathBuf::from("icon.png")),
+                    android: None,
+                },
                 ..AppIdentity::default()
             },
             &MinVersions {

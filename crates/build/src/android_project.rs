@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::app_config::AppMetadata;
-use crate::app_icon::{ANDROID_ICON_RESOURCE, AppIcon, IconError};
+use crate::app_icon::{ANDROID_ICON_RESOURCE, AdaptiveIconConfig, AppIcon, IconConfig, IconError};
 use crate::manifest::Manifest;
 use crate::native_deps::NativeDeps;
 
@@ -92,7 +92,8 @@ struct App<'a> {
     version_name: &'a str,
     version_code: u32,
     min_sdk: Option<u32>,
-    /// Drawable reference for `${istmoIcon}`, when `[app] icon` is set.
+    /// Drawable reference for `${istmoIcon}`, when `[app.icon]` gives
+    /// Android a launcher icon.
     icon: Option<String>,
 }
 
@@ -142,8 +143,8 @@ impl AndroidProject {
                 min_sdk: app.min_android,
                 icon: app
                     .icon
-                    .as_ref()
-                    .map(|_| format!("@mipmap/{ANDROID_ICON_RESOURCE}")),
+                    .has_android_launcher()
+                    .then(|| format!("@mipmap/{ANDROID_ICON_RESOURCE}")),
             },
             plugins,
             gradle: deps
@@ -161,9 +162,18 @@ impl AndroidProject {
         json
     }
 
-    /// Write the launcher icon mipmaps under [`ANDROID_RES_DIR`].
-    pub fn write_icon(&self, icon: &AppIcon) -> Result<(), IconError> {
-        icon.write_android_mipmaps(&self.root.join(ANDROID_RES_DIR))
+    /// Write the launcher icon under [`ANDROID_RES_DIR`]: the legacy
+    /// mipmaps from the decoded `[app.icon] image`, and the adaptive
+    /// icon from `icon.android` (or remove a stale one).
+    pub fn write_icon(&self, legacy: Option<&AppIcon>, icon: &IconConfig) -> Result<(), IconError> {
+        let res_dir = self.root.join(ANDROID_RES_DIR);
+        if let Some(legacy) = legacy {
+            legacy.write_android_mipmaps(&res_dir)?;
+        }
+        icon.android.as_ref().map_or_else(
+            || AdaptiveIconConfig::remove_android(&res_dir),
+            |adaptive| adaptive.write_android(&res_dir),
+        )
     }
 }
 
@@ -177,7 +187,10 @@ mod tests {
     fn app(icon: bool) -> AppMetadata {
         let identity = AppIdentity {
             id: Some(AppId::try_from("dev.istmo.demo").unwrap()),
-            icon: icon.then(|| PathBuf::from("icon.png")),
+            icon: IconConfig {
+                image: icon.then(|| PathBuf::from("icon.png")),
+                android: None,
+            },
             ..AppIdentity::default()
         };
         AppMetadata::resolve(
@@ -235,6 +248,25 @@ mod tests {
             value["gradle"][0]["notation"],
             "androidx.core:core-ktx:1.13.1"
         );
+    }
+
+    #[test]
+    fn adaptive_icon_alone_sets_the_launcher_icon() {
+        let mut app = app(false);
+        app.icon.android = Some(AdaptiveIconConfig {
+            foreground: crate::app_icon::IconLayer::Vector(PathBuf::from("/fg.xml")),
+            background: crate::app_icon::IconBackground::Layer(crate::app_icon::IconLayer::Vector(
+                PathBuf::from("/bg.xml"),
+            )),
+            monochrome: None,
+        });
+        let json = AndroidProject::new(Path::new("/x/android")).render_metadata(
+            &app,
+            &[],
+            &NativeDeps::new(),
+        );
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["app"]["icon"], "@mipmap/istmo_launcher");
     }
 
     #[test]

@@ -26,8 +26,15 @@ istmo provides.
 id      = "com.example.myapp"   # applicationId + PRODUCT_BUNDLE_IDENTIFIER
 name    = "My App"              # launcher label / CFBundleDisplayName
 build   = 12                    # versionCode / CFBundleVersion (default 1)
-icon    = "assets/icon.png"     # launcher icons for both platforms
 # version = "1.2.0"             # default: Cargo.toml `package.version`
+
+[app.icon]
+image = "assets/icon.png"       # iOS app icon + legacy Android mipmaps
+
+[app.icon.android]              # adaptive icon, Android 8+ (API 26)
+foreground = "assets/icon-foreground.xml"  # vector drawable .xml, or a 432 px .png
+background = "#EFE6D4"                     # #RRGGBB / #AARRGGBB, .xml or .png
+monochrome = "assets/icon-monochrome.xml"  # optional: themed icons (Android 13+)
 
 [min_versions]
 android = 24                    # minSdk
@@ -36,6 +43,28 @@ ios     = "15.0"                # IPHONEOS_DEPLOYMENT_TARGET
 
 Every key is optional. Leave `id` out when Android and iOS need
 different identifiers — the native projects keep theirs.
+
+### Launcher icon: `[app.icon]`
+
+Both keys are optional; set the ones your platforms need.
+
+- `image` — one square image (1024 px recommended). It becomes the iOS
+  app icon set (flattened onto white: the App Store rejects alpha) and
+  the legacy Android `mipmap-*dpi/istmo_launcher.png`.
+- `[app.icon.android]` — the layers of an
+  [adaptive icon](https://developer.android.com/develop/ui/views/launch/icon_design_adaptive).
+  `foreground` and `background` are required in this table,
+  `monochrome` is optional. A layer is either an Android vector drawable
+  (`.xml`, copied verbatim to `drawable/`) or a PNG (resized to 108 dp
+  at every density, 432 px at xxxhdpi). The background can also be a
+  colour. Keep the artwork inside the central 66 dp safe zone: launchers
+  mask the outer edge.
+
+The adaptive icon is written as `mipmap-anydpi-v26/istmo_launcher.xml`,
+the same resource name as the legacy PNGs, so `${istmoIcon}` stays
+`@mipmap/istmo_launcher` and Android picks the adaptive one on API 26+.
+Without `image`, devices below Android 8 get no launcher icon (the
+build warns when `[min_versions] android` is below 26).
 
 ## Android
 
@@ -114,7 +143,7 @@ under `ios/.istmo/`:
   app icon set and the Rust library link settings;
 - `build-rust.sh` — the pre-build phase: runs cargo for every
   architecture Xcode builds and stages `lib<crate>.a`;
-- `Assets.xcassets/IstmoAppIcon.appiconset` when `[app] icon` is set.
+- `Assets.xcassets/IstmoAppIcon.appiconset` when `[app.icon] image` is set.
 
 With xcodegen, include the fragment — it carries the plugin sources, the
 same build settings and the pre-build phase:

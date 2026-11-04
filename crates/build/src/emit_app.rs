@@ -170,9 +170,20 @@ pub fn emit_app_with(opts: AppOpts) {
             .map(|dir| (ios_root.as_path(), dir, ios_plugins_subdir.as_str())),
     );
     emit_runtime_env(&app, &app_config, &root, desktop_staging.as_deref());
-    let icon = app.icon.as_ref().map(|path| {
-        println!("cargo:rerun-if-changed={}", path.display());
-        AppIcon::open(path).unwrap_or_else(|err| panic!("istmo-build: `[app] icon`: {err}"))
+    for source in app.icon.source_files() {
+        println!("cargo:rerun-if-changed={}", source.display());
+    }
+    if app.icon.image.is_none()
+        && app.icon.android.is_some()
+        && app.min_android.is_some_and(|sdk| sdk < 26)
+    {
+        println!(
+            "cargo::warning=istmo-build: `[app.icon.android]` only covers Android 8+ (API 26); \
+             set `[app.icon] image` so older devices get a launcher icon too"
+        );
+    }
+    let icon = app.icon.image.as_ref().map(|path| {
+        AppIcon::open(path).unwrap_or_else(|err| panic!("istmo-build: `[app.icon] image`: {err}"))
     });
 
     let app_auto_register = opts
@@ -399,11 +410,9 @@ fn sync_android_project(
         &project.metadata_path(),
         &project.render_metadata(app, &plugins, &deps),
     );
-    if let Some(icon) = icon {
-        project
-            .write_icon(icon)
-            .unwrap_or_else(|err| panic!("istmo-build: {err}"));
-    }
+    project
+        .write_icon(icon, &app.icon)
+        .unwrap_or_else(|err| panic!("istmo-build: {err}"));
 }
 
 struct IosSync<'a> {

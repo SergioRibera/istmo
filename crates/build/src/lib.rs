@@ -31,7 +31,7 @@
 //!   [`Contract`].
 //! - [`manifest`] — parse and emit `istmo.toml` metadata.
 //! - [`app_config`] — the app crate's `[app]` section: codegen targets
-//!   and app identity (id, name, version, build, icon).
+//!   and app identity (id, name, version, build, `[app.icon]`).
 //! - [`handover`] — hex-encoded metadata piped between plugin
 //!   `build.rs`es and consuming apps via `DEP_*` env vars.
 //! - [`kotlin`] / [`kotlin_client`] / [`kotlin_host`] / [`kotlin_types`]
@@ -87,6 +87,7 @@ pub mod worker;
 pub use crate::app_config::{
     AppConfig, AppId, AppIdentity, AppMetadata, AppPluginOpts, CrateInfo, Platform, Role,
 };
+pub use crate::app_icon::{AdaptiveIconConfig, IconBackground, IconColor, IconConfig, IconLayer};
 pub use crate::apple_plist::{
     ENTITLEMENTS_FRAGMENT, INFO_PLIST_FRAGMENT, MergeWarning, PlistFragmentError, PlistFragments,
 };
