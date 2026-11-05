@@ -128,15 +128,6 @@ pub fn emit_app_with(opts: AppOpts) {
 
     let android_active = android_enabled && android_root.is_dir();
     let ios_active = ios_enabled && ios_root.is_dir();
-    if !android_active && !ios_active {
-        return;
-    }
-
-    let android_package = opts
-        .android_package
-        .clone()
-        .or_else(|| app_config.android_package.clone())
-        .or_else(|| detect_android_package(&android_root).map(|ns| format!("{ns}.gen")));
     let ios_app_dir = opts
         .ios_app_dir
         .clone()
@@ -147,6 +138,27 @@ pub fn emit_app_with(opts: AppOpts) {
         .clone()
         .or_else(|| app_config.ios_plugins_subdir.clone())
         .unwrap_or_else(|| "Plugins".to_owned());
+    // Desktop builds often ship without `android/` / `ios/` (e.g. a Nix
+    // source filter), and still need the runtime env and staged assets.
+    let desktop_staging = sync_assets(
+        &root,
+        app_manifest.as_ref(),
+        android_active.then_some(android_root.as_path()),
+        ios_active
+            .then(|| ios_app_dir.as_deref())
+            .flatten()
+            .map(|dir| (ios_root.as_path(), dir, ios_plugins_subdir.as_str())),
+    );
+    emit_runtime_env(&app, &app_config, &root, desktop_staging.as_deref());
+    if !android_active && !ios_active {
+        return;
+    }
+
+    let android_package = opts
+        .android_package
+        .clone()
+        .or_else(|| app_config.android_package.clone())
+        .or_else(|| detect_android_package(&android_root).map(|ns| format!("{ns}.gen")));
 
     let mut per_plugin = app_config.per_plugin.clone();
     for (k, v) in opts.per_plugin.clone() {
@@ -171,16 +183,6 @@ pub fn emit_app_with(opts: AppOpts) {
         .rust_entry
         .unwrap_or_else(|| app.krate.declares_mobile_app());
 
-    let desktop_staging = sync_assets(
-        &root,
-        app_manifest.as_ref(),
-        android_active.then_some(android_root.as_path()),
-        ios_active
-            .then(|| ios_app_dir.as_deref())
-            .flatten()
-            .map(|dir| (ios_root.as_path(), dir, ios_plugins_subdir.as_str())),
-    );
-    emit_runtime_env(&app, &app_config, &root, desktop_staging.as_deref());
     if app.icon.image.is_none()
         && app.icon.android.is_some()
         && app.min_android.is_some_and(|sdk| sdk < 26)
