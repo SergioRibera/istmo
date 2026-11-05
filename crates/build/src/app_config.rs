@@ -416,6 +416,19 @@ impl CrateInfo {
         self.crate_types.iter().any(|t| t == crate_type)
     }
 
+    /// Whether the package builds an executable: `src/main.rs`,
+    /// `src/bin/` or a `[[bin]]` target — Cargo's own auto-discovery.
+    #[must_use]
+    pub fn has_binaries(&self) -> bool {
+        let src = self.manifest_dir.join("src");
+        src.join("main.rs").is_file()
+            || src.join("bin").is_dir()
+            || fs::read_to_string(self.manifest_dir.join("Cargo.toml"))
+                .ok()
+                .and_then(|text| text.parse::<DocumentMut>().ok())
+                .is_some_and(|doc| doc.get("bin").is_some())
+    }
+
     /// Whether any source file under `src/` carries a
     /// `#[istmo::mobile_app]` (or `#[mobile_app]`) attribute — i.e. the
     /// crate exports the `istmo_run_ios` entry point.
@@ -602,6 +615,28 @@ image = "assets/icon.png"
         assert_eq!(meta.build, 1);
         assert!(meta.id.is_none());
         assert_eq!(meta.icon, IconConfig::default());
+    }
+
+    #[test]
+    fn detects_binary_targets() {
+        let root = std::env::temp_dir().join(format!("istmo-bins-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+        let info = CrateInfo {
+            manifest_dir: root.clone(),
+            ..krate()
+        };
+        assert!(!info.has_binaries());
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"p\"\n[[bin]]\nname = \"p\"\npath = \"x.rs\"\n",
+        )
+        .unwrap();
+        assert!(info.has_binaries());
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        assert!(info.has_binaries());
     }
 
     #[test]

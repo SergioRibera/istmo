@@ -121,13 +121,17 @@ pub fn emit_app_with(opts: AppOpts) {
         app_manifest.as_ref(),
         opts.lib_name.as_ref(),
     );
+    let android_active = android_enabled && android_root.is_dir();
+    let ios_active = ios_enabled && ios_root.is_dir();
+    // Plugin crates run `emit()` too: only apps (a native project or a
+    // binary to ship) get the desktop icon, runtime env and assets.
+    if !android_active && !ios_active && !app.krate.has_binaries() {
+        return;
+    }
     for source in app.icon.source_files() {
         println!("cargo:rerun-if-changed={}", source.display());
     }
     emit_desktop_icon(&app, &dep_manifests_by_links, app_manifest.as_ref());
-
-    let android_active = android_enabled && android_root.is_dir();
-    let ios_active = ios_enabled && ios_root.is_dir();
     let ios_app_dir = opts
         .ios_app_dir
         .clone()
