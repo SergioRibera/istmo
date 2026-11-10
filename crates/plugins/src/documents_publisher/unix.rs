@@ -16,7 +16,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 use istmo_core::Runtime;
 
 use super::{
-    ACK_WAIT, CONNECT_ATTEMPTS, CONNECT_BACKOFF, DocumentsError, ForwardRequest, InstanceKey,
-    MAX_CLIENTS, REQUEST_BUDGET, endpoint_stem, handle_client, send_request,
+    ACK_WAIT, CONNECT_ATTEMPTS, CONNECT_BACKOFF, ClientSlots, DocumentsError, ForwardRequest,
+    InstanceKey, REQUEST_BUDGET, endpoint_stem, handle_client, send_request,
 };
 
 /// How often the accept loop wakes up when idle.
@@ -54,22 +54,32 @@ impl Paths {
     }
 }
 
-/// A directory only the current user can enter.
+/// Whether `dir` is a real directory (not a symlink) owned by `uid` that
+/// nobody else can enter.
+#[allow(clippy::verbose_bit_mask)] // `& 0o077` names the group and other bits
+fn is_private(dir: &Path, uid: u32) -> io::Result<bool> {
+    let meta = fs::symlink_metadata(dir)?;
+    Ok(meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0)
+}
+
+/// A directory only the current user can enter: `$XDG_RUNTIME_DIR` on
+/// Linux (created `0700` by the session manager), the per-user `$TMPDIR`
+/// on macOS, else a private `istmo-<uid>` directory under the temp dir.
+/// The environment is not trusted blindly: `sudo -E` or a container may
+/// point those variables at someone else's or a shared directory.
 fn private_dir() -> io::Result<PathBuf> {
-    // `$XDG_RUNTIME_DIR` is created `0700` and owned by the user
-    // (XDG Base Directory spec); macOS gives every user a private
-    // `$TMPDIR` under `/var/folders`.
-    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
-        if dir.is_absolute() && dir.is_dir() {
+    // SAFETY: `geteuid` takes no arguments, cannot fail and has no
+    // side effects.
+    let uid = unsafe { libc::geteuid() };
+    let candidates = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain(cfg!(target_os = "macos").then(std::env::temp_dir));
+    for dir in candidates {
+        if dir.is_absolute() && is_private(&dir, uid).unwrap_or(false) {
             return Ok(dir);
         }
     }
-    if cfg!(target_os = "macos") {
-        return Ok(std::env::temp_dir());
-    }
-    // SAFETY: `getuid` takes no arguments, cannot fail and has no
-    // side effects.
-    let uid = unsafe { libc::getuid() };
     let dir = std::env::temp_dir().join(format!("istmo-{uid}"));
     match DirBuilder::new().mode(0o700).create(&dir) {
         Ok(()) => {}
@@ -77,10 +87,8 @@ fn private_dir() -> io::Result<PathBuf> {
         Err(err) => return Err(err),
     }
     // Someone else may have created the directory first (shared
-    // `/tmp`): refuse anything that is not ours and private. A symlink
-    // fails the `is_dir` check of `symlink_metadata`.
-    let meta = fs::symlink_metadata(&dir)?;
-    if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
+    // `/tmp`): refuse anything that is not ours and private.
+    if !is_private(&dir, uid)? {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!("{} is not a private directory of this user", dir.display()),
@@ -142,6 +150,8 @@ fn bind(path: &Path) -> Result<(UnixListener, FileId), DocumentsError> {
         Err(err) => return Err(DocumentsError::io("removing a stale socket")(err)),
     }
     let listener = UnixListener::bind(path).map_err(DocumentsError::io("binding the socket"))?;
+    // Until the chmod below the socket has umask permissions; that is
+    // harmless only because `private_dir` keeps everyone else out.
     fs::set_permissions(path, fs::Permissions::from_mode(STICKY_PRIVATE))
         .map_err(DocumentsError::io("restricting the socket"))?;
     listener
@@ -174,13 +184,15 @@ pub(super) fn claim(key: &InstanceKey) -> Result<Claim, DocumentsError> {
         .create(true)
         .truncate(false)
         .mode(0o600)
+        // A symlink planted under the lock's name must not redirect it.
+        .custom_flags(libc::O_NOFOLLOW)
         .open(&paths.lock)
         .map_err(DocumentsError::io("opening the instance lock"))?;
     if !try_lock(&lock).map_err(DocumentsError::io("locking the instance lock"))? {
         return Ok(Claim::Secondary);
     }
-    // Keep a lock created before this version out of clean-ups too.
-    let _ = fs::set_permissions(&paths.lock, fs::Permissions::from_mode(STICKY_PRIVATE));
+    // Through the descriptor (`fchmod`), never the path.
+    let _ = lock.set_permissions(fs::Permissions::from_mode(STICKY_PRIVATE));
     let (listener, socket_id) = bind(&paths.socket)?;
     Ok(Claim::Primary(Endpoint {
         listener,
@@ -193,6 +205,15 @@ pub(super) fn claim(key: &InstanceKey) -> Result<Claim, DocumentsError> {
 pub(super) fn forward(key: &InstanceKey, request: &ForwardRequest) -> Result<(), DocumentsError> {
     let paths = Paths::resolve(key)?;
     for _ in 0..CONNECT_ATTEMPTS {
+        // Only talk to a socket this user created.
+        // SAFETY: `geteuid` takes no arguments and cannot fail.
+        let ours = fs::symlink_metadata(&paths.socket)
+            .map(|meta| meta.uid() == unsafe { libc::geteuid() });
+        if matches!(ours, Ok(false)) {
+            return Err(DocumentsError::Protocol(
+                "the socket belongs to another user",
+            ));
+        }
         match UnixStream::connect(&paths.socket) {
             Ok(mut stream) => {
                 stream
@@ -263,7 +284,7 @@ impl Write for Deadline {
 struct Shared {
     stop: AtomicBool,
     alive: AtomicBool,
-    clients: AtomicUsize,
+    slots: ClientSlots,
 }
 
 #[derive(Debug)]
@@ -294,7 +315,7 @@ impl Server {
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(true),
-            clients: AtomicUsize::new(0),
+            slots: ClientSlots::default(),
         });
         let socket = paths.socket.clone();
         let thread = thread::Builder::new()
@@ -394,19 +415,30 @@ impl Serving {
     }
 
     fn serve(&self, stream: UnixStream, shared: &Arc<Shared>) {
-        if shared.clients.fetch_add(1, Ordering::AcqRel) >= MAX_CLIENTS {
-            shared.clients.fetch_sub(1, Ordering::AcqRel);
+        // Defence in depth: the directory already keeps other users out.
+        match peer_uid(&stream) {
+            // SAFETY: `geteuid` takes no arguments and cannot fail.
+            Ok(uid) if uid == unsafe { libc::geteuid() } => {}
+            Ok(uid) => {
+                tracing::warn!(target: "istmo.documents", uid, "refused a launch forwarded by another user");
+                return;
+            }
+            Err(err) => {
+                tracing::warn!(target: "istmo.documents", %err, "could not tell who connected");
+                return;
+            }
+        }
+        let Some(slot) = shared.slots.take() else {
             tracing::warn!(target: "istmo.documents", "too many forwarded launches at once; dropping one");
             return;
-        }
+        };
         let Some(runtime) = self.runtime.upgrade() else {
-            shared.clients.fetch_sub(1, Ordering::AcqRel);
             return;
         };
-        let shared_client = Arc::clone(shared);
         let spawned = thread::Builder::new()
             .name("istmo-documents-client".to_owned())
             .spawn(move || {
+                let _slot = slot;
                 let mut client = Deadline {
                     stream,
                     until: Instant::now() + REQUEST_BUDGET,
@@ -420,12 +452,51 @@ impl Serving {
                     }
                     Err(err) => tracing::warn!(target: "istmo.documents", %err, "client socket"),
                 }
-                shared_client.clients.fetch_sub(1, Ordering::AcqRel);
             });
         if let Err(err) = spawned {
-            shared.clients.fetch_sub(1, Ordering::AcqRel);
             tracing::warn!(target: "istmo.documents", %err, "spawning a client thread");
         }
+    }
+}
+
+/// Effective user id of the process on the other end of `stream`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = libc::socklen_t::try_from(size_of::<libc::ucred>())
+        .map_err(|_| io::Error::other("ucred size"))?;
+    // SAFETY: `cred` and `len` are valid out-pointers sized for
+    // `SO_PEERCRED`; the descriptor is owned by `stream`.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut cred).cast(),
+            &raw mut len,
+        )
+    };
+    if rc == 0 {
+        Ok(cred.uid)
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Effective user id of the process on the other end of `stream`.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
+    let (mut uid, mut gid) = (0, 0);
+    // SAFETY: `uid` and `gid` are valid out-pointers; the descriptor is
+    // owned by `stream`.
+    if unsafe { libc::getpeereid(stream.as_raw_fd(), &raw mut uid, &raw mut gid) } == 0 {
+        Ok(uid)
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
@@ -467,7 +538,7 @@ mod tests {
         let meta = fs::metadata(&dir).unwrap();
         assert!(meta.is_dir());
         // SAFETY: see `private_dir`.
-        assert_eq!(meta.uid(), unsafe { libc::getuid() });
+        assert_eq!(meta.uid(), unsafe { libc::geteuid() });
     }
 
     #[test]

@@ -3,15 +3,19 @@
 //! - **Ownership** is decided by `FILE_FLAG_FIRST_PIPE_INSTANCE`:
 //!   creating the first instance of a name is atomic, so two
 //!   simultaneous launches cannot both become primary.
-//! - **Name** — `\\.\pipe\istmo-<hash>-<user SID>`: the pipe namespace
-//!   is machine-wide, and the SID (unlike `%USERNAME%`) is unique and
-//!   cannot be spoofed by the environment.
-//! - **Trust** — the default security descriptor grants write access
-//!   only to the creating user, `SYSTEM` and administrators, and
-//!   `PIPE_REJECT_REMOTE_CLIENTS` keeps SMB clients out. Another user
-//!   could still create a pipe with our name first; a second launch
-//!   checks that the server process runs as the same user before it
-//!   sends anything.
+//! - **Name** — `\\.\pipe\istmo-<hash>-<user SID>-<session>`: the pipe
+//!   namespace is machine-wide; the SID (unlike `%USERNAME%`) is unique
+//!   and cannot be spoofed by the environment, and the session keeps the
+//!   same user's RDP and console desktops apart.
+//! - **Trust** — the pipe gets an explicit DACL granting access only to
+//!   the user and `SYSTEM` (the default one also lets everyone read,
+//!   enough to occupy the server), `PIPE_REJECT_REMOTE_CLIENTS` keeps SMB
+//!   clients out, and the server checks the connecting process runs as
+//!   the user before reading. Another user could still create a pipe
+//!   with our name first: a second launch opens it with
+//!   `SECURITY_IDENTIFICATION` (the server cannot impersonate it) and
+//!   checks the server process runs as the same user before it sends
+//!   anything.
 //! - **Liveness** — each client is served on its own thread, so the
 //!   accept loop is back in `ConnectNamedPipe` right away and a stalled
 //!   client only parks its own thread. Synchronous pipe reads have no
@@ -22,8 +26,9 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread;
 
@@ -32,20 +37,30 @@ use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_PIPE_BUSY,
     ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
 };
-use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
-use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
-use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+use windows_sys::Win32::Security::Authorization::{
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
+use windows_sys::Win32::Security::{
+    GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    TokenUser,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
+};
+use windows_sys::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
+    PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+    PIPE_WAIT,
+};
+use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 use super::{
-    ACK_WAIT, CONNECT_ATTEMPTS, CONNECT_BACKOFF, DocumentsError, ForwardRequest, InstanceKey,
-    MAX_CLIENTS, endpoint_stem, handle_client, send_request,
+    ACK_WAIT, CONNECT_ATTEMPTS, CONNECT_BACKOFF, ClientSlots, DocumentsError, ForwardRequest,
+    InstanceKey, endpoint_stem, handle_client, send_request,
 };
 
 const PIPE_BUFFER: u32 = 64 * 1024;
@@ -140,7 +155,14 @@ fn current_user_sid() -> io::Result<String> {
     token_user_sid(unsafe { GetCurrentProcess() })
 }
 
-/// Whether the process serving `pipe` runs as `sid`.
+/// Whether the process with `pid` runs as `sid`.
+fn process_runs_as(pid: u32, sid: &str) -> io::Result<bool> {
+    // SAFETY: plain call; the result is checked by `owned`.
+    let process = owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) })?;
+    Ok(token_user_sid(process.as_raw_handle())? == sid)
+}
+
+/// Whether the process serving `pipe` (client end) runs as `sid`.
 fn server_runs_as(pipe: &File, sid: &str) -> io::Result<bool> {
     let mut pid = 0_u32;
     // SAFETY: `pipe` is the client end of a named pipe; `pid` is a
@@ -148,11 +170,31 @@ fn server_runs_as(pipe: &File, sid: &str) -> io::Result<bool> {
     if unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &raw mut pid) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: plain call; the result is checked by `owned`.
-    let process = owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) })?;
-    Ok(token_user_sid(process.as_raw_handle())? == sid)
+    process_runs_as(pid, sid)
 }
 
+/// Whether the process connected to `pipe` (server end) runs as `sid`.
+fn client_runs_as(pipe: &File, sid: &str) -> io::Result<bool> {
+    let mut pid = 0_u32;
+    // SAFETY: `pipe` is the server end of a connected named pipe; `pid`
+    // is a valid out-pointer.
+    if unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle(), &raw mut pid) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    process_runs_as(pid, sid)
+}
+
+fn current_session() -> io::Result<u32> {
+    let mut session = 0_u32;
+    // SAFETY: `session` is a valid out-pointer; `GetCurrentProcessId`
+    // cannot fail.
+    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &raw mut session) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(session)
+}
+
+#[derive(Debug, Clone)]
 struct PipeName {
     path: String,
     wide: Vec<u16>,
@@ -162,7 +204,8 @@ struct PipeName {
 impl PipeName {
     fn resolve(key: &InstanceKey) -> Result<Self, DocumentsError> {
         let sid = current_user_sid().map_err(DocumentsError::io("reading the user SID"))?;
-        let path = format!(r"\\.\pipe\{}-{sid}", endpoint_stem(key));
+        let session = current_session().map_err(DocumentsError::io("reading the session"))?;
+        let path = format!(r"\\.\pipe\{}-{sid}-{session}", endpoint_stem(key));
         Ok(Self {
             wide: wide(&path),
             path,
@@ -171,18 +214,65 @@ impl PipeName {
     }
 }
 
+/// Security descriptor of the pipe: full access for the user and
+/// `SYSTEM`, nothing for anyone else (`P` blocks inherited entries).
+#[derive(Debug)]
+struct PipeSecurity(PSECURITY_DESCRIPTOR);
+
+// SAFETY: the descriptor is an immutable `LocalAlloc` block owned only by
+// this value; Win32 reads it from any thread.
+unsafe impl Send for PipeSecurity {}
+
+impl PipeSecurity {
+    fn for_user(sid: &str) -> io::Result<Self> {
+        let sddl = wide(&format!("D:P(A;;GA;;;{sid})(A;;GA;;;SY)"));
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: `sddl` is NUL-terminated and outlives the call;
+        // `descriptor` receives a `LocalAlloc`ed block freed in `Drop`.
+        let ok = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &raw mut descriptor,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self(descriptor))
+    }
+
+    fn attributes(&self) -> SECURITY_ATTRIBUTES {
+        SECURITY_ATTRIBUTES {
+            nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
+        }
+    }
+}
+
+impl Drop for PipeSecurity {
+    fn drop(&mut self) {
+        // SAFETY: the block came from `LocalAlloc` in the conversion and
+        // nothing references it after this value.
+        unsafe { LocalFree(self.0) };
+    }
+}
+
 /// Create one server instance of the pipe. `first` asks for exclusive
 /// ownership of the name.
-fn create_instance(name: &[u16], first: bool) -> io::Result<OwnedHandle> {
+fn create_instance(name: &[u16], security: &PipeSecurity, first: bool) -> io::Result<OwnedHandle> {
     let open_mode = PIPE_ACCESS_DUPLEX
         | if first {
             FILE_FLAG_FIRST_PIPE_INSTANCE
         } else {
             0
         };
-    // SAFETY: `name` is a NUL-terminated UTF-16 string that outlives
-    // the call; a null security-attributes pointer selects the default
-    // descriptor. The returned handle is checked by `owned`.
+    let attributes = security.attributes();
+    // SAFETY: `name` is a NUL-terminated UTF-16 string and `attributes`
+    // points at a live descriptor; both outlive the call. The returned
+    // handle is checked by `owned`.
     owned(unsafe {
         CreateNamedPipeW(
             name.as_ptr(),
@@ -192,7 +282,7 @@ fn create_instance(name: &[u16], first: bool) -> io::Result<OwnedHandle> {
             PIPE_BUFFER,
             PIPE_BUFFER,
             0,
-            std::ptr::null(),
+            &raw const attributes,
         )
     })
 }
@@ -216,8 +306,8 @@ fn wait_for_client(instance: &OwnedHandle) -> io::Result<()> {
 
 #[derive(Debug)]
 pub(super) struct Endpoint {
-    wide: Vec<u16>,
-    path: String,
+    name: PipeName,
+    security: PipeSecurity,
     first: OwnedHandle,
 }
 
@@ -229,10 +319,12 @@ pub(super) enum Claim {
 
 pub(super) fn claim(key: &InstanceKey) -> Result<Claim, DocumentsError> {
     let name = PipeName::resolve(key)?;
-    match create_instance(&name.wide, true) {
+    let security =
+        PipeSecurity::for_user(&name.sid).map_err(DocumentsError::io("building the pipe DACL"))?;
+    match create_instance(&name.wide, &security, true) {
         Ok(first) => Ok(Claim::Primary(Endpoint {
-            wide: name.wide,
-            path: name.path,
+            name,
+            security,
             first,
         })),
         Err(err) if is_os_error(&err, ERROR_ACCESS_DENIED) => Ok(Claim::Secondary),
@@ -240,8 +332,15 @@ pub(super) fn claim(key: &InstanceKey) -> Result<Claim, DocumentsError> {
     }
 }
 
+/// Open the client end. `SECURITY_IDENTIFICATION` (std adds
+/// `SECURITY_SQOS_PRESENT`) lets the server learn who we are but never
+/// act as us, in case the pipe belongs to an impostor.
 fn open_client(path: &str) -> io::Result<File> {
-    OpenOptions::new().read(true).write(true).open(path)
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .security_qos_flags(SECURITY_IDENTIFICATION)
+        .open(path)
 }
 
 pub(super) fn forward(key: &InstanceKey, request: &ForwardRequest) -> Result<(), DocumentsError> {
@@ -298,7 +397,7 @@ fn exchange(name: &PipeName, request: &ForwardRequest) -> Result<(), DocumentsEr
 struct Shared {
     stop: AtomicBool,
     alive: AtomicBool,
-    clients: AtomicUsize,
+    slots: ClientSlots,
 }
 
 #[derive(Debug)]
@@ -315,9 +414,9 @@ impl Server {
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(true),
-            clients: AtomicUsize::new(0),
+            slots: ClientSlots::default(),
         });
-        let path = endpoint.path.clone();
+        let path = endpoint.name.path.clone();
         thread::Builder::new()
             .name("istmo-documents".to_owned())
             .spawn({
@@ -337,7 +436,11 @@ impl Server {
 }
 
 fn serve(endpoint: Endpoint, shared: &Arc<Shared>, runtime: &Weak<Runtime>) {
-    let Endpoint { wide, first, .. } = endpoint;
+    let Endpoint {
+        name,
+        security,
+        first,
+    } = endpoint;
     let mut pending = first;
     while !shared.stop.load(Ordering::Acquire) {
         let connected = wait_for_client(&pending);
@@ -348,7 +451,7 @@ fn serve(endpoint: Endpoint, shared: &Arc<Shared>, runtime: &Weak<Runtime>) {
         // a launch in between never sees "no such pipe" and starts a
         // second primary. The old instance closes only after the new
         // one exists.
-        let next = match create_instance(&wide, false) {
+        let next = match create_instance(&name.wide, &security, false) {
             Ok(next) => next,
             Err(err) => {
                 tracing::warn!(target: "istmo.documents", %err, "creating a pipe instance failed");
@@ -357,7 +460,7 @@ fn serve(endpoint: Endpoint, shared: &Arc<Shared>, runtime: &Weak<Runtime>) {
         };
         let client = std::mem::replace(&mut pending, next);
         match connected {
-            Ok(()) => spawn_client(File::from(client), shared, runtime),
+            Ok(()) => spawn_client(File::from(client), &name.sid, shared, runtime),
             Err(err) => {
                 // e.g. `ERROR_NO_DATA`: the client left before we
                 // accepted; its instance is dropped and replaced.
@@ -371,20 +474,32 @@ fn serve(endpoint: Endpoint, shared: &Arc<Shared>, runtime: &Weak<Runtime>) {
     }
 }
 
-fn spawn_client(mut pipe: File, shared: &Arc<Shared>, runtime: &Weak<Runtime>) {
-    if shared.clients.fetch_add(1, Ordering::AcqRel) >= MAX_CLIENTS {
-        shared.clients.fetch_sub(1, Ordering::AcqRel);
+fn spawn_client(mut pipe: File, sid: &str, shared: &Arc<Shared>, runtime: &Weak<Runtime>) {
+    let Some(slot) = shared.slots.take() else {
         tracing::warn!(target: "istmo.documents", "too many forwarded launches at once; dropping one");
         return;
-    }
+    };
     let Some(runtime) = runtime.upgrade() else {
-        shared.clients.fetch_sub(1, Ordering::AcqRel);
         return;
     };
-    let shared_client = Arc::clone(shared);
+    let sid = sid.to_owned();
     let spawned = thread::Builder::new()
         .name("istmo-documents-client".to_owned())
         .spawn(move || {
+            let _slot = slot;
+            // The DACL already limits who can connect; this keeps the
+            // check next to the read it protects.
+            match client_runs_as(&pipe, &sid) {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::warn!(target: "istmo.documents", "refused a launch forwarded by another user");
+                    return;
+                }
+                Err(err) => {
+                    tracing::warn!(target: "istmo.documents", %err, "could not tell who connected");
+                    return;
+                }
+            }
             match handle_client(&mut pipe, &runtime) {
                 // Closing a pipe discards unread data: wait until the
                 // client has read the acknowledgement.
@@ -393,10 +508,8 @@ fn spawn_client(mut pipe: File, shared: &Arc<Shared>, runtime: &Weak<Runtime>) {
                     tracing::warn!(target: "istmo.documents", %err, "rejected a forwarded launch");
                 }
             }
-            shared_client.clients.fetch_sub(1, Ordering::AcqRel);
         });
     if let Err(err) = spawned {
-        shared.clients.fetch_sub(1, Ordering::AcqRel);
         tracing::warn!(target: "istmo.documents", %err, "spawning a client thread");
     }
 }

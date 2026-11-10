@@ -22,8 +22,11 @@
 //!   drops the lock with the process).
 //! - **Windows** — a named pipe created with
 //!   `FILE_FLAG_FIRST_PIPE_INSTANCE` (atomic ownership) and
-//!   `PIPE_REJECT_REMOTE_CLIENTS`; the default pipe DACL only grants
-//!   write access to the creating user, SYSTEM and administrators.
+//!   `PIPE_REJECT_REMOTE_CLIENTS`, with a DACL for the user and SYSTEM
+//!   only; both ends check the other process runs as the same user.
+//!
+//! Both servers also check who connected (`SO_PEERCRED` / `getpeereid`,
+//! the pipe client's token) before reading a request.
 //!
 //! Failures never stop the app from starting: when the endpoint cannot
 //! be created or reached the process runs as a primary without
@@ -188,6 +191,39 @@ impl DocumentsError {
     }
 }
 
+/// The [`MAX_CLIENTS`] handler slots of a server.
+#[derive(Debug, Default)]
+struct ClientSlots(Arc<std::sync::atomic::AtomicUsize>);
+
+impl ClientSlots {
+    /// A slot, or `None` when every one is busy.
+    fn take(&self) -> Option<ClientSlot> {
+        use std::sync::atomic::Ordering;
+        let mut busy = self.0.load(Ordering::Acquire);
+        while busy < MAX_CLIENTS {
+            match self
+                .0
+                .compare_exchange_weak(busy, busy + 1, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => return Some(ClientSlot(Arc::clone(&self.0))),
+                Err(now) => busy = now,
+            }
+        }
+        None
+    }
+}
+
+/// One busy handler slot, given back on drop — also when the handler
+/// panics, so a crashing request cannot lock forwarding out.
+#[derive(Debug)]
+struct ClientSlot(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for ClientSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 /// What a second launch sends to the primary.
 #[message(bincode = "::bincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,7 +269,12 @@ impl ForwardRequest {
         stream
             .read_exact(&mut body)
             .map_err(DocumentsError::io("reading a forwarded request"))?;
-        let (request, read) = codec::decode::<Self>(&body).map_err(DocumentsError::Codec)?;
+        // The frame cap bounds the bytes, not what bincode allocates for a
+        // length prefix inside them: a 9-byte body may claim a terabyte
+        // Vec. The decode limit caps every claimed allocation as well.
+        let config = codec::wire_config().with_limit::<{ MAX_FRAME_LEN as usize }>();
+        let (request, read): (Self, usize) = bincode::decode_from_slice(&body, config)
+            .map_err(|err| DocumentsError::Codec(CodecError::from(err)))?;
         if read != body.len() {
             return Err(DocumentsError::Protocol("trailing bytes"));
         }
@@ -519,6 +560,44 @@ mod tests {
         ]
         .concat();
         assert!(ForwardRequest::read_from(&mut Cursor::new(truncated)).is_err());
+    }
+
+    #[test]
+    fn huge_length_prefixes_are_rejected_without_allocating() {
+        // `paths.len` claims 2^40 entries in a 9-byte body; a plain
+        // decode would try to reserve terabytes and abort the process.
+        let mut body = vec![0xFD];
+        body.extend_from_slice(&(1_u64 << 40).to_le_bytes());
+        let len = u32::try_from(body.len()).unwrap();
+        let frame = [
+            MAGIC.as_slice(),
+            &[PROTOCOL_VERSION],
+            &len.to_le_bytes(),
+            &body,
+        ]
+        .concat();
+        assert!(matches!(
+            ForwardRequest::read_from(&mut Cursor::new(frame)),
+            Err(DocumentsError::Codec(_))
+        ));
+    }
+
+    #[test]
+    fn client_slots_are_bounded_and_given_back() {
+        let slots = ClientSlots::default();
+        let taken: Vec<_> = (0..MAX_CLIENTS).filter_map(|_| slots.take()).collect();
+        assert_eq!(taken.len(), MAX_CLIENTS);
+        assert!(slots.take().is_none());
+        drop(taken);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _slot = slots.take().unwrap();
+            panic!("handler crashed");
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(
+            (0..MAX_CLIENTS).filter_map(|_| slots.take()).count(),
+            MAX_CLIENTS
+        );
     }
 
     /// Two launches in one process: the second finds the first's endpoint
