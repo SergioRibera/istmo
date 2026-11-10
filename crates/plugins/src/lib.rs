@@ -31,16 +31,17 @@ pub mod battery_state;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod battery_state_publisher;
 pub mod capabilities;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub mod capabilities_publisher;
 pub mod deeplinks;
 pub mod device_info;
+pub mod documents;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub mod documents_publisher;
 pub mod lifecycle;
 pub mod network_state;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod network_state_publisher;
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub mod theme_preference_publisher;
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub mod capabilities_publisher;
 pub mod notifications;
 pub mod permissions;
 pub mod safe_area;
@@ -51,6 +52,8 @@ pub mod storage_info_publisher;
 pub mod system_info;
 pub mod task_scheduler;
 pub mod theme_preference;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub mod theme_preference_publisher;
 pub mod worker;
 
 pub use crate::activity_results::{
@@ -77,6 +80,15 @@ pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLink
 pub use crate::device_info::{
     DEVICE_INFO_CHANNEL, DEVICE_INFO_PLUGIN_ID, DeviceInfo, DeviceInfoClient, DeviceInfoStream,
     FormFactor, ScreenInfo,
+};
+pub use crate::documents::{
+    ActivationStream, DOCUMENTS_ACTIVATION_CHANNEL, DOCUMENTS_CHANNEL, DOCUMENTS_PLUGIN_ID,
+    DocumentLocation, DocumentOrigin, DocumentStream, Documents, InstanceActivation,
+    OpenedDocument,
+};
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::documents_publisher::{
+    DocumentsError, DocumentsPublisher, InstanceKey, Startup, instance_key_from_build,
 };
 pub use crate::lifecycle::{AppLifecycle, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream};
 pub use crate::network_state::{

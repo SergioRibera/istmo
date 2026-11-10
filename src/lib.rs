@@ -105,3 +105,29 @@ pub mod bincode {
     pub use ::bincode::error;
     pub use ::bincode::{Decode, Encode, config, decode_from_slice, encode_to_vec};
 }
+
+/// Instance key of the app crate for
+/// [`plugins::DocumentsPublisher::start`]: `Some` when `istmo.toml`
+/// enables `[app] single_instance` (on by default when the app declares
+/// `[[app.document_type]]`), `None` otherwise.
+///
+/// Expands in the calling crate, so it reads the `ISTMO_APP_BUNDLE_ID`
+/// and `ISTMO_SINGLE_INSTANCE` values `istmo-build` emitted for the app.
+///
+/// ```ignore
+/// let key = istmo::single_instance!();
+/// match istmo::plugins::DocumentsPublisher::start(&rt, std::env::args_os().skip(1), key.as_ref())? {
+///     istmo::plugins::Startup::Forwarded => return Ok(()),
+///     istmo::plugins::Startup::Primary(publisher) => run_app(publisher),
+/// }
+/// ```
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[macro_export]
+macro_rules! single_instance {
+    () => {
+        $crate::plugins::instance_key_from_build(
+            ::core::option_env!("ISTMO_APP_BUNDLE_ID"),
+            ::core::option_env!("ISTMO_SINGLE_INSTANCE"),
+        )
+    };
+}
