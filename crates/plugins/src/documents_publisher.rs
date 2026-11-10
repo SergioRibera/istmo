@@ -44,6 +44,8 @@ use istmo_macros::message;
 
 use crate::documents::{DocumentOrigin, Documents, OpenedDocument};
 
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
@@ -359,6 +361,9 @@ impl DocumentsPublisher {
         runtime
             .check_declared(crate::documents::DOCUMENTS_PLUGIN_ID)
             .map_err(DocumentsError::Runtime)?;
+        // Finder and `open` hand documents over as Apple Events, not argv.
+        #[cfg(target_os = "macos")]
+        macos::install(runtime);
         let paths = match std::env::current_dir() {
             Ok(cwd) => document_paths(args, Some(&cwd)),
             Err(err) => {
