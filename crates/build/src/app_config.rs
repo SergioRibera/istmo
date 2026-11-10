@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::app_icon::IconConfig;
+use crate::document_types::DocumentTypes;
 use crate::manifest::{
     AndroidPermission, InfoPlistEntry, ManifestError, expect_bool, expect_integer, expect_string,
     expect_table, parse_android_permissions,
@@ -45,6 +46,8 @@ const KNOWN_APP_KEYS: &[&str] = &[
     "build",
     "icon",
     "assets_dir",
+    "document_type",
+    "single_instance",
 ];
 
 const KNOWN_APP_PLUGIN_KEYS: &[&str] = &["id", "type", "role", "platforms", "auto_register"];
@@ -174,9 +177,23 @@ pub struct AppConfig {
     /// env override. Absolute paths are used verbatim; relative paths
     /// are resolved against the crate root at emit time.
     pub assets_dir: Option<PathBuf>,
+    /// `[[app.document_type]]`: the file types the app opens.
+    pub document_types: DocumentTypes,
+    /// Desktop: forward documents opened while the app runs to the
+    /// running instance. Unset means "on when `document_types` is not
+    /// empty"; see [`Self::single_instance`].
+    pub single_instance: Option<bool>,
 }
 
 impl AppConfig {
+    /// Effective `[app] single_instance`: explicit value, else on when
+    /// the app declares document types.
+    #[must_use]
+    pub fn single_instance(&self) -> bool {
+        self.single_instance
+            .unwrap_or_else(|| !self.document_types.is_empty())
+    }
+
     pub fn parse(source: &str) -> Result<Self, ManifestError> {
         let doc: DocumentMut = source.parse().map_err(ManifestError::Parse)?;
         Self::from_document(&doc)
@@ -255,6 +272,12 @@ impl AppConfig {
                     .unwrap_or_default(),
             },
             assets_dir: string("assets_dir", "app.assets_dir")?.map(PathBuf::from),
+            document_types: table
+                .get("document_type")
+                .map(DocumentTypes::parse)
+                .transpose()?
+                .unwrap_or_default(),
+            single_instance: boolean("single_instance", "app.single_instance")?,
         })
     }
 }
@@ -497,6 +520,22 @@ impl AppMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_instance_follows_document_types() {
+        let plain = AppConfig::parse("[app]\nname = \"x\"\n").unwrap();
+        assert!(!plain.single_instance());
+        let with_docs = AppConfig::parse(
+            "[[app.document_type]]\nname = \"PDF\"\nextensions = [\"pdf\"]\n",
+        )
+        .unwrap();
+        assert!(with_docs.single_instance());
+        let opted_out = AppConfig::parse(
+            "[app]\nsingle_instance = false\n[[app.document_type]]\nname = \"PDF\"\nextensions = [\"pdf\"]\n",
+        )
+        .unwrap();
+        assert!(!opted_out.single_instance());
+    }
 
     #[test]
     fn missing_app_section_is_default() {

@@ -62,6 +62,7 @@ pub mod contract;
 pub mod desktop;
 pub mod doc_extract;
 pub mod doctor;
+pub mod document_types;
 pub mod emit_app;
 pub mod entitlements;
 pub mod extract;

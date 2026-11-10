@@ -237,6 +237,66 @@ Las entradas se escriben entre los marcadores gestionados del
 Sin los marcadores, copiá las entradas a mano desde el sidecar
 generado `Info.plist.background.xml`.
 
+### `[[app.document_type]]`
+
+Tipos de archivo que abre la app. Una sola declaración alimenta todas las plataformas:
+
+```toml
+[app]
+single_instance = true          # escritorio; por defecto: true si hay algún document_type
+
+[[app.document_type]]
+name       = "PDF document"     # obligatorio: nombre que muestra el sistema
+id         = "com.adobe.pdf"    # UTI (Apple) / base del ProgID (Windows); obligatorio si exported
+extensions = ["pdf"]            # sin el punto
+mime_types = ["application/pdf"]
+role       = "viewer"           # viewer | editor (por defecto: viewer)
+rank       = "alternate"        # owner | default | alternate (por defecto: alternate)
+
+[[app.document_type]]
+name        = "Notes document"
+id          = "com.example.notes.document"
+extensions  = ["note"]
+mime_types  = ["application/x-note"]
+role        = "editor"
+rank        = "owner"           # solo en tipos exportados
+exported    = true              # la app define este tipo (por defecto: false)
+conforms_to = ["public.data"]   # tipos padre en Apple (por defecto: ["public.data"])
+```
+
+Cada entrada necesita `extensions` o `mime_types`.
+
+- **Android** — filtros `VIEW` y `SEND` por tipo MIME, más un filtro
+  `VIEW` por `pathPattern` para las extensiones de los tipos exportados.
+  Pertenecen a una sola actividad, así que van entre marcadores que ponés
+  dentro del `<activity>` que recibe documentos:
+
+  ```xml
+  <activity android:name=".MainActivity" ...>
+      <!-- istmo:documents:start -->
+      <!-- istmo:documents:end -->
+  </activity>
+  ```
+
+  Sin los marcadores, copialos de `app/src/main/AndroidManifest.documents.xml`.
+- **iOS** — `CFBundleDocumentTypes`, `UTExportedTypeDeclarations`,
+  `UTImportedTypeDeclarations` (los tipos del sistema como
+  `com.adobe.pdf` no se vuelven a importar) y, si algún tipo es
+  `editor`, `LSSupportsOpeningDocumentsInPlace`, entre los marcadores
+  `istmo:background` del `Info.plist`.
+- **Escritorio** — las herramientas de empaquetado leen la misma tabla
+  (por ejemplo `fileAssociations` de nix-bundle-app). En ejecución,
+  `istmo::plugins::DocumentsPublisher` publica los documentos de la línea
+  de comandos y, con `single_instance`, reenvía los de un arranque
+  posterior a la instancia que ya corre (socket Unix protegido con
+  `flock` en Linux y macOS, named pipe en Windows). El build emite
+  `ISTMO_SINGLE_INSTANCE`; `istmo::single_instance!()` lo convierte en la
+  clave de instancia.
+
+Los documentos llegan por el plugin `istmo.documents`
+(`Documents::stream()`); Android e iOS publican en el mismo canal desde
+sus manejadores de intents / URLs.
+
 ## `[[remote_override]]`
 
 Fuerza al cliente de un plugin a rutear por el proceso `:remote` en

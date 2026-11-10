@@ -27,6 +27,7 @@ pub fn entries() -> Vec<PluginEntry> {
     [
         ("istmo.lifecycle", "::istmo_plugins::AppLifecycle", &[][..]),
         ("istmo.deeplinks", "::istmo_plugins::DeepLinks", &[][..]),
+        ("istmo.documents", "::istmo_plugins::Documents", &[][..]),
         ("istmo.safe_area", "::istmo_plugins::SafeArea", &[][..]),
         ("istmo.system_info", "::istmo_plugins::SystemInfo", &[][..]),
         (

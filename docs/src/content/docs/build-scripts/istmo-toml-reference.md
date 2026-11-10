@@ -234,6 +234,66 @@ shared with `[plugin.ios_background]`:
 Without the markers, copy the entries from the generated
 `Info.plist.background.xml` sidecar by hand.
 
+### `[[app.document_type]]`
+
+File types the app opens. One declaration feeds every platform:
+
+```toml
+[app]
+single_instance = true          # desktop; default: true when any document_type is declared
+
+[[app.document_type]]
+name       = "PDF document"     # required: name the system shows
+id         = "com.adobe.pdf"    # UTI (Apple) / ProgID base (Windows); required when exported
+extensions = ["pdf"]            # without the dot
+mime_types = ["application/pdf"]
+role       = "viewer"           # viewer | editor (default: viewer)
+rank       = "alternate"        # owner | default | alternate (default: alternate)
+
+[[app.document_type]]
+name        = "Notes document"
+id          = "com.example.notes.document"
+extensions  = ["note"]
+mime_types  = ["application/x-note"]
+role        = "editor"
+rank        = "owner"           # only on exported types
+exported    = true              # the app defines this type (default: false)
+conforms_to = ["public.data"]   # Apple parent types (default: ["public.data"])
+```
+
+Every entry needs `extensions` or `mime_types`.
+
+- **Android** — `VIEW` and `SEND` intent filters by MIME type, plus a
+  path-pattern `VIEW` filter for the extensions of exported types. They
+  belong to one activity, so they land between markers you place inside
+  the `<activity>` that receives documents:
+
+  ```xml
+  <activity android:name=".MainActivity" ...>
+      <!-- istmo:documents:start -->
+      <!-- istmo:documents:end -->
+  </activity>
+  ```
+
+  Without the markers, copy them from `app/src/main/AndroidManifest.documents.xml`.
+- **iOS** — `CFBundleDocumentTypes`, `UTExportedTypeDeclarations`,
+  `UTImportedTypeDeclarations` (system types such as `com.adobe.pdf`
+  are not re-imported) and, when a type is an `editor`,
+  `LSSupportsOpeningDocumentsInPlace`, written between the
+  `istmo:background` markers of `Info.plist`.
+- **Desktop** — packaging tools read the same table (for example
+  nix-bundle-app's `fileAssociations`). At run time,
+  `istmo::plugins::DocumentsPublisher` publishes the documents of the
+  command line and, with `single_instance`, forwards the documents of a
+  later launch to the running instance (Unix socket guarded by an
+  `flock` on Linux and macOS, named pipe on Windows). The build emits
+  `ISTMO_SINGLE_INSTANCE`; `istmo::single_instance!()` turns it into the
+  instance key.
+
+Opened documents arrive on the `istmo.documents` plugin
+(`Documents::stream()`); Android and iOS shells publish to the same
+channel from their intent / URL handlers.
+
 ## `[[remote_override]]`
 
 Force a plugin's client to route through the `:remote` process on
