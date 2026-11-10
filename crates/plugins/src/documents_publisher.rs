@@ -57,13 +57,41 @@ const PROTOCOL_VERSION: u8 = 1;
 /// Upper bound of a forwarded request; a command line never gets close.
 const MAX_FRAME_LEN: u32 = 1 << 20;
 const ACK: [u8; 2] = *b"OK";
-/// How long a client may take to send its request or read the ack.
-const IO_TIMEOUT: Duration = Duration::from_secs(2);
+/// Total time the primary gives one client to send its whole request.
+/// A deadline, not a per-read timeout, so a trickling client cannot hold
+/// a handler forever.
+/// Unix only: synchronous Windows pipes have no read timeout (see
+/// `windows.rs`).
+#[cfg(unix)]
+const REQUEST_BUDGET: Duration = Duration::from_millis(1500);
+/// How long a second launch waits for the acknowledgement. Longer than
+/// [`REQUEST_BUDGET`] so a slow but healthy primary is not mistaken for a
+/// dead one (which would open the documents twice).
+const ACK_WAIT: Duration = Duration::from_secs(5);
+/// Forwarded launches served at once; more are turned away.
+const MAX_CLIENTS: usize = 8;
+/// Rounds of "claim, else forward" before giving up on single instance:
+/// a forward that fails because the primary was quitting lets the next
+/// round claim the freed lock instead of starting a second instance.
+const CLAIM_ROUNDS: u32 = 3;
 /// A second launch can start while the primary holds the lock but is
 /// not listening yet; retry this long before giving up.
 const CONNECT_ATTEMPTS: u32 = 20;
 const CONNECT_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_KEY_LEN: usize = 64;
+
+/// Short, fixed-length endpoint name for a key: Unix socket paths are
+/// limited to 104 bytes on macOS and app sandboxes put `$TMPDIR` deep.
+fn endpoint_stem(key: &InstanceKey) -> String {
+    // FNV-1a: stable across builds and platforms, no dependency.
+    let hash = key
+        .as_str()
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+    format!("istmo-{hash:016x}")
+}
 
 /// Name of the per-user endpoint, derived from the app's bundle id.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -247,62 +275,77 @@ impl DocumentsPublisher {
         runtime
             .check_declared(crate::documents::DOCUMENTS_PLUGIN_ID)
             .map_err(DocumentsError::Runtime)?;
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let paths = document_paths(args, &cwd);
+        let paths = match std::env::current_dir() {
+            Ok(cwd) => document_paths(args, Some(&cwd)),
+            Err(err) => {
+                tracing::warn!(target: "istmo.documents", %err, "no working directory; relative paths are ignored");
+                document_paths(args, None)
+            }
+        };
         let token = activation_token();
+        let primary = |server| {
+            publish_paths(runtime, &paths, DocumentOrigin::Launch, token.as_deref());
+            Ok(Startup::Primary(Self { server }))
+        };
 
         let Some(key) = key else {
-            publish_paths(runtime, paths, DocumentOrigin::Launch, token.as_deref());
-            return Ok(Startup::Primary(Self { server: None }));
+            return primary(None);
         };
-        match platform::claim(key) {
-            Ok(platform::Claim::Primary(endpoint)) => {
-                publish_paths(runtime, paths, DocumentOrigin::Launch, token.as_deref());
-                let server = platform::Server::spawn(endpoint, Arc::downgrade(runtime))
-                    .map_err(|err| {
-                        tracing::warn!(target: "istmo.documents", %err, "not accepting forwarded launches");
-                    })
-                    .ok();
-                Ok(Startup::Primary(Self { server }))
-            }
-            Ok(platform::Claim::Secondary) => {
-                let request = ForwardRequest {
-                    paths: paths
-                        .iter()
-                        .filter_map(|path| path.to_str().map(str::to_owned))
-                        .collect(),
-                    activation_token: token.clone(),
-                };
-                match platform::forward(key, &request) {
-                    Ok(()) => Ok(Startup::Forwarded),
-                    Err(err) => {
-                        tracing::warn!(
-                            target: "istmo.documents",
-                            %err,
-                            "the running instance did not answer; starting another one"
-                        );
-                        publish_paths(runtime, paths, DocumentOrigin::Launch, token.as_deref());
-                        Ok(Startup::Primary(Self { server: None }))
+        let request = ForwardRequest {
+            paths: paths
+                .iter()
+                .filter_map(|path| {
+                    let utf8 = path.to_str().map(str::to_owned);
+                    if utf8.is_none() {
+                        tracing::warn!(target: "istmo.documents", path = %path.display(), "not forwarding a non UTF-8 path");
                     }
+                    utf8
+                })
+                .collect(),
+            activation_token: token.clone(),
+        };
+        for round in 1..=CLAIM_ROUNDS {
+            match platform::claim(key) {
+                Ok(platform::Claim::Primary(endpoint)) => {
+                    let server = platform::Server::spawn(endpoint, Arc::downgrade(runtime))
+                        .map_err(|err| {
+                            tracing::warn!(target: "istmo.documents", %err, "not accepting forwarded launches");
+                        })
+                        .ok();
+                    return primary(server);
+                }
+                Ok(platform::Claim::Secondary) => match platform::forward(key, &request) {
+                    Ok(()) => return Ok(Startup::Forwarded),
+                    // The primary may be quitting: its lock frees up and
+                    // the next round claims it.
+                    Err(err) => {
+                        tracing::warn!(target: "istmo.documents", %err, round, "the running instance did not answer");
+                        std::thread::sleep(CONNECT_BACKOFF * round);
+                    }
+                },
+                Err(err) => {
+                    tracing::warn!(target: "istmo.documents", %err, "single instance unavailable");
+                    return primary(None);
                 }
             }
-            Err(err) => {
-                tracing::warn!(target: "istmo.documents", %err, "single instance unavailable");
-                publish_paths(runtime, paths, DocumentOrigin::Launch, token.as_deref());
-                Ok(Startup::Primary(Self { server: None }))
-            }
         }
+        tracing::warn!(target: "istmo.documents", "starting another instance: the running one does not answer");
+        primary(None)
     }
 
-    /// Whether later launches are forwarded to this process.
+    /// Whether later launches are forwarded to this process right now.
+    /// Turns `false` when the endpoint is lost (removed from disk,
+    /// runtime gone).
     #[must_use]
-    pub const fn is_serving(&self) -> bool {
-        self.server.is_some()
+    pub fn is_serving(&self) -> bool {
+        self.server.as_ref().is_some_and(platform::Server::is_alive)
     }
 }
 
-/// Documents named on a command line, made absolute.
-fn document_paths(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Vec<PathBuf> {
+/// Documents named on a command line, made absolute. Without a working
+/// directory relative paths are dropped: resolving them in the primary
+/// would open the wrong files.
+fn document_paths(args: impl IntoIterator<Item = OsString>, cwd: Option<&Path>) -> Vec<PathBuf> {
     let mut options_done = false;
     let mut out = Vec::new();
     for arg in args {
@@ -319,11 +362,11 @@ fn document_paths(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Vec<P
             continue;
         }
         let path = PathBuf::from(arg);
-        out.push(if path.is_absolute() {
-            path
-        } else {
-            cwd.join(path)
-        });
+        if path.is_absolute() {
+            out.push(path);
+        } else if let Some(cwd) = cwd {
+            out.push(cwd.join(path));
+        }
     }
     out
 }
@@ -335,16 +378,15 @@ fn activation_token() -> Option<String> {
         .find_map(|var| std::env::var(var).ok().filter(|v| !v.is_empty()))
 }
 
-fn publish_paths(
+fn publish_paths<'a>(
     runtime: &Runtime,
-    paths: impl IntoIterator<Item = PathBuf>,
+    paths: impl IntoIterator<Item = &'a PathBuf>,
     origin: DocumentOrigin,
     token: Option<&str>,
 ) {
     for path in paths {
-        let shown = path.display().to_string();
-        let Some(mut document) = OpenedDocument::from_path(path, origin) else {
-            tracing::warn!(target: "istmo.documents", path = %shown, "skipping a non UTF-8 path");
+        let Some(mut document) = OpenedDocument::from_path(path.clone(), origin) else {
+            tracing::warn!(target: "istmo.documents", path = %path.display(), "skipping a non UTF-8 path");
             continue;
         };
         document.activation_token = token.map(str::to_owned);
@@ -364,12 +406,15 @@ fn handle_client(
     if request.paths.is_empty() {
         Documents::publish_activation(runtime, token).map_err(DocumentsError::Runtime)?;
     } else {
-        publish_paths(
-            runtime,
-            request.paths.into_iter().map(PathBuf::from),
-            DocumentOrigin::Running,
-            token,
-        );
+        // A forwarded path is resolved by the sender; a relative one would
+        // resolve against this process's directory and name another file.
+        let paths: Vec<PathBuf> = request
+            .paths
+            .into_iter()
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .collect();
+        publish_paths(runtime, &paths, DocumentOrigin::Running, token);
     }
     stream
         .write_all(&ACK)
@@ -422,12 +467,17 @@ mod tests {
         let cwd = Path::new("/work");
         let args = ["--flag", "a.pdf", "/abs/b.md", "--", "-dash.txt", ""].map(OsString::from);
         assert_eq!(
-            document_paths(args, cwd),
+            document_paths(args.clone(), Some(cwd)),
             [
                 PathBuf::from("/work/a.pdf"),
                 PathBuf::from("/abs/b.md"),
                 PathBuf::from("/work/-dash.txt"),
             ]
+        );
+        assert_eq!(
+            document_paths(args, None),
+            [PathBuf::from("/abs/b.md")],
+            "relative paths need a working directory"
         );
     }
 
@@ -479,13 +529,12 @@ mod tests {
         let documents = Documents::from_runtime(&rt).unwrap();
         let opened = documents.stream();
         let activations = documents.activations();
-        let key = InstanceKey::try_from(
-            format!("istmo-test-forward-{}", std::process::id()).as_str(),
-        )
-        .unwrap();
+        let key =
+            InstanceKey::try_from(format!("istmo-test-forward-{}", std::process::id()).as_str())
+                .unwrap();
 
-        let first = DocumentsPublisher::start(&rt, [OsString::from("/tmp/first.pdf")], Some(&key))
-            .unwrap();
+        let first =
+            DocumentsPublisher::start(&rt, [OsString::from("/tmp/first.pdf")], Some(&key)).unwrap();
         let Startup::Primary(primary) = first else {
             panic!("first launch must be primary");
         };
@@ -496,7 +545,10 @@ mod tests {
 
         let second = DocumentsPublisher::start(
             &rt,
-            [OsString::from("--new-window"), OsString::from("/tmp/second.md")],
+            [
+                OsString::from("--new-window"),
+                OsString::from("/tmp/second.md"),
+            ],
             Some(&key),
         )
         .unwrap();
