@@ -60,7 +60,7 @@ use windows_sys::Win32::System::Threading::{
 
 use super::{
     ACK_WAIT, CONNECT_ATTEMPTS, CONNECT_BACKOFF, ClientSlots, DocumentsError, ForwardRequest,
-    InstanceKey, endpoint_stem, handle_client, send_request,
+    InstanceKey, RecentNonces, endpoint_stem, handle_client, send_request,
 };
 
 const PIPE_BUFFER: u32 = 64 * 1024;
@@ -398,6 +398,7 @@ struct Shared {
     stop: AtomicBool,
     alive: AtomicBool,
     slots: ClientSlots,
+    seen: RecentNonces,
 }
 
 #[derive(Debug)]
@@ -415,6 +416,7 @@ impl Server {
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             slots: ClientSlots::default(),
+            seen: RecentNonces::default(),
         });
         let path = endpoint.name.path.clone();
         thread::Builder::new()
@@ -483,10 +485,16 @@ fn spawn_client(mut pipe: File, sid: &str, shared: &Arc<Shared>, runtime: &Weak<
         return;
     };
     let sid = sid.to_owned();
+    let shared_client = Arc::clone(shared);
     let spawned = thread::Builder::new()
         .name("istmo-documents-client".to_owned())
         .spawn(move || {
             let _slot = slot;
+            // Quitting: no acknowledgement, so the launch retries and
+            // takes over once this process lets go of the name.
+            if shared_client.stop.load(Ordering::Acquire) {
+                return;
+            }
             // The DACL already limits who can connect; this keeps the
             // check next to the read it protects.
             match client_runs_as(&pipe, &sid) {
@@ -500,7 +508,7 @@ fn spawn_client(mut pipe: File, sid: &str, shared: &Arc<Shared>, runtime: &Weak<
                     return;
                 }
             }
-            match handle_client(&mut pipe, &runtime) {
+            match handle_client(&mut pipe, &runtime, &shared_client.seen) {
                 // Closing a pipe discards unread data: wait until the
                 // client has read the acknowledgement.
                 Ok(()) => drop(pipe.sync_all()),

@@ -56,7 +56,7 @@ use windows as platform;
 
 /// Frame header: magic, then the protocol version byte.
 const MAGIC: [u8; 4] = *b"ISTD";
-const PROTOCOL_VERSION: u8 = 1;
+const PROTOCOL_VERSION: u8 = 2;
 /// Upper bound of a forwarded request; a command line never gets close.
 const MAX_FRAME_LEN: u32 = 1 << 20;
 const ACK: [u8; 2] = *b"OK";
@@ -167,7 +167,7 @@ impl fmt::Display for DocumentsError {
                 "invalid instance key `{key}` (expected 1-64 ASCII letters, digits, `.`, `-` or `_`)"
             ),
             Self::Io { op, source } => write!(f, "{op}: {source}"),
-            Self::Codec(err) => write!(f, "encoding a forwarded request: {err}"),
+            Self::Codec(err) => write!(f, "forwarded request codec: {err}"),
             Self::Runtime(err) => write!(f, "documents plugin: {err}"),
             Self::Protocol(what) => write!(f, "single-instance protocol: {what}"),
         }
@@ -196,6 +196,12 @@ impl DocumentsError {
 struct ClientSlots(Arc<std::sync::atomic::AtomicUsize>);
 
 impl ClientSlots {
+    /// Whether every slot is busy right now.
+    #[cfg(unix)]
+    fn is_full(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Acquire) >= MAX_CLIENTS
+    }
+
     /// A slot, or `None` when every one is busy.
     fn take(&self) -> Option<ClientSlot> {
         use std::sync::atomic::Ordering;
@@ -228,8 +234,45 @@ impl Drop for ClientSlot {
 #[message(bincode = "::bincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ForwardRequest {
+    /// Random per launch. A launch that gives up waiting re-sends the
+    /// same request; a primary that was only slow (stopped, swapping)
+    /// then reads every copy, and the nonce lets it open the files once.
+    nonce: u64,
     paths: Vec<String>,
     activation_token: Option<String>,
+}
+
+/// A per-process random value without a dependency: std seeds every
+/// `RandomState` from the OS.
+fn random_nonce() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::hash::RandomState::new().build_hasher();
+    hasher.write_u32(std::process::id());
+    hasher.finish()
+}
+
+/// Nonces of the requests a primary served lately.
+#[derive(Debug, Default)]
+struct RecentNonces(std::sync::Mutex<std::collections::VecDeque<u64>>);
+
+impl RecentNonces {
+    const KEEP: usize = 64;
+
+    /// `true` the first time `nonce` is seen.
+    fn first_time(&self, nonce: u64) -> bool {
+        let mut seen = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if seen.contains(&nonce) {
+            return false;
+        }
+        if seen.len() == Self::KEEP {
+            seen.pop_front();
+        }
+        seen.push_back(nonce);
+        true
+    }
 }
 
 impl ForwardRequest {
@@ -333,6 +376,7 @@ impl DocumentsPublisher {
             return primary(None);
         };
         let request = ForwardRequest {
+            nonce: random_nonce(),
             paths: paths
                 .iter()
                 .filter_map(|path| {
@@ -441,10 +485,13 @@ fn publish_paths<'a>(
 fn handle_client(
     stream: &mut (impl Read + Write),
     runtime: &Runtime,
+    seen: &RecentNonces,
 ) -> Result<(), DocumentsError> {
     let request = ForwardRequest::read_from(stream)?;
     let token = request.activation_token.as_deref();
-    if request.paths.is_empty() {
+    if !seen.first_time(request.nonce) {
+        // A copy of a request already served: acknowledge only.
+    } else if request.paths.is_empty() {
         Documents::publish_activation(runtime, token).map_err(DocumentsError::Runtime)?;
     } else {
         // A forwarded path is resolved by the sender; a relative one would
@@ -525,6 +572,7 @@ mod tests {
     #[test]
     fn request_round_trip() {
         let request = ForwardRequest {
+            nonce: 7,
             paths: vec!["/a.pdf".to_owned(), "/b c.md".to_owned()],
             activation_token: Some("token".to_owned()),
         };
@@ -580,6 +628,18 @@ mod tests {
             ForwardRequest::read_from(&mut Cursor::new(frame)),
             Err(DocumentsError::Codec(_))
         ));
+    }
+
+    #[test]
+    fn repeated_requests_are_served_once() {
+        let seen = RecentNonces::default();
+        assert!(seen.first_time(1));
+        assert!(!seen.first_time(1), "a re-sent copy");
+        for nonce in 2..=RecentNonces::KEEP as u64 + 1 {
+            assert!(seen.first_time(nonce));
+        }
+        assert!(seen.first_time(1), "forgotten after KEEP newer ones");
+        assert_ne!(random_nonce(), random_nonce());
     }
 
     #[test]

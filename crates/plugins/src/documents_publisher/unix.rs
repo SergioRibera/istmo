@@ -25,7 +25,7 @@ use istmo_core::Runtime;
 
 use super::{
     ACK_WAIT, CONNECT_ATTEMPTS, CONNECT_BACKOFF, ClientSlots, DocumentsError, ForwardRequest,
-    InstanceKey, REQUEST_BUDGET, endpoint_stem, handle_client, send_request,
+    InstanceKey, REQUEST_BUDGET, RecentNonces, endpoint_stem, handle_client, send_request,
 };
 
 /// How often the accept loop wakes up when idle.
@@ -34,7 +34,13 @@ const POLL: Duration = Duration::from_millis(200);
 const CHECK_EVERY: Duration = Duration::from_secs(5);
 /// `S_ISVTX` on a file in `$XDG_RUNTIME_DIR` exempts it from the
 /// periodic clean-up the XDG Base Directory spec allows.
-const STICKY_PRIVATE: u32 = 0o1600;
+const STICKY_PRIVATE: u32 = if cfg!(target_os = "linux") {
+    0o1600
+} else {
+    // macOS rejects the sticky bit on non-directories for non-root
+    // users (`EFTYPE`) and does not need it.
+    0o600
+};
 
 /// Files of one instance key inside the private runtime directory.
 #[derive(Debug, Clone)]
@@ -74,6 +80,10 @@ fn private_dir() -> io::Result<PathBuf> {
     let candidates = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .into_iter()
+        // The session's runtime dir even when a launch lost the variable
+        // (a launcher, `env -i`): every launch must land on the same
+        // endpoint or two of them become primary.
+        .chain(cfg!(target_os = "linux").then(|| PathBuf::from(format!("/run/user/{uid}"))))
         .chain(cfg!(target_os = "macos").then(std::env::temp_dir));
     for dir in candidates {
         if dir.is_absolute() && is_private(&dir, uid).unwrap_or(false) {
@@ -243,6 +253,15 @@ pub(super) fn forward(key: &InstanceKey, request: &ForwardRequest) -> Result<(),
     ))
 }
 
+/// A socket timeout surfaces as `WouldBlock`; call it what it is.
+fn timed_out(err: io::Error) -> io::Error {
+    if err.kind() == io::ErrorKind::WouldBlock {
+        io::Error::new(io::ErrorKind::TimedOut, "request deadline")
+    } else {
+        err
+    }
+}
+
 /// A connected client with one deadline for the whole exchange: every
 /// read and write gets the time that is left, so a client sending a
 /// byte at a time cannot hold its handler past [`REQUEST_BUDGET`].
@@ -265,14 +284,14 @@ impl Deadline {
 impl Read for Deadline {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.stream.set_read_timeout(Some(self.remaining()?))?;
-        self.stream.read(buf)
+        self.stream.read(buf).map_err(timed_out)
     }
 }
 
 impl Write for Deadline {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.stream.set_write_timeout(Some(self.remaining()?))?;
-        self.stream.write(buf)
+        self.stream.write(buf).map_err(timed_out)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -285,6 +304,7 @@ struct Shared {
     stop: AtomicBool,
     alive: AtomicBool,
     slots: ClientSlots,
+    seen: RecentNonces,
 }
 
 #[derive(Debug)]
@@ -316,6 +336,7 @@ impl Server {
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             slots: ClientSlots::default(),
+            seen: RecentNonces::default(),
         });
         let socket = paths.socket.clone();
         let thread = thread::Builder::new()
@@ -364,7 +385,15 @@ impl Serving {
     fn run(&mut self, shared: &Arc<Shared>) -> Option<FileId> {
         let mut last_check = Instant::now();
         while !shared.stop.load(Ordering::Acquire) {
-            match self.listener.accept() {
+            // With every handler busy, leave new connections in the kernel
+            // backlog: the launch waits for its ACK instead of being reset
+            // and starting a second instance.
+            let accepted = if shared.slots.is_full() {
+                Err(io::ErrorKind::WouldBlock.into())
+            } else {
+                self.listener.accept()
+            };
+            match accepted {
                 Ok((stream, _)) => self.serve(stream, shared),
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
                 Err(err) => {
@@ -435,10 +464,16 @@ impl Serving {
         let Some(runtime) = self.runtime.upgrade() else {
             return;
         };
+        let shared = Arc::clone(shared);
         let spawned = thread::Builder::new()
             .name("istmo-documents-client".to_owned())
             .spawn(move || {
                 let _slot = slot;
+                // Quitting: no acknowledgement, so the launch retries and
+                // takes over once this process lets go of the lock.
+                if shared.stop.load(Ordering::Acquire) {
+                    return;
+                }
                 let mut client = Deadline {
                     stream,
                     until: Instant::now() + REQUEST_BUDGET,
@@ -446,7 +481,7 @@ impl Serving {
                 let ready = client.stream.set_nonblocking(false);
                 match ready.map_err(DocumentsError::io("configuring a client socket")) {
                     Ok(()) => {
-                        if let Err(err) = handle_client(&mut client, &runtime) {
+                        if let Err(err) = handle_client(&mut client, &runtime, &shared.seen) {
                             tracing::warn!(target: "istmo.documents", %err, "rejected a forwarded launch");
                         }
                     }
