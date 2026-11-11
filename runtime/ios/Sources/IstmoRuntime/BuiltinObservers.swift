@@ -18,6 +18,9 @@ import CoreLocation
 #if canImport(CoreHaptics) && os(iOS)
 import CoreHaptics
 #endif
+#if canImport(CoreTelephony) && os(iOS)
+import CoreTelephony
+#endif
 
 /// Native observers that bridge Apple system events to the typed
 /// `publishXxx` helpers. Each observer registers lazily on
@@ -71,14 +74,26 @@ public enum IstmoDeviceInfoObserver {
         osName = "visionos"
         #endif
         vendorId = device.identifierForVendor?.uuidString
-        let main = UIScreen.main
-        let scale = Float(main.scale)
-        screen = ScreenMetrics(
-            logicalWidth: UInt32(main.bounds.width),
-            logicalHeight: UInt32(main.bounds.height),
-            scale: scale,
-            refreshHz: nil
-        )
+        #if !os(visionOS)
+        // `UIScreen.main` is deprecated on iOS 16+ and unavailable on
+        // visionOS; prefer the active window scene's screen.
+        let activeScreen: UIScreen? = {
+            if #available(iOS 13.0, tvOS 13.0, *) {
+                return UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .first?.windows.first?.screen
+            }
+            return UIScreen.main
+        }()
+        if let s = activeScreen {
+            screen = ScreenMetrics(
+                logicalWidth: UInt32(s.bounds.width),
+                logicalHeight: UInt32(s.bounds.height),
+                scale: Float(s.scale),
+                refreshHz: nil
+            )
+        }
+        #endif
         #else
         model = sysctlString("hw.model")
         #endif
@@ -174,16 +189,29 @@ public enum IstmoCapabilitiesObserver {
         hasMicrophone = AVCaptureDevice.default(for: .audio) != nil
         #endif
 
-        #if canImport(CoreLocation)
-        hasGps = CLLocationManager.locationServicesEnabled()
+        // `CLLocationManager.locationServicesEnabled()` is deprecated
+        // on iOS 14+ and blocks the main thread. GPS presence on Apple
+        // hardware is effectively universal across iPhone/iPad/Watch
+        // GPS SKUs; non-cellular iPads lack it. Reporting "present"
+        // on every iOS build and "unknown→false" on macOS matches
+        // what an app actually ships with.
+        #if os(iOS) || os(watchOS)
+        hasGps = true
         #endif
 
-        #if canImport(CoreBluetooth)
+        #if canImport(CoreBluetooth) && (os(iOS) || os(macOS) || os(tvOS) || os(watchOS))
+        // Bluetooth is a hardware feature on all current Apple SKUs;
+        // the only reliable programmatic probe (`CBCentralManager`)
+        // needs user permission to resolve. Report present on
+        // platforms that always ship it.
         hasBluetooth = true
         #endif
 
         #if canImport(CoreTelephony) && os(iOS)
-        hasTelephony = true
+        // Actual cellular probe: query carrier info. Returns an empty
+        // dictionary on Wi-Fi-only iPads.
+        let telephony = CTTelephonyNetworkInfo()
+        hasTelephony = !(telephony.serviceSubscriberCellularProviders?.isEmpty ?? true)
         #endif
 
         runtime.publishCapabilities(
@@ -310,7 +338,18 @@ public final class IstmoSystemInfoObserver {
             return .islamic
         case .hebrew: return .hebrew
         case .persian: return .persian
-        default: return .other(String(describing: id))
+        // `String(describing:)` yields Swift lowerCamelCase
+        // (`ethiopicAmeteMihret`); CLDR expects kebab-case
+        // (`ethiopic-amete-mihret`). Explicit map keeps the wire
+        // identifier portable.
+        case .chinese: return .other("chinese")
+        case .coptic: return .other("coptic")
+        case .ethiopicAmeteMihret: return .other("ethiopic")
+        case .ethiopicAmeteAlem: return .other("ethiopic-amete-alem")
+        case .indian: return .other("indian")
+        case .iso8601: return .other("iso8601")
+        case .republicOfChina: return .other("roc")
+        @unknown default: return .other("unknown")
         }
     }
 }
@@ -356,10 +395,22 @@ public final class IstmoThemePreferenceObserver {
     public func publish() {
         guard let runtime = runtime else { return }
         #if canImport(UIKit) && !os(watchOS)
-        let traits = UIScreen.main.traitCollection
+        // `UIScreen.main` is deprecated iOS 16+ and unavailable on
+        // visionOS. Prefer the active window scene's trait collection
+        // when available.
+        let traits: UITraitCollection? = {
+            if #available(iOS 13.0, tvOS 13.0, *) {
+                let scene = UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .first
+                return scene?.windows.first?.traitCollection
+                    ?? scene?.traitCollection
+            }
+            return nil
+        }()
         let scheme: ColorScheme = {
-            if #available(iOS 12.0, tvOS 10.0, *) {
-                switch traits.userInterfaceStyle {
+            if #available(iOS 12.0, tvOS 10.0, *), let t = traits {
+                switch t.userInterfaceStyle {
                 case .light: return .light
                 case .dark: return .dark
                 default: return .auto
@@ -431,10 +482,15 @@ public final class IstmoNetworkStateObserver {
             if path.usesInterfaceType(.other) { return .other }
             return online ? .other : .none
         }()
+        // `metered` = carrier charges per byte (cellular hint),
+        // `expensive` = Apple's hint that includes tethered/hotspot
+        // + user-flagged costly links. Previously both were wired
+        // from `isExpensive` which conflated them.
+        let metered = path.usesInterfaceType(.cellular)
         runtime.publishNetworkState(
             online: online,
             link: link,
-            metered: path.isExpensive,
+            metered: metered,
             expensive: path.isExpensive,
             constrained: path.isConstrained
         )
