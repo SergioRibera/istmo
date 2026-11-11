@@ -26,12 +26,17 @@ object IstmoHost {
     private const val TAG = "istmo"
 
     private var started = false
+    private var builtinObservers: IstmoBuiltinObservers? = null
 
     /**
      * Start the runtime (first call per process only) and register every
      * plugin with [activity] as host. The library name comes from the
      * activity's `android.app.lib_name` meta-data unless [libraryName] is
      * given.
+     *
+     * Also wires [IstmoBuiltinObservers] so wire-only system plugins
+     * ([dev.istmo.runtime] system-info / theme / network / battery…)
+     * start publishing without the app having to opt in by hand.
      */
     @JvmStatic
     @JvmOverloads
@@ -44,6 +49,7 @@ object IstmoHost {
             }
         }
         registerPlugins(activity)
+        registerBuiltinObservers(activity.applicationContext)
     }
 
     /** Shut the runtime down once [activity] is finishing for good. */
@@ -51,10 +57,27 @@ object IstmoHost {
     fun onDestroy(activity: Activity) {
         if (!activity.isFinishing || activity.isChangingConfigurations) return
         synchronized(this) {
+            builtinObservers?.unregisterAll()
+            builtinObservers = null
             if (started) {
                 IstmoRuntime.shutdown()
                 started = false
             }
+        }
+    }
+
+    /**
+     * Wire [IstmoBuiltinObservers] so wire-only system plugins publish
+     * from this process. Called automatically from [onCreate]; exposed
+     * for apps that drive runtime startup themselves.
+     */
+    @JvmStatic
+    fun registerBuiltinObservers(context: Context) {
+        synchronized(this) {
+            if (builtinObservers != null) return
+            val observers = IstmoBuiltinObservers(context.applicationContext)
+            observers.registerAll()
+            builtinObservers = observers
         }
     }
 

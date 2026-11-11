@@ -144,10 +144,13 @@ class IstmoSystemInfoObserver(private val context: Context) {
     }
 
     private fun publishLocale() {
-        val l = JvmLocale.getDefault()
+        val l = currentLocale()
         val tag = l.toLanguageTag()
+        // Modern Hausa (`ha`) defaults to Latin/LTR; CLDR's
+        // `likelySubtags` resolves bare `ha` to `Latn`. Matches Rust
+        // `RTL_LANGUAGES` in `istmo-plugins`.
         val direction = when (l.language.lowercase()) {
-            "ar", "arc", "ckb", "dv", "fa", "ha", "he", "khw", "ks", "ps", "sd",
+            "ar", "arc", "ckb", "dv", "fa", "he", "khw", "ks", "ps", "sd",
             "ug", "ur", "yi" -> LayoutDirection.RTL
             else -> LayoutDirection.LTR
         }
@@ -158,6 +161,21 @@ class IstmoSystemInfoObserver(private val context: Context) {
             script = l.script.takeIf { it.isNotEmpty() },
             direction = direction,
         )
+    }
+
+    private fun currentLocale(): JvmLocale {
+        // `JvmLocale.getDefault()` is per-JVM and can be overwritten by
+        // appcompat delegates; on Android 13+ per-app language picks go
+        // through `LocaleManager` which only updates the resource
+        // configuration. Read from there so this tracks the locale the
+        // user actually sees.
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val locales = context.resources.configuration.locales
+            if (!locales.isEmpty) locales.get(0) else JvmLocale.getDefault()
+        } else {
+            @Suppress("DEPRECATION")
+            context.resources.configuration.locale ?: JvmLocale.getDefault()
+        }
     }
 
     private fun publishTimezone() {
@@ -177,7 +195,7 @@ class IstmoSystemInfoObserver(private val context: Context) {
     }
 
     private fun publishFormats() {
-        val l = JvmLocale.getDefault()
+        val l = currentLocale()
         val uses24h = android.text.format.DateFormat.is24HourFormat(context)
         val cal = Calendar.getInstance(l)
         val apple = cal.firstDayOfWeek
@@ -529,19 +547,31 @@ class IstmoBuiltinObservers(private val context: Context) {
     private val battery = IstmoBatteryStateObserver(context)
 
     fun registerAll() {
-        IstmoDeviceInfoObserver.publishOnce(context)
-        IstmoCapabilitiesObserver.publishOnce(context)
-        IstmoStorageInfoObserver.publishOnce(context)
-        systemInfo.register()
-        theme.register()
-        network.register()
-        battery.register()
+        safely("device-info one-shot") { IstmoDeviceInfoObserver.publishOnce(context) }
+        safely("capabilities one-shot") { IstmoCapabilitiesObserver.publishOnce(context) }
+        safely("storage-info one-shot") { IstmoStorageInfoObserver.publishOnce(context) }
+        safely("system-info observer") { systemInfo.register() }
+        safely("theme-preference observer") { theme.register() }
+        // Network callbacks need `ACCESS_NETWORK_STATE`. The permission
+        // pipeline only emits it when `NetworkStateClient` is declared;
+        // a best-effort catch keeps auto-registration safe when the
+        // plugin is not wired.
+        safely("network-state observer") { network.register() }
+        safely("battery-state observer") { battery.register() }
     }
 
     fun unregisterAll() {
-        systemInfo.unregister()
-        theme.unregister()
-        network.unregister()
-        battery.unregister()
+        safely("system-info observer") { systemInfo.unregister() }
+        safely("theme-preference observer") { theme.unregister() }
+        safely("network-state observer") { network.unregister() }
+        safely("battery-state observer") { battery.unregister() }
+    }
+
+    private inline fun safely(label: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (t: Throwable) {
+            android.util.Log.w("istmo", "builtin observer '$label' failed: ${t.message}")
+        }
     }
 }
