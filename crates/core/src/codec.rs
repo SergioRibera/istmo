@@ -32,7 +32,7 @@ const MIN_DECODE: usize = 1 << 16;
 /// Types that encode with the wire layout.
 pub trait Encode: SchemaWrite<EncodeConfig, Src = Self> {}
 
-impl<T> Encode for T where T: SchemaWrite<EncodeConfig, Src = T> {}
+impl<T: ?Sized> Encode for T where T: SchemaWrite<EncodeConfig, Src = T> {}
 
 macro_rules! rungs {
     ($($shift:literal),+) => {
