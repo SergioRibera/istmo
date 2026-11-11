@@ -145,6 +145,11 @@ fn the_limit_follows_the_input() {
 fn a_cap_below_the_value_refuses_it() {
     let bytes = codec::encode(&vec![0_u8; 1 << 17]).expect("encode");
     let err = codec::decode_capped::<Vec<u8>>(&bytes, 1 << 16).expect_err("past the cap");
+    assert!(matches!(err, CodecError::TooLong { .. }), "{err}");
+    // Fewer bytes than the cap, claiming far past it.
+    let mut claim = vec![0xfc];
+    claim.extend_from_slice(&(1_u32 << 30).to_le_bytes());
+    let err = codec::decode_capped::<Vec<u8>>(&claim, 1 << 16).expect_err("claim past the cap");
     assert!(matches!(err, CodecError::Decode(_)), "{err}");
 }
 

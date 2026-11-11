@@ -116,6 +116,13 @@ pub enum CodecError {
         /// How many bytes were left.
         extra: usize,
     },
+    /// Input longer than any value of its kind may be.
+    TooLong {
+        /// Input length.
+        len: usize,
+        /// Most bytes the kind may take.
+        cap: usize,
+    },
 }
 
 impl fmt::Display for CodecError {
@@ -124,6 +131,7 @@ impl fmt::Display for CodecError {
             Self::Encode(err) => write!(f, "encode: {err}"),
             Self::Decode(err) => write!(f, "decode: {err}"),
             Self::TrailingBytes { extra } => write!(f, "decode: {extra} trailing bytes"),
+            Self::TooLong { len, cap } => write!(f, "decode: {len} bytes, past the {cap} allowed"),
         }
     }
 }
@@ -133,7 +141,7 @@ impl std::error::Error for CodecError {
         match self {
             Self::Encode(err) => Some(err),
             Self::Decode(err) => Some(err),
-            Self::TrailingBytes { .. } => None,
+            Self::TrailingBytes { .. } | Self::TooLong { .. } => None,
         }
     }
 }

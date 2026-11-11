@@ -6,7 +6,8 @@
 //! 9-byte input may claim a terabyte `Vec`, and wincode preallocates
 //! up to its limit before reading the elements, so the limit follows the
 //! input: 64 times its size, at least 64 KiB, never past [`MAX_DECODE`].
-//! The limit is a const generic, so [`decode`] picks one of a few rungs.
+//! The limit is a const generic, so [`decode`] picks one of a few rungs,
+//! each four times the last.
 
 use wincode::config::{Configuration, PREALLOCATION_SIZE_LIMIT_DISABLED};
 use wincode::int_encoding::{LittleEndian, VarInt};
@@ -25,40 +26,35 @@ pub type EncodeConfig = WireConfig<PREALLOCATION_SIZE_LIMIT_DISABLED>;
 /// Largest allocation a decoded value may claim.
 pub const MAX_DECODE: usize = 1 << 30;
 
-/// Decoding rungs, smallest first; the last one is [`MAX_DECODE`].
-pub type Rung16 = WireConfig<{ 1 << 16 }>;
-/// See [`Rung16`].
-pub type Rung20 = WireConfig<{ 1 << 20 }>;
-/// See [`Rung16`].
-pub type Rung24 = WireConfig<{ 1 << 24 }>;
-/// See [`Rung16`].
-pub type Rung28 = WireConfig<{ 1 << 28 }>;
-/// See [`Rung16`].
-pub type Rung30 = WireConfig<MAX_DECODE>;
+/// Smallest limit [`decode`] works with when the input is tiny.
+const MIN_DECODE: usize = 1 << 16;
 
 /// Types that encode with the wire layout.
 pub trait Encode: SchemaWrite<EncodeConfig, Src = Self> {}
 
 impl<T> Encode for T where T: SchemaWrite<EncodeConfig, Src = T> {}
 
-/// Types that decode with the wire layout under every rung.
-pub trait Decode:
-    SchemaReadOwned<Rung16, Dst = Self>
-    + SchemaReadOwned<Rung20, Dst = Self>
-    + SchemaReadOwned<Rung24, Dst = Self>
-    + SchemaReadOwned<Rung28, Dst = Self>
-    + SchemaReadOwned<Rung30, Dst = Self>
-{
+macro_rules! rungs {
+    ($($shift:literal),+) => {
+        /// Types that decode with the wire layout under every rung.
+        pub trait Decode: $(SchemaReadOwned<WireConfig<{ 1 << $shift }>, Dst = Self> +)+ Sized {}
+
+        impl<T> Decode for T where T: $(SchemaReadOwned<WireConfig<{ 1 << $shift }>, Dst = T> +)+ Sized {}
+
+        /// Read a `T` from the front of `rest` with the smallest rung that
+        /// holds `need`.
+        fn read_within<T: Decode>(rest: &mut &[u8], need: usize) -> wincode::ReadResult<T> {
+            $(
+                if need <= 1 << $shift {
+                    return <T as SchemaRead<'_, WireConfig<{ 1 << $shift }>>>::get(rest);
+                }
+            )+
+            <T as SchemaRead<'_, WireConfig<MAX_DECODE>>>::get(rest)
+        }
+    };
 }
 
-impl<T> Decode for T where
-    T: SchemaReadOwned<Rung16, Dst = T>
-        + SchemaReadOwned<Rung20, Dst = T>
-        + SchemaReadOwned<Rung24, Dst = T>
-        + SchemaReadOwned<Rung28, Dst = T>
-        + SchemaReadOwned<Rung30, Dst = T>
-{
-}
+rungs!(12, 14, 16, 18, 20, 22, 24, 26, 28, 30);
 
 /// Encode `value` into a `Vec<u8>` with the wire layout.
 ///
@@ -83,26 +79,23 @@ pub fn decode<T: Decode>(bytes: &[u8]) -> Result<(T, usize), CodecError> {
     decode_capped(bytes, MAX_DECODE)
 }
 
-/// [`decode`] with the allocation limit also capped at `cap`, rounded up
-/// to the next rung.
+/// [`decode`] for a value that may never take more than `cap` bytes:
+/// longer input is refused outright, and no claim may pass `cap` rounded
+/// up to the next rung (at most four times it).
 ///
 /// # Errors
 ///
-/// As [`decode`].
+/// As [`decode`], plus [`CodecError::TooLong`].
 pub fn decode_capped<T: Decode>(bytes: &[u8], cap: usize) -> Result<(T, usize), CodecError> {
-    let need = bytes.len().saturating_mul(64).max(1 << 16).min(cap);
+    if bytes.len() > cap {
+        return Err(CodecError::TooLong {
+            len: bytes.len(),
+            cap,
+        });
+    }
+    let need = bytes.len().saturating_mul(64).max(MIN_DECODE).min(cap);
     let mut rest = bytes;
-    let value = if need <= 1 << 16 {
-        <T as SchemaRead<'_, Rung16>>::get(&mut rest)
-    } else if need <= 1 << 20 {
-        <T as SchemaRead<'_, Rung20>>::get(&mut rest)
-    } else if need <= 1 << 24 {
-        <T as SchemaRead<'_, Rung24>>::get(&mut rest)
-    } else if need <= 1 << 28 {
-        <T as SchemaRead<'_, Rung28>>::get(&mut rest)
-    } else {
-        <T as SchemaRead<'_, Rung30>>::get(&mut rest)
-    }?;
+    let value = read_within(&mut rest, need)?;
     Ok((value, bytes.len() - rest.len()))
 }
 
@@ -112,7 +105,16 @@ pub fn decode_capped<T: Decode>(bytes: &[u8], cap: usize) -> Result<(T, usize), 
 ///
 /// As [`decode`], plus [`CodecError::TrailingBytes`].
 pub fn decode_exact<T: Decode>(bytes: &[u8]) -> Result<T, CodecError> {
-    let (value, read) = decode(bytes)?;
+    decode_exact_capped(bytes, MAX_DECODE)
+}
+
+/// [`decode_capped`] that also refuses bytes left over after the value.
+///
+/// # Errors
+///
+/// As [`decode_capped`], plus [`CodecError::TrailingBytes`].
+pub fn decode_exact_capped<T: Decode>(bytes: &[u8], cap: usize) -> Result<T, CodecError> {
+    let (value, read) = decode_capped(bytes, cap)?;
     if read == bytes.len() {
         Ok(value)
     } else {
