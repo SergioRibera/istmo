@@ -271,8 +271,11 @@ public final class IstmoSystemInfoObserver {
         let region = locale.regionCode?.uppercased()
         let script = locale.scriptCode
         let bcp47 = locale.identifier.replacingOccurrences(of: "_", with: "-")
+        // Modern Hausa (`ha`) defaults to Latin/LTR; CLDR's
+        // `likelySubtags` resolves bare `ha` to `Latn`. Matches Rust
+        // `RTL_LANGUAGES` in `istmo-plugins`.
         let rtlLanguages: Set<String> = [
-            "ar", "arc", "ckb", "dv", "fa", "ha", "he", "khw", "ks",
+            "ar", "arc", "ckb", "dv", "fa", "he", "khw", "ks",
             "ps", "sd", "ug", "ur", "yi"
         ]
         let direction: LayoutDirection = rtlLanguages.contains(language) ? .rtl : .ltr

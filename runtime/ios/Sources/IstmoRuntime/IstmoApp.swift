@@ -7,9 +7,14 @@ import Foundation
 /// entry point, so the app's `main.swift` is the single line
 /// `IstmoApp.run()`.
 public enum IstmoApp {
-    /// Start the runtime, call `registerPlugins`, then hand the process
-    /// over to `entry` — the crate's `istmo_run_ios`, which runs the UI
-    /// event loop and normally never returns.
+    /// Held so the observer tokens outlive `run()`; the process exits
+    /// before anything would read it back.
+    nonisolated(unsafe) private static var builtinObservers: IstmoBuiltinObservers?
+
+    /// Start the runtime, call `registerPlugins`, wire the built-in
+    /// system observers, then hand the process over to `entry` — the
+    /// crate's `istmo_run_ios`, which runs the UI event loop and
+    /// normally never returns.
     public static func run(registerPlugins: () -> Void, entry: () -> Int32) -> Never {
         do {
             try IstmoRuntime.shared.start()
@@ -17,6 +22,9 @@ public enum IstmoApp {
             fatalError("istmo: IstmoRuntime.start() failed: \(error)")
         }
         registerPlugins()
+        let observers = IstmoBuiltinObservers(runtime: IstmoRuntime.shared)
+        observers.registerAll()
+        builtinObservers = observers
         exit(entry())
     }
 }
