@@ -27,7 +27,7 @@ pub use publisher::DeviceInfoPublisher;
 pub const DEVICE_INFO_PLUGIN_ID: &str = "istmo.device_info";
 pub const DEVICE_INFO_CHANNEL: &str = "istmo.device_info";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeviceInfo {
     /// Marketing model identifier when the platform exposes it
@@ -64,7 +64,7 @@ pub struct DeviceInfo {
     pub vendor_id: Option<String>,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FormFactor {
     Phone,
@@ -77,7 +77,7 @@ pub enum FormFactor {
     Unknown,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScreenInfo {
     pub logical_width: u32,

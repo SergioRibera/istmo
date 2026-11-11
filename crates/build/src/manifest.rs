@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use bincode::{Decode, Encode};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
+use wincode::{SchemaRead, SchemaWrite};
 
 use crate::assets::{AssetsPayload, resolve_assets};
 use crate::handover::{emit_assets, emit_contract, emit_manifest, emit_native_deps};
@@ -62,7 +62,7 @@ const KNOWN_IOS_BACKGROUND_KEYS: &[&str] = &[
 
 const KNOWN_OVERRIDE_KEYS: &[&str] = &["plugin", "deployment"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SchemaWrite, SchemaRead)]
 pub enum Deployment {
     #[default]
     Local,
@@ -98,7 +98,7 @@ impl Default for PluginEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct PluginEntry {
     pub id: String,
 
@@ -174,7 +174,7 @@ pub struct PluginEntry {
 ///     { name = "android.permission.WRITE_EXTERNAL_STORAGE", max_sdk_version = 28 },
 /// ]
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub struct AndroidPermission {
     pub name: String,
     /// Maps to `android:maxSdkVersion` — the permission is only
@@ -214,7 +214,7 @@ impl From<String> for AndroidPermission {
 
 /// Constructor argument of a plugin's Android backend, declared as
 /// `android_backend_arg` in the plugin's `istmo.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, SchemaWrite, SchemaRead)]
 pub enum AndroidBackendArg {
     /// `android.content.Context` (`"context"`, the default).
     #[default]
@@ -246,7 +246,7 @@ impl AndroidBackendArg {
 }
 
 /// Scalar value of an [`InfoPlistEntry`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SchemaWrite, SchemaRead)]
 pub enum InfoPlistValue {
     String(String),
     Bool(bool),
@@ -255,7 +255,7 @@ pub enum InfoPlistValue {
 /// One top-level `<key>` / value pair contributed to an iOS app's
 /// `Info.plist`, declared under `[plugin.info_plist]` (plugin crates)
 /// or `[app.info_plist]` (apps, where it overrides plugin defaults).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SchemaWrite, SchemaRead)]
 pub struct InfoPlistEntry {
     pub key: String,
     pub value: InfoPlistValue,
@@ -318,7 +318,7 @@ fn xml_escape(raw: &str) -> String {
     out
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct AndroidServiceSpec {
     pub class_name: String,
     pub foreground_service_type: Option<String>,
@@ -327,14 +327,14 @@ pub struct AndroidServiceSpec {
     pub process: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct IosBackgroundSpec {
     pub class_name: String,
     pub task_identifier: Option<String>,
     pub kind: IosBackgroundKindSpec,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum IosBackgroundKindSpec {
     Refresh {
         interval_minutes: u32,
@@ -346,7 +346,7 @@ pub enum IosBackgroundKindSpec {
     Continuous(IosContinuousModeSpec),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum IosContinuousModeSpec {
     Audio,
     Location,
@@ -356,7 +356,7 @@ pub enum IosContinuousModeSpec {
     BluetoothPeripheral,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct RemoteOverride {
     pub plugin: String,
     pub deployment: Deployment,
@@ -373,7 +373,7 @@ pub struct RemoteOverride {
 ///
 /// The `name` is a stable identifier used for de-duplication when two
 /// plugins declare the same fragment.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub struct WindowsManifestFragment {
     pub name: String,
     pub xml: String,
@@ -391,12 +391,12 @@ pub struct WindowsManifestFragment {
 ///
 /// Paths are always relative to the manifest's directory unless
 /// absolute.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub struct AssetEntry {
     pub path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct Manifest {
     pub plugins: Vec<PluginEntry>,
 
@@ -1272,7 +1272,7 @@ pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
             panic!("istmo-build: {err}");
         });
         for asset in &resolved {
-            println!("cargo:rerun-if-changed={}", asset.source_abs.display());
+            println!("cargo:rerun-if-changed={}", asset.source().display());
         }
         let payload = AssetsPayload {
             plugin_ids: manifest.plugin_ids().map(str::to_owned).collect(),
@@ -1674,7 +1674,7 @@ id = "istmo.example"
     }
 
     #[test]
-    fn manifest_native_deps_survive_bincode_round_trip() {
+    fn manifest_native_deps_survive_wire_round_trip() {
         let m = Manifest::parse(FULL_MANIFEST).expect("parse");
         let hex = crate::serialize_native_deps(&m.native_deps).expect("serialize");
         let back = crate::deserialize_native_deps(&hex).expect("deserialize");

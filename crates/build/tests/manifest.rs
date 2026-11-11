@@ -4,7 +4,7 @@ use istmo_build::{
 };
 
 #[test]
-fn aggregates_two_manifests_via_bincode_channel() {
+fn aggregates_two_manifests_via_wire_channel() {
     let sign_in_toml = r#"
 [plugin]
 id = "istmo.google_sign_in"
@@ -220,7 +220,7 @@ version = "1.13.0"
 }
 
 #[test]
-fn windows_manifest_fragments_parse_and_survive_bincode_roundtrip() {
+fn windows_manifest_fragments_parse_and_survive_wire_roundtrip() {
     let src = r#"
 [plugin]
 id = "istmo.pen"
@@ -322,7 +322,7 @@ fn rejects_malformed_min_versions() {
 }
 
 #[test]
-fn plugin_info_plist_parses_strings_and_bools_and_survives_bincode_roundtrip() {
+fn plugin_info_plist_parses_strings_and_bools_and_survives_wire_roundtrip() {
     let src = r#"
 [plugin]
 id = "istmo.biometric"

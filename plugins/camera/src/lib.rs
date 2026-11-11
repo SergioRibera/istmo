@@ -80,7 +80,7 @@ pub enum CameraSessionTag {}
 /// Shared across every session opened by the same client. Prefer the
 /// defaults unless you need to tune backpressure for a specific
 /// capture pipeline (recording vs. preview vs. ML inference).
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CameraInitConfig {
     /// How many frames the native ring buffer may hold before the
@@ -103,7 +103,7 @@ impl Default for CameraInitConfig {
 // -------------------------------------------------------------------
 
 /// Lens orientation relative to the device chassis.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CameraFacing {
     Front,
@@ -116,7 +116,7 @@ pub enum CameraFacing {
 /// Android's `LENS_INFO_AVAILABLE_FOCAL_LENGTHS` + `REQUEST_AVAILABLE_CAPABILITIES`
 /// map to the same discriminants iOS exposes via
 /// `AVCaptureDevice.DeviceType`.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LensKind {
     /// Primary wide-angle lens — the "default" camera most apps mean.
@@ -144,7 +144,7 @@ pub enum LensKind {
 /// Pixel resolution. Dimensions are nominal — ask the session for the
 /// `negotiated` resolution after `open_session`, since the backend may
 /// coerce to the closest supported mode.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Resolution {
     pub width: u32,
@@ -155,7 +155,7 @@ pub struct Resolution {
 /// accept for a session. The driver can usually produce other
 /// combinations by downscaling / colour-converting, but these are the
 /// *native* modes — picking one avoids a hidden conversion step.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SupportedFormat {
     pub resolution: Resolution,
@@ -167,7 +167,7 @@ pub struct SupportedFormat {
 /// Standardised capability flags. Fields map one-to-one to the
 /// equivalent `CameraCharacteristics` / `AVCaptureDevice` queries so
 /// shared Rust code can gate features without `cfg(target_os = …)`.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraCapabilities {
     pub min_zoom: f32,
@@ -196,7 +196,7 @@ pub struct CameraCapabilities {
 /// `id` is opaque — the platform's own camera identifier (Android
 /// `CameraManager` id string, iOS `AVCaptureDevice.uniqueID`). Pass it
 /// unmodified to [`SessionConfig::device_id`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraDevice {
     pub id: String,
@@ -214,7 +214,7 @@ pub struct CameraDevice {
 
 /// A pair of camera ids the platform guarantees it can stream
 /// concurrently. Mirrors Android's `CameraManager::getConcurrentCameraIds`.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConcurrentPair {
     pub primary: String,
@@ -222,7 +222,7 @@ pub struct ConcurrentPair {
 }
 
 /// Platform-advertised concurrent-camera limits.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConcurrentSupport {
     /// Maximum number of sessions the platform will keep open at
@@ -247,7 +247,7 @@ pub struct ConcurrentSupport {
 /// avoids a colour-conversion pass. Pick [`PixelFormat::Jpeg`] when
 /// the consumer wants compressed bytes (e.g. shipping over a network
 /// socket) — the backend asks the hardware encoder when available.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PixelFormat {
     /// Android `ImageFormat::NV21` — Y plane + interleaved VU plane.
@@ -271,7 +271,7 @@ pub enum PixelFormat {
 // -------------------------------------------------------------------
 
 /// Current camera-access authorisation state.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccessStatus {
     Granted,
@@ -289,7 +289,7 @@ pub enum AccessStatus {
 // -------------------------------------------------------------------
 
 /// What the caller wants from a session.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionConfig {
     pub device_id: String,
@@ -359,7 +359,7 @@ impl SessionConfig {
 /// Negotiated capture parameters — what the backend actually opened,
 /// which may differ from [`SessionConfig`] when the requested mode
 /// wasn't an exact native match.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NegotiatedFormat {
     pub resolution: Resolution,
@@ -371,7 +371,7 @@ pub struct NegotiatedFormat {
 /// Wire response from [`Camera::open`]. Prefer
 /// [`CameraClient::open_session`] on the client, which wraps this in
 /// a [`SessionHandle`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CameraSession {
     #[handle(CameraSessionTag)]
@@ -387,7 +387,7 @@ pub struct CameraSession {
 /// format. For planar YUV, there are three entries (Y, U, V); for
 /// semi-planar NV21 / NV12 there are two (Y, VU / UV); for packed
 /// RGBA / JPEG there is one.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FramePlane {
     /// Byte offset within [`CameraFrame::bytes`] where this plane
@@ -404,7 +404,7 @@ pub struct FramePlane {
 }
 
 /// One frame delivered on the capture stream.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CameraFrame {
     /// Monotonically increasing sequence number since the session
@@ -434,7 +434,7 @@ pub struct CameraFrame {
 // -------------------------------------------------------------------
 
 /// Focus strategy applied to a running session.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FocusMode {
     /// Single-shot autofocus (returns to idle after locking).
@@ -450,7 +450,7 @@ pub enum FocusMode {
     Manual(f32),
 }
 
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WhiteBalanceMode {
     Auto,
@@ -462,7 +462,7 @@ pub enum WhiteBalanceMode {
     Twilight,
 }
 
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FlashMode {
     Off,
@@ -474,7 +474,7 @@ pub enum FlashMode {
 /// change one knob without having to re-send the rest — pass `None`
 /// to leave a setting untouched. The backend returns the effective
 /// state as [`AppliedControls`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CameraControls {
     pub zoom: Option<f32>,
@@ -489,7 +489,7 @@ pub struct CameraControls {
 /// request. Each field reflects the actual value on the running
 /// session, which may differ from the request when the hardware
 /// clamps.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppliedControls {
     pub zoom: f32,
@@ -504,7 +504,7 @@ pub struct AppliedControls {
 // Still capture
 // -------------------------------------------------------------------
 
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StillCaptureRequest {
     pub pixel_format: PixelFormat,
@@ -522,7 +522,7 @@ impl Default for StillCaptureRequest {
     }
 }
 
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StillPhoto {
     pub resolution: Resolution,
@@ -537,7 +537,7 @@ pub struct StillPhoto {
 // -------------------------------------------------------------------
 
 /// Domain-level errors surfaced by every [`Camera`] method.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CameraError {
     /// User denied camera access, or the OS declined before the
@@ -584,9 +584,7 @@ impl std::error::Error for CameraError {}
 impl From<IstmoError> for CameraError {
     fn from(err: IstmoError) -> Self {
         if let IstmoError::PluginError { ref bytes } = err {
-            if let Ok((decoded, _)) =
-                bincode::decode_from_slice::<Self, _>(bytes, bincode::config::standard())
-            {
+            if let Ok((decoded, _)) = istmo_core::codec::decode::<Self>(bytes) {
                 return decoded;
             }
         }

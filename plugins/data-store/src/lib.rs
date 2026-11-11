@@ -32,7 +32,7 @@ pub const DATA_STORE_PLUGIN_ID: &str = "istmo.data_store";
 /// to segregate values — on Android it maps to a `SharedPreferences`
 /// file name, on iOS to a `UserDefaults` suite name. Two instances
 /// with different namespaces cannot see each other's keys.
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DataStoreConfig {
     /// Backend namespace. Convention: reverse-DNS app id
@@ -42,7 +42,7 @@ pub struct DataStoreConfig {
 }
 
 /// Domain-level errors returned by every [`DataStore`] method.
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DataStoreError {
     /// Native backend rejected the operation. Carries the platform's

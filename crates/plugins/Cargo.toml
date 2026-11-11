@@ -19,7 +19,7 @@ winit-publisher = []
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
-bincode = { workspace = true }
+wincode = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
 tracing = { workspace = true }

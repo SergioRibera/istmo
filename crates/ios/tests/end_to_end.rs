@@ -2,7 +2,6 @@ use std::os::raw::c_void;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use bincode::config::Configuration;
 use istmo_core::{
     CancelToken, Dispatch, DispatchError, DispatchFuture, InstanceId, Outcome, Plugin, RuntimeInit,
 };
@@ -11,7 +10,6 @@ use istmo_ios::{
     istmo_ios_submit_response,
 };
 
-const CODEC: Configuration = bincode::config::standard();
 const PLUGIN_ID: &str = "test.ios.echo";
 
 struct EchoHost;
@@ -35,11 +33,10 @@ impl Dispatch for EchoHost {
         Box::pin(async move {
             match method {
                 "echo" => {
-                    let ((msg,), _): ((String,), _) = bincode::decode_from_slice(payload, CODEC)
-                        .map_err(|e| DispatchError::Decode(istmo_core::CodecError::from(e)))?;
+                    let ((msg,), _): ((String,), _) =
+                        istmo_core::codec::decode(payload).map_err(DispatchError::Decode)?;
                     let reply = format!("echo:{msg}");
-                    let bytes = bincode::encode_to_vec(&reply, CODEC)
-                        .map_err(|e| DispatchError::Encode(istmo_core::CodecError::from(e)))?;
+                    let bytes = istmo_core::codec::encode(&reply).map_err(DispatchError::Encode)?;
                     Ok(Outcome::Ok(bytes))
                 }
                 other => Err(DispatchError::UnknownMethod(other.to_owned())),
@@ -272,7 +269,7 @@ fn ios_transport_end_to_end() {
     assert!(istmo_ios_start(callbacks()), "start should succeed");
 
     let call_id: u64 = 42;
-    let args = bincode::encode_to_vec(&(String::from("hello"),), CODEC).unwrap();
+    let args = istmo_core::codec::encode(&(String::from("hello"),)).unwrap();
     unsafe {
         istmo_ios_submit_call(
             call_id,
@@ -304,7 +301,7 @@ fn ios_transport_end_to_end() {
     };
     assert_eq!(cid, call_id);
     assert!(ok);
-    let (reply, _): (String, _) = bincode::decode_from_slice(&payload, CODEC).unwrap();
+    let (reply, _): (String, _) = istmo_core::codec::decode(&payload).unwrap();
     assert_eq!(reply, "echo:hello");
 
     let runtime = istmo_core::Runtime::global().expect("started");
@@ -327,7 +324,7 @@ fn ios_transport_end_to_end() {
         })
     });
 
-    let reply_bytes = bincode::encode_to_vec(String::from("pong"), CODEC).unwrap();
+    let reply_bytes = istmo_core::codec::encode(&String::from("pong")).unwrap();
     unsafe {
         istmo_ios_submit_response(
             remote_call_id,
@@ -338,7 +335,7 @@ fn ios_transport_end_to_end() {
     }
     let result = handle.recv_blocking().expect("handle recv");
     let bytes = result.expect("ok");
-    let (msg, _): (String, _) = bincode::decode_from_slice(&bytes, CODEC).unwrap();
+    let (msg, _): (String, _) = istmo_core::codec::decode(&bytes).unwrap();
     assert_eq!(msg, "pong");
 
     istmo_ios_shutdown();

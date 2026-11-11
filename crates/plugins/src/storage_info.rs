@@ -17,7 +17,7 @@ use istmo_macros::message;
 pub const STORAGE_INFO_PLUGIN_ID: &str = "istmo.storage_info";
 pub const STORAGE_INFO_CHANNEL: &str = "istmo.storage_info";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StorageInfo {
     pub primary_free_bytes: u64,
@@ -25,7 +25,7 @@ pub struct StorageInfo {
     pub external: Option<ExternalStorage>,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExternalStorage {
     pub free_bytes: u64,
@@ -35,7 +35,7 @@ pub struct ExternalStorage {
     pub medium: ExternalMedium,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ExternalMedium {
     #[default]

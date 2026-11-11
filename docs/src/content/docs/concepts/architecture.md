@@ -17,7 +17,7 @@ An Istmo app has three actors:
    execution.
 
 Everything crosses between (1) + (2) and (3) through **one binary
-protocol** — a length-prefixed `bincode`-encoded `Envelope` carrying a
+protocol** — a length-prefixed wincode-encoded `Envelope` carrying a
 `Frame` variant. No per-plugin trampolines, no JSON, no reflection.
 
 ## The Runtime
@@ -47,7 +47,7 @@ with `SignInClient::from_runtime(&runtime)`.
 
 A `Frame` is the unit of everything: calls, responses, events, cancels,
 handle releases. It is defined in `istmo-core` and serialized with
-`bincode 2`. The current protocol version is **4** (see [Frame
+wincode in bincode 2's `standard()` layout. The current protocol version is **4** (see [Frame
 protocol](/istmo/concepts/frame-protocol/) for the history).
 
 Variants you'll encounter:

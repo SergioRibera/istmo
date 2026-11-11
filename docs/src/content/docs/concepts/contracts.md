@@ -38,7 +38,7 @@ hood, `emit()`:
 3. Parses `src/lib.rs` with `syn`, finds `trait Foo`, and builds a
    `Contract` from its methods and any sibling `#[istmo::message]`
    items.
-4. Emits the contract as a hex-encoded, `bincode`-serialised payload
+4. Emits the contract as a hex-encoded, wincode-serialised payload
    via `cargo:CONTRACT=<hex>`.
 
 Cargo forwards that to every downstream crate as

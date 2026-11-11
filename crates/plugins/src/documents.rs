@@ -38,7 +38,7 @@ pub const DOCUMENTS_ACTIVATION_CHANNEL: &str = "istmo.documents.activation";
 const ACTIVATION_CAPACITY: usize = 4;
 
 /// A later launch asked the running app to come forward.
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceActivation {
     /// Same as [`OpenedDocument::activation_token`].
@@ -46,7 +46,7 @@ pub struct InstanceActivation {
 }
 
 /// Where an opened document lives.
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocumentLocation {
     /// Absolute path on the local file system.
@@ -57,7 +57,7 @@ pub enum DocumentLocation {
 }
 
 /// How the document reached the app.
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentOrigin {
     /// It started the app (cold start).
@@ -68,7 +68,7 @@ pub enum DocumentOrigin {
     Share,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenedDocument {
     pub location: DocumentLocation,

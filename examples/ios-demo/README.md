@@ -69,7 +69,7 @@ build; a warm cargo cache turns it into a ~50 ms no-op per arch.
 ## What the demo exercises
 
 1. Rust hosts `Echo::echo(text) -> Result<String, EchoError>`.
-2. Swift `EchoClient.echo(text)` bincode-encodes the argument, calls
+2. Swift `EchoClient.echo(text)` wire-encodes the argument, calls
    `IstmoRuntime.shared.call(pluginId, "echo", payload)`.
 3. `istmo_ios_submit_call` hands the frame to Rust; the runtime routes
    it to the hosted `EchoImpl`.

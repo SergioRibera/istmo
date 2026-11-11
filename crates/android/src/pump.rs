@@ -8,11 +8,6 @@ use jni::JavaVM;
 use jni::objects::{GlobalRef, JObject, JValue};
 use jni::signature::{Primitive, ReturnType};
 
-#[allow(dead_code)]
-const fn codec() -> bincode::config::Configuration {
-    bincode::config::standard()
-}
-
 pub(crate) struct PumpHandles {
     pub(crate) shutdown: FlumeSender<()>,
     pub(crate) join: JoinHandle<()>,

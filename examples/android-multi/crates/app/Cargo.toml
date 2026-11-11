@@ -14,7 +14,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 istmo = { path = "../../../.." }
-bincode = { workspace = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }

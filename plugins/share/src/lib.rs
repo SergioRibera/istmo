@@ -68,7 +68,7 @@ pub const SHARE_PLUGIN_ID: &str = "istmo.share";
 
 /// Rectangle in the anchor window's coordinate space, in points
 /// (logical pixels), origin top-left.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ShareRect {
     pub x: f64,
@@ -83,7 +83,7 @@ pub struct ShareRect {
 /// anchor — the iOS backend falls back to the centre of the key window)
 /// and on macOS (the picker is a popover). Windows uses only the
 /// window. Android ignores it.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ShareAnchor {
     /// Desktop: id the window was registered under in
@@ -96,7 +96,7 @@ pub struct ShareAnchor {
 }
 
 /// Where a [`ShareFile`]'s bytes come from.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShareFileSource {
     /// Absolute path to an existing file readable by the app. On
@@ -111,7 +111,7 @@ pub enum ShareFileSource {
 }
 
 /// One file attached to a [`ShareRequest`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShareFile {
     pub source: ShareFileSource,
@@ -181,7 +181,7 @@ impl ShareFile {
 /// a `ClipData` thumbnail) and Windows (`DataPackage` title and
 /// thumbnail). macOS ignores it — `NSSharingServicePicker` has no
 /// preview header. Check [`ShareCapabilities::rich_preview`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct SharePreview {
     /// Title shown in the preview header.
@@ -196,7 +196,7 @@ pub struct SharePreview {
 
 /// What to share. Any combination of fields may be set; at least one
 /// of `text`, `url` or `files` must be.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ShareRequest {
     /// Plain text body.
@@ -326,7 +326,7 @@ impl ShareRequest {
 
 /// What the user did with the share sheet, as far as the platform
 /// reports it.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShareOutcome {
     /// The target reported success. Carries the target id when known
@@ -344,7 +344,7 @@ pub enum ShareOutcome {
 }
 
 /// Which parts of the API the current platform supports.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ShareCapabilities {
@@ -375,7 +375,7 @@ pub struct ShareCapabilities {
 }
 
 /// Errors surfaced by [`Share`] methods.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShareError {
     /// The platform (or this build of it) cannot share at all, or not
@@ -426,7 +426,7 @@ impl From<istmo_core::IstmoError> for ShareError {
 }
 
 /// A file shared into the app, already copied into app-owned storage.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IncomingFile {
     /// Absolute path of the app-owned copy.
@@ -438,7 +438,7 @@ pub struct IncomingFile {
 }
 
 /// Content another app shared into this one.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct IncomingShare {
     pub text: Option<String>,
@@ -467,7 +467,7 @@ pub struct IncomingShare {
 /// without it. A [`ShareTarget::launcher_only`] target is only that
 /// launcher shortcut: it stays out of the share sheet and needs no
 /// receive alias.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShareTarget {
     /// Stable id, returned in [`IncomingShare::target_id`].

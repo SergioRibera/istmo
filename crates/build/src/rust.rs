@@ -23,7 +23,7 @@ fn write_header(out: &mut String, contract: &Contract) {
 
 fn write_struct(out: &mut String, s: &StructDef, all: &[TypeDef]) {
     let derives = suggest_derives(&TypeDef::Struct(s.clone()), all);
-    let _ = writeln!(out, "#[::istmo_macros::message(bincode = \"::bincode\")]");
+    let _ = writeln!(out, "#[::istmo_macros::message(wincode = \"::wincode\")]");
     let _ = writeln!(out, "#[derive({})]", derives.join(", "));
     let _ = writeln!(out, "pub struct {} {{", s.name);
     for f in &s.fields {
@@ -39,7 +39,7 @@ fn write_struct(out: &mut String, s: &StructDef, all: &[TypeDef]) {
 
 fn write_enum(out: &mut String, e: &EnumDef, all: &[TypeDef]) {
     let derives = suggest_derives(&TypeDef::Enum(e.clone()), all);
-    let _ = writeln!(out, "#[::istmo_macros::message(bincode = \"::bincode\")]");
+    let _ = writeln!(out, "#[::istmo_macros::message(wincode = \"::wincode\")]");
     let _ = writeln!(out, "#[derive({})]", derives.join(", "));
     let _ = writeln!(out, "pub enum {} {{", e.name);
     for v in &e.variants {

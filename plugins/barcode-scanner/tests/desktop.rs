@@ -18,8 +18,7 @@ fn qr_config_limits_formats() {
 
 #[test]
 fn plugin_error_payload_decodes_to_typed_error() {
-    let bytes = bincode::encode_to_vec(ScanError::PermissionDenied, bincode::config::standard())
-        .expect("encode");
+    let bytes = istmo_core::codec::encode(&ScanError::PermissionDenied).expect("encode");
     let err = ScanError::from(istmo_core::IstmoError::PluginError { bytes });
     assert_eq!(err, ScanError::PermissionDenied);
 }

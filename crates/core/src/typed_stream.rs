@@ -1,6 +1,6 @@
 //! Typed adapter around [`StreamHandle`].
 //!
-//! [`TypedStream`] decodes each raw bincode payload into a strongly
+//! [`TypedStream`] decodes each raw wire payload into a strongly
 //! typed [`StreamItem`], so consumers work with domain values instead of
 //! byte slices.
 
@@ -29,7 +29,7 @@ pub enum StreamItem<T, E> {
 
 /// Typed wrapper around a raw [`StreamHandle`].
 ///
-/// Each item and terminal error are decoded from bincode bytes into the
+/// Each item and terminal error are decoded from wire bytes into the
 /// caller-declared types. The three receive shapes ([`recv`](Self::recv),
 /// [`recv_async`](Self::recv_async), [`try_recv`](Self::try_recv)) mirror
 /// [`StreamHandle`]'s and behave identically otherwise.

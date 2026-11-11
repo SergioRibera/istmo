@@ -638,7 +638,7 @@ fn build_feed(count: usize) -> Vec<FeedItem> {
         "wgpu on Android finally landed adaptive banners",
         "why we replaced Flutter with 400 lines of Rust",
         "shipping a workspace-scale Cargo build",
-        "no more `serde` on the wire — bincode 2 is enough",
+        "no more `serde` on the wire — wincode is enough",
         "safe-area insets across every OEM",
         "PopupWindow: the one Android trick nobody remembered",
         "AdMob adaptive height without a layout jump",

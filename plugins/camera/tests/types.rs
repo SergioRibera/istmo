@@ -1,7 +1,7 @@
 //! Round-trip + API-surface checks for `istmo-camera`.
 //!
 //! These tests prove that:
-//! - every wire type encodes / decodes through bincode without loss,
+//! - every wire type encodes / decodes through the wire codec without loss,
 //! - the macro-generated plugin surface compiles with the expected
 //!   method signatures (compile-only `const _` assertions),
 //! - error decode via `From<IstmoError>` recovers the typed variant.
@@ -17,11 +17,10 @@ use istmo_core::IstmoError;
 
 fn roundtrip<T>(value: &T) -> T
 where
-    T: bincode::Encode + bincode::Decode<()> + PartialEq + std::fmt::Debug,
+    T: istmo_core::Message + PartialEq + std::fmt::Debug,
 {
-    let encoded = bincode::encode_to_vec(value, bincode::config::standard()).expect("encode");
-    let (decoded, _) =
-        bincode::decode_from_slice::<T, _>(&encoded, bincode::config::standard()).expect("decode");
+    let encoded = istmo_core::codec::encode(value).expect("encode");
+    let (decoded, _) = istmo_core::codec::decode::<T>(&encoded).expect("decode");
     assert_eq!(value, &decoded, "round-trip failed");
     decoded
 }
@@ -246,8 +245,7 @@ fn access_status_roundtrip() {
 #[test]
 fn error_decode_from_plugin_bytes() {
     let original = CameraError::DeviceNotFound("cam-7".into());
-    let payload =
-        bincode::encode_to_vec(&original, bincode::config::standard()).expect("encode error");
+    let payload = istmo_core::codec::encode(&original).expect("encode error");
     let wire = IstmoError::PluginError { bytes: payload };
     let decoded: CameraError = CameraError::from(wire);
     assert_eq!(decoded, original);

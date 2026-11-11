@@ -96,7 +96,7 @@ just rust-mobile-demo
 6. Every `SignInClient::...` / `PermissionsClient::...` /
    `NotificationsClient::...` call emits `Frame::Call`; the Rust pump
    invokes `IstmoRuntime.onCall(...)` in Kotlin; the matching
-   `PluginHandler` produces bincode-encoded response bytes;
+   `PluginHandler` produces wire-encoded response bytes;
    `IstmoRuntime.nativeSubmitResponse(...)` ships them back to Rust.
 
 ## Known limitations

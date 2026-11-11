@@ -17,7 +17,7 @@ Una app Istmo tiene tres actores:
    ejecución en background.
 
 Todo cruza entre (1) + (2) y (3) a través de **un solo protocolo
-binario** — un `Envelope` `bincode`-encoded con length-prefix que
+binario** — un `Envelope` wincode-encoded con length-prefix que
 carga una variante `Frame`. Sin trampolines por plugin, sin JSON, sin
 reflection.
 
@@ -48,7 +48,7 @@ En compile time produce `Runtime::new()` retornando un
 
 Un `Frame` es la unidad de todo: calls, respuestas, events, cancels,
 releases de handles. Se define en `istmo-core` y se serializa con
-`bincode 2`. La versión de protocolo actual es **4** (ver [Frame
+wincode con el layout `standard()` de bincode 2. La versión de protocolo actual es **4** (ver [Frame
 protocol](/istmo/es/concepts/frame-protocol/) para el historial).
 
 Variantes con las que te vas a encontrar:

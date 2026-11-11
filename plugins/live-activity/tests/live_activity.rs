@@ -8,13 +8,13 @@ use istmo_live_activity::{
 };
 use istmo_macros::message;
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq)]
 struct TimerAttributes {
     title: String,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq)]
 struct TimerState {
     elapsed: u64,

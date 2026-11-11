@@ -1,14 +1,22 @@
 use std::path::PathBuf;
 
-use bincode::config::Configuration;
-use bincode::error::{DecodeError, EncodeError};
+use wincode::config::Configuration;
+use wincode::int_encoding::{LittleEndian, VarInt};
+use wincode::len::BincodeLen;
+use wincode::{ReadError as DecodeError, WriteError as EncodeError};
 
 use crate::assets::AssetsPayload;
 use crate::contract::Contract;
 use crate::manifest::Manifest;
 use crate::native_deps::NativeDeps;
 
-const CODEC: Configuration = bincode::config::standard();
+/// Build-time handover between our own build scripts. Payloads are a few
+/// KiB; the limit only keeps a broken `DEP_*` value from claiming memory.
+type Codec = Configuration<true, { 64 << 20 }, BincodeLen, LittleEndian, VarInt>;
+
+const fn codec() -> Codec {
+    Codec::new()
+}
 
 pub const CONTRACT_KEY: &str = "CONTRACT";
 
@@ -48,25 +56,25 @@ impl std::error::Error for HandoverError {
 }
 
 pub fn serialize_contract(contract: &Contract) -> Result<String, HandoverError> {
-    let bytes = bincode::encode_to_vec(contract, CODEC).map_err(HandoverError::Encode)?;
+    let bytes = wincode::config::serialize(contract, codec()).map_err(HandoverError::Encode)?;
     Ok(hex_encode(&bytes))
 }
 
 pub fn deserialize_contract(hex: &str) -> Result<Contract, HandoverError> {
     let bytes = hex_decode(hex)?;
-    let (contract, _) =
-        bincode::decode_from_slice::<Contract, _>(&bytes, CODEC).map_err(HandoverError::Decode)?;
+    let contract = wincode::config::deserialize::<Contract, _>(&bytes, codec())
+        .map_err(HandoverError::Decode)?;
     Ok(contract)
 }
 
 pub fn serialize_native_deps(deps: &NativeDeps) -> Result<String, HandoverError> {
-    let bytes = bincode::encode_to_vec(deps, CODEC).map_err(HandoverError::Encode)?;
+    let bytes = wincode::config::serialize(deps, codec()).map_err(HandoverError::Encode)?;
     Ok(hex_encode(&bytes))
 }
 
 pub fn deserialize_native_deps(hex: &str) -> Result<NativeDeps, HandoverError> {
     let bytes = hex_decode(hex)?;
-    let (deps, _) = bincode::decode_from_slice::<NativeDeps, _>(&bytes, CODEC)
+    let deps = wincode::config::deserialize::<NativeDeps, _>(&bytes, codec())
         .map_err(HandoverError::Decode)?;
     Ok(deps)
 }
@@ -82,14 +90,14 @@ pub fn emit_native_deps(deps: &NativeDeps) {
 }
 
 pub fn serialize_manifest(manifest: &Manifest) -> Result<String, HandoverError> {
-    let bytes = bincode::encode_to_vec(manifest, CODEC).map_err(HandoverError::Encode)?;
+    let bytes = wincode::config::serialize(manifest, codec()).map_err(HandoverError::Encode)?;
     Ok(hex_encode(&bytes))
 }
 
 pub fn deserialize_manifest(hex: &str) -> Result<Manifest, HandoverError> {
     let bytes = hex_decode(hex)?;
-    let (manifest, _) =
-        bincode::decode_from_slice::<Manifest, _>(&bytes, CODEC).map_err(HandoverError::Decode)?;
+    let manifest = wincode::config::deserialize::<Manifest, _>(&bytes, codec())
+        .map_err(HandoverError::Decode)?;
     Ok(manifest)
 }
 
@@ -99,13 +107,13 @@ pub fn emit_manifest(manifest: &Manifest) {
 }
 
 pub fn serialize_assets(payload: &AssetsPayload) -> Result<String, HandoverError> {
-    let bytes = bincode::encode_to_vec(payload, CODEC).map_err(HandoverError::Encode)?;
+    let bytes = wincode::config::serialize(payload, codec()).map_err(HandoverError::Encode)?;
     Ok(hex_encode(&bytes))
 }
 
 pub fn deserialize_assets(hex: &str) -> Result<AssetsPayload, HandoverError> {
     let bytes = hex_decode(hex)?;
-    let (payload, _) = bincode::decode_from_slice::<AssetsPayload, _>(&bytes, CODEC)
+    let payload = wincode::config::deserialize::<AssetsPayload, _>(&bytes, codec())
         .map_err(HandoverError::Decode)?;
     Ok(payload)
 }
@@ -323,7 +331,7 @@ mod tests {
     #[test]
     fn deserialize_reports_decode_failure_on_valid_hex_bad_bytes() {
         let hex = "DEADBEEF";
-        let err = deserialize_contract(hex).expect_err("bincode decode should fail");
+        let err = deserialize_contract(hex).expect_err("decode should fail");
         assert!(matches!(err, HandoverError::Decode(_)));
     }
 

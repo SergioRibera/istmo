@@ -32,7 +32,6 @@ crate-type = ["rlib"]
 
 [dependencies]
 istmo = "0.1"
-bincode = "2"
 
 [build-dependencies]
 istmo-build = "0.1"

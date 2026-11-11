@@ -1,13 +1,13 @@
 ---
 title: Frame protocol
-description: The single bincode-encoded wire format that flows across JNI and FFI.
+description: The single wire format that flows across JNI and FFI.
 sidebar:
   order: 5
 ---
 
 Everything that crosses between Rust and the native side of an Istmo
 app is a **frame** wrapped in an **envelope**. There is only one format,
-one codec (`bincode 2`), and one version byte. Rust and Kotlin/Swift
+one codec (wincode, laid out like bincode 2's `standard()`), and one version byte. Rust and Kotlin/Swift
 never encode envelopes by hand — they hand each other typed payloads and
 the runtime does the packing.
 

@@ -20,7 +20,7 @@ use istmo_macros::message;
 pub const NETWORK_STATE_PLUGIN_ID: &str = "istmo.network_state";
 pub const NETWORK_STATE_CHANNEL: &str = "istmo.network_state";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NetworkState {
     pub online: bool,
@@ -34,7 +34,7 @@ pub struct NetworkState {
     pub constrained: bool,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum LinkKind {
     #[default]

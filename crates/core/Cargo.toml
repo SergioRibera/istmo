@@ -13,7 +13,7 @@ keywords = ["mobile", "android", "ios", "ffi", "istmo"]
 categories = ["development-tools::ffi", "network-programming", "os"]
 
 [dependencies]
-bincode = { workspace = true }
+wincode = { workspace = true }
 flume = { workspace = true }
 oneshot = { workspace = true }
 pollster = { workspace = true }

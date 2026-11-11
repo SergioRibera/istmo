@@ -1,6 +1,8 @@
-use bincode::{Decode, Encode};
+use wincode::{SchemaRead, SchemaWrite};
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+mod wire;
+
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct Contract {
     pub plugin_id: String,
     pub type_name: String,
@@ -9,7 +11,7 @@ pub struct Contract {
     pub types: Vec<TypeDef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum TypeDef {
     Struct(StructDef),
     Enum(EnumDef),
@@ -25,31 +27,31 @@ impl TypeDef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<Field>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct Field {
     pub name: String,
     pub ty: TypeRef,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct EnumDef {
     pub name: String,
     pub variants: Vec<EnumVariant>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct EnumVariant {
     pub name: String,
     pub payload: Vec<TypeRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct Method {
     pub name: String,
     pub kind: MethodKind,
@@ -58,19 +60,21 @@ pub struct Method {
     pub error: Option<TypeRef>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum MethodKind {
     Unary,
     Stream,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct Arg {
     pub name: String,
     pub ty: TypeRef,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+/// Wire impls are hand-written in [`wire`]: wincode cannot derive a
+/// recursive type.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeRef {
     Unit,
     Bool,

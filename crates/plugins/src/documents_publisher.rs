@@ -233,7 +233,7 @@ impl Drop for ClientSlot {
 }
 
 /// What a second launch sends to the primary.
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ForwardRequest {
     /// Random per launch. A launch that gives up waiting re-sends the
@@ -314,12 +314,10 @@ impl ForwardRequest {
         stream
             .read_exact(&mut body)
             .map_err(DocumentsError::io("reading a forwarded request"))?;
-        // The frame cap bounds the bytes, not what bincode allocates for a
-        // length prefix inside them: a 9-byte body may claim a terabyte
-        // Vec. The decode limit caps every claimed allocation as well.
-        let config = codec::wire_config().with_limit::<{ MAX_FRAME_LEN as usize }>();
-        let (request, read): (Self, usize) = bincode::decode_from_slice(&body, config)
-            .map_err(|err| DocumentsError::Codec(CodecError::from(err)))?;
+        // The frame cap bounds the bytes, not what a length prefix inside
+        // them may claim: the decode limit caps every claimed allocation too.
+        let (request, read): (Self, usize) =
+            codec::decode_capped(&body, MAX_FRAME_LEN as usize).map_err(DocumentsError::Codec)?;
         if read != body.len() {
             return Err(DocumentsError::Protocol("trailing bytes"));
         }

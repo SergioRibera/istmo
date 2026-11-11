@@ -14,7 +14,6 @@ categories = ["os", "development-tools::ffi"]
 
 [dependencies]
 istmo-core = { workspace = true }
-bincode = { workspace = true }
 flume = { workspace = true }
 tracing = { workspace = true }
 

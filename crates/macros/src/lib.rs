@@ -14,7 +14,7 @@
 //!   for the caller side, and a `<Trait>Host<Impl>` dispatcher that
 //!   wires a Rust implementation to inbound frames.
 //! - [`#[message]`](message) — a thin sugar over
-//!   `#[derive(bincode::Encode, bincode::Decode)]` for wire-safe
+//!   `#[derive(wincode::SchemaWrite, wincode::SchemaRead)]` for wire-safe
 //!   payloads.
 //! - [`#[stream]`](stream) — marks a plugin method as returning a live
 //!   stream. The base trait return type is the stream item.
@@ -85,7 +85,7 @@ pub fn plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Mark a struct or enum as a wire-safe message.
 ///
-/// Sugar over `#[derive(bincode::Encode, bincode::Decode)]` — the same
+/// Sugar over `#[derive(wincode::SchemaWrite, wincode::SchemaRead)]` — the same
 /// derives are emitted, so message types can be constructed and
 /// inspected as ordinary Rust values but also travel across the wire.
 ///

@@ -30,7 +30,7 @@
 //!   main thread" (Android `Handler`, iOS main queue, or an inline
 //!   executor on desktop).
 //! - [`typed_stream`] — typed wrapper around a raw byte-stream receiver.
-//! - [`codec`] — bincode configuration used across the wire.
+//! - [`codec`] — wire encoding and bounded decoding.
 //! - [`error`] — [`IstmoError`] and [`CodecError`].
 
 #![doc(html_root_url = "https://docs.rs/istmo-core")]
@@ -50,6 +50,10 @@ pub mod protocol;
 pub mod routing;
 pub mod runtime;
 pub mod typed_stream;
+
+/// The wincode the wire derives use, re-exported so `#[message]` types
+/// need no direct dependency on it.
+pub use wincode;
 
 pub use crate::dispatch::{CancelToken, Dispatch, DispatchError, DispatchFuture, Outcome, Plugin};
 pub use crate::error::{CodecError, IstmoError};

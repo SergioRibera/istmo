@@ -1,13 +1,13 @@
 //! Wire protocol: [`Envelope`], [`Frame`], typed identifiers and the
 //! current [`PROTOCOL_VERSION`].
 //!
-//! Every message that crosses the FFI boundary is a bincode-encoded
+//! Every message that crosses the FFI boundary is a wire-encoded
 //! [`Envelope`] carrying a single [`Frame`]. Version mismatches are
 //! rejected at decode time by [`Envelope::from_wire_bytes`].
 
 use core::fmt;
 
-use bincode::{Decode, Encode};
+use wincode::{SchemaRead, SchemaWrite};
 
 /// Current on-wire protocol version.
 ///
@@ -20,7 +20,7 @@ pub const PROTOCOL_VERSION: u16 = 4;
 macro_rules! id_newtype {
     ($(#[$attr:meta])* $name:ident, $short:literal) => {
         $(#[$attr])*
-        #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
         #[repr(transparent)]
         pub struct $name(pub u64);
 
@@ -97,14 +97,14 @@ id_newtype!(
 ///
 /// Carried by [`Frame::StreamEnd`] to distinguish clean completion from
 /// caller-initiated cancellation and provider-side failure.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum StreamEndReason {
     /// Producer finished normally.
     Complete,
     /// Consumer cancelled the subscription (dropped its handle or
     /// signalled a [`CancelToken`](crate::dispatch::CancelToken)).
     Cancelled,
-    /// Producer errored out. The wrapped bytes are the bincode-encoded
+    /// Producer errored out. The wrapped bytes are the wire-encoded
     /// domain error emitted by the plugin.
     Error(Vec<u8>),
 }
@@ -113,7 +113,7 @@ pub enum StreamEndReason {
 ///
 /// Controls how the runtime buffers events published before their first
 /// subscriber attaches.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum EarlyEventKind {
     /// Keep only the most recent value. Late subscribers see the latest
     /// value first, then live updates.
@@ -132,7 +132,7 @@ pub enum EarlyEventKind {
 /// [`Envelope::from_wire_bytes`]. The `version` field is compared
 /// against [`PROTOCOL_VERSION`] on decode and mismatches produce
 /// [`IstmoError::ProtocolVersionMismatch`](crate::error::IstmoError::ProtocolVersionMismatch).
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct Envelope {
     /// Protocol version this envelope was encoded against.
     pub version: u16,
@@ -155,7 +155,7 @@ impl Envelope {
     ///
     /// # Errors
     ///
-    /// Returns [`CodecError`](crate::error::CodecError) if bincode
+    /// Returns [`CodecError`](crate::error::CodecError) if wincode
     /// serialization fails.
     pub fn to_wire_bytes(&self) -> Result<Vec<u8>, crate::error::CodecError> {
         crate::codec::encode(self)
@@ -184,10 +184,10 @@ impl Envelope {
 
 /// A single message crossing the wire.
 ///
-/// Payload bytes are always bincode-encoded plugin-specific data; the
+/// Payload bytes are always wire-encoded plugin-specific data; the
 /// runtime never inspects them. Every variant is a distinct point in
 /// the call / event / lifecycle lifecycle of a plugin surface.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum Frame {
     /// Request half of a unary or stream-returning plugin method.
     Call {
@@ -207,8 +207,8 @@ pub enum Frame {
     Respond {
         /// Echoes the originating [`CallId`].
         call_id: CallId,
-        /// `Ok(bytes)` carries a bincode-encoded return value.
-        /// `Err(bytes)` carries a bincode-encoded domain error.
+        /// `Ok(bytes)` carries a wire-encoded return value.
+        /// `Err(bytes)` carries a wire-encoded domain error.
         result: Result<Vec<u8>, Vec<u8>>,
     },
 

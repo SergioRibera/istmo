@@ -8,8 +8,7 @@ fn empty_url_is_invalid() {
 
 #[test]
 fn plugin_error_payload_decodes_to_typed_error() {
-    let bytes =
-        bincode::encode_to_vec(OpenError::NoHandler, bincode::config::standard()).expect("encode");
+    let bytes = istmo_core::codec::encode(&OpenError::NoHandler).expect("encode");
     let err = OpenError::from(istmo_core::IstmoError::PluginError { bytes });
     assert_eq!(err, OpenError::NoHandler);
 }

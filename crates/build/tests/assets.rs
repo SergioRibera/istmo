@@ -1,6 +1,6 @@
 //! End-to-end coverage for the asset pipeline.
 //!
-//! Exercises the manifest → glob resolution → bincode round-trip path
+//! Exercises the manifest → glob resolution → wire round-trip path
 //! that plugin `build.rs` scripts follow when advertising bundled
 //! assets through the `DEP_*_ISTMO_ASSETS` env-var handover.
 
@@ -82,5 +82,5 @@ fn resolved_asset_source_paths_are_absolute() {
         source_abs,
     } = &resolved[0];
     assert_eq!(bundle_path, "data.bin");
-    assert!(source_abs.is_absolute());
+    assert!(std::path::Path::new(source_abs).is_absolute());
 }

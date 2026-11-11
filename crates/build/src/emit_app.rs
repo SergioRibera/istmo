@@ -1363,7 +1363,7 @@ fn sync_assets(
         let android_assets = android_root.join("app/src/main/assets");
         for asset in &app_assets {
             let target = android_assets.join(&asset.bundle_path);
-            install_asset(&asset.source_abs, &target);
+            install_asset(asset.source(), &target);
         }
         for (_links, payload) in &dep_assets {
             for asset in &payload.resolved {
@@ -1371,7 +1371,7 @@ fn sync_assets(
                     let target = android_assets
                         .join(format!("plugin:{id}"))
                         .join(&asset.bundle_path);
-                    install_asset(&asset.source_abs, &target);
+                    install_asset(asset.source(), &target);
                 }
             }
         }
@@ -1382,7 +1382,7 @@ fn sync_assets(
         let app_root = ios_root.join(app_dir).join("Assets");
         for asset in &app_assets {
             let target = app_root.join(&asset.bundle_path);
-            install_asset(&asset.source_abs, &target);
+            install_asset(asset.source(), &target);
         }
         for (_links, payload) in &dep_assets {
             for asset in &payload.resolved {
@@ -1390,7 +1390,7 @@ fn sync_assets(
                     let target = assets_root
                         .join(format!("plugin:{id}"))
                         .join(&asset.bundle_path);
-                    install_asset(&asset.source_abs, &target);
+                    install_asset(asset.source(), &target);
                 }
             }
         }
@@ -1398,11 +1398,11 @@ fn sync_assets(
 
     for (_links, payload) in &dep_assets {
         for asset in &payload.resolved {
-            println!("cargo:rerun-if-changed={}", asset.source_abs.display());
+            println!("cargo:rerun-if-changed={}", asset.source().display());
         }
     }
     for asset in &app_assets {
-        println!("cargo:rerun-if-changed={}", asset.source_abs.display());
+        println!("cargo:rerun-if-changed={}", asset.source().display());
     }
 
     stage_desktop_assets(&app_assets, &dep_assets)
@@ -1428,7 +1428,7 @@ fn stage_desktop_assets(
     let _ = fs::remove_dir_all(&staging);
     for asset in app_assets {
         let target = staging.join(&asset.bundle_path);
-        install_asset(&asset.source_abs, &target);
+        install_asset(asset.source(), &target);
     }
     for (_links, payload) in dep_assets {
         for asset in &payload.resolved {
@@ -1436,7 +1436,7 @@ fn stage_desktop_assets(
                 let target = staging
                     .join(format!("plugin:{id}"))
                     .join(&asset.bundle_path);
-                install_asset(&asset.source_abs, &target);
+                install_asset(asset.source(), &target);
             }
         }
     }

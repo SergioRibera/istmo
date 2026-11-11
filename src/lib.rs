@@ -3,7 +3,7 @@
 //! `istmo` lets a single Rust codebase drive Android and iOS through a
 //! typed plugin contract. Plugin surfaces are declared once as async
 //! Rust traits; codegen emits the matching Kotlin and Swift bindings,
-//! and one bincode-framed wire protocol carries every call across the
+//! and one wincode-framed wire protocol carries every call across the
 //! FFI boundary.
 //!
 //! # Quick start
@@ -43,8 +43,8 @@
 //!   pulled in by target cfg. Not present on desktop targets. See
 //!   [`istmo-android`](https://docs.rs/istmo-android) and
 //!   [`istmo-ios`](https://docs.rs/istmo-ios).
-//! - [`bincode`] — the encoding primitives used on the wire, re-exported
-//!   so downstream crates don't need a direct `bincode` dependency.
+//! - [`wincode`] — the encoding the wire derives use, re-exported so
+//!   downstream crates don't need a direct `wincode` dependency.
 //!
 //! # Feature areas
 //!
@@ -64,7 +64,7 @@
 //!
 //! # Wire protocol
 //!
-//! All frames cross the FFI boundary as opaque bincode-encoded byte
+//! All frames cross the FFI boundary as opaque wire-encoded byte
 //! payloads. The current wire version is [`PROTOCOL_VERSION`]; runtimes
 //! reject frames from mismatched peers.
 //!
@@ -94,17 +94,8 @@ pub use istmo_android as android;
 ))]
 pub use istmo_ios as ios;
 
-/// Wire-encoding primitives re-exported from [`bincode`](::bincode).
-///
-/// Message types derive [`Encode`](bincode::Encode) and
-/// [`Decode`](bincode::Decode) via [`#[message]`](macro@message);
-/// downstream crates rarely need to touch this module directly, but it
-/// is available so users don't have to pin a matching `bincode`
-/// version.
-pub mod bincode {
-    pub use ::bincode::error;
-    pub use ::bincode::{Decode, Encode, config, decode_from_slice, encode_to_vec};
-}
+/// The wincode the wire derives use; `#[message]` types reach it here.
+pub use istmo_core::wincode;
 
 /// Instance key of the app crate for
 /// [`plugins::DocumentsPublisher::start`]: `Some` when `istmo.toml`

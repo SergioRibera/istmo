@@ -22,7 +22,7 @@ use istmo_macros::{message, plugin};
 pub const OPENER_PLUGIN_ID: &str = "istmo.opener";
 
 /// Why a URL did not open.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OpenError {
     /// Nothing on the device handles this kind of URL.
@@ -50,11 +50,10 @@ impl From<istmo_core::IstmoError> for OpenError {
     fn from(err: istmo_core::IstmoError) -> Self {
         match err {
             istmo_core::IstmoError::PluginError { bytes } => {
-                bincode::decode_from_slice::<Self, _>(&bytes, bincode::config::standard())
-                    .map_or_else(
-                        |e| Self::Backend(format!("decode plugin error payload: {e}")),
-                        |(err, _)| err,
-                    )
+                istmo_core::codec::decode::<Self>(&bytes).map_or_else(
+                    |e| Self::Backend(format!("decode plugin error payload: {e}")),
+                    |(err, _)| err,
+                )
             }
             other => Self::Backend(other.to_string()),
         }

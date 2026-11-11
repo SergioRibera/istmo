@@ -14,7 +14,7 @@ use istmo_macros::message;
 /// Early-event channel name lifecycle updates are published on.
 pub const LIFECYCLE_CHANNEL: &str = "istmo.lifecycle";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LifecycleState {
     Created,

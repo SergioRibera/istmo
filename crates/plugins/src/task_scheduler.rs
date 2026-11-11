@@ -11,13 +11,13 @@ use crate::worker::Constraints;
 /// Wire identifier for the task-scheduler plugin.
 pub const TASK_SCHEDULER_PLUGIN_ID: &str = "istmo.task_scheduler";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TaskHandle {
     pub id: String,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExistingWorkPolicy {
     #[default]
@@ -27,7 +27,7 @@ pub enum ExistingWorkPolicy {
     AppendOrReplace,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRequest {
     pub task_id: String,
@@ -39,7 +39,7 @@ pub struct TaskRequest {
     pub existing_work_policy: ExistingWorkPolicy,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskSchedulerError {
     UnknownTask(String),

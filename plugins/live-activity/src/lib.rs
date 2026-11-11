@@ -29,7 +29,7 @@ pub const LIVE_ACTIVITY_PLUGIN_ID: &str = "istmo.live_activity";
 pub enum LiveActivityToken {}
 
 /// How prominently the platform should render the live activity.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActivityStyle {
     /// Full presentation — Lock Screen banner + Dynamic Island on iOS,
@@ -45,7 +45,7 @@ pub enum ActivityStyle {
 /// On iOS the platform decides whether to actually surface the alert
 /// (respects Focus modes, do-not-disturb, etc.); on Android it becomes
 /// a heads-up notification tied to the ongoing activity.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlertConfig {
     /// Short title shown as the alert headline.
@@ -57,7 +57,7 @@ pub struct AlertConfig {
 }
 
 /// Sound played when an [`AlertConfig`] fires.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlertSound {
     /// Use the platform's default notification sound.
@@ -71,7 +71,7 @@ pub enum AlertSound {
 }
 
 /// How to remove the activity when `end()` is called.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DismissalPolicy {
     /// Remove the activity immediately, no lingering final state.
@@ -88,7 +88,7 @@ pub enum DismissalPolicy {
 /// Android-only hint that biases the backend towards a particular
 /// rendering strategy when several are available on the device (custom
 /// RemoteViews vs. `ProgressStyle` vs. Live Update APIs).
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AndroidTierHint {
     /// Force the fully custom RemoteView-based rendering.
@@ -105,7 +105,7 @@ pub enum AndroidTierHint {
 ///
 /// Returned by `capabilities()` so apps can gate features (e.g. only
 /// enable Dynamic Island widgets when actually supported).
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlatformCapabilities {
     /// Running on iOS with the ActivityKit surface.
@@ -117,7 +117,7 @@ pub enum PlatformCapabilities {
 }
 
 /// iOS-specific ActivityKit feature availability.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IosCapabilities {
     /// Whether the ActivityKit framework itself is available (iOS
@@ -133,7 +133,7 @@ pub struct IosCapabilities {
 }
 
 /// Android-specific live-update / ongoing-notification capabilities.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AndroidCapabilities {
     /// Whether the plugin can render fully custom RemoteViews.
@@ -153,7 +153,7 @@ pub struct AndroidCapabilities {
 ///
 /// Payloads travel as raw bytes here — [`TypedLiveActivity::restore`]
 /// decodes them into concrete attributes and state types.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RestoredActivity {
     /// Handle owning the underlying platform activity — release it
@@ -169,7 +169,7 @@ pub struct RestoredActivity {
 }
 
 /// Domain-level errors returned by every [`LiveActivity`] method.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ActivityError {
     /// The device / OS does not offer live activities at all.

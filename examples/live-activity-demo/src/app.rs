@@ -12,14 +12,14 @@ use istmo_macros::message;
 
 pub const ACTIVITY_TYPE: &str = "timer";
 
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimerAttributes {
     pub title: String,
     pub target_seconds: u32,
 }
 
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimerState {
     pub elapsed_seconds: u32,

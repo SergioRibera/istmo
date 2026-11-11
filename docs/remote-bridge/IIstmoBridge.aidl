@@ -2,14 +2,14 @@
 //
 // Wire shape for the `:remote` bridge. Both the app process and the
 // `:remote` process implement this Binder interface; each side calls
-// `submitEnvelope(bytes)` to push a bincoded Envelope over Binder into
+// `submitEnvelope(bytes)` to push a wire-encoded Envelope over Binder into
 // the other runtime's `inject_wire_envelope(bytes)`.
 
 package dev.istmo.remote;
 
 interface IIstmoBridge {
     /**
-     * Ship a bincoded istmo Envelope to the receiver. The receiver
+     * Ship a wire-encoded istmo Envelope to the receiver. The receiver
      * pipes the bytes into `Runtime::inject_wire_envelope` on its
      * cdylib. Fire-and-forget from the caller's perspective — the
      * envelope itself carries any correlation id (`CallId` /

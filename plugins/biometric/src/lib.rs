@@ -102,7 +102,7 @@ pub const BIOMETRIC_PLUGIN_ID: &str = "istmo.biometric";
 /// [`AuthPolicy::BiometricStrong`] and [`AuthPolicy::BiometricWeak`]
 /// alike. Windows Hello always offers its PIN as a fallback, whatever
 /// the policy.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AuthPolicy {
     /// Class 3 ("strong") biometrics only — the only class Android
@@ -118,7 +118,7 @@ pub enum AuthPolicy {
 }
 
 /// Why a device can or cannot satisfy an [`AuthPolicy`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BiometricStatus {
     /// Authentication can be requested right now.
@@ -143,7 +143,7 @@ pub enum BiometricStatus {
 }
 
 /// Kind of biometric sensor exposed by the device.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BiometricKind {
     /// Fingerprint reader (Touch ID, capacitive or under-display sensors).
@@ -158,7 +158,7 @@ pub enum BiometricKind {
 }
 
 /// Result of [`Biometric::availability`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Availability {
     /// Whether the requested [`AuthPolicy`] can be satisfied.
@@ -199,7 +199,7 @@ impl Availability {
 /// * Windows → `reason` (dialog message).
 /// * Linux → nothing: fprintd has no UI, so the app must tell the user
 ///   to touch the sensor.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AuthPrompt {
     /// Prompt title (Android).
@@ -323,7 +323,7 @@ impl std::fmt::Display for SecretAlias {
 
 /// Factor the user verified with in a successful
 /// [`Biometric::authenticate`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthMethod {
     /// A biometric sensor verified the user.
@@ -337,7 +337,7 @@ pub enum AuthMethod {
 }
 
 /// Domain-level errors surfaced by every [`Biometric`] method.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BiometricError {
     /// The user dismissed the prompt or pressed the cancel button.

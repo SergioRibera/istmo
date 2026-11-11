@@ -24,7 +24,6 @@ path = "src/main.rs"
 istmo = { path = "../..", default-features = false, features = ["game-activity"] }
 istmo-core = { workspace = true }
 istmo-camera = { workspace = true }
-bincode = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
 log = "0.4"

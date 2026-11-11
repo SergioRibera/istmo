@@ -44,7 +44,7 @@ pub const SYSTEM_INFO_TIMEZONE_CHANNEL: &str = "istmo.system_info.timezone";
 pub const SYSTEM_INFO_FORMATS_CHANNEL: &str = "istmo.system_info.formats";
 pub const SYSTEM_INFO_UPTIME_CHANNEL: &str = "istmo.system_info.uptime";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Locale {
     /// Canonical BCP-47 tag, e.g. `es-AR`, `zh-Hans-CN`.
@@ -58,7 +58,7 @@ pub struct Locale {
     pub direction: LayoutDirection,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum LayoutDirection {
     #[default]
@@ -66,7 +66,7 @@ pub enum LayoutDirection {
     Rtl,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TimeZone {
     /// IANA id, e.g. `America/Argentina/Buenos_Aires`. Platforms that
@@ -82,7 +82,7 @@ pub struct TimeZone {
     pub abbreviation: String,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Formats {
     pub uses_24h: bool,
@@ -97,7 +97,7 @@ pub struct Formats {
     pub calendar: CalendarSystem,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MeasurementSystem {
     #[default]
@@ -106,7 +106,7 @@ pub enum MeasurementSystem {
     UkImperial,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TemperatureUnit {
     #[default]
@@ -114,7 +114,7 @@ pub enum TemperatureUnit {
     Fahrenheit,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum CalendarSystem {
     #[default]
@@ -215,7 +215,6 @@ impl SystemInfoClient {
         })
     }
 }
-
 
 #[derive(Debug)]
 pub struct LocaleStream {

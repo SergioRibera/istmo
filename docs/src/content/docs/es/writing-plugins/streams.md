@@ -102,7 +102,7 @@ while let Some(fix) = updates.recv_async().await.ok() {
 ```
 
 `updates` aquí es un `TypedStream<LocationFix>` envolviendo un
-decoder bincode. Implementa `Stream<Item = LocationFix>`, así que
+decoder wire. Implementa `Stream<Item = LocationFix>`, así que
 cualquier executor que hable `futures::Stream` puede driveelo.
 
 Dropear el receiver del lado Rust emite `Frame::Cancel` upstream — el

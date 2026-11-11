@@ -9,7 +9,7 @@ use istmo_macros::{message, plugin};
 /// Wire identifier for the activity-results plugin.
 pub const ACTIVITY_RESULTS_PLUGIN_ID: &str = "istmo.activity_results";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExtraValue {
     Text(String),
@@ -18,7 +18,7 @@ pub enum ExtraValue {
     Bytes(Vec<u8>),
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntentRequest {
     pub action: String,
@@ -29,7 +29,7 @@ pub struct IntentRequest {
     pub extras: Vec<(String, ExtraValue)>,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityOutcome {
     Ok,
@@ -37,7 +37,7 @@ pub enum ActivityOutcome {
     Custom(i32),
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityResult {
     pub outcome: ActivityOutcome,
@@ -45,7 +45,7 @@ pub struct ActivityResult {
     pub extras: Vec<(String, ExtraValue)>,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActivityLaunchError {
     NoActivityFound,

@@ -7,7 +7,7 @@ use crate::protocol::{CallId, InstanceId, StreamId};
 /// Everything the runtime can return through a fallible plugin call.
 ///
 /// Domain errors raised by a plugin implementation are carried as
-/// [`IstmoError::PluginError`] with the bincode-encoded payload — the
+/// [`IstmoError::PluginError`] with the wire-encoded payload — the
 /// caller is expected to decode it against the plugin's declared error
 /// type.
 #[derive(Debug)]
@@ -43,7 +43,7 @@ pub enum IstmoError {
     /// An outcome came back on the wrong routing lane (e.g. a stream
     /// event landed on a unary call registration).
     RoutingMismatch(&'static str),
-    /// A plugin-authored domain error, bincode-encoded against the
+    /// A plugin-authored domain error, wire-encoded against the
     /// plugin's declared error type.
     PluginError {
         /// Encoded domain-error payload.
@@ -102,15 +102,20 @@ impl From<CodecError> for IstmoError {
     }
 }
 
-/// Bincode encode / decode failures.
+/// Wire encode / decode failures.
 ///
 /// Wrapped by [`IstmoError::Codec`] when surfaced through the runtime.
 #[derive(Debug)]
 pub enum CodecError {
     /// Encoding a value to bytes failed.
-    Encode(bincode::error::EncodeError),
+    Encode(wincode::WriteError),
     /// Decoding a value from bytes failed.
-    Decode(bincode::error::DecodeError),
+    Decode(wincode::ReadError),
+    /// A value decoded with bytes left over after it.
+    TrailingBytes {
+        /// How many bytes were left.
+        extra: usize,
+    },
 }
 
 impl fmt::Display for CodecError {
@@ -118,6 +123,7 @@ impl fmt::Display for CodecError {
         match self {
             Self::Encode(err) => write!(f, "encode: {err}"),
             Self::Decode(err) => write!(f, "decode: {err}"),
+            Self::TrailingBytes { extra } => write!(f, "decode: {extra} trailing bytes"),
         }
     }
 }
@@ -127,18 +133,19 @@ impl std::error::Error for CodecError {
         match self {
             Self::Encode(err) => Some(err),
             Self::Decode(err) => Some(err),
+            Self::TrailingBytes { .. } => None,
         }
     }
 }
 
-impl From<bincode::error::EncodeError> for CodecError {
-    fn from(err: bincode::error::EncodeError) -> Self {
+impl From<wincode::WriteError> for CodecError {
+    fn from(err: wincode::WriteError) -> Self {
         Self::Encode(err)
     }
 }
 
-impl From<bincode::error::DecodeError> for CodecError {
-    fn from(err: bincode::error::DecodeError) -> Self {
+impl From<wincode::ReadError> for CodecError {
+    fn from(err: wincode::ReadError) -> Self {
         Self::Decode(err)
     }
 }

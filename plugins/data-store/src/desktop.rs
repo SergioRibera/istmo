@@ -1,6 +1,6 @@
 //! File-backed desktop backend for the data-store plugin.
 //!
-//! Persists a bincoded `HashMap<String, StoredValue>` per namespace
+//! Persists a wire-encoded `HashMap<String, StoredValue>` per namespace
 //! under [`istmo_core::path::preference_dir`] — the same directory
 //! semantics `SharedPreferences` covers on Android and `UserDefaults`
 //! covers on Apple platforms:
@@ -30,15 +30,15 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use bincode::{Decode, Encode, config};
 use istmo_core::path;
+use wincode::{SchemaRead, SchemaWrite};
 
 use crate::{DataStore, DataStoreConfig, DataStoreError, DataStoreFactory};
 
 const DIR_NAME: &str = "data-store";
 const FILE_EXT: &str = "bin";
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, SchemaWrite, SchemaRead)]
 enum StoredValue {
     Str(String),
     I64(i64),
@@ -78,7 +78,7 @@ impl DesktopDataStore {
     ///
     /// Returns [`DataStoreError::Backend`] when the base directory
     /// cannot be created, or when an existing file is unreadable or
-    /// bincode-corrupt.
+    /// corrupt.
     pub fn open(config: &DataStoreConfig) -> Result<Self, DataStoreError> {
         let dir = base_dir();
         fs::create_dir_all(&dir).map_err(|err| {
@@ -346,14 +346,13 @@ fn load(path: &Path) -> Result<HashMap<String, StoredValue>, DataStoreError> {
     if bytes.is_empty() {
         return Ok(HashMap::new());
     }
-    let (values, _) =
-        bincode::decode_from_slice::<HashMap<String, StoredValue>, _>(&bytes, config::standard())
-            .map_err(|err| DataStoreError::Corrupted(format!("decode {}: {err}", path.display())))?;
+    let (values, _) = istmo_core::codec::decode::<HashMap<String, StoredValue>>(&bytes)
+        .map_err(|err| DataStoreError::Corrupted(format!("decode {}: {err}", path.display())))?;
     Ok(values)
 }
 
 fn persist(path: &Path, values: &HashMap<String, StoredValue>) -> Result<(), DataStoreError> {
-    let bytes = bincode::encode_to_vec(values, config::standard())
+    let bytes = istmo_core::codec::encode(values)
         .map_err(|err| DataStoreError::Backend(format!("encode {}: {err}", path.display())))?;
     let tmp = tmp_path(path);
     fs::write(&tmp, &bytes)

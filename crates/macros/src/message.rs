@@ -21,9 +21,9 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
 }
 
 fn expand_enum(args: &MessageArgs, item: &syn::ItemEnum) -> TokenStream {
-    let bincode = &args.bincode_path;
+    let derive = args.derive();
     quote! {
-        #[derive(#bincode::Encode, #bincode::Decode)]
+        #derive
         #item
     }
 }
@@ -32,9 +32,9 @@ fn expand_struct(args: &MessageArgs, mut wire: ItemStruct) -> syn::Result<TokenS
     let handles = collect_handle_fields(&wire)?;
     strip_handle_attrs(&mut wire);
 
-    let bincode = &args.bincode_path;
+    let derive = args.derive();
     let wire_tokens = quote! {
-        #[derive(#bincode::Encode, #bincode::Decode)]
+        #derive
         #wire
     };
 
@@ -179,14 +179,29 @@ fn generate_into_owned(wire: &ItemStruct, handles: &[HandleField], root: &Path) 
 }
 
 struct MessageArgs {
-    bincode_path: Path,
+    wincode_path: Path,
     crate_path: Path,
+}
+
+impl MessageArgs {
+    /// The wincode derives, pointed at the wincode the caller can reach.
+    fn derive(&self) -> TokenStream {
+        let wincode = &self.wincode_path;
+        let path = LitStr::new(
+            &quote!(#wincode).to_string(),
+            proc_macro2::Span::call_site(),
+        );
+        quote! {
+            #[derive(#wincode::SchemaWrite, #wincode::SchemaRead)]
+            #[wincode(crate = #path)]
+        }
+    }
 }
 
 impl syn::parse::Parse for MessageArgs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let pairs = Punctuated::<MetaNameValue, Token![,]>::parse_terminated(input)?;
-        let mut bincode_path: Option<Path> = None;
+        let mut wincode_path: Option<Path> = None;
         let mut crate_path: Option<Path> = None;
         for pair in pairs {
             let key = pair
@@ -195,10 +210,10 @@ impl syn::parse::Parse for MessageArgs {
                 .ok_or_else(|| syn::Error::new_spanned(&pair.path, "expected identifier"))?
                 .to_string();
             match key.as_str() {
-                "bincode" => {
+                "wincode" => {
                     let raw = expect_lit_str(&pair.value)?;
-                    bincode_path = Some(parse_str::<Path>(&raw.value()).map_err(|e| {
-                        syn::Error::new_spanned(&pair.value, format!("invalid `bincode` path: {e}"))
+                    wincode_path = Some(parse_str::<Path>(&raw.value()).map_err(|e| {
+                        syn::Error::new_spanned(&pair.value, format!("invalid `wincode` path: {e}"))
                     })?);
                 }
                 "crate" => {
@@ -210,14 +225,15 @@ impl syn::parse::Parse for MessageArgs {
                 other => {
                     return Err(syn::Error::new_spanned(
                         &pair.path,
-                        format!("unknown argument `{other}`; expected `bincode` or `crate`"),
+                        format!("unknown argument `{other}`; expected `wincode` or `crate`"),
                     ));
                 }
             }
         }
+        let crate_path: Path = crate_path.unwrap_or_else(|| parse_quote!(::istmo));
         Ok(Self {
-            bincode_path: bincode_path.unwrap_or_else(|| parse_quote!(::istmo::bincode)),
-            crate_path: crate_path.unwrap_or_else(|| parse_quote!(::istmo)),
+            wincode_path: wincode_path.unwrap_or_else(|| parse_quote!(#crate_path::wincode)),
+            crate_path,
         })
     }
 }

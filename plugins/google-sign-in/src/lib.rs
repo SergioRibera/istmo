@@ -29,7 +29,7 @@ pub enum Credential {}
 
 /// How the platform should behave when no cached credential is
 /// available.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum SignInMode {
     /// Present the account chooser sheet (Credential Manager on
@@ -45,7 +45,7 @@ pub enum SignInMode {
 ///
 /// Passed as `init` when acquiring a `SignInClient` — the native
 /// backend hangs on to the config for the lifetime of the instance.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SignInConfig {
     /// Google Cloud Console **Web** OAuth client id. Used verbatim as
@@ -73,7 +73,7 @@ pub struct SignInConfig {
 /// token material — obtain the ergonomic `OwnedSignInAccount` via
 /// `sign_in_owned` / `silent_sign_in_owned` to have it dropped
 /// deterministically.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SignInAccount {
     /// Stable Google user id (`sub` claim of the id token).
@@ -98,7 +98,7 @@ pub struct SignInAccount {
 }
 
 /// Domain-level errors surfaced by every `SignIn` method.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SignInError {
     /// User dismissed the account chooser or denied consent.

@@ -39,7 +39,7 @@ fn sample_formats() -> Formats {
 
 fn publish<T>(rt: &std::sync::Arc<Runtime>, channel: &str, value: &T)
 where
-    T: bincode::Encode,
+    T: codec::Encode,
 {
     let bytes = codec::encode(value).expect("encode");
     rt.publish_early_latest(channel, bytes);

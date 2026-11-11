@@ -19,7 +19,7 @@ pub const DEEPLINKS_CHANNEL: &str = "istmo.deeplinks";
 /// Default number of pre-subscriber links retained by the queue.
 pub const DEFAULT_DEEPLINKS_CAPACITY: usize = 16;
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepLink {
     pub uri: String,

@@ -16,7 +16,7 @@ use istmo_macros::{message, plugin};
 
 pub const SERVICE_CONTROL_PLUGIN_ID: &str = "istmo.service_control";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationSpec {
     pub channel_id: String,
@@ -34,11 +34,11 @@ pub struct NotificationSpec {
     pub foreground_service_type: Option<u32>,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WakelockToken(pub u64);
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceControlError {
     UnknownService(String),
@@ -272,7 +272,7 @@ async fn call_unit<T>(
     args: &T,
 ) -> Result<(), IstmoError>
 where
-    T: bincode::Encode + Sync,
+    T: codec::Encode + Sync,
 {
     let payload = codec::encode(args)?;
     let handle = runtime.call(SERVICE_CONTROL_PLUGIN_ID, None, method, payload)?;

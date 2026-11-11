@@ -40,7 +40,7 @@ pub const PEN_PLUGIN_ID: &str = "istmo.pen";
 /// backend maps it to a specific `View` / `UIView` / `NSWindow` / `HWND`
 /// / `wl_surface` at registration time. Two [`PenClient`]s created with
 /// different ids receive disjoint event streams.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PenConfig {
     /// Opaque per-window identifier. Convention: monotonic small
@@ -60,7 +60,7 @@ impl PenConfig {
 /// Backends distinguish primary tool tip from eraser / secondary tools
 /// where the platform reports it; consumers filter by `tool_id` on
 /// [`PenSample`] to route strokes appropriately.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PenToolKind {
     /// Primary tip — the default drawing surface of a stylus.
@@ -80,7 +80,7 @@ pub enum PenToolKind {
 /// [`PenCapabilities`]. This keeps the wire schema flat and cheap to
 /// decode; consumers that care about signal presence check
 /// capabilities once at attach time.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PenSample {
     /// X position in logical (points / dp) coordinates relative to the
@@ -140,7 +140,7 @@ pub struct PenSample {
 /// the current codegen (`istmo-build::kotlin_types`) models
 /// single-payload variants only — multi-tuple variants would truncate
 /// on the Kotlin / Swift side.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PenMove {
     /// Live sample this move event reports.
@@ -156,7 +156,7 @@ pub struct PenMove {
 }
 
 /// Extra payload for [`PenEvent::ButtonChanged`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PenButtonChange {
     /// Sample observed at the button transition.
@@ -167,7 +167,7 @@ pub struct PenButtonChange {
 }
 
 /// A stylus shortcut gesture.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PenGestureKind {
     /// Apple Pencil 2 / Pro double tap; the primary barrel button
@@ -179,14 +179,14 @@ pub enum PenGestureKind {
 
 /// Payload of [`PenEvent::Gesture`]. A struct so the variant keeps the
 /// single-payload shape the Kotlin / Swift codegen models.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PenGesture {
     pub kind: PenGestureKind,
 }
 
 /// A contact-phase event fired while the tool is touching the surface.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub enum PenEvent {
     /// Pen made contact with the surface.
@@ -210,7 +210,7 @@ pub enum PenEvent {
 /// touching the surface. Only surfaces on platforms with proximity
 /// sensing (iPadOS 12.9"+ with Apple Pencil, Android `AXIS_DISTANCE`,
 /// Windows `WM_POINTERENTER` / `HOVER` / `LEAVE`).
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub enum PenHoverEvent {
     /// Tool entered proximity of the surface.
@@ -228,7 +228,7 @@ pub enum PenHoverEvent {
 /// etc.). Fields that the sample carries as zero but which the
 /// capability flag reports `true` are still meaningful — a tool at rest
 /// legitimately reports zero pressure.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PenCapabilities {
     pub pressure: bool,
@@ -256,7 +256,7 @@ pub struct PenCapabilities {
 }
 
 /// Domain-level errors returned by [`Pen`] methods.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PenError {
     /// No native window has been registered for the [`PenConfig::window_id`]

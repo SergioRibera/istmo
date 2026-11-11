@@ -19,7 +19,7 @@ pub type CallResult = Result<Vec<u8>, Vec<u8>>;
 /// One decoded frame off a live stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamMessage {
-    /// A live event carrying a bincode-encoded item.
+    /// A live event carrying a wire-encoded item.
     Event(Vec<u8>),
     /// Stream terminated.
     End(StreamEndReason),

@@ -164,7 +164,7 @@ fn cancel_by_tag_and_unique_name_reach_the_host_in_order() {
 }
 
 #[test]
-fn task_request_round_trips_through_bincode() {
+fn task_request_round_trips_through_the_wire() {
     let request = sample_request("myapp.backup", "nightly");
     let bytes = istmo_core::codec::encode(&request).unwrap();
     let (decoded, _) = istmo_core::codec::decode::<TaskRequest>(&bytes).unwrap();

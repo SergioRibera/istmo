@@ -12,7 +12,7 @@ Android app when you want a plugin trait to live in a `:remote` process.
 
 ## Rust-side primitives (in-tree, tested)
 
-- `Envelope::to_wire_bytes()` — bincode-encode an envelope for
+- `Envelope::to_wire_bytes()` — wire-encode an envelope for
   transport.
 - `Envelope::from_wire_bytes(bytes)` — decode + verify
   `PROTOCOL_VERSION`.

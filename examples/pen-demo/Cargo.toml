@@ -24,7 +24,6 @@ path = "src/main.rs"
 istmo = { path = "../..", default-features = false, features = ["game-activity"] }
 istmo-core = { workspace = true }
 istmo-pen = { workspace = true, features = ["libinput_fallback"] }
-bincode = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
 log = "0.4"

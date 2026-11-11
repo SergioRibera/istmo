@@ -17,7 +17,7 @@ use istmo_macros::message;
 pub const CAPABILITIES_PLUGIN_ID: &str = "istmo.capabilities";
 pub const CAPABILITIES_CHANNEL: &str = "istmo.capabilities";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Capabilities {

@@ -22,7 +22,7 @@ use istmo_macros::message;
 
 pub const SAFE_AREA_CHANNEL: &str = "istmo.safe_area";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EdgeInsets {
     pub top: f32,
@@ -60,7 +60,7 @@ impl EdgeInsets {
     }
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SafeAreaInsets {
     pub system_bars: EdgeInsets,

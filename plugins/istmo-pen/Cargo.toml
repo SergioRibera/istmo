@@ -26,7 +26,6 @@ libinput_fallback = ["dep:input", "dep:libc"]
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
-bincode = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
 istmo-build = { workspace = true, optional = true }

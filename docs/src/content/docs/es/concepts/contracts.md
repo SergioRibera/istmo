@@ -39,7 +39,7 @@ el capó, `emit()`:
 3. Parsea `src/lib.rs` con `syn`, encuentra `trait Foo`, y construye
    un `Contract` desde sus métodos y cualquier item hermano
    `#[istmo::message]`.
-4. Emite el contrato como payload hex-encoded y `bincode`-serialized
+4. Emite el contrato como payload hex-encoded y wincode-serialized
    vía `cargo:CONTRACT=<hex>`.
 
 Cargo lo forwardea a cada crate downstream como

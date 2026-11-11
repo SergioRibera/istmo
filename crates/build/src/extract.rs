@@ -129,7 +129,7 @@ fn parse_plugin_attr(attr: &Attribute) -> Result<PluginAttrArgs, ExtractError> {
                 let ty = expect_type(&pair.value)?;
                 init = Some(type_to_ref(&ty)?);
             }
-            "crate" | "bincode" => {}
+            "crate" | "wincode" => {}
             _ => {}
         }
     }

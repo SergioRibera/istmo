@@ -207,7 +207,7 @@ fn runtime_notify_without_local_host_emits_outbound_notify_frame() {
 }
 
 #[test]
-fn inject_wire_envelope_bridges_bincoded_bytes_into_dispatch() {
+fn inject_wire_envelope_bridges_wire_bytes_into_dispatch() {
     let init = Runtime::mock();
     let rt = init.runtime;
     let outbound = init.outbound;

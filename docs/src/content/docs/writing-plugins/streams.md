@@ -100,7 +100,7 @@ while let Some(fix) = updates.recv_async().await.ok() {
 }
 ```
 
-`updates` here is a `TypedStream<LocationFix>` wrapping a bincode
+`updates` here is a `TypedStream<LocationFix>` wrapping a wire
 decoder. It implements `Stream<Item = LocationFix>`, so any executor
 that speaks `futures::Stream` can drive it.
 

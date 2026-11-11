@@ -95,9 +95,9 @@ impl CancelToken {
 /// [`Frame::Event`](crate::protocol::Frame::Event) frames.
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    /// Unary success. Bytes are a bincode-encoded return value.
+    /// Unary success. Bytes are a wire-encoded return value.
     Ok(Vec<u8>),
-    /// Unary domain failure. Bytes are a bincode-encoded plugin-declared
+    /// Unary domain failure. Bytes are a wire-encoded plugin-declared
     /// error type.
     DomainError(Vec<u8>),
     /// Stream successfully opened. Each item read from the receiver is
@@ -193,7 +193,7 @@ pub trait Dispatch: Send + Sync + 'static {
     /// - `instance_id` — `Some` for stateful plugins, `None` for
     ///   stateless ones.
     /// - `method` — method name declared on the plugin trait.
-    /// - `payload` — bincode-encoded arguments tuple.
+    /// - `payload` — wire-encoded arguments tuple.
     /// - `cancel` — cooperative cancellation signal; fires when the
     ///   caller either drops its handle or sends
     ///   [`Frame::Cancel`](crate::protocol::Frame::Cancel).
@@ -211,7 +211,7 @@ pub trait Dispatch: Send + Sync + 'static {
     /// Default returns [`DispatchError::UnknownMethod`] — stateless
     /// dispatchers never see this call. Stateful hosts override to
     /// decode `config_payload`, spin up per-instance state, and return
-    /// the freshly-allocated [`InstanceId`] as bincode-encoded bytes in
+    /// the freshly-allocated [`InstanceId`] as wire-encoded bytes in
     /// [`Outcome::Ok`]. The runtime picks the id out of the response
     /// and wires it into the routing tables so subsequent
     /// [`dispatch`](Self::dispatch) calls carry `Some(instance_id)`.

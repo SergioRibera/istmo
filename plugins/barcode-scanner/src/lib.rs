@@ -34,7 +34,7 @@ use istmo_macros::{message, plugin};
 pub const BARCODE_SCANNER_PLUGIN_ID: &str = "istmo.barcode_scanner";
 
 /// A symbology the scanner may look for.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BarcodeFormat {
     Qr,
@@ -46,7 +46,7 @@ pub enum BarcodeFormat {
 }
 
 /// What to scan for.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct ScanConfig {
     /// Hint shown over the camera where the backend allows one.
@@ -67,7 +67,7 @@ impl ScanConfig {
 }
 
 /// A code the scanner read.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ScannedCode {
     /// Decoded text (UTF-8).
@@ -76,7 +76,7 @@ pub struct ScannedCode {
 }
 
 /// Why a scan could not run.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ScanError {
     /// No camera, or no scanner service on this device.
@@ -105,11 +105,10 @@ impl From<istmo_core::IstmoError> for ScanError {
     fn from(err: istmo_core::IstmoError) -> Self {
         match err {
             istmo_core::IstmoError::PluginError { bytes } => {
-                bincode::decode_from_slice::<Self, _>(&bytes, bincode::config::standard())
-                    .map_or_else(
-                        |e| Self::Backend(format!("decode plugin error payload: {e}")),
-                        |(err, _)| err,
-                    )
+                istmo_core::codec::decode::<Self>(&bytes).map_or_else(
+                    |e| Self::Backend(format!("decode plugin error payload: {e}")),
+                    |(err, _)| err,
+                )
             }
             other => Self::Backend(other.to_string()),
         }

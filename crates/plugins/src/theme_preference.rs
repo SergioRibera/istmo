@@ -17,7 +17,7 @@ use istmo_macros::message;
 pub const THEME_PREFERENCE_PLUGIN_ID: &str = "istmo.theme_preference";
 pub const THEME_PREFERENCE_CHANNEL: &str = "istmo.theme_preference";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ThemePreference {
@@ -46,7 +46,7 @@ pub struct ThemePreference {
     pub screen_reader_active: bool,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ColorScheme {
     Light,
@@ -58,7 +58,7 @@ pub enum ColorScheme {
     Auto,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Color {
     pub r: u8,

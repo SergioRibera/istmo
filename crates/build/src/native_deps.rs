@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use bincode::{Decode, Encode};
+use wincode::{SchemaRead, SchemaWrite};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub enum GradleScope {
     Implementation,
 
@@ -26,7 +26,7 @@ impl GradleScope {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub struct GradleCoord {
     pub group: String,
     pub artifact: String,
@@ -61,13 +61,13 @@ impl GradleCoord {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub struct GradleKey {
     pub group: String,
     pub artifact: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub struct GradleDep {
     pub scope: GradleScope,
     pub coord: GradleCoord,
@@ -80,7 +80,7 @@ impl GradleDep {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub struct SwiftPackageDep {
     pub url: String,
 
@@ -89,14 +89,14 @@ pub struct SwiftPackageDep {
     pub from_version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct VersionConflict {
     pub key: GradleKey,
     pub picked: String,
     pub discarded: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct NativeDeps {
     gradle: BTreeMap<(GradleScope, GradleKey), String>,
     swift: BTreeMap<(String, String), String>,

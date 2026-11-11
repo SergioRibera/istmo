@@ -10,7 +10,7 @@ use std::sync::Arc;
 use istmo_core::{CancelToken, Runtime};
 use istmo_macros::message;
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NetworkKind {
     #[default]
@@ -23,7 +23,7 @@ pub enum NetworkKind {
     Metered,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Constraints {
@@ -34,7 +34,7 @@ pub struct Constraints {
     pub requires_storage_not_low: bool,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskOutcome {
     Success,

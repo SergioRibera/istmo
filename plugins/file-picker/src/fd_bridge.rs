@@ -258,11 +258,8 @@ fn map_err(res: Result<RawFileHandle, IstmoError>) -> Result<RawFileHandle, File
     match res {
         Ok(raw) => Ok(raw),
         Err(IstmoError::PluginError { bytes }) => {
-            let (err, _) = bincode::decode_from_slice::<FilePickerError, _>(
-                &bytes,
-                bincode::config::standard(),
-            )
-            .map_err(|e| FilePickerError::Io(format!("decode plugin error payload: {e}")))?;
+            let (err, _) = istmo_core::codec::decode::<FilePickerError>(&bytes)
+                .map_err(|e| FilePickerError::Io(format!("decode plugin error payload: {e}")))?;
             Err(err)
         }
         Err(other) => Err(FilePickerError::Backend(other.to_string())),

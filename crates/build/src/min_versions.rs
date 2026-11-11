@@ -30,7 +30,7 @@ use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 
-use bincode::{Decode, Encode};
+use wincode::{SchemaRead, SchemaWrite};
 
 use crate::manifest::Manifest;
 
@@ -38,7 +38,7 @@ use crate::manifest::Manifest;
 ///
 /// Missing trailing components compare as zero, so `"15"` equals
 /// `"15.0.0"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub struct OsVersion {
     pub major: u32,
     pub minor: u32,
@@ -138,7 +138,7 @@ impl MinVersionPlatform {
 }
 
 /// Parsed `[min_versions]` table. Absent keys mean "no constraint".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, SchemaWrite, SchemaRead)]
 pub struct MinVersions {
     /// Android API level.
     pub android: Option<u32>,

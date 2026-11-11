@@ -11,8 +11,8 @@
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use bincode::{Decode, Encode};
 use globset::{Glob, GlobMatcher};
+use wincode::{SchemaRead, SchemaWrite};
 
 use crate::manifest::AssetEntry;
 
@@ -26,17 +26,27 @@ const GLOB_META: &[char] = &['*', '?', '[', ']'];
 /// `assets\`) segment when present, so authors can keep an `assets/`
 /// prefix in `istmo.toml` without needing to repeat it in every
 /// [`read`](../../../istmo_core/assets/fn.read.html) call.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub struct ResolvedAsset {
     pub bundle_path: String,
-    pub source_abs: PathBuf,
+    /// Absolute source path, kept as UTF-8 so it crosses the build-script
+    /// handover.
+    pub source_abs: String,
+}
+
+impl ResolvedAsset {
+    /// [`Self::source_abs`] as a path.
+    #[must_use]
+    pub fn source(&self) -> &Path {
+        Path::new(&self.source_abs)
+    }
 }
 
 /// Bundle payload emitted per plugin crate and collected app-side.
 ///
 /// Each plugin (or plugin-shaped crate) advertises a single payload;
 /// the app walks every `DEP_*_ISTMO_ASSETS` env var to collect them.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, SchemaWrite, SchemaRead)]
 pub struct AssetsPayload {
     /// Every plugin id in the emitting crate — an asset lookup issued
     /// under any of these ids resolves to entries in [`resolved`].
@@ -63,6 +73,9 @@ pub enum AssetResolveError {
     OutsideRoot {
         path: PathBuf,
     },
+    NonUtf8 {
+        path: PathBuf,
+    },
 }
 
 impl std::fmt::Display for AssetResolveError {
@@ -79,6 +92,9 @@ impl std::fmt::Display for AssetResolveError {
                 "asset `{}` resolves outside the crate root",
                 path.display()
             ),
+            Self::NonUtf8 { path } => {
+                write!(f, "asset path `{}` is not UTF-8", path.display())
+            }
         }
     }
 }
@@ -139,6 +155,7 @@ fn resolve_one(
     } else {
         let source_abs = canonical_or_absolute(&candidate)?;
         let bundle_path = bundle_key(&source_abs, root)?;
+        let source_abs = utf8(source_abs)?;
         out.push(ResolvedAsset {
             bundle_path,
             source_abs,
@@ -171,6 +188,7 @@ fn walk_dir(
         } else if file_type.is_file() {
             let source_abs = canonical_or_absolute(&path)?;
             let bundle_path = bundle_key(&source_abs, root)?;
+            let source_abs = utf8(source_abs)?;
             out.push(ResolvedAsset {
                 bundle_path,
                 source_abs,
@@ -234,6 +252,7 @@ fn walk_glob(
         if matcher.is_match(rel) {
             let source_abs = canonical_or_absolute(&path)?;
             let bundle_path = bundle_key(&source_abs, root)?;
+            let source_abs = utf8(source_abs)?;
             out.push(ResolvedAsset {
                 bundle_path,
                 source_abs,
@@ -254,6 +273,12 @@ fn join_root(root: &Path, raw: &str) -> PathBuf {
     } else {
         root.join(candidate)
     }
+}
+
+fn utf8(path: PathBuf) -> Result<String, AssetResolveError> {
+    path.into_os_string()
+        .into_string()
+        .map_err(|raw| AssetResolveError::NonUtf8 { path: raw.into() })
 }
 
 fn canonical_or_absolute(path: &Path) -> Result<PathBuf, AssetResolveError> {

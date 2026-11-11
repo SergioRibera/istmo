@@ -21,7 +21,6 @@ istmo = { path = "../.." }
 istmo-core = { workspace = true }
 istmo-live-activity = { workspace = true }
 istmo-macros = { workspace = true }
-bincode = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
 log = "0.4"

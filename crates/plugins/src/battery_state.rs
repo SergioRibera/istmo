@@ -23,7 +23,7 @@ use istmo_macros::message;
 pub const BATTERY_STATE_PLUGIN_ID: &str = "istmo.battery_state";
 pub const BATTERY_STATE_CHANNEL: &str = "istmo.battery_state";
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct BatteryState {
     /// Fractional charge `0.0..=1.0`. `None` on devices without a
@@ -41,7 +41,7 @@ pub struct BatteryState {
     pub thermal_state: ThermalState,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ChargingState {
     #[default]
@@ -52,7 +52,7 @@ pub enum ChargingState {
     Full,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PowerSource {
     #[default]
@@ -63,7 +63,7 @@ pub enum PowerSource {
     Wireless,
 }
 
-#[message(bincode = "::bincode")]
+#[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ThermalState {
     #[default]

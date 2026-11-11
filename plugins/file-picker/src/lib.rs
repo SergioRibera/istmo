@@ -91,7 +91,7 @@ pub enum FileRef {}
 ///   `extensions`
 ///
 /// An empty [`FileFilter`] means "any file".
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct FileFilter {
     /// MIME types such as `"image/*"` or `"application/pdf"`. Used by
@@ -107,7 +107,7 @@ pub struct FileFilter {
 
 /// Configuration for [`FilePicker::pick_file`] and
 /// [`FilePicker::pick_files`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct PickConfig {
     /// Optional title shown in the picker chrome. Ignored by backends
@@ -125,7 +125,7 @@ pub struct PickConfig {
 }
 
 /// Configuration for [`FilePicker::save_file`].
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct SaveConfig {
     pub dialog_title: Option<String>,
@@ -149,7 +149,7 @@ pub struct SaveConfig {
 /// [`PickedFile::into_owned`] or annotate the client method with
 /// `#[owned]` to receive an [`OwnedPickedFile`] whose handle drops
 /// deterministically.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PickedFile {
     /// Human-visible filename as reported by the native backend.
@@ -176,7 +176,7 @@ pub struct PickedFile {
 /// which close on drop).
 ///
 /// [`raw`]: RawFileHandle::raw
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RawFileHandle {
     /// The raw fd (unix) or `HANDLE`-as-`i64` (windows).
@@ -184,7 +184,7 @@ pub struct RawFileHandle {
 }
 
 /// Domain-level errors surfaced by every [`FilePicker`] method.
-#[message(bincode = "::bincode", crate = "::istmo_core")]
+#[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FilePickerError {
     /// User dismissed the picker without selecting anything. Returned
