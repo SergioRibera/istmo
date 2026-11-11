@@ -243,6 +243,7 @@ class IstmoSystemInfoObserver(private val context: Context) {
  */
 class IstmoThemePreferenceObserver(private val context: Context) {
     private var listener: AccessibilityManager.AccessibilityStateChangeListener? = null
+    private var componentCallbacks: android.content.ComponentCallbacks? = null
     private val am =
         context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
 
@@ -251,12 +252,23 @@ class IstmoThemePreferenceObserver(private val context: Context) {
         val l = AccessibilityManager.AccessibilityStateChangeListener { publish() }
         am.addAccessibilityStateChangeListener(l)
         listener = l
+        // Dark-mode toggles, font scale and bold-text changes travel
+        // through `Configuration` updates, not the accessibility
+        // listener.
+        val cb = object : android.content.ComponentCallbacks {
+            override fun onConfigurationChanged(newConfig: Configuration) = publish()
+            override fun onLowMemory() {}
+        }
+        context.registerComponentCallbacks(cb)
+        componentCallbacks = cb
         publish()
     }
 
     fun unregister() {
         listener?.let { am.removeAccessibilityStateChangeListener(it) }
         listener = null
+        componentCallbacks?.let { context.unregisterComponentCallbacks(it) }
+        componentCallbacks = null
     }
 
     fun publish() {
