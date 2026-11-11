@@ -80,18 +80,39 @@ mod linux {
     const SYSFS_ROOT: &str = "/sys/class/power_supply";
 
     pub(super) fn sample() -> Option<BatteryState> {
-        let (battery, ac) = scan_devices();
-        let battery_path = battery?;
-        let capacity = read_u64(&battery_path.join("capacity"))
-            .and_then(|v| u8::try_from(v.min(100)).ok())
-            .map(|v| f32::from(v) / 100.0);
-        let status = read_string(&battery_path.join("status")).unwrap_or_default();
-        let charging = match status.trim() {
-            "Charging" => ChargingState::Charging,
-            "Discharging" => ChargingState::Discharging,
-            "Not charging" => ChargingState::NotCharging,
-            "Full" => ChargingState::Full,
-            _ => ChargingState::Unknown,
+        let (batteries, ac) = scan_devices();
+        if batteries.is_empty() {
+            return None;
+        }
+        // Dual-battery laptops (e.g. ThinkPad BAT0/BAT1) expose one
+        // sysfs entry per cell. Average the capacities (energy_now
+        // isn't universally present) and prefer a "Charging" status
+        // when any cell is charging.
+        let caps: Vec<u8> = batteries
+            .iter()
+            .filter_map(|p| read_u64(&p.join("capacity")))
+            .filter_map(|v| u8::try_from(v.min(100)).ok())
+            .collect();
+        let capacity = if caps.is_empty() {
+            None
+        } else {
+            let sum: u32 = caps.iter().map(|v| u32::from(*v)).sum();
+            Some(sum as f32 / caps.len() as f32 / 100.0)
+        };
+        let statuses: Vec<String> = batteries
+            .iter()
+            .filter_map(|p| read_string(&p.join("status")))
+            .collect();
+        let charging = if statuses.iter().any(|s| s.trim() == "Charging") {
+            ChargingState::Charging
+        } else if statuses.iter().all(|s| s.trim() == "Full") && !statuses.is_empty() {
+            ChargingState::Full
+        } else if statuses.iter().any(|s| s.trim() == "Discharging") {
+            ChargingState::Discharging
+        } else if statuses.iter().any(|s| s.trim() == "Not charging") {
+            ChargingState::NotCharging
+        } else {
+            ChargingState::Unknown
         };
         let online = ac
             .as_ref()
@@ -114,24 +135,27 @@ mod linux {
         })
     }
 
-    fn scan_devices() -> (Option<PathBuf>, Option<PathBuf>) {
-        let mut battery = None;
-        let mut ac = None;
+    fn scan_devices() -> (Vec<PathBuf>, Option<PathBuf>) {
+        let mut batteries: Vec<PathBuf> = Vec::new();
+        let mut ac: Option<PathBuf> = None;
         let Ok(entries) = fs::read_dir(SYSFS_ROOT) else {
-            return (None, None);
+            return (batteries, ac);
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
+        // Collect + sort for stable iteration order across kernel
+        // versions (`read_dir` is filesystem-order on Linux).
+        let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for path in paths {
             let kind = read_string(&path.join("type")).unwrap_or_default();
             match kind.trim() {
-                "Battery" if battery.is_none() => battery = Some(path),
+                "Battery" => batteries.push(path),
                 "Mains" | "USB" | "USB_PD" | "USB_C" | "Wireless" if ac.is_none() => {
                     ac = Some(path);
                 }
                 _ => {}
             }
         }
-        (battery, ac)
+        (batteries, ac)
     }
 
     fn read_string(path: &std::path::Path) -> Option<String> {

@@ -115,7 +115,21 @@ mod linux {
     }
 
     fn has_fingerprint_device() -> bool {
-        // `fprintd` typical install path.
-        Path::new("/usr/libexec/fprintd").exists() || Path::new("/usr/lib/fprintd").exists()
+        // Hardware probe first — more reliable than daemon-install
+        // path checks (distros vary: Fedora puts `fprintd` under
+        // `/usr/libexec`, Arch under `/usr/lib`, NixOS under
+        // `/nix/store/...`).
+        if let Ok(entries) = fs::read_dir("/sys/class") {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy().to_ascii_lowercase();
+                if name.contains("fingerprint") || name.contains("fprint") {
+                    return true;
+                }
+            }
+        }
+        Path::new("/usr/libexec/fprintd").exists()
+            || Path::new("/usr/lib/fprintd").exists()
+            || Path::new("/run/current-system/sw/libexec/fprintd").exists()
     }
 }
