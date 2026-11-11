@@ -42,6 +42,7 @@ pub const SYSTEM_INFO_PLUGIN_ID: &str = "istmo.system_info";
 pub const SYSTEM_INFO_LOCALE_CHANNEL: &str = "istmo.system_info.locale";
 pub const SYSTEM_INFO_TIMEZONE_CHANNEL: &str = "istmo.system_info.timezone";
 pub const SYSTEM_INFO_FORMATS_CHANNEL: &str = "istmo.system_info.formats";
+pub const SYSTEM_INFO_UPTIME_CHANNEL: &str = "istmo.system_info.uptime";
 
 #[message(bincode = "::bincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -133,6 +134,7 @@ pub struct SystemInfo {
     locale_slot: Arc<LatestValueSlot>,
     timezone_slot: Arc<LatestValueSlot>,
     formats_slot: Arc<LatestValueSlot>,
+    uptime_slot: Arc<LatestValueSlot>,
 }
 
 impl Plugin for SystemInfo {
@@ -152,6 +154,7 @@ impl SystemInfo {
             locale_slot: early.latest_slot(SYSTEM_INFO_LOCALE_CHANNEL),
             timezone_slot: early.latest_slot(SYSTEM_INFO_TIMEZONE_CHANNEL),
             formats_slot: early.latest_slot(SYSTEM_INFO_FORMATS_CHANNEL),
+            uptime_slot: early.latest_slot(SYSTEM_INFO_UPTIME_CHANNEL),
         })
     }
 
@@ -168,21 +171,21 @@ impl SystemInfo {
     }
 
     #[must_use]
-    pub fn locale(&self) -> LocaleStream {
+    pub fn locale_updates(&self) -> LocaleStream {
         LocaleStream {
             rx: self.locale_slot.subscribe(),
         }
     }
 
     #[must_use]
-    pub fn timezone(&self) -> TimeZoneStream {
+    pub fn timezone_updates(&self) -> TimeZoneStream {
         TimeZoneStream {
             rx: self.timezone_slot.subscribe(),
         }
     }
 
     #[must_use]
-    pub fn formats(&self) -> FormatsStream {
+    pub fn formats_updates(&self) -> FormatsStream {
         FormatsStream {
             rx: self.formats_slot.subscribe(),
         }
@@ -196,93 +199,18 @@ impl SystemInfo {
             .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
     }
 
-    /// Milliseconds since the device booted, best-effort pure Rust.
-    ///
-    /// - Linux reads `/proc/uptime`.
-    /// - Apple targets call `NSProcessInfo.processInfo.systemUptime`
-    ///   through `objc2`.
-    /// - Windows / WASM / BSDs return `None` until a native bridge
-    ///   publishes the value (same shape as locale / tz publication).
-    ///
-    /// Monotonic within a boot; `None` is a signal to fall back to a
-    /// platform-provided value published through an early-event
-    /// channel, not an error.
-    #[must_use]
-    pub fn uptime_millis(&self) -> Option<u64> {
-        clock::uptime_millis()
+    /// Milliseconds since the device booted. Returns `None` when no
+    /// publisher has supplied a value — platforms wire this via
+    /// [`UptimePublisher`](publisher::UptimePublisher) on desktop or a
+    /// native bridge on mobile.
+    pub fn uptime_millis(&self) -> Result<Option<u64>, IstmoError> {
+        self.uptime_slot.peek().map_or(Ok(None), |b| {
+            let (v, _) = codec::decode::<u64>(&b)?;
+            Ok(Some(v))
+        })
     }
 }
 
-mod clock {
-    #[must_use]
-    pub(super) fn uptime_millis() -> Option<u64> {
-        #[cfg(target_os = "linux")]
-        {
-            linux()
-        }
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        {
-            apple()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            windows()
-        }
-        #[cfg(not(any(
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "windows"
-        )))]
-        {
-            None
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    #[allow(unsafe_code)]
-    fn windows() -> Option<u64> {
-        use windows_sys::Win32::System::SystemInformation::GetTickCount64;
-        // SAFETY: `GetTickCount64` is a non-blocking accessor returning
-        // milliseconds since boot, no pointer parameters.
-        Some(unsafe { GetTickCount64() })
-    }
-
-    #[cfg(target_os = "linux")]
-    fn linux() -> Option<u64> {
-        let raw = std::fs::read_to_string("/proc/uptime").ok()?;
-        let seconds: f64 = raw.split_whitespace().next()?.parse().ok()?;
-        if !seconds.is_finite() || seconds < 0.0 {
-            return None;
-        }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        Some((seconds * 1000.0) as u64)
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    #[allow(unsafe_code)]
-    fn apple() -> Option<u64> {
-        use objc2::msg_send;
-        use objc2::runtime::{AnyClass, AnyObject};
-
-        // SAFETY: `NSProcessInfo.processInfo` returns a Foundation
-        // singleton retained for the process lifetime; `systemUptime`
-        // is a non-throwing accessor returning a `TimeInterval` (f64).
-        unsafe {
-            let cls = AnyClass::get(c"NSProcessInfo")?;
-            let obj: *mut AnyObject = msg_send![cls, processInfo];
-            if obj.is_null() {
-                return None;
-            }
-            let seconds: f64 = msg_send![obj, systemUptime];
-            if !seconds.is_finite() || seconds < 0.0 {
-                return None;
-            }
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            Some((seconds * 1000.0) as u64)
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct LocaleStream {

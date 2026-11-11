@@ -15,6 +15,7 @@ import java.io.ByteArrayOutputStream
 private const val SYSTEM_INFO_LOCALE_CHANNEL = "istmo.system_info.locale"
 private const val SYSTEM_INFO_TIMEZONE_CHANNEL = "istmo.system_info.timezone"
 private const val SYSTEM_INFO_FORMATS_CHANNEL = "istmo.system_info.formats"
+private const val SYSTEM_INFO_UPTIME_CHANNEL = "istmo.system_info.uptime"
 private const val DEVICE_INFO_CHANNEL = "istmo.device_info"
 private const val THEME_PREFERENCE_CHANNEL = "istmo.theme_preference"
 private const val NETWORK_STATE_CHANNEL = "istmo.network_state"
@@ -202,6 +203,13 @@ fun IstmoRuntime.publishFormats(
     Bincode.writeString(out, groupSeparator)
     writeCalendar(out, calendar)
     nativeSubmitEarlyLatest(SYSTEM_INFO_FORMATS_CHANNEL, out.toByteArray())
+}
+
+fun IstmoRuntime.publishUptimeMillis(ms: Long) {
+    require(ms >= 0) { "uptime millis must be non-negative" }
+    val out = ByteArrayOutputStream()
+    Bincode.writeVarintU64(out, ms)
+    nativeSubmitEarlyLatest(SYSTEM_INFO_UPTIME_CHANNEL, out.toByteArray())
 }
 
 fun IstmoRuntime.publishDeviceInfo(

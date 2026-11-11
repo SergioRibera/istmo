@@ -21,7 +21,7 @@ use istmo_core::{IstmoError, Runtime, codec};
 
 use super::{
     Formats, Locale, SYSTEM_INFO_FORMATS_CHANNEL, SYSTEM_INFO_LOCALE_CHANNEL,
-    SYSTEM_INFO_PLUGIN_ID, SYSTEM_INFO_TIMEZONE_CHANNEL, TimeZone,
+    SYSTEM_INFO_PLUGIN_ID, SYSTEM_INFO_TIMEZONE_CHANNEL, SYSTEM_INFO_UPTIME_CHANNEL, TimeZone,
 };
 
 #[derive(Debug)]
@@ -82,6 +82,82 @@ impl SystemInfoPublisher {
                 Err(err) => tracing::warn!(target = "istmo.system_info", ?err, "formats encode"),
             }
         }
+
+        if let Some(ms) = uptime::uptime_millis() {
+            match codec::encode(&ms) {
+                Ok(bytes) => {
+                    runtime.publish_early_latest(SYSTEM_INFO_UPTIME_CHANNEL, bytes);
+                }
+                Err(err) => tracing::warn!(target = "istmo.system_info", ?err, "uptime encode"),
+            }
+        }
+    }
+}
+
+mod uptime {
+    #[must_use]
+    pub(super) fn uptime_millis() -> Option<u64> {
+        #[cfg(target_os = "linux")]
+        {
+            linux()
+        }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            apple()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            windows()
+        }
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows"
+        )))]
+        {
+            None
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux() -> Option<u64> {
+        let raw = std::fs::read_to_string("/proc/uptime").ok()?;
+        let seconds: f64 = raw.split_whitespace().next()?.parse().ok()?;
+        if !seconds.is_finite() || seconds < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some((seconds * 1000.0) as u64)
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[allow(unsafe_code)]
+    fn apple() -> Option<u64> {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject};
+        // SAFETY: `NSProcessInfo.processInfo` is a Foundation singleton.
+        unsafe {
+            let cls = AnyClass::get(c"NSProcessInfo")?;
+            let obj: *mut AnyObject = msg_send![cls, processInfo];
+            if obj.is_null() {
+                return None;
+            }
+            let seconds: f64 = msg_send![obj, systemUptime];
+            if !seconds.is_finite() || seconds < 0.0 {
+                return None;
+            }
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            Some((seconds * 1000.0) as u64)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[allow(unsafe_code)]
+    fn windows() -> Option<u64> {
+        use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+        // SAFETY: no pointer parameters.
+        Some(unsafe { GetTickCount64() })
     }
 }
 
