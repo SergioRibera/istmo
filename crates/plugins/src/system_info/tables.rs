@@ -8,8 +8,11 @@
 
 use super::{LayoutDirection, MeasurementSystem, TemperatureUnit};
 
+// Modern Hausa defaults to Boko (Latin, LTR); only the obsolescent
+// Ajami variant is RTL and CLDR's `likelySubtags` resolves bare `ha`
+// to Latn. Omit `ha` to avoid misclassifying the common case.
 const RTL_LANGUAGES: &[&str] = &[
-    "ar", "arc", "ckb", "dv", "fa", "ha", "he", "khw", "ks", "ps", "sd", "ug", "ur", "yi",
+    "ar", "arc", "ckb", "dv", "fa", "he", "khw", "ks", "ps", "sd", "ug", "ur", "yi",
 ];
 
 const US_CUSTOMARY_REGIONS: &[&str] = &["US", "LR", "MM"];

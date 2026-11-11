@@ -472,8 +472,12 @@ mod windows {
         let uses_24h = locale_string(&bcp47, LOCALE_STIMEFORMAT)
             .map(|fmt| fmt.contains('H') && !fmt.contains('h'))
             .unwrap_or(false);
+        // Windows `LOCALE_IFIRSTDAYOFWEEK` returns 0 = Monday … 6 =
+        // Sunday; ISO target is 1 = Monday … 7 = Sunday, so the
+        // mapping is a direct `+ 1`.
         let first_day_of_week = locale_integer(&bcp47, LOCALE_IFIRSTDAYOFWEEK)
-            .map(|v| u8::try_from((v + 1) % 7 + 1).unwrap_or(1))
+            .and_then(|v| u8::try_from(v + 1).ok())
+            .filter(|v| (1..=7).contains(v))
             .unwrap_or(1);
 
         let formats = Formats {
@@ -545,18 +549,20 @@ mod windows {
 
     fn timezone_info() -> (String, i32, bool, String) {
         let mut info: DYNAMIC_TIME_ZONE_INFORMATION = unsafe { std::mem::zeroed() };
-        // SAFETY: Writes DYNAMIC_TIME_ZONE_INFORMATION fields; return value
-        // tells whether we're in standard (TIME_ZONE_ID_STANDARD = 1) or
-        // daylight (TIME_ZONE_ID_DAYLIGHT = 2) time.
+        // SAFETY: Writes DYNAMIC_TIME_ZONE_INFORMATION fields; return
+        // value is TIME_ZONE_ID_UNKNOWN=0 (no DST info; `Bias` alone
+        // valid), TIME_ZONE_ID_STANDARD=1, or TIME_ZONE_ID_DAYLIGHT=2.
         let kind = unsafe { GetDynamicTimeZoneInformation(&raw mut info) };
         let is_dst = kind == 2;
-        let bias_minutes = info.Bias
-            + if is_dst {
-                info.DaylightBias
-            } else {
-                info.StandardBias
-            };
-        let offset_seconds = -(bias_minutes as i32) * 60;
+        // When `kind == 0` DST bias fields are not meaningful — use
+        // `Bias` alone. Standard = Bias + StandardBias; Daylight =
+        // Bias + DaylightBias.
+        let bias_minutes = match kind {
+            0 => i32::from(info.Bias),
+            2 => i32::from(info.Bias) + i32::from(info.DaylightBias),
+            _ => i32::from(info.Bias) + i32::from(info.StandardBias),
+        };
+        let offset_seconds = -bias_minutes * 60;
         let id = wide_to_string(&info.TimeZoneKeyName).unwrap_or_else(|| "UTC".into());
         let abbreviation = if is_dst {
             wide_to_string(&info.DaylightName).unwrap_or_default()

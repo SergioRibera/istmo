@@ -166,15 +166,20 @@ mod windows {
     use super::ColorScheme;
 
     pub(super) fn color_scheme() -> ColorScheme {
-        const PATH: &str =
-            "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
+        const PATH: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
         const VALUE: &str = "AppsUseLightTheme";
         let path_w: Vec<u16> = PATH.encode_utf16().chain(Some(0)).collect();
         let value_w: Vec<u16> = VALUE.encode_utf16().chain(Some(0)).collect();
         let mut hkey: HKEY = ptr::null_mut();
         // SAFETY: NUL-terminated UTF-16 paths; `hkey` is out-param.
         let rc = unsafe {
-            RegOpenKeyExW(HKEY_CURRENT_USER, path_w.as_ptr(), 0, KEY_READ, &raw mut hkey)
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                path_w.as_ptr(),
+                0,
+                KEY_READ,
+                &raw mut hkey,
+            )
         };
         if rc != ERROR_SUCCESS {
             return ColorScheme::Auto;

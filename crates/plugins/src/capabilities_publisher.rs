@@ -98,8 +98,7 @@ mod linux {
 
     fn has_bluetooth_device() -> bool {
         Path::new("/sys/class/bluetooth").exists()
-            && fs::read_dir("/sys/class/bluetooth")
-                .is_ok_and(|mut it| it.next().is_some())
+            && fs::read_dir("/sys/class/bluetooth").is_ok_and(|mut it| it.next().is_some())
     }
 
     fn has_microphone_device() -> bool {
@@ -117,7 +116,6 @@ mod linux {
 
     fn has_fingerprint_device() -> bool {
         // `fprintd` typical install path.
-        Path::new("/usr/libexec/fprintd").exists()
-            || Path::new("/usr/lib/fprintd").exists()
+        Path::new("/usr/libexec/fprintd").exists() || Path::new("/usr/lib/fprintd").exists()
     }
 }

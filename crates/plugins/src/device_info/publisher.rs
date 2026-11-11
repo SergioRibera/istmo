@@ -134,8 +134,9 @@ mod apple {
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
 mod windows {
+    use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
     use windows_sys::Win32::System::SystemInformation::{
-        GetVersionExW, GlobalMemoryStatusEx, MEMORYSTATUSEX, OSVERSIONINFOW,
+        GlobalMemoryStatusEx, MEMORYSTATUSEX, OSVERSIONINFOW,
     };
 
     pub(super) fn ram_total_bytes() -> Option<u64> {
@@ -151,12 +152,15 @@ mod windows {
     }
 
     pub(super) fn os_version() -> Option<String> {
+        // `GetVersionExW` lies on Windows 10/11 processes without a
+        // side-by-side compatibility manifest (returns 6.2.9200).
+        // `RtlGetVersion` from ntdll always returns the true version.
         let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
         info.dwOSVersionInfoSize = u32::try_from(std::mem::size_of::<OSVERSIONINFOW>()).ok()?;
-        // SAFETY: `GetVersionExW` is deprecated but still writes the
-        // version fields when passed a correctly-sized struct.
-        let ok = unsafe { GetVersionExW(&raw mut info) };
-        if ok == 0 {
+        // SAFETY: `RtlGetVersion` writes the version fields on success
+        // (returns 0 = STATUS_SUCCESS).
+        let status = unsafe { RtlGetVersion(&raw mut info) };
+        if status != 0 {
             return None;
         }
         Some(format!(

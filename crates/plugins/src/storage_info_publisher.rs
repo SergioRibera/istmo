@@ -1,13 +1,14 @@
 //! Pure-Rust desktop sampler for [`super::storage_info::StorageInfoClient`].
 //!
 //! Samples the free + total bytes of the volume holding the current
-//! working directory. Linux / macOS use `statvfs` via a hand-rolled
-//! `extern "C"` declaration; Windows uses `GetDiskFreeSpaceExW` via
+//! working directory. Linux / macOS use `libc::statvfs` so the struct
+//! layout is correct per platform (Darwin `fsblkcnt_t` = `uint32_t`,
+//! Linux = `u_long`); Windows uses `GetDiskFreeSpaceExW` via
 //! `windows-sys`. External volume info is left as `None` on desktop
 //! — the semantic (removable SD card / USB stick) does not have a
 //! portable equivalent and is better reported by a per-app observer.
 //!
-//! Idempotent for the current working directory: call [`publish`] on
+//! Idempotent for the current working directory: call [`tick`] on
 //! startup and on low-storage warnings or app resume.
 
 use std::sync::{Arc, Weak};
@@ -68,68 +69,29 @@ fn sample() -> Option<StorageInfo> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[allow(unsafe_code, non_camel_case_types)]
+#[allow(unsafe_code)]
 mod unix {
     use std::ffi::CString;
+    use std::os::unix::ffi::OsStringExt;
 
     use super::StorageInfo;
-
-    #[repr(C)]
-    #[derive(Default)]
-    struct Statvfs {
-        f_bsize: libc_ulong,
-        f_frsize: libc_ulong,
-        f_blocks: libc_fsblkcnt,
-        f_bfree: libc_fsblkcnt,
-        f_bavail: libc_fsblkcnt,
-        f_files: libc_fsfilcnt,
-        f_ffree: libc_fsfilcnt,
-        f_favail: libc_fsfilcnt,
-        f_fsid: libc_ulong,
-        #[cfg(target_os = "linux")]
-        f_flag: libc_ulong,
-        #[cfg(target_os = "linux")]
-        f_namemax: libc_ulong,
-        #[cfg(target_os = "linux")]
-        f_type: libc_ulong,
-        #[cfg(target_os = "linux")]
-        _spare: [libc_ulong; 5],
-        #[cfg(target_os = "macos")]
-        f_owner: u32,
-        #[cfg(target_os = "macos")]
-        f_type: u32,
-        #[cfg(target_os = "macos")]
-        f_flag: libc_ulong,
-        #[cfg(target_os = "macos")]
-        f_namemax: libc_ulong,
-    }
-
-    #[cfg(target_pointer_width = "64")]
-    type libc_ulong = u64;
-    #[cfg(target_pointer_width = "32")]
-    type libc_ulong = u32;
-    type libc_fsblkcnt = libc_ulong;
-    type libc_fsfilcnt = libc_ulong;
-
-    unsafe extern "C" {
-        fn statvfs(path: *const std::ffi::c_char, buf: *mut Statvfs) -> i32;
-    }
 
     #[allow(clippy::unnecessary_cast)]
     pub(super) fn sample() -> Option<StorageInfo> {
         let cwd = std::env::current_dir().ok()?;
-        let path = CString::new(cwd.into_os_string().into_string().ok()?).ok()?;
-        let mut info: Statvfs = Statvfs::default();
-        // SAFETY: `path` is a NUL-terminated C string; `info` is a valid
-        // `statvfs`-shaped struct for the current platform.
-        let ok = unsafe { statvfs(path.as_ptr(), &raw mut info) };
+        let path = CString::new(cwd.into_os_string().into_vec()).ok()?;
+        // SAFETY: `path` is a NUL-terminated C string; `info` is a
+        // platform-correct `libc::statvfs` struct (Darwin uses u32
+        // block counts, Linux uses u_long — libc gets the layout
+        // right per cfg).
+        let mut info: libc::statvfs = unsafe { std::mem::zeroed() };
+        let ok = unsafe { libc::statvfs(path.as_ptr(), &raw mut info) };
         if ok != 0 {
             return None;
         }
-        // Width of `libc_ulong` varies per target (u64 on 64-bit,
-        // u32 on 32-bit) — the `as u64` cast is a no-op on 64-bit
-        // and widens on 32-bit; clippy's unnecessary-cast lint fires
-        // only on the 64-bit path.
+        // Cast through u64 explicitly — field widths differ across
+        // targets (macOS u32, 64-bit Linux u64); the cast is a no-op
+        // on 64-bit and widens on 32-bit.
         let block = info.f_frsize as u64;
         Some(StorageInfo {
             primary_free_bytes: info.f_bavail as u64 * block,

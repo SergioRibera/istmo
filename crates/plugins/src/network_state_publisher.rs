@@ -116,13 +116,19 @@ mod linux {
         }
         let kind_path = format!("/sys/class/net/{iface}/type");
         if let Ok(raw) = fs::read_to_string(&kind_path) {
-            // ARPHRD_* numeric codes — 1 = ethernet, 772 = loopback,
-            // 820 = ppp, 823 = ieee80211 (also seen for cellular on
-            // some stacks). 24 covers some tunnel/VPN interfaces.
+            // ARPHRD_* numeric codes (linux/if_arp.h):
+            //   1   = ARPHRD_ETHER
+            //   512 = ARPHRD_PPP
+            //   768 = ARPHRD_TUNNEL
+            //   772 = ARPHRD_LOOPBACK
+            //   801 = ARPHRD_IEEE80211
+            //   802 = ARPHRD_PRISM
+            //   803 = ARPHRD_IEEE80211_RADIOTAP
             if let Ok(code) = raw.trim().parse::<u32>() {
                 return match code {
                     1 => LinkKind::Ethernet,
-                    768 | 823 => LinkKind::Wifi,
+                    801 | 802 | 803 => LinkKind::Wifi,
+                    768 => LinkKind::Vpn,
                     _ if iface.starts_with("ppp")
                         || iface.starts_with("wwan")
                         || iface.starts_with("rmnet") =>
