@@ -79,8 +79,22 @@ pub use crate::capabilities::{
 pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
 pub use crate::device_info::{
     DEVICE_INFO_CHANNEL, DEVICE_INFO_PLUGIN_ID, DeviceInfo, DeviceInfoClient, DeviceInfoStream,
-    FormFactor, ScreenInfo,
+    FormFactor, ScreenInfo, rust_fallback as device_info_rust_fallback,
 };
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::battery_state_publisher::BatteryStatePublisher;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::capabilities_publisher::CapabilitiesPublisher;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::device_info::DeviceInfoPublisher;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::network_state_publisher::NetworkStatePublisher;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::storage_info_publisher::StorageInfoPublisher;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::system_info::SystemInfoPublisher;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::theme_preference_publisher::ThemePreferencePublisher;
 pub use crate::documents::{
     ActivationStream, DOCUMENTS_ACTIVATION_CHANNEL, DOCUMENTS_CHANNEL, DOCUMENTS_PLUGIN_ID,
     DocumentLocation, DocumentOrigin, DocumentStream, Documents, InstanceActivation,
@@ -119,7 +133,7 @@ pub use crate::system_info::{
     CalendarSystem, Formats, FormatsStream, LayoutDirection, Locale, LocaleStream,
     MeasurementSystem, SYSTEM_INFO_FORMATS_CHANNEL, SYSTEM_INFO_LOCALE_CHANNEL,
     SYSTEM_INFO_PLUGIN_ID, SYSTEM_INFO_TIMEZONE_CHANNEL, SYSTEM_INFO_UPTIME_CHANNEL, SystemInfo,
-    TemperatureUnit, TimeZone, TimeZoneStream,
+    SystemInfoClient, TemperatureUnit, TimeZone, TimeZoneStream,
 };
 pub use crate::task_scheduler::{
     ExistingWorkPolicy, TASK_SCHEDULER_PLUGIN_ID, TaskHandle, TaskRequest, TaskScheduler,

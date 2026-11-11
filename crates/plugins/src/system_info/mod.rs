@@ -130,18 +130,23 @@ pub enum CalendarSystem {
 
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)]
-pub struct SystemInfo {
+pub struct SystemInfoClient {
     locale_slot: Arc<LatestValueSlot>,
     timezone_slot: Arc<LatestValueSlot>,
     formats_slot: Arc<LatestValueSlot>,
     uptime_slot: Arc<LatestValueSlot>,
 }
 
-impl Plugin for SystemInfo {
+/// Backcompat alias — older callers used `SystemInfo`; the canonical
+/// name follows the `XxxClient` convention of every other first-party
+/// plugin.
+pub type SystemInfo = SystemInfoClient;
+
+impl Plugin for SystemInfoClient {
     const PLUGIN_ID: &'static str = SYSTEM_INFO_PLUGIN_ID;
 }
 
-impl SystemInfo {
+impl SystemInfoClient {
     pub fn acquire() -> Result<Self, IstmoError> {
         let rt = Runtime::global()?;
         Self::from_runtime(&rt)
