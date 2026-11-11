@@ -17,6 +17,7 @@ import android.os.PowerManager
 import android.os.StatFs
 import android.os.storage.StorageManager
 import android.provider.Settings
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.view.accessibility.AccessibilityManager
 import java.util.Calendar
 import java.util.Locale as JvmLocale
@@ -206,8 +207,32 @@ class IstmoSystemInfoObserver(private val context: Context) {
             currencyCode = currency,
             decimalSeparator = symbols.decimalSeparator.toString(),
             groupSeparator = symbols.groupingSeparator.toString(),
-            calendar = CalendarSystem.Gregorian,
+            calendar = resolveCalendarSystem(l),
         )
+    }
+
+    private fun resolveCalendarSystem(l: JvmLocale): CalendarSystem {
+        // `android.icu.util.Calendar.getInstance(locale).type` returns
+        // CLDR identifiers like "gregorian", "buddhist", "japanese"…
+        val type = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                android.icu.util.Calendar.getInstance(l).type
+            } else {
+                "gregorian"
+            }
+        } catch (_: Throwable) {
+            "gregorian"
+        }
+        return when (type) {
+            "gregorian" -> CalendarSystem.Gregorian
+            "buddhist" -> CalendarSystem.Buddhist
+            "japanese" -> CalendarSystem.Japanese
+            "islamic", "islamic-civil", "islamic-umalqura", "islamic-tbla",
+            "islamic-rgsa" -> CalendarSystem.Islamic
+            "hebrew" -> CalendarSystem.Hebrew
+            "persian" -> CalendarSystem.Persian
+            else -> CalendarSystem.Other(type)
+        }
     }
 }
 
@@ -242,7 +267,13 @@ class IstmoThemePreferenceObserver(private val context: Context) {
             Configuration.UI_MODE_NIGHT_NO -> ColorScheme.LIGHT
             else -> ColorScheme.AUTO
         }
-        val screenReader = am.isTouchExplorationEnabled || am.isEnabled
+        // `isEnabled || isTouchExplorationEnabled` returns true for
+        // any accessibility service (magnifier, color correction,
+        // switch access…). Narrow to spoken-feedback services so this
+        // matches the iOS `isVoiceOverRunning` semantic.
+        val screenReader = am
+            .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_SPOKEN)
+            .isNotEmpty()
         val animScale = try {
             Settings.Global.getFloat(
                 context.contentResolver,
@@ -308,9 +339,11 @@ class IstmoNetworkStateObserver(private val context: Context) {
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
                 publish()
         }
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-            .build()
+        // `NET_CAPABILITY_NOT_RESTRICTED` (11) is API 28+; adding it
+        // to the request builder throws `IllegalArgumentException` on
+        // API 21-27. Leave the request capability-less so the callback
+        // fires for every available network, and filter in `publish`.
+        val request = NetworkRequest.Builder().build()
         cm.registerNetworkCallback(request, cb)
         callback = cb
         publish()
@@ -433,20 +466,31 @@ object IstmoStorageInfoObserver {
         val blockSize = stat.blockSizeLong
         val primaryFree = stat.availableBlocksLong * blockSize
         val primaryTotal = stat.blockCountLong * blockSize
+        // StorageManager.storageVolumes is API 24 (N), but the
+        // StatFs read of `volume.directory.path` only exists on
+        // API 30+ (`StorageVolume.getDirectory()`). On earlier
+        // versions we skip external volume reporting.
         val external: ExternalVolume? = if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
         ) {
             try {
                 val sm =
                     context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
-                val uuid = StorageManager.UUID_DEFAULT
-                val free = sm.getAllocatableBytes(uuid)
-                val total = sm.getCacheQuotaBytes(uuid)
-                if (total > 0) {
+                val removable = sm.storageVolumes.firstOrNull {
+                    !it.isPrimary && it.isRemovable
+                }
+                val dir = removable?.directory
+                if (dir != null) {
+                    val s = StatFs(dir.path)
+                    val bs = s.blockSizeLong
+                    val medium = when {
+                        removable.isRemovable -> ExternalMedium.SD_CARD
+                        else -> ExternalMedium.UNKNOWN
+                    }
                     ExternalVolume(
-                        freeBytes = free,
-                        totalBytes = total,
-                        medium = ExternalMedium.UNKNOWN,
+                        freeBytes = s.availableBlocksLong * bs,
+                        totalBytes = s.blockCountLong * bs,
+                        medium = medium,
                     )
                 } else null
             } catch (_: Exception) {
