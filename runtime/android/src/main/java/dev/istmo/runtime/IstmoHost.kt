@@ -28,6 +28,9 @@ object IstmoHost {
     private var started = false
     private var builtinObservers: IstmoBuiltinObservers? = null
 
+    /** Activities between [onCreate] and [onDestroy]; observers stop at zero. */
+    private var liveActivities = 0
+
     /**
      * Start the runtime (first call per process only) and register every
      * plugin with [activity] as host. The library name comes from the
@@ -47,13 +50,16 @@ object IstmoHost {
                 IstmoRuntime.start(lib)
                 started = true
             }
+            liveActivities++
         }
         registerPlugins(activity)
         registerBuiltinObservers(activity.applicationContext)
     }
 
     /**
-     * Stop the builtin observers once [activity] is finishing for good.
+     * Stop the builtin observers once the last istmo activity is
+     * finishing for good; another activity of the app still running keeps
+     * them registered.
      *
      * The runtime itself stays up: it is process-scoped and cannot be
      * started again after [IstmoRuntime.shutdown], while Android may
@@ -62,8 +68,11 @@ object IstmoHost {
      */
     @JvmStatic
     fun onDestroy(activity: Activity) {
-        if (!activity.isFinishing || activity.isChangingConfigurations) return
         synchronized(this) {
+            // Count every destroy, configuration changes included: the
+            // recreated activity counts itself again in onCreate.
+            if (liveActivities > 0) liveActivities--
+            if (liveActivities > 0 || !activity.isFinishing || activity.isChangingConfigurations) return
             builtinObservers?.unregisterAll()
             builtinObservers = null
         }
