@@ -28,7 +28,7 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
 
     private let queue = DispatchQueue(label: "dev.istmo.plugins.file-picker.backend")
     private var files: [UInt64: Entry] = [:]
-    private let launchGate = DispatchSemaphore(value: 1)
+    private let launchGate = LaunchGate()
 
     public init() {}
 
@@ -121,8 +121,40 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
         save: Bool,
         saveConfig: SaveConfig?
     ) async throws -> [URL] {
-        launchGate.wait()
-        defer { launchGate.signal() }
+        // An actor gate rather than a semaphore: blocking a cooperative
+        // thread inside `async` code can starve the Swift concurrency pool.
+        await launchGate.acquire()
+        do {
+            let urls = try await presentLocked(config: config, multi: multi, save: save, saveConfig: saveConfig)
+            await launchGate.release()
+            return urls
+        } catch {
+            await launchGate.release()
+            throw error
+        }
+    }
+
+    private func presentLocked(
+        config: PickConfig?,
+        multi: Bool,
+        save: Bool,
+        saveConfig: SaveConfig?
+    ) async throws -> [URL] {
+        // Save flow: an empty placeholder, named after the sanitised
+        // suggestion, inside a temp directory of its own. Exporting it
+        // with `asCopy: false` *moves* it to the location the user picks
+        // and reports that destination URL — security-scoped and
+        // writable — which `open_write` then targets. A copy would leave
+        // us holding only the placeholder.
+        let export: (dir: URL, file: URL)? = try save
+            ? Self.makeSavePlaceholder(suggestedName: saveConfig?.suggestedName)
+            : nil
+        defer {
+            if let export {
+                try? FileManager.default.removeItem(at: export.dir)
+            }
+        }
+        let placeholder = export?.file
 
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[URL], Error>) in
             DispatchQueue.main.async {
@@ -131,16 +163,11 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
                     return
                 }
                 let picker: UIDocumentPickerViewController
-                if save, let saveConfig {
-                    // Save picker: write suggestedName to a temp URL first so we
-                    // can hand it to `forExporting:` and get "Save As" semantics.
-                    let name = saveConfig.suggestedName ?? "untitled"
-                    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-                    try? Data().write(to: tmp)
+                if let placeholder {
                     if #available(iOS 14.0, *) {
-                        picker = UIDocumentPickerViewController(forExporting: [tmp], asCopy: true)
+                        picker = UIDocumentPickerViewController(forExporting: [placeholder], asCopy: false)
                     } else {
-                        picker = UIDocumentPickerViewController(url: tmp, in: .exportToService)
+                        picker = UIDocumentPickerViewController(url: placeholder, in: .moveToService)
                     }
                 } else if #available(iOS 14.0, *) {
                     let types = Self.utTypes(from: config?.filter)
@@ -156,6 +183,34 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
                 root.present(picker, animated: true)
             }
         }
+    }
+
+    private static func makeSavePlaceholder(suggestedName: String?) throws -> (dir: URL, file: URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("istmo-file-picker-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+            let file = dir.appendingPathComponent(sanitizedFileName(suggestedName))
+            try Data().write(to: file)
+            return (dir, file)
+        } catch {
+            try? FileManager.default.removeItem(at: dir)
+            throw FilePickerError.io("create save placeholder: \(error)")
+        }
+    }
+
+    /// Last path component of `suggested`, so a name like `../../x` or
+    /// `a/b` cannot point the placeholder outside its temp directory.
+    private static func sanitizedFileName(_ suggested: String?) -> String {
+        let cleaned = (suggested ?? "")
+            .replacingOccurrences(of: "\0", with: "")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+        let name = URL(fileURLWithPath: cleaned).lastPathComponent
+        if name.isEmpty || name == "." || name == ".." || name == "/" {
+            return "untitled"
+        }
+        return name
     }
 
     @available(iOS 14.0, *)
@@ -200,6 +255,29 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
     }
     public func releaseNativeHandle(_ handleId: UInt64) {}
     #endif
+}
+
+/// One picker at a time; waiters resume in FIFO order.
+private actor LaunchGate {
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !busy {
+            busy = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            busy = false
+        } else {
+            // Ownership passes straight to the next waiter; `busy` stays set.
+            waiters.removeFirst().resume()
+        }
+    }
 }
 
 #if canImport(UIKit)
