@@ -268,6 +268,8 @@ fn write_native_handle_codec(out: &mut String) {
         out,
         "    override fun writeNativeHandleId(out: ByteArrayOutputStream, value: NativeHandleId) {{",
     );
-    let _ = writeln!(out, "        Bincode.writeVarintU64(out, value)");
+    // Ids past `Long.MAX_VALUE` read back negative; `writeVarintU64`
+    // would refuse them, `writeU64` writes the same 64 bits back.
+    let _ = writeln!(out, "        Bincode.writeU64(out, value.toULong())");
     let _ = writeln!(out, "    }}");
 }
