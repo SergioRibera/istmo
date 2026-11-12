@@ -143,6 +143,12 @@ impl Callbacks {
                     StreamEndReason::Complete => (0u32, Vec::new()),
                     StreamEndReason::Cancelled => (1, Vec::new()),
                     StreamEndReason::Error(bytes) => (2, bytes),
+                    // Swift only knows the three tags above: end anything newer
+                    // as an error so the consumer still sees the stream close.
+                    other => {
+                        tracing::warn!(?other, "unmapped stream end reason; reported as error");
+                        (2, Vec::new())
+                    }
                 };
                 // SAFETY: module-level callback contract; `payload` is
                 // owned by this arm and lives past the call.

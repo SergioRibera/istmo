@@ -341,6 +341,12 @@ impl Pump {
                     istmo_core::StreamEndReason::Complete => (0i32, Vec::new()),
                     istmo_core::StreamEndReason::Cancelled => (1, Vec::new()),
                     istmo_core::StreamEndReason::Error(bytes) => (2, bytes),
+                    // Kotlin only knows the three tags above: end anything newer
+                    // as an error so the consumer still sees the stream close.
+                    other => {
+                        tracing::warn!(?other, "unmapped stream end reason; reported as error");
+                        (2, Vec::new())
+                    }
                 };
                 let payload_j = env.byte_array_from_slice(&payload)?;
                 self.call_static_void(

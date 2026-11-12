@@ -38,7 +38,6 @@ impl AndroidRuntimeError {
             Self::Core(
                 istmo_core::IstmoError::UnknownCallId(_)
                     | istmo_core::IstmoError::UnknownStreamId(_)
-                    | istmo_core::IstmoError::UnknownInstance(_)
                     | istmo_core::IstmoError::ChannelClosed
             )
         )
