@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::SystemTime;
 
+use istmo_core::sync::lock;
 use istmo_core::{NativeHandleId, Runtime};
 use nokhwa::CallbackCamera;
 use nokhwa::pixel_format::RgbAFormat;
@@ -34,17 +35,17 @@ use crate::{
 /// Each open session owns its own `nokhwa` capture thread and feeds
 /// frames into a shared [`flume::Receiver<CameraFrame>`] handed to
 /// subscribers via [`Camera::frames`].
-/// Session ids handed out by every [`DesktopCamera`] in the process. Release
-/// hooks see every [`NativeHandleId`] the runtime frees, so ids must not
-/// repeat across instances.
-static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
-
+///
+/// Session ids come from [`Runtime::alloc_native_handle_id`], so they
+/// never collide with ids a Kotlin / Swift backend or another Rust host
+/// hands out through the same runtime.
 #[derive(Debug)]
 pub struct DesktopCamera {
     config: CameraInitConfig,
     sessions: Arc<Mutex<HashMap<NativeHandleId, SessionEntry>>>,
-    /// Set once the runtime release hook for this instance is installed.
-    release_hook: OnceLock<()>,
+    /// Runtime the release hook was installed on; also the id allocator.
+    /// `None` when no process runtime existed on first use.
+    runtime: OnceLock<Option<Weak<Runtime>>>,
 }
 
 /// Live session state. `CallbackCamera` keeps its capture thread
@@ -72,37 +73,39 @@ impl DesktopCamera {
         Self {
             config,
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            release_hook: OnceLock::new(),
+            runtime: OnceLock::new(),
         }
     }
 
-    fn alloc_id() -> NativeHandleId {
-        NativeHandleId::new(NEXT_SESSION.fetch_add(1, Ordering::Relaxed))
-    }
-
-    /// Close a session when the client drops its [`crate::SessionHandle`]
-    /// without calling `close`. The runtime only forwards that release to
-    /// its hooks; there is no transport pump to route it back here.
-    fn install_release_hook(&self) {
-        self.release_hook.get_or_init(|| {
-            let Ok(runtime) = Runtime::global() else {
-                tracing::warn!(
-                    target: "istmo.camera.desktop",
-                    "no runtime; dropped sessions stay open until close"
-                );
-                return;
-            };
+    /// Runtime this host serves, installing the release hook on first use.
+    ///
+    /// The hook closes a session when the client drops its
+    /// [`crate::SessionHandle`] without calling `close`. The runtime only
+    /// forwards that release to its hooks; there is no transport pump to
+    /// route it back here.
+    fn runtime(&self) -> Result<Arc<Runtime>, CameraError> {
+        let weak = self.runtime.get_or_init(|| {
+            let runtime = Runtime::global().ok()?;
             let sessions: Weak<Mutex<HashMap<NativeHandleId, SessionEntry>>> =
                 Arc::downgrade(&self.sessions);
             runtime.install_native_handle_release_hook(Arc::new(move |id| {
+                // Every release in the runtime reaches every hook. Ids this
+                // host never handed out are not in the map and fall through.
+                if !id.is_rust_allocated() {
+                    return;
+                }
                 let Some(sessions) = sessions.upgrade() else {
                     return;
                 };
-                let entry = sessions.lock().expect("sessions mutex").remove(&id);
+                let entry = lock(&sessions).remove(&id);
                 // Dropping the entry stops the capture thread and frees the device.
                 drop(entry);
             }));
+            Some(Arc::downgrade(&runtime))
         });
+        weak.as_ref()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| CameraError::Backend("istmo runtime is not running".to_owned()))
     }
 
     fn pool_depth(&self) -> usize {
@@ -156,6 +159,9 @@ impl Camera for DesktopCamera {
         let seq = Arc::new(AtomicU64::new(0));
         let pixel_format = config.pixel_format;
 
+        // Resolve the id allocator before touching the device so a missing
+        // runtime fails without opening (and leaking) a capture stream.
+        let id = self.runtime()?.alloc_native_handle_id();
         let index = resolve_index(&config.device_id)?;
         let requested = requested_format(&config);
 
@@ -206,9 +212,7 @@ impl Camera for DesktopCamera {
             rotation_degrees: 0,
         };
 
-        self.install_release_hook();
-        let id = Self::alloc_id();
-        self.sessions.lock().expect("sessions mutex").insert(
+        lock(&self.sessions).insert(
             id,
             SessionEntry {
                 camera,
@@ -225,11 +229,7 @@ impl Camera for DesktopCamera {
     }
 
     async fn close(&self, session: NativeHandleId) -> Result<(), CameraError> {
-        let mut entry = self
-            .sessions
-            .lock()
-            .expect("sessions mutex")
-            .remove(&session);
+        let mut entry = lock(&self.sessions).remove(&session);
         if let Some(ref mut e) = entry {
             let _ = e.camera.stop_stream();
         }
@@ -237,17 +237,13 @@ impl Camera for DesktopCamera {
     }
 
     fn frames(&self, session: NativeHandleId) -> flume::Receiver<CameraFrame> {
-        self.sessions
-            .lock()
-            .expect("sessions mutex")
-            .get(&session)
-            .map_or_else(
-                || {
-                    let (_tx, rx) = flume::bounded::<CameraFrame>(0);
-                    rx
-                },
-                |entry| entry.rx.clone(),
-            )
+        lock(&self.sessions).get(&session).map_or_else(
+            || {
+                let (_tx, rx) = flume::bounded::<CameraFrame>(0);
+                rx
+            },
+            |entry| entry.rx.clone(),
+        )
     }
 
     async fn apply_controls(
@@ -255,7 +251,7 @@ impl Camera for DesktopCamera {
         session: NativeHandleId,
         controls: CameraControls,
     ) -> Result<AppliedControls, CameraError> {
-        let mut guard = self.sessions.lock().expect("sessions mutex");
+        let mut guard = lock(&self.sessions);
         let entry = guard.get_mut(&session).ok_or(CameraError::SessionClosed)?;
 
         if let Some(zoom) = controls.zoom {
@@ -303,7 +299,7 @@ impl Camera for DesktopCamera {
         session: NativeHandleId,
         _request: StillCaptureRequest,
     ) -> Result<StillPhoto, CameraError> {
-        let mut guard = self.sessions.lock().expect("sessions mutex");
+        let mut guard = lock(&self.sessions);
         let entry = guard.get_mut(&session).ok_or(CameraError::SessionClosed)?;
         let buffer = entry
             .camera
