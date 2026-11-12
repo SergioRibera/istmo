@@ -335,7 +335,13 @@ class ShareBackendImpl(
          * 1. split on `/` and `\\` and keep the last non-empty component;
          * 2. replace `< > : " | ? *` and C0 / C1 controls (U+0000–U+001F,
          *    U+007F–U+009F) with `_`;
-         * 3. a result made only of dots (or empty) becomes `shared`.
+         * 3. a result made only of dots (or empty) becomes `shared`;
+         * 4. a Windows device name ([WINDOWS_DEVICE_NAMES], ASCII case
+         *    insensitive) before the first `.`, trailing spaces ignored,
+         *    gets a `_` prefix;
+         * 5. past [MAX_FILE_NAME_BYTES] UTF-8 bytes the name is cut at a
+         *    code point boundary, keeping an extension (from the last `.`,
+         *    not at index 0) of up to [MAX_KEPT_EXTENSION_BYTES] bytes.
          */
         internal fun sanitize(name: String): String {
             val base = name.split('/', '\\').lastOrNull { it.isNotEmpty() }.orEmpty()
@@ -345,7 +351,68 @@ class ShareBackendImpl(
                     append(if (control || c in FORBIDDEN_NAME_CHARS) '_' else c)
                 }
             }
-            return if (cleaned.all { it == '.' }) "shared" else cleaned
+            var result = if (cleaned.all { it == '.' }) "shared" else cleaned
+            val stem = result.substringBefore('.').trimEnd(' ')
+            val folded = asciiFold(stem)
+            if (WINDOWS_DEVICE_NAMES.any { it == folded }) {
+                result = "_$result"
+            }
+            return truncate(result)
+        }
+
+        private const val MAX_FILE_NAME_BYTES = 255
+        private const val MAX_KEPT_EXTENSION_BYTES = 16
+
+        private val WINDOWS_DEVICE_NAMES = listOf(
+            "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+            "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "COM¹", "COM²", "COM³",
+            "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+            "LPT¹", "LPT²", "LPT³",
+        )
+
+        /** Upper-case ASCII letters only, like Rust's `eq_ignore_ascii_case`. */
+        private fun asciiFold(s: String): String =
+            String(CharArray(s.length) { i -> s[i].let { if (it in 'a'..'z') it - 32 else it } })
+
+        private fun utf8Length(codePoint: Int): Int = when {
+            codePoint < 0x80 -> 1
+            codePoint < 0x800 -> 2
+            codePoint < 0x10000 -> 3
+            else -> 4
+        }
+
+        private fun utf8Length(s: String): Int {
+            var total = 0
+            var i = 0
+            while (i < s.length) {
+                val cp = s.codePointAt(i)
+                total += utf8Length(cp)
+                i += Character.charCount(cp)
+            }
+            return total
+        }
+
+        private fun truncate(name: String): String {
+            val total = utf8Length(name)
+            if (total <= MAX_FILE_NAME_BYTES) return name
+            val dot = name.lastIndexOf('.')
+            val ext = if (dot > 0 && utf8Length(name.substring(dot)) <= MAX_KEPT_EXTENSION_BYTES) {
+                name.substring(dot)
+            } else {
+                ""
+            }
+            val stem = name.substring(0, name.length - ext.length)
+            val budget = MAX_FILE_NAME_BYTES - utf8Length(ext)
+            var used = 0
+            var end = 0
+            while (end < stem.length) {
+                val cp = stem.codePointAt(end)
+                if (used + utf8Length(cp) > budget) break
+                used += utf8Length(cp)
+                end += Character.charCount(cp)
+            }
+            return stem.substring(0, end) + ext
         }
     }
 }

@@ -310,20 +310,74 @@ public enum IstmoShareHandoff {
     /// 1. split on `/` and `\` and keep the last non-empty component;
     /// 2. replace `< > : " | ? *` and C0 / C1 controls (U+0000–U+001F,
     ///    U+007F–U+009F) with `_`;
-    /// 3. a result made only of dots (or empty) becomes `shared`.
+    /// 3. a result made only of dots (or empty) becomes `shared`;
+    /// 4. a Windows device name (`windowsDeviceNames`, ASCII case
+    ///    insensitive) before the first `.`, trailing spaces ignored, gets
+    ///    a `_` prefix;
+    /// 5. past 255 UTF-8 bytes the name is cut at a scalar boundary,
+    ///    keeping an extension (from the last `.`, not at index 0) of up
+    ///    to 16 bytes.
     public static func sanitize(_ name: String) -> String {
         // Unicode scalars, not `Character`s: a separator followed by a
         // combining mark is one grapheme but still a separator.
         let parts = Array(name.unicodeScalars).split(whereSeparator: { $0 == "/" || $0 == "\\" })
-        var cleaned = String.UnicodeScalarView()
+        var cleaned: [Unicode.Scalar] = []
         for scalar in parts.last ?? [] {
             let forbidden = "<>:\"|?*".unicodeScalars.contains(scalar)
                 || scalar.value <= 0x1F
                 || (0x7F...0x9F).contains(scalar.value)
             cleaned.append(forbidden ? "_" : scalar)
         }
-        let result = String(cleaned)
-        return result.unicodeScalars.allSatisfy({ $0 == "." }) ? "shared" : result
+        if cleaned.allSatisfy({ $0 == "." }) {
+            cleaned = Array("shared".unicodeScalars)
+        }
+        var stem = Array(cleaned.prefix(while: { $0 != "." }))
+        while stem.last == " " {
+            stem.removeLast()
+        }
+        let folded = String(String.UnicodeScalarView(stem.map(asciiUppercased)))
+        if windowsDeviceNames.contains(folded) {
+            cleaned.insert("_", at: 0)
+        }
+        return String(String.UnicodeScalarView(truncated(cleaned)))
+    }
+
+    private static let maxFileNameBytes = 255
+    private static let maxKeptExtensionBytes = 16
+
+    private static let windowsDeviceNames: Set<String> = [
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+        "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "COM\u{B9}", "COM\u{B2}", "COM\u{B3}",
+        "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "LPT\u{B9}", "LPT\u{B2}", "LPT\u{B3}",
+    ]
+
+    private static func asciiUppercased(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
+        (0x61...0x7A).contains(scalar.value) ? Unicode.Scalar(scalar.value - 0x20)! : scalar
+    }
+
+    private static func utf8Count(_ scalars: ArraySlice<Unicode.Scalar>) -> Int {
+        scalars.reduce(0) { $0 + $1.utf8.count }
+    }
+
+    private static func truncated(_ scalars: [Unicode.Scalar]) -> [Unicode.Scalar] {
+        guard utf8Count(scalars[...]) > maxFileNameBytes else { return scalars }
+        var ext: ArraySlice<Unicode.Scalar> = []
+        if let dot = scalars.lastIndex(of: "."), dot > 0,
+           utf8Count(scalars[dot...]) <= maxKeptExtensionBytes {
+            ext = scalars[dot...]
+        }
+        let budget = maxFileNameBytes - utf8Count(ext)
+        var kept: [Unicode.Scalar] = []
+        var used = 0
+        for scalar in scalars[..<(scalars.count - ext.count)] {
+            let size = scalar.utf8.count
+            if used + size > budget { break }
+            used += size
+            kept.append(scalar)
+        }
+        return kept + ext
     }
 
     public static func nowMs() -> UInt64 {
