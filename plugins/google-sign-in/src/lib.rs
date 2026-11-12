@@ -13,8 +13,9 @@
 //! [`NativeHandle`](istmo_core::NativeHandle)s — the native layer owns
 //! the token material and releases it when the handle is dropped.
 //!
-//! `Debug` output of [`SignInAccount`] and [`SignInConfig`] redacts the
-//! id token and the nonce, so logging them does not leak credentials.
+//! `Debug` output of [`SignInAccount`], [`OwnedSignInAccount`] and
+//! [`SignInConfig`] redacts the id token and the nonce (`#[redact]`), so
+//! logging them does not leak credentials.
 //!
 //! The `codegen` feature exposes the plugin's `Contract`
 //! (see [`istmo-build`](https://docs.rs/istmo-build)) so downstream
@@ -69,6 +70,7 @@ pub struct SignInConfig {
     pub hosted_domain: Option<String>,
     /// Optional nonce for replay protection. Recommended when the
     /// resulting `id_token` is forwarded to your own backend.
+    #[redact]
     pub nonce: Option<String>,
     /// If `true`, sign the user in without a chooser when exactly one
     /// eligible credential is available. Ignored when
@@ -99,6 +101,7 @@ pub struct SignInAccount {
     pub photo_url: Option<String>,
     /// Signed OpenID Connect id token — forward to your backend to
     /// verify the user's identity server-side.
+    #[redact]
     pub id_token: String,
     /// Scopes actually granted by the user (may be a subset of what
     /// `SignInConfig::scopes` requested).
@@ -205,36 +208,6 @@ impl From<istmo_core::IstmoError> for SignInError {
             }
             other => Self::Backend(other.to_string()),
         }
-    }
-}
-
-/// Placeholder printed instead of secret fields.
-const REDACTED: &str = "<redacted>";
-
-// Manual impls: the derived ones would print the id token / nonce.
-impl std::fmt::Debug for SignInConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SignInConfig")
-            .field("server_client_id", &self.server_client_id)
-            .field("scopes", &self.scopes)
-            .field("hosted_domain", &self.hosted_domain)
-            .field("nonce", &self.nonce.as_ref().map(|_| REDACTED))
-            .field("auto_select", &self.auto_select)
-            .finish()
-    }
-}
-
-impl std::fmt::Debug for SignInAccount {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SignInAccount")
-            .field("id", &self.id)
-            .field("email", &self.email)
-            .field("display_name", &self.display_name)
-            .field("photo_url", &self.photo_url)
-            .field("id_token", &REDACTED)
-            .field("granted_scopes", &self.granted_scopes)
-            .field("credential", &self.credential)
-            .finish()
     }
 }
 

@@ -202,6 +202,11 @@ fn debug_output_redacts_secrets() {
     assert!(!account.contains(&sample_account(1).id_token), "{account}");
     assert!(account.contains("<redacted>"));
 
+    let rt = Runtime::mock().runtime;
+    let owned = format!("{:?}", sample_account(1).into_owned(&rt));
+    assert!(!owned.contains(&sample_account(1).id_token), "{owned}");
+    assert!(owned.contains("<redacted>"));
+
     let config = format!("{:?}", cfg());
     assert!(!config.contains("random-nonce"), "{config}");
     assert!(config.contains("example.com"));

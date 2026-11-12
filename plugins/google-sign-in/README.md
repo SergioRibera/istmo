@@ -40,5 +40,6 @@ token refresh (`refresh` re-runs the silent flow) and no revoke call
 (`revoke` clears local state; revoke the grant from your server).
 `grantedScopes` therefore only lists `openid`, `email` and `profile`.
 
-`Debug` output of `SignInAccount` and `SignInConfig` redacts the id
+`Debug` output of `SignInAccount`, `OwnedSignInAccount` and
+`SignInConfig` redacts the id
 token and the nonce.
