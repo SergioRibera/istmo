@@ -2,20 +2,27 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
-    Expr, ExprLit, FnArg, ItemTrait, Lit, LitStr, MetaNameValue, Path, ReturnType, Token,
-    TraitItem, TraitItemFn, parse_quote, parse_str, parse2,
+    ItemTrait, LitStr, MetaNameValue, Path, Token, TraitItem, TraitItemFn, parse_quote, parse2,
 };
 
-#[allow(unreachable_pub, clippy::too_many_lines)]
-pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+use crate::common::{
+    ReturnShape, TraitKind, classify_return, desugar_async_methods, expect_lit_str,
+    expect_path_lit, reject_unsupported_trait_shape,
+};
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one quote! block holding the whole adapter reads better than fragments stitched together"
+)]
+pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let args: ServiceArgs = parse2(attr)?;
     let mut trait_def: ItemTrait = parse2(item)?;
 
-    reject_unsupported_trait_shape(&trait_def)?;
+    reject_unsupported_trait_shape(&trait_def, TraitKind::Service)?;
 
     let (on_start_returns_result, on_stop_present) = classify_methods(&trait_def)?;
 
-    add_send_bound_to_async_methods(&mut trait_def);
+    desugar_async_methods(&mut trait_def);
 
     let trait_ident = trait_def.ident.clone();
     let vis = trait_def.vis.clone();
@@ -57,7 +64,21 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         struct #state_ident {
             notifier: #plugins::StopNotifier,
             cancel: #core::CancelToken,
-            thread: ::core::option::Option<::std::thread::JoinHandle<()>>,
+            thread: ::std::thread::JoinHandle<()>,
+        }
+
+        impl #state_ident {
+            /// Signal the running `on_start` to stop and wait for its
+            /// thread. Must run without the adapter's state lock held:
+            /// the join blocks for as long as `on_start` takes to wind
+            /// down.
+            fn shut_down(self) {
+                self.notifier.signal();
+                self.cancel.cancel();
+                if self.thread.join().is_err() {
+                    #core::__private::tracing::error!("service on_start thread panicked");
+                }
+            }
         }
 
         #vis struct #adapter_ident<Impl>
@@ -79,6 +100,10 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                     __runtime: ::std::sync::OnceLock::new(),
                     __state: ::std::sync::Mutex::new(::core::option::Option::None),
                 }
+            }
+
+            fn __take_state(&self) -> ::core::option::Option<#state_ident> {
+                self.__state.lock().unwrap_or_else(|p| p.into_inner()).take()
             }
         }
 
@@ -129,6 +154,13 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                                 .ok_or(#core::DispatchError::Unimplemented(
                                     "service adapter has no runtime; call register_host before on_start",
                                 ))?;
+
+                            // At most one `on_start` runs at a time: stop the
+                            // previous one before starting the next.
+                            if let ::core::option::Option::Some(previous) = self.__take_state() {
+                                previous.shut_down();
+                            }
+
                             let (notifier, stop_rx) = #plugins::stop_channel();
                             let ctx = #plugins::ServiceContext::new(
                                 runtime,
@@ -137,33 +169,57 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                                 cancel.clone(),
                             );
 
+                            // Bridges a `Frame::Cancel` (which only trips the
+                            // token) into the stop signal `ctx.stopped()` waits on.
                             let notifier_for_watch = notifier.clone();
                             let cancel_for_watch = cancel.clone();
-                            ::std::thread::spawn(move || {
-                                #core::__private::block_on(cancel_for_watch.cancelled());
-                                notifier_for_watch.signal();
-                            });
+                            ::std::thread::Builder::new()
+                                .name(::std::string::String::from("istmo-svc-watch"))
+                                .spawn(move || {
+                                    #core::__private::block_on(cancel_for_watch.cancelled());
+                                    notifier_for_watch.signal();
+                                })
+                                .map_err(|err| {
+                                    #core::__private::tracing::error!(?err, "failed to spawn the service cancel watcher");
+                                    #core::DispatchError::Unimplemented(
+                                        "service cancel watcher thread could not be spawned",
+                                    )
+                                })?;
+
                             let inner = ::std::sync::Arc::clone(&self.__inner);
                             let service_id_for_thread = service_id.clone();
-                            let handle = ::std::thread::spawn(move || {
-                                #on_start_body
-                            });
-                            {
-                                let mut guard = self.__state.lock().unwrap_or_else(|p| p.into_inner());
-                                if let ::core::option::Option::Some(mut prev) = guard.take() {
-                                    prev.notifier.signal();
-
-                                    prev.cancel.cancel();
-                                    if let ::core::option::Option::Some(h) = prev.thread.take() {
-                                        let _ = h.join();
-                                    }
+                            let spawned = ::std::thread::Builder::new()
+                                .name(::std::string::String::from("istmo-service"))
+                                .spawn(move || {
+                                    #on_start_body
+                                });
+                            let thread = match spawned {
+                                ::core::result::Result::Ok(thread) => thread,
+                                ::core::result::Result::Err(err) => {
+                                    // Releases the watcher thread.
+                                    cancel.cancel();
+                                    #core::__private::tracing::error!(?err, "failed to spawn the service thread");
+                                    return ::core::result::Result::Err(#core::DispatchError::Unimplemented(
+                                        "service thread could not be spawned",
+                                    ));
                                 }
-                                *guard = ::core::option::Option::Some(#state_ident {
+                            };
+
+                            let raced = self
+                                .__state
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .replace(#state_ident {
                                     notifier,
                                     cancel: cancel.clone(),
-                                    thread: ::core::option::Option::Some(handle),
+                                    thread,
                                 });
+                            // A concurrent `on_start` stored its state after
+                            // ours was taken above; the newest one wins.
+                            if let ::core::option::Option::Some(raced) = raced {
+                                raced.shut_down();
                             }
+
                             let bytes = #core::codec::encode(&())
                                 .map_err(#core::DispatchError::Encode)?;
                             ::core::result::Result::Ok(#core::Outcome::Ok(bytes))
@@ -171,17 +227,8 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                         "on_stop" => {
                             let ((), _) = #core::codec::decode::<()>(payload)
                                 .map_err(#core::DispatchError::Decode)?;
-                            let state = {
-                                let mut guard = self.__state.lock().unwrap_or_else(|p| p.into_inner());
-                                guard.take()
-                            };
-                            if let ::core::option::Option::Some(mut state) = state {
-                                state.notifier.signal();
-
-                                state.cancel.cancel();
-                                if let ::core::option::Option::Some(h) = state.thread.take() {
-                                    let _ = h.join();
-                                }
+                            if let ::core::option::Option::Some(state) = self.__take_state() {
+                                state.shut_down();
                             }
                             #on_stop_call
                             let bytes = #core::codec::encode(&())
@@ -196,22 +243,6 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             }
         }
     })
-}
-
-fn reject_unsupported_trait_shape(t: &ItemTrait) -> syn::Result<()> {
-    if !t.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &t.generics,
-            "generic service traits are not supported",
-        ));
-    }
-    if !t.supertraits.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &t.supertraits,
-            "supertraits on a service trait are not supported",
-        ));
-    }
-    Ok(())
 }
 
 fn classify_methods(t: &ItemTrait) -> syn::Result<(bool, bool)> {
@@ -246,18 +277,15 @@ fn classify_methods(t: &ItemTrait) -> syn::Result<(bool, bool)> {
             "`on_start` must be `async fn`",
         ));
     }
-
-    if on_start.sig.inputs.len() != 2
-        || !matches!(on_start.sig.inputs.first(), Some(FnArg::Receiver(_)))
-    {
+    if on_start.sig.inputs.len() != 2 {
         return Err(syn::Error::new_spanned(
             &on_start.sig,
             "`on_start` must take `&self` and a single `ctx: ServiceContext` argument",
         ));
     }
     let on_start_returns_result = matches!(
-        &on_start.sig.output,
-        ReturnType::Type(_, ty) if is_result_type(ty)
+        classify_return(&on_start.sig.output)?,
+        ReturnShape::Result { .. }
     );
     let on_stop_present = if let Some(f) = on_stop {
         if f.sig.asyncness.is_none() {
@@ -266,7 +294,7 @@ fn classify_methods(t: &ItemTrait) -> syn::Result<(bool, bool)> {
                 "`on_stop` must be `async fn`",
             ));
         }
-        if f.sig.inputs.len() != 1 || !matches!(f.sig.inputs.first(), Some(FnArg::Receiver(_))) {
+        if f.sig.inputs.len() != 1 {
             return Err(syn::Error::new_spanned(
                 &f.sig,
                 "`on_stop` must take only `&self`",
@@ -277,31 +305,6 @@ fn classify_methods(t: &ItemTrait) -> syn::Result<(bool, bool)> {
         false
     };
     Ok((on_start_returns_result, on_stop_present))
-}
-
-fn is_result_type(ty: &syn::Type) -> bool {
-    let syn::Type::Path(tp) = ty else {
-        return false;
-    };
-    tp.path.segments.last().is_some_and(|s| s.ident == "Result")
-}
-
-fn add_send_bound_to_async_methods(trait_def: &mut ItemTrait) {
-    for item in &mut trait_def.items {
-        let TraitItem::Fn(f) = item else { continue };
-        if f.sig.asyncness.is_none() {
-            continue;
-        }
-        f.sig.asyncness = None;
-        let return_ty = match &f.sig.output {
-            ReturnType::Default => quote! { () },
-            ReturnType::Type(_, t) => quote! { #t },
-        };
-        let new_output: syn::Type = parse_quote! {
-            impl ::core::future::Future<Output = #return_ty> + ::core::marker::Send + '_
-        };
-        f.sig.output = ReturnType::Type(<Token![->]>::default(), Box::new(new_output));
-    }
 }
 
 struct ServiceArgs {
@@ -325,18 +328,8 @@ impl syn::parse::Parse for ServiceArgs {
                 .to_string();
             match key.as_str() {
                 "name" => plugin_id = Some(expect_lit_str(&pair.value)?),
-                "crate" => {
-                    let path_str = expect_lit_str(&pair.value)?;
-                    core_path = Some(parse_str::<Path>(&path_str.value()).map_err(|e| {
-                        syn::Error::new_spanned(&pair.value, format!("invalid `crate` path: {e}"))
-                    })?);
-                }
-                "plugins" => {
-                    let path_str = expect_lit_str(&pair.value)?;
-                    plugins_path = Some(parse_str::<Path>(&path_str.value()).map_err(|e| {
-                        syn::Error::new_spanned(&pair.value, format!("invalid `plugins` path: {e}"))
-                    })?);
-                }
+                "crate" => core_path = Some(expect_path_lit(&pair.value, "crate")?),
+                "plugins" => plugins_path = Some(expect_path_lit(&pair.value, "plugins")?),
                 other => {
                     return Err(syn::Error::new_spanned(
                         &pair.path,
@@ -348,6 +341,7 @@ impl syn::parse::Parse for ServiceArgs {
             }
         }
 
+        let core_path = core_path.unwrap_or_else(|| parse_quote!(::istmo));
         Ok(Self {
             plugin_id: plugin_id.ok_or_else(|| {
                 syn::Error::new(
@@ -355,17 +349,8 @@ impl syn::parse::Parse for ServiceArgs {
                     "#[istmo::service] requires a `name = \"...\"` argument",
                 )
             })?,
-            core_path: core_path.unwrap_or_else(|| parse_quote!(::istmo)),
-            plugins_path: plugins_path.unwrap_or_else(|| parse_quote!(::istmo::plugins)),
+            plugins_path: plugins_path.unwrap_or_else(|| parse_quote!(#core_path::plugins)),
+            core_path,
         })
-    }
-}
-
-fn expect_lit_str(expr: &Expr) -> syn::Result<LitStr> {
-    match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Str(s), ..
-        }) => Ok(s.clone()),
-        _ => Err(syn::Error::new_spanned(expr, "expected string literal")),
     }
 }

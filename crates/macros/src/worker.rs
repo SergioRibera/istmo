@@ -2,20 +2,27 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
-    Expr, ExprLit, FnArg, ItemTrait, Lit, LitStr, MetaNameValue, Path, ReturnType, Token,
-    TraitItem, TraitItemFn, parse_quote, parse_str, parse2,
+    ItemTrait, LitStr, MetaNameValue, Path, Token, TraitItem, TraitItemFn, parse_quote, parse2,
 };
 
-#[allow(unreachable_pub, clippy::too_many_lines)]
-pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+use crate::common::{
+    ReturnShape, TraitKind, classify_return, desugar_async_methods, expect_lit_str,
+    expect_path_lit, reject_unsupported_trait_shape,
+};
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one quote! block holding the whole adapter reads better than fragments stitched together"
+)]
+pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let args: WorkerArgs = parse2(attr)?;
     let mut trait_def: ItemTrait = parse2(item)?;
 
-    reject_unsupported_trait_shape(&trait_def)?;
+    reject_unsupported_trait_shape(&trait_def, TraitKind::Worker)?;
 
     let run_returns_result = classify_run_method(&trait_def)?;
 
-    add_send_bound_to_async_methods(&mut trait_def);
+    desugar_async_methods(&mut trait_def);
 
     let trait_ident = trait_def.ident.clone();
     let vis = trait_def.vis.clone();
@@ -143,22 +150,6 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     })
 }
 
-fn reject_unsupported_trait_shape(t: &ItemTrait) -> syn::Result<()> {
-    if !t.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &t.generics,
-            "generic worker traits are not supported",
-        ));
-    }
-    if !t.supertraits.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &t.supertraits,
-            "supertraits on a worker trait are not supported",
-        ));
-    }
-    Ok(())
-}
-
 fn classify_run_method(t: &ItemTrait) -> syn::Result<bool> {
     let mut run: Option<&TraitItemFn> = None;
     for item in &t.items {
@@ -186,42 +177,16 @@ fn classify_run_method(t: &ItemTrait) -> syn::Result<bool> {
             "`run` must be `async fn`",
         ));
     }
-    if run.sig.inputs.len() != 2 || !matches!(run.sig.inputs.first(), Some(FnArg::Receiver(_))) {
+    if run.sig.inputs.len() != 2 {
         return Err(syn::Error::new_spanned(
             &run.sig,
             "`run` must take `&self` and a single `ctx: WorkerContext` argument",
         ));
     }
-    let returns_result = matches!(
-        &run.sig.output,
-        ReturnType::Type(_, ty) if is_result_type(ty)
-    );
-    Ok(returns_result)
-}
-
-fn is_result_type(ty: &syn::Type) -> bool {
-    let syn::Type::Path(tp) = ty else {
-        return false;
-    };
-    tp.path.segments.last().is_some_and(|s| s.ident == "Result")
-}
-
-fn add_send_bound_to_async_methods(trait_def: &mut ItemTrait) {
-    for item in &mut trait_def.items {
-        let TraitItem::Fn(f) = item else { continue };
-        if f.sig.asyncness.is_none() {
-            continue;
-        }
-        f.sig.asyncness = None;
-        let return_ty = match &f.sig.output {
-            ReturnType::Default => quote! { () },
-            ReturnType::Type(_, t) => quote! { #t },
-        };
-        let new_output: syn::Type = parse_quote! {
-            impl ::core::future::Future<Output = #return_ty> + ::core::marker::Send + '_
-        };
-        f.sig.output = ReturnType::Type(<Token![->]>::default(), Box::new(new_output));
-    }
+    Ok(matches!(
+        classify_return(&run.sig.output)?,
+        ReturnShape::Result { .. }
+    ))
 }
 
 struct WorkerArgs {
@@ -245,18 +210,8 @@ impl syn::parse::Parse for WorkerArgs {
                 .to_string();
             match key.as_str() {
                 "name" => plugin_id = Some(expect_lit_str(&pair.value)?),
-                "crate" => {
-                    let path_str = expect_lit_str(&pair.value)?;
-                    core_path = Some(parse_str::<Path>(&path_str.value()).map_err(|e| {
-                        syn::Error::new_spanned(&pair.value, format!("invalid `crate` path: {e}"))
-                    })?);
-                }
-                "plugins" => {
-                    let path_str = expect_lit_str(&pair.value)?;
-                    plugins_path = Some(parse_str::<Path>(&path_str.value()).map_err(|e| {
-                        syn::Error::new_spanned(&pair.value, format!("invalid `plugins` path: {e}"))
-                    })?);
-                }
+                "crate" => core_path = Some(expect_path_lit(&pair.value, "crate")?),
+                "plugins" => plugins_path = Some(expect_path_lit(&pair.value, "plugins")?),
                 other => {
                     return Err(syn::Error::new_spanned(
                         &pair.path,
@@ -268,6 +223,7 @@ impl syn::parse::Parse for WorkerArgs {
             }
         }
 
+        let core_path = core_path.unwrap_or_else(|| parse_quote!(::istmo));
         Ok(Self {
             plugin_id: plugin_id.ok_or_else(|| {
                 syn::Error::new(
@@ -275,17 +231,8 @@ impl syn::parse::Parse for WorkerArgs {
                     "#[istmo::worker] requires a `name = \"...\"` argument",
                 )
             })?,
-            core_path: core_path.unwrap_or_else(|| parse_quote!(::istmo)),
-            plugins_path: plugins_path.unwrap_or_else(|| parse_quote!(::istmo::plugins)),
+            plugins_path: plugins_path.unwrap_or_else(|| parse_quote!(#core_path::plugins)),
+            core_path,
         })
-    }
-}
-
-fn expect_lit_str(expr: &Expr) -> syn::Result<LitStr> {
-    match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Str(s), ..
-        }) => Ok(s.clone()),
-        _ => Err(syn::Error::new_spanned(expr, "expected string literal")),
     }
 }
