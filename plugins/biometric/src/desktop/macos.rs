@@ -66,8 +66,10 @@ impl Backend {
     ) -> Result<AuthMethod, BiometricError> {
         let (reply_tx, reply_rx) = flume::bounded(1);
         let (cancel_tx, cancel_rx) = flume::bounded(1);
-        // `LAContext` is not `Send`: it lives on its own thread for the
-        // whole evaluation and is only reached through channels.
+        // `LAContext` itself is thread-safe (see `keychain::SharedContext`),
+        // but objc2 does not mark `Retained<LAContext>` as `Send`. Rather
+        // than share it through that unsafe wrapper, this evaluation keeps
+        // its context on one thread and is cancelled through a channel.
         std::thread::Builder::new()
             .name("istmo-biometric-la".to_owned())
             .spawn(move || Evaluation::new(&prompt).run(&reply_tx, &cancel_rx))
@@ -88,17 +90,42 @@ impl Backend {
 }
 
 impl Backend {
-    #[allow(clippy::unused_async)] // Async like every platform backend.
     pub(super) async fn store_secret(
         &self,
         _options: &DesktopOptions,
         alias: &SecretAlias,
         secret: Vec<u8>,
         prompt: AuthPrompt,
-        _cancel: CancelToken,
+        cancel: CancelToken,
     ) -> Result<(), BiometricError> {
-        VaultQuery::item(alias).delete()?;
-        VaultQuery::item(alias).add(&secret, prompt.policy)
+        let context = SharedContext::new();
+        context.configure(&prompt);
+        let (reply_tx, reply_rx) = flume::bounded(1);
+        // Replacing an access-controlled item can block on the Touch ID
+        // sheet, like `SecItemCopyMatching` in `read_secret`.
+        let worker_context = Arc::clone(&context);
+        let alias = alias.clone();
+        let policy = prompt.policy;
+        std::thread::Builder::new()
+            .name("istmo-biometric-keychain".to_owned())
+            .spawn(move || {
+                let outcome = VaultQuery::item(&alias)
+                    .authenticated_by(&worker_context)
+                    .upsert(&secret, policy);
+                let _ = reply_tx.send(outcome);
+            })
+            .map_err(|err| BiometricError::Backend(format!("spawn keychain thread: {err}")))?;
+
+        match until_cancelled(reply_rx.recv_async(), &cancel).await {
+            Some(Ok(outcome)) => outcome,
+            Some(Err(_)) => Err(BiometricError::Backend(
+                "keychain thread exited without a reply".to_owned(),
+            )),
+            None => {
+                context.invalidate();
+                Err(BiometricError::SystemCancelled)
+            }
+        }
     }
 
     pub(super) async fn read_secret(

@@ -22,7 +22,9 @@ use security_framework_sys::item::{
     kSecReturnAttributes, kSecReturnData, kSecUseAuthenticationContext,
     kSecUseDataProtectionKeychain, kSecValueData,
 };
-use security_framework_sys::keychain_item::{SecItemAdd, SecItemCopyMatching, SecItemDelete};
+use security_framework_sys::keychain_item::{
+    SecItemAdd, SecItemCopyMatching, SecItemDelete, SecItemUpdate,
+};
 
 use crate::{AuthPolicy, AuthPrompt, BiometricError, SecretAlias};
 
@@ -43,7 +45,9 @@ pub(super) struct SharedContext(Retained<LAContext>);
 
 // SAFETY: `LAContext` is thread-safe — the macOS 14 SDK declares it
 // `NS_SWIFT_SENDABLE`, and `invalidate` exists precisely to abort an
-// evaluation running on another thread.
+// evaluation running on another thread. objc2 only leaves
+// `Retained<LAContext>` `!Send` because its bindings do not carry that
+// annotation, which is what this impl restores.
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for SharedContext {}
 // SAFETY: see `Send` above.
@@ -146,23 +150,39 @@ impl VaultQuery {
         CFDictionary::from_CFType_pairs(&self.0)
     }
 
-    /// Store `secret` behind an access control matching `policy`.
-    pub(super) fn add(self, secret: &[u8], policy: AuthPolicy) -> Result<(), BiometricError> {
-        let flags = match policy {
-            AuthPolicy::BiometricStrong | AuthPolicy::BiometricWeak => {
-                kSecAccessControlBiometryCurrentSet
-            }
-            AuthPolicy::BiometricOrDeviceCredential => kSecAccessControlUserPresence,
+    /// Store `secret` behind an access control matching `policy`,
+    /// replacing the item in place when it already exists.
+    ///
+    /// Updating (instead of delete + add) keeps the previous secret when
+    /// the call fails or the user cancels the sheet that replacing an
+    /// access-controlled item can show, so the query should carry an
+    /// [`authenticated_by`](Self::authenticated_by) context.
+    pub(super) fn upsert(self, secret: &[u8], policy: AuthPolicy) -> Result<(), BiometricError> {
+        // SAFETY: immutable Security.framework constants.
+        let changes = unsafe {
+            Self(Vec::new())
+                .with(kSecValueData, CFData::from_buffer(secret))
+                .with(kSecAttrAccessControl, access_control(policy)?)
         };
-        let access = SecAccessControl::create_with_protection(
-            Some(ProtectionMode::AccessibleWhenPasscodeSetThisDeviceOnly),
-            flags,
-        )
-        .map_err(|err| BiometricError::Backend(format!("SecAccessControl: {err}")))?;
+        // SAFETY: both dictionaries are valid; `changes` only holds
+        // updatable attributes.
+        let status = unsafe {
+            SecItemUpdate(
+                self.dictionary().as_concrete_TypeRef(),
+                changes.dictionary().as_concrete_TypeRef(),
+            )
+        };
+        match status {
+            ERR_SEC_ITEM_NOT_FOUND => self.add(secret, policy),
+            other => KeychainStatus(other).into_result(),
+        }
+    }
+
+    fn add(self, secret: &[u8], policy: AuthPolicy) -> Result<(), BiometricError> {
         // SAFETY: immutable Security.framework constants.
         let query = unsafe {
             self.with(kSecValueData, CFData::from_buffer(secret))
-                .with(kSecAttrAccessControl, access)
+                .with(kSecAttrAccessControl, access_control(policy)?)
         };
         // SAFETY: the dictionary is a valid add query; no result is
         // requested.
@@ -222,6 +242,20 @@ impl VaultQuery {
             other => KeychainStatus(other).into_result().map(|()| false),
         }
     }
+}
+
+fn access_control(policy: AuthPolicy) -> Result<SecAccessControl, BiometricError> {
+    let flags = match policy {
+        AuthPolicy::BiometricStrong | AuthPolicy::BiometricWeak => {
+            kSecAccessControlBiometryCurrentSet
+        }
+        AuthPolicy::BiometricOrDeviceCredential => kSecAccessControlUserPresence,
+    };
+    SecAccessControl::create_with_protection(
+        Some(ProtectionMode::AccessibleWhenPasscodeSetThisDeviceOnly),
+        flags,
+    )
+    .map_err(|err| BiometricError::Backend(format!("SecAccessControl: {err}")))
 }
 
 /// `OSStatus` returned by a `SecItem*` call.
