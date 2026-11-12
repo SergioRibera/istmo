@@ -1,6 +1,11 @@
 [plugin]
 id = "istmo.google_sign_in"
 client_type = "::istmo_google_sign_in::SignInClient"
+# Reference factories shipped in `native/`. Credential Manager presents
+# over an Activity, so the Android factory takes the host activity.
+android_backend = "dev.istmo.plugins.googlesignin.GoogleSignInFactoryImpl"
+android_backend_arg = "activity"
+ios_backend = "GoogleSignInFactoryImpl"
 
 [[gradle]]
 group = "androidx.credentials"
@@ -18,8 +23,8 @@ group = "com.google.android.libraries.identity.googleid"
 artifact = "googleid"
 version = "1.1.1"
 
+# 7.1 adds the `nonce:` parameter to `GIDSignIn.signIn`.
 [[swift_package]]
 url = "https://github.com/google/GoogleSignIn-iOS.git"
 product = "GoogleSignIn"
-from_version = "7.0.0"
-
+from_version = "7.1.0"
