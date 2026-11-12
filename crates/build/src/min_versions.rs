@@ -315,7 +315,12 @@ pub fn enforce_min_versions(dep_manifests: &[Manifest], app: Option<&Manifest>, 
         MinVersionPlatform::Macos => {
             crate::directive::rerun_if_env_changed("MACOSX_DEPLOYMENT_TARGET");
         }
-        MinVersionPlatform::Android | MinVersionPlatform::Windows => {}
+        MinVersionPlatform::Android => {
+            for file in ["build.gradle.kts", "build.gradle"] {
+                crate::directive::rerun_if_exists(&app_root.join("android/app").join(file));
+            }
+        }
+        MinVersionPlatform::Windows => {}
     }
     let app_versions = app.map(|m| m.min_versions).unwrap_or_default();
     let Some((floor, source)) = detect_app_floor(platform, &app_versions, app_root) else {

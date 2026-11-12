@@ -31,6 +31,14 @@ pub(crate) fn rerun_if_changed(path: &Path) {
     emit(format!("cargo:rerun-if-changed={}", path.display()));
 }
 
+/// [`rerun_if_changed`] for an input that may not exist. Cargo treats a
+/// missing tracked path as always stale, so absent paths are skipped.
+pub(crate) fn rerun_if_exists(path: &Path) {
+    if path.exists() {
+        rerun_if_changed(path);
+    }
+}
+
 /// `cargo:rerun-if-env-changed=<var>`.
 pub(crate) fn rerun_if_env_changed(var: &str) {
     emit(format!("cargo:rerun-if-env-changed={var}"));
@@ -68,5 +76,11 @@ mod tests {
                 "cargo::warning=istmo-build: careful",
             ]
         );
+    }
+
+    #[test]
+    fn missing_paths_are_not_tracked() {
+        let ((), lines) = capture(|| rerun_if_exists(Path::new("/definitely/not/here")));
+        assert!(lines.is_empty());
     }
 }

@@ -118,7 +118,6 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
         .unwrap_or_else(|| root.join("android"));
     let ios_root = opts.ios_root.clone().unwrap_or_else(|| root.join("ios"));
 
-    let manifest_path = root.join("istmo.toml");
     let app_config = &toml.app;
 
     let android_enabled = opts.android.or(app_config.android).unwrap_or(true);
@@ -134,6 +133,7 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
     );
     let android_active = android_enabled && android_root.is_dir();
     let ios_active = ios_enabled && ios_root.is_dir();
+    track_crate_inputs(&root);
     // Plugin crates run `emit()` too: only apps (a native project or a
     // binary to ship) get the desktop icon, runtime env and assets.
     if !android_active && !ios_active && !app.krate.has_binaries() {
@@ -143,11 +143,18 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
         crate::directive::rerun_if_changed(source);
     }
     emit_desktop_icon(&app, &dep_manifests_by_links, app_manifest.as_ref());
-    let ios_app_dir = opts
+    let configured_ios_app_dir = opts
         .ios_app_dir
         .clone()
-        .or_else(|| app_config.ios_app_dir.clone())
-        .or_else(|| detect_ios_app_dir(&ios_root));
+        .or_else(|| app_config.ios_app_dir.clone());
+    let ios_app_dir_detected = configured_ios_app_dir.is_none();
+    let ios_app_dir = configured_ios_app_dir.or_else(|| detect_ios_app_dir(&ios_root));
+    if android_active {
+        track_android_inputs(&android_root);
+    }
+    if ios_active {
+        track_ios_inputs(&ios_root, ios_app_dir.as_deref(), ios_app_dir_detected);
+    }
     let ios_plugins_subdir = opts
         .ios_plugins_subdir
         .clone()
@@ -194,9 +201,11 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
         .map(|p| (p.id.as_str(), p))
         .collect();
 
-    let rust_entry = app_config
-        .rust_entry
-        .unwrap_or_else(|| app.krate.declares_mobile_app());
+    let rust_entry = app_config.rust_entry.unwrap_or_else(|| {
+        // The scan reads every file under `src/`.
+        crate::directive::rerun_if_exists(&root.join("src"));
+        app.krate.declares_mobile_app()
+    });
 
     if app.icon.image.is_none()
         && app.icon.android.is_some()
@@ -383,10 +392,40 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
             .map(|dir| (ios_root.as_path(), dir)),
     )
     .report();
+}
 
+/// Crate files every app-side run reads. Tracked before the early
+/// returns so plugin and desktop-only crates rerun on them too; the
+/// `src/` entry points feed wired-plugin extraction.
+fn track_crate_inputs(root: &Path) {
     crate::directive::rerun_if_changed(Path::new("build.rs"));
-    if manifest_path.exists() {
-        crate::directive::rerun_if_changed(Path::new("istmo.toml"));
+    for file in ["istmo.toml", "Cargo.toml", "src/lib.rs", "src/main.rs"] {
+        crate::directive::rerun_if_exists(&root.join(file));
+    }
+}
+
+/// Android project files read by namespace detection, the doctor and
+/// the `AndroidManifest.xml` marker patches.
+fn track_android_inputs(android_root: &Path) {
+    for file in [
+        "app/build.gradle.kts",
+        "app/build.gradle",
+        "app/src/main/AndroidManifest.xml",
+    ] {
+        crate::directive::rerun_if_exists(&android_root.join(file));
+    }
+}
+
+/// iOS project files read by app-dir detection, the doctor and the
+/// `Info.plist` marker patches. A detected app dir depends on the
+/// listing of `ios/`, which Cargo can only watch as the whole directory.
+fn track_ios_inputs(ios_root: &Path, app_dir: Option<&str>, app_dir_detected: bool) {
+    if app_dir_detected {
+        crate::directive::rerun_if_changed(ios_root);
+    }
+    crate::directive::rerun_if_exists(&ios_root.join("project.yml"));
+    if let Some(app_dir) = app_dir {
+        crate::directive::rerun_if_exists(&ios_root.join(app_dir).join("Info.plist"));
     }
 }
 
@@ -839,6 +878,8 @@ fn patch_marker_file(path: &Path, start: &str, end: &str, fragments: &[String]) 
     let Ok(source) = fs::read_to_string(path) else {
         return;
     };
+    // User-owned file: a hand edit (e.g. adding the markers) must rerun us.
+    crate::directive::rerun_if_changed(path);
     let Some(start_idx) = source.find(start) else {
         return;
     };
@@ -1541,6 +1582,85 @@ mod tests {
             extract_manifest_package(xml).as_deref(),
             Some("dev.istmo.legacy")
         );
+    }
+
+    fn write(path: &Path, contents: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn every_read_input_gets_a_rerun_line() {
+        let root = std::env::temp_dir().join(format!("istmo-rerun-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write(&root.join("istmo.toml"), "[app]\nname = \"Demo\"\n");
+        write(&root.join("Cargo.toml"), "[package]\nname = \"demo\"\n");
+        write(&root.join("src/lib.rs"), "istmo::runtime!(plugins: []);\n");
+        write(&root.join("src/main.rs"), "fn main() {}\n");
+        let gradle = root.join("android/app/build.gradle.kts");
+        write(
+            &gradle,
+            "android {\n    namespace = \"com.example.demo\"\n}\n",
+        );
+        let android_manifest = root.join("android/app/src/main/AndroidManifest.xml");
+        write(&android_manifest, "<manifest>\n</manifest>\n");
+        let info_plist = root.join("ios/Demo/Info.plist");
+        write(&info_plist, "<plist><dict></dict></plist>\n");
+        write(&root.join("ios/project.yml"), "name: Demo\n");
+
+        let ((), lines) = crate::directive::capture(|| {
+            emit_app_with(AppOpts {
+                root: Some(root.clone()),
+                lib_name: Some("demo".into()),
+                ..AppOpts::default()
+            });
+        });
+        let rerun: Vec<&str> = lines
+            .iter()
+            .filter_map(|line| line.strip_prefix("cargo:rerun-if-changed="))
+            .collect();
+        let expected = [
+            PathBuf::from("build.rs"),
+            root.join("istmo.toml"),
+            root.join("Cargo.toml"),
+            root.join("src/lib.rs"),
+            root.join("src/main.rs"),
+            gradle,
+            android_manifest,
+            root.join("ios"),
+            root.join("ios/project.yml"),
+            info_plist,
+        ];
+        for path in &expected {
+            let path = path.display().to_string();
+            assert!(
+                rerun.contains(&path.as_str()),
+                "missing {path} in {rerun:#?}"
+            );
+        }
+        // Only inputs that exist are tracked: Cargo reruns forever on a
+        // missing one.
+        let groovy = root.join("android/app/build.gradle").display().to_string();
+        assert!(!rerun.contains(&groovy.as_str()));
+    }
+
+    #[test]
+    fn configured_ios_app_dir_does_not_watch_the_ios_directory() {
+        let root = std::env::temp_dir().join(format!("istmo-rerun-ios-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write(&root.join("ios/Demo/Info.plist"), "<plist/>\n");
+        write(&root.join("src/main.rs"), "fn main() {}\n");
+        let ((), lines) = crate::directive::capture(|| {
+            emit_app_with(AppOpts {
+                root: Some(root.clone()),
+                android: Some(false),
+                ios_app_dir: Some("Demo".into()),
+                lib_name: Some("demo".into()),
+                ..AppOpts::default()
+            });
+        });
+        let ios = format!("cargo:rerun-if-changed={}", root.join("ios").display());
+        assert!(!lines.contains(&ios), "{lines:#?}");
     }
 
     #[test]
