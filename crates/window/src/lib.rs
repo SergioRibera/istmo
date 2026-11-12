@@ -23,6 +23,7 @@
 
 #![doc(html_root_url = "https://docs.rs/istmo-window")]
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fmt;
@@ -185,6 +186,9 @@ pub enum WindowError {
     /// A [`WindowListener`] refused the window; the registration was
     /// rolled back.
     Listener(String),
+    /// A [`WindowListener`] callback called back into a mutating
+    /// operation of the registry that is notifying it.
+    Reentrant,
 }
 
 impl fmt::Display for WindowError {
@@ -193,6 +197,9 @@ impl fmt::Display for WindowError {
             Self::Handle(err) => write!(f, "window handle unavailable: {err}"),
             Self::UnsupportedHandle => f.write_str("unsupported raw window handle kind"),
             Self::Listener(msg) => write!(f, "window listener rejected registration: {msg}"),
+            Self::Reentrant => {
+                f.write_str("window registry mutated from inside one of its listener callbacks")
+            }
         }
     }
 }
@@ -201,7 +208,7 @@ impl std::error::Error for WindowError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Handle(err) => Some(err),
-            Self::UnsupportedHandle | Self::Listener(_) => None,
+            Self::UnsupportedHandle | Self::Listener(_) | Self::Reentrant => None,
         }
     }
 }
@@ -224,9 +231,11 @@ pub trait WindowListener: Send + Sync {
 /// Listener callbacks run on the thread that registers, unregisters or
 /// subscribes, outside the window map's lock (so they may call
 /// [`WindowRegistry::get`] and the other readers) but inside the
-/// registry's operation lock: a listener must not call back into
-/// [`WindowRegistry::register`], [`WindowRegistry::unregister`] or
-/// [`WindowRegistry::add_listener`] on the same registry.
+/// registry's operation lock. Calling back into
+/// [`WindowRegistry::register`] or [`WindowRegistry::add_listener`] on
+/// the same registry from a listener fails with
+/// [`WindowError::Reentrant`], and [`WindowRegistry::unregister`] is
+/// ignored, instead of deadlocking on that lock.
 #[derive(Default)]
 pub struct WindowRegistry {
     /// Serialises the mutating operations so the map and every
@@ -273,7 +282,7 @@ impl WindowRegistry {
     /// Register an already-resolved [`NativeWindow`] (or
     /// [`NativeWindow::Detached`]) under `id`.
     pub fn register_native(&self, id: WindowId, window: NativeWindow) -> Result<(), WindowError> {
-        let _ops = lock(&self.ops);
+        let _ops = self.enter_ops().ok_or(WindowError::Reentrant)?;
         self.unregister_locked(id);
         let listeners = self.live_listeners();
         for (index, listener) in listeners.iter().enumerate() {
@@ -288,9 +297,12 @@ impl WindowRegistry {
         Ok(())
     }
 
-    /// Remove `id`. Unknown ids are ignored.
+    /// Remove `id`. Unknown ids are ignored, and so is a call from inside
+    /// one of this registry's listener callbacks.
     pub fn unregister(&self, id: WindowId) {
-        let _ops = lock(&self.ops);
+        let Some(_ops) = self.enter_ops() else {
+            return;
+        };
         self.unregister_locked(id);
     }
 
@@ -330,7 +342,7 @@ impl WindowRegistry {
     /// Replay errors are returned but do not unregister the window —
     /// other plugins may already depend on it.
     pub fn add_listener(&self, listener: &Arc<dyn WindowListener>) -> Result<(), WindowError> {
-        let _ops = lock(&self.ops);
+        let _ops = self.enter_ops().ok_or(WindowError::Reentrant)?;
         lock(&self.listeners).push(Arc::downgrade(listener));
         let snapshot: Vec<_> = lock(&self.windows)
             .iter()
@@ -345,10 +357,44 @@ impl WindowRegistry {
         first_error.map_or(Ok(()), Err)
     }
 
+    /// Take the operation lock, or `None` when this thread already holds
+    /// it (a listener callback re-entering): `std` mutexes are not
+    /// reentrant, so locking again would deadlock.
+    fn enter_ops(&self) -> Option<OpsGuard<'_>> {
+        let addr = std::ptr::from_ref(self).addr();
+        if OPS_HELD.with_borrow(|held| held.contains(&addr)) {
+            return None;
+        }
+        let guard = lock(&self.ops);
+        OPS_HELD.with_borrow_mut(|held| held.push(addr));
+        Some(OpsGuard { _lock: guard, addr })
+    }
+
     fn live_listeners(&self) -> Vec<Arc<dyn WindowListener>> {
         let mut listeners = lock(&self.listeners);
         listeners.retain(|weak| weak.strong_count() > 0);
         listeners.iter().filter_map(Weak::upgrade).collect()
+    }
+}
+
+thread_local! {
+    /// Addresses of the registries whose operation lock this thread holds.
+    static OPS_HELD: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A registry's operation lock plus its [`OPS_HELD`] entry.
+struct OpsGuard<'a> {
+    _lock: MutexGuard<'a, ()>,
+    addr: usize,
+}
+
+impl Drop for OpsGuard<'_> {
+    fn drop(&mut self) {
+        OPS_HELD.with_borrow_mut(|held| {
+            if let Some(at) = held.iter().rposition(|&a| a == self.addr) {
+                held.swap_remove(at);
+            }
+        });
     }
 }
 
@@ -446,6 +492,50 @@ mod tests {
             .expect("register");
         assert_eq!(registry.any_attached(), Some((WindowId(2), hwnd)));
         assert_eq!(hwnd.hwnd().map(NonZeroIsize::get), Some(0x10));
+    }
+
+    /// Re-enters the registry it listens to from every callback.
+    struct Reentering {
+        registry: Weak<WindowRegistry>,
+        seen: Mutex<Vec<String>>,
+    }
+
+    impl WindowListener for Reentering {
+        fn window_registered(&self, id: WindowId, _window: NativeWindow) -> Result<(), String> {
+            let registry = self.registry.upgrade().expect("registry alive");
+            let nested = registry.register_native(WindowId(id.0 + 100), NativeWindow::Detached);
+            let listener: Arc<dyn WindowListener> = Arc::new(Recorder::default());
+            let added = registry.add_listener(&listener);
+            registry.unregister(id);
+            lock(&self.seen).push(format!(
+                "{}/{}/{}",
+                matches!(nested, Err(WindowError::Reentrant)),
+                matches!(added, Err(WindowError::Reentrant)),
+                registry.get(WindowId(id.0 + 100)).is_none(),
+            ));
+            Ok(())
+        }
+
+        fn window_unregistered(&self, _id: WindowId) {}
+    }
+
+    #[test]
+    fn listener_reentry_fails_instead_of_deadlocking() {
+        let registry = Arc::new(WindowRegistry::default());
+        let reentering = Arc::new(Reentering {
+            registry: Arc::downgrade(&registry),
+            seen: Mutex::default(),
+        });
+        let listener: Arc<dyn WindowListener> = reentering.clone();
+        registry.add_listener(&listener).expect("add");
+        registry
+            .register_native(WindowId(1), NativeWindow::Detached)
+            .expect("register");
+        assert_eq!(*lock(&reentering.seen), ["true/true/true"]);
+        assert_eq!(registry.ids(), [WindowId(1)]);
+        // The lock was released: later operations go through.
+        registry.unregister(WindowId(1));
+        assert!(registry.ids().is_empty());
     }
 
     #[test]
