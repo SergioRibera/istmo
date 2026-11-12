@@ -13,6 +13,9 @@ public enum IstmoRuntimeError: Error {
 
     case shutdown
 
+    /// The call was cancelled through `IstmoRuntime.cancel(pluginId:)`.
+    case cancelled
+
     case streamCancelled
 
     case streamError(Data)

@@ -11,8 +11,20 @@ public final class IstmoRuntime {
     /// never observe a freed runtime; released once the pump is joined.
     private var retainedCtx: Unmanaged<IstmoRuntime>?
     private var nextId: UInt64 = 1_000_000_000
-    private var pending: [UInt64: CheckedContinuation<Data, Error>] = [:]
-    private var streams: [UInt64: AsyncThrowingStream<Data, Error>.Continuation] = [:]
+    /// Calls into Rust awaiting their response, keyed by call id. The
+    /// plugin id lets `cancel(pluginId:)` pick out its own calls.
+    private var pending: [UInt64: PendingCall] = [:]
+    private var streams: [UInt64: PendingStream] = [:]
+
+    private struct PendingCall {
+        let pluginId: String
+        let cont: CheckedContinuation<Data, Error>
+    }
+
+    private struct PendingStream {
+        let pluginId: String
+        let cont: AsyncThrowingStream<Data, Error>.Continuation
+    }
 
     private var handlers: [String: PluginHandler] = [:]
 
@@ -86,12 +98,12 @@ public final class IstmoRuntime {
             }
         }
         queue.sync {
-            for (_, cont) in pending {
-                cont.resume(throwing: IstmoRuntimeError.shutdown)
+            for (_, call) in pending {
+                call.cont.resume(throwing: IstmoRuntimeError.shutdown)
             }
             pending.removeAll()
-            for (_, cont) in streams {
-                cont.finish(throwing: IstmoRuntimeError.shutdown)
+            for (_, stream) in streams {
+                stream.cont.finish(throwing: IstmoRuntimeError.shutdown)
             }
             streams.removeAll()
             for (_, task) in hostedTasks {
@@ -116,7 +128,7 @@ public final class IstmoRuntime {
                     cont.resume(throwing: IstmoRuntimeError.shutdown)
                     return
                 }
-                self.pending[callId] = cont
+                self.pending[callId] = PendingCall(pluginId: pluginId, cont: cont)
                 let pidBytes = Array(pluginId.utf8)
                 let mBytes = Array(method.utf8)
                 payload.withUnsafeBytes { payloadPtr in
@@ -147,13 +159,29 @@ public final class IstmoRuntime {
         }
     }
 
+    /// Cancel every call and stream this runtime has in flight to
+    /// `pluginId`: each fails locally with `IstmoRuntimeError.cancelled` /
+    /// `.streamCancelled`, and Rust gets a cooperative cancel so the
+    /// hosted work stops too. Calls to other plugins are left alone.
     public func cancel(pluginId: String) {
-        queue.sync {
-
-            for (_, cont) in pending {
-                cont.resume(throwing: IstmoRuntimeError.shutdown)
+        let callIds = queue.sync { () -> [UInt64] in
+            var ids: [UInt64] = []
+            for (id, call) in pending where call.pluginId == pluginId {
+                pending.removeValue(forKey: id)
+                call.cont.resume(throwing: IstmoRuntimeError.cancelled)
+                ids.append(id)
             }
-            pending.removeAll()
+            for (id, stream) in streams where stream.pluginId == pluginId {
+                streams.removeValue(forKey: id)
+                stream.cont.finish(throwing: IstmoRuntimeError.streamCancelled)
+                ids.append(id)
+            }
+            return ids
+        }
+        // Outside `queue`: the cancel is delivered on Rust's side and
+        // nothing here needs the runtime's state any more.
+        for id in callIds {
+            istmo_ios_submit_cancel(id)
         }
     }
 
@@ -169,7 +197,7 @@ public final class IstmoRuntime {
                     cont.finish(throwing: IstmoRuntimeError.shutdown)
                     return
                 }
-                self.streams[streamId] = cont
+                self.streams[streamId] = PendingStream(pluginId: pluginId, cont: cont)
                 let pidBytes = Array(pluginId.utf8)
                 let mBytes = Array(method.utf8)
                 payload.withUnsafeBytes { payloadPtr in
@@ -188,9 +216,13 @@ public final class IstmoRuntime {
                 }
             }
             cont.onTermination = { @Sendable _ in
-
                 self.queue.async {
-                    self.streams.removeValue(forKey: streamId)
+                    // Still registered means the consumer stopped first
+                    // (every other end removes the entry before finishing),
+                    // so Rust has to stop producing.
+                    if self.streams.removeValue(forKey: streamId) != nil {
+                        istmo_ios_submit_cancel(streamId)
+                    }
                 }
             }
         }
@@ -246,7 +278,7 @@ public final class IstmoRuntime {
 
     fileprivate func handleRespond(callId: UInt64, ok: Bool, payload: Data) {
         queue.async {
-            guard let cont = self.pending.removeValue(forKey: callId) else {
+            guard let cont = self.pending.removeValue(forKey: callId)?.cont else {
                 NSLog("IstmoRuntime: onRespond for unknown call_id \(callId)")
                 return
             }
@@ -260,7 +292,7 @@ public final class IstmoRuntime {
 
     fileprivate func handleEvent(streamId: UInt64, payload: Data) {
         queue.async {
-            guard let cont = self.streams[streamId] else {
+            guard let cont = self.streams[streamId]?.cont else {
                 NSLog("IstmoRuntime: onEvent for unknown stream_id \(streamId)")
                 return
             }
@@ -270,7 +302,7 @@ public final class IstmoRuntime {
 
     fileprivate func handleStreamEnd(streamId: UInt64, reason: UInt32, errPayload: Data) {
         queue.async {
-            guard let cont = self.streams.removeValue(forKey: streamId) else { return }
+            guard let cont = self.streams.removeValue(forKey: streamId)?.cont else { return }
             switch reason {
             case 0:
                 cont.finish()
