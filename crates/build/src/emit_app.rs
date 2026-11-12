@@ -558,10 +558,16 @@ fn track_android_inputs(android_root: &Path) {
 }
 
 /// iOS project files read by app-dir detection, the doctor and the
-/// `Info.plist` marker patches. A detected app dir depends on the
-/// listing of `ios/`, which Cargo can only watch as the whole directory.
+/// `Info.plist` marker patches.
+///
+/// Detection depends on the listing of `ios/`, which Cargo can only
+/// watch as the whole directory, recursively. Once an app dir is found
+/// that watch would rerun the build script (and recompile the crate)
+/// whenever Xcode touches its user state or the build writes into
+/// `ios/`, so it is kept only while detection finds nothing; a found
+/// dir that goes away still reruns through its `Info.plist`.
 fn track_ios_inputs(ios_root: &Path, app_dir: Option<&str>, app_dir_detected: bool) {
-    if app_dir_detected {
+    if app_dir_detected && app_dir.is_none() {
         crate::directive::rerun_if_changed(ios_root);
     }
     crate::directive::rerun_if_exists(&ios_root.join("project.yml"));
@@ -853,7 +859,6 @@ mod tests {
             root.join("src/main.rs"),
             gradle,
             android_manifest,
-            root.join("ios"),
             root.join("ios/project.yml"),
             info_plist,
         ];
@@ -868,6 +873,28 @@ mod tests {
         // missing one.
         let groovy = root.join("android/app/build.gradle").display().to_string();
         assert!(!rerun.contains(&groovy.as_str()));
+        // A detected app dir stops the recursive `ios/` watch.
+        let ios = root.join("ios").display().to_string();
+        assert!(!rerun.contains(&ios.as_str()), "{rerun:#?}");
+    }
+
+    #[test]
+    fn undetectable_ios_app_dir_watches_the_ios_directory() {
+        let root =
+            std::env::temp_dir().join(format!("istmo-rerun-ios-none-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("ios")).unwrap();
+        write(&root.join("src/main.rs"), "fn main() {}\n");
+        let ((), lines) = crate::directive::capture(|| {
+            emit_app_with(AppOpts {
+                root: Some(root.clone()),
+                android: Some(false),
+                lib_name: Some("demo".into()),
+                ..AppOpts::default()
+            });
+        });
+        let ios = format!("cargo:rerun-if-changed={}", root.join("ios").display());
+        assert!(lines.contains(&ios), "{lines:#?}");
     }
 
     #[test]
