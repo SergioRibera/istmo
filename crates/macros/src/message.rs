@@ -2,17 +2,17 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
-    Attribute, Expr, ExprLit, Item, ItemStruct, Lit, LitStr, MetaNameValue, Path, Token,
-    parse_quote, parse_str, parse2,
+    Attribute, Fields, Item, ItemStruct, LitStr, MetaNameValue, Path, Token, parse_quote, parse2,
 };
 
-#[allow(unreachable_pub)]
-pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+use crate::common::expect_path_lit;
+
+pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let args: MessageArgs = parse2(attr)?;
     let item: Item = parse2(item)?;
     match item {
         Item::Struct(s) => expand_struct(&args, s),
-        Item::Enum(e) => Ok(expand_enum(&args, &e)),
+        Item::Enum(e) => expand_enum(&args, &e),
         other => Err(syn::Error::new_spanned(
             other,
             "#[istmo::message] can only be applied to struct or enum declarations",
@@ -20,15 +20,27 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     }
 }
 
-fn expand_enum(args: &MessageArgs, item: &syn::ItemEnum) -> TokenStream {
+fn expand_enum(args: &MessageArgs, item: &syn::ItemEnum) -> syn::Result<TokenStream> {
+    for variant in &item.variants {
+        reject_handle_attrs(
+            &variant.fields,
+            "`#[handle]` is not supported inside enums; carry the handle in a `#[message]` struct field",
+        )?;
+    }
     let derive = args.derive();
-    quote! {
+    Ok(quote! {
         #derive
         #item
-    }
+    })
 }
 
 fn expand_struct(args: &MessageArgs, mut wire: ItemStruct) -> syn::Result<TokenStream> {
+    if !matches!(wire.fields, Fields::Named(_)) {
+        reject_handle_attrs(
+            &wire.fields,
+            "`#[handle]` requires a struct with named fields",
+        )?;
+    }
     let handles = collect_handle_fields(&wire)?;
     strip_handle_attrs(&mut wire);
 
@@ -59,8 +71,18 @@ struct HandleField {
     marker: syn::Type,
 }
 
+/// `#[handle]` is an inert marker that only a named-field struct
+/// consumes; anywhere else it would reach rustc as an unknown attribute.
+fn reject_handle_attrs(fields: &Fields, message: &str) -> syn::Result<()> {
+    fields
+        .iter()
+        .flat_map(|f| &f.attrs)
+        .find(|a| is_handle_attr(a))
+        .map_or(Ok(()), |attr| Err(syn::Error::new_spanned(attr, message)))
+}
+
 fn collect_handle_fields(s: &ItemStruct) -> syn::Result<Vec<HandleField>> {
-    let syn::Fields::Named(named) = &s.fields else {
+    let Fields::Named(named) = &s.fields else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
@@ -68,28 +90,26 @@ fn collect_handle_fields(s: &ItemStruct) -> syn::Result<Vec<HandleField>> {
         let Some(marker) = handle_marker(&f.attrs)? else {
             continue;
         };
-        if f.ident.is_none() {
-            return Err(syn::Error::new_spanned(
-                f,
-                "`#[handle]` requires a named field",
-            ));
-        }
         out.push(HandleField { index, marker });
     }
     Ok(out)
 }
 
 fn handle_marker(attrs: &[Attribute]) -> syn::Result<Option<syn::Type>> {
-    for attr in attrs {
-        if !is_handle_attr(attr) {
-            continue;
-        }
-        let marker: syn::Type = attr
-            .parse_args()
-            .map_err(|e| syn::Error::new_spanned(attr, format!("`#[handle(...)]`: {e}")))?;
-        return Ok(Some(marker));
+    let mut found = attrs.iter().filter(|a| is_handle_attr(a));
+    let Some(attr) = found.next() else {
+        return Ok(None);
+    };
+    if let Some(extra) = found.next() {
+        return Err(syn::Error::new_spanned(
+            extra,
+            "a field takes a single `#[handle(...)]`",
+        ));
     }
-    Ok(None)
+    let marker: syn::Type = attr
+        .parse_args()
+        .map_err(|e| syn::Error::new_spanned(attr, format!("`#[handle(...)]`: {e}")))?;
+    Ok(Some(marker))
 }
 
 fn is_handle_attr(attr: &Attribute) -> bool {
@@ -107,7 +127,7 @@ fn is_handle_attr(attr: &Attribute) -> bool {
 }
 
 fn strip_handle_attrs(s: &mut ItemStruct) {
-    if let syn::Fields::Named(named) = &mut s.fields {
+    if let Fields::Named(named) = &mut s.fields {
         for f in &mut named.named {
             f.attrs.retain(|a| !is_handle_attr(a));
         }
@@ -117,27 +137,28 @@ fn strip_handle_attrs(s: &mut ItemStruct) {
 fn generate_owned_struct(wire: &ItemStruct, handles: &[HandleField], root: &Path) -> TokenStream {
     let vis = &wire.vis;
     let owned_ident = format_ident!("Owned{}", wire.ident);
-    let syn::Fields::Named(named) = &wire.fields else {
+    let generics = &wire.generics;
+    let where_clause = &generics.where_clause;
+    let Fields::Named(named) = &wire.fields else {
         return quote! {};
     };
     let fields = named.named.iter().enumerate().map(|(idx, f)| {
         let field_vis = &f.vis;
-        let name = f.ident.as_ref().expect("named field");
-        if let Some(h) = handles.iter().find(|h| h.index == idx) {
-            let marker = &h.marker;
-            quote! {
-                #field_vis #name: #root::NativeHandle<#marker>
-            }
-        } else {
-            let ty = &f.ty;
-            quote! {
-                #field_vis #name: #ty
-            }
-        }
+        let name = &f.ident;
+        handles.iter().find(|h| h.index == idx).map_or_else(
+            || {
+                let ty = &f.ty;
+                quote! { #field_vis #name: #ty }
+            },
+            |h| {
+                let marker = &h.marker;
+                quote! { #field_vis #name: #root::NativeHandle<#marker> }
+            },
+        )
     });
     quote! {
         #[derive(::core::fmt::Debug)]
-        #vis struct #owned_ident {
+        #vis struct #owned_ident #generics #where_clause {
             #(#fields,)*
         }
     }
@@ -146,30 +167,27 @@ fn generate_owned_struct(wire: &ItemStruct, handles: &[HandleField], root: &Path
 fn generate_into_owned(wire: &ItemStruct, handles: &[HandleField], root: &Path) -> TokenStream {
     let wire_ident = &wire.ident;
     let owned_ident = format_ident!("Owned{}", wire_ident);
-    let syn::Fields::Named(named) = &wire.fields else {
+    let (impl_generics, ty_generics, where_clause) = wire.generics.split_for_impl();
+    let Fields::Named(named) = &wire.fields else {
         return quote! {};
     };
     let field_assigns = named.named.iter().enumerate().map(|(idx, f)| {
-        let name = f.ident.as_ref().expect("named field");
-        if let Some(h) = handles.iter().find(|h| h.index == idx) {
-            let marker = &h.marker;
-            quote! {
-                #name: #root::NativeHandle::<#marker>::adopt(rt, self.#name)
-            }
-        } else {
-            quote! {
-                #name: self.#name
-            }
-        }
+        let name = &f.ident;
+        handles.iter().find(|h| h.index == idx).map_or_else(
+            || quote! { #name: self.#name },
+            |h| {
+                let marker = &h.marker;
+                quote! { #name: #root::NativeHandle::<#marker>::adopt(rt, self.#name) }
+            },
+        )
     });
     quote! {
-        impl #wire_ident {
-
+        impl #impl_generics #wire_ident #ty_generics #where_clause {
             #[must_use]
             pub fn into_owned(
                 self,
                 rt: &::std::sync::Arc<#root::Runtime>,
-            ) -> #owned_ident {
+            ) -> #owned_ident #ty_generics {
                 #owned_ident {
                     #(#field_assigns,)*
                 }
@@ -210,18 +228,8 @@ impl syn::parse::Parse for MessageArgs {
                 .ok_or_else(|| syn::Error::new_spanned(&pair.path, "expected identifier"))?
                 .to_string();
             match key.as_str() {
-                "wincode" => {
-                    let raw = expect_lit_str(&pair.value)?;
-                    wincode_path = Some(parse_str::<Path>(&raw.value()).map_err(|e| {
-                        syn::Error::new_spanned(&pair.value, format!("invalid `wincode` path: {e}"))
-                    })?);
-                }
-                "crate" => {
-                    let raw = expect_lit_str(&pair.value)?;
-                    crate_path = Some(parse_str::<Path>(&raw.value()).map_err(|e| {
-                        syn::Error::new_spanned(&pair.value, format!("invalid `crate` path: {e}"))
-                    })?);
-                }
+                "wincode" => wincode_path = Some(expect_path_lit(&pair.value, "wincode")?),
+                "crate" => crate_path = Some(expect_path_lit(&pair.value, "crate")?),
                 other => {
                     return Err(syn::Error::new_spanned(
                         &pair.path,
@@ -235,14 +243,5 @@ impl syn::parse::Parse for MessageArgs {
             wincode_path: wincode_path.unwrap_or_else(|| parse_quote!(#crate_path::wincode)),
             crate_path,
         })
-    }
-}
-
-fn expect_lit_str(expr: &Expr) -> syn::Result<LitStr> {
-    match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Str(s), ..
-        }) => Ok(s.clone()),
-        _ => Err(syn::Error::new_spanned(expr, "expected string literal")),
     }
 }
