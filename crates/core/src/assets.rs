@@ -162,15 +162,15 @@ impl From<AssetError> for io::Error {
     fn from(value: AssetError) -> Self {
         match value {
             AssetError::Io(err) => err,
-            AssetError::NotFound { scope, key } => io::Error::new(
+            AssetError::NotFound { scope, key } => Self::new(
                 io::ErrorKind::NotFound,
                 format!("asset `{key}` not found in {scope}"),
             ),
-            AssetError::BackendNotInstalled => io::Error::new(
+            AssetError::BackendNotInstalled => Self::new(
                 io::ErrorKind::Unsupported,
                 "istmo asset backend has not been installed on this platform",
             ),
-            AssetError::Backend(msg) => io::Error::other(msg),
+            AssetError::Backend(msg) => Self::other(msg),
         }
     }
 }
@@ -216,7 +216,7 @@ pub fn open(path: impl AsRef<Path>) -> io::Result<AssetReader> {
 
 /// Plugin-scoped asset accessor.
 #[must_use]
-pub fn plugin(id: &'static str) -> PluginAssets {
+pub const fn plugin(id: &'static str) -> PluginAssets {
     PluginAssets { id }
 }
 
@@ -285,7 +285,7 @@ fn normalise_key(path: &Path) -> io::Result<String> {
         use std::path::Component::{CurDir, Normal, ParentDir, Prefix, RootDir};
         match component {
             Normal(part) => parts.push(part.to_string_lossy().into_owned()),
-            CurDir => continue,
+            CurDir => {}
             ParentDir => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -331,8 +331,10 @@ mod tests {
                 AssetScope::App => "app".to_string(),
                 AssetScope::Plugin(id) => format!("plugin:{id}"),
             };
-            let entries = self.entries.lock().unwrap();
-            let bytes = entries
+            let bytes = self
+                .entries
+                .lock()
+                .unwrap()
                 .iter()
                 .find(|(s, k, _)| *s == scope_str && *k == key)
                 .map(|(_, _, b)| b.clone())
@@ -394,7 +396,7 @@ mod tests {
         // Exercise the desktop backend end-to-end without installing it
         // globally (which would race with `read_all_returns_full_bytes`
         // that already installed a mock).
-        let backend = desktop::DesktopAssetBackend::for_root(tmp.clone());
+        let backend = desktop::DesktopAssetBackend::for_root(tmp);
         let mut reader = backend.open(AssetScope::App, "root.txt").unwrap();
         let mut buf = Vec::new();
         reader.read_to_end(&mut buf).unwrap();

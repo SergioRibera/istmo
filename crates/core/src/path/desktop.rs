@@ -10,7 +10,7 @@
 //!
 //! [File System Basics]: https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/FileSystemOverview/FileSystemOverview.html
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use super::PlatformPaths;
@@ -54,8 +54,9 @@ pub fn set_app_info(bundle_id: Option<&'static str>, crate_name: &'static str) {
 pub fn default_paths() -> PlatformPaths {
     let (baked, cargo) = APP_INFO_OVERRIDE
         .get()
-        .map(|o| (o.bundle_id, o.crate_name))
-        .unwrap_or((BAKED_BUNDLE_ID, CARGO_CRATE_NAME));
+        .map_or((BAKED_BUNDLE_ID, CARGO_CRATE_NAME), |o| {
+            (o.bundle_id, o.crate_name)
+        });
     let id = baked.unwrap_or(cargo);
     resolve_for_os(id)
 }
@@ -230,10 +231,6 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
 }
-
-// Re-exported for tests below.
-#[allow(dead_code)]
-fn _touch(_p: &Path) {}
 
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {

@@ -55,12 +55,11 @@ impl Dispatch for EchoDispatch {
 fn wait_for_respond(outbound: &flume::Receiver<Envelope>, call_id: CallId) -> Frame {
     let deadline = std::time::Instant::now() + Duration::from_secs(1);
     while std::time::Instant::now() < deadline {
-        if let Ok(env) = outbound.recv_timeout(Duration::from_millis(50)) {
-            if let Frame::Respond { call_id: cid, .. } = &env.frame {
-                if *cid == call_id {
-                    return env.frame;
-                }
-            }
+        if let Ok(env) = outbound.recv_timeout(Duration::from_millis(50))
+            && let Frame::Respond { call_id: cid, .. } = &env.frame
+            && *cid == call_id
+        {
+            return env.frame;
         }
     }
     panic!("timed out waiting for Respond for {call_id:?}");

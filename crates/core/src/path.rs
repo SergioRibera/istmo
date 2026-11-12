@@ -186,7 +186,7 @@ mod tests {
             runtime_dir: tmp.join("runtime"),
             temp_dir: tmp.join("temp"),
         };
-        install(paths.clone());
+        install(paths);
         // Value may reflect either our install or a prior test's
         // default install; both are acceptable — assert internal
         // consistency (getters return the same struct).

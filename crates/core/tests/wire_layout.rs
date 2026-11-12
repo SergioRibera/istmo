@@ -4,7 +4,7 @@
 //! native sides.
 
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Write as _};
 use std::time::Duration;
 
 use istmo_core::CodecError;
@@ -34,7 +34,10 @@ struct Rec {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
 }
 
 #[track_caller]

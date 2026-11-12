@@ -81,7 +81,7 @@ pub struct DesktopAssetBackend {
 
 impl DesktopAssetBackend {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             root: OnceLock::new(),
             override_root: None,
@@ -89,7 +89,7 @@ impl DesktopAssetBackend {
     }
 
     #[must_use]
-    pub fn for_root(root: PathBuf) -> Self {
+    pub const fn for_root(root: PathBuf) -> Self {
         Self {
             root: OnceLock::new(),
             override_root: Some(root),
@@ -125,12 +125,12 @@ impl Default for DesktopAssetBackend {
 impl AssetBackend for DesktopAssetBackend {
     fn open(&self, scope: AssetScope<'_>, key: &str) -> io::Result<AssetReader> {
         let path = self.resolve(scope, key);
-        let file = File::open(&path).map_err(|err| annotate(err, &path))?;
+        let file = File::open(&path).map_err(|err| annotate(&err, &path))?;
         Ok(AssetReader::new(file))
     }
 }
 
-fn annotate(err: io::Error, path: &Path) -> io::Error {
+fn annotate(err: &io::Error, path: &Path) -> io::Error {
     if err.kind() == io::ErrorKind::NotFound {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -144,8 +144,9 @@ fn annotate(err: io::Error, path: &Path) -> io::Error {
 fn resolve_root() -> PathBuf {
     let (build_time, manifest) = APP_ASSETS_OVERRIDE
         .get()
-        .map(|o| (o.build_time_dir, o.manifest_dir))
-        .unwrap_or((BUILD_TIME_DIR, CRATE_MANIFEST_DIR));
+        .map_or((BUILD_TIME_DIR, CRATE_MANIFEST_DIR), |o| {
+            (o.build_time_dir, o.manifest_dir)
+        });
 
     if let Some(raw) = std::env::var_os(RUNTIME_ENV)
         && !raw.is_empty()
