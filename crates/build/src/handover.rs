@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use wincode::config::Configuration;
@@ -18,9 +19,17 @@ const fn codec() -> Codec {
     Codec::new()
 }
 
-pub const CONTRACT_KEY: &str = "CONTRACT";
+pub const CONTRACT_KEY: &str = "ISTMO_CONTRACT";
 
-pub const NATIVE_DEPS_KEY: &str = "NATIVE_DEPS";
+pub const NATIVE_DEPS_KEY: &str = "ISTMO_NATIVE_DEPS";
+
+/// Keys emitted before the `ISTMO_` prefix. Still read so dependencies
+/// built by an older `istmo-build` keep working; any crate may emit a
+/// bare `CONTRACT`, so a payload under these that fails to decode is
+/// skipped without a warning.
+const LEGACY_CONTRACT_KEY: &str = "CONTRACT";
+
+const LEGACY_NATIVE_DEPS_KEY: &str = "NATIVE_DEPS";
 
 pub const MANIFEST_KEY: &str = "ISTMO_MANIFEST";
 
@@ -62,7 +71,7 @@ pub fn serialize_contract(contract: &Contract) -> Result<String, HandoverError> 
 
 pub fn deserialize_contract(hex: &str) -> Result<Contract, HandoverError> {
     let bytes = hex_decode(hex)?;
-    let contract = wincode::config::deserialize::<Contract, _>(&bytes, codec())
+    let contract = wincode::config::deserialize_exact::<Contract, _>(&bytes, codec())
         .map_err(HandoverError::Decode)?;
     Ok(contract)
 }
@@ -74,7 +83,7 @@ pub fn serialize_native_deps(deps: &NativeDeps) -> Result<String, HandoverError>
 
 pub fn deserialize_native_deps(hex: &str) -> Result<NativeDeps, HandoverError> {
     let bytes = hex_decode(hex)?;
-    let deps = wincode::config::deserialize::<NativeDeps, _>(&bytes, codec())
+    let deps = wincode::config::deserialize_exact::<NativeDeps, _>(&bytes, codec())
         .map_err(HandoverError::Decode)?;
     Ok(deps)
 }
@@ -96,7 +105,7 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String, HandoverError> 
 
 pub fn deserialize_manifest(hex: &str) -> Result<Manifest, HandoverError> {
     let bytes = hex_decode(hex)?;
-    let manifest = wincode::config::deserialize::<Manifest, _>(&bytes, codec())
+    let manifest = wincode::config::deserialize_exact::<Manifest, _>(&bytes, codec())
         .map_err(HandoverError::Decode)?;
     Ok(manifest)
 }
@@ -113,7 +122,7 @@ pub fn serialize_assets(payload: &AssetsPayload) -> Result<String, HandoverError
 
 pub fn deserialize_assets(hex: &str) -> Result<AssetsPayload, HandoverError> {
     let bytes = hex_decode(hex)?;
-    let payload = wincode::config::deserialize::<AssetsPayload, _>(&bytes, codec())
+    let payload = wincode::config::deserialize_exact::<AssetsPayload, _>(&bytes, codec())
         .map_err(HandoverError::Decode)?;
     Ok(payload)
 }
@@ -209,41 +218,71 @@ fn links_name(var: &str, key: &str) -> String {
         .to_owned()
 }
 
+/// Every dependency's contract, sorted by the advertising crate's `links`
+/// name so generated output does not depend on env-var order.
 #[must_use]
 pub fn collect_dep_contracts() -> Vec<Contract> {
-    collect_env_payloads(CONTRACT_KEY)
-        .into_iter()
-        .filter_map(|(var, payload)| match deserialize_contract(&payload) {
-            Ok(c) => Some(c),
-            Err(err) => {
-                println!("cargo::warning=istmo handover decode failed for {var}: {err}");
-                None
-            }
-        })
-        .collect()
+    collect_keyed(CONTRACT_KEY, LEGACY_CONTRACT_KEY, deserialize_contract)
 }
 
+/// Every dependency's native deps merged in `links`-name order, so
+/// conflict resolution is deterministic.
 #[must_use]
 pub fn collect_dep_native_deps() -> NativeDeps {
     let mut out = NativeDeps::new();
-    for (var, payload) in collect_env_payloads(NATIVE_DEPS_KEY) {
-        match deserialize_native_deps(&payload) {
-            Ok(deps) => {
-                out.merge(deps);
+    for deps in collect_keyed(
+        NATIVE_DEPS_KEY,
+        LEGACY_NATIVE_DEPS_KEY,
+        deserialize_native_deps,
+    ) {
+        out.merge(deps);
+    }
+    out
+}
+
+/// Decodes `DEP_<LINKS>_<key>` payloads, falling back to
+/// `DEP_<LINKS>_<legacy>` for crates that only emit the old key.
+fn collect_keyed<T>(
+    key: &str,
+    legacy: &str,
+    decode: fn(&str) -> Result<T, HandoverError>,
+) -> Vec<T> {
+    let current = collect_env_payloads(key);
+    let mut by_links: BTreeMap<String, T> = BTreeMap::new();
+    for (var, payload) in &current {
+        match decode(payload) {
+            Ok(value) => {
+                by_links.insert(links_name(var, key), value);
             }
             Err(err) => {
                 println!("cargo::warning=istmo handover decode failed for {var}: {err}");
             }
         }
     }
-    out
+    for (var, payload) in collect_env_payloads(legacy) {
+        // `DEP_X_ISTMO_CONTRACT` also ends in `_CONTRACT`.
+        if current.iter().any(|(v, _)| *v == var) {
+            continue;
+        }
+        let links = links_name(&var, legacy);
+        if by_links.contains_key(&links) {
+            continue;
+        }
+        if let Ok(value) = decode(&payload) {
+            by_links.insert(links, value);
+        }
+    }
+    by_links.into_values().collect()
 }
 
+/// `DEP_*_<key>` variables, sorted by name.
 fn collect_env_payloads(key: &str) -> Vec<(String, String)> {
     let suffix = format!("_{key}");
-    std::env::vars()
+    let mut out: Vec<(String, String)> = std::env::vars()
         .filter(|(k, _)| k.starts_with("DEP_") && k.ends_with(&suffix))
-        .collect()
+        .collect();
+    out.sort();
+    out
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -255,7 +294,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(hex: &str) -> Result<Vec<u8>, HandoverError> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(HandoverError::InvalidHex);
     }
     let mut out = Vec::with_capacity(hex.len() / 2);
@@ -332,6 +371,13 @@ mod tests {
     fn deserialize_reports_decode_failure_on_valid_hex_bad_bytes() {
         let hex = "DEADBEEF";
         let err = deserialize_contract(hex).expect_err("decode should fail");
+        assert!(matches!(err, HandoverError::Decode(_)));
+    }
+
+    #[test]
+    fn deserialize_refuses_trailing_bytes() {
+        let hex = serialize_contract(&sample_contract()).expect("serialize") + "00";
+        let err = deserialize_contract(&hex).expect_err("trailing byte");
         assert!(matches!(err, HandoverError::Decode(_)));
     }
 

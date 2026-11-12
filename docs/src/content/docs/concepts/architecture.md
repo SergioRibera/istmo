@@ -97,7 +97,7 @@ script `DEP_<links>_*` env var mechanism:
 
 1. Plugin `build.rs` calls `istmo_build::emit()`.
 2. That emits `DEP_<plugin>_ISTMO_CONTRACT` and
-   `DEP_<plugin>_NATIVE_DEPS` (Gradle + SwiftPM coordinates).
+   `DEP_<plugin>_ISTMO_NATIVE_DEPS` (Gradle + SwiftPM coordinates).
 3. App `build.rs` calls `istmo_build::emit()`.
 4. That walks every `DEP_*_ISTMO_CONTRACT`, generates Kotlin and Swift
    dispatchers for each, and writes them into `android/` and `ios/`.

@@ -99,7 +99,7 @@ Contratos y deps nativas viajan por el mecanismo de env vars
 
 1. `build.rs` del plugin invoca `istmo_build::emit()`.
 2. Eso emite `DEP_<plugin>_ISTMO_CONTRACT` y
-   `DEP_<plugin>_NATIVE_DEPS` (coordenadas Gradle + SwiftPM).
+   `DEP_<plugin>_ISTMO_NATIVE_DEPS` (coordenadas Gradle + SwiftPM).
 3. `build.rs` de la app invoca `istmo_build::emit()`.
 4. Eso camina cada `DEP_*_ISTMO_CONTRACT`, genera dispatchers Kotlin y
    Swift para cada uno, y los escribe en `android/` e `ios/`.

@@ -42,7 +42,7 @@ from_version = "1.5.0"
 
 `istmo_build::emit()` reads this, verifies the trait exists, and emits
 a wire-encoded contract to `DEP_<crate>_ISTMO_CONTRACT`, plus the native
-deps to `DEP_<crate>_NATIVE_DEPS`.
+deps to `DEP_<crate>_ISTMO_NATIVE_DEPS`.
 
 ### Multi-plugin plugin crate
 
