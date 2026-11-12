@@ -206,6 +206,11 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
             .replacingOccurrences(of: "\0", with: "")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: ":", with: "_")
+        // `URL(fileURLWithPath: "")` is the working directory, whose name
+        // would otherwise become the suggestion.
+        if cleaned.isEmpty {
+            return "untitled"
+        }
         let name = URL(fileURLWithPath: cleaned).lastPathComponent
         if name.isEmpty || name == "." || name == ".." || name == "/" {
             return "untitled"

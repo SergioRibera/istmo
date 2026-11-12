@@ -170,12 +170,18 @@ class FilePickerBackendImpl(
     override fun releaseNativeHandle(handleId: Long) {
         val uri = files.remove(handleId) ?: return
         IstmoRuntime.forgetHandle(handleId)
-        val lastRef = synchronized(uriRefs) {
+        // The grant changes under the same lock as the count: otherwise a
+        // concurrent pick of this URI could take its grant just before a
+        // late release from the previous last handle drops it.
+        synchronized(uriRefs) {
             val left = (uriRefs[uri] ?: 1) - 1
-            if (left <= 0) uriRefs.remove(uri) else uriRefs[uri] = left
-            left <= 0
+            if (left <= 0) {
+                uriRefs.remove(uri)
+                releaseGrant(uri)
+            } else {
+                uriRefs[uri] = left
+            }
         }
-        if (lastRef) releaseGrant(uri)
     }
 
     // ------------------------------------------------------------- helpers
@@ -227,38 +233,44 @@ class FilePickerBackendImpl(
     }
 
     private fun registerAndDescribe(uri: Uri, flags: Int): PickedFile {
-        val firstRef = synchronized(uriRefs) {
+        synchronized(uriRefs) {
             val refs = (uriRefs[uri] ?: 0) + 1
             uriRefs[uri] = refs
-            refs == 1
+            if (refs == 1) takeGrant(uri, flags)
         }
-        if (firstRef) takeGrant(uri, flags)
         val id = IstmoRuntime.allocHandleId(PLUGIN_ID)
         files[id] = uri
         val (name, size, mime) = describe(uri)
         return PickedFile(displayName = name, mimeType = mime, size = size?.toULong(), handle = id)
     }
 
+    // The log is written synchronously (`commit`) *before* a grant is
+    // taken and cleared only *after* it is released, so a process killed
+    // in between leaves at worst a logged grant that is already gone —
+    // which the next process's reconciliation just forgets — never a
+    // persisted grant nothing records.
     private fun takeGrant(uri: Uri, flags: Int) {
+        grantLog.edit().putInt(uri.toString(), flags).commit()
         try {
             resolver.takePersistableUriPermission(uri, flags)
-            grantLog.edit().putInt(uri.toString(), flags).apply()
         } catch (_: SecurityException) {
             // Some providers (e.g. transient in-memory ones) do not
             // support persistence; the URI still works for the current
             // process, so keep going.
+            grantLog.edit().remove(uri.toString()).commit()
         }
     }
 
     private fun releaseGrant(uri: Uri) {
         val flags = grantLog.getInt(uri.toString(), 0)
-        grantLog.edit().remove(uri.toString()).apply()
-        if (flags == 0) return
-        try {
-            resolver.releasePersistableUriPermission(uri, flags)
-        } catch (_: SecurityException) {
-            // Permission may already have been dropped by the system.
+        if (flags != 0) {
+            try {
+                resolver.releasePersistableUriPermission(uri, flags)
+            } catch (_: SecurityException) {
+                // Permission may already have been dropped by the system.
+            }
         }
+        grantLog.edit().remove(uri.toString()).commit()
     }
 
     private fun releaseOrphanedGrants() {
@@ -269,7 +281,7 @@ class FilePickerBackendImpl(
             if (key in persisted) {
                 releaseGrant(Uri.parse(key))
             } else {
-                grantLog.edit().remove(key).apply()
+                grantLog.edit().remove(key).commit()
             }
         }
     }
