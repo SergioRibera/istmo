@@ -43,6 +43,8 @@
 //!   pulled in by target cfg. Not present on desktop targets. See
 //!   [`istmo-android`](https://docs.rs/istmo-android) and
 //!   [`istmo-ios`](https://docs.rs/istmo-ios).
+//! - [`sync::lock`] — mutex locking that recovers from poisoning, for
+//!   plugin state whose critical sections never leave it inconsistent.
 //! - [`wincode`] — the encoding the wire derives use, re-exported so
 //!   downstream crates don't need a direct `wincode` dependency.
 //!
@@ -94,8 +96,13 @@ pub use istmo_android as android;
 ))]
 pub use istmo_ios as ios;
 
-/// The wincode the wire derives use; `#[message]` types reach it here.
-pub use istmo_core::wincode;
+/// Paths the macros expand to (`::istmo::__private::…`). Declared here
+/// so the facade names exactly what generated code needs; it shadows the
+/// same-named module the glob above would bring in.
+#[doc(hidden)]
+pub mod __private {
+    pub use istmo_core::__private::{block_on, set_app_assets, set_app_info, tracing};
+}
 
 /// Instance key of the app crate for
 /// [`plugins::DocumentsPublisher::start`]: `Some` when `istmo.toml`
