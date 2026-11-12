@@ -304,6 +304,21 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
         }
     }
 
+    // The default `<namespace>.gen` package is istmo-build's alone; an
+    // explicit `android_package` may be shared with hand-written code.
+    let android_package_is_default =
+        opts.android_package.is_none() && app_config.android_package.is_none();
+    if let Some(pkg) = android_package
+        .as_deref()
+        .filter(|_| android_package_is_default)
+    {
+        mark_codegen_dir(
+            &android_root
+                .join("app/src/main/java")
+                .join(pkg.replace('.', "/")),
+        );
+    }
+
     // Registries are emitted even when empty: `IstmoHost` and the
     // generated `IstmoApp.run()` reference them unconditionally.
     if android_active {
@@ -778,8 +793,15 @@ fn emit_wired_android_permissions(android_root: &Path, wired: &[PluginEntry]) {
     if !android_root.join("app").is_dir() {
         return;
     }
-    if let Err(err) = crate::wired_plugins::write_android_permissions_sidecar(android_root, wired) {
-        crate::directive::warning(&format!("failed to write istmo-permissions.xml: {err}"));
+    match crate::wired_plugins::write_android_permissions_sidecar(android_root, wired) {
+        Ok(sidecar) => {
+            if let Some(dir) = sidecar.parent() {
+                crate::fsx::mark_generated_dir(dir);
+            }
+        }
+        Err(err) => {
+            crate::directive::warning(&format!("failed to write istmo-permissions.xml: {err}"));
+        }
     }
 }
 
@@ -926,6 +948,9 @@ fn emit_kotlin_registry(android_root: &Path, codegen_package: &str, entries: &[R
         &dest,
         &generate_kotlin_plugin_registry(codegen_package, entries),
     );
+    if let Some(dir) = dest.parent() {
+        mark_codegen_dir(dir);
+    }
     // Before 0.2 the registry lived in the codegen package.
     let legacy = java_root
         .join(codegen_package.replace('.', "/"))
@@ -1024,6 +1049,23 @@ fn emit_swift(
         &generated.join(format!("{ty}CodecsImpl.swift")),
         &generate_swift_codecs(contract),
     );
+    mark_codegen_dir(&generated);
+}
+
+/// [`crate::fsx::mark_generated_dir`] for a codegen output directory,
+/// unless it holds a seeded `*BackendImpl` the user now owns.
+fn mark_codegen_dir(dir: &Path) {
+    let holds_user_code = fs::read_dir(dir).is_ok_and(|entries| {
+        entries.filter_map(Result::ok).any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.contains("BackendImpl."))
+        })
+    });
+    if !holds_user_code {
+        crate::fsx::mark_generated_dir(dir);
+    }
 }
 
 fn kotlin_with_package(package: &str, body: &str) -> String {

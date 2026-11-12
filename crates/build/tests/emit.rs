@@ -84,6 +84,21 @@ fn second_run_leaves_the_permissions_sidecar_untouched() {
 }
 
 #[test]
+fn owned_generated_dirs_carry_their_own_gitignore() {
+    let root = scratch_root("gitignore");
+    let android_root = seed_android_app(&root);
+    emit_app_with(android_only(&root));
+    for dir in [".istmo", "app/src/main/java/dev/istmo/generated"] {
+        let marker = android_root.join(dir).join(".gitignore");
+        assert!(
+            fs::read_to_string(&marker).is_ok_and(|text| text.ends_with("\n*\n")),
+            "{}",
+            marker.display()
+        );
+    }
+}
+
+#[test]
 fn legacy_permissions_sidecar_is_removed_unless_hand_edited() {
     let root = scratch_root("perms-legacy");
     let android_root = seed_android_app(&root);

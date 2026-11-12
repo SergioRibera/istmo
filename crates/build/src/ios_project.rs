@@ -83,6 +83,7 @@ impl IosProject {
             .unwrap_or_else(|| app.krate.manifest_dir.display().to_string());
         write_if_changed(&script, &render_build_script(app, &crate_dir));
         make_executable(&script);
+        crate::fsx::mark_generated_dir(&dir);
     }
 
     /// Write the `IstmoAppIcon` asset catalog.
