@@ -18,7 +18,7 @@
 //!   `filesDir/documents`.
 
 use istmo_core::path::{PlatformPaths, install};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Wire the runtime path provider from four Kotlin-side directories.
 ///
@@ -33,12 +33,16 @@ pub fn install_from_dirs(
     let config = files.join("config");
     let preferences = files.join("preferences");
     let documents = external_files.unwrap_or_else(|| files.join("documents"));
-    let _ = std::fs::create_dir_all(&config);
-    let _ = std::fs::create_dir_all(&preferences);
-    let _ = std::fs::create_dir_all(&documents);
+    // `std::env::temp_dir()` resolves to `/data/local/tmp` on Android,
+    // which app processes cannot write to; keep scratch files under the
+    // app's own OS-cleanable cache instead.
+    let temp = temp_dir_for(&cache);
+    for dir in [&config, &preferences, &documents, &temp] {
+        let _ = std::fs::create_dir_all(dir);
+    }
     let paths = PlatformPaths {
         data_dir: files.clone(),
-        data_local_dir: files.clone(),
+        data_local_dir: files,
         config_dir: config.clone(),
         config_local_dir: config,
         cache_dir: cache.clone(),
@@ -46,9 +50,13 @@ pub fn install_from_dirs(
         preference_dir: preferences,
         documents_dir: documents,
         runtime_dir: cache,
-        temp_dir: std::env::temp_dir(),
+        temp_dir: temp,
     };
     install(paths);
+}
+
+fn temp_dir_for(cache: &Path) -> PathBuf {
+    cache.join("tmp")
 }
 
 #[cfg(test)]
@@ -63,9 +71,16 @@ mod tests {
         let nb = tmp.join("nobackup");
         // Call is idempotent through OnceLock — this test verifies it
         // does not panic and creates subdirectories.
-        install_from_dirs(files.clone(), cache, nb, None);
+        install_from_dirs(files.clone(), cache.clone(), nb, None);
         assert!(files.join("config").exists());
         assert!(files.join("preferences").exists());
         assert!(files.join("documents").exists());
+        assert!(cache.join("tmp").exists());
+    }
+
+    #[test]
+    fn temp_dir_lives_under_the_app_cache() {
+        let cache = Path::new("/data/user/0/com.example/cache");
+        assert_eq!(temp_dir_for(cache), cache.join("tmp"));
     }
 }
