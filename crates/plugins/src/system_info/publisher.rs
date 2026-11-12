@@ -16,86 +16,85 @@
 //! `windowsZones.xml`.
 
 use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 use istmo_core::{IstmoError, Runtime, codec};
 
-use super::{
-    Formats, Locale, SYSTEM_INFO_FORMATS_CHANNEL, SYSTEM_INFO_LOCALE_CHANNEL,
-    SYSTEM_INFO_PLUGIN_ID, SYSTEM_INFO_TIMEZONE_CHANNEL, SYSTEM_INFO_UPTIME_CHANNEL, TimeZone,
-};
+use super::{Formats, Locale, SYSTEM_INFO_UPTIME_CHANNEL, TimeZone};
+use crate::early::LatestPublisher;
 
+/// Shortest time between two uptime publishes. Uptime changes on every
+/// tick, so without a floor a per-frame tick would publish (and wake
+/// every subscriber) every frame.
+pub const UPTIME_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Publishes the host's locale, time zone, formats and uptime.
 #[derive(Debug)]
 pub struct SystemInfoPublisher {
     runtime: Weak<Runtime>,
-    last_locale: Option<Locale>,
-    last_timezone: Option<TimeZone>,
-    last_formats: Option<Formats>,
+    locale: LatestPublisher<Locale>,
+    timezone: LatestPublisher<TimeZone>,
+    formats: LatestPublisher<Formats>,
+    uptime_at: Option<Instant>,
 }
 
 impl SystemInfoPublisher {
+    /// Publisher bound to `runtime`.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::PluginNotDeclared`] when enforcement is on and the
+    /// plugin was not declared.
     pub fn install(runtime: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        runtime.check_declared(SYSTEM_INFO_PLUGIN_ID)?;
         Ok(Self {
             runtime: Arc::downgrade(runtime),
-            last_locale: None,
-            last_timezone: None,
-            last_formats: None,
+            locale: LatestPublisher::install(runtime)?,
+            timezone: LatestPublisher::install(runtime)?,
+            formats: LatestPublisher::install(runtime)?,
+            uptime_at: None,
         })
     }
 
-    /// Sample the host and publish any changed values. Safe to call on
-    /// every frame — publishes only when a value actually changed.
+    /// Sample the host and publish what changed. Safe to call every
+    /// frame: locale, time zone and formats publish only on change and
+    /// uptime at most once per [`UPTIME_INTERVAL`].
     pub fn tick(&mut self) {
+        if let Some(sample) = sample() {
+            self.locale.publish_if_changed(sample.locale);
+            self.timezone.publish_if_changed(sample.timezone);
+            self.formats.publish_if_changed(sample.formats);
+        }
+        self.publish_uptime(Instant::now());
+    }
+
+    fn publish_uptime(&mut self, now: Instant) {
+        if let Some(at) = self.uptime_at
+            && now.duration_since(at) < UPTIME_INTERVAL
+        {
+            return;
+        }
         let Some(runtime) = self.runtime.upgrade() else {
             return;
         };
-        let Some(sample) = sample() else {
+        let Some(ms) = uptime::uptime_millis() else {
             return;
         };
-
-        if self.last_locale.as_ref() != Some(&sample.locale) {
-            match codec::encode(&sample.locale) {
-                Ok(bytes) => {
-                    runtime.publish_early_latest(SYSTEM_INFO_LOCALE_CHANNEL, bytes);
-                    self.last_locale = Some(sample.locale);
-                }
-                Err(err) => tracing::warn!(target = "istmo.system_info", ?err, "locale encode"),
+        match codec::encode(&ms) {
+            Ok(bytes) => {
+                runtime.publish_early_latest(SYSTEM_INFO_UPTIME_CHANNEL, bytes);
+                self.uptime_at = Some(now);
             }
-        }
-
-        if self.last_timezone.as_ref() != Some(&sample.timezone) {
-            match codec::encode(&sample.timezone) {
-                Ok(bytes) => {
-                    runtime.publish_early_latest(SYSTEM_INFO_TIMEZONE_CHANNEL, bytes);
-                    self.last_timezone = Some(sample.timezone);
-                }
-                Err(err) => tracing::warn!(target = "istmo.system_info", ?err, "tz encode"),
-            }
-        }
-
-        if self.last_formats.as_ref() != Some(&sample.formats) {
-            match codec::encode(&sample.formats) {
-                Ok(bytes) => {
-                    runtime.publish_early_latest(SYSTEM_INFO_FORMATS_CHANNEL, bytes);
-                    self.last_formats = Some(sample.formats);
-                }
-                Err(err) => tracing::warn!(target = "istmo.system_info", ?err, "formats encode"),
-            }
-        }
-
-        if let Some(ms) = uptime::uptime_millis() {
-            match codec::encode(&ms) {
-                Ok(bytes) => {
-                    runtime.publish_early_latest(SYSTEM_INFO_UPTIME_CHANNEL, bytes);
-                }
-                Err(err) => tracing::warn!(target = "istmo.system_info", ?err, "uptime encode"),
-            }
+            Err(err) => tracing::warn!(target: "istmo.system_info", %err, "uptime encode failed"),
         }
     }
 }
 
 mod uptime {
     #[must_use]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "infallible on Windows only; the signature is shared"
+    )]
     pub(super) fn uptime_millis() -> Option<u64> {
         #[cfg(target_os = "linux")]
         {
@@ -107,7 +106,7 @@ mod uptime {
         }
         #[cfg(target_os = "windows")]
         {
-            windows()
+            Some(windows())
         }
         #[cfg(not(any(
             target_os = "linux",
@@ -154,10 +153,10 @@ mod uptime {
 
     #[cfg(target_os = "windows")]
     #[allow(unsafe_code)]
-    fn windows() -> Option<u64> {
+    fn windows() -> u64 {
         use windows_sys::Win32::System::SystemInformation::GetTickCount64;
         // SAFETY: no pointer parameters.
-        Some(unsafe { GetTickCount64() })
+        unsafe { GetTickCount64() }
     }
 }
 
@@ -168,7 +167,10 @@ struct Sample {
     formats: Formats,
 }
 
-#[allow(clippy::unnecessary_wraps)]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "only the Apple sampler can fail; the signature is shared"
+)]
 fn sample() -> Option<Sample> {
     #[cfg(target_os = "linux")]
     {
@@ -180,7 +182,7 @@ fn sample() -> Option<Sample> {
     }
     #[cfg(target_os = "windows")]
     {
-        windows::sample()
+        Some(windows::sample())
     }
     #[cfg(not(any(
         target_os = "linux",
@@ -264,10 +266,10 @@ mod linux {
     const ZONEINFO_MARKER: &str = "zoneinfo/";
 
     fn read_timezone_id() -> Option<String> {
-        if let Ok(tz) = std::env::var("TZ") {
-            if !tz.is_empty() {
-                return Some(tz.trim_start_matches(':').to_string());
-            }
+        if let Ok(tz) = std::env::var("TZ")
+            && !tz.is_empty()
+        {
+            return Some(tz.trim_start_matches(':').to_string());
         }
         let link = fs::read_link("/etc/localtime").ok()?;
         let s = link.to_str()?;
@@ -324,7 +326,14 @@ mod apple {
     };
     use super::Sample;
 
+    /// Runs inside its own pool: every NSString read below is
+    /// autoreleased, and a tick driven from a plain thread (no run loop
+    /// draining a pool) would otherwise leak them one batch per tick.
     pub(super) fn sample() -> Option<Sample> {
+        objc2::rc::autoreleasepool(|_| sample_in_pool())
+    }
+
+    fn sample_in_pool() -> Option<Sample> {
         // SAFETY: `NSLocale`, `NSTimeZone`, `NSCalendar` singletons
         // returned by `autoupdating*` are retained by Foundation for
         // the process lifetime. Every message send is null-checked;
@@ -455,11 +464,11 @@ mod apple {
         if ns.is_null() {
             return None;
         }
-        let bytes: *const i8 = unsafe { msg_send![ns, UTF8String] };
+        let bytes: *const std::ffi::c_char = unsafe { msg_send![ns, UTF8String] };
         if bytes.is_null() {
             return None;
         }
-        let c_str = unsafe { core::ffi::CStr::from_ptr(bytes) };
+        let c_str = unsafe { std::ffi::CStr::from_ptr(bytes) };
         c_str.to_str().ok().map(ToOwned::to_owned)
     }
 
@@ -516,19 +525,11 @@ mod windows {
     };
     use super::Sample;
 
-    pub(super) fn sample() -> Option<Sample> {
+    pub(super) fn sample() -> Sample {
         let bcp47 = user_default_locale().unwrap_or_else(|| "en-US".to_owned());
         let (language, script, region) = parse_bcp47(&bcp47);
         let canonical = canonicalize_tag(&language, script.as_deref(), region.as_deref());
         let direction = direction_from_language(&language);
-
-        let locale = Locale {
-            bcp47: canonical.clone(),
-            language: language.clone(),
-            region: region.clone(),
-            script,
-            direction,
-        };
 
         let (tz_id, offset_seconds, is_dst, abbreviation) = timezone_info();
         let timezone = TimeZone {
@@ -546,8 +547,7 @@ mod windows {
             .filter(|s| !s.is_empty())
             .or_else(|| currency_for_region(region.as_deref()).map(str::to_owned));
         let uses_24h = locale_string(&bcp47, LOCALE_STIMEFORMAT)
-            .map(|fmt| fmt.contains('H') && !fmt.contains('h'))
-            .unwrap_or(false);
+            .is_some_and(|fmt| fmt.contains('H') && !fmt.contains('h'));
         // Windows `LOCALE_IFIRSTDAYOFWEEK` returns 0 = Monday … 6 =
         // Sunday; ISO target is 1 = Monday … 7 = Sunday, so the
         // mapping is a direct `+ 1`.
@@ -567,22 +567,37 @@ mod windows {
             calendar: CalendarSystem::Gregorian,
         };
 
-        Some(Sample {
+        let locale = Locale {
+            bcp47: canonical,
+            language,
+            region,
+            script,
+            direction,
+        };
+
+        Sample {
             locale,
             timezone,
             formats,
-        })
+        }
+    }
+
+    /// Length the Win32 call returned, minus the NUL terminator; `None`
+    /// for the `<= 0` failure values.
+    fn written_chars(written: i32) -> Option<usize> {
+        usize::try_from(written)
+            .ok()
+            .filter(|&n| n > 0)
+            .map(|n| n - 1)
     }
 
     fn user_default_locale() -> Option<String> {
         let mut buf = [0u16; LOCALE_NAME_MAX_LENGTH as usize];
-        // SAFETY: Win32 call writes up to `buf.len()` wide chars into `buf`
+        let len = i32::try_from(buf.len()).ok()?;
+        // SAFETY: Win32 call writes up to `len` wide chars into `buf`
         // or returns 0 on failure.
-        let written = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) };
-        if written <= 0 {
-            return None;
-        }
-        wide_to_string(&buf[..(written as usize).saturating_sub(1)])
+        let written = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), len) };
+        wide_to_string(buf.get(..written_chars(written)?)?)
     }
 
     fn locale_string(locale: &str, lctype: u32) -> Option<String> {
@@ -591,16 +606,12 @@ mod windows {
         // size. Second call fills a correctly-sized buffer.
         let needed =
             unsafe { GetLocaleInfoEx(wide_locale.as_ptr(), lctype, std::ptr::null_mut(), 0) };
-        if needed <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; needed as usize];
+        let mut buf = vec![0u16; written_chars(needed)? + 1];
+        // SAFETY: `buf` holds `needed` wide chars, the size the first
+        // call asked for.
         let written =
             unsafe { GetLocaleInfoEx(wide_locale.as_ptr(), lctype, buf.as_mut_ptr(), needed) };
-        if written <= 0 {
-            return None;
-        }
-        wide_to_string(&buf[..(written as usize).saturating_sub(1)])
+        wide_to_string(buf.get(..written_chars(written)?)?)
     }
 
     fn locale_integer(locale: &str, lctype: u32) -> Option<i32> {
@@ -614,7 +625,8 @@ mod windows {
                 wide_locale.as_ptr(),
                 lctype | LOCALE_RETURN_NUMBER,
                 (&raw mut value).cast::<u16>(),
-                (std::mem::size_of::<i32>() / std::mem::size_of::<u16>()) as i32,
+                // An i32 is two UTF-16 units.
+                2,
             )
         };
         if written <= 0 {
@@ -634,9 +646,9 @@ mod windows {
         // `Bias` alone. Standard = Bias + StandardBias; Daylight =
         // Bias + DaylightBias.
         let bias_minutes = match kind {
-            0 => i32::from(info.Bias),
-            2 => i32::from(info.Bias) + i32::from(info.DaylightBias),
-            _ => i32::from(info.Bias) + i32::from(info.StandardBias),
+            0 => info.Bias,
+            2 => info.Bias + info.DaylightBias,
+            _ => info.Bias + info.StandardBias,
         };
         let offset_seconds = -bias_minutes * 60;
         let id = wide_to_string(&info.TimeZoneKeyName).unwrap_or_else(|| "UTC".into());

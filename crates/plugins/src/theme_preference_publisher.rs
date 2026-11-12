@@ -1,61 +1,67 @@
 //! Pure-Rust desktop sampler for
-//! [`super::theme_preference::ThemePreferenceClient`].
+//! [`ThemePreferenceClient`](super::theme_preference::ThemePreferenceClient).
 //!
 //! Covers the single most-asked signal — the user's light/dark
-//! preference — on Linux (gsettings), macOS (`defaults read` or
-//! objc2 NSAppearance) and Windows (Registry `AppsUseLightTheme`).
-//! Fonts scale, accessibility flags and accent-colour pickers vary
-//! wildly across desktop DEs; leave those to the per-app observer
-//! until a real consumer surfaces.
+//! preference — on Linux (`gsettings`), macOS (`defaults read`) and
+//! Windows (Registry `AppsUseLightTheme`). Font scale, accessibility
+//! flags and accent-colour pickers vary wildly across desktop DEs;
+//! leave those to the per-app observer until a real consumer surfaces.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use istmo_core::{IstmoError, Runtime, codec};
+use istmo_core::{IstmoError, Runtime};
 
-use super::theme_preference::{
-    ColorScheme, THEME_PREFERENCE_CHANNEL, THEME_PREFERENCE_PLUGIN_ID, ThemePreference,
-};
+use super::theme_preference::{ColorScheme, ThemePreference};
+use crate::early::LatestPublisher;
 
+/// Shortest time between two samples.
+///
+/// Linux and macOS sample by running `gsettings` / `defaults` as a child
+/// process, far too costly for a per-frame tick; a user toggling dark
+/// mode tolerates a two-second lag.
+pub const MIN_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Publishes the host's light/dark preference.
+///
+/// [`tick`](Self::tick) may be called every frame: it samples at most
+/// once per [`MIN_SAMPLE_INTERVAL`] and publishes only on change.
 #[derive(Debug)]
 pub struct ThemePreferencePublisher {
-    runtime: Weak<Runtime>,
-    last: Option<ThemePreference>,
+    publisher: LatestPublisher<ThemePreference>,
+    sampled_at: Option<Instant>,
 }
 
 impl ThemePreferencePublisher {
+    /// Publisher bound to `runtime`.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::PluginNotDeclared`] when enforcement is on and the
+    /// plugin was not declared.
     pub fn install(runtime: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        runtime.check_declared(THEME_PREFERENCE_PLUGIN_ID)?;
         Ok(Self {
-            runtime: Arc::downgrade(runtime),
-            last: None,
+            publisher: LatestPublisher::install(runtime)?,
+            sampled_at: None,
         })
     }
 
+    /// Sample the host unless the last sample is younger than
+    /// [`MIN_SAMPLE_INTERVAL`], and publish if the preference changed.
     pub fn tick(&mut self) {
-        let Some(runtime) = self.runtime.upgrade() else {
-            return;
-        };
-        let Some(sample) = sample() else {
-            return;
-        };
-        if self.last.as_ref() == Some(&sample) {
+        let now = Instant::now();
+        if let Some(at) = self.sampled_at
+            && now.duration_since(at) < MIN_SAMPLE_INTERVAL
+        {
             return;
         }
-        match codec::encode(&sample) {
-            Ok(bytes) => {
-                runtime.publish_early_latest(THEME_PREFERENCE_CHANNEL, bytes);
-                self.last = Some(sample);
-            }
-            Err(err) => {
-                tracing::warn!(target = "istmo.theme_preference", ?err, "encode failed");
-            }
-        }
+        self.sampled_at = Some(now);
+        self.publisher.publish_if_changed(sample());
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn sample() -> Option<ThemePreference> {
-    Some(ThemePreference {
+fn sample() -> ThemePreference {
+    ThemePreference {
         color_scheme: color_scheme(),
         accent_color: None,
         high_contrast: false,
@@ -65,7 +71,7 @@ fn sample() -> Option<ThemePreference> {
         bold_text: false,
         invert_colors: false,
         screen_reader_active: false,
-    })
+    }
 }
 
 fn color_scheme() -> ColorScheme {
