@@ -92,6 +92,8 @@ istmo-file-picker = { path = "plugins/file-picker", version = "0.1.1-alpha.5" }
 istmo-share = { path = "plugins/share", version = "0.1.1-alpha.5" }
 istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.5" }
 istmo-camera = { path = "plugins/camera", version = "0.1.1-alpha.5" }
+istmo-barcode-scanner = { path = "plugins/barcode-scanner", version = "0.1.1-alpha.5" }
+istmo-opener = { path = "plugins/opener", version = "0.1.1-alpha.5" }
 
 [package]
 name = "istmo"
