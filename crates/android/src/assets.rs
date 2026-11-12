@@ -15,13 +15,13 @@ mod imp {
 
     use istmo_core::assets::{AssetBackend, AssetReader, AssetScope, install_backend};
     use jni::JNIEnv;
-    use jni::objects::JObject;
+    use jni::objects::{GlobalRef, JObject};
 
-    /// SEEK_SET (see `<unistd.h>`) — POSIX absolute offset.
+    /// `SEEK_SET` (see `<unistd.h>`) — POSIX absolute offset.
     const SEEK_SET: i32 = 0;
-    /// SEEK_CUR — offset relative to current position.
+    /// `SEEK_CUR` — offset relative to current position.
     const SEEK_CUR: i32 = 1;
-    /// SEEK_END — offset relative to end of file.
+    /// `SEEK_END` — offset relative to end of file.
     const SEEK_END: i32 = 2;
     /// `AASSET_MODE_STREAMING` — sequential read, no full-file
     /// mmap. Fine for both `read_to_end` and short random reads that
@@ -29,20 +29,24 @@ mod imp {
     const AASSET_MODE_STREAMING: i32 = 2;
 
     /// [`AssetBackend`] backed by an `AAssetManager*`.
-    ///
-    /// Cloning is cheap — the underlying manager pointer is owned by
-    /// the JVM (Kotlin's `AssetManager`) and stays valid for the
-    /// process lifetime.
-    pub struct AndroidAssetBackend {
+    pub(super) struct AndroidAssetBackend {
         manager: SendPtr,
+        /// The NDK documents that the `AAssetManager*` returned by
+        /// `AAssetManager_fromJava` is only valid while the Java
+        /// `AssetManager` it came from is alive. The global reference
+        /// pins it for as long as the backend is installed.
+        _java_manager: GlobalRef,
     }
 
     #[derive(Clone, Copy)]
     struct SendPtr(NonNull<ndk_sys::AAssetManager>);
 
     // SAFETY: `AAssetManager*` is thread-safe — the NDK explicitly
-    // supports concurrent `AAssetManager_open` from multiple threads.
+    // supports concurrent `AAssetManager_open` from multiple threads,
+    // and the pointer itself carries no thread affinity.
     unsafe impl Send for SendPtr {}
+    // SAFETY: as above; every use goes through `&self` and the NDK
+    // serialises access internally.
     unsafe impl Sync for SendPtr {}
 
     impl std::fmt::Debug for AndroidAssetBackend {
@@ -62,8 +66,9 @@ mod imp {
                 io::Error::new(io::ErrorKind::InvalidInput, "asset key contains NUL byte")
             })?;
             // SAFETY: `manager` came from `AAssetManager_fromJava` and
-            // is guaranteed valid for the process lifetime; `cstring`
-            // is a nul-terminated pointer we own for the call.
+            // stays valid because `_java_manager` keeps its Java peer
+            // alive; `cstring` is a nul-terminated buffer we own for the
+            // duration of the call.
             let asset_ptr = unsafe {
                 ndk_sys::AAssetManager_open(
                     self.manager.0.as_ptr(),
@@ -83,6 +88,11 @@ mod imp {
 
     /// Owning wrapper around an `AAsset*` — closes on drop, forwards
     /// `Read` / `Seek` through the NDK.
+    ///
+    /// The `AAsset` keeps its own reference to the asset data, but it is
+    /// only valid while its `AAssetManager` is; readers outliving the
+    /// installed backend are fine because the backend is process-global
+    /// and never uninstalled.
     struct AAssetReader {
         asset: NonNull<ndk_sys::AAsset>,
     }
@@ -96,42 +106,39 @@ mod imp {
     impl Read for AAssetReader {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             // SAFETY: `self.asset` is a valid `AAsset*` owned by this
-            // wrapper; `buf` is a valid mutable slice.
+            // wrapper; `buf` is a valid mutable slice of `buf.len()`
+            // bytes.
             let n = unsafe {
                 ndk_sys::AAsset_read(self.asset.as_ptr(), buf.as_mut_ptr().cast(), buf.len())
             };
-            if n < 0 {
-                Err(io::Error::other("AAsset_read returned negative"))
-            } else {
-                Ok(n as usize)
-            }
+            usize::try_from(n).map_err(|_| io::Error::other("AAsset_read returned negative"))
         }
     }
 
     impl Seek for AAssetReader {
         fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
             let (offset, whence) = match pos {
-                SeekFrom::Start(off) => (off as i64, SEEK_SET),
+                SeekFrom::Start(off) => (
+                    i64::try_from(off).map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "seek offset exceeds i64")
+                    })?,
+                    SEEK_SET,
+                ),
                 SeekFrom::End(off) => (off, SEEK_END),
                 SeekFrom::Current(off) => (off, SEEK_CUR),
             };
-            // SAFETY: `self.asset` is a valid `AAsset*`.
+            // SAFETY: `self.asset` is a valid `AAsset*` owned by this
+            // wrapper.
             let result = unsafe { ndk_sys::AAsset_seek64(self.asset.as_ptr(), offset, whence) };
-            if result < 0 {
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "AAsset_seek64 failed",
-                ))
-            } else {
-                Ok(result as u64)
-            }
+            u64::try_from(result)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "AAsset_seek64 failed"))
         }
     }
 
     impl Drop for AAssetReader {
         fn drop(&mut self) {
             // SAFETY: `self.asset` is a valid `AAsset*` obtained from
-            // `AAssetManager_open`.
+            // `AAssetManager_open` and closed exactly once, here.
             unsafe { ndk_sys::AAsset_close(self.asset.as_ptr()) };
         }
     }
@@ -141,13 +148,21 @@ mod imp {
     /// # Errors
     ///
     /// Returns [`io::Error`] with [`io::ErrorKind::InvalidInput`] when
-    /// `AAssetManager_fromJava` returns null.
+    /// `AAssetManager_fromJava` returns null, or
+    /// [`io::ErrorKind::Other`] when the global reference cannot be
+    /// created.
     pub fn install_from_java(env: &mut JNIEnv, assets: &JObject) -> io::Result<()> {
-        // SAFETY: `env.get_raw()` yields a valid `JNIEnv*` for the
-        // current thread; `assets.as_raw()` yields the caller's local
-        // reference which is valid for the call duration.
+        let java_manager = env
+            .new_global_ref(assets)
+            .map_err(|err| io::Error::other(format!("AssetManager global ref: {err}")))?;
+        // SAFETY: `env.get_raw()` yields the valid `JNIEnv*` of the
+        // current thread; `java_manager` is a live global reference to
+        // the `AssetManager`, valid for the call and beyond.
         let raw = unsafe {
-            ndk_sys::AAssetManager_fromJava(env.get_raw().cast(), assets.as_raw().cast())
+            ndk_sys::AAssetManager_fromJava(
+                env.get_raw().cast(),
+                java_manager.as_obj().as_raw().cast(),
+            )
         };
         let ptr = NonNull::new(raw).ok_or_else(|| {
             io::Error::new(
@@ -157,6 +172,7 @@ mod imp {
         })?;
         install_backend(Arc::new(AndroidAssetBackend {
             manager: SendPtr(ptr),
+            _java_manager: java_manager,
         }));
         Ok(())
     }
@@ -172,6 +188,10 @@ mod imp {
     use jni::JNIEnv;
     use jni::objects::JObject;
 
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "the Android implementation of the same signature is not const"
+    )]
     pub fn install_from_java(_env: &mut JNIEnv, _assets: &JObject) -> io::Result<()> {
         Ok(())
     }
