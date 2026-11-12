@@ -108,24 +108,27 @@ impl PreMainQueue {
 
     /// Publish a value.
     ///
-    /// Delivered directly to every attached subscriber; if none is
-    /// attached, it is appended to the internal buffer (dropping the
-    /// oldest entry on overflow).
+    /// Delivered directly to every live subscriber; if none is live
+    /// (never attached, or every receiver has been dropped), it is
+    /// appended to the internal buffer (dropping the oldest entry on
+    /// overflow).
     pub fn publish(&self, value: Vec<u8>) {
         let mut inner = lock(&self.inner);
-        if inner.subscribers.is_empty() {
-            if self.capacity == 0 {
-                return;
-            }
-            if inner.buffered.len() == self.capacity {
-                inner.buffered.pop_front();
-            }
-            inner.buffered.push_back(value);
-        } else {
-            inner
-                .subscribers
-                .retain(|tx| tx.send(value.clone()).is_ok());
+        // Prune dead subscribers while delivering, so a value whose only
+        // subscriber went away is buffered instead of lost.
+        let mut delivered = false;
+        inner.subscribers.retain(|tx| {
+            let live = tx.send(value.clone()).is_ok();
+            delivered |= live;
+            live
+        });
+        if delivered || self.capacity == 0 {
+            return;
         }
+        if inner.buffered.len() == self.capacity {
+            inner.buffered.pop_front();
+        }
+        inner.buffered.push_back(value);
     }
 
     /// Subscribe to the queue.
@@ -143,10 +146,26 @@ impl PreMainQueue {
     }
 }
 
+/// Most named [`LatestValueSlot`]s, and separately most named
+/// [`PreMainQueue`]s, one [`EarlyEventStore`] keeps.
+///
+/// Channel names and capacities can arrive on the wire
+/// ([`Frame::EarlyEvent`](crate::protocol::Frame::EarlyEvent)), so a
+/// misbehaving peer must not be able to grow the store without bound.
+/// Real apps use a handful of channels.
+pub const MAX_EARLY_EVENT_CHANNELS: usize = 256;
+
+/// Largest capacity a [`PreMainQueue`] created through
+/// [`EarlyEventStore::queue`] gets; larger requests are clamped.
+pub const MAX_EARLY_QUEUE_CAPACITY: usize = 1024;
+
 /// Named directory of early-event slots and queues.
 ///
 /// Slots are addressed by string key — usually a plugin id or a
-/// subchannel path (`"lifecycle"`, `"deep-links"`, and so on).
+/// subchannel path (`"lifecycle"`, `"deep-links"`, and so on). At most
+/// [`MAX_EARLY_EVENT_CHANNELS`] keys of each kind are retained; past
+/// that, a new key gets a detached slot or queue that is not stored, so
+/// its publishes reach no later subscriber.
 #[derive(Debug, Default)]
 pub struct EarlyEventStore {
     latest: Mutex<HashMap<String, Arc<LatestValueSlot>>>,
@@ -163,27 +182,42 @@ impl EarlyEventStore {
     /// Return the [`LatestValueSlot`] for `key`, creating it on first
     /// access.
     pub fn latest_slot(&self, key: &str) -> Arc<LatestValueSlot> {
-        let mut map = lock(&self.latest);
-        if let Some(existing) = map.get(key) {
-            return existing.clone();
-        }
-        let slot = Arc::new(LatestValueSlot::new());
-        map.insert(key.to_owned(), slot.clone());
-        slot
+        Self::get_or_create(&self.latest, key, LatestValueSlot::new)
     }
 
     /// Return the [`PreMainQueue`] for `key`, creating it on first
-    /// access with the given `capacity`.
+    /// access with the given `capacity` (clamped to
+    /// [`MAX_EARLY_QUEUE_CAPACITY`]).
     ///
     /// If a queue already exists under `key`, its existing capacity is
     /// preserved and the `capacity` argument is ignored.
     pub fn queue(&self, key: &str, capacity: usize) -> Arc<PreMainQueue> {
-        let mut map = lock(&self.queues);
+        Self::get_or_create(&self.queues, key, || {
+            PreMainQueue::new(capacity.min(MAX_EARLY_QUEUE_CAPACITY))
+        })
+    }
+
+    fn get_or_create<T>(
+        map: &Mutex<HashMap<String, Arc<T>>>,
+        key: &str,
+        make: impl FnOnce() -> T,
+    ) -> Arc<T> {
+        let mut map = lock(map);
         if let Some(existing) = map.get(key) {
-            return existing.clone();
+            return Arc::clone(existing);
         }
-        let queue = Arc::new(PreMainQueue::new(capacity));
-        map.insert(key.to_owned(), queue.clone());
-        queue
+        let value = Arc::new(make());
+        let retained = map.len() < MAX_EARLY_EVENT_CHANNELS;
+        if retained {
+            map.insert(key.to_owned(), Arc::clone(&value));
+        }
+        drop(map);
+        if !retained {
+            tracing::warn!(
+                key,
+                "early-event channel limit reached; channel not retained"
+            );
+        }
+        value
     }
 }

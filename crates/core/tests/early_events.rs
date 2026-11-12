@@ -1,4 +1,7 @@
-use istmo_core::early_events::{EarlyEventStore, LatestValueSlot, PreMainQueue};
+use istmo_core::early_events::{
+    EarlyEventStore, LatestValueSlot, MAX_EARLY_EVENT_CHANNELS, MAX_EARLY_QUEUE_CAPACITY,
+    PreMainQueue,
+};
 
 #[test]
 fn latest_value_slot_replays_current_value_to_late_subscribers() {
@@ -98,4 +101,38 @@ fn early_event_store_reuses_queues_by_key() {
     q1.publish(vec![1]);
     let rx = q2.subscribe();
     assert_eq!(rx.recv().unwrap(), vec![1]);
+}
+
+#[test]
+fn pre_main_queue_buffers_when_its_only_subscriber_dropped() {
+    let queue = PreMainQueue::new(4);
+    drop(queue.subscribe());
+    queue.publish(vec![1]);
+    let rx = queue.subscribe();
+    assert_eq!(
+        rx.try_recv().expect("buffered for the next subscriber"),
+        vec![1]
+    );
+}
+
+#[test]
+fn early_event_store_clamps_wire_supplied_queue_capacity() {
+    let store = EarlyEventStore::new();
+    let queue = store.queue("big", usize::MAX);
+    for i in 0..=MAX_EARLY_QUEUE_CAPACITY {
+        queue.publish(i.to_le_bytes().to_vec());
+    }
+    let rx = queue.subscribe();
+    assert_eq!(rx.drain().count(), MAX_EARLY_QUEUE_CAPACITY);
+}
+
+#[test]
+fn early_event_store_stops_retaining_new_channels_past_the_limit() {
+    let store = EarlyEventStore::new();
+    for i in 0..MAX_EARLY_EVENT_CHANNELS {
+        store.latest_slot(&format!("ch{i}")).publish(vec![1]);
+    }
+    store.latest_slot("overflow").publish(vec![2]);
+    assert_eq!(store.latest_slot("overflow").peek(), None);
+    assert_eq!(store.latest_slot("ch0").peek(), Some(vec![1]));
 }
