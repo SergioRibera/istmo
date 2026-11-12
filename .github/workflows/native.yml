@@ -1,0 +1,97 @@
+name: native
+
+# Compiles the Kotlin and Swift halves that `cargo test` never sees: the
+# runtimes under `runtime/`, the code `istmo-build` generates into apps
+# and the `native/` sources of the plugins, built together through the
+# examples that link them.
+#
+# * `swift-core` — type-checks the UIKit-free core of the Swift runtime on
+#   Linux against a Foundation stub (`runtime/ios/ci/typecheck-stub.sh`).
+#   Fast feedback; the same script runs on a dev box with any swiftc.
+# * `ios` — builds the `IstmoRuntime` package for the iOS Simulator and
+#   type-checks each example's generated Swift plus its plugins'
+#   `native/ios` sources against the real SDK
+#   (`runtime/ios/ci/typecheck-app.sh`).
+# * `android` — compiles each example's Kotlin (Kotlin runtime as an
+#   included build, generated dispatchers / codecs / registry, plugin
+#   `native/android` sources) in the same rust-android image the
+#   justfile uses. `compileDebugKotlin` stops short of the cargo
+#   cross-build and APK signing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "runtime/**"
+      - "plugins/*/native/**"
+      - "plugins/*/istmo.toml"
+      - "crates/build/**"
+      - "crates/ios/**"
+      - "crates/android/**"
+      - "examples/**"
+      - "Package.swift"
+      - ".github/workflows/native.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "5.10"
+      - name: Type-check runtime core
+        run: runtime/ios/ci/typecheck-stub.sh
+
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [data-store-demo, biometric-demo, live-activity-demo]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios-${{ matrix.example }}
+      - name: Build IstmoRuntime for the iOS Simulator
+        run: >
+          xcodebuild build
+          -scheme IstmoRuntime
+          -destination "generic/platform=iOS Simulator"
+          -derivedDataPath "$RUNNER_TEMP/dd"
+          CODE_SIGNING_ALLOWED=NO
+      - name: Type-check ${{ matrix.example }}
+        run: runtime/ios/ci/typecheck-app.sh "${{ matrix.example }}"
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: sergioribera/rust-android:1.98-sdk-36
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [data-store-demo, biometric-demo, share-demo, camera-demo]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.cargo/registry
+          key: android-${{ matrix.example }}-${{ hashFiles('**/*.gradle.kts', '**/Cargo.toml') }}
+          restore-keys: android-${{ matrix.example }}-
+      - name: Compile Kotlin
+        working-directory: examples/${{ matrix.example }}/android
+        run: gradle :app:compileDebugKotlin --no-daemon
