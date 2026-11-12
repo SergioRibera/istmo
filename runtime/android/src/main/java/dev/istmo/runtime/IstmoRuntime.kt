@@ -62,6 +62,17 @@ object IstmoRuntime {
         return ok
     }
 
+    /**
+     * Start the Rust runtime and its pump thread.
+     *
+     * Idempotent while the runtime runs: later calls (another activity, a
+     * service in the same process) return `true` without restarting it.
+     * Always returns `true`; failures throw [IllegalStateException]
+     * (or the underlying JNI error, e.g. [NoSuchMethodError] when this
+     * class and the native library disagree on a callback signature).
+     * After [shutdown] the runtime cannot be started again in the same
+     * process.
+     */
     fun start(): Boolean {
         val ok = nativeStart(IstmoRuntime::class.java)
         synchronized(pendingEarlyQueue) { flushPendingEarlyQueueLocked() }
@@ -112,6 +123,11 @@ object IstmoRuntime {
         }
     }
 
+    /**
+     * Cancel pending work and stop the pump. Terminal for the process:
+     * the native runtime lives in a process-wide `OnceLock`, so a later
+     * [start] throws instead of restarting it. Idempotent.
+     */
     fun shutdown() {
         nativeShutdown()
         scope.cancel()
@@ -131,10 +147,18 @@ object IstmoRuntime {
         val callId = nextCallId.getAndIncrement()
         outboundCalls[callId] = PendingCall(cont)
         cont.invokeOnCancellation {
-            outboundCalls.remove(callId)
-            nativeSubmitCall(callId, pluginId, instanceId, method, EMPTY_PAYLOAD)
+            // Cancellation handlers must not throw; a cancel racing
+            // shutdown has nothing left to stop anyway.
+            if (outboundCalls.remove(callId) != null) {
+                runCatching { nativeSubmitCancel(callId) }
+            }
         }
-        nativeSubmitCall(callId, pluginId, instanceId, method, payload)
+        try {
+            nativeSubmitCall(callId, pluginId, instanceId, method, payload)
+        } catch (e: IllegalStateException) {
+            outboundCalls.remove(callId)
+            throw e
+        }
     }
 
     suspend fun call(pluginId: String, method: String, payload: ByteArray): ByteArray =
@@ -304,7 +328,12 @@ object IstmoRuntime {
         }
     }
 
+    // Every `native*` below throws IllegalStateException when the call
+    // points at a bug (runtime not started, malformed bytes, bad
+    // argument). Late frames racing a cancel or shutdown are dropped
+    // silently on the Rust side.
     external fun nativeStart(runtimeClass: Class<*>): Boolean
+    external fun nativeSubmitCancel(callId: Long)
     external fun nativeSubmitCall(
         callId: Long,
         pluginId: String,

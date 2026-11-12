@@ -44,7 +44,7 @@ object IstmoHost {
         synchronized(this) {
             if (!started) {
                 val lib = libraryName ?: libraryName(activity)
-                check(IstmoRuntime.start(lib)) { "istmo: IstmoRuntime.start(\"$lib\") failed" }
+                IstmoRuntime.start(lib)
                 started = true
             }
         }
@@ -52,17 +52,20 @@ object IstmoHost {
         registerBuiltinObservers(activity.applicationContext)
     }
 
-    /** Shut the runtime down once [activity] is finishing for good. */
+    /**
+     * Stop the builtin observers once [activity] is finishing for good.
+     *
+     * The runtime itself stays up: it is process-scoped and cannot be
+     * started again after [IstmoRuntime.shutdown], while Android may
+     * relaunch the activity in the same process. The OS reclaims it with
+     * the process.
+     */
     @JvmStatic
     fun onDestroy(activity: Activity) {
         if (!activity.isFinishing || activity.isChangingConfigurations) return
         synchronized(this) {
             builtinObservers?.unregisterAll()
             builtinObservers = null
-            if (started) {
-                IstmoRuntime.shutdown()
-                started = false
-            }
         }
     }
 
