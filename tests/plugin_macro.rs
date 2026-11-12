@@ -325,3 +325,100 @@ fn generated_client_reads_stream_events() {
     assert_eq!(collected, vec![0_u32, 1, 2]);
     backend.join().unwrap();
 }
+
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum Credential {}
+
+#[istmo::message]
+#[derive(Debug)]
+pub struct Account<T> {
+    pub extra: T,
+    #[istmo::handle(Credential)]
+    pub credential: istmo::NativeHandleId,
+}
+
+#[istmo::plugin(name = "com.example.accounts")]
+pub trait Accounts {
+    #[istmo::owned]
+    async fn sign_in(&self) -> Account<u8>;
+}
+
+#[test]
+fn owned_client_method_adopts_handles_of_generic_messages() {
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let outbound = init.outbound;
+
+    let backend_rt = rt.clone();
+    let backend = thread::spawn(move || {
+        let envelope = outbound.recv().expect("call frame");
+        let Frame::Call { call_id, .. } = envelope.frame else {
+            panic!("expected call");
+        };
+        let account = Account {
+            extra: 7_u8,
+            credential: istmo::NativeHandleId(41),
+        };
+        backend_rt
+            .dispatch_inbound(Envelope::new(Frame::Respond {
+                call_id,
+                result: Ok(codec::encode(&account).unwrap()),
+            }))
+            .unwrap();
+    });
+
+    let accounts = AccountsClient::from_runtime(&rt).expect("declared");
+    let owned: OwnedAccount<u8> = pollster::block_on(accounts.sign_in_owned()).unwrap();
+    assert_eq!(owned.extra, 7);
+    assert_eq!(owned.credential.id(), istmo::NativeHandleId(41));
+    let _ = owned.credential.into_id();
+    backend.join().unwrap();
+}
+
+#[istmo::plugin(name = "com.example.signatures")]
+pub trait Signatures {
+    async fn qualified(&self) -> ::core::result::Result<u8, EchoError>;
+}
+
+#[derive(Debug)]
+struct Failing;
+
+impl Signatures for Failing {
+    async fn qualified(&self) -> Result<u8, EchoError> {
+        Err(EchoError {
+            reason: "boom".to_owned(),
+        })
+    }
+}
+
+#[test]
+fn qualified_result_path_splits_into_domain_error() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let outbound = init.outbound;
+
+    rt.register_host(SignaturesHost::new(Failing));
+
+    let call_id = CallId(31);
+    rt.dispatch_inbound(Envelope::new(Frame::Call {
+        call_id,
+        plugin_id: "com.example.signatures".to_owned(),
+        instance_id: None,
+        method: "qualified".to_owned(),
+        payload: codec::encode(&()).unwrap(),
+    }))
+    .unwrap();
+
+    let envelope = outbound
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("respond");
+    let Frame::Respond {
+        result: Err(bytes), ..
+    } = envelope.frame
+    else {
+        panic!("expected a domain error, got {:?}", envelope.frame);
+    };
+    let (err, _) = codec::decode::<EchoError>(&bytes).unwrap();
+    assert_eq!(err.reason, "boom");
+}

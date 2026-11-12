@@ -1,0 +1,5 @@
+error: unary plugin methods must be `async fn`; mark stream methods with `#[istmo::stream]`
+ --> tests/ui/fail/plugin_unary_not_async.rs:3:8
+  |
+3 |     fn now(&self) -> u64;
+  |        ^^^

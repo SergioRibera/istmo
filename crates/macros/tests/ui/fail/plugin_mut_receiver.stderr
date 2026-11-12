@@ -1,0 +1,5 @@
+error: the receiver must be `&self`; `&mut self`, `self`, explicit lifetimes and typed receivers are not supported
+ --> tests/ui/fail/plugin_mut_receiver.rs:3:19
+  |
+3 |     async fn bump(&mut self) -> u32;
+  |                   ^^^^^^^^^

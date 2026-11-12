@@ -1,0 +1,5 @@
+error: the receiver must be `&self`; `&mut self`, `self`, explicit lifetimes and typed receivers are not supported
+ --> tests/ui/fail/service_mut_receiver.rs:3:23
+  |
+3 |     async fn on_start(&mut self, ctx: istmo::plugins::ServiceContext);
+  |                       ^^^^^^^^^

@@ -1,0 +1,5 @@
+error: unknown section `expects`; expected `plugins`, `remote`, `hosts`, `services` or `workers`
+ --> tests/ui/fail/runtime_unknown_section.rs:1:17
+  |
+1 | istmo::runtime!(expects: [EchoClient]);
+  |                 ^^^^^^^

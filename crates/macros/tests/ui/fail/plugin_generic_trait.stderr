@@ -1,0 +1,5 @@
+error: generic plugin traits are not supported
+ --> tests/ui/fail/plugin_generic_trait.rs:2:16
+  |
+2 | pub trait Store<T> {
+  |                ^^^

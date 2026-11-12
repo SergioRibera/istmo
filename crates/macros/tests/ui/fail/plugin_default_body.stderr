@@ -1,0 +1,8 @@
+error: default method bodies are not supported on a plugin trait; the macro rewrites each signature, so implement the method on the type instead
+ --> tests/ui/fail/plugin_default_body.rs:3:35
+  |
+3 |       async fn answer(&self) -> u32 {
+  |  ___________________________________^
+4 | |         42
+5 | |     }
+  | |_____^

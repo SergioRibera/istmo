@@ -1,0 +1,5 @@
+error: `#[handle]` is not supported inside enums; carry the handle in a `#[message]` struct field
+ --> tests/ui/fail/message_handle_enum.rs:6:9
+  |
+6 |         #[handle(Credential)]
+  |         ^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: a plugin trait may only declare methods
+ --> tests/ui/fail/plugin_associated_type.rs:3:5
+  |
+3 |     type Item;
+  |     ^^^^^^^^^^

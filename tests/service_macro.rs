@@ -103,3 +103,69 @@ fn adapter_reports_stable_plugin_id() {
     assert_eq!(adapter.plugin_id(), "myapp.sync");
     let _ = Outcome::Ok(Vec::new());
 }
+
+#[istmo::service(name = "myapp.exclusive")]
+pub trait ExclusiveService {
+    async fn on_start(&self, ctx: ServiceContext);
+}
+
+#[derive(Debug, Default, Clone)]
+struct ExclusiveImpl {
+    running: Arc<AtomicUsize>,
+    max_running: Arc<AtomicUsize>,
+    starts: Arc<AtomicUsize>,
+}
+
+impl ExclusiveService for ExclusiveImpl {
+    async fn on_start(&self, ctx: ServiceContext) {
+        let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_running.fetch_max(now, Ordering::SeqCst);
+        self.starts.fetch_add(1, Ordering::SeqCst);
+        ctx.stopped().await;
+        self.running.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn start_exclusive(rt: &Arc<Runtime>, call_id: u64) {
+    rt.dispatch_inbound(Envelope::new(Frame::Call {
+        call_id: istmo::CallId(call_id),
+        plugin_id: "myapp.exclusive".to_owned(),
+        instance_id: None,
+        method: "on_start".to_owned(),
+        payload: codec::encode(&(format!("run-{call_id}"),)).unwrap(),
+    }))
+    .unwrap();
+}
+
+fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    while !done() {
+        assert!(start.elapsed() < Duration::from_secs(2), "{what}");
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn second_on_start_stops_the_first_before_starting() {
+    let service = ExclusiveImpl::default();
+    let init = Runtime::mock()
+        .host(ExclusiveServiceAdapter::new(service.clone()))
+        .finish();
+    let rt = init.runtime;
+
+    start_exclusive(&rt, 1);
+    wait_for("first on_start never ran", || {
+        service.starts.load(Ordering::SeqCst) == 1
+    });
+    start_exclusive(&rt, 2);
+    wait_for("second on_start never ran", || {
+        service.starts.load(Ordering::SeqCst) == 2
+    });
+
+    assert_eq!(service.running.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        service.max_running.load(Ordering::SeqCst),
+        1,
+        "two on_start bodies were alive at once",
+    );
+}

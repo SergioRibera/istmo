@@ -1,0 +1,5 @@
+error: `make` must take `&self` as its first argument
+ --> tests/ui/fail/plugin_missing_receiver.rs:3:5
+  |
+3 |     async fn make(seed: u32) -> u32;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

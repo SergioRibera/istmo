@@ -1,0 +1,5 @@
+error: `#[istmo::stream]` methods are not `async`: drop `async` and declare the stream item as the return type
+ --> tests/ui/fail/plugin_stream_async.rs:4:5
+  |
+4 |     async fn ticks(&self) -> u32;
+  |     ^^^^^

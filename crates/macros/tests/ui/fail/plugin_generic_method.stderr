@@ -1,0 +1,5 @@
+error: generic methods are not supported on a plugin trait; every argument and return type must be concrete
+ --> tests/ui/fail/plugin_generic_method.rs:3:21
+  |
+3 |     async fn convert<T>(&self, value: u32) -> u32;
+  |                     ^^^

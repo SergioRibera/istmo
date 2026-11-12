@@ -1,0 +1,7 @@
+error: #[istmo::plugin] requires a `name = "..."` argument
+ --> tests/ui/fail/plugin_missing_name.rs:1:1
+  |
+1 | #[istmo::plugin]
+  | ^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `istmo::plugin` (in Nightly builds, run with -Z macro-backtrace for more info)

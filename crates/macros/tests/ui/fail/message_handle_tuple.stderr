@@ -1,0 +1,5 @@
+error: `#[handle]` requires a struct with named fields
+ --> tests/ui/fail/message_handle_tuple.rs:4:20
+  |
+4 | pub struct Account(#[handle(Credential)] istmo::NativeHandleId);
+  |                    ^^^^^^^^^^^^^^^^^^^^^
