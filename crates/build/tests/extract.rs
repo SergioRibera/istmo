@@ -421,6 +421,48 @@ fn collects_message_types_from_inline_and_file_modules() {
 }
 
 #[test]
+fn path_attributes_resolve_like_rustc() {
+    let path = write_source(
+        r#"
+        mod plain;
+        #[path = "sub/loaded.rs"]
+        mod loaded;
+
+        #[istmo::plugin(name = "p")]
+        pub trait P { async fn go(&self, a: plain::A, b: loaded::B); }
+        "#,
+    );
+    let dir = path.parent().unwrap();
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    // `#[path]` in a non-mod-rs file is relative to that file's directory.
+    std::fs::write(
+        dir.join("plain.rs"),
+        "#[path = \"beside.rs\"]\nmod beside;\n#[istmo::message]\npub struct A { pub c: C }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("beside.rs"),
+        "#[istmo::message]\npub struct C { pub x: u8 }\n",
+    )
+    .unwrap();
+    // A file loaded through `#[path]` is mod-rs: `mod d;` sits beside it.
+    std::fs::write(
+        dir.join("sub/loaded.rs"),
+        "mod d;\n#[istmo::message]\npub struct B { pub d: D }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("sub/d.rs"),
+        "#[istmo::message]\npub struct D { pub y: u16 }\n",
+    )
+    .unwrap();
+
+    let got = extract_contract(&path, "P").expect("extract");
+    let names: Vec<&str> = got.types.iter().map(TypeDef::name).collect();
+    assert_eq!(names, ["C", "A", "D", "B"]);
+}
+
+#[test]
 fn parse_errors_report_line_and_column() {
     let path = write_source("pub struct Broken {\n    x: u8,,\n}\n");
     let err = extract_contract(&path, "P").unwrap_err();

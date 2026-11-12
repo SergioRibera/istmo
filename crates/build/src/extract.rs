@@ -81,26 +81,54 @@ pub fn extract_contract(
     let path = source_path.as_ref();
     let source = fs::read_to_string(path)?;
     let file: File = syn::parse_file(&source)?;
-    let contract = lower_contract(&file, trait_name, Some(&module_dir(path)))?;
+    let contract = lower_contract(&file, trait_name, &ModuleDirs::of_file(path, false))?;
     contract.validate()?;
     Ok(contract)
 }
 
-/// Directory holding the files of `mod foo;` items declared in `path`:
-/// its own directory for `lib.rs` / `main.rs` / `mod.rs`, a sibling
-/// directory named after the file otherwise.
-fn module_dir(path: &Path) -> PathBuf {
-    let parent = path.parent().unwrap_or_else(|| Path::new(""));
-    match path.file_stem().and_then(|s| s.to_str()) {
-        Some("lib" | "main" | "mod") | None => parent.to_path_buf(),
-        Some(stem) => parent.join(stem),
+/// Where rustc looks for the files of `mod foo;` items at one nesting
+/// level of a source file.
+#[derive(Debug, Clone)]
+struct ModuleDirs {
+    /// Directory of `foo.rs` / `foo/mod.rs`.
+    modules: PathBuf,
+    /// Directory a `#[path = "…"]` is relative to.
+    path_attr: PathBuf,
+}
+
+impl ModuleDirs {
+    /// Top level of `path`. A "mod-rs" file (`lib.rs`, `main.rs`,
+    /// `mod.rs`, or any file loaded through `#[path]`) keeps its
+    /// submodules beside it; any other `foo.rs` keeps them in `foo/`.
+    /// `#[path]` is relative to the file's own directory either way.
+    fn of_file(path: &Path, mod_rs: bool) -> Self {
+        let parent = path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+        let stem = path.file_stem().and_then(|s| s.to_str());
+        let modules = match stem {
+            Some(stem) if !mod_rs && !matches!(stem, "lib" | "main" | "mod") => parent.join(stem),
+            _ => parent.clone(),
+        };
+        Self {
+            modules,
+            path_attr: parent,
+        }
+    }
+
+    /// Inside the inline `mod name { … }`: both lookups gain `name` as a
+    /// directory component.
+    fn inline(&self, name: &str) -> Self {
+        let dir = self.modules.join(name);
+        Self {
+            modules: dir.clone(),
+            path_attr: dir,
+        }
     }
 }
 
 fn lower_contract(
     file: &File,
     trait_name: &str,
-    dir: Option<&Path>,
+    dirs: &ModuleDirs,
 ) -> Result<Contract, ExtractError> {
     let (trait_def, attr_args) = find_plugin_trait(&file.items, trait_name)?
         .ok_or_else(|| ExtractError::TraitNotFound(trait_name.to_owned()))?;
@@ -116,7 +144,7 @@ fn lower_contract(
     }
 
     let mut types = Vec::new();
-    collect_message_types(&file.items, dir, &mut types)?;
+    collect_message_types(&file.items, dirs, &mut types)?;
 
     Ok(Contract {
         plugin_id,
@@ -392,13 +420,13 @@ fn pat_name(pat: &syn::Pat) -> Option<String> {
 }
 
 /// Appends the message types of `items`, descending into inline modules
-/// and, when `dir` is known, into `mod foo;` files resolved the way rustc
-/// does (`#[path]`, `foo.rs`, `foo/mod.rs`). A module file that does not
-/// exist is skipped; a type it would have declared then surfaces as an
-/// unknown type in [`Contract::validate`].
+/// and into `mod foo;` files resolved the way rustc does (`#[path]`,
+/// `foo.rs`, `foo/mod.rs`). A module file that does not exist is
+/// skipped; a type it would have declared then surfaces as an unknown
+/// type in [`Contract::validate`].
 fn collect_message_types(
     items: &[Item],
-    dir: Option<&Path>,
+    dirs: &ModuleDirs,
     out: &mut Vec<TypeDef>,
 ) -> Result<(), ExtractError> {
     for item in items {
@@ -409,7 +437,7 @@ fn collect_message_types(
             Item::Enum(e) if has_message_attr(&e.attrs) => {
                 out.push(TypeDef::Enum(lower_enum(e)?));
             }
-            Item::Mod(m) => collect_module(m, dir, out)?,
+            Item::Mod(m) => collect_module(m, dirs, out)?,
             _ => {}
         }
     }
@@ -418,30 +446,31 @@ fn collect_message_types(
 
 fn collect_module(
     m: &ItemMod,
-    dir: Option<&Path>,
+    dirs: &ModuleDirs,
     out: &mut Vec<TypeDef>,
 ) -> Result<(), ExtractError> {
     let name = ident(&m.ident);
-    let child_dir = dir.map(|d| d.join(&name));
     if let Some((_, items)) = &m.content {
-        return collect_message_types(items, child_dir.as_deref(), out);
+        return collect_message_types(items, &dirs.inline(&name), out);
     }
-    let Some(dir) = dir else { return Ok(()) };
-    let candidates = path_attr(&m.attrs).map_or_else(
+    let attr = path_attr(&m.attrs);
+    let candidates = attr.as_ref().map_or_else(
         || {
             vec![
-                dir.join(format!("{name}.rs")),
-                dir.join(&name).join("mod.rs"),
+                dirs.modules.join(format!("{name}.rs")),
+                dirs.modules.join(&name).join("mod.rs"),
             ]
         },
-        |p| vec![dir.join(p)],
+        |p| vec![dirs.path_attr.join(p)],
     );
     let Some(file_path) = candidates.into_iter().find(|p| p.is_file()) else {
         return Ok(());
     };
     let source = fs::read_to_string(&file_path)?;
     let file = syn::parse_file(&source)?;
-    collect_message_types(&file.items, Some(&module_dir(&file_path)), out)
+    // rustc treats a file loaded through `#[path]` as mod-rs.
+    let child = ModuleDirs::of_file(&file_path, attr.is_some());
+    collect_message_types(&file.items, &child, out)
 }
 
 fn path_attr(attrs: &[Attribute]) -> Option<String> {
