@@ -42,7 +42,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
             androidTierHint: nil
         )
         queue.sync {
-            typeByHandle[id.value] = activity_type
+            typeByHandle[id] = activity_type
         }
         return id
     }
@@ -64,8 +64,9 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
         let handler = try handler(forHandle: handle)
         try await handler.end(handle: handle, finalState: final_state, dismissal: dismissal)
         queue.sync {
-            _ = typeByHandle.removeValue(forKey: handle.value)
+            _ = typeByHandle.removeValue(forKey: handle)
         }
+        IstmoRuntime.shared.forgetHandle(handle)
     }
 
     public func are_activities_enabled() async throws -> Bool {
@@ -85,20 +86,20 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
             let info = ActivityAuthorizationInfo()
             return .ios(
                 IosCapabilities(
-                    activity_kit_available: true,
-                    activities_enabled: info.areActivitiesEnabled,
+                    activityKitAvailable: true,
+                    activitiesEnabled: info.areActivitiesEnabled,
 
-                    dynamic_island: true,
-                    push_updates: false
+                    dynamicIsland: true,
+                    pushUpdates: false
                 )
             )
         }
         return .ios(
             IosCapabilities(
-                activity_kit_available: false,
-                activities_enabled: false,
-                dynamic_island: false,
-                push_updates: false
+                activityKitAvailable: false,
+                activitiesEnabled: false,
+                dynamicIsland: false,
+                pushUpdates: false
             )
         )
         #else
@@ -113,7 +114,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
             let restored = try await handler.restoreActive()
             for item in restored {
                 queue.sync {
-                    typeByHandle[item.handle.value] = handler.activityType
+                    typeByHandle[item.handle] = handler.activityType
                 }
                 out.append(item)
             }
@@ -126,7 +127,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
         guard let ty, let handler = queue.sync(execute: { handlersByType[ty] }) else {
             return
         }
-        handler.releaseHandle(NativeHandleId(value: handleId))
+        handler.releaseHandle(handleId)
         queue.sync {
             _ = typeByHandle.removeValue(forKey: handleId)
         }
@@ -141,7 +142,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
     }
 
     private func handler(forHandle handle: NativeHandleId) throws -> LiveActivityHandler {
-        let ty = queue.sync { typeByHandle[handle.value] }
+        let ty = queue.sync { typeByHandle[handle] }
         guard let ty else {
             throw ActivityError.handleNotFound
         }

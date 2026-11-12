@@ -58,11 +58,11 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
                 staleDate: staleAfterSeconds.map { Date().addingTimeInterval(TimeInterval($0)) }
             )
             let activity = try request(attributes: attrs, content: content, style: style)
-            let id = IstmoRuntime.shared.allocateHandleId(owner: self.activityType)
+            let id = IstmoRuntime.shared.allocHandleId(pluginId: LiveActivityDispatcher.PLUGIN_ID)
             queue.sync {
                 self.activities[id] = activity
             }
-            return NativeHandleId(value: id)
+            return id
         } catch let err as ActivityError {
             throw err
         } catch {
@@ -79,7 +79,7 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
         state: Data,
         alert: AlertConfig?
     ) async throws {
-        guard let activity = queue.sync(execute: { activities[handle.value] }) else {
+        guard let activity = queue.sync(execute: { activities[handle] }) else {
             throw ActivityError.handleNotFound
         }
 
@@ -103,7 +103,7 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
         finalState: Data?,
         dismissal: DismissalPolicy
     ) async throws {
-        let activity = queue.sync { activities[handle.value] }
+        let activity = queue.sync { activities[handle] }
         guard let activity else { throw ActivityError.handleNotFound }
 
         let policy: ActivityUIDismissalPolicy
@@ -129,17 +129,15 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
 
         await activity.end(content, dismissalPolicy: policy)
         queue.sync {
-            _ = activities.removeValue(forKey: handle.value)
+            _ = activities.removeValue(forKey: handle)
         }
     }
 
     public func restoreActive() async throws -> [RestoredActivity] {
         var out: [RestoredActivity] = []
         for activity in Activity<Attributes>.activities {
-            let id = IstmoRuntime.shared.allocateHandleId(owner: self.activityType)
-            queue.sync {
-                self.activities[id] = activity
-            }
+            // Encode before allocating so a failing activity does not leave
+            // an id registered that nothing will ever release.
             let attrsData: Data
             let stateData: Data
             do {
@@ -148,10 +146,14 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
             } catch {
                 throw ActivityError.decode(String(describing: error))
             }
+            let id = IstmoRuntime.shared.allocHandleId(pluginId: LiveActivityDispatcher.PLUGIN_ID)
+            queue.sync {
+                self.activities[id] = activity
+            }
             out.append(
                 RestoredActivity(
-                    handle: NativeHandleId(value: id),
-                    activity_type: self.activityType,
+                    handle: id,
+                    activityType: self.activityType,
                     attributes: attrsData,
                     state: stateData
                 )
@@ -161,7 +163,7 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
     }
 
     public func releaseHandle(_ handle: NativeHandleId) {
-        let activity = queue.sync { activities.removeValue(forKey: handle.value) }
+        let activity = queue.sync { activities.removeValue(forKey: handle) }
         guard let activity else { return }
         Task { await activity.end(nil, dismissalPolicy: .immediate) }
     }

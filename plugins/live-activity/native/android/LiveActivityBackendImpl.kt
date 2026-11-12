@@ -13,6 +13,7 @@ import dev.istmo.runtime.DismissalPolicy
 import dev.istmo.runtime.HandleReleaser
 import dev.istmo.runtime.IstmoRuntime
 import dev.istmo.runtime.LiveActivityBackend
+import dev.istmo.runtime.LiveActivityDispatcher
 import dev.istmo.runtime.NativeHandleId
 import dev.istmo.runtime.PlatformCapabilities
 import dev.istmo.runtime.RestoredActivity
@@ -42,7 +43,10 @@ class LiveActivityBackendImpl(
         android_tier_hint: AndroidTierHint?,
     ): NativeHandleId {
         val handler = handlerFor(activity_type)
-        val id: NativeHandleId = IstmoRuntime.allocHandleId(activity_type)
+        // The runtime routes `ReleaseNativeHandle` to the handler registered
+        // under the owner id, so the owner must be the plugin id, never the
+        // activity type.
+        val id: NativeHandleId = IstmoRuntime.allocHandleId(LiveActivityDispatcher.PLUGIN_ID)
         try {
             handler.start(
                 handle = id,
@@ -87,10 +91,10 @@ class LiveActivityBackendImpl(
         val sdk = Build.VERSION.SDK_INT
         return PlatformCapabilities.Android(
             AndroidCapabilities(
-                supports_custom = true,
-                supports_progress_style = sdk >= 35,
-                supports_live_update = sdk >= 36,
-                notifications_enabled = NotificationManagerCompat
+                supportsCustom = true,
+                supportsProgressStyle = sdk >= 35,
+                supportsLiveUpdate = sdk >= 36,
+                notificationsEnabled = NotificationManagerCompat
                     .from(appContext)
                     .areNotificationsEnabled(),
             ),
