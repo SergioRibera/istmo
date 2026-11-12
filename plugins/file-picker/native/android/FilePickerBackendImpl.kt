@@ -1,6 +1,7 @@
 package dev.istmo.plugins.filepicker
 
 import android.content.ContentResolver
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -8,6 +9,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import dev.istmo.runtime.BackendException
 import dev.istmo.runtime.FilePickerBackend
 import dev.istmo.runtime.FilePickerError
@@ -19,6 +22,8 @@ import dev.istmo.runtime.PickedFile
 import dev.istmo.runtime.RawFileHandle
 import dev.istmo.runtime.SaveConfig
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -30,9 +35,10 @@ import kotlinx.coroutines.sync.withLock
  *
  * `ActivityResultLauncher`s must be registered before the host `Activity`
  * reaches `STARTED`, so this class *must* be constructed inside
- * `Activity.onCreate` and held for the activity's lifetime. Wrap it in
- * the codegen-emitted `FilePickerDispatcher` and register that with the
- * runtime:
+ * `Activity.onCreate` and held for the activity's lifetime. The
+ * generated `IstmoPluginRegistry` does exactly that (`istmo.toml` sets
+ * `android_backend_arg = "activity"`) when `registerAll` runs from
+ * `onCreate`. Registering by hand looks the same:
  *
  * ```kotlin
  * override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,19 +53,34 @@ import kotlinx.coroutines.sync.withLock
  * (which implements `HandleReleaser`) so URI permissions drop
  * deterministically when the Rust side lets the handle go.
  *
- * Auto-registration is disabled in `istmo.toml` because the constructor
- * needs an `Activity`, not a plain `Context`.
+ * # Activity recreation
+ *
+ * The launchers belong to the activity that constructed the backend. If
+ * that activity is destroyed while a picker is open (e.g. a
+ * configuration change without `android:configChanges`), its result can
+ * no longer reach this instance: the pending call fails with
+ * `FilePickerError.Backend` instead of hanging, and the caller retries
+ * against the backend registered by the new activity.
+ *
+ * # Persisted grants
+ *
+ * Every URI this backend persists is recorded in its own
+ * `SharedPreferences`. Handles never outlive the process, so grants
+ * recorded by a previous process are orphans and are released when the
+ * next backend is constructed. Grants the app persisted through other
+ * code are never touched.
  */
 class FilePickerBackendImpl(
     private val activity: ComponentActivity,
 ) : FilePickerBackend, HandleReleaser {
 
     private val resolver: ContentResolver = activity.contentResolver
-    private val files = ConcurrentHashMap<Long, Uri>()
+    private val grantLog = activity.applicationContext
+        .getSharedPreferences(GRANT_PREFS, Context.MODE_PRIVATE)
 
     /** Serialises picker launches — SAF only tolerates one modal at a time. */
     private val launchMutex = Mutex()
-    private var pending: CancellableContinuation<ActivityResult>? = null
+    private val pending = AtomicReference<CancellableContinuation<ActivityResult>?>(null)
 
     private val openDocumentLauncher: ActivityResultLauncher<Intent> =
         activity.registerForActivityResult(
@@ -71,30 +92,43 @@ class FilePickerBackendImpl(
             ActivityResultContracts.StartActivityForResult()
         ) { result -> resumePending(result) }
 
+    init {
+        if (reconciled.compareAndSet(false, true)) releaseOrphanedGrants()
+        activity.lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_DESTROY) {
+                pending.getAndSet(null)?.resumeWith(
+                    Result.failure(
+                        BackendException(
+                            FilePickerError.Backend("host activity destroyed while the picker was open"),
+                        ),
+                    ),
+                )
+            }
+        })
+    }
+
     // ------------------------------------------------------------- FilePicker impl
 
     override suspend fun pick_file(config: PickConfig): PickedFile? {
         val intent = buildOpenIntent(config, multi = false)
         val result = launch(openDocumentLauncher, intent)
-        val uri = result.data?.data ?: return null
-        takePersistable(uri, config.filter.mimeTypes.contains("*/*") || config.filter.mimeTypes.isEmpty())
-        return registerAndDescribe(uri)
+        val data = result.data ?: return null
+        val uri = data.data ?: return null
+        return registerAndDescribe(uri, grantedFlags(data))
     }
 
     override suspend fun pick_files(config: PickConfig): List<PickedFile> {
         val intent = buildOpenIntent(config, multi = config.allowMultiple)
         val result = launch(openDocumentLauncher, intent)
         val data = result.data ?: return emptyList()
+        val flags = grantedFlags(data)
         val clip = data.clipData
         val uris: List<Uri> = if (clip != null) {
             List(clip.itemCount) { clip.getItemAt(it).uri }
         } else {
             listOfNotNull(data.data)
         }
-        return uris.map { uri ->
-            takePersistable(uri, writable = false)
-            registerAndDescribe(uri)
-        }
+        return uris.map { uri -> registerAndDescribe(uri, flags) }
     }
 
     override suspend fun save_file(config: SaveConfig): PickedFile? {
@@ -104,9 +138,9 @@ class FilePickerBackendImpl(
             config.suggestedName?.let { putExtra(Intent.EXTRA_TITLE, it) }
         }
         val result = launch(createDocumentLauncher, intent)
-        val uri = result.data?.data ?: return null
-        takePersistable(uri, writable = true)
-        return registerAndDescribe(uri)
+        val data = result.data ?: return null
+        val uri = data.data ?: return null
+        return registerAndDescribe(uri, grantedFlags(data))
     }
 
     override suspend fun open_read(file: NativeHandleId): RawFileHandle {
@@ -135,13 +169,13 @@ class FilePickerBackendImpl(
 
     override fun releaseNativeHandle(handleId: Long) {
         val uri = files.remove(handleId) ?: return
-        try {
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            resolver.releasePersistableUriPermission(uri, flags)
-        } catch (_: SecurityException) {
-            // Permission may already have been dropped by the system.
-        }
         IstmoRuntime.forgetHandle(handleId)
+        val lastRef = synchronized(uriRefs) {
+            val left = (uriRefs[uri] ?: 1) - 1
+            if (left <= 0) uriRefs.remove(uri) else uriRefs[uri] = left
+            left <= 0
+        }
+        if (lastRef) releaseGrant(uri)
     }
 
     // ------------------------------------------------------------- helpers
@@ -163,30 +197,52 @@ class FilePickerBackendImpl(
         intent: Intent,
     ): ActivityResult = launchMutex.withLock {
         suspendCancellableCoroutine { cont ->
-            pending = cont
+            pending.set(cont)
+            // The Rust caller dropped its future: forget the continuation
+            // so a late result is ignored. The system picker itself
+            // cannot be dismissed programmatically.
+            cont.invokeOnCancellation { pending.compareAndSet(cont, null) }
             try {
                 launcher.launch(intent)
             } catch (t: Throwable) {
-                pending = null
-                cont.resumeWith(Result.failure(BackendException(t.message ?: "launch failed")))
+                if (pending.compareAndSet(cont, null)) {
+                    cont.resumeWith(
+                        Result.failure(BackendException(FilePickerError.Backend(t.message ?: "launch failed"))),
+                    )
+                }
             }
         }
     }
 
     private fun resumePending(result: ActivityResult) {
-        val cont = pending ?: return
-        pending = null
-        cont.resume(result)
+        val cont = pending.getAndSet(null) ?: return
+        if (cont.isActive) cont.resume(result)
     }
 
-    private fun takePersistable(uri: Uri, writable: Boolean) {
-        val flags = if (writable) {
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        } else {
-            Intent.FLAG_GRANT_READ_URI_PERMISSION
+    /** Read / write grants the provider actually handed out with the result. */
+    private fun grantedFlags(data: Intent): Int {
+        val flags = data.flags and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        return if (flags == 0) Intent.FLAG_GRANT_READ_URI_PERMISSION else flags
+    }
+
+    private fun registerAndDescribe(uri: Uri, flags: Int): PickedFile {
+        val firstRef = synchronized(uriRefs) {
+            val refs = (uriRefs[uri] ?: 0) + 1
+            uriRefs[uri] = refs
+            refs == 1
         }
+        if (firstRef) takeGrant(uri, flags)
+        val id = IstmoRuntime.allocHandleId(PLUGIN_ID)
+        files[id] = uri
+        val (name, size, mime) = describe(uri)
+        return PickedFile(displayName = name, mimeType = mime, size = size?.toULong(), handle = id)
+    }
+
+    private fun takeGrant(uri: Uri, flags: Int) {
         try {
             resolver.takePersistableUriPermission(uri, flags)
+            grantLog.edit().putInt(uri.toString(), flags).apply()
         } catch (_: SecurityException) {
             // Some providers (e.g. transient in-memory ones) do not
             // support persistence; the URI still works for the current
@@ -194,11 +250,28 @@ class FilePickerBackendImpl(
         }
     }
 
-    private fun registerAndDescribe(uri: Uri): PickedFile {
-        val id = IstmoRuntime.allocHandleId(PLUGIN_ID)
-        files[id] = uri
-        val (name, size, mime) = describe(uri)
-        return PickedFile(displayName = name, mimeType = mime, size = size?.toULong(), handle = id)
+    private fun releaseGrant(uri: Uri) {
+        val flags = grantLog.getInt(uri.toString(), 0)
+        grantLog.edit().remove(uri.toString()).apply()
+        if (flags == 0) return
+        try {
+            resolver.releasePersistableUriPermission(uri, flags)
+        } catch (_: SecurityException) {
+            // Permission may already have been dropped by the system.
+        }
+    }
+
+    private fun releaseOrphanedGrants() {
+        val recorded = grantLog.all.keys.toList()
+        if (recorded.isEmpty()) return
+        val persisted = resolver.persistedUriPermissions.map { it.uri.toString() }.toSet()
+        for (key in recorded) {
+            if (key in persisted) {
+                releaseGrant(Uri.parse(key))
+            } else {
+                grantLog.edit().remove(key).apply()
+            }
+        }
     }
 
     private fun describe(uri: Uri): Triple<String, Long?, String?> {
@@ -219,5 +292,18 @@ class FilePickerBackendImpl(
 
     companion object {
         private const val PLUGIN_ID = "istmo.file_picker"
+        private const val GRANT_PREFS = "dev.istmo.plugins.filepicker.grants"
+
+        // Handle state is per process, not per backend: the backend is
+        // rebuilt with every host activity, while the handles it handed
+        // out keep living on the Rust side and must still resolve (and
+        // release) through whichever instance is registered now.
+        private val files = ConcurrentHashMap<Long, Uri>()
+
+        /** Live handles per URI: picking the same document twice yields two handles, one grant. */
+        private val uriRefs = HashMap<Uri, Int>()
+
+        /** Orphaned grants are reconciled once per process, before any handle exists. */
+        private val reconciled = AtomicBoolean(false)
     }
 }
