@@ -21,6 +21,7 @@ codegen = ["dep:istmo-build"]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 wincode = { workspace = true }
+tracing = { workspace = true }
 pollster = { workspace = true }
 istmo-build = { workspace = true, optional = true }
 
