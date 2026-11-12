@@ -176,13 +176,37 @@ class ShareReceiverActivity : Activity() {
      */
     private fun isForeignContent(uri: Uri): Boolean {
         if (uri.scheme != ContentResolver.SCHEME_CONTENT) return false
-        val authority = uri.authority ?: return false
+        // A cross-user URI carries its user id as `<user>@<authority>`.
+        val authority = uri.authority?.substringAfterLast('@')?.takeIf { it.isNotEmpty() } ?: return false
+        // The app's own providers are known exactly; checking them first
+        // does not depend on resolving the provider, which package
+        // visibility can make return null for a legitimate sender.
+        val own = ownAuthorities()
+        if (own != null && authority in own) return false
         val owner = try {
             packageManager.resolveContentProvider(authority, 0)?.packageName
         } catch (_: Exception) {
             null
-        } ?: return false
+        } ?: return own != null
         return owner != packageName
+    }
+
+    /** Authorities of every provider this package declares; `null` if unknown. */
+    private fun ownAuthorities(): Set<String>? = try {
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageInfo(
+                packageName,
+                PackageManager.PackageInfoFlags.of(PackageManager.GET_PROVIDERS.toLong()),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, PackageManager.GET_PROVIDERS)
+        }
+        info.providers.orEmpty()
+            .flatMap { it.authority?.split(';').orEmpty() }
+            .toSet()
+    } catch (_: Exception) {
+        null
     }
 
     /** Copy at most [limit] bytes; `null` when the stream is longer. */
