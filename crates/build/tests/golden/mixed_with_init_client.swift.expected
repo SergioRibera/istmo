@@ -35,7 +35,15 @@ public final class WatchClient {
         codecs.writeAccuracy(&payload, accuracy)
         var events = IstmoRuntime.shared.stream(pluginId: Self.PLUGIN_ID, method: "watchLocation", payload: payload).makeAsyncIterator()
         return AsyncThrowingStream(unfolding: {
-            guard let bytes = try await events.next() else { return nil }
+            let next: Data?
+            do {
+                next = try await events.next()
+            } catch IstmoRuntimeError.streamError(let errPayload) {
+                var errCursor = Bincode.Cursor(errPayload)
+                let decoded: WatchError? = try? codecs.readWatchError(&errCursor)
+                throw WatchException(payload: errPayload, decoded: decoded)
+            }
+            guard let bytes = next else { return nil }
             var c = Bincode.Cursor(bytes)
             return try codecs.readPosition(&c)
         })

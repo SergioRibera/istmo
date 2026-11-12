@@ -61,7 +61,7 @@ pub fn generate_swift_client(contract: &Contract) -> String {
         let _ = writeln!(out);
         match method.kind {
             MethodKind::Unary => write_unary(&mut out, contract, method),
-            MethodKind::Stream => write_stream(&mut out, method, uses_codecs),
+            MethodKind::Stream => write_stream(&mut out, contract, method, uses_codecs),
         }
     }
     let _ = writeln!(out, "}}");
@@ -164,7 +164,7 @@ fn arg_names(method: &Method) -> Vec<&str> {
     method.args.iter().map(|a| a.name.as_str()).collect()
 }
 
-fn write_stream(out: &mut String, method: &Method, uses_codecs: bool) {
+fn write_stream(out: &mut String, contract: &Contract, method: &Method, uses_codecs: bool) {
     let args = format_args(method);
     let item = method.returns.to_swift();
     let _ = writeln!(
@@ -188,16 +188,47 @@ fn write_stream(out: &mut String, method: &Method, uses_codecs: bool) {
         swift_string(&method.name),
     );
     let _ = writeln!(out, "        return AsyncThrowingStream(unfolding: {{");
-    if method.returns.is_unit() {
+    let next = format!("try await {events}.next()");
+    let next = if let Some(err) = &method.error {
+        // `StreamEnd::Error` surfaces as `IstmoRuntimeError.streamError`
+        // carrying the encoded domain error.
+        let next_item = fresh("next", &names);
+        let err_payload = fresh("errPayload", &names);
+        let _ = writeln!(out, "            let {next_item}: Data?");
+        let _ = writeln!(out, "            do {{");
+        let _ = writeln!(out, "                {next_item} = {next}");
         let _ = writeln!(
             out,
-            "            guard try await {events}.next() != nil else {{ return nil }}"
+            "            }} catch IstmoRuntimeError.streamError(let {err_payload}) {{"
         );
+        let _ = writeln!(
+            out,
+            "                var errCursor = Bincode.Cursor({err_payload})"
+        );
+        let read = WIRE.read(err, "errCursor");
+        let read = read.strip_prefix("try ").unwrap_or(&read);
+        let _ = writeln!(
+            out,
+            "                let decoded: {}? = try? {read}",
+            err.to_swift()
+        );
+        let _ = writeln!(
+            out,
+            "                throw {}(payload: {err_payload}, decoded: decoded)",
+            contract.exception_name(err),
+        );
+        let _ = writeln!(out, "            }}");
+        next_item
+    } else {
+        next
+    };
+    if method.returns.is_unit() {
+        let _ = writeln!(out, "            guard {next} != nil else {{ return nil }}");
         let _ = writeln!(out, "            return ()");
     } else {
         let _ = writeln!(
             out,
-            "            guard let {bytes} = try await {events}.next() else {{ return nil }}"
+            "            guard let {bytes} = {next} else {{ return nil }}"
         );
         let _ = writeln!(out, "            var {cursor} = Bincode.Cursor({bytes})");
         let _ = writeln!(

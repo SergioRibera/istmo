@@ -14,6 +14,9 @@ pub fn generate_kotlin_client(contract: &Contract) -> String {
     let _ = writeln!(out);
     let _ = writeln!(out, "import java.io.ByteArrayOutputStream");
     if contract.has_stream() {
+        if contract.has_failing_stream() {
+            let _ = writeln!(out, "import kotlinx.coroutines.flow.catch");
+        }
         let _ = writeln!(out, "import kotlinx.coroutines.flow.map");
     }
     let _ = writeln!(out);
@@ -153,6 +156,22 @@ fn write_client_method(out: &mut String, contract: &Contract, method: &Method) {
                 "        return IstmoRuntime.stream(PLUGIN_ID, {wire_name}, {payload}).map {{ {bytes} ->",
             );
             write_stream_map_body(out, &method.returns, &locals, "            ");
+            if let Some(err) = &method.error {
+                // A `StreamEnd::Error` reaches the collector as a
+                // `PluginException` carrying the encoded domain error.
+                let decode = WIRE.read(err, "e.payload", "0");
+                let _ = writeln!(out, "        }}.catch {{ e ->");
+                let _ = writeln!(out, "            if (e !is PluginException) throw e");
+                let _ = writeln!(
+                    out,
+                    "            val decoded = runCatching {{ {decode}.value }}.getOrNull()",
+                );
+                let _ = writeln!(
+                    out,
+                    "            throw {}(e.payload, decoded)",
+                    contract.exception_name(err),
+                );
+            }
             let _ = writeln!(out, "        }}");
             let _ = writeln!(out, "    }}");
         }

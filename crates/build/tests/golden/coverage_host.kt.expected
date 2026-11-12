@@ -2,6 +2,7 @@
 // plugin id: com.example."cov$"
 
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 
 /// Platform-facing surface for the `Coverage` plugin. Hand-write an
@@ -18,6 +19,9 @@ interface CoverageBackend {
     suspend fun send(payload: ByteArray, cursor: UShort, c: Short): Unit
 
     fun watch(mode: Mode): kotlinx.coroutines.flow.Flow<ByteArray?>
+
+    // Throw BackendException(SecondError) from the flow to end it with a domain error.
+    fun follow(next: UInt): kotlinx.coroutines.flow.Flow<Shape>
 
     suspend fun default(): Unit
 }
@@ -126,6 +130,24 @@ class CoverageDispatcher(
                         val out = ByteArrayOutputStream()
                         Bincode.writeOption(out, __istmo_item) { s1, v1 -> Bincode.writeBytes(s1, v1) }
                         out.toByteArray()
+                    }
+                )
+            }
+            "follow" -> {
+                var cursor = 0
+                val d_next = Bincode.readU32(payload, cursor); cursor = d_next.consumed
+                val next = d_next.value
+                val __istmo_flow = backend.follow(next)
+                PluginResult.Stream(
+                    __istmo_flow.map { __istmo_item ->
+                        val out = ByteArrayOutputStream()
+                        codecs.writeShape(out, __istmo_item)
+                        out.toByteArray()
+                    }.catch { e ->
+                        val err = (e as? BackendException)?.error as? SecondError ?: throw e
+                        val errOut = ByteArrayOutputStream()
+                        codecs.writeSecondError(errOut, err)
+                        throw PluginException(errOut.toByteArray())
                     }
                 )
             }

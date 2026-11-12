@@ -15,6 +15,7 @@ public protocol CoverageBackend: AnyObject {
     /// Throw `FirstError` to surface a typed domain error.
     func send(payload: Data, cursor: UInt16, c: Int16) async throws -> Void
     func watch(mode: Mode) -> AsyncThrowingStream<Data?, Error>
+    func follow(next: UInt32) -> AsyncThrowingStream<Shape, Error>
     func `default`() async throws -> Void
 }
 
@@ -97,6 +98,8 @@ public final class CoverageDispatcher: PluginHandler, HandleReleaser {
                 throw PluginException(payload: errOut)
             }
         case "watch":
+            throw PluginRuntimeError.unknownMethod(plugin: "Coverage", method: method)
+        case "follow":
             throw PluginRuntimeError.unknownMethod(plugin: "Coverage", method: method)
         case "default":
             try await backend.`default`()

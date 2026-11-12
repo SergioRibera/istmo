@@ -188,6 +188,13 @@ impl Contract {
             .any(|m| matches!(m.kind, MethodKind::Stream))
     }
 
+    /// Whether a stream declares a domain error its end can carry.
+    pub(crate) fn has_failing_stream(&self) -> bool {
+        self.methods
+            .iter()
+            .any(|m| matches!(m.kind, MethodKind::Stream) && m.error.is_some())
+    }
+
     /// Whether a client must be handed a `<T>Codecs` instance.
     pub(crate) fn signatures_use_named(&self) -> bool {
         self.methods.iter().any(|m| {

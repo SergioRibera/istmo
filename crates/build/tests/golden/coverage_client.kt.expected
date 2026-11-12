@@ -2,6 +2,7 @@
 // plugin id: com.example."cov$"
 
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 
 /// Rust-hosted `Coverage` plugin. Ships each call across the frame
@@ -71,6 +72,22 @@ class CoverageClient(
             val d_result = Bincode.readOption(bytes, cursor) { b1, c1 -> Bincode.readBytes(b1, c1) }; cursor = d_result.consumed
             val result = d_result.value
             result
+        }
+    }
+
+    fun follow(next: UInt): kotlinx.coroutines.flow.Flow<Shape> {
+        val payloadBuf = ByteArrayOutputStream()
+        Bincode.writeU32(payloadBuf, next)
+        val payload = payloadBuf.toByteArray()
+        return IstmoRuntime.stream(PLUGIN_ID, "follow", payload).map { bytes ->
+            var cursor = 0
+            val d_result = codecs.readShape(bytes, cursor); cursor = d_result.consumed
+            val result = d_result.value
+            result
+        }.catch { e ->
+            if (e !is PluginException) throw e
+            val decoded = runCatching { codecs.readSecondError(e.payload, 0).value }.getOrNull()
+            throw CoverageSecondErrorException(e.payload, decoded)
         }
     }
 

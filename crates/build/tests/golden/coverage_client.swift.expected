@@ -91,6 +91,26 @@ public final class CoverageClient {
         })
     }
 
+    public func follow(next: UInt32) -> AsyncThrowingStream<Shape, Error> {
+        let codecs = self.codecs
+        var payload = Data()
+        Bincode.writeVarintU32(&payload, next)
+        var events = IstmoRuntime.shared.stream(pluginId: Self.PLUGIN_ID, method: "follow", payload: payload).makeAsyncIterator()
+        return AsyncThrowingStream(unfolding: {
+            let next_: Data?
+            do {
+                next_ = try await events.next()
+            } catch IstmoRuntimeError.streamError(let errPayload) {
+                var errCursor = Bincode.Cursor(errPayload)
+                let decoded: SecondError? = try? codecs.readSecondError(&errCursor)
+                throw CoverageSecondErrorException(payload: errPayload, decoded: decoded)
+            }
+            guard let bytes = next_ else { return nil }
+            var c = Bincode.Cursor(bytes)
+            return try codecs.readShape(&c)
+        })
+    }
+
     public func `default`() async throws -> Void {
         let payload = Data()
         _ = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "default", payload: payload)

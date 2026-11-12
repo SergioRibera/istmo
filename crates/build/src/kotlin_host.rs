@@ -56,6 +56,9 @@ fn write_file_header(out: &mut String, contract: &Contract) {
     let _ = writeln!(out);
     let _ = writeln!(out, "import java.io.ByteArrayOutputStream");
     if contract.has_stream() {
+        if contract.has_failing_stream() {
+            let _ = writeln!(out, "import kotlinx.coroutines.flow.catch");
+        }
         let _ = writeln!(out, "import kotlinx.coroutines.flow.map");
     }
     let _ = writeln!(out);
@@ -98,6 +101,13 @@ fn write_backend_method(out: &mut String, method: &Method) {
             let _ = writeln!(out, "    suspend fun {name}({args}): {ret}");
         }
         MethodKind::Stream => {
+            if let Some(err) = &method.error {
+                let _ = writeln!(
+                    out,
+                    "    // Throw BackendException({}) from the flow to end it with a domain error.",
+                    err.to_kotlin()
+                );
+            }
             let _ = writeln!(
                 out,
                 "    fun {name}({args}): kotlinx.coroutines.flow.Flow<{ret}>",
@@ -343,6 +353,22 @@ fn write_method_arm(out: &mut String, method: &Method) {
             "__istmo_item",
         );
         let _ = writeln!(out, "{indent}        out.toByteArray()");
+        if let Some(err) = &method.error {
+            // The runtime ends the stream with `StreamEnd::Error` carrying
+            // a `PluginException`'s payload.
+            let _ = writeln!(out, "{indent}    }}.catch {{ e ->");
+            let _ = writeln!(
+                out,
+                "{indent}        val err = (e as? BackendException)?.error as? {} ?: throw e",
+                err.to_kotlin(),
+            );
+            let _ = writeln!(out, "{indent}        val errOut = ByteArrayOutputStream()");
+            WIRE.write_stmt(out, &format!("{indent}        "), err, "errOut", "err");
+            let _ = writeln!(
+                out,
+                "{indent}        throw PluginException(errOut.toByteArray())"
+            );
+        }
         let _ = writeln!(out, "{indent}    }}");
         let _ = writeln!(out, "{indent})");
     } else if method.returns.is_unit() {

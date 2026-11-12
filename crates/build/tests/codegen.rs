@@ -1540,6 +1540,13 @@ fn coverage_methods() -> Vec<Method> {
             error: None,
         },
         Method {
+            name: "follow".to_owned(),
+            kind: MethodKind::Stream,
+            args: vec![arg("next", TypeRef::U32)],
+            returns: named("Shape"),
+            error: Some(named("SecondError")),
+        },
+        Method {
             name: "default".to_owned(),
             kind: MethodKind::Unary,
             args: vec![],

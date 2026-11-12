@@ -237,6 +237,9 @@ object IstmoRuntime {
         } catch (e: kotlinx.coroutines.CancellationException) {
             nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
             throw e
+        } catch (e: PluginException) {
+            // Generated dispatchers turn a domain error into its encoded bytes.
+            nativeSubmitStreamEnd(callId, STREAM_END_ERROR, e.payload)
         } catch (_: Throwable) {
             nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
         }
@@ -244,6 +247,7 @@ object IstmoRuntime {
 
     private const val STREAM_END_COMPLETE = 0
     private const val STREAM_END_CANCELLED = 1
+    private const val STREAM_END_ERROR = 2
 
     @JvmStatic
     fun onCancel(callId: Long) {

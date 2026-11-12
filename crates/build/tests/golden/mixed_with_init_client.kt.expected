@@ -2,6 +2,7 @@
 // plugin id: com.example.watch
 
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 
 /// Rust-hosted `Watch` plugin. Ships each call across the frame
@@ -23,6 +24,10 @@ class WatchClient(
             val d_result = codecs.readPosition(bytes, cursor); cursor = d_result.consumed
             val result = d_result.value
             result
+        }.catch { e ->
+            if (e !is PluginException) throw e
+            val decoded = runCatching { codecs.readWatchError(e.payload, 0).value }.getOrNull()
+            throw WatchException(e.payload, decoded)
         }
     }
 
