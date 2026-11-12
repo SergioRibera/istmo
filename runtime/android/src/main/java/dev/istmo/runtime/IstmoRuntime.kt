@@ -155,7 +155,10 @@ object IstmoRuntime {
         }
         try {
             nativeSubmitCall(callId, pluginId, instanceId, method, payload)
-        } catch (e: IllegalStateException) {
+        } catch (e: Throwable) {
+            // Not only IllegalStateException: a pending JNI error (e.g.
+            // OutOfMemoryError) or UnsatisfiedLinkError must not leak the
+            // pending entry either.
             outboundCalls.remove(callId)
             throw e
         }
