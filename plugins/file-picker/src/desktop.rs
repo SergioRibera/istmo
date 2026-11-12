@@ -17,18 +17,20 @@
 //! # Handle registry
 //!
 //! Picked paths are stored in an in-process `HashMap<u64, PathBuf>`
-//! keyed by a monotonically increasing [`NativeHandleId`]. There is no
-//! automatic release path in the Rust runtime today — the map grows for
-//! the process's lifetime. Call [`DesktopFilePicker::purge`] to clear it
-//! (the file descriptors handed out via [`crate::FilePicker::open_read`]
-//! / [`crate::FilePicker::open_write`] are owned by the caller through
-//! their [`std::fs::File`] wrappers and are unaffected).
+//! keyed by ids from [`Runtime::alloc_native_handle_id`], so they never
+//! collide with ids other hosts hand out. The map entry goes away when
+//! the client drops the handle (see
+//! [`DesktopFilePicker::install_release_hook`]);
+//! [`DesktopFilePicker::purge`] clears it wholesale. File descriptors
+//! handed out via [`crate::FilePicker::open_read`] /
+//! [`crate::FilePicker::open_write`] are owned by the caller through
+//! their [`std::fs::File`] wrappers and are unaffected.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use istmo_core::sync::lock;
 use istmo_core::{NativeHandleId, Runtime};
 
 use crate::{
@@ -64,7 +66,8 @@ pub struct DesktopFilePicker {
 #[derive(Debug, Default)]
 struct DesktopFilePickerInner {
     files: Mutex<HashMap<u64, PathBuf>>,
-    next_id: AtomicU64,
+    /// Runtime the ids come from; set by `install_release_hook`.
+    runtime: OnceLock<Weak<Runtime>>,
 }
 
 impl DesktopFilePicker {
@@ -73,16 +76,25 @@ impl DesktopFilePicker {
         Self::default()
     }
 
-    /// Install a hook on `runtime` that removes the picker's cached
-    /// path when the client drops the corresponding
-    /// [`NativeHandle`](istmo_core::NativeHandle). Idempotent — installing
-    /// twice registers two hooks, both fire per release; the second
-    /// simply no-ops on already-gone entries.
+    /// Attach the picker to `runtime`: handle ids are allocated from it,
+    /// and a hook removes the cached path when the client drops the
+    /// corresponding [`NativeHandle`](istmo_core::NativeHandle).
+    ///
+    /// Must be called before the first pick — until then picks fail
+    /// with [`FilePickerError::Backend`]. Installing again registers a
+    /// second hook that no-ops on already-gone entries; the first
+    /// runtime stays the id source.
     pub fn install_release_hook(&self, runtime: &Arc<Runtime>) {
+        let _ = self.inner.runtime.set(Arc::downgrade(runtime));
         let weak = Arc::downgrade(&self.inner);
         runtime.install_native_handle_release_hook(Arc::new(move |id| {
+            // Hooks see every release in the runtime; only Rust-allocated
+            // ids can be ours.
+            if !id.is_rust_allocated() {
+                return;
+            }
             if let Some(inner) = weak.upgrade() {
-                inner.files.lock().expect("files map").remove(&id.get());
+                lock(&inner.files).remove(&id.get());
             }
         }));
     }
@@ -90,30 +102,41 @@ impl DesktopFilePicker {
     /// Drop the entire in-process URI/path map. Manual escape hatch
     /// when the release hook is not wired up.
     pub fn purge(&self) {
-        self.inner.files.lock().expect("files map").clear();
+        lock(&self.inner.files).clear();
     }
 
-    fn alloc(&self, path: PathBuf) -> NativeHandleId {
-        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        self.inner.files.lock().expect("files map").insert(id, path);
-        NativeHandleId::new(id)
+    fn alloc(&self, path: PathBuf) -> Result<NativeHandleId, FilePickerError> {
+        let runtime = self
+            .inner
+            .runtime
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| {
+                FilePickerError::Backend(
+                    "DesktopFilePicker is not attached to a runtime; call install_release_hook"
+                        .into(),
+                )
+            })?;
+        let id = runtime.alloc_native_handle_id();
+        lock(&self.inner.files).insert(id.get(), path);
+        Ok(id)
     }
 
-    fn alloc_many(&self, paths: Vec<PathBuf>) -> Vec<(PathBuf, NativeHandleId)> {
+    fn alloc_many(
+        &self,
+        paths: Vec<PathBuf>,
+    ) -> Result<Vec<(PathBuf, NativeHandleId)>, FilePickerError> {
         paths
             .into_iter()
             .map(|p| {
-                let id = self.alloc(p.clone());
-                (p, id)
+                let id = self.alloc(p.clone())?;
+                Ok((p, id))
             })
             .collect()
     }
 
     fn lookup(&self, id: NativeHandleId) -> Result<PathBuf, FilePickerError> {
-        self.inner
-            .files
-            .lock()
-            .expect("files map")
+        lock(&self.inner.files)
             .get(&id.get())
             .cloned()
             .ok_or_else(|| FilePickerError::NotFound(format!("handle {}", id.get())))
@@ -210,14 +233,14 @@ impl FilePicker for DesktopFilePicker {
         let Some(path) = run_pick_single(&config) else {
             return Ok(None);
         };
-        let handle = self.alloc(path.clone());
+        let handle = self.alloc(path.clone())?;
         Ok(Some(picked_from_path(&path, handle)))
     }
 
     async fn pick_files(&self, config: PickConfig) -> Result<Vec<PickedFile>, FilePickerError> {
         let paths = run_pick_multi(&config);
         Ok(self
-            .alloc_many(paths)
+            .alloc_many(paths)?
             .into_iter()
             .map(|(p, id)| picked_from_path(&p, id))
             .collect())
@@ -238,7 +261,7 @@ impl FilePicker for DesktopFilePicker {
                 .map(|_| ()),
             "create save target",
         )?;
-        let handle = self.alloc(path.clone());
+        let handle = self.alloc(path.clone())?;
         Ok(Some(picked_from_path(&path, handle)))
     }
 
