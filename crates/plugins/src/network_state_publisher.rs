@@ -1,54 +1,26 @@
 //! Pure-Rust desktop sampler for
-//! [`super::network_state::NetworkStateClient`].
+//! [`NetworkStateClient`](super::network_state::NetworkStateClient).
 //!
-//! - Linux inspects `/proc/net/route` to detect a default route and
-//!   scans `/sys/class/net/*/wireless` for the active interface's
-//!   link kind.
-//! - Windows calls `GetBestInterface` + `GetAdaptersInfo` via
-//!   `windows-sys` to classify the active adapter.
+//! - Linux reads `/proc/net/route` for the default route and
+//!   classifies its interface from `/sys/class/net/<iface>/`.
+//! - Windows walks `GetAdaptersAddresses`: an adapter that is up, has a
+//!   gateway and is neither loopback nor a tunnel pseudo-interface makes
+//!   the host online, and the best-ranked such adapter names the link.
 //! - macOS and BSDs are not covered — plug the native observer
 //!   (`NWPathMonitor` Swift bridge) or publish bytes directly via
 //!   `Runtime::publish_early_latest`.
 
-use std::sync::{Arc, Weak};
+use super::network_state::{LinkKind, NetworkState};
+use crate::early::LatestPublisher;
 
-use istmo_core::{IstmoError, Runtime, codec};
+/// Publishes the host's connectivity snapshot.
+pub type NetworkStatePublisher = LatestPublisher<NetworkState>;
 
-use super::network_state::{
-    LinkKind, NETWORK_STATE_CHANNEL, NETWORK_STATE_PLUGIN_ID, NetworkState,
-};
-
-#[derive(Debug)]
-pub struct NetworkStatePublisher {
-    runtime: Weak<Runtime>,
-    last: Option<NetworkState>,
-}
-
-impl NetworkStatePublisher {
-    pub fn install(runtime: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        runtime.check_declared(NETWORK_STATE_PLUGIN_ID)?;
-        Ok(Self {
-            runtime: Arc::downgrade(runtime),
-            last: None,
-        })
-    }
-
+impl LatestPublisher<NetworkState> {
+    /// Sample the host and publish if the snapshot changed.
     pub fn tick(&mut self) {
-        let Some(runtime) = self.runtime.upgrade() else {
-            return;
-        };
-        let Some(sample) = sample() else {
-            return;
-        };
-        if self.last.as_ref() == Some(&sample) {
-            return;
-        }
-        match codec::encode(&sample) {
-            Ok(bytes) => {
-                runtime.publish_early_latest(NETWORK_STATE_CHANNEL, bytes);
-                self.last = Some(sample);
-            }
-            Err(err) => tracing::warn!(target = "istmo.network_state", ?err, "encode failed"),
+        if let Some(sample) = sample() {
+            self.publish_if_changed(sample);
         }
     }
 }
@@ -68,162 +40,278 @@ fn sample() -> Option<NetworkState> {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+const fn snapshot(link: Option<LinkKind>) -> NetworkState {
+    NetworkState {
+        online: link.is_some(),
+        link: match link {
+            Some(kind) => kind,
+            None => LinkKind::None,
+        },
+        metered: false,
+        expensive: false,
+        constrained: false,
+    }
+}
+
+/// Interface carrying the IPv4 default route in a `/proc/net/route`
+/// table: destination `00000000` with the `RTF_UP` flag.
+#[cfg(any(target_os = "linux", test))]
+fn default_route_interface(table: &str) -> Option<&str> {
+    const RTF_UP: u32 = 0x1;
+    table.lines().skip(1).find_map(|line| {
+        let mut cols = line.split_whitespace();
+        let iface = cols.next()?;
+        let destination = cols.next()?;
+        let _gateway = cols.next()?;
+        let flags = u32::from_str_radix(cols.next()?, 16).ok()?;
+        (destination == "00000000" && flags & RTF_UP != 0).then_some(iface)
+    })
+}
+
+/// Link kind of `iface` from whether it has a `wireless/` directory and
+/// its `ARPHRD_*` type code (`linux/if_arp.h`).
+#[cfg(any(target_os = "linux", test))]
+fn classify_link(iface: &str, wireless: bool, arphrd: Option<u32>) -> LinkKind {
+    const ETHER: u32 = 1;
+    const TUNNEL: u32 = 768;
+    const IEEE80211: u32 = 801;
+    const IEEE80211_RADIOTAP: u32 = 803;
+
+    if wireless {
+        return LinkKind::Wifi;
+    }
+    let named = |prefixes: &[&str]| prefixes.iter().any(|p| iface.starts_with(p));
+    match arphrd {
+        // Mobile-broadband modems often register as plain Ethernet, so
+        // their names win over the type code.
+        _ if named(&["ppp", "wwan", "rmnet"]) => LinkKind::Cellular,
+        _ if named(&["tun", "tap", "wg"]) => LinkKind::Vpn,
+        Some(ETHER) => LinkKind::Ethernet,
+        Some(IEEE80211..=IEEE80211_RADIOTAP) => LinkKind::Wifi,
+        Some(TUNNEL) => LinkKind::Vpn,
+        _ => LinkKind::Other,
+    }
+}
+
+/// One adapter as `GetAdaptersAddresses` reports it.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, Copy)]
+struct Adapter {
+    /// IANA `ifType`.
+    if_type: u32,
+    up: bool,
+    has_gateway: bool,
+}
+
+/// Best link among `adapters`, `None` when none can reach beyond the
+/// host. Loopback and tunnel pseudo-interfaces (Teredo, ISATAP) are
+/// always up and never carry the default route themselves, so they are
+/// ignored; so is anything without a gateway (host-only virtual NICs).
+#[cfg(any(target_os = "windows", test))]
+fn best_link(adapters: impl IntoIterator<Item = Adapter>) -> Option<LinkKind> {
+    // IANA ifType numbers.
+    const ETHERNET_CSMACD: u32 = 6;
+    const PPP: u32 = 23;
+    const SOFTWARE_LOOPBACK: u32 = 24;
+    const IEEE80211: u32 = 71;
+    const TUNNEL: u32 = 131;
+    const WWANPP: u32 = 243;
+    const WWANPP2: u32 = 244;
+
+    let rank = |kind: LinkKind| match kind {
+        LinkKind::Ethernet => 5,
+        LinkKind::Wifi => 4,
+        LinkKind::Cellular => 3,
+        LinkKind::Vpn => 2,
+        LinkKind::Bluetooth | LinkKind::Other => 1,
+        LinkKind::None => 0,
+    };
+    adapters
+        .into_iter()
+        .filter(|a| a.up && a.has_gateway)
+        .filter_map(|a| match a.if_type {
+            SOFTWARE_LOOPBACK | TUNNEL => None,
+            ETHERNET_CSMACD => Some(LinkKind::Ethernet),
+            IEEE80211 => Some(LinkKind::Wifi),
+            WWANPP | WWANPP2 => Some(LinkKind::Cellular),
+            PPP => Some(LinkKind::Vpn),
+            _ => Some(LinkKind::Other),
+        })
+        .max_by_key(|&kind| rank(kind))
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use std::fs;
 
-    use super::{LinkKind, NetworkState};
+    use super::{NetworkState, classify_link, default_route_interface, snapshot};
 
-    #[allow(clippy::unnecessary_wraps)]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "shares the `Option` signature of the other platforms' samplers"
+    )]
     pub(super) fn sample() -> Option<NetworkState> {
-        let default_iface = default_route_interface();
-        let online = default_iface.is_some();
-        let link = default_iface
-            .as_deref()
-            .map_or(LinkKind::None, classify_link);
-        Some(NetworkState {
-            online,
-            link,
-            metered: false,
-            expensive: false,
-            constrained: false,
-        })
-    }
-
-    fn default_route_interface() -> Option<String> {
-        let routes = fs::read_to_string("/proc/net/route").ok()?;
-        for line in routes.lines().skip(1) {
-            let mut cols = line.split_whitespace();
-            let iface = cols.next()?;
-            let dest = cols.next()?;
-            let _gw = cols.next()?;
-            let flags = cols.next()?;
-            // Default route: destination = 00000000 and flag bit 0x1 (UP).
-            if dest == "00000000"
-                && u32::from_str_radix(flags, 16)
-                    .ok()
-                    .is_some_and(|f| f & 1 != 0)
-            {
-                return Some(iface.to_owned());
-            }
-        }
-        None
-    }
-
-    fn classify_link(iface: &str) -> LinkKind {
-        if fs::metadata(format!("/sys/class/net/{iface}/wireless")).is_ok() {
-            return LinkKind::Wifi;
-        }
-        let kind_path = format!("/sys/class/net/{iface}/type");
-        if let Ok(raw) = fs::read_to_string(&kind_path) {
-            // ARPHRD_* numeric codes (linux/if_arp.h):
-            //   1   = ARPHRD_ETHER
-            //   512 = ARPHRD_PPP
-            //   768 = ARPHRD_TUNNEL
-            //   772 = ARPHRD_LOOPBACK
-            //   801 = ARPHRD_IEEE80211
-            //   802 = ARPHRD_PRISM
-            //   803 = ARPHRD_IEEE80211_RADIOTAP
-            if let Ok(code) = raw.trim().parse::<u32>() {
-                return match code {
-                    1 => LinkKind::Ethernet,
-                    801 | 802 | 803 => LinkKind::Wifi,
-                    768 => LinkKind::Vpn,
-                    _ if iface.starts_with("ppp")
-                        || iface.starts_with("wwan")
-                        || iface.starts_with("rmnet") =>
-                    {
-                        LinkKind::Cellular
-                    }
-                    _ if iface.starts_with("tun") || iface.starts_with("tap") => LinkKind::Vpn,
-                    _ => LinkKind::Other,
-                };
-            }
-        }
-        LinkKind::Other
+        let table = fs::read_to_string("/proc/net/route").unwrap_or_default();
+        let link = default_route_interface(&table).map(|iface| {
+            let wireless = fs::metadata(format!("/sys/class/net/{iface}/wireless")).is_ok();
+            let arphrd = fs::read_to_string(format!("/sys/class/net/{iface}/type"))
+                .ok()
+                .and_then(|raw| raw.trim().parse().ok());
+            classify_link(iface, wireless, arphrd)
+        });
+        Some(snapshot(link))
     }
 }
 
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
 mod windows {
-    use std::mem;
+    use std::mem::size_of;
     use std::ptr;
 
     use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
-        GetAdaptersAddresses, IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_PPP,
-        IF_TYPE_TUNNEL, IF_TYPE_WWANPP, IF_TYPE_WWANPP2, IP_ADAPTER_ADDRESSES_LH,
+        GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+        GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
     };
     use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
     use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
 
-    use super::{LinkKind, NetworkState};
+    use super::{Adapter, NetworkState, best_link, snapshot};
 
-    const GAA_FLAG_INCLUDE_PREFIX: u32 = 0x0010;
+    /// Retries when adapters appear between the sizing call and the
+    /// fill call.
+    const ATTEMPTS: usize = 3;
 
     pub(super) fn sample() -> Option<NetworkState> {
+        let flags = GAA_FLAG_INCLUDE_GATEWAYS
+            | GAA_FLAG_SKIP_ANYCAST
+            | GAA_FLAG_SKIP_MULTICAST
+            | GAA_FLAG_SKIP_DNS_SERVER;
+        // Microsoft suggests starting at 15 KiB.
         let mut size: u32 = 15 * 1024;
-        let mut buf: Vec<u8> = Vec::with_capacity(size as usize);
-        // SAFETY: `GetAdaptersAddresses` fills `buf` up to `size` and
-        // reports `ERROR_BUFFER_OVERFLOW` when more is needed.
-        loop {
+        for _ in 0..ATTEMPTS {
+            // `u64` storage keeps the `IP_ADAPTER_ADDRESSES_LH` records
+            // 8-byte aligned; a zeroed `Vec` makes every byte initialised.
+            let mut buffer = vec![0_u64; (size as usize).div_ceil(size_of::<u64>())];
+            // SAFETY: `buffer` holds at least `size` writable bytes; the
+            // call writes at most `size` bytes and updates `size` to the
+            // required length on `ERROR_BUFFER_OVERFLOW`.
             let rc = unsafe {
                 GetAdaptersAddresses(
                     u32::from(AF_UNSPEC),
-                    GAA_FLAG_INCLUDE_PREFIX,
+                    flags,
                     ptr::null(),
-                    buf.as_mut_ptr().cast(),
+                    buffer.as_mut_ptr().cast(),
                     &raw mut size,
                 )
             };
             match rc {
-                NO_ERROR => break,
-                ERROR_BUFFER_OVERFLOW => {
-                    buf = Vec::with_capacity(size as usize);
-                    continue;
-                }
+                NO_ERROR => return Some(snapshot(best_link(adapters(&buffer)))),
+                ERROR_BUFFER_OVERFLOW => {}
                 _ => return None,
             }
         }
+        None
+    }
 
-        let mut link = LinkKind::None;
-        let mut online = false;
-
-        let mut ptr_cur = buf.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
-        while !ptr_cur.is_null() {
-            // SAFETY: pointer walk through linked list filled by Win32.
-            let adapter = unsafe { &*ptr_cur };
-            if adapter.OperStatus == IfOperStatusUp {
-                online = true;
-                let adapter_link = match adapter.IfType {
-                    IF_TYPE_IEEE80211 => LinkKind::Wifi,
-                    IF_TYPE_ETHERNET_CSMACD => LinkKind::Ethernet,
-                    IF_TYPE_PPP | IF_TYPE_WWANPP | IF_TYPE_WWANPP2 => LinkKind::Cellular,
-                    IF_TYPE_TUNNEL => LinkKind::Vpn,
-                    _ => LinkKind::Other,
-                };
-                // Prefer Wi-Fi over Ethernet when both are up (laptops
-                // often have both when docked but Wi-Fi is the
-                // user-visible one).
-                link = match (link, adapter_link) {
-                    (LinkKind::None, kind) => kind,
-                    (LinkKind::Ethernet, LinkKind::Wifi) => LinkKind::Wifi,
-                    (existing, _) => existing,
-                };
-            }
-            ptr_cur = adapter.Next;
+    /// Walk the adapter list `GetAdaptersAddresses` wrote into `buffer`.
+    fn adapters(buffer: &[u64]) -> Vec<Adapter> {
+        let mut out = Vec::new();
+        let mut cur = buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+        while !cur.is_null() {
+            // SAFETY: `cur` is the list head inside `buffer` or a `Next`
+            // link the call wrote, which also points inside `buffer`;
+            // `buffer` is borrowed for the whole walk.
+            let adapter = unsafe { &*cur };
+            out.push(Adapter {
+                if_type: adapter.IfType,
+                up: adapter.OperStatus == IfOperStatusUp,
+                has_gateway: !adapter.FirstGatewayAddress.is_null(),
+            });
+            cur = adapter.Next;
         }
+        out
+    }
+}
 
-        // Prevent "unused mem" import pedantic lint on 32-bit builds.
-        let _ = mem::size_of::<IP_ADAPTER_ADDRESSES_LH>();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        Some(NetworkState {
-            online,
-            link,
-            metered: false,
-            expensive: false,
-            constrained: false,
-        })
+    const ROUTES: &str = "\
+Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT
+docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0
+wlp3s0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0
+wlp3s0\t0001A8C0\t00000000\t0001\t0\t0\t600\t00FFFFFF\t0\t0\t0
+";
+
+    #[test]
+    fn default_route_is_the_zero_destination_that_is_up() {
+        assert_eq!(default_route_interface(ROUTES), Some("wlp3s0"));
+    }
+
+    #[test]
+    fn route_table_without_default_route_is_offline() {
+        let table = "Iface\tDestination\tGateway\tFlags\nlo\t0000007F\t00000000\t0001\n";
+        assert_eq!(default_route_interface(table), None);
+        assert_eq!(default_route_interface(""), None);
+        let down = "Iface\tDestination\tGateway\tFlags\neth0\t00000000\t0101A8C0\t0002\n";
+        assert_eq!(default_route_interface(down), None);
+    }
+
+    #[test]
+    fn links_classify_by_wireless_dir_name_and_arphrd() {
+        assert_eq!(classify_link("wlp3s0", true, Some(1)), LinkKind::Wifi);
+        assert_eq!(
+            classify_link("enp0s31f6", false, Some(1)),
+            LinkKind::Ethernet
+        );
+        assert_eq!(classify_link("wwan0", false, Some(1)), LinkKind::Cellular);
+        assert_eq!(classify_link("tun0", false, Some(65534)), LinkKind::Vpn);
+        assert_eq!(classify_link("wg0", false, Some(65534)), LinkKind::Vpn);
+        assert_eq!(classify_link("mon0", false, Some(803)), LinkKind::Wifi);
+        assert_eq!(classify_link("x", false, None), LinkKind::Other);
+    }
+
+    const fn adapter(if_type: u32, up: bool, has_gateway: bool) -> Adapter {
+        Adapter {
+            if_type,
+            up,
+            has_gateway,
+        }
+    }
+
+    #[test]
+    fn loopback_and_tunnels_never_make_the_host_online() {
+        let only_pseudo = [adapter(24, true, false), adapter(131, true, true)];
+        assert_eq!(best_link(only_pseudo), None);
+        assert!(!snapshot(best_link(only_pseudo)).online);
+    }
+
+    #[test]
+    fn adapters_without_gateway_or_down_are_ignored() {
+        assert_eq!(
+            best_link([adapter(6, true, false), adapter(71, false, true)]),
+            None
+        );
+    }
+
+    #[test]
+    fn best_ranked_link_wins_regardless_of_order() {
+        let adapters = [
+            adapter(53, true, true),
+            adapter(71, true, true),
+            adapter(6, true, true),
+        ];
+        assert_eq!(best_link(adapters), Some(LinkKind::Ethernet));
+        assert_eq!(
+            best_link([adapter(53, true, true), adapter(243, true, true)]),
+            Some(LinkKind::Cellular)
+        );
+        let state = snapshot(best_link([adapter(71, true, true)]));
+        assert!(state.online);
+        assert_eq!(state.link, LinkKind::Wifi);
     }
 }
