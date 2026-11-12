@@ -55,9 +55,21 @@ define_class!(
 );
 
 /// Start receiving `odoc` events. Must run on the main thread, before
-/// the event loop runs; later calls do nothing.
+/// the event loop runs. The Apple Event handler is process-wide, so the
+/// first runtime keeps receiving the documents: a later call with a
+/// different runtime only logs a warning.
 pub(super) fn install(runtime: &Arc<Runtime>) {
     if RUNTIME.set(Arc::downgrade(runtime)).is_err() {
+        let same = RUNTIME
+            .get()
+            .and_then(Weak::upgrade)
+            .is_some_and(|first| Arc::ptr_eq(&first, runtime));
+        if !same {
+            tracing::warn!(
+                target: "istmo.documents",
+                "documents from Finder stay bound to the first runtime that installed the publisher"
+            );
+        }
         return;
     }
     let Some(thread) = AnyClass::get(c"NSThread") else {
