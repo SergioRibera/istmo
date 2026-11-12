@@ -18,13 +18,20 @@ fn src(file: &str) -> PathBuf {
 }
 
 /// Contract of `trait_name` with the message types of every file in
-/// `files`, in order. The extractor reads one file, so the sources are
+/// `files` plus the build-script output named in `generated`, in order.
+/// The extractor reads one file, so the sources are
 /// concatenated first, minus their inner `//!` docs (only valid at the
 /// top of a file).
-fn extract(files: &[&str], trait_name: &str) -> Contract {
+fn extract(files: &[&str], generated: &[&str], trait_name: &str) -> Contract {
     let joined: String = files
         .iter()
-        .map(|file| std::fs::read_to_string(src(file)).expect("read plugin source"))
+        .map(|file| src(file))
+        .chain(
+            generated
+                .iter()
+                .map(|file| Path::new(env!("OUT_DIR")).join(file)),
+        )
+        .map(|file| std::fs::read_to_string(file).expect("read plugin source"))
         .flat_map(|source| {
             source
                 .lines()
@@ -41,7 +48,7 @@ fn extract(files: &[&str], trait_name: &str) -> Contract {
 /// Every schema type must match the extracted one. With
 /// `types_in_source == false` the Rust types are generated from the
 /// schema itself (`include!` from `build.rs`), so they cannot drift and
-/// the extractor does not see them.
+/// only the methods are compared.
 fn assert_same(schema: &Contract, extracted: &Contract, types_in_source: bool) {
     assert_eq!(schema.plugin_id, extracted.plugin_id);
     assert_eq!(schema.type_name, extracted.type_name);
@@ -70,7 +77,7 @@ fn assert_same(schema: &Contract, extracted: &Contract, types_in_source: bool) {
 fn service_control_schema_matches_the_trait() {
     assert_same(
         &istmo_plugins_schema::service_control(),
-        &extract(&["service.rs"], "ServiceControl"),
+        &extract(&["service.rs"], &[], "ServiceControl"),
         true,
     );
 }
@@ -79,7 +86,7 @@ fn service_control_schema_matches_the_trait() {
 fn task_scheduler_schema_matches_the_trait() {
     assert_same(
         &istmo_plugins_schema::task_scheduler(),
-        &extract(&["worker.rs", "task_scheduler.rs"], "TaskScheduler"),
+        &extract(&["worker.rs", "task_scheduler.rs"], &[], "TaskScheduler"),
         true,
     );
 }
@@ -88,7 +95,11 @@ fn task_scheduler_schema_matches_the_trait() {
 fn permissions_schema_matches_the_trait() {
     assert_same(
         &istmo_plugins_schema::permissions(),
-        &extract(&["permissions.rs"], "Permissions"),
+        &extract(
+            &["permissions.rs"],
+            &["permissions_types.rs"],
+            "Permissions",
+        ),
         false,
     );
 }
@@ -97,7 +108,11 @@ fn permissions_schema_matches_the_trait() {
 fn notifications_schema_matches_the_trait() {
     assert_same(
         &istmo_plugins_schema::notifications(),
-        &extract(&["notifications.rs"], "Notifications"),
+        &extract(
+            &["notifications.rs"],
+            &["notifications_types.rs"],
+            "Notifications",
+        ),
         false,
     );
 }
@@ -106,7 +121,7 @@ fn notifications_schema_matches_the_trait() {
 fn admob_schema_matches_the_trait() {
     assert_same(
         &istmo_plugins_schema::admob(),
-        &extract(&["admob/mod.rs"], "AdMob"),
+        &extract(&["admob/mod.rs"], &["admob_types.rs"], "AdMob"),
         false,
     );
 }
