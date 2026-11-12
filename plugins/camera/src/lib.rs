@@ -251,7 +251,8 @@ pub struct ConcurrentSupport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PixelFormat {
     /// Android `ImageFormat::NV21` — Y plane + interleaved VU plane.
-    /// Default on Android.
+    /// Default on Android. Both mobile backends repack their native
+    /// 4:2:0 capture into this layout.
     Nv21,
     /// Planar / semi-planar 4:2:0. On Android this maps to
     /// `YUV_420_888` (three planes); on iOS to
@@ -262,7 +263,9 @@ pub enum PixelFormat {
     /// 32-bit RGBA.
     Rgba8,
     /// Encoded JPEG. The payload is the hardware encoder's quality
-    /// knob (`0..=100`); 70 is a typical sweet spot.
+    /// knob (`0..=100`); 70 is a typical sweet spot. Still-only on
+    /// Android and iOS: opening a stream with it reports
+    /// [`CameraError::FormatUnsupported`].
     Jpeg(u8),
 }
 
@@ -364,6 +367,10 @@ impl SessionConfig {
 pub struct NegotiatedFormat {
     pub resolution: Resolution,
     pub pixel_format: PixelFormat,
+    /// Frame rate the backend locked the device to, or the device's
+    /// current rate when it reports one. `0` when the platform leaves
+    /// the rate to auto-exposure and does not expose it (Android
+    /// without a supported `target_fps`).
     pub fps: u32,
     pub rotation_degrees: u16,
 }
@@ -667,6 +674,12 @@ pub trait Camera {
 
     /// Capture a single still. The returned [`StillPhoto::bytes`]
     /// uses the pixel format requested in [`StillCaptureRequest`].
+    ///
+    /// Android and iOS capture [`PixelFormat::Jpeg`] only (through
+    /// CameraX `ImageCapture` / `AVCapturePhotoOutput`) and report
+    /// [`CameraError::FormatUnsupported`] for every other format; the
+    /// desktop host returns the latest preview frame in the session's
+    /// stream format.
     async fn capture_still(
         &self,
         session: NativeHandleId,

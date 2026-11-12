@@ -161,9 +161,9 @@ pixel format matched to your consumer:
   accept YUV.
 - `PixelFormat::Bgra8` / `PixelFormat::Rgba8` — 4 bytes per pixel.
   Convenient but ~2.5× the bandwidth of YUV.
-- `PixelFormat::Jpeg(quality)` — hardware-encoded (where available).
-  Order-of-magnitude cheaper over the wire but adds encode/decode
-  latency.
+- `PixelFormat::Jpeg(quality)` — stills only on Android and iOS
+  (`capture_still`, hardware-encoded); opening a stream with it returns
+  `CameraError::FormatUnsupported`.
 
 The native backend keeps a ring buffer sized by
 `CameraInitConfig::frame_pool_depth` (default `3`). When a consumer
