@@ -109,6 +109,13 @@ public final class IstmoRuntime {
         }
         return try await withCheckedThrowingContinuation { cont in
             queue.async {
+                // Outside start()..shutdown() no pump delivers a response,
+                // so the continuation would never resume. `shutdown()`
+                // fails whatever got in before `started` flipped.
+                guard self.started else {
+                    cont.resume(throwing: IstmoRuntimeError.shutdown)
+                    return
+                }
                 self.pending[callId] = cont
                 let pidBytes = Array(pluginId.utf8)
                 let mBytes = Array(method.utf8)
@@ -158,6 +165,10 @@ public final class IstmoRuntime {
                 return id
             }
             self.queue.async {
+                guard self.started else {
+                    cont.finish(throwing: IstmoRuntimeError.shutdown)
+                    return
+                }
                 self.streams[streamId] = cont
                 let pidBytes = Array(pluginId.utf8)
                 let mBytes = Array(method.utf8)
