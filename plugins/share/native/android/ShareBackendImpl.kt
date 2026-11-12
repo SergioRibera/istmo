@@ -42,9 +42,10 @@ import kotlinx.coroutines.withContext
  * Sends through `Intent.createChooser` with `ACTION_SEND` /
  * `ACTION_SEND_MULTIPLE`. Files are exposed as `content://` URIs by
  * [IstmoShareFileProvider] (declared in this plugin's
- * `AndroidManifest.xml`, merged by the istmo Gradle plugin); in-memory
- * files and paths outside the app's files/cache directories are copied
- * into `cacheDir/istmo-share/outgoing/` first.
+ * `AndroidManifest.xml`, merged by the istmo Gradle plugin), whose roots
+ * are only the `istmo-share/` directories of the app's cache and files
+ * dirs; in-memory files and every other path are copied into
+ * `cacheDir/istmo-share/outgoing/` first.
  *
  * The chosen target is reported through an `IntentSender` callback
  * ([ShareTargetChosenReceiver]); Android never reports whether the
@@ -69,12 +70,14 @@ import kotlinx.coroutines.withContext
  * ```
  */
 class ShareBackendImpl(
-    private val activity: ComponentActivity,
+    // Only used to register the chooser launcher; not kept, so a backend
+    // outliving its activity does not hold on to it.
+    activity: ComponentActivity,
 ) : ShareBackend {
 
     private val context: Context = activity.applicationContext
     private val authority = "${context.packageName}$AUTHORITY_SUFFIX"
-    private val outgoingRoot = File(context.cacheDir, "istmo-share/outgoing")
+    private val outgoingRoot = File(context.cacheDir, "/outgoing")
 
     /** Serialises share sheets — one chooser at a time. */
     private val sheetMutex = Mutex()
@@ -274,9 +277,17 @@ class ShareBackendImpl(
         return dest
     }
 
+    /**
+     * Whether [IstmoShareFileProvider] can expose [file] as is. Its roots
+     * (`res/xml/istmo_share_paths.xml`) are only the `istmo-share/`
+     * directories of the app's cache and files dirs, so nothing else in the
+     * sandbox is ever reachable through it; other files are copied in first.
+     */
     private fun isProviderRoot(file: File): Boolean {
         val canonical = file.canonicalPath
-        return listOf(context.cacheDir, context.filesDir).any { canonical.startsWith(it.canonicalPath + File.separator) }
+        return listOf(context.cacheDir, context.filesDir)
+            .map { File(it, SHARE_DIR).canonicalPath + File.separator }
+            .any { canonical.startsWith(it) }
     }
 
     /** Receivers read shared files lazily, so outgoing copies are kept for a day. */
@@ -310,9 +321,31 @@ class ShareBackendImpl(
             return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
         }
 
+        /** Provider-visible directory under `cacheDir` and `filesDir`. */
+        internal const val SHARE_DIR = "istmo-share"
+
+        private const val FORBIDDEN_NAME_CHARS = "<>:\"|?*"
+
+        /**
+         * File name that cannot escape the directory it is joined to.
+         *
+         * Port of `sanitize_file_name` in `plugins/share/src/lib.rs`; keep
+         * the rules identical and check them against its `sanitize_vectors`
+         * test:
+         * 1. split on `/` and `\\` and keep the last non-empty component;
+         * 2. replace `< > : " | ? *` and C0 / C1 controls (U+0000–U+001F,
+         *    U+007F–U+009F) with `_`;
+         * 3. a result made only of dots (or empty) becomes `shared`.
+         */
         internal fun sanitize(name: String): String {
-            val base = File(name).name.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
-            return if (base.trim('.').isEmpty()) "shared" else base
+            val base = name.split('/', '\\').lastOrNull { it.isNotEmpty() }.orEmpty()
+            val cleaned = buildString(base.length) {
+                for (c in base) {
+                    val control = c.code <= 0x1F || c.code in 0x7F..0x9F
+                    append(if (control || c in FORBIDDEN_NAME_CHARS) '_' else c)
+                }
+            }
+            return if (cleaned.all { it == '.' }) "shared" else cleaned
         }
     }
 }

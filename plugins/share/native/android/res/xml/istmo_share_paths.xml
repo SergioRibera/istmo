@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Roots IstmoShareFileProvider may expose. Only files the share
-     backend explicitly grants are ever reachable. -->
+<!-- Roots IstmoShareFileProvider may expose: only the plugin's own
+     `istmo-share/` directories, never the rest of the app's cache or
+     files dirs. ShareBackendImpl copies anything else in before sharing,
+     and only files it explicitly grants are ever reachable. Keep in sync
+     with ShareBackendImpl.SHARE_DIR. -->
 <paths>
-    <cache-path name="istmo_share_cache" path="." />
-    <files-path name="istmo_share_files" path="." />
+    <cache-path name="istmo_share_cache" path="istmo-share/" />
+    <files-path name="istmo_share_files" path="istmo-share/" />
 </paths>
