@@ -545,10 +545,11 @@ impl Drop for Server {
             .and_then(|thread| thread.join().ok().flatten());
         // Only remove the socket if it is still ours: a later primary
         // may own the name after our lock was lost.
-        if owned.is_some() && FileId::at(&self.socket) == owned {
-            if let Err(err) = fs::remove_file(&self.socket) {
-                tracing::debug!(target: "istmo.documents", %err, "removing the socket");
-            }
+        if owned.is_some()
+            && FileId::at(&self.socket) == owned
+            && let Err(err) = fs::remove_file(&self.socket)
+        {
+            tracing::debug!(target: "istmo.documents", %err, "removing the socket");
         }
     }
 }

@@ -1,4 +1,4 @@
-//! Google AdMob integration.
+//! Google `AdMob` integration.
 //!
 //! Exposes banner, interstitial and rewarded ad surfaces via typed
 //! [`NativeHandle`]s. The [`slot`] submodule provides a small
@@ -10,7 +10,7 @@ pub mod slot;
 use istmo_core::{IstmoError, NativeHandle, NativeHandleId};
 use istmo_macros::plugin;
 
-/// Wire identifier for the AdMob plugin.
+/// Wire identifier for the `AdMob` plugin.
 pub const ADMOB_PLUGIN_ID: &str = "istmo.admob";
 
 #[non_exhaustive]
