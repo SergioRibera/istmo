@@ -76,23 +76,34 @@ encuentra sin configuración:
 package dev.istmo.generated
 
 object IstmoPluginRegistry : IstmoPluginRegistrant {
+    override val activityPluginIds: List<String> = listOf(
+        com.myapp.gen.ShareDispatcher.PLUGIN_ID,
+    )
+
     override fun registerAll(context: Context) {
+        val appContext = context.applicationContext ?: context
         IstmoRuntime.registerHandler(
             com.myapp.gen.DataStoreDispatcher.PLUGIN_ID,
             com.myapp.gen.DataStoreDispatcher(
-                dev.istmo.plugins.datastore.DataStoreFactoryImpl(context),
+                dev.istmo.plugins.datastore.DataStoreFactoryImpl(appContext),
                 com.myapp.gen.DataStoreCodecsImpl(),
             ),
         )
-        hostActivity<androidx.activity.ComponentActivity>(context, "istmo.share")?.let { activity ->
-            IstmoRuntime.registerHandler(
-                com.myapp.gen.ShareDispatcher.PLUGIN_ID,
-                com.myapp.gen.ShareDispatcher(
-                    dev.istmo.plugins.share.ShareBackendImpl(activity),
-                    com.myapp.gen.ShareCodecsImpl(),
-                ),
-            )
+        if (context is Activity) {
+            registerActivityPlugins(context)
+        } else {
+            Log.w(TAG, "activity-bound plugins skipped when registering from ${context.javaClass.name}")
         }
+    }
+
+    override fun registerActivityPlugins(activity: Activity) {
+        IstmoRuntime.registerHandler(
+            com.myapp.gen.ShareDispatcher.PLUGIN_ID,
+            com.myapp.gen.ShareDispatcher(
+                dev.istmo.plugins.share.ShareBackendImpl(hostActivity<androidx.activity.ComponentActivity>(activity, "istmo.share")),
+                com.myapp.gen.ShareCodecsImpl(),
+            ),
+        )
     }
     // …
 }
@@ -137,7 +148,13 @@ ios_backend         = "ShareBackendImpl"
   completamente calificada, como `"androidx.fragment.app.FragmentActivity"`.
   Los plugins atados a una activity se saltean (con un log) cuando el
   registry corre sin activity (p. ej. desde un `Service`), y fallan con
-  un error claro cuando la activity host no es del tipo requerido.
+  un error claro cuando la activity host no es del tipo requerido. Los
+  handlers son de todo el proceso, así que los backends `"context"`
+  reciben el application context; los atados a una activity siguen a
+  la activity viva creada más recientemente (`IstmoHost` los vuelve a
+  registrar en cada `onCreate`) y se desregistran cuando se destruye la
+  última, así una activity terminada nunca queda alcanzable desde el
+  runtime.
 - **`ios_backend`**: tipo Swift, construido sin argumentos. Default:
   `<T>BackendImpl` / `<T>FactoryImpl`.
 

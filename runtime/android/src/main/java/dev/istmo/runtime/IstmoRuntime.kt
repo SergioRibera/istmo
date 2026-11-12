@@ -35,6 +35,15 @@ object IstmoRuntime {
         handlers[pluginId] = handler
     }
 
+    /**
+     * Drop the handler registered for [pluginId]; later calls to it fail
+     * as for an unregistered plugin. Calls already running keep their
+     * handler until they finish.
+     */
+    fun unregisterHandler(pluginId: String) {
+        handlers.remove(pluginId)
+    }
+
     fun allocHandleId(pluginId: String): Long {
         val id = nextGlobalHandleId.getAndIncrement()
         handleOwners[id] = pluginId
