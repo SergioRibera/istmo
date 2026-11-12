@@ -73,6 +73,11 @@ pub(super) fn sync_assets(
     for asset in &app_assets {
         crate::directive::rerun_if_changed(asset.source());
     }
+    if let Some(manifest) = app_manifest {
+        for dir in crate::assets::declared_asset_dirs(&manifest.assets, root) {
+            crate::directive::rerun_if_changed(&dir);
+        }
+    }
 
     stage_desktop_assets(&app_assets, &dep_assets, state_dir)
 }

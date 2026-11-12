@@ -129,6 +129,41 @@ pub fn resolve_assets(
     Ok(out)
 }
 
+/// Directories named by `entries`, resolved against `root`. Their file
+/// sets are inputs too: a file added under one changes the resolution,
+/// which per-file `rerun-if-changed` lines would miss.
+/// A glob contributes its literal leading directory; one starting with
+/// a wildcard contributes nothing, as watching the whole crate root
+/// would rerun on every build output.
+pub(crate) fn declared_asset_dirs(entries: &[AssetEntry], root: &Path) -> Vec<PathBuf> {
+    entries
+        .iter()
+        .map(|entry| {
+            if is_glob(&entry.path) {
+                glob_base(root, &entry.path)
+            } else {
+                join_root(root, &entry.path)
+            }
+        })
+        .filter(|path| path != root && path.is_dir())
+        .collect()
+}
+
+/// Deepest directory `pattern` can only match below: its leading
+/// components up to the first one holding a glob metacharacter.
+fn glob_base(root: &Path, pattern: &str) -> PathBuf {
+    let parts: Vec<&str> = pattern.split(['/', '\\']).collect();
+    // The final component names files, never a directory to descend.
+    let dirs = parts[..parts.len() - 1]
+        .iter()
+        .take_while(|part| !part.contains(GLOB_META) && !part.contains(['{', '}']));
+    let mut base = root.to_path_buf();
+    for part in dirs.filter(|part| !part.is_empty() && **part != ".") {
+        base.push(part);
+    }
+    base
+}
+
 fn resolve_one(
     raw: &str,
     root: &Path,
@@ -209,7 +244,12 @@ fn expand_glob(
     })?;
     let matcher = glob.compile_matcher();
     let before = out.len();
-    walk_glob(root, root, &matcher, out)?;
+    // Only the pattern's literal leading directory can hold matches, so
+    // a pattern like `assets/**/*.png` never walks `target/`.
+    let base = glob_base(root, pattern);
+    if base.is_dir() {
+        walk_glob(&base, root, &matcher, out)?;
+    }
     if out.len() == before {
         return Err(AssetResolveError::NoMatches {
             pattern: pattern.to_owned(),
@@ -370,6 +410,31 @@ mod tests {
         let resolved = resolve_assets(&entries, &root).expect("resolve");
         let keys: Vec<&str> = resolved.iter().map(|r| r.bundle_path.as_str()).collect();
         assert_eq!(keys, ["sounds/a.wav", "sounds/c.wav"]);
+    }
+
+    #[test]
+    fn glob_walk_starts_at_the_literal_prefix() {
+        let root = Path::new("/crate");
+        assert_eq!(glob_base(root, "assets/**/*.wav"), root.join("assets"));
+        assert_eq!(glob_base(root, "assets/img/logo*.png"), root.join("assets/img"));
+        assert_eq!(glob_base(root, "./a/{b,c}/*.png"), root.join("a"));
+        assert_eq!(glob_base(root, "**/*.png"), root);
+        assert_eq!(glob_base(root, "*.png"), root);
+    }
+
+    #[test]
+    fn declared_dirs_cover_dir_entries_and_glob_prefixes() {
+        let root = tmp_root("declared-dirs");
+        fs::create_dir_all(root.join("assets/img")).unwrap();
+        fs::write(root.join("assets/x.txt"), b"x").unwrap();
+        let entries: Vec<AssetEntry> = ["assets/img", "assets/x.txt", "assets/**/*.png", "*.png"]
+            .into_iter()
+            .map(|path| AssetEntry { path: path.into() })
+            .collect();
+        assert_eq!(
+            declared_asset_dirs(&entries, &root),
+            [root.join("assets/img"), root.join("assets")]
+        );
     }
 
     #[test]

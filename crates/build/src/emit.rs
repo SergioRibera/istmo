@@ -35,6 +35,9 @@ fn emit_plugin_metadata(path: &Path, manifest: Manifest) -> Manifest {
         for asset in &resolved {
             crate::directive::rerun_if_changed(asset.source());
         }
+        for dir in crate::assets::declared_asset_dirs(&manifest.assets, crate_root) {
+            crate::directive::rerun_if_changed(&dir);
+        }
         let payload = AssetsPayload {
             plugin_ids: manifest.plugin_ids().map(str::to_owned).collect(),
             resolved,
