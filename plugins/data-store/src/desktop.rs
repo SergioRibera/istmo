@@ -14,8 +14,9 @@
 //! `istmo-build::emit_app`; unset apps fall back to `CARGO_PKG_NAME`.
 //!
 //! `<namespace>` is percent-encoded (every byte outside
-//! `[A-Za-z0-9._-]` becomes `%XX`), so distinct namespaces always map
-//! to distinct files.
+//! `[A-Za-z0-9._-]` becomes `%XX`), so distinct namespaces map to
+//! distinct files — except, on case-insensitive filesystems (macOS,
+//! Windows), namespaces that differ only in ASCII case.
 //!
 //! Register the backend through the macro-emitted stateful host — the
 //! plugin's `init: DataStoreConfig` payload arrives as `CreateInstance`
@@ -415,15 +416,23 @@ fn namespace_path(dir: &Path, namespace: &str) -> PathBuf {
 /// Injective, filesystem-safe file stem for `namespace`.
 ///
 /// Bytes outside `[A-Za-z0-9._-]` — `%` included — become `%XX`, so two
-/// namespaces never share a file (`a/b` and `a_b` stay apart). A stem
-/// that Windows reserves for devices (`CON`, `NUL`, `COM1`, ...) gets its
-/// first byte escaped too.
+/// namespaces never share a file (`a/b` and `a_b` stay apart) on a
+/// case-sensitive filesystem; on a case-insensitive one (macOS, Windows)
+/// namespaces differing only in ASCII case still do. A name Windows
+/// reserves for devices (`CON`, `NUL`, `COM1`, ...) gets its first byte
+/// escaped too. Windows matches those names on the part before the first
+/// dot (`nul.cache` names the device as well), so that is what is checked.
 fn encode_namespace(namespace: &str) -> String {
     const RESERVED: &[&str] = &[
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
+        "LPT9",
     ];
-    let reserved = RESERVED.iter().any(|r| r.eq_ignore_ascii_case(namespace));
+    let base = namespace.split('.').next().unwrap_or_default();
+    // Windows also ignores trailing spaces here (`nul .x`); a space is
+    // escaped anyway, but the base still names the device.
+    let base = base.trim_end_matches(' ');
+    let reserved = RESERVED.iter().any(|r| r.eq_ignore_ascii_case(base));
     let mut out = String::with_capacity(namespace.len());
     for (i, byte) in namespace.bytes().enumerate() {
         let plain = byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-');
@@ -530,6 +539,9 @@ mod tests {
         assert_eq!(encode_namespace("a%2Fb"), "a%252Fb");
         assert_eq!(encode_namespace("..\\x:y"), "..%5Cx%3Ay");
         assert_eq!(encode_namespace("nul"), "%6Eul");
+        assert_eq!(encode_namespace("Com1.cache"), "%43om1.cache");
+        assert_eq!(encode_namespace("aux .x"), "%61ux%20.x");
+        assert_eq!(encode_namespace("console"), "console");
         assert_eq!(encode_namespace("é"), "%C3%A9");
     }
 
