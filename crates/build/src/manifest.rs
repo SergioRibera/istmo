@@ -419,7 +419,7 @@ impl Manifest {
         Self::parse(&text)
     }
 
-    fn from_document(doc: &DocumentMut) -> Result<Self, ManifestError> {
+    pub(crate) fn from_document(doc: &DocumentMut) -> Result<Self, ManifestError> {
         for (name, _) in doc.as_table() {
             if !KNOWN_KEYS.contains(&name) {
                 return Err(ManifestError::UnknownKey {
@@ -483,6 +483,45 @@ impl Manifest {
     #[must_use]
     pub fn into_native_deps(self) -> NativeDeps {
         self.native_deps
+    }
+}
+
+/// A crate's `istmo.toml`, read and parsed once per build-script run
+/// and handed to every emit step.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct IstmoToml {
+    /// `None` when the crate has no `istmo.toml`.
+    pub(crate) manifest: Option<Manifest>,
+    /// The `[app]` section; empty without one.
+    pub(crate) app: crate::app_config::AppConfig,
+}
+
+impl IstmoToml {
+    /// Read `path`. A missing file is an empty configuration.
+    pub(crate) fn read(path: &Path) -> Result<Self, ManifestError> {
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => {
+                return Err(ManifestError::Io {
+                    path: path.to_path_buf(),
+                    error,
+                });
+            }
+        };
+        let doc: DocumentMut = text.parse().map_err(ManifestError::Parse)?;
+        Ok(Self {
+            manifest: Some(Manifest::from_document(&doc)?),
+            app: crate::app_config::AppConfig::from_document(&doc)?,
+        })
+    }
+
+    /// [`Self::read`] for a build script: a malformed manifest is a user
+    /// error, so it fails the build naming the file.
+    pub(crate) fn load(path: &Path) -> Self {
+        Self::read(path).unwrap_or_else(|err| panic!("istmo-build: {}: {err}", path.display()))
     }
 }
 
@@ -608,9 +647,17 @@ fn parse_plugins(
         if array.is_empty() {
             return Err(ManifestError::Missing { key: "plugin" });
         }
-        let mut entries = Vec::with_capacity(array.len());
+        let mut entries: Vec<PluginEntry> = Vec::with_capacity(array.len());
         for table in array {
-            entries.push(parse_plugin_entry(table, "plugin", native_deps)?);
+            let entry = parse_plugin_entry(table, "plugin", native_deps)?;
+            if entries.iter().any(|seen| seen.id == entry.id) {
+                return Err(ManifestError::InvalidValue {
+                    key: "plugin.id".to_owned(),
+                    value: entry.id,
+                    expected: "an id not already used by another [[plugin]] entry",
+                });
+            }
+            entries.push(entry);
         }
         Ok(entries)
     } else {
@@ -637,10 +684,17 @@ fn parse_plugin_entry(
         .get("id")
         .ok_or(ManifestError::Missing { key: "plugin.id" })?;
     let id = expect_string(id_item, "plugin.id")?.to_owned();
-    let client_type = match table.get("client_type") {
-        Some(item) => Some(expect_string(item, "plugin.client_type")?.to_owned()),
-        None => None,
-    };
+    if !is_valid_plugin_id(&id) {
+        return Err(ManifestError::InvalidValue {
+            key: "plugin.id".to_owned(),
+            value: id,
+            expected: "a non-empty id of ASCII letters, digits, `.`, `_` or `-`",
+        });
+    }
+    let client_type = table
+        .get("client_type")
+        .map(parse_client_type)
+        .transpose()?;
     let default_deployment = match table.get("default_deployment") {
         Some(item) => {
             let literal = expect_string(item, "plugin.default_deployment")?;
@@ -713,6 +767,29 @@ fn parse_plugin_entry(
         ios_backend: optional_string("ios_backend", "plugin.ios_backend")?,
         android_permissions,
     })
+}
+
+/// Plugin ids end up in asset directory names, Kotlin/Swift registry
+/// keys and env-var payloads, so they stay within a portable charset.
+fn is_valid_plugin_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// `istmo::runtime!` parses every auto-wired client type as a path;
+/// rejecting a malformed one here names the manifest instead.
+fn parse_client_type(item: &Item) -> Result<String, ManifestError> {
+    let literal = expect_string(item, "plugin.client_type")?;
+    if syn::parse_str::<syn::Path>(literal).is_err() {
+        return Err(ManifestError::InvalidValue {
+            key: "plugin.client_type".to_owned(),
+            value: literal.to_owned(),
+            expected: "a Rust type path such as `::my_crate::MyClient`",
+        });
+    }
+    Ok(literal.to_owned())
 }
 
 fn parse_android_service(
@@ -1239,10 +1316,14 @@ fn static_field(context: &'static str, field: &'static str) -> &'static str {
 
 pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
     let path = path.as_ref();
+    let manifest = Manifest::from_path(path)
+        .unwrap_or_else(|err| panic!("istmo-build: {}: {err}", path.display()));
+    emit_plugin_metadata(path, manifest)
+}
+
+/// Plugin-side handover for an already parsed `istmo.toml` at `path`.
+fn emit_plugin_metadata(path: &Path, manifest: Manifest) -> Manifest {
     crate::directive::rerun_if_changed(path);
-    let manifest = Manifest::from_path(path).unwrap_or_else(|err| {
-        panic!("istmo-build: {err}");
-    });
     if !manifest.native_deps.is_empty() {
         emit_native_deps(&manifest.native_deps);
     }
@@ -1298,29 +1379,45 @@ pub fn emit() {
     emit_with(crate::emit_app::AppOpts::default());
 }
 
+/// [`emit`] with explicit options. Every path, `istmo.toml` included,
+/// resolves against `app.root` (default: `CARGO_MANIFEST_DIR`), and
+/// the manifest is read and parsed once for every step.
+///
+/// # Panics
+///
+/// When `istmo.toml` is malformed, a plugin contract cannot be
+/// extracted, or a minimum-version check fails — panicking is how a
+/// build script fails the build.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "public signature kept for existing build scripts"
+)]
 pub fn emit_with(app: crate::emit_app::AppOpts) {
-    let manifest_path = Path::new("istmo.toml");
-    let manifest_exists = manifest_path.exists();
+    let root = app
+        .root
+        .clone()
+        .unwrap_or_else(crate::emit_app::cargo_manifest_dir);
+    let manifest_path = root.join("istmo.toml");
+    let toml = IstmoToml::load(&manifest_path);
 
-    if manifest_exists {
-        emit_from(manifest_path, "src/lib.rs");
+    if let Some(manifest) = toml.manifest.clone() {
+        let manifest = emit_plugin_metadata(&manifest_path, manifest);
+        emit_contracts(&manifest, &root.join("src/lib.rs"));
     }
-    let app_toml = manifest_exists.then_some(manifest_path);
-    let _ = emit_wiring_env(app_toml);
-    let app_manifest = app_toml.and_then(|path| Manifest::from_path(path).ok());
-    let app_root = app.root.clone().unwrap_or_else(|| PathBuf::from("."));
-    crate::min_versions::enforce_min_versions(
-        &crate::handover::collect_dep_manifests(),
-        app_manifest.as_ref(),
-        &app_root,
-    );
-    crate::emit_app::emit_app_with(app);
+    let dep_manifests = crate::handover::collect_dep_manifests();
+    let _ = emit_wiring_for(&dep_manifests, toml.manifest.as_ref());
+    crate::min_versions::enforce_min_versions(&dep_manifests, toml.manifest.as_ref(), &root);
+    crate::emit_app::emit_app_from(&app, &root, &toml);
 }
 
 pub fn emit_from(manifest_path: impl AsRef<Path>, source_path: impl AsRef<Path>) {
     let manifest = emit_manifest_metadata(manifest_path);
-    let source_path = source_path.as_ref();
+    emit_contracts(&manifest, source_path.as_ref());
+}
 
+/// Extract and hand over the contract of every plugin entry that
+/// declares a `client_type`, from the trait in `source_path`.
+fn emit_contracts(manifest: &Manifest, source_path: &Path) {
     let has_client = manifest.plugins.iter().any(|p| p.client_type.is_some());
     if has_client {
         crate::directive::rerun_if_changed(source_path);
@@ -1396,20 +1493,28 @@ pub fn resolve_wiring(
     }
 }
 
+/// Resolve the auto-wired plugin set and bake it into
+/// `ISTMO_AUTO_PLUGINS` / `ISTMO_AUTO_REMOTE` for `istmo::runtime!`.
+///
+/// # Panics
+///
+/// When `app_manifest_path` names an `istmo.toml` that cannot be read
+/// or parsed.
 #[must_use]
 pub fn emit_wiring_env(app_manifest_path: Option<&Path>) -> ResolvedWiring {
-    let dep_manifests = crate::handover::collect_dep_manifests();
-    let app_manifest = app_manifest_path.and_then(|path| {
+    let app_manifest = app_manifest_path.map(|path| {
         crate::directive::rerun_if_changed(path);
-        match Manifest::from_path(path) {
-            Ok(m) => Some(m),
-            Err(err) => {
-                println!("cargo::warning=istmo-build: failed to read app istmo.toml: {err}");
-                None
-            }
-        }
+        Manifest::from_path(path)
+            .unwrap_or_else(|err| panic!("istmo-build: {}: {err}", path.display()))
     });
-    let resolved = resolve_wiring(&dep_manifests, app_manifest.as_ref());
+    emit_wiring_for(
+        &crate::handover::collect_dep_manifests(),
+        app_manifest.as_ref(),
+    )
+}
+
+fn emit_wiring_for(dep_manifests: &[Manifest], app_manifest: Option<&Manifest>) -> ResolvedWiring {
+    let resolved = resolve_wiring(dep_manifests, app_manifest);
     println!(
         "cargo::rustc-env=ISTMO_AUTO_PLUGINS={}",
         resolved.local_clients.join(","),
@@ -1557,6 +1662,70 @@ client_type = "::foo::Bar"
 "#;
         let err = Manifest::parse(src).expect_err("must fail");
         assert!(matches!(err, ManifestError::Missing { key: "plugin.id" }));
+    }
+
+    fn invalid_value_key(src: &str) -> String {
+        match Manifest::parse(src).expect_err("must fail") {
+            ManifestError::InvalidValue { key, .. } => key,
+            other => panic!("expected InvalidValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_plugin_id_is_rejected() {
+        assert_eq!(invalid_value_key("[plugin]\nid = \"\"\n"), "plugin.id");
+    }
+
+    #[test]
+    fn plugin_id_outside_the_portable_charset_is_rejected() {
+        for id in [
+            "istmo:camera",
+            "istmo camera",
+            "istmo/camera",
+            "kamera\u{e9}",
+        ] {
+            let src = format!("[plugin]\nid = \"{id}\"\n");
+            assert_eq!(invalid_value_key(&src), "plugin.id", "{id}");
+        }
+        assert!(Manifest::parse("[plugin]\nid = \"Istmo.data_store-2\"\n").is_ok());
+    }
+
+    #[test]
+    fn malformed_client_type_is_rejected() {
+        let src = "[plugin]\nid = \"istmo.a\"\nclient_type = \"::foo::\"\n";
+        assert_eq!(invalid_value_key(src), "plugin.client_type");
+        let src = "[plugin]\nid = \"istmo.a\"\nclient_type = \"foo bar\"\n";
+        assert_eq!(invalid_value_key(src), "plugin.client_type");
+    }
+
+    #[test]
+    fn duplicate_plugin_ids_are_rejected() {
+        let src = "[[plugin]]\nid = \"istmo.a\"\n\n[[plugin]]\nid = \"istmo.a\"\n";
+        let err = Manifest::parse(src).expect_err("must fail");
+        assert!(
+            matches!(&err, ManifestError::InvalidValue { key, value, .. }
+                if key == "plugin.id" && value == "istmo.a"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn istmo_toml_reads_manifest_and_app_section_once() {
+        let dir = std::env::temp_dir().join(format!("istmo-toml-read-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("istmo.toml");
+        assert!(IstmoToml::read(&path).unwrap().manifest.is_none());
+        fs::write(
+            &path,
+            "[plugin]\nid = \"istmo.a\"\n\n[app]\nandroid = false\n",
+        )
+        .unwrap();
+        let toml = IstmoToml::read(&path).unwrap();
+        assert_eq!(toml.manifest.unwrap().primary_id(), "istmo.a");
+        assert_eq!(toml.app.android, Some(false));
+        fs::write(&path, "[plugin]\nid = \"\"\n").unwrap();
+        assert!(IstmoToml::read(&path).is_err());
     }
 
     #[test]

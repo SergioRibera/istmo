@@ -212,7 +212,7 @@ impl AppConfig {
         }
     }
 
-    fn from_document(doc: &DocumentMut) -> Result<Self, ManifestError> {
+    pub(crate) fn from_document(doc: &DocumentMut) -> Result<Self, ManifestError> {
         let Some(item) = doc.get("app") else {
             return Ok(Self::default());
         };

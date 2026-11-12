@@ -40,7 +40,7 @@ use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host}
 use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
 use crate::manifest::{
     AndroidServiceSpec, InfoPlistEntry, IosBackgroundKindSpec, IosBackgroundSpec,
-    IosContinuousModeSpec, Manifest, PluginEntry,
+    IosContinuousModeSpec, IstmoToml, Manifest, PluginEntry,
 };
 use crate::plugin_registry::{
     KOTLIN_REGISTRY_PACKAGE, RegistryEntry, generate_kotlin_plugin_registry,
@@ -95,9 +95,23 @@ const DESKTOP_ICON_PNG: &str = "istmo-app-icon.png";
 /// Large enough for HiDPI title bars and the Windows taskbar.
 const DESKTOP_ICON_EDGE: u32 = 256;
 
+/// # Panics
+///
+/// When `istmo.toml` or the `[app]` configuration is invalid — see the
+/// crate-level error policy.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "public signature kept for existing build scripts"
+)]
 pub fn emit_app_with(opts: AppOpts) {
     let root = opts.root.clone().unwrap_or_else(cargo_manifest_dir);
+    let toml = IstmoToml::load(&root.join("istmo.toml"));
+    emit_app_from(&opts, &root, &toml);
+}
 
+/// App-side pass over an `istmo.toml` the caller already parsed.
+pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
+    let root = root.to_path_buf();
     let android_root = opts
         .android_root
         .clone()
@@ -105,20 +119,16 @@ pub fn emit_app_with(opts: AppOpts) {
     let ios_root = opts.ios_root.clone().unwrap_or_else(|| root.join("ios"));
 
     let manifest_path = root.join("istmo.toml");
-    let app_config = AppConfig::from_path(&manifest_path)
-        .unwrap_or_else(|err| panic!("istmo-build: {}: {err}", manifest_path.display()));
+    let app_config = &toml.app;
 
     let android_enabled = opts.android.or(app_config.android).unwrap_or(true);
     let ios_enabled = opts.ios.or(app_config.ios).unwrap_or(true);
 
     let dep_manifests_by_links = collect_dep_manifests_by_links();
-    let app_manifest = manifest_path.is_file().then(|| {
-        Manifest::from_path(&manifest_path)
-            .unwrap_or_else(|err| panic!("istmo-build: {}: {err}", manifest_path.display()))
-    });
+    let app_manifest = toml.manifest.clone();
     let app = resolve_app_metadata(
         &root,
-        &app_config,
+        app_config,
         app_manifest.as_ref(),
         opts.lib_name.as_ref(),
     );
@@ -154,7 +164,7 @@ pub fn emit_app_with(opts: AppOpts) {
             .flatten()
             .map(|dir| (ios_root.as_path(), dir, ios_plugins_subdir.as_str())),
     );
-    emit_runtime_env(&app, &app_config, &root, desktop_staging.as_deref());
+    emit_runtime_env(&app, app_config, &root, desktop_staging.as_deref());
     if !android_active && !ios_active {
         return;
     }
@@ -889,7 +899,7 @@ fn emit_kotlin_registry(android_root: &Path, codegen_package: &str, entries: &[R
     }
 }
 
-fn cargo_manifest_dir() -> PathBuf {
+pub(crate) fn cargo_manifest_dir() -> PathBuf {
     PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR")
             .expect("CARGO_MANIFEST_DIR must be set (build.rs only)"),
