@@ -1,6 +1,9 @@
 package dev.istmo.runtime
 
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 
 object Bincode {
 
@@ -163,7 +166,17 @@ object Bincode {
 
     fun readString(payload: ByteArray, offset: Int = 0): Decoded<String> {
         val (next, length) = readLength(payload, offset, "string")
-        return Decoded(String(payload, next, length, Charsets.UTF_8), next + length)
+        // Rust refuses malformed UTF-8; `String(bytes, UTF_8)` would
+        // silently substitute U+FFFD and re-encode to different bytes.
+        val decoder = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+        val text = try {
+            decoder.decode(ByteBuffer.wrap(payload, next, length)).toString()
+        } catch (_: CharacterCodingException) {
+            throw DecodeException("bincode string: invalid UTF-8 at offset=$next")
+        }
+        return Decoded(text, next + length)
     }
 
     /// Reads a byte-length prefix and checks the claimed bytes are present.
