@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use istmo_core::{
     CallId, CancelToken, Dispatch, DispatchFuture, Envelope, Frame, InstanceId, Outcome, Runtime,
-    codec,
+    StreamEndReason, StreamMessage, codec,
 };
 
 struct EchoDispatch {
@@ -642,4 +642,268 @@ fn dropping_a_locally_hosted_call_trips_its_cancel_token() {
         outbound.try_recv().is_err(),
         "a locally hosted call must not leak a Cancel frame to the peer"
     );
+}
+
+/// Stream host: `three` yields three items and closes, `forever` yields
+/// until the stream is cancelled and then reports on `stopped`, `panic`
+/// panics inside the dispatch.
+struct StreamHost {
+    stopped: flume::Sender<()>,
+}
+
+impl StreamHost {
+    const PLUGIN_ID: &'static str = "test.stream";
+}
+
+impl Dispatch for StreamHost {
+    fn plugin_id(&self) -> &'static str {
+        Self::PLUGIN_ID
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        _instance_id: Option<InstanceId>,
+        method: &'a str,
+        _payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        let stopped = self.stopped.clone();
+        Box::pin(async move {
+            let (tx, rx) = flume::bounded(1);
+            match method {
+                "three" => {
+                    std::thread::spawn(move || {
+                        for i in 0u8..3 {
+                            if tx.send(vec![i]).is_err() {
+                                return;
+                            }
+                        }
+                    });
+                }
+                "forever" => {
+                    std::thread::spawn(move || {
+                        while !cancel.is_cancelled() && tx.send(vec![0]).is_ok() {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        let _ = stopped.send(());
+                    });
+                }
+                _ => panic!("stream host asked to panic"),
+            }
+            Ok(Outcome::StreamOpened(rx))
+        })
+    }
+}
+
+fn stream_host(rt: &Arc<Runtime>) -> flume::Receiver<()> {
+    let (stopped, on_stop) = flume::unbounded();
+    rt.register_host(StreamHost { stopped });
+    on_stop
+}
+
+#[test]
+fn hosted_stream_delivers_items_then_ends_without_outbound_frames() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let _on_stop = stream_host(&rt);
+
+    let handle = rt
+        .stream(StreamHost::PLUGIN_ID, None, "three", Vec::new(), 0)
+        .expect("stream");
+    for i in 0u8..3 {
+        assert_eq!(handle.recv().expect("item"), StreamMessage::Event(vec![i]));
+    }
+    assert_eq!(
+        handle.recv().expect("end"),
+        StreamMessage::End(StreamEndReason::Complete)
+    );
+    drop(handle);
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(
+        init.outbound.try_recv().is_err(),
+        "a locally hosted stream must not reach the transport"
+    );
+}
+
+#[test]
+fn dropping_a_hosted_stream_stops_its_producer() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let on_stop = stream_host(&rt);
+
+    let handle = rt
+        .stream(StreamHost::PLUGIN_ID, None, "forever", Vec::new(), 1)
+        .expect("stream");
+    assert!(matches!(
+        handle.recv().expect("item"),
+        StreamMessage::Event(_)
+    ));
+    drop(handle);
+
+    on_stop
+        .recv_timeout(Duration::from_secs(1))
+        .expect("producer stopped after the consumer left");
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(
+        init.outbound.try_recv().is_err(),
+        "dropping a hosted stream must not send Cancel, Event or StreamEnd"
+    );
+}
+
+#[test]
+fn inbound_cancel_ends_a_peer_hosted_stream() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let on_stop = stream_host(&rt);
+    let call_id = CallId(77);
+
+    rt.dispatch_inbound(Envelope::new(Frame::Call {
+        call_id,
+        plugin_id: StreamHost::PLUGIN_ID.to_owned(),
+        instance_id: None,
+        method: "forever".to_owned(),
+        payload: Vec::new(),
+    }))
+    .expect("dispatch");
+    let first = init
+        .outbound
+        .recv_timeout(Duration::from_secs(1))
+        .expect("first event");
+    assert!(matches!(first.frame, Frame::Event { .. }));
+
+    rt.dispatch_inbound(Envelope::new(Frame::Cancel { call_id }))
+        .expect("cancel");
+    on_stop
+        .recv_timeout(Duration::from_secs(1))
+        .expect("producer stopped after the peer cancelled");
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let env = init
+            .outbound
+            .recv_deadline(deadline)
+            .expect("stream end before the deadline");
+        if let Frame::StreamEnd { stream_id, reason } = env.frame {
+            assert_eq!(stream_id.get(), call_id.get());
+            assert_eq!(reason, StreamEndReason::Cancelled);
+            break;
+        }
+    }
+}
+
+#[test]
+fn panicking_stream_dispatch_ends_the_local_stream_with_an_error() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    let _on_stop = stream_host(&rt);
+
+    let handle = rt
+        .stream(StreamHost::PLUGIN_ID, None, "panic", Vec::new(), 0)
+        .expect("stream");
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let message = loop {
+        if let Some(message) = handle.try_recv() {
+            break message;
+        }
+        assert!(std::time::Instant::now() < deadline, "stream never ended");
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    match message {
+        StreamMessage::End(StreamEndReason::Error(bytes)) => {
+            let (msg, _) = codec::decode::<String>(&bytes).expect("decode");
+            assert_eq!(msg, "host panicked");
+        }
+        other => panic!("expected an error end, got {other:?}"),
+    }
+}
+
+struct PanicHost;
+
+impl Dispatch for PanicHost {
+    fn plugin_id(&self) -> &'static str {
+        "test.panic"
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        _instance_id: Option<InstanceId>,
+        _method: &'a str,
+        _payload: &'a [u8],
+        _cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        Box::pin(async { panic!("host asked to panic") })
+    }
+}
+
+#[test]
+fn panicking_host_answers_a_local_call_with_an_error() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    rt.register_host(PanicHost);
+
+    let handle = rt
+        .call("test.panic", None, "any", Vec::new())
+        .expect("call");
+    let bytes = pollster::block_on(handle)
+        .expect("resolves")
+        .expect_err("error result");
+    let (msg, _) = codec::decode::<String>(&bytes).expect("decode");
+    assert_eq!(msg, "host panicked");
+}
+
+#[test]
+fn panicking_host_answers_a_peer_call_with_an_error() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    rt.register_host(PanicHost);
+    let call_id = CallId(31);
+
+    rt.dispatch_inbound(Envelope::new(Frame::Call {
+        call_id,
+        plugin_id: "test.panic".to_owned(),
+        instance_id: None,
+        method: "any".to_owned(),
+        payload: Vec::new(),
+    }))
+    .expect("dispatch");
+    match wait_for_respond(&init.outbound, call_id) {
+        Frame::Respond {
+            result: Err(bytes), ..
+        } => {
+            let (msg, _) = codec::decode::<String>(&bytes).expect("decode");
+            assert_eq!(msg, "host panicked");
+        }
+        other => panic!("unexpected frame: {other:?}"),
+    }
+}
+
+#[test]
+fn peer_call_ids_do_not_collide_with_local_pending_calls() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    rt.register_host(EchoDispatch::new());
+
+    // A local call to a peer-hosted plugin takes id 1.
+    let local = rt.call("peer.plugin", None, "m", Vec::new()).expect("call");
+    assert_eq!(local.call_id(), CallId(1));
+    let _ = init.outbound.recv().expect("call frame");
+
+    // The peer independently numbers its own call 1 too.
+    rt.dispatch_inbound(Envelope::new(Frame::Call {
+        call_id: CallId(1),
+        plugin_id: EchoDispatch::PLUGIN_ID.to_owned(),
+        instance_id: None,
+        method: "ping".to_owned(),
+        payload: b"x".to_vec(),
+    }))
+    .expect("dispatch");
+    assert!(matches!(
+        wait_for_respond(&init.outbound, CallId(1)),
+        Frame::Respond { result: Ok(_), .. }
+    ));
+    rt.dispatch_inbound(Envelope::new(Frame::Respond {
+        call_id: CallId(1),
+        result: Ok(vec![5]),
+    }))
+    .expect("the peer's response must not have completed the local call");
+    assert_eq!(pollster::block_on(local).expect("resolves"), Ok(vec![5]));
 }

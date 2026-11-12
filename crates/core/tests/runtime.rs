@@ -157,7 +157,7 @@ fn create_and_destroy_instance_round_trip() {
     let instance_id = InstanceId(99);
     rt.register_instance(instance_id, "plugin");
     assert_eq!(
-        rt.routing().instance(instance_id).map(|e| e.plugin_id),
+        rt.instance_plugin_id(instance_id),
         Some("plugin".to_owned())
     );
 
@@ -167,7 +167,7 @@ fn create_and_destroy_instance_round_trip() {
         Frame::DestroyInstance { instance_id: i } => assert_eq!(i, instance_id),
         other => panic!("expected DestroyInstance, got {other:?}"),
     }
-    assert!(rt.routing().instance(instance_id).is_none());
+    assert!(rt.instance_plugin_id(instance_id).is_none());
 }
 
 #[test]
@@ -306,4 +306,126 @@ fn stream_id_and_call_id_share_the_numeric_space() {
 
     drop(s);
     let _ = outbound.recv();
+}
+
+#[test]
+fn dropping_an_ended_stream_handle_sends_no_cancel() {
+    let (rt, outbound) = mock();
+    let handle = rt.stream("p", None, "ticks", vec![], 4).expect("stream");
+    let stream_id = handle.stream_id();
+    let _ = outbound.recv().expect("call frame");
+    rt.dispatch_inbound(Envelope::new(Frame::StreamEnd {
+        stream_id,
+        reason: StreamEndReason::Complete,
+    }))
+    .expect("end");
+    assert_eq!(
+        handle.recv().unwrap(),
+        StreamMessage::End(StreamEndReason::Complete)
+    );
+    drop(handle);
+    assert!(outbound.try_recv().is_err(), "ended stream sent a Cancel");
+}
+
+#[test]
+fn dropping_a_call_handle_after_its_response_arrived_sends_no_cancel() {
+    let (rt, outbound) = mock();
+    let handle = rt.call("p", None, "m", vec![]).expect("call");
+    let _ = outbound.recv().expect("call frame");
+    rt.dispatch_inbound(Envelope::new(Frame::Respond {
+        call_id: handle.call_id(),
+        result: Ok(vec![]),
+    }))
+    .expect("respond");
+    drop(handle);
+    assert!(outbound.try_recv().is_err(), "answered call sent a Cancel");
+}
+
+#[test]
+fn shutdown_rejects_new_work() {
+    let (rt, outbound) = mock();
+    rt.shutdown();
+    assert!(rt.is_shut_down());
+    assert!(matches!(
+        rt.call("p", None, "m", vec![]),
+        Err(IstmoError::RuntimeShutDown)
+    ));
+    assert!(matches!(
+        rt.stream("p", None, "m", vec![], 0),
+        Err(IstmoError::RuntimeShutDown)
+    ));
+    assert!(matches!(
+        rt.create_instance("p", vec![]),
+        Err(IstmoError::RuntimeShutDown)
+    ));
+    assert!(matches!(
+        rt.notify("p", None, "m", vec![]),
+        Err(IstmoError::RuntimeShutDown)
+    ));
+    assert!(outbound.try_recv().is_err());
+}
+
+#[test]
+fn inbound_call_after_shutdown_is_answered_with_an_error() {
+    let (rt, outbound) = mock();
+    rt.shutdown();
+    rt.dispatch_inbound(Envelope::new(Frame::Call {
+        call_id: CallId(9),
+        plugin_id: "p".to_owned(),
+        instance_id: None,
+        method: "m".to_owned(),
+        payload: vec![],
+    }))
+    .expect("dispatch");
+    match outbound.recv().expect("respond").frame {
+        Frame::Respond {
+            call_id,
+            result: Err(_),
+        } => assert_eq!(call_id, CallId(9)),
+        other => panic!("expected an error Respond, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_call_that_cannot_be_sent_leaves_nothing_pending() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    drop(init.outbound);
+    assert!(matches!(
+        rt.call("p", None, "m", vec![]),
+        Err(IstmoError::ChannelClosed)
+    ));
+    // A Respond for the failed call's id finds no registration.
+    let err = rt
+        .dispatch_inbound(Envelope::new(Frame::Respond {
+            call_id: CallId(1),
+            result: Ok(vec![]),
+        }))
+        .expect_err("nothing pending");
+    assert!(matches!(err, IstmoError::UnknownCallId(_)));
+}
+
+#[test]
+fn native_handle_ids_allocated_by_rust_stay_out_of_the_native_range() {
+    let (rt, _outbound) = mock();
+    let first = rt.alloc_native_handle_id();
+    let second = rt.alloc_native_handle_id();
+    assert_eq!(first.get(), NativeHandleId::RUST_ALLOCATED_BASE);
+    assert_eq!(second.get(), first.get() + 1);
+    assert!(first.is_rust_allocated());
+    assert!(!NativeHandleId(1).is_rust_allocated());
+}
+
+#[test]
+fn trailing_bytes_after_an_envelope_are_rejected() {
+    let mut bytes = Envelope::new(Frame::Cancel { call_id: CallId(1) })
+        .to_wire_bytes()
+        .expect("encode");
+    bytes.push(0);
+    assert!(matches!(
+        Envelope::from_wire_bytes(&bytes),
+        Err(IstmoError::Codec(istmo_core::CodecError::TrailingBytes {
+            extra: 1
+        }))
+    ));
 }

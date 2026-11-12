@@ -89,15 +89,43 @@ id_newtype!(
     /// Opaque `u64` referring to a platform-owned object (for example a
     /// Kotlin `Credential`). Released by [`Frame::ReleaseNativeHandle`]
     /// when the corresponding `NativeHandle` is dropped on the Rust side.
+    ///
+    /// # Id space
+    ///
+    /// The Kotlin and Swift runtimes allocate ids counting up from `1`.
+    /// Rust-side hosts allocate through
+    /// [`Runtime::alloc_native_handle_id`](crate::Runtime::alloc_native_handle_id),
+    /// which counts up from [`NativeHandleId::RUST_ALLOCATED_BASE`]
+    /// (the high bit set), so the two ranges never collide and a native
+    /// side receiving a release for an id it never allocated simply
+    /// no-ops it.
     NativeHandleId,
     "native"
 );
+
+impl NativeHandleId {
+    /// First id handed out by
+    /// [`Runtime::alloc_native_handle_id`](crate::Runtime::alloc_native_handle_id).
+    ///
+    /// Native runtimes count up from `1` and would need 2^63 allocations
+    /// to reach it.
+    pub const RUST_ALLOCATED_BASE: u64 = 1 << 63;
+
+    /// `true` when the id came from
+    /// [`Runtime::alloc_native_handle_id`](crate::Runtime::alloc_native_handle_id)
+    /// rather than from a native runtime.
+    #[must_use]
+    pub const fn is_rust_allocated(self) -> bool {
+        self.0 >= Self::RUST_ALLOCATED_BASE
+    }
+}
 
 /// Reason a stream terminated.
 ///
 /// Carried by [`Frame::StreamEnd`] to distinguish clean completion from
 /// caller-initiated cancellation and provider-side failure.
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
+#[non_exhaustive]
 pub enum StreamEndReason {
     /// Producer finished normally.
     Complete,
@@ -171,7 +199,7 @@ impl Envelope {
     ///   if the envelope was encoded against a different version of the
     ///   protocol.
     pub fn from_wire_bytes(bytes: &[u8]) -> Result<Self, crate::error::IstmoError> {
-        let (envelope, _) = crate::codec::decode::<Self>(bytes)?;
+        let envelope = crate::codec::decode_exact::<Self>(bytes)?;
         if envelope.version != PROTOCOL_VERSION {
             return Err(crate::error::IstmoError::ProtocolVersionMismatch {
                 expected: PROTOCOL_VERSION,

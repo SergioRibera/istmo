@@ -20,7 +20,8 @@
 //!   ([`RuntimeInit`], [`RuntimeConfig`]).
 //! - [`dispatch`] — the [`Plugin`] and [`Dispatch`] contracts, the
 //!   [`Outcome`] returned by dispatchers, and [`CancelToken`].
-//! - [`routing`] — pending-call / stream / instance registries.
+//! - [`routing`] — call results and stream messages.
+//! - [`sync`] — poison-recovering [`lock`](sync::lock).
 //! - [`message`] — the [`Message`] trait every wire type implements.
 //! - [`native_handle`] — opaque platform-owned references
 //!   ([`NativeHandle`], [`NativeHandleId`]).
@@ -35,8 +36,6 @@
 
 #![doc(html_root_url = "https://docs.rs/istmo-core")]
 
-mod sync;
-
 pub mod assets;
 pub mod codec;
 pub mod dispatch;
@@ -49,6 +48,7 @@ pub mod path;
 pub mod protocol;
 pub mod routing;
 pub mod runtime;
+pub mod sync;
 pub mod typed_stream;
 
 /// The wincode the wire derives use, re-exported so `#[message]` types
@@ -64,7 +64,7 @@ pub use crate::protocol::{
     CallId, EarlyEventKind, Envelope, Frame, InstanceId, NativeHandleId, PROTOCOL_VERSION,
     StreamEndReason, StreamId,
 };
-pub use crate::routing::{CallResult, InstanceEntry, RoutingTables, StreamMessage};
+pub use crate::routing::{CallResult, StreamMessage};
 pub use crate::runtime::{
     CallHandle, DEFAULT_OUTBOUND_CAPACITY, NativeHandleReleaseHook, PRE_START_EARLY_EVENT_CAPACITY,
     RemoteEnvelopeSink, Runtime, RuntimeConfig, RuntimeInit, StreamHandle,

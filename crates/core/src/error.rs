@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use crate::protocol::{CallId, InstanceId, StreamId};
+use crate::protocol::{CallId, StreamId};
 
 /// Everything the runtime can return through a fallible plugin call.
 ///
@@ -11,6 +11,7 @@ use crate::protocol::{CallId, InstanceId, StreamId};
 /// caller is expected to decode it against the plugin's declared error
 /// type.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum IstmoError {
     /// The process-global [`Runtime`](crate::runtime::Runtime) has not
     /// been initialised.
@@ -18,12 +19,12 @@ pub enum IstmoError {
     /// The process-global runtime is already initialised. Attempts to
     /// start a second runtime in the same process are rejected.
     RuntimeAlreadyStarted,
+    /// [`Runtime::shutdown`](crate::runtime::Runtime::shutdown) ran; the
+    /// runtime no longer accepts new calls, streams, instances or
+    /// notifications.
+    RuntimeShutDown,
     /// The wire codec failed. Wraps the underlying [`CodecError`].
     Codec(CodecError),
-    /// No plugin is registered under this id.
-    UnknownPlugin(String),
-    /// The referenced instance no longer exists or was never created.
-    UnknownInstance(InstanceId),
     /// The response references a call id the routing table doesn't know
     /// about — usually a late response after a cancel.
     UnknownCallId(CallId),
@@ -32,6 +33,9 @@ pub enum IstmoError {
     /// A queue or oneshot channel closed before the value could be
     /// delivered. Typically means the runtime is shutting down.
     ChannelClosed,
+    /// The outbound channel was full, so a frame sent from a path that
+    /// must not block (a drop, a cancel, a handle release) was dropped.
+    OutboundFull,
     /// The peer's [`PROTOCOL_VERSION`](crate::protocol::PROTOCOL_VERSION)
     /// does not match this runtime's.
     ProtocolVersionMismatch {
@@ -53,9 +57,6 @@ pub enum IstmoError {
     /// about. Add the client to the `plugins:` list of
     /// [`runtime!`](../../istmo_macros/macro.runtime.html).
     PluginNotDeclared(&'static str),
-    /// The plugin is declared but no native binding is registered — the
-    /// platform side hasn't installed its dispatcher yet.
-    MissingNativePlugin(&'static str),
 }
 
 impl fmt::Display for IstmoError {
@@ -63,12 +64,12 @@ impl fmt::Display for IstmoError {
         match self {
             Self::RuntimeNotStarted => f.write_str("istmo runtime not started"),
             Self::RuntimeAlreadyStarted => f.write_str("istmo runtime already started"),
+            Self::RuntimeShutDown => f.write_str("istmo runtime shut down"),
             Self::Codec(err) => write!(f, "codec error: {err}"),
-            Self::UnknownPlugin(id) => write!(f, "unknown plugin id: {id}"),
-            Self::UnknownInstance(id) => write!(f, "unknown instance id: {id}"),
             Self::UnknownCallId(id) => write!(f, "unknown call id: {id}"),
             Self::UnknownStreamId(id) => write!(f, "unknown stream id: {id}"),
             Self::ChannelClosed => f.write_str("istmo channel closed unexpectedly"),
+            Self::OutboundFull => f.write_str("istmo outbound channel full; frame dropped"),
             Self::ProtocolVersionMismatch { expected, got } => write!(
                 f,
                 "protocol version mismatch: expected {expected}, got {got}",
@@ -79,9 +80,6 @@ impl fmt::Display for IstmoError {
             }
             Self::PluginNotDeclared(id) => {
                 write!(f, "plugin `{id}` not declared in istmo::runtime!")
-            }
-            Self::MissingNativePlugin(id) => {
-                write!(f, "declared plugin `{id}` has no native binding")
             }
         }
     }
@@ -106,6 +104,7 @@ impl From<CodecError> for IstmoError {
 ///
 /// Wrapped by [`IstmoError::Codec`] when surfaced through the runtime.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum CodecError {
     /// Encoding a value to bytes failed.
     Encode(wincode::WriteError),
