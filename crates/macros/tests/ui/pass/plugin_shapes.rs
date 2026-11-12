@@ -42,6 +42,8 @@ pub trait Shapes {
     async fn accounts(&self) -> Vec<Account<u8>>;
     #[istmo::stream]
     fn ticks(&self, count: u32) -> u32;
+    #[istmo::stream]
+    fn readings(&self) -> Result<u32, Failure>;
 }
 
 #[istmo::message]
@@ -58,6 +60,7 @@ fn main() {
     let rt = istmo::Runtime::mock().runtime;
     let client = ShapesClient::from_runtime(&rt).expect("enforcement is off in mock runtimes");
     let _: Result<istmo::TypedStream<u32>, istmo::IstmoError> = client.ticks(3);
+    let _: Result<istmo::TypedStream<u32, Failure>, istmo::IstmoError> = client.readings();
     let _ = client.opaque();
     let _ = client.sign_in_owned();
     let _ = client.accounts_owned();

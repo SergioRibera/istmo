@@ -107,11 +107,19 @@ pub enum Outcome {
     /// Unary domain failure. Bytes are a wire-encoded plugin-declared
     /// error type.
     DomainError(Vec<u8>),
-    /// Stream successfully opened. Each item read from the receiver is
-    /// forwarded to the caller as a [`Frame::Event`](crate::protocol::Frame::Event);
-    /// dropping the sender end closes the stream cleanly.
-    StreamOpened(flume::Receiver<Vec<u8>>),
+    /// Stream successfully opened. Each `Ok` item read from the receiver
+    /// is forwarded to the caller as a
+    /// [`Frame::Event`](crate::protocol::Frame::Event). An `Err` item
+    /// ends the stream with
+    /// [`StreamEndReason::Error`](crate::protocol::StreamEndReason::Error)
+    /// carrying its bytes, and nothing after it is read; dropping the
+    /// sender end closes the stream cleanly.
+    StreamOpened(flume::Receiver<HostedStreamItem>),
 }
+
+/// One item a hosted stream hands the runtime: a wire-encoded item, or
+/// a wire-encoded domain error that ends the stream.
+pub type HostedStreamItem = Result<Vec<u8>, Vec<u8>>;
 
 impl PartialEq for Outcome {
     fn eq(&self, other: &Self) -> bool {

@@ -213,9 +213,43 @@ pub fn message(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// items on any thread and drops the sender to complete the stream. The
 /// client method returns a `TypedStream<Item>`.
 ///
-/// The item cannot be `Result<T, E>`: hosted streams only end with
-/// `StreamEnd::Complete`, so an error would travel as an ordinary item.
-/// Use a `#[message]` enum item that carries the failure instead.
+/// An item written `Result<T, E>` makes the stream fallible: `Ok(t)`
+/// items travel as events, and the first `Err(e)` ends the stream with
+/// `StreamEnd::Error` carrying `e` (nothing sent after it is read). The
+/// client method then returns a `TypedStream<T, E>`, whose
+/// `StreamItem::Failed(e)` is that error decoded. As for unary methods,
+/// `E` must implement [`std::error::Error`] unless it is `()`.
+///
+/// ```
+/// #[istmo::message]
+/// #[derive(Debug)]
+/// pub struct Lost;
+///
+/// impl std::fmt::Display for Lost {
+///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+///         f.write_str("signal lost")
+///     }
+/// }
+///
+/// impl std::error::Error for Lost {}
+///
+/// #[istmo::plugin(name = "demo.gps")]
+/// pub trait Gps {
+///     #[istmo::stream]
+///     fn fixes(&self) -> Result<u32, Lost>;
+/// }
+///
+/// struct Receiver;
+///
+/// impl Gps for Receiver {
+///     fn fixes(&self) -> flume::Receiver<Result<u32, Lost>> {
+///         let (tx, rx) = flume::unbounded();
+///         let _ = tx.send(Ok(1));
+///         let _ = tx.send(Err(Lost));
+///         rx
+///     }
+/// }
+/// ```
 ///
 /// # Example
 ///

@@ -50,7 +50,7 @@ impl Dispatch for Host {
                 "flood" => {
                     let (tx, rx) = flume::bounded(1);
                     thread::spawn(move || {
-                        while tx.send(vec![0]).is_ok() {}
+                        while tx.send(Ok(vec![0])).is_ok() {}
                         let _ = stopped.send(());
                     });
                     Ok(Outcome::StreamOpened(rx))

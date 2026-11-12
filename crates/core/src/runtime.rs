@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 
 use flume::{Receiver as FlumeReceiver, Sender as FlumeSender, TrySendError, bounded};
 
-use crate::dispatch::{CancelToken, Dispatch, DispatchError, Outcome, Plugin};
+use crate::dispatch::{CancelToken, Dispatch, DispatchError, HostedStreamItem, Outcome, Plugin};
 use crate::early_events::EarlyEventStore;
 use crate::error::IstmoError;
 use crate::main_thread::{InlineMainThread, MainThread};
@@ -1394,14 +1394,14 @@ impl Runtime {
         }
     }
 
-    /// Forward a hosted stream's items until the producer closes it or
-    /// the consumer cancels, then end it.
+    /// Forward a hosted stream's items until the producer closes or fails
+    /// it, or the consumer cancels, then end it.
     fn spawn_stream_pump(
         self: &Arc<Self>,
         origin: Origin,
         call_id: CallId,
         cancel: &CancelToken,
-        receiver: FlumeReceiver<Vec<u8>>,
+        receiver: FlumeReceiver<HostedStreamItem>,
     ) {
         let stream_id = StreamId(call_id.get());
         let runtime = Arc::clone(self);
@@ -1431,10 +1431,10 @@ impl Runtime {
         origin: Origin,
         stream_id: StreamId,
         cancel: &CancelToken,
-        receiver: &FlumeReceiver<Vec<u8>>,
+        receiver: &FlumeReceiver<HostedStreamItem>,
     ) -> StreamEndReason {
         enum Step {
-            Item(Vec<u8>),
+            Item(HostedStreamItem),
             Closed,
             Cancelled,
         }
@@ -1449,11 +1449,12 @@ impl Runtime {
                 return StreamEndReason::Cancelled;
             }
             match step {
-                Step::Item(payload) => {
+                Step::Item(Ok(payload)) => {
                     if !self.emit_event(origin, stream_id, payload, cancel) {
                         return StreamEndReason::Cancelled;
                     }
                 }
+                Step::Item(Err(error)) => return StreamEndReason::Error(error),
                 Step::Closed => return StreamEndReason::Complete,
                 Step::Cancelled => return StreamEndReason::Cancelled,
             }

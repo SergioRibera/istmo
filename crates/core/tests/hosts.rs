@@ -674,7 +674,7 @@ impl Dispatch for StreamHost {
                 "three" => {
                     std::thread::spawn(move || {
                         for i in 0u8..3 {
-                            if tx.send(vec![i]).is_err() {
+                            if tx.send(Ok(vec![i])).is_err() {
                                 return;
                             }
                         }
@@ -682,7 +682,7 @@ impl Dispatch for StreamHost {
                 }
                 "forever" => {
                     std::thread::spawn(move || {
-                        while !cancel.is_cancelled() && tx.send(vec![0]).is_ok() {
+                        while !cancel.is_cancelled() && tx.send(Ok(vec![0])).is_ok() {
                             std::thread::sleep(Duration::from_millis(1));
                         }
                         let _ = stopped.send(());

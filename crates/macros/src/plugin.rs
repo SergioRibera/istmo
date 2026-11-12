@@ -573,14 +573,6 @@ impl MethodSpec {
                     "`#[istmo::owned]` is not supported on stream methods yet",
                 ));
             }
-            if let ReturnShape::Result { .. } = &ret {
-                return Err(syn::Error::new_spanned(
-                    &sig.output,
-                    "`#[istmo::stream]` items cannot be `Result<T, E>`: hosted streams only \
-                     end with `StreamEnd::Complete`, so an error would travel as an item; \
-                     use a `#[message]` enum item that carries the failure",
-                ));
-            }
             MethodKind::Stream
         } else {
             if sig.asyncness.is_none() {
@@ -719,9 +711,7 @@ fn expand_host_arm(root: &Path, spec: &MethodSpec) -> TokenStream {
     };
 
     let body = match (spec.kind, &spec.ret) {
-        (MethodKind::Stream, ret) => {
-            expand_stream_arm_body(root, method_name_str, ret.ok_ty(), &call)
-        }
+        (MethodKind::Stream, ret) => expand_stream_arm_body(root, method_name_str, ret, &call),
         (MethodKind::Unary { .. }, ReturnShape::Result { ok, err }) => {
             let encode_ok = quote_spanned! {ok.span()=> #root::codec::encode(&value) };
             let encode_err = quote_spanned! {err.span()=> #root::codec::encode(&err) };
@@ -760,35 +750,68 @@ fn expand_host_arm(root: &Path, spec: &MethodSpec) -> TokenStream {
 /// Host side of a stream method: a named encoder thread turns the
 /// implementation's typed receiver into the byte receiver the runtime
 /// pumps out as `Event` frames.
+///
+/// A `Result<T, E>` item stream ends at its first `Err`: the encoded
+/// error becomes the stream's `StreamEnd::Error` and the encoder stops
+/// reading. An item that fails to encode ends the stream the same way,
+/// with the encode error as a string.
 fn expand_stream_arm_body(
     root: &Path,
     method_name_str: &LitStr,
-    item_ty: &Type,
+    ret: &ReturnShape,
     call: &TokenStream,
 ) -> TokenStream {
-    let encode = quote_spanned! {item_ty.span()=> #root::codec::encode(&item) };
+    let (item_ty, encode) = match ret {
+        ReturnShape::Plain(ty) => {
+            let encode = quote_spanned! {ty.span()=> #root::codec::encode(&item) };
+            (
+                quote! { #ty },
+                quote! { #encode.map(::core::result::Result::Ok) },
+            )
+        }
+        ReturnShape::Result { ok, err } => {
+            let encode_ok = quote_spanned! {ok.span()=> #root::codec::encode(&value) };
+            let encode_err = quote_spanned! {err.span()=> #root::codec::encode(&err) };
+            (
+                quote! { ::core::result::Result<#ok, #err> },
+                quote! {
+                    match item {
+                        ::core::result::Result::Ok(value) => {
+                            #encode_ok.map(::core::result::Result::Ok)
+                        }
+                        ::core::result::Result::Err(err) => {
+                            #encode_err.map(::core::result::Result::Err)
+                        }
+                    }
+                },
+            )
+        }
+    };
     quote! {
         let __istmo_source: #root::__private::flume::Receiver<#item_ty> = #call;
         let (__istmo_etx, __istmo_erx) =
-            #root::__private::flume::bounded::<::std::vec::Vec<u8>>(#STREAM_ENCODER_CAPACITY);
+            #root::__private::flume::bounded::<#root::HostedStreamItem>(#STREAM_ENCODER_CAPACITY);
         let __istmo_spawned = ::std::thread::Builder::new()
             .name(::std::string::String::from("istmo-stream-enc"))
             .spawn(move || {
                 while let ::core::result::Result::Ok(item) = __istmo_source.recv() {
-                    match #encode {
-                        ::core::result::Result::Ok(bytes) => {
-                            if __istmo_etx.send(bytes).is_err() {
-                                break;
-                            }
-                        }
+                    let chunk: #root::HostedStreamItem = match #encode {
+                        ::core::result::Result::Ok(chunk) => chunk,
                         ::core::result::Result::Err(err) => {
                             #root::__private::tracing::error!(
                                 ?err,
                                 method = #method_name_str,
                                 "hosted stream encode failed",
                             );
-                            break;
+                            let message = ::std::format!("hosted stream encode failed: {err}");
+                            ::core::result::Result::Err(
+                                #root::codec::encode(&message).unwrap_or_default(),
+                            )
                         }
+                    };
+                    let ends = chunk.is_err();
+                    if __istmo_etx.send(chunk).is_err() || ends {
+                        break;
                     }
                 }
             });
@@ -1003,10 +1026,14 @@ fn expand_stream_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> T
     let params = spec.client_params();
     let payload_expr = build_payload_expr(root, spec);
     let item_ty = spec.ret.ok_ty();
+    let stream_ty = spec.ret.err_ty().map_or_else(
+        || quote! { #root::TypedStream<#item_ty> },
+        |err_ty| quote! { #root::TypedStream<#item_ty, #err_ty> },
+    );
     quote! {
         #(#doc_attrs)*
         pub fn #name(&self, #(#params),*) -> ::core::result::Result<
-            #root::TypedStream<#item_ty>,
+            #stream_ty,
             #root::IstmoError,
         > {
             let payload = #payload_expr;

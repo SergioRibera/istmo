@@ -422,3 +422,80 @@ fn qualified_result_path_splits_into_domain_error() {
     let (err, _) = codec::decode::<EchoError>(&bytes).unwrap();
     assert_eq!(err.reason, "boom");
 }
+
+#[istmo::plugin(name = "com.example.readings")]
+pub trait Readings {
+    #[istmo::stream]
+    fn read(&self, good: u32) -> Result<u32, EchoError>;
+}
+
+struct Sensor;
+
+impl Readings for Sensor {
+    fn read(&self, good: u32) -> flume::Receiver<Result<u32, EchoError>> {
+        let (tx, rx) = flume::unbounded();
+        for reading in 0..good {
+            tx.send(Ok(reading)).unwrap();
+        }
+        tx.send(Err(EchoError {
+            reason: "sensor unplugged".to_owned(),
+        }))
+        .unwrap();
+        // Never read: the error ended the stream.
+        tx.send(Ok(99)).unwrap();
+        rx
+    }
+}
+
+fn assert_items_then_failure(stream: &istmo::TypedStream<u32, EchoError>) {
+    for expected in 0..3_u32 {
+        assert_eq!(stream.recv().unwrap(), StreamItem::Event(expected));
+    }
+    assert_eq!(
+        stream.recv().unwrap(),
+        StreamItem::Failed(EchoError {
+            reason: "sensor unplugged".to_owned()
+        })
+    );
+    assert!(stream.recv().is_err(), "nothing follows the error");
+}
+
+#[test]
+fn fallible_hosted_stream_ends_with_its_error_locally() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    rt.register_host(ReadingsHost::new(Sensor));
+
+    let readings = ReadingsClient::from_runtime(&rt).expect("declared");
+    assert_items_then_failure(&readings.read(3).expect("open"));
+    assert!(
+        init.outbound.try_recv().is_err(),
+        "a locally hosted stream stays off the transport"
+    );
+}
+
+#[test]
+fn fallible_hosted_stream_ends_with_its_error_across_runtimes() {
+    let client_init = Runtime::mock();
+    let host_init = Runtime::mock();
+    host_init.runtime.register_host(ReadingsHost::new(Sensor));
+
+    let host = Arc::clone(&host_init.runtime);
+    let to_host = client_init.outbound;
+    thread::spawn(move || {
+        while let Ok(envelope) = to_host.recv() {
+            let bytes = envelope.to_wire_bytes().unwrap();
+            drop(host.inject_wire_envelope(&bytes));
+        }
+    });
+    let client = Arc::clone(&client_init.runtime);
+    let to_client = host_init.outbound;
+    thread::spawn(move || {
+        while let Ok(envelope) = to_client.recv() {
+            drop(client.dispatch_inbound(envelope));
+        }
+    });
+
+    let readings = ReadingsClient::from_runtime(&client_init.runtime).expect("declared");
+    assert_items_then_failure(&readings.read(3).expect("open"));
+}

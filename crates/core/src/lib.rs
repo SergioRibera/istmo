@@ -55,7 +55,9 @@ pub mod typed_stream;
 /// need no direct dependency on it.
 pub use wincode;
 
-pub use crate::dispatch::{CancelToken, Dispatch, DispatchError, DispatchFuture, Outcome, Plugin};
+pub use crate::dispatch::{
+    CancelToken, Dispatch, DispatchError, DispatchFuture, HostedStreamItem, Outcome, Plugin,
+};
 pub use crate::error::{CodecError, IstmoError};
 pub use crate::main_thread::{InlineMainThread, MainThread, MockMainThread, Task};
 pub use crate::message::Message;
