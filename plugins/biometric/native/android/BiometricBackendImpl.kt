@@ -26,6 +26,7 @@ import dev.istmo.runtime.BiometricBackend
 import dev.istmo.runtime.BiometricError
 import dev.istmo.runtime.BiometricKind
 import dev.istmo.runtime.BiometricStatus
+import java.lang.ref.WeakReference
 import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -75,7 +76,7 @@ import kotlinx.coroutines.withContext
  * new generation is minted the first time the invalidation is observed.
  */
 class BiometricBackendImpl(
-    private val activity: FragmentActivity,
+    activity: FragmentActivity,
     private val credentialValiditySeconds: Int = DEFAULT_AUTH_VALIDITY_SECONDS,
 ) : BiometricBackend {
 
@@ -83,11 +84,15 @@ class BiometricBackendImpl(
         require(credentialValiditySeconds > 0) { "credentialValiditySeconds must be positive" }
     }
 
-    private val manager: BiometricManager = BiometricManager.from(activity)
+    // Weak: the registry builds a fresh backend on every activity `onCreate`,
+    // and a backend outliving its activity must not keep it alive.
+    private val activityRef = WeakReference(activity)
+    private val appContext: Context = activity.applicationContext
+    private val manager: BiometricManager = BiometricManager.from(appContext)
     private val vault: SharedPreferences =
-        activity.getSharedPreferences(VAULT_PREFERENCES, Context.MODE_PRIVATE)
+        appContext.getSharedPreferences(VAULT_PREFERENCES, Context.MODE_PRIVATE)
     private val enrollment: SharedPreferences =
-        activity.getSharedPreferences(ENROLLMENT_PREFERENCES, Context.MODE_PRIVATE)
+        appContext.getSharedPreferences(ENROLLMENT_PREFERENCES, Context.MODE_PRIVATE)
     private val keyStore: KeyStore by lazy {
         KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
     }
@@ -128,18 +133,32 @@ class BiometricBackendImpl(
         checkAlias(alias)
         checkPrompt(prompt)
         val mode = KeyMode.of(prompt.policy)
-        val key = withContext(Dispatchers.IO) { createKey(alias, mode) }
-        val cipher = unlockedCipher(mode, prompt) { it.init(Cipher.ENCRYPT_MODE, key) }
-        val sealed = crypt { cipher.doFinal(secret) }
-        vault.edit().putString(alias, StoredSecret(mode, cipher.iv, sealed).encode()).apply()
+        // The new secret gets a key under a fresh alias; the previous key
+        // and ciphertext stay usable until the new one is sealed, so a
+        // cancelled or failed prompt leaves the stored secret intact.
+        val previous = storedSecret(alias)
+        val newKeyAlias = freshKeyAlias(alias)
+        val sealed = try {
+            val key = withContext(Dispatchers.IO) { createKey(newKeyAlias, mode) }
+            val cipher = unlockedCipher(mode, prompt) { it.init(Cipher.ENCRYPT_MODE, key) }
+            StoredSecret(mode, newKeyAlias, cipher.iv, crypt { cipher.doFinal(secret) })
+        } catch (e: Throwable) {
+            // Runs for cancellation too; a Keystore delete does not suspend.
+            deleteKey(newKeyAlias)
+            throw e
+        }
+        withContext(Dispatchers.IO) {
+            // `commit` so the entry is durable before the old key is gone.
+            vault.edit().putString(alias, sealed.encode()).commit()
+            previous?.keyAlias?.takeIf { it != newKeyAlias }?.let(::deleteKey)
+        }
     }
 
     override suspend fun read_secret(alias: String, prompt: AuthPrompt): ByteArray {
         checkAlias(alias)
         checkPrompt(prompt)
-        val stored = vault.getString(alias, null)?.let(StoredSecret::decode)
-            ?: throw BackendException(BiometricError.SecretNotFound)
-        val key = withContext(Dispatchers.IO) { keyStore.getKey(keyAlias(alias), null) as? SecretKey }
+        val stored = storedSecret(alias) ?: throw BackendException(BiometricError.SecretNotFound)
+        val key = withContext(Dispatchers.IO) { keyStore.getKey(stored.keyAlias, null) as? SecretKey }
             ?: invalidated(alias)
         val cipher = try {
             unlockedCipher(stored.mode, prompt) {
@@ -159,7 +178,8 @@ class BiometricBackendImpl(
     override suspend fun has_secret(alias: String): Boolean {
         checkAlias(alias)
         return withContext(Dispatchers.IO) {
-            vault.contains(alias) && keyStore.containsAlias(keyAlias(alias))
+            val stored = runCatching { storedSecret(alias) }.getOrNull()
+            stored != null && keyStore.containsAlias(stored.keyAlias)
         }
     }
 
@@ -187,6 +207,8 @@ class BiometricBackendImpl(
         crypto: BiometricPrompt.CryptoObject?,
     ): BiometricPrompt.AuthenticationResult = promptMutex.withLock {
         withContext(Dispatchers.Main) {
+            val activity = activityRef.get()
+                ?: throw BackendException(BiometricError.Backend("host activity is gone"))
             suspendCancellableCoroutine { cont ->
                 val callback = object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(
@@ -233,7 +255,7 @@ class BiometricBackendImpl(
         // forbidden with it.
         if (allowed and DEVICE_CREDENTIAL == 0) {
             builder.setNegativeButtonText(
-                prompt.cancelLabel ?: activity.getString(android.R.string.cancel),
+                prompt.cancelLabel ?: appContext.getString(android.R.string.cancel),
             )
         }
         return builder.build()
@@ -285,28 +307,60 @@ class BiometricBackendImpl(
         }
     }
 
-    /** `v1:<mode>:<iv>:<ciphertext>` with Base64 fields. */
-    private class StoredSecret(val mode: KeyMode, val iv: ByteArray, val ciphertext: ByteArray) {
+    /**
+     * `v2:<mode>:<key alias>:<iv>:<ciphertext>` with Base64 binary fields.
+     * `v1:<mode>:<iv>:<ciphertext>` entries (written before keys were
+     * rotated per store) use the alias' fixed key, [legacyKeyAlias].
+     */
+    private class StoredSecret(
+        val mode: KeyMode,
+        val keyAlias: String,
+        val iv: ByteArray,
+        val ciphertext: ByteArray,
+    ) {
         fun encode(): String = listOf(
             FORMAT_VERSION,
             mode.name,
+            keyAlias,
             Base64.encodeToString(iv, Base64.NO_WRAP),
             Base64.encodeToString(ciphertext, Base64.NO_WRAP),
         ).joinToString(":")
 
         companion object {
-            fun decode(raw: String): StoredSecret {
+            fun decode(legacyKeyAlias: String, raw: String): StoredSecret {
                 val parts = raw.split(":")
-                if (parts.size != 4 || parts[0] != FORMAT_VERSION) {
-                    throw BackendException(BiometricError.Backend("unrecognised vault entry"))
+                return try {
+                    when {
+                        parts.size == 5 && parts[0] == FORMAT_VERSION -> StoredSecret(
+                            KeyMode.valueOf(parts[1]),
+                            parts[2],
+                            Base64.decode(parts[3], Base64.NO_WRAP),
+                            Base64.decode(parts[4], Base64.NO_WRAP),
+                        )
+                        parts.size == 4 && parts[0] == LEGACY_FORMAT_VERSION -> StoredSecret(
+                            KeyMode.valueOf(parts[1]),
+                            legacyKeyAlias,
+                            Base64.decode(parts[2], Base64.NO_WRAP),
+                            Base64.decode(parts[3], Base64.NO_WRAP),
+                        )
+                        else -> throw BackendException(BiometricError.Backend("unrecognised vault entry"))
+                    }
+                } catch (e: IllegalArgumentException) {
+                    // Unknown key mode or malformed Base64.
+                    throw BackendException(BiometricError.Backend("corrupt vault entry: ${e.message}"))
                 }
-                return StoredSecret(
-                    KeyMode.valueOf(parts[1]),
-                    Base64.decode(parts[2], Base64.NO_WRAP),
-                    Base64.decode(parts[3], Base64.NO_WRAP),
-                )
             }
         }
+    }
+
+    private fun storedSecret(alias: String): StoredSecret? =
+        vault.getString(alias, null)?.let { StoredSecret.decode(keyAlias(alias), it) }
+
+    /** A key alias no previous store of [alias] used. */
+    private fun freshKeyAlias(alias: String): String {
+        val suffix = ByteArray(KEY_ALIAS_SUFFIX_BYTES).also { SecureRandom().nextBytes(it) }
+            .joinToString("") { "%02x".format(it) }
+        return "${keyAlias(alias)}.$suffix"
     }
 
     /**
@@ -385,10 +439,9 @@ class BiometricBackendImpl(
             .generateKey()
     }
 
-    private fun createKey(alias: String, mode: KeyMode): SecretKey {
-        deleteQuietly(alias)
+    private fun createKey(keyAlias: String, mode: KeyMode): SecretKey {
         val spec = KeyGenParameterSpec.Builder(
-            keyAlias(alias),
+            keyAlias,
             KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
         )
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
@@ -426,8 +479,14 @@ class BiometricBackendImpl(
     }
 
     private fun deleteQuietly(alias: String) {
+        val stored = runCatching { storedSecret(alias) }.getOrNull()
         vault.edit().remove(alias).apply()
-        if (keyStore.containsAlias(keyAlias(alias))) keyStore.deleteEntry(keyAlias(alias))
+        stored?.keyAlias?.let(::deleteKey)
+        deleteKey(keyAlias(alias))
+    }
+
+    private fun deleteKey(keyAlias: String) {
+        runCatching { if (keyStore.containsAlias(keyAlias)) keyStore.deleteEntry(keyAlias) }
     }
 
     private inline fun <T> crypt(block: () -> T): T = try {
@@ -447,7 +506,7 @@ class BiometricBackendImpl(
     // --------------------------------------------------------------- helpers
 
     private fun sensorKinds(): List<BiometricKind> {
-        val pm = activity.packageManager
+        val pm = appContext.packageManager
         val kinds = buildList {
             if (pm.hasSystemFeature(PackageManager.FEATURE_FINGERPRINT)) add(BiometricKind.Fingerprint)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -461,7 +520,7 @@ class BiometricBackendImpl(
     }
 
     private fun keyguard(): KeyguardManager =
-        activity.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        appContext.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
 
     private fun authMethod(type: Int): AuthMethod = when (type) {
         BiometricPrompt.AUTHENTICATION_RESULT_TYPE_BIOMETRIC -> AuthMethod.Biometric
@@ -497,7 +556,9 @@ class BiometricBackendImpl(
         private const val KEY_ALIAS_PREFIX = "dev.istmo.biometric."
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val GCM_TAG_BITS = 128
-        private const val FORMAT_VERSION = "v1"
+        private const val FORMAT_VERSION = "v2"
+        private const val LEGACY_FORMAT_VERSION = "v1"
+        private const val KEY_ALIAS_SUFFIX_BYTES = 8
         private const val ENROLLMENT_PREFERENCES = "dev.istmo.biometric.enrollment"
         private const val ENROLLMENT_GENERATION = "generation"
         private const val ENROLLMENT_GENERATION_BYTES = 16
