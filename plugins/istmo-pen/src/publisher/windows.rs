@@ -22,13 +22,14 @@ use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::Pointer::{
     GetPointerPenInfo, GetPointerPenInfoHistory, GetPointerType, POINTER_PEN_INFO,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    PT_PEN, WM_POINTERCAPTURECHANGED, WM_POINTERDOWN, WM_POINTERENTER, WM_POINTERLEAVE,
-    WM_POINTERUP, WM_POINTERUPDATE,
+    GetWindowThreadProcessId, PT_PEN, WM_NCDESTROY, WM_POINTERCAPTURECHANGED, WM_POINTERDOWN,
+    WM_POINTERENTER, WM_POINTERLEAVE, WM_POINTERUP, WM_POINTERUPDATE,
 };
 
 use super::WindowState;
@@ -77,25 +78,28 @@ impl AttachClock {
 
 /// Book-keeping returned from [`attach_hwnd`] and stashed on the
 /// [`WindowState`](super::WindowState) so [`detach_hwnd`] can undo the
-/// subclass installation later.
+/// subclass installation later. The state itself is reachable through
+/// the registry entry; holding it here too would make a cycle.
 #[derive(Debug)]
 pub(super) struct WindowAttachment {
     /// `HWND` stored as an integer: the raw pointer type is not `Send`,
     /// and the attachment lives inside state shared across threads.
     hwnd_id: isize,
-    _state: Arc<WindowState>,
-    _clock: Arc<AttachClock>,
+    /// Registry entry this attachment owns. `HWND` values are recycled
+    /// after a window is destroyed, so entries are matched by this, not
+    /// by handle.
+    generation: u64,
 }
 
 /// Global registry keyed by `HWND` (as `usize`) — the subclass callback
-/// receives our refdata pointer and follows it back to the right
-/// [`WindowState`]. Uses `RwLock` for cheap concurrent reads on the
-/// hot path.
+/// looks the window up here to find the right [`WindowState`]. Uses
+/// `RwLock` for cheap concurrent reads on the hot path.
 type Registry = RwLock<Vec<Entry>>;
 
 #[derive(Debug)]
 struct Entry {
     hwnd_id: usize,
+    generation: u64,
     state: Arc<WindowState>,
     clock: Arc<AttachClock>,
 }
@@ -105,67 +109,100 @@ fn registry() -> &'static Registry {
     REGISTRY.get_or_init(|| RwLock::new(Vec::new()))
 }
 
+fn registry_write() -> std::sync::RwLockWriteGuard<'static, Vec<Entry>> {
+    registry()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Whether the calling thread created `hwnd`. Subclassing (and removing
+/// a subclass) only works from that thread: `SetWindowSubclass` fails
+/// and `RemoveWindowSubclass` does nothing from any other.
+fn on_window_thread(hwnd: HWND) -> bool {
+    // SAFETY: both calls only read the window's / thread's identity; a
+    // stale `hwnd` makes the first return 0, which never matches.
+    unsafe { GetWindowThreadProcessId(hwnd, std::ptr::null_mut()) == GetCurrentThreadId() }
+}
+
+/// Subclass `hwnd` so its pen messages feed `state`.
+///
+/// Must run on the thread that created the window (normally the UI
+/// thread); anything else fails with [`AttachError::WrongThread`].
 pub(super) fn attach_hwnd(
     hwnd: std::num::NonZeroIsize,
     state: Arc<WindowState>,
 ) -> Result<WindowAttachment, AttachError> {
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
+
     let hwnd_ptr: HWND = hwnd.get() as HWND;
-    let clock = Arc::new(AttachClock::new());
+    if !on_window_thread(hwnd_ptr) {
+        return Err(AttachError::WrongThread);
+    }
+    let hwnd_id = hwnd.get().cast_unsigned();
+    let generation = GENERATION.fetch_add(1, Ordering::Relaxed);
+    // A window attached again (under this or another id) feeds only its
+    // latest state.
     {
-        let mut list = match registry().write() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut list = registry_write();
+        list.retain(|e| e.hwnd_id != hwnd_id);
         list.push(Entry {
-            hwnd_id: hwnd.get() as usize,
-            state: Arc::clone(&state),
-            clock: Arc::clone(&clock),
+            hwnd_id,
+            generation,
+            state,
+            clock: Arc::new(AttachClock::new()),
         });
     }
-    // SAFETY: SetWindowSubclass is safe to call from any thread; the
-    // subclass proc is a plain function pointer. Refdata is unused —
-    // we look up state by HWND in the registry to avoid the classic
-    // aliasing hazard of leaking Arc<WindowState> pointers into
-    // Windows-owned memory.
+    // SAFETY: called on the window's own thread (checked above). The
+    // subclass proc is a plain function pointer and refdata is unused —
+    // state is looked up by HWND in the registry instead of leaking an
+    // `Arc<WindowState>` pointer into Windows-owned memory. Installing
+    // the same (proc, id) pair twice only updates refdata.
     let ok = unsafe { SetWindowSubclass(hwnd_ptr, Some(subclass_proc), SUBCLASS_ID, 0) };
     if ok == 0 {
-        let mut list = match registry().write() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        list.retain(|e| e.hwnd_id != hwnd.get() as usize);
+        registry_write().retain(|e| e.generation != generation);
         return Err(AttachError::SetWindowSubclassFailed);
     }
     Ok(WindowAttachment {
         hwnd_id: hwnd.get(),
-        _state: state,
-        _clock: clock,
+        generation,
     })
 }
 
+/// Stop feeding the attachment's state.
+///
+/// The subclass itself can only be removed on the window's thread; from
+/// any other thread it stays installed as a pass-through (no registry
+/// entry) until `WM_NCDESTROY` removes it.
 pub(super) fn detach_hwnd(attachment: WindowAttachment) {
-    let hwnd = attachment.hwnd_id as HWND;
-    let hwnd_id = attachment.hwnd_id as usize;
-    // SAFETY: RemoveWindowSubclass unhooks the callback for the given
-    // (hwnd, proc, id) triple. Safe to call even if the HWND has been
-    // destroyed — the call is a no-op.
-    let _ = unsafe { RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID) };
-    let mut list = match registry().write() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+    let removed = {
+        let mut list = registry_write();
+        let before = list.len();
+        list.retain(|e| e.generation != attachment.generation);
+        list.len() != before
     };
-    list.retain(|e| e.hwnd_id != hwnd_id);
+    let hwnd = attachment.hwnd_id as HWND;
+    // An entry `WM_NCDESTROY` already dropped belongs to a destroyed
+    // window whose handle may since name another one.
+    if removed && on_window_thread(hwnd) {
+        // SAFETY: on the window's thread; unhooks our (proc, id) pair.
+        let _ = unsafe { RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID) };
+    }
 }
 
 #[derive(Debug)]
 pub(super) enum AttachError {
     SetWindowSubclassFailed,
+    /// `register_window` ran on a thread that did not create the window.
+    WrongThread,
 }
 
 impl std::fmt::Display for AttachError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SetWindowSubclassFailed => f.write_str("SetWindowSubclass returned FALSE"),
+            Self::WrongThread => f.write_str(
+                "windows must be registered from the thread that created them (the UI thread)",
+            ),
         }
     }
 }
@@ -180,8 +217,13 @@ unsafe extern "system" fn subclass_proc(
     _uid_subclass: usize,
     _refdata: usize,
 ) -> LRESULT {
-    let entry = lookup_entry(hwnd as usize);
-    if let Some(entry) = entry {
+    if msg == WM_NCDESTROY {
+        // Last message the window gets: drop the hook and its entry so a
+        // later window reusing this handle starts clean.
+        registry_write().retain(|e| e.hwnd_id != hwnd as usize);
+        // SAFETY: the subclass proc runs on the window's thread.
+        let _ = unsafe { RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID) };
+    } else if let Some(entry) = lookup_entry(hwnd as usize) {
         let pointer_id = get_pointer_id_from_wparam(wparam);
         if is_pointer_message(msg) && is_pen_pointer(pointer_id) {
             handle_pen_message(hwnd, msg, pointer_id, &entry);
@@ -193,12 +235,12 @@ unsafe extern "system" fn subclass_proc(
 }
 
 fn lookup_entry(hwnd_id: usize) -> Option<Entry> {
-    let list = match registry().read() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
+    let list = registry()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     list.iter().find(|e| e.hwnd_id == hwnd_id).map(|e| Entry {
         hwnd_id: e.hwnd_id,
+        generation: e.generation,
         state: Arc::clone(&e.state),
         clock: Arc::clone(&e.clock),
     })
