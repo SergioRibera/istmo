@@ -8,10 +8,14 @@
 
 use std::sync::Arc;
 
-use flume::Receiver;
 use istmo_core::early_events::PreMainQueue;
-use istmo_core::{IstmoError, Plugin, Runtime, codec};
+use istmo_core::{IstmoError, Plugin, Runtime};
 use istmo_macros::message;
+
+use crate::early::EarlyStream;
+
+/// Plugin id of the deep-link queue.
+pub const DEEPLINKS_PLUGIN_ID: &str = "istmo.deeplinks";
 
 /// Early-event channel name deep links are published on.
 pub const DEEPLINKS_CHANNEL: &str = "istmo.deeplinks";
@@ -19,33 +23,57 @@ pub const DEEPLINKS_CHANNEL: &str = "istmo.deeplinks";
 /// Default number of pre-subscriber links retained by the queue.
 pub const DEFAULT_DEEPLINKS_CAPACITY: usize = 16;
 
+/// One URL the OS asked the app to open.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepLink {
+    /// The URL as received.
     pub uri: String,
+    /// Where it came from (referrer app, notification, …) when known.
     pub source: Option<String>,
+    /// Receive time in Unix-epoch milliseconds, when the platform
+    /// stamps it.
     pub received_at_ms: Option<u64>,
 }
 
+/// Reader for the deep-link queue.
 #[derive(Debug, Clone)]
 pub struct DeepLinks {
     queue: Arc<PreMainQueue>,
 }
 
 impl Plugin for DeepLinks {
-    const PLUGIN_ID: &'static str = "istmo.deeplinks";
+    const PLUGIN_ID: &'static str = DEEPLINKS_PLUGIN_ID;
 }
 
 impl DeepLinks {
+    /// Client bound to the process-wide runtime.
+    ///
+    /// # Errors
+    ///
+    /// Fails when no global runtime is installed or the plugin was not
+    /// declared.
     pub fn acquire() -> Result<Self, IstmoError> {
         let rt = Runtime::global()?;
         Self::from_runtime(&rt)
     }
 
+    /// Client bound to `rt` with the default queue capacity.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::PluginNotDeclared`] when enforcement is on and the
+    /// plugin was not declared.
     pub fn from_runtime(rt: &Arc<Runtime>) -> Result<Self, IstmoError> {
         Self::from_runtime_with_capacity(rt, DEFAULT_DEEPLINKS_CAPACITY)
     }
 
+    /// Client bound to `rt`, retaining up to `capacity` links published
+    /// before the first subscriber.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`from_runtime`](Self::from_runtime).
     pub fn from_runtime_with_capacity(
         rt: &Arc<Runtime>,
         capacity: usize,
@@ -56,41 +84,12 @@ impl DeepLinks {
         })
     }
 
+    /// Subscribe: the first subscriber drains the links buffered so far.
     #[must_use]
     pub fn stream(&self) -> DeepLinkStream {
-        DeepLinkStream {
-            rx: self.queue.subscribe(),
-        }
+        EarlyStream::new(self.queue.subscribe())
     }
 }
 
-#[derive(Debug)]
-pub struct DeepLinkStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl DeepLinkStream {
-    pub fn recv(&self) -> Result<DeepLink, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<DeepLink, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<DeepLink, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode(&b))
-    }
-}
-
-fn decode(bytes: &[u8]) -> Result<DeepLink, IstmoError> {
-    let (link, _) = codec::decode::<DeepLink>(bytes)?;
-    Ok(link)
-}
+/// Deep links as they arrive.
+pub type DeepLinkStream = EarlyStream<DeepLink>;

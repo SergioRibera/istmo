@@ -7,21 +7,31 @@
 //!   `batteryMonitoringEnabled = true` (iOS); `IOPowerSources` on
 //!   macOS; `ProcessInfo.isLowPowerModeEnabled` +
 //!   `ProcessInfo.thermalState`.
-//! - Linux: UPower D-Bus `org.freedesktop.UPower.Device`.
+//! - Linux: `UPower` D-Bus `org.freedesktop.UPower.Device`.
 //! - Windows: `GetSystemPowerStatus`.
 //! - Web: `navigator.getBattery()` (deprecated, best-effort).
 //!
 //! No special permissions are required on any platform.
 
-use std::sync::Arc;
-
-use flume::Receiver;
-use istmo_core::early_events::LatestValueSlot;
-use istmo_core::{IstmoError, Plugin, Runtime, codec};
 use istmo_macros::message;
 
+use crate::early::{EarlyStream, LatestClient, LatestValue};
+
+/// Plugin id of the battery state stream.
 pub const BATTERY_STATE_PLUGIN_ID: &str = "istmo.battery_state";
+/// Early-event channel the battery snapshot is published on.
 pub const BATTERY_STATE_CHANNEL: &str = "istmo.battery_state";
+
+impl LatestValue for BatteryState {
+    const PLUGIN_ID: &'static str = BATTERY_STATE_PLUGIN_ID;
+    const CHANNEL: &'static str = BATTERY_STATE_CHANNEL;
+}
+
+/// Reader for the battery snapshot the platform publishes.
+pub type BatteryStateClient = LatestClient<BatteryState>;
+
+/// Battery snapshots as they are published.
+pub type BatteryStateStream = EarlyStream<BatteryState>;
 
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq)]
@@ -71,69 +81,4 @@ pub enum ThermalState {
     Fair,
     Serious,
     Critical,
-}
-
-#[derive(Debug, Clone)]
-pub struct BatteryStateClient {
-    slot: Arc<LatestValueSlot>,
-}
-
-impl Plugin for BatteryStateClient {
-    const PLUGIN_ID: &'static str = BATTERY_STATE_PLUGIN_ID;
-}
-
-impl BatteryStateClient {
-    pub fn acquire() -> Result<Self, IstmoError> {
-        let rt = Runtime::global()?;
-        Self::from_runtime(&rt)
-    }
-
-    pub fn from_runtime(rt: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        rt.check_declared(Self::PLUGIN_ID)?;
-        Ok(Self {
-            slot: rt.early_events().latest_slot(BATTERY_STATE_CHANNEL),
-        })
-    }
-
-    pub fn current(&self) -> Result<Option<BatteryState>, IstmoError> {
-        self.slot.peek().map_or(Ok(None), |b| decode(&b).map(Some))
-    }
-
-    #[must_use]
-    pub fn updates(&self) -> BatteryStateStream {
-        BatteryStateStream {
-            rx: self.slot.subscribe(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct BatteryStateStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl BatteryStateStream {
-    pub fn recv(&self) -> Result<BatteryState, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<BatteryState, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<BatteryState, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode(&b))
-    }
-}
-
-fn decode(bytes: &[u8]) -> Result<BatteryState, IstmoError> {
-    let (v, _) = codec::decode::<BatteryState>(bytes)?;
-    Ok(v)
 }

@@ -18,11 +18,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use flume::Receiver;
 use istmo_core::early_events::PreMainQueue;
 use istmo_core::{IstmoError, Plugin, Runtime, codec};
 use istmo_macros::message;
 
+use crate::early::EarlyStream;
+
+/// Plugin id of the documents queue.
 pub const DOCUMENTS_PLUGIN_ID: &str = "istmo.documents";
 
 /// Early-event channel documents are published on.
@@ -145,19 +147,17 @@ impl Documents {
         })
     }
 
+    /// Documents to open; the first subscriber drains those buffered so
+    /// far.
     #[must_use]
     pub fn stream(&self) -> DocumentStream {
-        DocumentStream {
-            rx: self.queue.subscribe(),
-        }
+        EarlyStream::new(self.queue.subscribe())
     }
 
     /// Launches that forwarded no document; raise or focus a window.
     #[must_use]
     pub fn activations(&self) -> ActivationStream {
-        ActivationStream {
-            rx: self.activations.subscribe(),
-        }
+        EarlyStream::new(self.activations.subscribe())
     }
 
     /// Publish a document from Rust (desktop publisher, tests). Native
@@ -186,64 +186,8 @@ fn queue(rt: &Runtime) -> Arc<PreMainQueue> {
         .queue(DOCUMENTS_CHANNEL, DEFAULT_DOCUMENTS_CAPACITY)
 }
 
-#[derive(Debug)]
-pub struct DocumentStream {
-    rx: Receiver<Vec<u8>>,
-}
+/// Documents as they arrive.
+pub type DocumentStream = EarlyStream<OpenedDocument>;
 
-impl DocumentStream {
-    pub fn recv(&self) -> Result<OpenedDocument, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<OpenedDocument, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<OpenedDocument, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode(&b))
-    }
-}
-
-fn decode(bytes: &[u8]) -> Result<OpenedDocument, IstmoError> {
-    let (document, _) = codec::decode::<OpenedDocument>(bytes)?;
-    Ok(document)
-}
-
-#[derive(Debug)]
-pub struct ActivationStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl ActivationStream {
-    pub fn recv(&self) -> Result<InstanceActivation, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode_activation(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<InstanceActivation, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode_activation(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<InstanceActivation, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode_activation(&b))
-    }
-}
-
-fn decode_activation(bytes: &[u8]) -> Result<InstanceActivation, IstmoError> {
-    let (activation, _) = codec::decode::<InstanceActivation>(bytes)?;
-    Ok(activation)
-}
+/// Activations as they arrive.
+pub type ActivationStream = EarlyStream<InstanceActivation>;

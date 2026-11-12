@@ -64,7 +64,7 @@ fn late_subscriber_receives_retained_locale_first() {
     let plugin = SystemInfo::from_runtime(&rt).expect("declared");
     assert_eq!(plugin.current_locale().unwrap(), Some(sample_locale()));
 
-    let stream = plugin.locale_updates();
+    let stream = plugin.locale_stream();
     assert_eq!(stream.recv().unwrap(), sample_locale());
 }
 
@@ -73,7 +73,7 @@ fn timezone_stream_delivers_updates() {
     let init = Runtime::mock();
     let rt = init.runtime;
     let plugin = SystemInfo::from_runtime(&rt).expect("declared");
-    let stream = plugin.timezone_updates();
+    let stream = plugin.timezone_stream();
 
     publish(&rt, SYSTEM_INFO_TIMEZONE_CHANNEL, &sample_timezone());
     assert_eq!(stream.recv().unwrap(), sample_timezone());
@@ -91,7 +91,7 @@ fn formats_stream_delivers_updates() {
     let init = Runtime::mock();
     let rt = init.runtime;
     let plugin = SystemInfo::from_runtime(&rt).expect("declared");
-    let stream = plugin.formats_updates();
+    let stream = plugin.formats_stream();
 
     publish(&rt, SYSTEM_INFO_FORMATS_CHANNEL, &sample_formats());
     assert_eq!(stream.recv().unwrap(), sample_formats());
@@ -110,9 +110,9 @@ fn now_utc_millis_is_positive_and_recent() {
 fn try_recv_returns_none_when_empty() {
     let init = Runtime::mock();
     let plugin = SystemInfo::from_runtime(&init.runtime).expect("declared");
-    assert!(plugin.locale_updates().try_recv().is_none());
-    assert!(plugin.timezone_updates().try_recv().is_none());
-    assert!(plugin.formats_updates().try_recv().is_none());
+    assert!(plugin.locale_stream().try_recv().is_none());
+    assert!(plugin.timezone_stream().try_recv().is_none());
+    assert!(plugin.formats_stream().try_recv().is_none());
 }
 
 #[test]

@@ -4,7 +4,7 @@ use istmo_plugins::{
     ThermalState,
 };
 
-fn sample() -> BatteryState {
+const fn sample() -> BatteryState {
     BatteryState {
         level: Some(0.72),
         charging: ChargingState::Discharging,
@@ -31,7 +31,7 @@ fn stream_delivers_charge_transition() {
     let init = Runtime::mock();
     let rt = init.runtime;
     let plugin = BatteryStateClient::from_runtime(&rt).expect("declared");
-    let stream = plugin.updates();
+    let stream = plugin.stream();
 
     publish(&rt, &sample());
     assert_eq!(stream.recv().unwrap(), sample());

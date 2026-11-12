@@ -1,7 +1,7 @@
 use istmo_core::{Runtime, codec};
 use istmo_plugins::{LinkKind, NETWORK_STATE_CHANNEL, NetworkState, NetworkStateClient};
 
-fn sample() -> NetworkState {
+const fn sample() -> NetworkState {
     NetworkState {
         online: true,
         link: LinkKind::Wifi,
@@ -30,7 +30,7 @@ fn late_subscriber_sees_retained() {
     publish(&rt, &sample());
     let plugin = NetworkStateClient::from_runtime(&rt).expect("declared");
     assert_eq!(plugin.current().unwrap(), Some(sample()));
-    assert_eq!(plugin.updates().recv().unwrap(), sample());
+    assert_eq!(plugin.stream().recv().unwrap(), sample());
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn updates_stream_delivers_transitions() {
     let init = Runtime::mock();
     let rt = init.runtime;
     let plugin = NetworkStateClient::from_runtime(&rt).expect("declared");
-    let stream = plugin.updates();
+    let stream = plugin.stream();
 
     publish(&rt, &sample());
     assert_eq!(stream.recv().unwrap(), sample());

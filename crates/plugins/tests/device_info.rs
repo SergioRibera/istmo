@@ -61,7 +61,7 @@ fn updates_stream_delivers() {
     let init = Runtime::mock();
     let rt = init.runtime;
     let plugin = DeviceInfoClient::from_runtime(&rt).expect("declared");
-    let stream = plugin.updates();
+    let stream = plugin.stream();
     publish(&rt, &sample());
     assert_eq!(stream.recv().unwrap(), sample());
 }

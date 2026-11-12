@@ -1,4 +1,5 @@
-//! Pure-Rust desktop sampler for [`super::storage_info::StorageInfoClient`].
+//! Pure-Rust desktop sampler for
+//! [`StorageInfoClient`](super::storage_info::StorageInfoClient).
 //!
 //! Samples the free + total bytes of the volume holding the current
 //! working directory. Linux / macOS use `libc::statvfs` so the struct
@@ -8,47 +9,20 @@
 //! — the semantic (removable SD card / USB stick) does not have a
 //! portable equivalent and is better reported by a per-app observer.
 //!
-//! Idempotent for the current working directory: call [`tick`] on
-//! startup and on low-storage warnings or app resume.
+//! Call [`StorageInfoPublisher::tick`] on startup and on low-storage
+//! warnings or app resume; it publishes only when the numbers change.
 
-use std::sync::{Arc, Weak};
+use super::storage_info::StorageInfo;
+use crate::early::LatestPublisher;
 
-use istmo_core::{IstmoError, Runtime, codec};
+/// Publishes the free and total space of the working directory volume.
+pub type StorageInfoPublisher = LatestPublisher<StorageInfo>;
 
-use super::storage_info::{STORAGE_INFO_CHANNEL, STORAGE_INFO_PLUGIN_ID, StorageInfo};
-
-#[derive(Debug)]
-pub struct StorageInfoPublisher {
-    runtime: Weak<Runtime>,
-    last: Option<StorageInfo>,
-}
-
-impl StorageInfoPublisher {
-    pub fn install(runtime: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        runtime.check_declared(STORAGE_INFO_PLUGIN_ID)?;
-        Ok(Self {
-            runtime: Arc::downgrade(runtime),
-            last: None,
-        })
-    }
-
+impl LatestPublisher<StorageInfo> {
     /// Sample the primary volume and publish if it changed.
     pub fn tick(&mut self) {
-        let Some(runtime) = self.runtime.upgrade() else {
-            return;
-        };
-        let Some(sample) = sample() else {
-            return;
-        };
-        if self.last.as_ref() == Some(&sample) {
-            return;
-        }
-        match codec::encode(&sample) {
-            Ok(bytes) => {
-                runtime.publish_early_latest(STORAGE_INFO_CHANNEL, bytes);
-                self.last = Some(sample);
-            }
-            Err(err) => tracing::warn!(target = "istmo.storage_info", ?err, "encode failed"),
+        if let Some(sample) = sample() {
+            self.publish_if_changed(sample);
         }
     }
 }

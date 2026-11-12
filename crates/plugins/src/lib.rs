@@ -1,27 +1,46 @@
 //! First-party plugin surfaces bundled with [`istmo`](https://docs.rs/istmo).
 //!
-//! Each submodule exposes a plugin trait, its generated client, and any
-//! supporting message / config types. All plugins here are wire-only:
-//! the Rust side ships the trait, and the platform side provides the
-//! implementation.
+//! Plugins come in two shapes:
+//!
+//! - **Calls** — an `#[istmo::plugin]` trait with its generated client and
+//!   host. The platform side implements the trait; Rust calls it.
+//! - **Early-event streams** — the platform (or a Rust publisher) pushes
+//!   snapshots or events onto an early-event channel and Rust reads them
+//!   through [`LatestClient`] / [`EarlyStream`]. Desktop targets ship
+//!   pure-Rust publishers (`*Publisher`) for most of these.
 //!
 //! # Modules
 //!
-//! - [`lifecycle`] — app foreground / background / terminated events
-//!   published as an early-event stream.
-//! - [`deeplinks`] — inbound URL routing, including cold-start intents
-//!   buffered as an early-event queue.
+//! Calls:
+//!
 //! - [`permissions`] — request and query runtime permissions.
 //! - [`notifications`] — local user notifications.
 //! - [`activity_results`] — Android `startActivityForResult` /
 //!   `ActivityResultLauncher` equivalent.
-//! - [`safe_area`] — safe-area insets published by the host UI layer.
-//! - [`system_info`] — locale, time zone, formatting preferences and
-//!   the device wall clock.
-//! - [`admob`] — Google AdMob banner / interstitial / rewarded ads.
+//! - [`admob`] — Google `AdMob` banner / interstitial / rewarded ads, plus
+//!   the [`BannerSlot`] driver.
 //! - [`service`] — long-running background service control channel.
 //! - [`worker`] — one-shot scheduled task hooks.
 //! - [`task_scheduler`] — enqueue and cancel platform-scheduled tasks.
+//!
+//! Early-event streams:
+//!
+//! - [`lifecycle`] — app foreground / background / terminated events.
+//! - [`deeplinks`] — inbound URL routing, including cold-start intents
+//!   buffered as a queue.
+//! - [`documents`] — files the OS asks the app to open, plus the desktop
+//!   single-instance forwarding in `documents_publisher`.
+//! - [`safe_area`] — safe-area insets published by the host UI layer.
+//! - [`system_info`] — locale, time zone, formatting preferences, uptime
+//!   and the device wall clock.
+//! - [`device_info`] — model, OS, CPU, RAM and screen.
+//! - [`capabilities`] — hardware feature flags.
+//! - [`battery_state`] — charge level, charging and thermal state.
+//! - [`network_state`] — reachability and link kind.
+//! - [`storage_info`] — free and total space.
+//! - [`theme_preference`] — light/dark and accessibility preferences.
+//!
+//! [`early`] holds the shared client, stream and publisher types.
 
 #![doc(html_root_url = "https://docs.rs/istmo-plugins")]
 
@@ -38,6 +57,7 @@ pub mod device_info;
 pub mod documents;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod documents_publisher;
+pub mod early;
 pub mod lifecycle;
 pub mod network_state;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -72,29 +92,24 @@ pub use crate::battery_state::{
     BATTERY_STATE_CHANNEL, BATTERY_STATE_PLUGIN_ID, BatteryState, BatteryStateClient,
     BatteryStateStream, ChargingState, PowerSource, ThermalState,
 };
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::battery_state_publisher::BatteryStatePublisher;
 pub use crate::capabilities::{
     CAPABILITIES_CHANNEL, CAPABILITIES_PLUGIN_ID, Capabilities, CapabilitiesClient,
     CapabilitiesStream,
 };
-pub use crate::deeplinks::{DEEPLINKS_CHANNEL, DeepLink, DeepLinkStream, DeepLinks};
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::capabilities_publisher::CapabilitiesPublisher;
+pub use crate::deeplinks::{
+    DEEPLINKS_CHANNEL, DEEPLINKS_PLUGIN_ID, DEFAULT_DEEPLINKS_CAPACITY, DeepLink, DeepLinkStream,
+    DeepLinks,
+};
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::device_info::DeviceInfoPublisher;
 pub use crate::device_info::{
     DEVICE_INFO_CHANNEL, DEVICE_INFO_PLUGIN_ID, DeviceInfo, DeviceInfoClient, DeviceInfoStream,
     FormFactor, ScreenInfo, rust_fallback as device_info_rust_fallback,
 };
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub use crate::battery_state_publisher::BatteryStatePublisher;
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub use crate::capabilities_publisher::CapabilitiesPublisher;
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub use crate::device_info::DeviceInfoPublisher;
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub use crate::network_state_publisher::NetworkStatePublisher;
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub use crate::storage_info_publisher::StorageInfoPublisher;
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub use crate::system_info::SystemInfoPublisher;
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub use crate::theme_preference_publisher::ThemePreferencePublisher;
 pub use crate::documents::{
     ActivationStream, DOCUMENTS_ACTIVATION_CHANNEL, DOCUMENTS_CHANNEL, DOCUMENTS_PLUGIN_ID,
     DocumentLocation, DocumentOrigin, DocumentStream, Documents, InstanceActivation,
@@ -104,11 +119,16 @@ pub use crate::documents::{
 pub use crate::documents_publisher::{
     DocumentsError, DocumentsPublisher, InstanceKey, Startup, instance_key_from_build,
 };
-pub use crate::lifecycle::{AppLifecycle, LIFECYCLE_CHANNEL, LifecycleState, LifecycleStream};
+pub use crate::early::{EarlyStream, LatestClient, LatestPublisher, LatestValue};
+pub use crate::lifecycle::{
+    AppLifecycle, LIFECYCLE_CHANNEL, LIFECYCLE_PLUGIN_ID, LifecycleState, LifecycleStream,
+};
 pub use crate::network_state::{
     LinkKind, NETWORK_STATE_CHANNEL, NETWORK_STATE_PLUGIN_ID, NetworkState, NetworkStateClient,
     NetworkStateStream,
 };
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::network_state_publisher::NetworkStatePublisher;
 pub use crate::notifications::{
     NOTIFICATIONS_PLUGIN_ID, NotificationError, NotificationHandle, NotificationImportance,
     NotificationRequest, Notifications, NotificationsClient, NotificationsHost,
@@ -118,7 +138,7 @@ pub use crate::permissions::{
     PermissionsHost,
 };
 pub use crate::safe_area::{
-    EdgeInsets, SAFE_AREA_CHANNEL, SafeArea, SafeAreaInsets, SafeAreaStream,
+    EdgeInsets, SAFE_AREA_CHANNEL, SAFE_AREA_PLUGIN_ID, SafeArea, SafeAreaInsets, SafeAreaStream,
 };
 pub use crate::service::{
     NotificationSpec, SERVICE_CONTROL_PLUGIN_ID, ServiceContext, ServiceControl,
@@ -129,6 +149,10 @@ pub use crate::storage_info::{
     ExternalMedium, ExternalStorage, STORAGE_INFO_CHANNEL, STORAGE_INFO_PLUGIN_ID, StorageInfo,
     StorageInfoClient, StorageInfoStream,
 };
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::storage_info_publisher::StorageInfoPublisher;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::system_info::SystemInfoPublisher;
 pub use crate::system_info::{
     CalendarSystem, Formats, FormatsStream, LayoutDirection, Locale, LocaleStream,
     MeasurementSystem, SYSTEM_INFO_FORMATS_CHANNEL, SYSTEM_INFO_LOCALE_CHANNEL,
@@ -143,4 +167,6 @@ pub use crate::theme_preference::{
     Color, ColorScheme, THEME_PREFERENCE_CHANNEL, THEME_PREFERENCE_PLUGIN_ID, ThemePreference,
     ThemePreferenceClient, ThemePreferenceStream,
 };
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::theme_preference_publisher::ThemePreferencePublisher;
 pub use crate::worker::{Constraints, NetworkKind, TaskOutcome, WorkerContext};

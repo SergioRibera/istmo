@@ -1,50 +1,25 @@
 //! Pure-Rust desktop sampler for
-//! [`super::capabilities::CapabilitiesClient`].
+//! [`CapabilitiesClient`](super::capabilities::CapabilitiesClient).
 //!
 //! Capability probing on desktop is uneven: Linux inspects `/sys` +
 //! `/dev` entries, Windows probes services via Registry/APIs, macOS
-//! would need IOKit (heavier dep). This sampler ships what the
+//! would need `IOKit` (heavier dep). This sampler ships what the
 //! stdlib + minimal FFI can resolve; everything else stays `false`
 //! and the per-app observer / native bridge covers higher-fidelity
 //! probes.
 
-use std::sync::{Arc, Weak};
+use super::capabilities::Capabilities;
+use crate::early::LatestPublisher;
 
-use istmo_core::{IstmoError, Runtime, codec};
+/// Publishes the capability flags the host can detect.
+pub type CapabilitiesPublisher = LatestPublisher<Capabilities>;
 
-use super::capabilities::{CAPABILITIES_CHANNEL, CAPABILITIES_PLUGIN_ID, Capabilities};
-
-#[derive(Debug)]
-pub struct CapabilitiesPublisher {
-    runtime: Weak<Runtime>,
-    emitted: bool,
-}
-
-impl CapabilitiesPublisher {
-    pub fn install(runtime: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        runtime.check_declared(CAPABILITIES_PLUGIN_ID)?;
-        Ok(Self {
-            runtime: Arc::downgrade(runtime),
-            emitted: false,
-        })
-    }
-
+impl LatestPublisher<Capabilities> {
     /// Capability flags rarely change at runtime — publish once at
-    /// startup. Subsequent calls are no-ops.
+    /// startup. Calls after the first successful publish are no-ops.
     pub fn publish(&mut self) {
-        if self.emitted {
-            return;
-        }
-        let Some(runtime) = self.runtime.upgrade() else {
-            return;
-        };
-        let caps = sample();
-        match codec::encode(&caps) {
-            Ok(bytes) => {
-                runtime.publish_early_latest(CAPABILITIES_CHANNEL, bytes);
-                self.emitted = true;
-            }
-            Err(err) => tracing::warn!(target = "istmo.capabilities", ?err, "encode failed"),
+        if !self.has_published() {
+            self.publish_if_changed(sample());
         }
     }
 }

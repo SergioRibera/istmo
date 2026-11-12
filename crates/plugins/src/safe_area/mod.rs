@@ -3,9 +3,11 @@
 //! Delivered as an early-event stream so subscribers attaching after
 //! the first insets update see the current value immediately.
 //!
-//! A `SafeAreaPublisher` (behind the `winit-publisher` feature) is
-//! provided for winit-based desktops that want to synthesise insets
-//! from window insets.
+//! [`SafeAreaPublisher`] (behind the `winit-publisher` feature) lets a
+//! Rust-driven UI publish the insets itself: on iOS it reads the key
+//! window of the active scene, elsewhere it publishes nothing and the
+//! host (Android's window-insets listener, a desktop shell) is expected
+//! to publish instead.
 
 #[cfg(feature = "winit-publisher")]
 pub mod publisher;
@@ -13,25 +15,33 @@ pub mod publisher;
 #[cfg(feature = "winit-publisher")]
 pub use publisher::SafeAreaPublisher;
 
-use std::sync::Arc;
-
-use flume::Receiver;
-use istmo_core::early_events::LatestValueSlot;
-use istmo_core::{IstmoError, Plugin, Runtime, codec};
+use istmo_core::IstmoError;
 use istmo_macros::message;
 
+use crate::early::{EarlyStream, LatestClient, LatestValue};
+
+/// Plugin id of the safe-area stream.
+pub const SAFE_AREA_PLUGIN_ID: &str = "istmo.safe_area";
+
+/// Early-event channel the insets are published on.
 pub const SAFE_AREA_CHANNEL: &str = "istmo.safe_area";
 
+/// Distances from each window edge, in logical points.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EdgeInsets {
+    /// Top edge.
     pub top: f32,
+    /// Right edge.
     pub right: f32,
+    /// Bottom edge.
     pub bottom: f32,
+    /// Left edge.
     pub left: f32,
 }
 
 impl EdgeInsets {
+    /// No inset on any edge.
     pub const ZERO: Self = Self {
         top: 0.0,
         right: 0.0,
@@ -39,6 +49,7 @@ impl EdgeInsets {
         left: 0.0,
     };
 
+    /// Edge-wise maximum of `self` and `other`.
     #[must_use]
     pub const fn max(self, other: Self) -> Self {
         Self {
@@ -49,33 +60,40 @@ impl EdgeInsets {
         }
     }
 
+    /// Left plus right.
     #[must_use]
     pub fn horizontal(self) -> f32 {
         self.left + self.right
     }
 
+    /// Top plus bottom.
     #[must_use]
     pub fn vertical(self) -> f32 {
         self.top + self.bottom
     }
 }
 
+/// Insets of everything that can cover the window.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SafeAreaInsets {
+    /// Status and navigation bars.
     pub system_bars: EdgeInsets,
-
+    /// On-screen keyboard.
     pub ime: EdgeInsets,
-
+    /// Notches and camera cutouts.
     pub display_cutout: EdgeInsets,
 }
 
 impl SafeAreaInsets {
+    /// Padding that keeps content clear of bars and cutouts.
     #[must_use]
     pub const fn padding(self) -> EdgeInsets {
         self.system_bars.max(self.display_cutout)
     }
 
+    /// [`padding`](Self::padding), with the bottom also clear of the
+    /// keyboard.
     #[must_use]
     pub const fn view_padding(self) -> EdgeInsets {
         let mut base = self.padding();
@@ -84,78 +102,26 @@ impl SafeAreaInsets {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SafeArea {
-    slot: Arc<LatestValueSlot>,
+impl LatestValue for SafeAreaInsets {
+    const PLUGIN_ID: &'static str = SAFE_AREA_PLUGIN_ID;
+    const CHANNEL: &'static str = SAFE_AREA_CHANNEL;
 }
 
-impl Plugin for SafeArea {
-    const PLUGIN_ID: &'static str = "istmo.safe_area";
-}
+/// Reader for the insets the host publishes.
+pub type SafeArea = LatestClient<SafeAreaInsets>;
 
-impl SafeArea {
-    pub fn acquire() -> Result<Self, IstmoError> {
-        let rt = Runtime::global()?;
-        Self::from_runtime(&rt)
-    }
+/// Insets as they are published.
+pub type SafeAreaStream = EarlyStream<SafeAreaInsets>;
 
-    pub fn from_runtime(rt: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        rt.check_declared(Self::PLUGIN_ID)?;
-        Ok(Self {
-            slot: rt.early_events().latest_slot(SAFE_AREA_CHANNEL),
-        })
-    }
-
-    pub fn current(&self) -> Result<Option<SafeAreaInsets>, IstmoError> {
-        match self.slot.peek() {
-            None => Ok(None),
-            Some(bytes) => {
-                let (insets, _) = codec::decode::<SafeAreaInsets>(&bytes)?;
-                Ok(Some(insets))
-            }
-        }
-    }
-
+impl LatestClient<SafeAreaInsets> {
+    /// The current insets, or zero before the first publish or when the
+    /// retained payload does not decode.
+    #[deprecated(note = "use `current_or_default()`, which reports decode errors")]
     #[must_use]
     pub fn current_or_zero(&self) -> SafeAreaInsets {
-        self.current().ok().flatten().unwrap_or_default()
+        self.current_or_default().unwrap_or_else(|err: IstmoError| {
+            tracing::warn!(target: "istmo.safe_area", %err, "undecodable insets");
+            SafeAreaInsets::default()
+        })
     }
-
-    #[must_use]
-    pub fn stream(&self) -> SafeAreaStream {
-        SafeAreaStream {
-            rx: self.slot.subscribe(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct SafeAreaStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl SafeAreaStream {
-    pub fn recv(&self) -> Result<SafeAreaInsets, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<SafeAreaInsets, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<SafeAreaInsets, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode(&b))
-    }
-}
-
-fn decode(bytes: &[u8]) -> Result<SafeAreaInsets, IstmoError> {
-    let (insets, _) = codec::decode::<SafeAreaInsets>(bytes)?;
-    Ok(insets)
 }

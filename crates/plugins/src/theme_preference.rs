@@ -7,16 +7,16 @@
 //! [`ThemePreference`] snapshot through a latest-value slot so late
 //! subscribers get the current state immediately.
 
-use std::sync::Arc;
-
-use flume::Receiver;
-use istmo_core::early_events::LatestValueSlot;
-use istmo_core::{IstmoError, Plugin, Runtime, codec};
 use istmo_macros::message;
 
+use crate::early::{EarlyStream, LatestClient, LatestValue};
+
+/// Plugin id of the theme preference stream.
 pub const THEME_PREFERENCE_PLUGIN_ID: &str = "istmo.theme_preference";
+/// Early-event channel the theme snapshot is published on.
 pub const THEME_PREFERENCE_CHANNEL: &str = "istmo.theme_preference";
 
+/// Appearance and accessibility preferences.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -79,67 +79,13 @@ impl Color {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ThemePreferenceClient {
-    slot: Arc<LatestValueSlot>,
-}
-
-impl Plugin for ThemePreferenceClient {
+impl LatestValue for ThemePreference {
     const PLUGIN_ID: &'static str = THEME_PREFERENCE_PLUGIN_ID;
+    const CHANNEL: &'static str = THEME_PREFERENCE_CHANNEL;
 }
 
-impl ThemePreferenceClient {
-    pub fn acquire() -> Result<Self, IstmoError> {
-        let rt = Runtime::global()?;
-        Self::from_runtime(&rt)
-    }
+/// Reader for the theme snapshot the platform publishes.
+pub type ThemePreferenceClient = LatestClient<ThemePreference>;
 
-    pub fn from_runtime(rt: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        rt.check_declared(Self::PLUGIN_ID)?;
-        Ok(Self {
-            slot: rt.early_events().latest_slot(THEME_PREFERENCE_CHANNEL),
-        })
-    }
-
-    pub fn current(&self) -> Result<Option<ThemePreference>, IstmoError> {
-        self.slot.peek().map_or(Ok(None), |b| decode(&b).map(Some))
-    }
-
-    #[must_use]
-    pub fn updates(&self) -> ThemePreferenceStream {
-        ThemePreferenceStream {
-            rx: self.slot.subscribe(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ThemePreferenceStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl ThemePreferenceStream {
-    pub fn recv(&self) -> Result<ThemePreference, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<ThemePreference, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<ThemePreference, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode(&b))
-    }
-}
-
-fn decode(bytes: &[u8]) -> Result<ThemePreference, IstmoError> {
-    let (v, _) = codec::decode::<ThemePreference>(bytes)?;
-    Ok(v)
-}
+/// Theme snapshots as they are published.
+pub type ThemePreferenceStream = EarlyStream<ThemePreference>;

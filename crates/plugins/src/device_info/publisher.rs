@@ -2,49 +2,25 @@
 //!
 //! Reads whatever can be resolved without a dep (OS name, arch,
 //! CPU core count via `std`; RAM total via `/proc/meminfo` on Linux;
-//! kernel release via `uname` on unix). Native-side publishers on
-//! Android / iOS / macOS / Windows / Web are expected to overwrite
-//! this snapshot with richer values (model, manufacturer, screen).
+//! kernel release from `/proc` on Linux, Foundation on macOS,
+//! `RtlGetVersion` on Windows). Native-side publishers on Android / iOS
+//! / macOS / Windows / Web are expected to overwrite this snapshot with
+//! richer values (model, manufacturer, screen).
 
-use std::sync::{Arc, Weak};
+use super::{DeviceInfo, rust_fallback};
+use crate::early::LatestPublisher;
 
-use istmo_core::{IstmoError, Runtime, codec};
+/// Publishes the device snapshot the host can resolve.
+pub type DeviceInfoPublisher = LatestPublisher<DeviceInfo>;
 
-use super::{DEVICE_INFO_CHANNEL, DEVICE_INFO_PLUGIN_ID, DeviceInfo, rust_fallback};
-
-#[derive(Debug)]
-pub struct DeviceInfoPublisher {
-    runtime: Weak<Runtime>,
-    emitted: bool,
-}
-
-impl DeviceInfoPublisher {
-    pub fn install(runtime: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        runtime.check_declared(DEVICE_INFO_PLUGIN_ID)?;
-        Ok(Self {
-            runtime: Arc::downgrade(runtime),
-            emitted: false,
-        })
-    }
-
-    /// Publish the sampled snapshot. Idempotent — subsequent calls
-    /// are no-ops. Call once from app startup after the runtime is
-    /// built; native-side bridges remain free to publish a richer
-    /// snapshot later.
+impl LatestPublisher<DeviceInfo> {
+    /// Publish the sampled snapshot. Idempotent — calls after the first
+    /// successful publish are no-ops. Call once from app startup after
+    /// the runtime is built; native-side bridges remain free to publish
+    /// a richer snapshot later.
     pub fn publish(&mut self) {
-        if self.emitted {
-            return;
-        }
-        let Some(runtime) = self.runtime.upgrade() else {
-            return;
-        };
-        let snapshot = enrich(rust_fallback());
-        match codec::encode(&snapshot) {
-            Ok(bytes) => {
-                runtime.publish_early_latest(DEVICE_INFO_CHANNEL, bytes);
-                self.emitted = true;
-            }
-            Err(err) => tracing::warn!(target = "istmo.device_info", ?err, "encode failed"),
+        if !self.has_published() {
+            self.publish_if_changed(enrich(rust_fallback()));
         }
     }
 }
@@ -104,30 +80,37 @@ mod linux {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(unsafe_code)]
 mod apple {
+    use std::ffi::{CStr, c_char};
+
     use objc2::msg_send;
+    use objc2::rc::autoreleasepool;
     use objc2::runtime::{AnyClass, AnyObject};
 
     pub(super) fn os_version() -> Option<String> {
-        // SAFETY: `NSProcessInfo.processInfo` is a Foundation singleton
-        // and `operatingSystemVersionString` returns an NSString valid
-        // for the autorelease pool scope — copied immediately.
-        unsafe {
-            let cls = AnyClass::get(c"NSProcessInfo")?;
-            let info: *mut AnyObject = msg_send![cls, processInfo];
-            if info.is_null() {
-                return None;
+        // The pool drains the autoreleased NSString before returning, so
+        // repeated calls off the main run loop do not accumulate it.
+        autoreleasepool(|_| {
+            // SAFETY: `NSProcessInfo.processInfo` is a Foundation
+            // singleton; `operatingSystemVersionString` returns an
+            // autoreleased NSString that lives until this pool drains,
+            // and its `UTF8String` buffer is copied before that.
+            unsafe {
+                let cls = AnyClass::get(c"NSProcessInfo")?;
+                let info: *mut AnyObject = msg_send![cls, processInfo];
+                if info.is_null() {
+                    return None;
+                }
+                let ns: *mut AnyObject = msg_send![info, operatingSystemVersionString];
+                if ns.is_null() {
+                    return None;
+                }
+                let bytes: *const c_char = msg_send![ns, UTF8String];
+                if bytes.is_null() {
+                    return None;
+                }
+                CStr::from_ptr(bytes).to_str().ok().map(ToOwned::to_owned)
             }
-            let ns: *mut AnyObject = msg_send![info, operatingSystemVersionString];
-            if ns.is_null() {
-                return None;
-            }
-            let bytes: *const i8 = msg_send![ns, UTF8String];
-            if bytes.is_null() {
-                return None;
-            }
-            let c_str = core::ffi::CStr::from_ptr(bytes);
-            c_str.to_str().ok().map(ToOwned::to_owned)
-        }
+        })
     }
 }
 

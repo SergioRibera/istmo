@@ -666,7 +666,11 @@ fn hide_while_loading_hides_the_banner_once_it_arrives() {
         spawn_create_instance(&backend_rt, &backend_outbound, InstanceId(1));
         let (show, _) = expect_call(&backend_outbound, "show_banner");
         go_rx.recv().unwrap();
-        respond(&backend_rt, show, codec::encode(&NativeHandleId(9)).unwrap());
+        respond(
+            &backend_rt,
+            show,
+            codec::encode(&NativeHandleId(9)).unwrap(),
+        );
 
         let (hide, payload) = expect_call(&backend_outbound, "hide_banner");
         let ((id,), _) = codec::decode::<(NativeHandleId,)>(&payload).unwrap();
@@ -699,7 +703,11 @@ fn show_while_hiding_shows_again_at_the_latest_rect() {
     let backend = thread::spawn(move || {
         spawn_create_instance(&backend_rt, &backend_outbound, InstanceId(1));
         let (show, _) = expect_call(&backend_outbound, "show_banner");
-        respond(&backend_rt, show, codec::encode(&NativeHandleId(1)).unwrap());
+        respond(
+            &backend_rt,
+            show,
+            codec::encode(&NativeHandleId(1)).unwrap(),
+        );
 
         let (hide, _) = expect_call(&backend_outbound, "hide_banner");
         go_rx.recv().unwrap();
@@ -708,7 +716,11 @@ fn show_while_hiding_shows_again_at_the_latest_rect() {
         let (show, payload) = expect_call(&backend_outbound, "show_banner");
         let ((req,), _) = codec::decode::<(istmo_plugins::BannerRequest,)>(&payload).unwrap();
         assert_eq!(req.rect, RECT_B);
-        respond(&backend_rt, show, codec::encode(&NativeHandleId(2)).unwrap());
+        respond(
+            &backend_rt,
+            show,
+            codec::encode(&NativeHandleId(2)).unwrap(),
+        );
     });
 
     let client = build_client(&rt);
@@ -737,7 +749,11 @@ fn rect_change_queued_behind_a_hide_never_reaches_the_released_banner() {
     let backend = thread::spawn(move || {
         spawn_create_instance(&backend_rt, &backend_outbound, InstanceId(1));
         let (show, _) = expect_call(&backend_outbound, "show_banner");
-        respond(&backend_rt, show, codec::encode(&NativeHandleId(3)).unwrap());
+        respond(
+            &backend_rt,
+            show,
+            codec::encode(&NativeHandleId(3)).unwrap(),
+        );
 
         let (update, _) = expect_call(&backend_outbound, "update_banner");
         seen_tx.send(()).unwrap();

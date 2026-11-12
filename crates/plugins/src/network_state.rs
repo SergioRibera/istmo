@@ -5,25 +5,31 @@
 //!   (requires `android.permission.ACCESS_NETWORK_STATE` in the
 //!   consuming app's manifest).
 //! - Apple: `NWPathMonitor` on a serial queue.
-//! - Linux: NetworkManager D-Bus `org.freedesktop.NetworkManager`
+//! - Linux: `NetworkManager` D-Bus `org.freedesktop.NetworkManager`
 //!   `StateChanged` signal.
 //! - Windows: `INetworkListManager::NetworkConnectivityChanged`.
 //! - Web: `online` / `offline` window events + `navigator.connection`.
 
-use std::sync::Arc;
-
-use flume::Receiver;
-use istmo_core::early_events::LatestValueSlot;
-use istmo_core::{IstmoError, Plugin, Runtime, codec};
 use istmo_macros::message;
 
+use crate::early::{EarlyStream, LatestClient, LatestValue};
+
+/// Plugin id of the network state stream.
 pub const NETWORK_STATE_PLUGIN_ID: &str = "istmo.network_state";
+/// Early-event channel the network snapshot is published on.
 pub const NETWORK_STATE_CHANNEL: &str = "istmo.network_state";
 
+/// Connectivity snapshot.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent wire flags mirroring the platform APIs"
+)]
 pub struct NetworkState {
+    /// A route to the internet exists.
     pub online: bool,
+    /// Kind of the link carrying the default route.
     pub link: LinkKind,
     /// User is on a metered connection (mobile data, hotspot). Treat
     /// as hint to avoid prefetches / background sync.
@@ -34,80 +40,34 @@ pub struct NetworkState {
     pub constrained: bool,
 }
 
+/// Physical or virtual kind of a network link.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum LinkKind {
+    /// No usable link.
     #[default]
     None,
+    /// Wi-Fi.
     Wifi,
+    /// Mobile data.
     Cellular,
+    /// Wired Ethernet.
     Ethernet,
+    /// VPN or tunnel.
     Vpn,
+    /// Bluetooth tethering.
     Bluetooth,
+    /// Anything else.
     Other,
 }
 
-#[derive(Debug, Clone)]
-pub struct NetworkStateClient {
-    slot: Arc<LatestValueSlot>,
-}
-
-impl Plugin for NetworkStateClient {
+impl LatestValue for NetworkState {
     const PLUGIN_ID: &'static str = NETWORK_STATE_PLUGIN_ID;
+    const CHANNEL: &'static str = NETWORK_STATE_CHANNEL;
 }
 
-impl NetworkStateClient {
-    pub fn acquire() -> Result<Self, IstmoError> {
-        let rt = Runtime::global()?;
-        Self::from_runtime(&rt)
-    }
+/// Reader for the connectivity snapshot the platform publishes.
+pub type NetworkStateClient = LatestClient<NetworkState>;
 
-    pub fn from_runtime(rt: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        rt.check_declared(Self::PLUGIN_ID)?;
-        Ok(Self {
-            slot: rt.early_events().latest_slot(NETWORK_STATE_CHANNEL),
-        })
-    }
-
-    pub fn current(&self) -> Result<Option<NetworkState>, IstmoError> {
-        self.slot.peek().map_or(Ok(None), |b| decode(&b).map(Some))
-    }
-
-    #[must_use]
-    pub fn updates(&self) -> NetworkStateStream {
-        NetworkStateStream {
-            rx: self.slot.subscribe(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct NetworkStateStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl NetworkStateStream {
-    pub fn recv(&self) -> Result<NetworkState, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<NetworkState, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<NetworkState, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode(&b))
-    }
-}
-
-fn decode(bytes: &[u8]) -> Result<NetworkState, IstmoError> {
-    let (v, _) = codec::decode::<NetworkState>(bytes)?;
-    Ok(v)
-}
+/// Connectivity snapshots as they are published.
+pub type NetworkStateStream = EarlyStream<NetworkState>;

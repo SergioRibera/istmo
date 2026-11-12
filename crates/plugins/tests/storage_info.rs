@@ -3,7 +3,7 @@ use istmo_plugins::{
     ExternalMedium, ExternalStorage, STORAGE_INFO_CHANNEL, StorageInfo, StorageInfoClient,
 };
 
-fn sample() -> StorageInfo {
+const fn sample() -> StorageInfo {
     StorageInfo {
         primary_free_bytes: 32 * 1024 * 1024 * 1024,
         primary_total_bytes: 128 * 1024 * 1024 * 1024,
@@ -41,7 +41,7 @@ fn stream_delivers_low_storage_update() {
     let init = Runtime::mock();
     let rt = init.runtime;
     let plugin = StorageInfoClient::from_runtime(&rt).expect("declared");
-    let stream = plugin.updates();
+    let stream = plugin.stream();
 
     publish(&rt, &sample());
     assert_eq!(stream.recv().unwrap(), sample());

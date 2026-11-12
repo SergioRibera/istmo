@@ -25,10 +25,11 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use flume::Receiver;
 use istmo_core::early_events::LatestValueSlot;
 use istmo_core::{IstmoError, Plugin, Runtime, codec};
 use istmo_macros::message;
+
+use crate::early::{EarlyStream, LatestClient, LatestValue};
 
 pub mod tables;
 
@@ -38,12 +39,18 @@ pub mod publisher;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use publisher::SystemInfoPublisher;
 
+/// Plugin id of the system info streams.
 pub const SYSTEM_INFO_PLUGIN_ID: &str = "istmo.system_info";
+/// Early-event channel of [`Locale`].
 pub const SYSTEM_INFO_LOCALE_CHANNEL: &str = "istmo.system_info.locale";
+/// Early-event channel of [`TimeZone`].
 pub const SYSTEM_INFO_TIMEZONE_CHANNEL: &str = "istmo.system_info.timezone";
+/// Early-event channel of [`Formats`].
 pub const SYSTEM_INFO_FORMATS_CHANNEL: &str = "istmo.system_info.formats";
+/// Early-event channel of the uptime in milliseconds (`u64`).
 pub const SYSTEM_INFO_UPTIME_CHANNEL: &str = "istmo.system_info.uptime";
 
+/// The user's language and region.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Locale {
@@ -128,13 +135,38 @@ pub enum CalendarSystem {
     Other(String),
 }
 
+impl LatestValue for Locale {
+    const PLUGIN_ID: &'static str = SYSTEM_INFO_PLUGIN_ID;
+    const CHANNEL: &'static str = SYSTEM_INFO_LOCALE_CHANNEL;
+}
+
+impl LatestValue for TimeZone {
+    const PLUGIN_ID: &'static str = SYSTEM_INFO_PLUGIN_ID;
+    const CHANNEL: &'static str = SYSTEM_INFO_TIMEZONE_CHANNEL;
+}
+
+impl LatestValue for Formats {
+    const PLUGIN_ID: &'static str = SYSTEM_INFO_PLUGIN_ID;
+    const CHANNEL: &'static str = SYSTEM_INFO_FORMATS_CHANNEL;
+}
+
+/// Locales as they are published.
+pub type LocaleStream = EarlyStream<Locale>;
+
+/// Time zones as they are published.
+pub type TimeZoneStream = EarlyStream<TimeZone>;
+
+/// Formatting preferences as they are published.
+pub type FormatsStream = EarlyStream<Formats>;
+
+/// Reader for the locale, time zone, formats and uptime the platform
+/// publishes.
 #[derive(Debug, Clone)]
-#[allow(clippy::struct_field_names)]
 pub struct SystemInfoClient {
-    locale_slot: Arc<LatestValueSlot>,
-    timezone_slot: Arc<LatestValueSlot>,
-    formats_slot: Arc<LatestValueSlot>,
-    uptime_slot: Arc<LatestValueSlot>,
+    locale: LatestClient<Locale>,
+    timezone: LatestClient<TimeZone>,
+    formats: LatestClient<Formats>,
+    uptime: Arc<LatestValueSlot>,
 }
 
 /// Backcompat alias — older callers used `SystemInfo`; the canonical
@@ -147,53 +179,95 @@ impl Plugin for SystemInfoClient {
 }
 
 impl SystemInfoClient {
+    /// Client bound to the process-wide runtime.
+    ///
+    /// # Errors
+    ///
+    /// Fails when no global runtime is installed or the plugin was not
+    /// declared.
     pub fn acquire() -> Result<Self, IstmoError> {
-        let rt = Runtime::global()?;
-        Self::from_runtime(&rt)
+        Self::from_runtime(&Runtime::global()?)
     }
 
+    /// Client bound to `rt`.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::PluginNotDeclared`] when enforcement is on and the
+    /// plugin was not declared.
     pub fn from_runtime(rt: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        rt.check_declared(Self::PLUGIN_ID)?;
-        let early = rt.early_events();
         Ok(Self {
-            locale_slot: early.latest_slot(SYSTEM_INFO_LOCALE_CHANNEL),
-            timezone_slot: early.latest_slot(SYSTEM_INFO_TIMEZONE_CHANNEL),
-            formats_slot: early.latest_slot(SYSTEM_INFO_FORMATS_CHANNEL),
-            uptime_slot: early.latest_slot(SYSTEM_INFO_UPTIME_CHANNEL),
+            locale: LatestClient::from_runtime(rt)?,
+            timezone: LatestClient::from_runtime(rt)?,
+            formats: LatestClient::from_runtime(rt)?,
+            uptime: rt.early_events().latest_slot(SYSTEM_INFO_UPTIME_CHANNEL),
         })
     }
 
+    /// The retained locale, `None` before the first publish.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::Codec`] when the retained payload does not decode.
     pub fn current_locale(&self) -> Result<Option<Locale>, IstmoError> {
-        peek_locale(&self.locale_slot)
+        self.locale.current()
     }
 
+    /// The retained time zone, `None` before the first publish.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::Codec`] when the retained payload does not decode.
     pub fn current_timezone(&self) -> Result<Option<TimeZone>, IstmoError> {
-        peek_timezone(&self.timezone_slot)
+        self.timezone.current()
     }
 
+    /// The retained formats, `None` before the first publish.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::Codec`] when the retained payload does not decode.
     pub fn current_formats(&self) -> Result<Option<Formats>, IstmoError> {
-        peek_formats(&self.formats_slot)
+        self.formats.current()
     }
 
+    /// Subscribe to locale changes, starting with the retained value.
+    #[must_use]
+    pub fn locale_stream(&self) -> LocaleStream {
+        self.locale.stream()
+    }
+
+    /// Subscribe to time zone changes, starting with the retained value.
+    #[must_use]
+    pub fn timezone_stream(&self) -> TimeZoneStream {
+        self.timezone.stream()
+    }
+
+    /// Subscribe to formats changes, starting with the retained value.
+    #[must_use]
+    pub fn formats_stream(&self) -> FormatsStream {
+        self.formats.stream()
+    }
+
+    /// Former name of [`locale_stream`](Self::locale_stream).
+    #[deprecated(note = "use `locale_stream()`")]
     #[must_use]
     pub fn locale_updates(&self) -> LocaleStream {
-        LocaleStream {
-            rx: self.locale_slot.subscribe(),
-        }
+        self.locale_stream()
     }
 
+    /// Former name of [`timezone_stream`](Self::timezone_stream).
+    #[deprecated(note = "use `timezone_stream()`")]
     #[must_use]
     pub fn timezone_updates(&self) -> TimeZoneStream {
-        TimeZoneStream {
-            rx: self.timezone_slot.subscribe(),
-        }
+        self.timezone_stream()
     }
 
+    /// Former name of [`formats_stream`](Self::formats_stream).
+    #[deprecated(note = "use `formats_stream()`")]
     #[must_use]
     pub fn formats_updates(&self) -> FormatsStream {
-        FormatsStream {
-            rx: self.formats_slot.subscribe(),
-        }
+        self.formats_stream()
     }
 
     /// Unix-epoch milliseconds. Pure Rust, no FFI.
@@ -204,122 +278,18 @@ impl SystemInfoClient {
             .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
     }
 
-    /// Milliseconds since the device booted. Returns `None` when no
-    /// publisher has supplied a value — platforms wire this via
-    /// [`UptimePublisher`](publisher::UptimePublisher) on desktop or a
-    /// native bridge on mobile.
+    /// Milliseconds since the device booted, as of the last publish.
+    /// `None` when no publisher has supplied a value — desktops wire
+    /// this through [`SystemInfoPublisher`], mobile through a native
+    /// bridge.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::Codec`] when the retained payload does not decode.
     pub fn uptime_millis(&self) -> Result<Option<u64>, IstmoError> {
-        self.uptime_slot.peek().map_or(Ok(None), |b| {
-            let (v, _) = codec::decode::<u64>(&b)?;
-            Ok(Some(v))
-        })
+        self.uptime
+            .peek()
+            .map(|bytes| Ok(codec::decode::<u64>(&bytes)?.0))
+            .transpose()
     }
-}
-
-#[derive(Debug)]
-pub struct LocaleStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl LocaleStream {
-    pub fn recv(&self) -> Result<Locale, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode_locale(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<Locale, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode_locale(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<Locale, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode_locale(&b))
-    }
-}
-
-#[derive(Debug)]
-pub struct TimeZoneStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl TimeZoneStream {
-    pub fn recv(&self) -> Result<TimeZone, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode_timezone(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<TimeZone, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode_timezone(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<TimeZone, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode_timezone(&b))
-    }
-}
-
-#[derive(Debug)]
-pub struct FormatsStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl FormatsStream {
-    pub fn recv(&self) -> Result<Formats, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode_formats(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<Formats, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode_formats(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<Formats, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode_formats(&b))
-    }
-}
-
-fn peek_locale(slot: &LatestValueSlot) -> Result<Option<Locale>, IstmoError> {
-    slot.peek()
-        .map_or(Ok(None), |b| decode_locale(&b).map(Some))
-}
-
-fn peek_timezone(slot: &LatestValueSlot) -> Result<Option<TimeZone>, IstmoError> {
-    slot.peek()
-        .map_or(Ok(None), |b| decode_timezone(&b).map(Some))
-}
-
-fn peek_formats(slot: &LatestValueSlot) -> Result<Option<Formats>, IstmoError> {
-    slot.peek()
-        .map_or(Ok(None), |b| decode_formats(&b).map(Some))
-}
-
-fn decode_locale(bytes: &[u8]) -> Result<Locale, IstmoError> {
-    let (v, _) = codec::decode::<Locale>(bytes)?;
-    Ok(v)
-}
-
-fn decode_timezone(bytes: &[u8]) -> Result<TimeZone, IstmoError> {
-    let (v, _) = codec::decode::<TimeZone>(bytes)?;
-    Ok(v)
-}
-
-fn decode_formats(bytes: &[u8]) -> Result<Formats, IstmoError> {
-    let (v, _) = codec::decode::<Formats>(bytes)?;
-    Ok(v)
 }

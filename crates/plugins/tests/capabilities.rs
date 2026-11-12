@@ -1,7 +1,7 @@
 use istmo_core::{Runtime, codec};
 use istmo_plugins::{CAPABILITIES_CHANNEL, Capabilities, CapabilitiesClient};
 
-fn sample() -> Capabilities {
+const fn sample() -> Capabilities {
     Capabilities {
         has_biometric: true,
         has_face_id: true,
@@ -46,7 +46,7 @@ fn updates_stream_delivers() {
     let init = Runtime::mock();
     let rt = init.runtime;
     let plugin = CapabilitiesClient::from_runtime(&rt).expect("declared");
-    let stream = plugin.updates();
+    let stream = plugin.stream();
     publish(&rt, &sample());
     assert_eq!(stream.recv().unwrap(), sample());
 }

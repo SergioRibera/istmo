@@ -21,7 +21,10 @@ fn current_is_none_before_any_publish() {
     let init = Runtime::mock();
     let plugin = SafeArea::from_runtime(&init.runtime).expect("declared");
     assert!(plugin.current().unwrap().is_none());
-    assert_eq!(plugin.current_or_zero(), SafeAreaInsets::default());
+    assert_eq!(
+        plugin.current_or_default().unwrap(),
+        SafeAreaInsets::default()
+    );
 }
 
 #[test]

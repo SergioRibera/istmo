@@ -7,105 +7,62 @@
 //! `DEVICE_STORAGE_OK`). No permissions required when reading only the
 //! app's scoped storage volume.
 
-use std::sync::Arc;
-
-use flume::Receiver;
-use istmo_core::early_events::LatestValueSlot;
-use istmo_core::{IstmoError, Plugin, Runtime, codec};
 use istmo_macros::message;
 
+use crate::early::{EarlyStream, LatestClient, LatestValue};
+
+/// Plugin id of the storage info stream.
 pub const STORAGE_INFO_PLUGIN_ID: &str = "istmo.storage_info";
+/// Early-event channel the storage snapshot is published on.
 pub const STORAGE_INFO_CHANNEL: &str = "istmo.storage_info";
 
+/// Free and total space on the app's volumes.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StorageInfo {
+    /// Bytes available to the app on the primary volume.
     pub primary_free_bytes: u64,
+    /// Size of the primary volume in bytes.
     pub primary_total_bytes: u64,
+    /// External volume, when one is mounted and reported.
     pub external: Option<ExternalStorage>,
 }
 
+/// Space on an external volume.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExternalStorage {
+    /// Bytes available to the app.
     pub free_bytes: u64,
+    /// Size of the volume in bytes.
     pub total_bytes: u64,
     /// Underlying medium — a removable SD card on Android, an attached
     /// disk on desktop, `Unknown` when the platform does not say.
     pub medium: ExternalMedium,
 }
 
+/// Medium behind an external volume.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ExternalMedium {
+    /// Not reported.
     #[default]
     Unknown,
+    /// Removable SD card.
     SdCard,
+    /// USB mass storage.
     Usb,
+    /// Network share.
     Network,
 }
 
-#[derive(Debug, Clone)]
-pub struct StorageInfoClient {
-    slot: Arc<LatestValueSlot>,
-}
-
-impl Plugin for StorageInfoClient {
+impl LatestValue for StorageInfo {
     const PLUGIN_ID: &'static str = STORAGE_INFO_PLUGIN_ID;
+    const CHANNEL: &'static str = STORAGE_INFO_CHANNEL;
 }
 
-impl StorageInfoClient {
-    pub fn acquire() -> Result<Self, IstmoError> {
-        let rt = Runtime::global()?;
-        Self::from_runtime(&rt)
-    }
+/// Reader for the storage snapshot the platform publishes.
+pub type StorageInfoClient = LatestClient<StorageInfo>;
 
-    pub fn from_runtime(rt: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        rt.check_declared(Self::PLUGIN_ID)?;
-        Ok(Self {
-            slot: rt.early_events().latest_slot(STORAGE_INFO_CHANNEL),
-        })
-    }
-
-    pub fn current(&self) -> Result<Option<StorageInfo>, IstmoError> {
-        self.slot.peek().map_or(Ok(None), |b| decode(&b).map(Some))
-    }
-
-    #[must_use]
-    pub fn updates(&self) -> StorageInfoStream {
-        StorageInfoStream {
-            rx: self.slot.subscribe(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct StorageInfoStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl StorageInfoStream {
-    pub fn recv(&self) -> Result<StorageInfo, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<StorageInfo, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<StorageInfo, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode(&b))
-    }
-}
-
-fn decode(bytes: &[u8]) -> Result<StorageInfo, IstmoError> {
-    let (v, _) = codec::decode::<StorageInfo>(bytes)?;
-    Ok(v)
-}
+/// Storage snapshots as they are published.
+pub type StorageInfoStream = EarlyStream<StorageInfo>;

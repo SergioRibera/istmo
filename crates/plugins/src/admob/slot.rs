@@ -106,11 +106,10 @@ impl SlotInner {
                 self.state = SlotState::Loading;
                 Action::Show(rect)
             }
-            (SlotState::Idle, SlotTarget::Hide)
-            | (SlotState::Loading | SlotState::Hiding, _) => Action::None,
-            (SlotState::Live { rect: current, .. }, SlotTarget::Show(rect))
-                if current == rect =>
-            {
+            (SlotState::Idle, SlotTarget::Hide) | (SlotState::Loading | SlotState::Hiding, _) => {
+                Action::None
+            }
+            (SlotState::Live { rect: current, .. }, SlotTarget::Show(rect)) if current == rect => {
                 Action::None
             }
             (SlotState::Live { handle, .. }, SlotTarget::Show(_)) => {

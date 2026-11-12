@@ -11,12 +11,10 @@
 //! [`DeviceInfoPublisher`] which emits the Rust-known snapshot + any
 //! platform values it can resolve without a system dep.
 
-use std::sync::Arc;
-
-use flume::Receiver;
-use istmo_core::early_events::LatestValueSlot;
-use istmo_core::{IstmoError, Plugin, Runtime, codec};
+use istmo_core::IstmoError;
 use istmo_macros::message;
+
+use crate::early::{EarlyStream, LatestClient, LatestValue};
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod publisher;
@@ -24,9 +22,12 @@ pub mod publisher;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use publisher::DeviceInfoPublisher;
 
+/// Plugin id of the device info snapshot.
 pub const DEVICE_INFO_PLUGIN_ID: &str = "istmo.device_info";
+/// Early-event channel the device snapshot is published on.
 pub const DEVICE_INFO_CHANNEL: &str = "istmo.device_info";
 
+/// Static description of the device.
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeviceInfo {
@@ -88,80 +89,28 @@ pub struct ScreenInfo {
     pub refresh_hz: Option<f32>,
 }
 
-#[derive(Debug, Clone)]
-pub struct DeviceInfoClient {
-    slot: Arc<LatestValueSlot>,
-}
-
-impl Plugin for DeviceInfoClient {
+impl LatestValue for DeviceInfo {
     const PLUGIN_ID: &'static str = DEVICE_INFO_PLUGIN_ID;
+    const CHANNEL: &'static str = DEVICE_INFO_CHANNEL;
 }
 
-impl DeviceInfoClient {
-    pub fn acquire() -> Result<Self, IstmoError> {
-        let rt = Runtime::global()?;
-        Self::from_runtime(&rt)
-    }
+/// Reader for the device snapshot the platform publishes.
+pub type DeviceInfoClient = LatestClient<DeviceInfo>;
 
-    pub fn from_runtime(rt: &Arc<Runtime>) -> Result<Self, IstmoError> {
-        rt.check_declared(Self::PLUGIN_ID)?;
-        Ok(Self {
-            slot: rt.early_events().latest_slot(DEVICE_INFO_CHANNEL),
-        })
-    }
+/// Device snapshots as they are published.
+pub type DeviceInfoStream = EarlyStream<DeviceInfo>;
 
-    pub fn current(&self) -> Result<Option<DeviceInfo>, IstmoError> {
-        self.slot.peek().map_or(Ok(None), |b| decode(&b).map(Some))
-    }
-
-    /// Returns [`current`](Self::current) if present, otherwise the
-    /// Rust-side fallback snapshot built from `std::env::consts` +
-    /// `std::thread::available_parallelism`. Useful on desktops where
-    /// no platform publisher is wired yet.
+impl LatestClient<DeviceInfo> {
+    /// [`current`](Self::current) if present, otherwise the Rust-side
+    /// [`rust_fallback`] snapshot. Useful on desktops where no platform
+    /// publisher is wired yet.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::Codec`] when the retained payload does not decode.
     pub fn current_or_fallback(&self) -> Result<DeviceInfo, IstmoError> {
-        if let Some(current) = self.current()? {
-            return Ok(current);
-        }
-        Ok(rust_fallback())
+        Ok(self.current()?.unwrap_or_else(rust_fallback))
     }
-
-    #[must_use]
-    pub fn updates(&self) -> DeviceInfoStream {
-        DeviceInfoStream {
-            rx: self.slot.subscribe(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct DeviceInfoStream {
-    rx: Receiver<Vec<u8>>,
-}
-
-impl DeviceInfoStream {
-    pub fn recv(&self) -> Result<DeviceInfo, IstmoError> {
-        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    pub async fn recv_async(&self) -> Result<DeviceInfo, IstmoError> {
-        let bytes = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| IstmoError::ChannelClosed)?;
-        decode(&bytes)
-    }
-
-    #[must_use]
-    pub fn try_recv(&self) -> Option<Result<DeviceInfo, IstmoError>> {
-        self.rx.try_recv().ok().map(|b| decode(&b))
-    }
-}
-
-fn decode(bytes: &[u8]) -> Result<DeviceInfo, IstmoError> {
-    let (v, _) = codec::decode::<DeviceInfo>(bytes)?;
-    Ok(v)
 }
 
 /// Rust-only snapshot — fields that platforms must supply (model,
