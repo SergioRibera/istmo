@@ -423,6 +423,18 @@ impl TryFrom<IstmoError> for BiometricError {
     type Error = IstmoError;
 
     fn try_from(err: IstmoError) -> Result<Self, Self::Error> {
+        Self::try_from_istmo(err)
+    }
+}
+
+impl BiometricError {
+    /// Same as the [`TryFrom`] impl, under the name every istmo plugin
+    /// error shares.
+    ///
+    /// # Errors
+    /// Hands back `err` unchanged when it is a transport failure or
+    /// carries bytes that do not decode as a [`BiometricError`].
+    pub fn try_from_istmo(err: IstmoError) -> Result<Self, IstmoError> {
         match err {
             IstmoError::PluginError { bytes } => match codec::decode::<Self>(&bytes) {
                 Ok((domain, _)) => Ok(domain),
