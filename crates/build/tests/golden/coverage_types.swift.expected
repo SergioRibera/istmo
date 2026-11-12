@@ -2,6 +2,7 @@
 // plugin id: com.example."cov$"
 
 import Foundation
+import IstmoRuntime
 
 public struct Everything {
     public let unit: Void

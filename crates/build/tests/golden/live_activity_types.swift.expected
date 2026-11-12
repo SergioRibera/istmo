@@ -2,6 +2,7 @@
 // plugin id: istmo.live_activity
 
 import Foundation
+import IstmoRuntime
 
 public enum ActivityStyle: UInt32 {
     case standard = 0

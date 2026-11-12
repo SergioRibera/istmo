@@ -1,5 +1,9 @@
 import Foundation
 
+/// Wire form of a native handle: the bare `u64` Rust's `NativeHandleId`
+/// wraps. Generated codecs read and write it as a varint.
+public typealias NativeHandleId = UInt64
+
 public protocol PluginHandler: AnyObject {
 
     func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data

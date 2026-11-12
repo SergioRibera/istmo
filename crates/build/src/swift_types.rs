@@ -17,6 +17,10 @@ pub fn generate_swift_types(contract: &Contract) -> String {
     write_header(&mut out, contract);
     let _ = writeln!(out);
     let _ = writeln!(out, "import Foundation");
+    if contract.references_native_handle() {
+        // `NativeHandleId` is declared by the runtime module.
+        let _ = writeln!(out, "import IstmoRuntime");
+    }
     for ty in &contract.types {
         let _ = writeln!(out);
         let is_error = is_error_shape(ty.name()) || errors.contains(ty.name());
