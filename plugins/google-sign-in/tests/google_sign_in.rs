@@ -195,3 +195,21 @@ fn domain_error_surfaces_as_plugin_error_bytes() {
     assert_eq!(decoded, SignInError::UserCancelled);
     backend.join().unwrap();
 }
+
+#[test]
+fn debug_output_redacts_secrets() {
+    let account = format!("{:?}", sample_account(1));
+    assert!(!account.contains(&sample_account(1).id_token), "{account}");
+    assert!(account.contains("<redacted>"));
+
+    let config = format!("{:?}", cfg());
+    assert!(!config.contains("random-nonce"), "{config}");
+    assert!(config.contains("example.com"));
+}
+
+#[test]
+fn plugin_error_payload_decodes_to_typed_error() {
+    let bytes = codec::encode(&SignInError::Reauthenticate).unwrap();
+    let err = SignInError::from(istmo_core::IstmoError::PluginError { bytes });
+    assert_eq!(err, SignInError::Reauthenticate);
+}

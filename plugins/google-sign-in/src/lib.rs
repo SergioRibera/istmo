@@ -1,11 +1,20 @@
 //! Google Sign-In plugin for [`istmo`](https://docs.rs/istmo).
 //!
-//! Ships a Rust-side [`SignIn`] trait plus the wire types needed to
-//! drive a native `GoogleSignInClient` on Android and `ASAuthorization`
-//! flow on Apple platforms. Credentials returned by the platform side
-//! are opaque [`NativeHandle`](istmo_core::NativeHandle)s — the native
-//! layer owns the token material and releases it when the handle is
-//! dropped.
+//! Ships a Rust-side [`SignIn`] trait plus the wire types its native
+//! backends speak:
+//!
+//! * Android — Jetpack Credential Manager with the Google ID token
+//!   credential (`androidx.credentials` + `googleid`).
+//! * iOS — the `GoogleSignIn-iOS` SDK (`GIDSignIn`).
+//!
+//! Both dependencies are declared in this crate's `istmo.toml`;
+//! reference backends live under `native/` (see the crate README).
+//! Credentials returned by the platform side are opaque
+//! [`NativeHandle`](istmo_core::NativeHandle)s — the native layer owns
+//! the token material and releases it when the handle is dropped.
+//!
+//! `Debug` output of [`SignInAccount`] and [`SignInConfig`] redacts the
+//! id token and the nonce, so logging them does not leak credentials.
 //!
 //! The `codegen` feature exposes the plugin's `Contract`
 //! (see [`istmo-build`](https://docs.rs/istmo-build)) so downstream
@@ -46,7 +55,7 @@ pub enum SignInMode {
 /// Passed as `init` when acquiring a `SignInClient` — the native
 /// backend hangs on to the config for the lifetime of the instance.
 #[message(crate = "::istmo_core")]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SignInConfig {
     /// Google Cloud Console **Web** OAuth client id. Used verbatim as
     /// `serverClientId` on Android and as the ID-token audience on
@@ -73,8 +82,12 @@ pub struct SignInConfig {
 /// token material — obtain the ergonomic `OwnedSignInAccount` via
 /// `sign_in_owned` / `silent_sign_in_owned` to have it dropped
 /// deterministically.
+///
+/// Deliberately not `Clone`: every copy would carry the same raw
+/// `credential` id, and adopting two copies with
+/// [`into_owned`](Self::into_owned) would release the credential twice.
 #[message(crate = "::istmo_core")]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 pub struct SignInAccount {
     /// Stable Google user id (`sub` claim of the id token).
     pub id: String,
@@ -179,6 +192,51 @@ impl std::fmt::Display for SignInError {
 }
 
 impl std::error::Error for SignInError {}
+
+/// Recover the typed error from a failed [`SignInClient`] call.
+impl From<istmo_core::IstmoError> for SignInError {
+    fn from(err: istmo_core::IstmoError) -> Self {
+        match err {
+            istmo_core::IstmoError::PluginError { bytes } => {
+                istmo_core::codec::decode::<Self>(&bytes).map_or_else(
+                    |e| Self::Backend(format!("decode plugin error payload: {e}")),
+                    |(err, _)| err,
+                )
+            }
+            other => Self::Backend(other.to_string()),
+        }
+    }
+}
+
+/// Placeholder printed instead of secret fields.
+const REDACTED: &str = "<redacted>";
+
+// Manual impls: the derived ones would print the id token / nonce.
+impl std::fmt::Debug for SignInConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignInConfig")
+            .field("server_client_id", &self.server_client_id)
+            .field("scopes", &self.scopes)
+            .field("hosted_domain", &self.hosted_domain)
+            .field("nonce", &self.nonce.as_ref().map(|_| REDACTED))
+            .field("auto_select", &self.auto_select)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for SignInAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignInAccount")
+            .field("id", &self.id)
+            .field("email", &self.email)
+            .field("display_name", &self.display_name)
+            .field("photo_url", &self.photo_url)
+            .field("id_token", &REDACTED)
+            .field("granted_scopes", &self.granted_scopes)
+            .field("credential", &self.credential)
+            .finish()
+    }
+}
 
 #[plugin(
     name = "istmo.google_sign_in",
