@@ -123,8 +123,8 @@ fn coverage_values_match_golden_bytes() {
     line(&mut out, "FirstError", &FirstError::Failed("ñ".to_owned()));
     line(&mut out, "SecondError", &SecondError { code: 300 });
 
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/coverage_wire.hex.expected");
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/coverage_wire.hex.expected");
     if std::env::var("ISTMO_BUILD_UPDATE_GOLDEN").is_ok() {
         fs::write(&path, &out).expect("update golden");
         return;
