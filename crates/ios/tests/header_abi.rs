@@ -1,8 +1,10 @@
 //! Keeps `runtime/ios/Sources/IstmoFFI/include/istmo_ffi.h` (what Swift
 //! compiles against) in sync with `src/cdecl_exports.rs` (what the
 //! staticlib exports). Plain text checks: the callback table's field
-//! names, order and per-callback arity, and every exported function's
-//! name and arity.
+//! names, order and types (callback parameter and return types
+//! included), and every exported function's name, parameter types and
+//! return type. C types are mapped onto their Rust spelling; a type
+//! neither side knows fails the test instead of slipping through.
 
 use std::path::{Path, PathBuf};
 
@@ -36,27 +38,86 @@ fn strip_comments(src: &str) -> String {
     out
 }
 
-/// Number of parameters in the list starting right after an opening
-/// parenthesis. `void` alone counts as zero.
-fn arity(after_open: &str) -> usize {
+/// Parameters of the list starting right after an opening parenthesis,
+/// plus the text after its closing one. `void` alone is an empty list.
+fn split_params(after_open: &str) -> (Vec<&str>, &str) {
     let mut depth = 0usize;
     let mut end = after_open.len();
     for (i, ch) in after_open.char_indices() {
         match ch {
-            '(' => depth += 1,
+            '(' | '<' => depth += 1,
             ')' if depth == 0 => {
                 end = i;
                 break;
             }
-            ')' => depth -= 1,
+            ')' | '>' => depth = depth.saturating_sub(1),
             _ => {}
         }
     }
-    after_open[..end]
+    let params = after_open[..end]
         .split(',')
         .map(str::trim)
         .filter(|p| !p.is_empty() && *p != "void")
-        .count()
+        .collect();
+    (params, after_open.get(end + 1..).unwrap_or(""))
+}
+
+/// Rust spelling of a C type written without a parameter name.
+fn c_to_rust(ty: &str) -> String {
+    let spaced = ty.replace('*', " * ");
+    let ty = spaced.split_whitespace().collect::<Vec<_>>().join(" ");
+    match ty.as_str() {
+        "void" => "()",
+        "void *" => "*mut c_void",
+        "const uint8_t *" => "*const u8",
+        "bool" => "bool",
+        "uint32_t" => "u32",
+        "uint64_t" => "u64",
+        "size_t" => "usize",
+        "IstmoIosCallbacks" => "IstmoIosCallbacks",
+        other => panic!("C type `{other}` has no Rust mapping in this test"),
+    }
+    .to_owned()
+}
+
+/// Rust spelling of a named C parameter such as `const uint8_t *payload`.
+fn c_param(param: &str) -> String {
+    let spaced = param.replace('*', " * ");
+    let mut tokens = spaced.split_whitespace().collect::<Vec<_>>();
+    assert!(tokens.len() > 1, "C parameter `{param}` has no name");
+    tokens.pop();
+    c_to_rust(&tokens.join(" "))
+}
+
+/// Type of a Rust parameter `name: ty`, whitespace normalised.
+fn rust_param(param: &str) -> String {
+    let (_, ty) = param
+        .split_once(':')
+        .unwrap_or_else(|| panic!("Rust parameter `{param}` is not `name: type`"));
+    normalise(ty)
+}
+
+fn normalise(ty: &str) -> String {
+    ty.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Return type following a Rust parameter list, `()` when absent.
+fn rust_return(after_close: &str) -> String {
+    let sig = after_close
+        .split(['{', ';'])
+        .next()
+        .expect("split yields one item");
+    sig.split_once("->")
+        .map_or_else(|| "()".to_owned(), |(_, ret)| normalise(ret))
+}
+
+/// A function signature as `(parameter types, return type)`.
+type Sig = (Vec<String>, String);
+
+#[derive(Debug, PartialEq, Eq)]
+enum Field {
+    Plain(String),
+    Callback(Sig),
 }
 
 fn block<'a>(src: &'a str, opener: &str) -> &'a str {
@@ -68,8 +129,18 @@ fn block<'a>(src: &'a str, opener: &str) -> &'a str {
     &src[start..start + len]
 }
 
-/// `(field, callback arity)` in declaration order; `ctx` has no arity.
-fn header_fields(header: &str) -> Vec<(String, Option<usize>)> {
+fn header_typedef(header: &str, name: &str) -> Sig {
+    let marker = format!("(*{name})(");
+    let at = header
+        .find(&marker)
+        .unwrap_or_else(|| panic!("typedef {name} not found"));
+    let typedef = header[..at].rfind("typedef").expect("typedef keyword") + "typedef".len();
+    let ret = c_to_rust(&header[typedef..at]);
+    let (params, _) = split_params(&header[at + marker.len()..]);
+    (params.into_iter().map(c_param).collect(), ret)
+}
+
+fn header_fields(header: &str) -> Vec<(String, Field)> {
     block(header, "typedef struct IstmoIosCallbacks {")
         .split(';')
         .map(str::trim)
@@ -78,69 +149,85 @@ fn header_fields(header: &str) -> Vec<(String, Option<usize>)> {
             let (ty, name) = decl
                 .rsplit_once(char::is_whitespace)
                 .expect("type and name");
+            let stars = name.len() - name.trim_start_matches('*').len();
             let name = name.trim_start_matches('*').to_owned();
-            let ty = ty.trim();
-            let arity = (ty != "void").then(|| {
-                let typedef = format!("(*{ty})(");
-                let at = header
-                    .find(&typedef)
-                    .unwrap_or_else(|| panic!("typedef {ty} not found"));
-                arity(&header[at + typedef.len()..])
-            });
-            (name, arity)
+            let ty = format!("{}{}", ty.trim(), " *".repeat(stars));
+            let field = if ty.starts_with("Istmo") && ty.ends_with("Fn") {
+                Field::Callback(header_typedef(header, &ty))
+            } else {
+                Field::Plain(c_to_rust(&ty))
+            };
+            (name, field)
         })
         .collect()
 }
 
-fn rust_fields(rust: &str) -> Vec<(String, Option<usize>)> {
-    block(rust, "pub struct IstmoIosCallbacks {")
-        .split(',')
-        .map(str::trim)
-        .filter(|decl| !decl.is_empty())
+fn rust_alias(rust: &str, alias: &str) -> Sig {
+    let def = format!("pub type {alias} =");
+    let at = rust
+        .find(&def)
+        .unwrap_or_else(|| panic!("alias {alias} not found"));
+    let open = rust[at..].find("fn(").expect("fn pointer alias") + at + 3;
+    let (params, tail) = split_params(&rust[open..]);
+    (
+        params.into_iter().map(rust_param).collect(),
+        rust_return(tail),
+    )
+}
+
+fn rust_fields(rust: &str) -> Vec<(String, Field)> {
+    let body = block(rust, "pub struct IstmoIosCallbacks {");
+    let (fields, _) = split_params(body);
+    fields
+        .into_iter()
         .map(|decl| {
             let decl = decl.strip_prefix("pub ").expect("public field");
             let (name, ty) = decl.split_once(':').expect("name: type");
-            let ty = ty.trim();
-            let arity = ty
+            let ty = normalise(ty);
+            let field = ty
                 .strip_prefix("Option<")
                 .and_then(|t| t.strip_suffix('>'))
-                .map(|alias| {
-                    let def = format!("pub type {alias} =");
-                    let at = rust
-                        .find(&def)
-                        .unwrap_or_else(|| panic!("alias {alias} not found"));
-                    let open = rust[at..].find("fn(").expect("fn pointer alias") + at + 3;
-                    arity(&rust[open..])
-                });
-            (name.trim().to_owned(), arity)
+                .map_or_else(
+                    || Field::Plain(ty.clone()),
+                    |alias| Field::Callback(rust_alias(rust, alias)),
+                );
+            (name.trim().to_owned(), field)
         })
         .collect()
 }
 
-/// `(name, arity)` of every `#[unsafe(no_mangle)]` function.
-fn rust_exports(rust: &str) -> Vec<(String, usize)> {
+/// `(name, signature)` of every `#[unsafe(no_mangle)]` function.
+fn rust_exports(rust: &str) -> Vec<(String, Sig)> {
     rust.split("#[unsafe(no_mangle)]")
         .skip(1)
         .map(|item| {
             let fn_at = item.find("fn ").expect("exported fn") + 3;
             let open = item[fn_at..].find('(').expect("parameter list") + fn_at;
+            let (params, tail) = split_params(&item[open + 1..]);
             (
                 item[fn_at..open].trim().to_owned(),
-                arity(&item[open + 1..]),
+                (
+                    params.into_iter().map(rust_param).collect(),
+                    rust_return(tail),
+                ),
             )
         })
         .collect()
 }
 
-fn header_function(header: &str, name: &str) -> Option<usize> {
+fn header_function(header: &str, name: &str) -> Option<Sig> {
     // Declarations sit at the start of a line: `<ret> name(`.
-    header.lines().enumerate().find_map(|(i, line)| {
-        let open = format!(" {name}(");
-        line.find(&open).map(|at| {
-            let offset: usize = header.lines().take(i).map(|l| l.len() + 1).sum();
-            arity(&header[offset + at + open.len()..])
-        })
-    })
+    let open = format!(" {name}(");
+    let mut offset = 0;
+    for line in header.lines() {
+        if let Some(at) = line.find(&open) {
+            let ret = c_to_rust(&line[..at]);
+            let (params, _) = split_params(&header[offset + at + open.len()..]);
+            return Some((params.into_iter().map(c_param).collect(), ret));
+        }
+        offset += line.len() + 1;
+    }
+    None
 }
 
 #[test]
@@ -156,18 +243,15 @@ fn header_matches_rust_exports() {
     assert_eq!(
         header_fields(&header),
         rust_fields(&rust),
-        "IstmoIosCallbacks fields (name, callback arity) differ between istmo_ffi.h and cdecl_exports.rs",
+        "IstmoIosCallbacks fields (name, type) differ between istmo_ffi.h and cdecl_exports.rs",
     );
 
     let exports = rust_exports(&rust);
     assert!(!exports.is_empty(), "no #[unsafe(no_mangle)] exports found");
-    for (name, rust_arity) in &exports {
-        let header_arity = header_function(&header, name)
+    for (name, rust_sig) in &exports {
+        let header_sig = header_function(&header, name)
             .unwrap_or_else(|| panic!("`{name}` is exported but not declared in istmo_ffi.h"));
-        assert_eq!(
-            header_arity, *rust_arity,
-            "`{name}` parameter count differs"
-        );
+        assert_eq!(&header_sig, rust_sig, "`{name}` signature differs");
     }
 
     let declared = header
@@ -184,4 +268,14 @@ fn header_matches_rust_exports() {
             "`{name}` is declared in istmo_ffi.h but not exported by cdecl_exports.rs",
         );
     }
+}
+
+#[test]
+fn c_types_map_onto_rust_spelling() {
+    assert_eq!(c_param("const uint8_t *payload"), "*const u8");
+    assert_eq!(c_param("void *ctx"), "*mut c_void");
+    assert_eq!(c_param("uint64_t call_id"), "u64");
+    assert_eq!(rust_param("payload_len: usize"), "usize");
+    assert_eq!(rust_return(" -> bool {"), "bool");
+    assert_eq!(rust_return(" {"), "()");
 }
