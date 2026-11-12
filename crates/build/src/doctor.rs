@@ -130,20 +130,20 @@ impl<'a> Doctor<'a> {
             });
         }
         let ios_root = ios_app.parent().unwrap_or(ios_app);
-        if let Ok(project) = fs::read_to_string(ios_root.join("project.yml")) {
-            if !project.contains("istmo-plugins.yml") {
-                findings.push(Finding {
-                    message: format!(
-                        "ios/project.yml does not include the generated fragment; add \
-                         `include: [{{ path: {}/istmo-plugins.yml }}]` so plugin sources, build \
-                         settings and the cargo build phase reach the Xcode project",
-                        ios_app
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("<App>")
-                    ),
-                });
-            }
+        if let Ok(project) = fs::read_to_string(ios_root.join("project.yml"))
+            && !project.contains("istmo-plugins.yml")
+        {
+            findings.push(Finding {
+                message: format!(
+                    "ios/project.yml does not include the generated fragment; add \
+                     `include: [{{ path: {}/istmo-plugins.yml }}]` so plugin sources, build \
+                     settings and the cargo build phase reach the Xcode project",
+                    ios_app
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("<App>")
+                ),
+            });
         }
         let Ok(plist) = fs::read_to_string(ios_app.join("Info.plist")) else {
             return;

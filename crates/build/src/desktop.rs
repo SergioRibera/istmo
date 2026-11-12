@@ -273,10 +273,10 @@ fn render_windows_install(contract: &DesktopServiceContract) -> String {
             quote_ps(&contract.windows_dependencies.join("/")),
         ));
     }
-    if contract.scope == ServiceScope::System {
-        if let Some(user) = &contract.user {
-            create_args.push(format!("obj= {}", quote_ps(user)));
-        }
+    if contract.scope == ServiceScope::System
+        && let Some(user) = &contract.user
+    {
+        create_args.push(format!("obj= {}", quote_ps(user)));
     }
     let _ = writeln!(
         out,

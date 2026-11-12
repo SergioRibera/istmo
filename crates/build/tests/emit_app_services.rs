@@ -20,7 +20,7 @@ interval_minutes = 15
 
 fn scratch_root(subdir: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
-    path.push(format!("istmo-emit-app-{}-{}", subdir, std::process::id(),));
+    path.push(format!("istmo-emit-app-{}-{}", subdir, std::process::id()));
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).unwrap();
     path
@@ -39,17 +39,17 @@ fn emit_app_writes_kotlin_service_class_and_sidecar() {
     .unwrap();
 
     let manifest = Manifest::parse(SERVICE_MANIFEST).unwrap();
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.android_root = Some(android_root.clone());
-    opts.ios = Some(false);
-    opts.extra_manifests = vec![manifest];
-    opts.lib_name = Some("myapp".to_owned());
-    opts.extra_contracts = vec![]; // ensure `!contracts.is_empty()` short-circuit is bypassed via manifest side
-
-    // emit_app currently early-returns if contracts is empty; feed a dummy
-    // contract so the flow reaches the service/background emit.
-    opts.extra_contracts.push(dummy_contract());
+    let opts = AppOpts {
+        root: Some(root.clone()),
+        android_root: Some(android_root.clone()),
+        ios: Some(false),
+        extra_manifests: vec![manifest],
+        lib_name: Some("myapp".to_owned()),
+        // A dummy contract keeps the run on the full codegen path that
+        // reaches the service/background emit.
+        extra_contracts: vec![dummy_contract()],
+        ..AppOpts::default()
+    };
 
     emit_app_with(opts);
 
@@ -84,12 +84,14 @@ fn emit_app_writes_swift_bgtask_and_sidecar() {
     fs::create_dir_all(ios_root.join("MyApp.xcodeproj")).unwrap();
 
     let manifest = Manifest::parse(SERVICE_MANIFEST).unwrap();
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.ios_root = Some(ios_root.clone());
-    opts.android = Some(false);
-    opts.extra_manifests = vec![manifest];
-    opts.extra_contracts = vec![dummy_contract()];
+    let opts = AppOpts {
+        root: Some(root.clone()),
+        ios_root: Some(ios_root.clone()),
+        android: Some(false),
+        extra_manifests: vec![manifest],
+        extra_contracts: vec![dummy_contract()],
+        ..AppOpts::default()
+    };
 
     emit_app_with(opts);
 
@@ -136,13 +138,15 @@ fn emit_app_patches_android_manifest_between_markers() {
     .unwrap();
 
     let manifest = Manifest::parse(SERVICE_MANIFEST).unwrap();
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.android_root = Some(android_root.clone());
-    opts.ios = Some(false);
-    opts.extra_manifests = vec![manifest];
-    opts.lib_name = Some("myapp".to_owned());
-    opts.extra_contracts = vec![dummy_contract()];
+    let opts = AppOpts {
+        root: Some(root.clone()),
+        android_root: Some(android_root.clone()),
+        ios: Some(false),
+        extra_manifests: vec![manifest],
+        lib_name: Some("myapp".to_owned()),
+        extra_contracts: vec![dummy_contract()],
+        ..AppOpts::default()
+    };
 
     emit_app_with(opts);
 
@@ -157,13 +161,15 @@ fn emit_app_patches_android_manifest_between_markers() {
 
     // Idempotent: second run must not grow the managed block.
     let manifest = Manifest::parse(SERVICE_MANIFEST).unwrap();
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.android_root = Some(android_root.clone());
-    opts.ios = Some(false);
-    opts.extra_manifests = vec![manifest];
-    opts.lib_name = Some("myapp".to_owned());
-    opts.extra_contracts = vec![dummy_contract()];
+    let opts = AppOpts {
+        root: Some(root.clone()),
+        android_root: Some(android_root),
+        ios: Some(false),
+        extra_manifests: vec![manifest],
+        lib_name: Some("myapp".to_owned()),
+        extra_contracts: vec![dummy_contract()],
+        ..AppOpts::default()
+    };
     emit_app_with(opts);
     let second = fs::read_to_string(&android_manifest_path).unwrap();
     assert_eq!(patched, second);
@@ -194,12 +200,14 @@ fn emit_app_patches_ios_info_plist_between_markers() {
     .unwrap();
 
     let manifest = Manifest::parse(SERVICE_MANIFEST).unwrap();
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.ios_root = Some(ios_root.clone());
-    opts.android = Some(false);
-    opts.extra_manifests = vec![manifest];
-    opts.extra_contracts = vec![dummy_contract()];
+    let opts = AppOpts {
+        root: Some(root.clone()),
+        ios_root: Some(ios_root),
+        android: Some(false),
+        extra_manifests: vec![manifest],
+        extra_contracts: vec![dummy_contract()],
+        ..AppOpts::default()
+    };
 
     emit_app_with(opts);
 
@@ -252,15 +260,17 @@ fn emit_app_merges_plugin_info_plist_entries_with_app_overrides() {
 
     let emit = |app_toml: &str| {
         fs::write(root.join("istmo.toml"), app_toml).unwrap();
-        let mut opts = AppOpts::default();
-        opts.root = Some(root.clone());
-        opts.ios_root = Some(ios_root.clone());
-        opts.android = Some(false);
-        opts.extra_manifests = vec![
-            Manifest::parse(INFO_PLIST_MANIFEST).unwrap(),
-            Manifest::parse(OTHER_INFO_PLIST_MANIFEST).unwrap(),
-        ];
-        opts.extra_contracts = vec![dummy_contract()];
+        let opts = AppOpts {
+            root: Some(root.clone()),
+            ios_root: Some(ios_root.clone()),
+            android: Some(false),
+            extra_manifests: vec![
+                Manifest::parse(INFO_PLIST_MANIFEST).unwrap(),
+                Manifest::parse(OTHER_INFO_PLIST_MANIFEST).unwrap(),
+            ],
+            extra_contracts: vec![dummy_contract()],
+            ..AppOpts::default()
+        };
         emit_app_with(opts);
         fs::read_to_string(&plist_path).unwrap()
     };
@@ -348,13 +358,15 @@ fn emit_app_merges_plugin_plist_fragments_into_marked_info_plist() {
     )
     .unwrap();
 
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.ios_root = Some(ios_root.clone());
-    opts.ios_app_dir = Some("MyApp".to_owned());
-    opts.android = Some(false);
-    opts.extra_contracts.push(dummy_contract());
-    opts.extra_native_ios_dirs = vec![("ISTMO_SHARE".to_owned(), plugin_dir.clone())];
+    let opts = AppOpts {
+        root: Some(root.clone()),
+        ios_root: Some(ios_root),
+        ios_app_dir: Some("MyApp".to_owned()),
+        android: Some(false),
+        extra_contracts: vec![dummy_contract()],
+        extra_native_ios_dirs: vec![("ISTMO_SHARE".to_owned(), plugin_dir)],
+        ..AppOpts::default()
+    };
     emit_app_with(opts);
 
     let info = fs::read_to_string(app_dir.join("Info.plist")).unwrap();

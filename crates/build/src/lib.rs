@@ -39,7 +39,7 @@
 //! - [`swift`] / [`swift_host`] / [`swift_types`] — Swift generators.
 //! - [`rust`] — Rust-side type generators (used by the plugin schema
 //!   crate).
-//! - [`native_deps`] — Gradle / SwiftPM dependency aggregation.
+//! - [`native_deps`] — Gradle / `SwiftPM` dependency aggregation.
 //! - [`ios`] — iOS background mode + entitlements contract.
 //! - [`service`] / [`worker`] — Android service / worker artefacts.
 //! - [`desktop`] — systemd unit, launchd plist, Windows sc.exe and

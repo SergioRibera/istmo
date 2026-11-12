@@ -245,9 +245,8 @@ fn walk_glob(
         if !file_type.is_file() {
             continue;
         }
-        let rel = match path.strip_prefix(root) {
-            Ok(r) => r,
-            Err(_) => continue,
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
         };
         if matcher.is_match(rel) {
             let source_abs = canonical_or_absolute(&path)?;

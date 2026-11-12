@@ -263,14 +263,14 @@ pub fn resolve_wired_entries(
     let mut selected = Vec::new();
     let mut seen_ids = Vec::new();
     for entry in all {
-        let keep = match entry.client_type.as_deref() {
-            // Plugins with no client type carry no wire-level surface
-            // the app can `runtime!`-list — include unconditionally
-            // so service-only / background-only plugins ship when
-            // present, matching pre-filter behavior.
-            None => true,
-            Some(ct) => wanted.contains(&last_segment(ct)),
-        };
+        // Plugins with no client type carry no wire-level surface the
+        // app can `runtime!`-list — include unconditionally so
+        // service-only / background-only plugins ship when present,
+        // matching pre-filter behavior.
+        let keep = entry
+            .client_type
+            .as_deref()
+            .is_none_or(|ct| wanted.contains(&last_segment(ct)));
         if !keep {
             continue;
         }
@@ -427,32 +427,32 @@ mod tests {
 
     #[test]
     fn mixed_with_other_sections() {
-        let s = r#"
+        let s = r"
             istmo::runtime!(
                 plugins: [FooClient],
                 remote: [BazClient],
                 expects: [some::Trait],
             );
-        "#;
+        ";
         assert_eq!(extract(s), vec!["FooClient"]);
     }
 
     #[test]
     fn invocation_inside_fn() {
-        let s = r#"
+        let s = r"
             fn main() {
                 istmo::runtime!(plugins: [A, B]);
             }
-        "#;
+        ";
         assert_eq!(extract(s), vec!["A", "B"]);
     }
 
     #[test]
     fn short_form_after_use() {
-        let s = r#"
+        let s = r"
             use istmo::runtime;
             runtime!(plugins: [X]);
-        "#;
+        ";
         assert_eq!(extract(s), vec!["X"]);
     }
 
@@ -489,7 +489,7 @@ mod tests {
     fn resolve_matches_builtin_by_last_segment() {
         let selected = resolve_wired_entries(
             &[],
-            &vec!["NetworkStateClient".to_owned(), "SystemInfo".to_owned()],
+            &["NetworkStateClient".to_owned(), "SystemInfo".to_owned()],
         );
         let ids: Vec<_> = selected.iter().map(|e| e.id.as_str()).collect();
         assert!(ids.contains(&"istmo.network_state"));
@@ -500,14 +500,14 @@ mod tests {
     #[test]
     fn resolve_handles_qualified_path() {
         let selected =
-            resolve_wired_entries(&[], &vec!["::istmo_plugins::BatteryStateClient".to_owned()]);
+            resolve_wired_entries(&[], &["::istmo_plugins::BatteryStateClient".to_owned()]);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].id, "istmo.battery_state");
     }
 
     #[test]
     fn resolve_excludes_unwired_builtins() {
-        let selected = resolve_wired_entries(&[], &vec!["SystemInfo".to_owned()]);
+        let selected = resolve_wired_entries(&[], &["SystemInfo".to_owned()]);
         let ids: Vec<_> = selected.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["istmo.system_info"]);
     }

@@ -93,7 +93,7 @@ pub fn emit_app() {
 
 /// Window icon staged in `OUT_DIR` for `istmo::app_icon!()`.
 const DESKTOP_ICON_PNG: &str = "istmo-app-icon.png";
-/// Large enough for HiDPI title bars and the Windows taskbar.
+/// Large enough for `HiDPI` title bars and the Windows taskbar.
 const DESKTOP_ICON_EDGE: u32 = 256;
 
 /// # Panics
@@ -167,9 +167,9 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
         &root,
         app_manifest.as_ref(),
         android_active.then_some(android_root.as_path()),
-        ios_active
-            .then(|| ios_app_dir.as_deref())
-            .flatten()
+        ios_app_dir
+            .as_deref()
+            .filter(|_| ios_active)
             .map(|dir| (ios_root.as_path(), dir, ios_plugins_subdir.as_str())),
     );
     emit_runtime_env(&app, app_config, &root, desktop_staging.as_deref());
@@ -385,7 +385,7 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
 
     emit_service_and_background(
         &wired_entries,
-        ServiceEmitOpts {
+        &ServiceEmitOpts {
             android_active,
             android_root: &android_root,
             android_package: android_package.as_deref(),
@@ -562,7 +562,7 @@ struct ServiceEmitOpts<'a> {
     lib_name: &'a str,
 }
 
-fn emit_service_and_background(wired: &[PluginEntry], opts: ServiceEmitOpts<'_>) {
+fn emit_service_and_background(wired: &[PluginEntry], opts: &ServiceEmitOpts<'_>) {
     let mut android_manifest_fragments: Vec<String> = Vec::new();
     let mut ios_plist_fragments: Vec<String> = Vec::new();
 
@@ -641,11 +641,12 @@ fn emit_service_and_background(wired: &[PluginEntry], opts: ServiceEmitOpts<'_>)
         write_android_manifest_sidecar(opts.android_root, &android_manifest_fragments);
         patch_android_manifest(opts.android_root, &android_manifest_fragments);
     }
-    if opts.ios_active && !ios_plist_fragments.is_empty() {
-        if let Some(app_dir) = opts.ios_app_dir {
-            write_ios_plist_sidecar(opts.ios_root, app_dir, &ios_plist_fragments);
-            patch_ios_info_plist(opts.ios_root, app_dir, &ios_plist_fragments);
-        }
+    if opts.ios_active
+        && !ios_plist_fragments.is_empty()
+        && let Some(app_dir) = opts.ios_app_dir
+    {
+        write_ios_plist_sidecar(opts.ios_root, app_dir, &ios_plist_fragments);
+        patch_ios_info_plist(opts.ios_root, app_dir, &ios_plist_fragments);
     }
 }
 
@@ -731,7 +732,7 @@ fn emit_ios_background(
     artifacts.info_plist_fragment
 }
 
-fn ios_kind_from_spec(spec: &IosBackgroundKindSpec) -> BackgroundKind {
+const fn ios_kind_from_spec(spec: &IosBackgroundKindSpec) -> BackgroundKind {
     match spec {
         IosBackgroundKindSpec::Refresh { interval_minutes } => BackgroundKind::Refresh {
             interval_minutes: *interval_minutes,
@@ -1279,21 +1280,17 @@ fn kotlin_method_name(rust_snake: &str) -> String {
 
 #[must_use]
 pub fn detect_android_package(android_root: &Path) -> Option<String> {
-    for name in ["build.gradle.kts", "build.gradle"] {
-        let path = android_root.join("app").join(name);
-        if let Ok(text) = fs::read_to_string(&path) {
-            if let Some(ns) = extract_namespace(&text) {
-                return Some(ns);
-            }
-        }
-    }
-    let manifest = android_root.join("app/src/main/AndroidManifest.xml");
-    if let Ok(text) = fs::read_to_string(&manifest) {
-        if let Some(pkg) = extract_manifest_package(&text) {
-            return Some(pkg);
-        }
-    }
-    None
+    ["build.gradle.kts", "build.gradle"]
+        .into_iter()
+        .find_map(|name| {
+            let text = fs::read_to_string(android_root.join("app").join(name)).ok()?;
+            extract_namespace(&text)
+        })
+        .or_else(|| {
+            let text =
+                fs::read_to_string(android_root.join("app/src/main/AndroidManifest.xml")).ok()?;
+            extract_manifest_package(&text)
+        })
 }
 
 /// Desktop targets: stage the window icon PNG behind
@@ -1358,8 +1355,7 @@ fn emit_runtime_env(
     let bundle_id = app
         .id
         .as_ref()
-        .map(|id| id.as_str().to_owned())
-        .unwrap_or_else(|| app.krate.package.clone());
+        .map_or_else(|| app.krate.package.clone(), |id| id.as_str().to_owned());
     println!("cargo::rustc-env=ISTMO_APP_BUNDLE_ID={bundle_id}");
     println!(
         "cargo::rustc-env=ISTMO_SINGLE_INSTANCE={}",

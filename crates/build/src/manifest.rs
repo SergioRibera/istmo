@@ -109,7 +109,7 @@ pub struct PluginEntry {
     /// Whether `emit_app` should auto-register this plugin's dispatcher
     /// in the generated `IstmoPluginRegistry`. Default `true`. Plugins
     /// with bespoke construction (custom config, non-standard
-    /// BackendImpl signature) set this to `false` and expect the app
+    /// `BackendImpl` signature) set this to `false` and expect the app
     /// author to register the handler manually.
     pub auto_register: bool,
 
@@ -1110,7 +1110,7 @@ fn parse_swift_package(
             "url" => url = Some(expect_string_ctx(item, context, "url")?),
             "product" => product = Some(expect_string_ctx(item, context, "product")?),
             "from_version" => {
-                from_version = Some(expect_string_ctx(item, context, "from_version")?)
+                from_version = Some(expect_string_ctx(item, context, "from_version")?);
             }
             other => {
                 return Err(ManifestError::UnknownKey {
@@ -1168,9 +1168,9 @@ pub(crate) fn parse_android_permissions(
     let mut out = Vec::with_capacity(array.len());
     for value in array {
         let perm = match value {
-            Value::String(s) => AndroidPermission::new(s.value().clone()),
+            Value::String(s) => AndroidPermission::new(s.value()),
             Value::InlineTable(table) => {
-                for (ident, _) in &*table {
+                for (ident, _) in table {
                     if !KNOWN_PERMISSION_KEYS.contains(&ident) {
                         return Err(ManifestError::UnknownKey {
                             key: format!("{key}.{ident}"),

@@ -37,11 +37,13 @@ fn wired_builtin_emits_matching_permission_sidecar() {
     let android_root = seed_android_project(&root);
     write_runtime_src(&root, "istmo::runtime!(plugins: [NetworkStateClient]);\n");
 
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.android_root = Some(android_root.clone());
-    opts.ios = Some(false);
-    opts.lib_name = Some("app".into());
+    let opts = AppOpts {
+        root: Some(root),
+        android_root: Some(android_root.clone()),
+        ios: Some(false),
+        lib_name: Some("app".into()),
+        ..AppOpts::default()
+    };
 
     emit_app_with(opts);
 
@@ -64,11 +66,13 @@ fn unwired_builtin_omits_permission() {
     let android_root = seed_android_project(&root);
     write_runtime_src(&root, "istmo::runtime!(plugins: [SystemInfo]);\n");
 
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.android_root = Some(android_root.clone());
-    opts.ios = Some(false);
-    opts.lib_name = Some("app".into());
+    let opts = AppOpts {
+        root: Some(root),
+        android_root: Some(android_root.clone()),
+        ios: Some(false),
+        lib_name: Some("app".into()),
+        ..AppOpts::default()
+    };
 
     emit_app_with(opts);
 
@@ -97,11 +101,13 @@ android_permissions = [
     )
     .unwrap();
 
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.android_root = Some(android_root.clone());
-    opts.ios = Some(false);
-    opts.lib_name = Some("app".into());
+    let opts = AppOpts {
+        root: Some(root),
+        android_root: Some(android_root.clone()),
+        ios: Some(false),
+        lib_name: Some("app".into()),
+        ..AppOpts::default()
+    };
 
     emit_app_with(opts);
 
@@ -129,12 +135,14 @@ android_permissions = ["android.permission.BLUETOOTH"]
     )
     .unwrap();
 
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.android_root = Some(android_root.clone());
-    opts.ios = Some(false);
-    opts.lib_name = Some("app".into());
-    opts.extra_manifests = vec![dep];
+    let opts = AppOpts {
+        root: Some(root),
+        android_root: Some(android_root.clone()),
+        ios: Some(false),
+        lib_name: Some("app".into()),
+        extra_manifests: vec![dep],
+        ..AppOpts::default()
+    };
 
     emit_app_with(opts);
 
@@ -153,11 +161,13 @@ fn empty_wired_set_emits_empty_manifest() {
     let android_root = seed_android_project(&root);
     write_runtime_src(&root, "fn main() {}\n");
 
-    let mut opts = AppOpts::default();
-    opts.root = Some(root.clone());
-    opts.android_root = Some(android_root.clone());
-    opts.ios = Some(false);
-    opts.lib_name = Some("app".into());
+    let opts = AppOpts {
+        root: Some(root),
+        android_root: Some(android_root.clone()),
+        ios: Some(false),
+        lib_name: Some("app".into()),
+        ..AppOpts::default()
+    };
 
     emit_app_with(opts);
 
