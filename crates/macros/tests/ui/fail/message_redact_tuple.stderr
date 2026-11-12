@@ -1,0 +1,5 @@
+error: `#[redact]` requires a struct with named fields
+ --> tests/ui/fail/message_redact_tuple.rs:2:19
+  |
+2 | pub struct Secret(#[redact] String);
+  |                   ^^^^^^^^^

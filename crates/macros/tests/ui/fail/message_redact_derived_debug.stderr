@@ -1,0 +1,5 @@
+error: a struct with `#[redact]` fields gets its `Debug` impl from `#[istmo::message]`; remove `Debug` from the derive
+ --> tests/ui/fail/message_redact_derived_debug.rs:2:17
+  |
+2 | #[derive(Clone, Debug)]
+  |                 ^^^^^

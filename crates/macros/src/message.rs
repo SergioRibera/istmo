@@ -26,6 +26,10 @@ fn expand_enum(args: &MessageArgs, item: &syn::ItemEnum) -> syn::Result<TokenStr
             &variant.fields,
             "`#[handle]` is not supported inside enums; carry the handle in a `#[message]` struct field",
         )?;
+        reject_redact_attrs(
+            &variant.fields,
+            "`#[redact]` is not supported inside enums; carry the secret in a `#[message]` struct field",
+        )?;
     }
     let derive = args.derive();
     Ok(quote! {
@@ -40,14 +44,30 @@ fn expand_struct(args: &MessageArgs, mut wire: ItemStruct) -> syn::Result<TokenS
             &wire.fields,
             "`#[handle]` requires a struct with named fields",
         )?;
+        reject_redact_attrs(
+            &wire.fields,
+            "`#[redact]` requires a struct with named fields",
+        )?;
     }
     let handles = collect_handle_fields(&wire)?;
-    strip_handle_attrs(&mut wire);
+    let redacted = collect_redacted_fields(&wire)?;
+    if !redacted.is_empty() {
+        reject_derived_debug(&wire)?;
+    }
+    strip_marker_attrs(&mut wire);
 
     let derive = args.derive();
+    // A struct with secrets gets its `Debug` from the macro: a derived
+    // one would print them.
+    let wire_debug = if redacted.is_empty() {
+        quote! {}
+    } else {
+        generate_debug(&wire, &wire.ident, &redacted)
+    };
     let wire_tokens = quote! {
         #derive
         #wire
+        #wire_debug
     };
 
     if handles.is_empty() {
@@ -55,7 +75,7 @@ fn expand_struct(args: &MessageArgs, mut wire: ItemStruct) -> syn::Result<TokenS
     }
 
     let root = &args.crate_path;
-    let owned = generate_owned_struct(&wire, &handles, root);
+    let owned = generate_owned_struct(&wire, &handles, &redacted, root);
     let adapter = generate_into_owned(&wire, &handles, root);
 
     Ok(quote! {
@@ -79,6 +99,54 @@ fn reject_handle_attrs(fields: &Fields, message: &str) -> syn::Result<()> {
         .flat_map(|f| &f.attrs)
         .find(|a| is_handle_attr(a))
         .map_or(Ok(()), |attr| Err(syn::Error::new_spanned(attr, message)))
+}
+
+/// `#[redact]` is consumed the same way as `#[handle]`.
+fn reject_redact_attrs(fields: &Fields, message: &str) -> syn::Result<()> {
+    fields
+        .iter()
+        .flat_map(|f| &f.attrs)
+        .find(|a| is_marker_attr(a, "redact"))
+        .map_or(Ok(()), |attr| Err(syn::Error::new_spanned(attr, message)))
+}
+
+/// Indices of the fields marked `#[redact]`.
+fn collect_redacted_fields(s: &ItemStruct) -> syn::Result<Vec<usize>> {
+    let Fields::Named(named) = &s.fields else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for (index, f) in named.named.iter().enumerate() {
+        let Some(attr) = f.attrs.iter().find(|a| is_marker_attr(a, "redact")) else {
+            continue;
+        };
+        if !matches!(attr.meta, syn::Meta::Path(_)) {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "`#[redact]` takes no arguments",
+            ));
+        }
+        out.push(index);
+    }
+    Ok(out)
+}
+
+/// The macro writes `Debug` for a struct with `#[redact]` fields, so a
+/// derived one would collide with it (and print the secrets).
+fn reject_derived_debug(s: &ItemStruct) -> syn::Result<()> {
+    for attr in s.attrs.iter().filter(|a| a.path().is_ident("derive")) {
+        let paths = attr.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?;
+        if let Some(debug) = paths
+            .iter()
+            .find(|p| p.segments.last().is_some_and(|seg| seg.ident == "Debug"))
+        {
+            return Err(syn::Error::new_spanned(
+                debug,
+                "a struct with `#[redact]` fields gets its `Debug` impl from `#[istmo::message]`; remove `Debug` from the derive",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn collect_handle_fields(s: &ItemStruct) -> syn::Result<Vec<HandleField>> {
@@ -113,6 +181,11 @@ fn handle_marker(attrs: &[Attribute]) -> syn::Result<Option<syn::Type>> {
 }
 
 fn is_handle_attr(attr: &Attribute) -> bool {
+    is_marker_attr(attr, "handle")
+}
+
+/// `#[marker]`, `#[istmo::marker]` or `#[istmo_macros::marker]`.
+fn is_marker_attr(attr: &Attribute, marker: &str) -> bool {
     let segs: Vec<String> = attr
         .path()
         .segments
@@ -120,21 +193,60 @@ fn is_handle_attr(attr: &Attribute) -> bool {
         .map(|s| s.ident.to_string())
         .collect();
     match segs.as_slice() {
-        [only] => only == "handle",
-        [ns, name] => (ns == "istmo" || ns == "istmo_macros") && name == "handle",
+        [only] => only == marker,
+        [ns, name] => (ns == "istmo" || ns == "istmo_macros") && name == marker,
         _ => false,
     }
 }
 
-fn strip_handle_attrs(s: &mut ItemStruct) {
+fn strip_marker_attrs(s: &mut ItemStruct) {
     if let Fields::Named(named) = &mut s.fields {
         for f in &mut named.named {
-            f.attrs.retain(|a| !is_handle_attr(a));
+            f.attrs
+                .retain(|a| !is_marker_attr(a, "handle") && !is_marker_attr(a, "redact"));
         }
     }
 }
 
-fn generate_owned_struct(wire: &ItemStruct, handles: &[HandleField], root: &Path) -> TokenStream {
+/// `Debug` for a named-field struct shaped like `wire` and named `ident`,
+/// printing `<redacted>` for the fields at `redacted`. Type parameters
+/// are bounded by `Debug`, as the derive does.
+fn generate_debug(wire: &ItemStruct, ident: &syn::Ident, redacted: &[usize]) -> TokenStream {
+    let Fields::Named(named) = &wire.fields else {
+        return quote! {};
+    };
+    let mut generics = wire.generics.clone();
+    for param in generics.type_params_mut() {
+        param.bounds.push(parse_quote!(::core::fmt::Debug));
+    }
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let name = ident.to_string();
+    let fields = named.named.iter().enumerate().map(|(idx, f)| {
+        let field = &f.ident;
+        let label = field.as_ref().map(ToString::to_string).unwrap_or_default();
+        if redacted.contains(&idx) {
+            quote! { .field(#label, &::core::format_args!("<redacted>")) }
+        } else {
+            quote! { .field(#label, &self.#field) }
+        }
+    });
+    quote! {
+        impl #impl_generics ::core::fmt::Debug for #ident #ty_generics #where_clause {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                f.debug_struct(#name)
+                    #(#fields)*
+                    .finish()
+            }
+        }
+    }
+}
+
+fn generate_owned_struct(
+    wire: &ItemStruct,
+    handles: &[HandleField],
+    redacted: &[usize],
+    root: &Path,
+) -> TokenStream {
     let vis = &wire.vis;
     let owned_ident = format_ident!("Owned{}", wire.ident);
     let generics = &wire.generics;
@@ -156,11 +268,13 @@ fn generate_owned_struct(wire: &ItemStruct, handles: &[HandleField], root: &Path
             },
         )
     });
+    // The wire type's field list, minus whatever `#[redact]` hides.
+    let debug = generate_debug(wire, &owned_ident, redacted);
     quote! {
-        #[derive(::core::fmt::Debug)]
         #vis struct #owned_ident #generics #where_clause {
             #(#fields,)*
         }
+        #debug
     }
 }
 

@@ -22,6 +22,8 @@
 //! - [`#[handle(T)]`](handle) — on a wire-struct field, requests that
 //!   the accompanying `_owned` variant materialize the field into a
 //!   [`NativeHandle<T>`](https://docs.rs/istmo-core/latest/istmo_core/native_handle/struct.NativeHandle.html).
+//! - [`#[redact]`](redact) — on a wire-struct field, hides it from the
+//!   `Debug` impl `#[message]` writes for the struct.
 //! - [`#[owned]`](owned) — on a trait method, opts into the `_owned`
 //!   client sibling that adopts every returned handle id into a
 //!   `NativeHandle`.
@@ -179,6 +181,8 @@ pub fn plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// A named-field struct whose fields carry [`#[handle(T)]`](macro@handle)
 /// also gets an `Owned<Name>` sibling and an `into_owned(&rt)` method.
+/// Fields marked [`#[redact]`](macro@redact) print as `<redacted>` in the
+/// `Debug` impl the macro then writes for the struct and its sibling.
 ///
 /// # Example
 ///
@@ -286,6 +290,32 @@ pub fn stream(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// side. Rejected on tuple structs and inside enums.
 #[proc_macro_attribute]
 pub fn handle(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
+/// Marker for secret fields of a named-field `#[message]` struct.
+///
+/// `#[message]` then writes the struct's `Debug` impl itself (so the
+/// struct must not derive `Debug`), printing `<redacted>` in place of
+/// every marked field; the `Owned*` sibling, if any, follows suit.
+/// Rejected on tuple structs and inside enums.
+///
+/// ```
+/// #[istmo::message]
+/// pub struct Login {
+///     pub user: String,
+///     #[redact]
+///     pub password: String,
+/// }
+///
+/// let login = Login { user: "ana".into(), password: "hunter2".into() };
+/// assert_eq!(
+///     format!("{login:?}"),
+///     r#"Login { user: "ana", password: <redacted> }"#,
+/// );
+/// ```
+#[proc_macro_attribute]
+pub fn redact(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 

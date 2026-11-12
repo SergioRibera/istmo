@@ -84,7 +84,7 @@
 
 pub use istmo_core::*;
 pub use istmo_macros::{
-    app_icon, handle, message, mobile_app, owned, plugin, runtime, service, stream, worker,
+    app_icon, handle, message, mobile_app, owned, plugin, redact, runtime, service, stream, worker,
 };
 
 /// First-party plugin surfaces (lifecycle, deep links, permissions,
