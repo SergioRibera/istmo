@@ -73,7 +73,7 @@ impl ServiceControl for MockControl {
             let mut g = self.inner.lock().unwrap();
             g.next_token += 1;
             g.wakelocks.push((service_id, tag));
-            WakelockToken(g.next_token)
+            WakelockToken::new(g.next_token)
         };
         Ok(token)
     }
@@ -154,7 +154,7 @@ fn wakelock_acquire_returns_token_and_release_forwards_it() {
 
     pollster::block_on(async {
         let lock = ctx.acquire_wakelock("network").await.unwrap();
-        assert_eq!(lock.token(), WakelockToken(1));
+        assert_eq!(lock.token(), WakelockToken::new(1));
         lock.release().await.unwrap();
     });
 
@@ -165,7 +165,7 @@ fn wakelock_acquire_returns_token_and_release_forwards_it() {
     );
     assert_eq!(
         snap.released,
-        vec![("myapp.sync".to_owned(), WakelockToken(1))]
+        vec![("myapp.sync".to_owned(), WakelockToken::new(1))]
     );
 }
 
@@ -177,7 +177,7 @@ fn wakelock_drop_forwards_release_via_notify_no_response_needed() {
 
     pollster::block_on(async {
         let lock = ctx.acquire_wakelock("bg-refresh").await.unwrap();
-        assert_eq!(lock.token(), WakelockToken(1));
+        assert_eq!(lock.token(), WakelockToken::new(1));
 
         drop(lock);
     });
@@ -191,7 +191,7 @@ fn wakelock_drop_forwards_release_via_notify_no_response_needed() {
     let snap = mock.snapshot();
     assert_eq!(
         snap.released,
-        vec![("myapp.sync".to_owned(), WakelockToken(1))],
+        vec![("myapp.sync".to_owned(), WakelockToken::new(1))],
         "drop should notify the host with the wakelock token",
     );
 }

@@ -57,6 +57,8 @@ istmo-build = { workspace = true }
 istmo-plugins-schema = { workspace = true }
 
 [dev-dependencies]
+istmo-build = { workspace = true }
+istmo-plugins-schema = { workspace = true }
 
 [lints.rust]
 unsafe_code = "allow"
