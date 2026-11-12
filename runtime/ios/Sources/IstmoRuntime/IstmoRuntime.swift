@@ -351,7 +351,7 @@ public final class IstmoRuntime {
 
     fileprivate func handleReleaseNativeHandle(handleId: UInt64) {
         let owner = queue.sync { self.handleOwners.removeValue(forKey: handleId) }
-        guard let ownerId = owner, let handler = queue.sync({ self.handlers[ownerId] }) else {
+        guard let ownerId = owner, let handler = queue.sync(execute: { self.handlers[ownerId] }) else {
             return
         }
         if let releaser = handler as? HandleReleaser {
