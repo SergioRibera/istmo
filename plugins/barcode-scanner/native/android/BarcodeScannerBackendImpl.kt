@@ -38,9 +38,14 @@ class BarcodeScannerBackendImpl(
         if (availability != ConnectionResult.SUCCESS) {
             throw BackendException(ScanError.Unavailable)
         }
+        val formats = config.formats.mapNotNull(::toMlKit)
+        // An empty list means "every format"; one that only became
+        // empty by dropping `Other` must not widen the scan.
+        if (formats.isEmpty() && config.formats.isNotEmpty()) {
+            throw BackendException(ScanError.Backend("none of the requested formats can be scanned"))
+        }
         val options = GmsBarcodeScannerOptions.Builder()
             .apply {
-                val formats = config.formats.map(::toMlKit)
                 if (formats.isNotEmpty()) {
                     setBarcodeFormats(formats.first(), *formats.drop(1).toIntArray())
                 }
@@ -51,11 +56,16 @@ class BarcodeScannerBackendImpl(
         suspendCancellableCoroutine { cont ->
             scanner.startScan()
                 .addOnSuccessListener { barcode ->
+                    // `rawValue` is null for payloads that are not text
+                    // (binary QR codes); that is still a successful read.
                     val text = barcode.rawValue
-                    if (text == null) {
-                        cont.resume(null)
+                    val raw = barcode.rawBytes
+                    if (text == null && raw == null) {
+                        cont.resumeWithException(
+                            BackendException(ScanError.Backend("scanner returned an empty code")),
+                        )
                     } else {
-                        cont.resume(ScannedCode(text, fromMlKit(barcode.format)))
+                        cont.resume(ScannedCode(text.orEmpty(), fromMlKit(barcode.format), raw))
                     }
                 }
                 .addOnCanceledListener { cont.resume(null) }
@@ -77,21 +87,38 @@ class BarcodeScannerBackendImpl(
         }
     }
 
-    private fun toMlKit(format: BarcodeFormat): Int = when (format) {
+    /** `null` for `Other`, which names no ML Kit format to ask for. */
+    private fun toMlKit(format: BarcodeFormat): Int? = when (format) {
         BarcodeFormat.Qr -> Barcode.FORMAT_QR_CODE
         BarcodeFormat.Aztec -> Barcode.FORMAT_AZTEC
         BarcodeFormat.DataMatrix -> Barcode.FORMAT_DATA_MATRIX
         BarcodeFormat.Pdf417 -> Barcode.FORMAT_PDF417
         BarcodeFormat.Code128 -> Barcode.FORMAT_CODE_128
         BarcodeFormat.Ean13 -> Barcode.FORMAT_EAN_13
+        BarcodeFormat.Ean8 -> Barcode.FORMAT_EAN_8
+        BarcodeFormat.UpcA -> Barcode.FORMAT_UPC_A
+        BarcodeFormat.UpcE -> Barcode.FORMAT_UPC_E
+        BarcodeFormat.Code39 -> Barcode.FORMAT_CODE_39
+        BarcodeFormat.Code93 -> Barcode.FORMAT_CODE_93
+        BarcodeFormat.Itf -> Barcode.FORMAT_ITF
+        BarcodeFormat.Codabar -> Barcode.FORMAT_CODABAR
+        BarcodeFormat.Other -> null
     }
 
     private fun fromMlKit(format: Int): BarcodeFormat = when (format) {
+        Barcode.FORMAT_QR_CODE -> BarcodeFormat.Qr
         Barcode.FORMAT_AZTEC -> BarcodeFormat.Aztec
         Barcode.FORMAT_DATA_MATRIX -> BarcodeFormat.DataMatrix
         Barcode.FORMAT_PDF417 -> BarcodeFormat.Pdf417
         Barcode.FORMAT_CODE_128 -> BarcodeFormat.Code128
         Barcode.FORMAT_EAN_13 -> BarcodeFormat.Ean13
-        else -> BarcodeFormat.Qr
+        Barcode.FORMAT_EAN_8 -> BarcodeFormat.Ean8
+        Barcode.FORMAT_UPC_A -> BarcodeFormat.UpcA
+        Barcode.FORMAT_UPC_E -> BarcodeFormat.UpcE
+        Barcode.FORMAT_CODE_39 -> BarcodeFormat.Code39
+        Barcode.FORMAT_CODE_93 -> BarcodeFormat.Code93
+        Barcode.FORMAT_ITF -> BarcodeFormat.Itf
+        Barcode.FORMAT_CODABAR -> BarcodeFormat.Codabar
+        else -> BarcodeFormat.Other
     }
 }

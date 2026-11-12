@@ -34,15 +34,48 @@ use istmo_macros::{message, plugin};
 pub const BARCODE_SCANNER_PLUGIN_ID: &str = "istmo.barcode_scanner";
 
 /// A symbology the scanner may look for.
+///
+/// Not every platform reads every format: iOS has no separate UPC-A
+/// (it reports those as [`Ean13`](Self::Ean13) with a leading `0`) and
+/// reads Codabar only from iOS 15.4. A requested format the platform
+/// cannot read is ignored.
+///
+/// New variants are only ever appended, so existing wire indices stay
+/// stable.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum BarcodeFormat {
+    /// QR code.
     Qr,
+    /// Aztec.
     Aztec,
+    /// Data Matrix.
     DataMatrix,
+    /// PDF417.
     Pdf417,
+    /// Code 128.
     Code128,
+    /// EAN-13.
     Ean13,
+    /// EAN-8.
+    Ean8,
+    /// UPC-A.
+    UpcA,
+    /// UPC-E.
+    UpcE,
+    /// Code 39.
+    Code39,
+    /// Code 93.
+    Code93,
+    /// Interleaved 2 of 5 (ITF, including ITF-14).
+    Itf,
+    /// Codabar.
+    Codabar,
+    /// A code the platform read but whose symbology has no variant
+    /// here. Never matches anything when requested in
+    /// [`ScanConfig::formats`].
+    Other,
 }
 
 /// What to scan for.
@@ -70,9 +103,15 @@ impl ScanConfig {
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ScannedCode {
-    /// Decoded text (UTF-8).
+    /// Decoded text (UTF-8). Empty when the payload is not text — read
+    /// [`raw`](Self::raw) then.
     pub text: String,
+    /// Symbology of the code.
     pub format: BarcodeFormat,
+    /// Raw payload bytes, when the platform exposes them. Android
+    /// always fills it (binary QR codes included); iOS leaves it `None`
+    /// and skips codes it cannot decode as text.
+    pub raw: Option<Vec<u8>>,
 }
 
 /// Why a scan could not run.

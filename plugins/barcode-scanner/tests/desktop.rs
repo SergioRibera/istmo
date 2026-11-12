@@ -17,6 +17,19 @@ fn qr_config_limits_formats() {
 }
 
 #[test]
+fn format_wire_indices_stay_stable() {
+    use istmo_barcode_scanner::BarcodeFormat;
+    for (format, index) in [
+        (BarcodeFormat::Qr, 0u8),
+        (BarcodeFormat::Ean13, 5),
+        (BarcodeFormat::Ean8, 6),
+        (BarcodeFormat::Other, 13),
+    ] {
+        assert_eq!(istmo_core::codec::encode(&format).expect("encode"), [index]);
+    }
+}
+
+#[test]
 fn plugin_error_payload_decodes_to_typed_error() {
     let bytes = istmo_core::codec::encode(&ScanError::PermissionDenied).expect("encode");
     let err = ScanError::from(istmo_core::IstmoError::PluginError { bytes });
