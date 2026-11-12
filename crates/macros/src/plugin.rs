@@ -18,6 +18,10 @@ use crate::common::{
 /// instead of buffering encoded items without limit.
 const STREAM_ENCODER_CAPACITY: usize = 64;
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "assembles the three emitted siblings; each piece is already its own function"
+)]
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let args: PluginArgs = parse2(attr)?;
     let mut trait_def: ItemTrait = parse2(item)?;
@@ -884,10 +888,11 @@ fn expand_error_bounds(specs: &[MethodSpec]) -> TokenStream {
     quote! { #(#asserts)* }
 }
 
-/// Assert, at the type's own span, that every wire type is a
-/// [`Message`](https://docs.rs/istmo-core/latest/istmo_core/message/trait.Message.html),
-/// so a missing `#[message]` points at the offending argument or return
-/// type instead of at the macro invocation.
+/// Assert, at the type's own span, that every wire type encodes, so a
+/// missing `#[message]` points at the offending argument or return type
+/// instead of at the macro invocation. Only `Encode` is checked: it is a
+/// single bound, while `Decode` would repeat the error once per decode
+/// size rung.
 fn expand_message_bounds(root: &Path, specs: &[MethodSpec]) -> TokenStream {
     let mut seen = std::collections::BTreeSet::new();
     let mut asserts = Vec::new();
@@ -898,7 +903,7 @@ fn expand_message_bounds(root: &Path, specs: &[MethodSpec]) -> TokenStream {
         let call = quote_spanned! {ty.span()=> __istmo_assert_message::<#ty>() };
         asserts.push(quote! {
             const _: fn() = || {
-                fn __istmo_assert_message<T: #root::Message>() {}
+                fn __istmo_assert_message<T: #root::codec::Encode>() {}
                 #call;
             };
         });
@@ -1020,32 +1025,30 @@ fn expand_stream_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> T
 }
 
 fn build_owned_return(ok_ty: &Type) -> syn::Result<(TokenStream, TokenStream)> {
-    if let Some(ident) = as_bare_ident(ok_ty) {
-        let owned_ident = format_ident!("Owned{}", ident);
-        return Ok((quote! { #owned_ident }, quote! { __wire.into_owned(__rt) }));
-    }
-
     if let Some(inner) = as_generic("Option", ok_ty)
-        && let Some(inner_ident) = as_bare_ident(inner)
+        && let Some(owned) = owned_sibling(inner)
     {
-        let owned_ident = format_ident!("Owned{}", inner_ident);
         return Ok((
-            quote! { ::core::option::Option<#owned_ident> },
+            quote! { ::core::option::Option<#owned> },
             quote! { __wire.map(|v| v.into_owned(__rt)) },
         ));
     }
 
     if let Some(inner) = as_generic("Vec", ok_ty)
-        && let Some(inner_ident) = as_bare_ident(inner)
+        && let Some(owned) = owned_sibling(inner)
     {
-        let owned_ident = format_ident!("Owned{}", inner_ident);
         return Ok((
-            quote! { ::std::vec::Vec<#owned_ident> },
+            quote! { ::std::vec::Vec<#owned> },
             quote! {
                 __wire.into_iter().map(|v| v.into_owned(__rt)).collect::<::std::vec::Vec<_>>()
             },
         ));
     }
+
+    if let Some(owned) = owned_sibling(ok_ty) {
+        return Ok((quote! { #owned }, quote! { __wire.into_owned(__rt) }));
+    }
+
     Err(syn::Error::new_spanned(
         ok_ty,
         "`#[istmo::owned]` supports return shapes `T`, `Option<T>` or `Vec<T>` where `T` \
@@ -1053,18 +1056,23 @@ fn build_owned_return(ok_ty: &Type) -> syn::Result<(TokenStream, TokenStream)> {
     ))
 }
 
-fn as_bare_ident(ty: &Type) -> Option<&Ident> {
+/// The `Owned*` sibling `#[message]` emits next to a wire struct:
+/// `api::Account<u8>` → `api::OwnedAccount<u8>`.
+fn owned_sibling(ty: &Type) -> Option<Type> {
     let Type::Path(TypePath { qself: None, path }) = ty else {
         return None;
     };
-    if path.segments.len() != 1 {
+    let last = path.segments.last()?;
+    if last.ident == "Option" || last.ident == "Vec" {
         return None;
     }
-    let seg = &path.segments[0];
-    if !matches!(seg.arguments, PathArguments::None) {
-        return None;
-    }
-    Some(&seg.ident)
+    let mut owned = path.clone();
+    let last = owned.segments.last_mut()?;
+    last.ident = format_ident!("Owned{}", last.ident, span = last.ident.span());
+    Some(Type::Path(TypePath {
+        qself: None,
+        path: owned,
+    }))
 }
 
 fn as_generic<'a>(wrapper: &str, ty: &'a Type) -> Option<&'a Type> {

@@ -2,7 +2,6 @@
 //! (`#[plugin]`, `#[service]`, `#[worker]`).
 
 use quote::quote;
-use syn::spanned::Spanned;
 use syn::{
     Expr, ExprLit, FnArg, GenericArgument, ItemTrait, Lit, LitStr, Path, PathArguments, ReturnType,
     Signature, Token, TraitItem, Type, parse_quote, parse_str,
@@ -217,8 +216,8 @@ pub(crate) fn classify_return(output: &ReturnType) -> syn::Result<ReturnShape> {
             ok: (*ok).clone(),
             err: Box::new((*err).clone()),
         }),
-        _ => Err(syn::Error::new(
-            ty.span(),
+        _ => Err(syn::Error::new_spanned(
+            &ty,
             "spell out the full `Result<T, E>`: an alias with a hidden error type \
              (such as `io::Result<T>`) cannot be split into a success payload and a domain error",
         )),
