@@ -109,7 +109,7 @@ pub use istmo_ios as ios;
 /// same-named module the glob above would bring in.
 #[doc(hidden)]
 pub mod __private {
-    pub use istmo_core::__private::{block_on, set_app_assets, set_app_info, tracing};
+    pub use istmo_core::__private::{block_on, flume, set_app_assets, set_app_info, tracing};
 }
 
 /// Instance key of the app crate for
