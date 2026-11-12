@@ -2,38 +2,102 @@
 // plugin id: istmo.share
 
 import Foundation
+import IstmoRuntime
+
+/// Reader / writer per `Named` type referenced by the `Share` contract.
+/// User provides one impl; each entry typically delegates to a
+/// helper on the type itself.
+public protocol ShareCodecs {
+    func readIncomingFile(_ c: inout Bincode.Cursor) throws -> IncomingFile
+    func writeIncomingFile(_ out: inout Data, _ value: IncomingFile)
+    func readIncomingShare(_ c: inout Bincode.Cursor) throws -> IncomingShare
+    func writeIncomingShare(_ out: inout Data, _ value: IncomingShare)
+    func readShareAnchor(_ c: inout Bincode.Cursor) throws -> ShareAnchor
+    func writeShareAnchor(_ out: inout Data, _ value: ShareAnchor)
+    func readShareCapabilities(_ c: inout Bincode.Cursor) throws -> ShareCapabilities
+    func writeShareCapabilities(_ out: inout Data, _ value: ShareCapabilities)
+    func readShareError(_ c: inout Bincode.Cursor) throws -> ShareError
+    func writeShareError(_ out: inout Data, _ value: ShareError)
+    func readShareFile(_ c: inout Bincode.Cursor) throws -> ShareFile
+    func writeShareFile(_ out: inout Data, _ value: ShareFile)
+    func readShareFileSource(_ c: inout Bincode.Cursor) throws -> ShareFileSource
+    func writeShareFileSource(_ out: inout Data, _ value: ShareFileSource)
+    func readShareOutcome(_ c: inout Bincode.Cursor) throws -> ShareOutcome
+    func writeShareOutcome(_ out: inout Data, _ value: ShareOutcome)
+    func readSharePreview(_ c: inout Bincode.Cursor) throws -> SharePreview
+    func writeSharePreview(_ out: inout Data, _ value: SharePreview)
+    func readShareRect(_ c: inout Bincode.Cursor) throws -> ShareRect
+    func writeShareRect(_ out: inout Data, _ value: ShareRect)
+    func readShareRequest(_ c: inout Bincode.Cursor) throws -> ShareRequest
+    func writeShareRequest(_ out: inout Data, _ value: ShareRequest)
+    func readShareTarget(_ c: inout Bincode.Cursor) throws -> ShareTarget
+    func writeShareTarget(_ out: inout Data, _ value: ShareTarget)
+}
 
 /// Rust-hosted `Share` plugin. Ships each call across the frame
 /// protocol via `IstmoRuntime.shared.call(...)`.
-public final class ShareClient: Share {
+public final class ShareClient {
     public static let PLUGIN_ID: String = "istmo.share"
 
-    public init() {}
+    private let codecs: ShareCodecs
+
+    public init(codecs: ShareCodecs) {
+        self.codecs = codecs
+    }
 
     public func share(request: ShareRequest) async throws -> ShareOutcome {
         var payload = Data()
-        Bincode.encode(&payload, request)
-        let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "share", payload: payload)
-        return try Bincode.decode(bytes) as ShareOutcome
+        codecs.writeShareRequest(&payload, request)
+        let bytes: Data
+        do {
+            bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "share", payload: payload)
+        } catch let e as PluginException {
+            var errCursor = Bincode.Cursor(e.payload)
+            let decoded: ShareError? = try? codecs.readShareError(&errCursor)
+            throw ShareException(payload: e.payload, decoded: decoded)
+        }
+        var c = Bincode.Cursor(bytes)
+        return try codecs.readShareOutcome(&c)
     }
 
     public func capabilities() async throws -> ShareCapabilities {
         let payload = Data()
-        let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "capabilities", payload: payload)
-        return try Bincode.decode(bytes) as ShareCapabilities
+        let bytes: Data
+        do {
+            bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "capabilities", payload: payload)
+        } catch let e as PluginException {
+            var errCursor = Bincode.Cursor(e.payload)
+            let decoded: ShareError? = try? codecs.readShareError(&errCursor)
+            throw ShareException(payload: e.payload, decoded: decoded)
+        }
+        var c = Bincode.Cursor(bytes)
+        return try codecs.readShareCapabilities(&c)
     }
 
     public func staging_dir() async throws -> String {
         let payload = Data()
-        let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "staging_dir", payload: payload)
-        return try Bincode.decode(bytes) as String
+        let bytes: Data
+        do {
+            bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "staging_dir", payload: payload)
+        } catch let e as PluginException {
+            var errCursor = Bincode.Cursor(e.payload)
+            let decoded: ShareError? = try? codecs.readShareError(&errCursor)
+            throw ShareException(payload: e.payload, decoded: decoded)
+        }
+        var c = Bincode.Cursor(bytes)
+        return try Bincode.readString(&c)
     }
 
     public func set_share_targets(targets: [ShareTarget]) async throws -> Void {
         var payload = Data()
-        Bincode.encode(&payload, targets)
-        let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "set_share_targets", payload: payload)
-        return try Bincode.decode(bytes) as Void
+        Bincode.writeVec(&payload, targets) { o1, v1 in codecs.writeShareTarget(&o1, v1) }
+        do {
+            _ = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "set_share_targets", payload: payload)
+        } catch let e as PluginException {
+            var errCursor = Bincode.Cursor(e.payload)
+            let decoded: ShareError? = try? codecs.readShareError(&errCursor)
+            throw ShareException(payload: e.payload, decoded: decoded)
+        }
     }
 }
 

@@ -59,7 +59,7 @@ class ShareClient(
 
     suspend fun set_share_targets(targets: List<ShareTarget>) {
         val payloadBuf = ByteArrayOutputStream()
-        Bincode.writeVec(payloadBuf, targets) { s, v -> codecs.writeShareTarget(s, v) }
+        Bincode.writeVec(payloadBuf, targets) { s1, v1 -> codecs.writeShareTarget(s1, v1) }
         val payload = payloadBuf.toByteArray()
         try {
             IstmoRuntime.call(PLUGIN_ID, "set_share_targets", payload)

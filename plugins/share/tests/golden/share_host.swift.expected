@@ -101,7 +101,7 @@ public final class ShareDispatcher: PluginHandler {
         case "set_share_targets":
             do {
                 var c = Bincode.Cursor(payload)
-                let targets = try Bincode.readVec(&c) { try codecs.readShareTarget(&$0) }
+                let targets = try Bincode.readVec(&c) { c1 in try codecs.readShareTarget(&c1) }
                 try await backend.set_share_targets(targets: targets)
                 return Data()
             } catch let err as ShareError {

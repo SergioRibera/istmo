@@ -7,16 +7,16 @@ import java.io.ByteArrayOutputStream
 /// impl with the SDK-specific logic; the dispatcher below handles
 /// wire encode/decode.
 interface ShareBackend {
-     // Throw BackendException(ShareError) for domain errors.
+    // Throw BackendException(ShareError) for domain errors.
     suspend fun share(request: ShareRequest): ShareOutcome
 
-     // Throw BackendException(ShareError) for domain errors.
+    // Throw BackendException(ShareError) for domain errors.
     suspend fun capabilities(): ShareCapabilities
 
-     // Throw BackendException(ShareError) for domain errors.
+    // Throw BackendException(ShareError) for domain errors.
     suspend fun staging_dir(): String
 
-     // Throw BackendException(ShareError) for domain errors.
+    // Throw BackendException(ShareError) for domain errors.
     suspend fun set_share_targets(targets: List<ShareTarget>): Unit
 }
 
@@ -119,7 +119,7 @@ class ShareDispatcher(
             "set_share_targets" -> {
                 try {
                     var cursor = 0
-                    val d_targets = Bincode.readVec(payload, cursor) { p, o -> codecs.readShareTarget(p, o) }; cursor = d_targets.consumed
+                    val d_targets = Bincode.readVec(payload, cursor) { b1, c1 -> codecs.readShareTarget(b1, c1) }; cursor = d_targets.consumed
                     val targets = d_targets.value
                     backend.set_share_targets(targets)
                     PluginResult.Unary(ByteArray(0))
