@@ -1468,3 +1468,238 @@ fn multi_payload_swift_codecs_read_write_all_fields() {
         "write pattern binds all fields: {out}",
     );
 }
+
+fn named(name: &str) -> TypeRef {
+    TypeRef::Named(name.to_owned())
+}
+
+fn boxed_vec(inner: TypeRef) -> TypeRef {
+    TypeRef::Vec(Box::new(inner))
+}
+
+fn boxed_opt(inner: TypeRef) -> TypeRef {
+    TypeRef::Option(Box::new(inner))
+}
+
+fn field(name: &str, ty: TypeRef) -> Field {
+    Field {
+        name: name.to_owned(),
+        ty,
+    }
+}
+
+fn arg(name: &str, ty: TypeRef) -> Arg {
+    Arg {
+        name: name.to_owned(),
+        ty,
+    }
+}
+
+fn variant(name: &str, payload: Vec<TypeRef>) -> EnumVariant {
+    EnumVariant {
+        name: name.to_owned(),
+        payload,
+    }
+}
+
+fn coverage_methods() -> Vec<Method> {
+    vec![
+        Method {
+            name: "object".to_owned(),
+            kind: MethodKind::Unary,
+            args: vec![arg("in", TypeRef::U8), arg("val", TypeRef::I8)],
+            returns: named("Everything"),
+            error: Some(named("FirstError")),
+        },
+        Method {
+            name: "round_trip".to_owned(),
+            kind: MethodKind::Unary,
+            args: vec![
+                arg("value", named("Everything")),
+                arg("shape", named("Shape")),
+            ],
+            returns: boxed_vec(boxed_opt(boxed_vec(TypeRef::String))),
+            error: Some(named("SecondError")),
+        },
+        Method {
+            name: "send".to_owned(),
+            kind: MethodKind::Unary,
+            args: vec![
+                arg("payload", TypeRef::Bytes),
+                arg("cursor", TypeRef::U16),
+                arg("c", TypeRef::I16),
+            ],
+            returns: TypeRef::Unit,
+            error: Some(named("FirstError")),
+        },
+        Method {
+            name: "watch".to_owned(),
+            kind: MethodKind::Stream,
+            args: vec![arg("mode", named("Mode"))],
+            returns: boxed_opt(TypeRef::Bytes),
+            error: None,
+        },
+        Method {
+            name: "default".to_owned(),
+            kind: MethodKind::Unary,
+            args: vec![],
+            returns: TypeRef::Unit,
+            error: None,
+        },
+    ]
+}
+
+fn coverage_types() -> Vec<TypeDef> {
+    vec![
+        TypeDef::Struct(StructDef {
+            name: "Everything".to_owned(),
+            fields: vec![
+                field("unit", TypeRef::Unit),
+                field("flag", TypeRef::Bool),
+                field("byte", TypeRef::U8),
+                field("signedByte", TypeRef::I8),
+                field("short", TypeRef::U16),
+                field("signedShort", TypeRef::I16),
+                field("word", TypeRef::U32),
+                field("signedWord", TypeRef::I32),
+                field("long", TypeRef::U64),
+                field("signedLong", TypeRef::I64),
+                field("single", TypeRef::F32),
+                field("double", TypeRef::F64),
+                field("text", TypeRef::String),
+                field("blob", TypeRef::Bytes),
+                field("nested", boxed_vec(boxed_opt(boxed_vec(TypeRef::String)))),
+                field("maybeBlob", boxed_opt(TypeRef::Bytes)),
+                field("grid", boxed_vec(boxed_vec(TypeRef::U32))),
+                field("shapes", boxed_opt(boxed_vec(named("Shape")))),
+                field("handle", named("NativeHandleId")),
+                field("object", TypeRef::String),
+                field("default", TypeRef::Bool),
+                field("where", boxed_opt(TypeRef::I64)),
+                field("cursor", TypeRef::U8),
+                field("c", TypeRef::U8),
+            ],
+        }),
+        TypeDef::Enum(EnumDef {
+            name: "Shape".to_owned(),
+            variants: vec![
+                variant("Default", vec![]),
+                variant("Circle", vec![TypeRef::F64]),
+                variant(
+                    "Path",
+                    vec![boxed_vec(TypeRef::I32), boxed_opt(TypeRef::String)],
+                ),
+            ],
+        }),
+        TypeDef::Enum(EnumDef {
+            name: "Mode".to_owned(),
+            variants: vec![variant("In", vec![]), variant("Out", vec![])],
+        }),
+        TypeDef::Enum(EnumDef {
+            name: "FirstError".to_owned(),
+            variants: vec![
+                variant("Denied", vec![]),
+                variant("Failed", vec![TypeRef::String]),
+            ],
+        }),
+        TypeDef::Struct(StructDef {
+            name: "SecondError".to_owned(),
+            fields: vec![field("code", TypeRef::U32)],
+        }),
+    ]
+}
+
+/// Every `TypeRef`, three-level nesting, Kotlin/Swift keywords as type,
+/// field, argument and method names, a hosted stream, names that clash
+/// with generated locals and two distinct domain errors.
+fn coverage() -> Contract {
+    Contract {
+        plugin_id: "com.example.\"cov$\"".to_owned(),
+        type_name: "Coverage".to_owned(),
+        methods: coverage_methods(),
+        init: None,
+        types: coverage_types(),
+    }
+}
+
+#[test]
+fn coverage_contract_is_valid() {
+    assert_eq!(coverage().validate(), Ok(()));
+}
+
+#[test]
+fn coverage_kotlin_matches_golden() {
+    let c = coverage();
+    assert_matches("coverage_types", "kt", &generate_kotlin_types(&c));
+    assert_matches("coverage_codecs", "kt", &generate_kotlin_codecs(&c));
+    assert_matches("coverage_host", "kt", &generate_kotlin_host(&c));
+    assert_matches("coverage_client", "kt", &generate_kotlin_client(&c));
+    assert_matches(
+        "coverage_codecs_interface",
+        "kt",
+        &istmo_build::generate_kotlin_codecs_interface(&c),
+    );
+}
+
+#[test]
+fn coverage_swift_matches_golden() {
+    let c = coverage();
+    assert_matches("coverage_types", "swift", &generate_swift_types(&c));
+    assert_matches("coverage_codecs", "swift", &generate_swift_codecs(&c));
+    assert_matches("coverage_host", "swift", &generate_swift_host(&c));
+    assert_matches("coverage_client", "swift", &generate_swift_client(&c));
+}
+
+#[test]
+fn coverage_rust_matches_golden() {
+    assert_matches("coverage_types", "rs", &generate_rust_types(&coverage()));
+}
+
+#[test]
+fn coverage_byte_wide_integers_use_raw_byte_helpers() {
+    let c = coverage();
+    let kt = generate_kotlin_host(&c);
+    assert!(kt.contains("Bincode.readU8(payload, cursor)"), "{kt}");
+    assert!(kt.contains("Bincode.readI8(payload, cursor)"), "{kt}");
+    let codecs = generate_kotlin_codecs(&c);
+    assert!(
+        codecs.contains("Bincode.writeU8(out, value.byte)"),
+        "{codecs}"
+    );
+    assert!(
+        codecs.contains("Bincode.writeI8(out, value.signedByte)"),
+        "{codecs}"
+    );
+    let swift = generate_swift_codecs(&c);
+    assert!(swift.contains("try Bincode.readU8(&c)"), "{swift}");
+    assert!(
+        swift.contains("Bincode.writeI8(&out, value.signedByte)"),
+        "{swift}"
+    );
+}
+
+#[test]
+fn coverage_escapes_keywords_and_literals() {
+    let c = coverage();
+    let kt = generate_kotlin_host(&c);
+    assert!(kt.contains("suspend fun `object`(`in`: UByte, `val`: Byte): Everything"));
+    assert!(kt.contains(r#"const val PLUGIN_ID = "com.example.\"cov\$\"""#));
+    let swift = generate_swift_host(&c);
+    assert!(swift.contains("func `default`() async throws -> Void"));
+    assert!(swift.contains(r#"PLUGIN_ID: String = "com.example.\"cov$\"""#));
+    let types = generate_swift_types(&c);
+    assert!(types.contains("case `in` = 0"));
+    assert!(types.contains("public let `where`: Int64?"));
+}
+
+#[test]
+fn coverage_clients_raise_one_exception_per_error_type() {
+    let c = coverage();
+    let kt = generate_kotlin_client(&c);
+    assert!(kt.contains("class CoverageFirstErrorException("));
+    assert!(kt.contains("class CoverageSecondErrorException("));
+    assert!(kt.contains("throw CoverageSecondErrorException(e.payload, decoded)"));
+    let swift = generate_swift_client(&c);
+    assert!(swift.contains("public struct CoverageFirstErrorException: Error"));
+    assert!(swift.contains("try? codecs.readSecondError(&errCursor)"));
+}
