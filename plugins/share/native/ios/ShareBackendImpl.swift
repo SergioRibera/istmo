@@ -391,10 +391,8 @@ struct OutgoingStaging {
         }
     }
 
+    /// Same rules on every platform; see `IstmoShareHandoff.sanitize`.
     static func sanitize(_ name: String) -> String {
-        let base = (name as NSString).lastPathComponent
-        let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters)
-        let cleaned = String(base.unicodeScalars.map { forbidden.contains($0) ? "_" : Character($0) })
-        return cleaned.trimmingCharacters(in: CharacterSet(charactersIn: ".")).isEmpty ? "shared" : cleaned
+        IstmoShareHandoff.sanitize(name)
     }
 }

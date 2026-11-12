@@ -575,18 +575,28 @@ pub trait Share {
 pub const INCOMING_RETENTION: std::time::Duration =
     std::time::Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Keep only the final path component and replace characters Windows
-/// rejects, so a hostile or sloppy name cannot escape a staging dir.
+/// Turn a display name from another app into a file name that cannot
+/// escape the directory it is joined to.
+///
+/// The rules, identical on every platform and mirrored by the Kotlin
+/// (`ShareBackendImpl.sanitize`) and Swift (`IstmoShareHandoff.sanitize`)
+/// backends — `tests::sanitize_vectors` is the shared reference:
+///
+/// 1. Split on both `/` and `\` and keep the last non-empty component.
+/// 2. Replace `< > : " | ? *` and C0 / C1 control characters
+///    (U+0000–U+001F, U+007F–U+009F) with `_`.
+/// 3. A result made only of dots (or empty) becomes `shared`, so `.`
+///    and `..` never survive.
 #[must_use]
 pub(crate) fn sanitize_file_name(name: &str) -> String {
-    let base = std::path::Path::new(name)
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or("shared");
+    let base = name
+        .rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or("");
     let cleaned: String = base
         .chars()
         .map(|c| match c {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            '<' | '>' | ':' | '"' | '|' | '?' | '*' => '_',
             c if c.is_control() => '_',
             c => c,
         })
@@ -631,5 +641,42 @@ pub fn mime_from_name(name: &str) -> &'static str {
         Some("ppt") => "application/vnd.ms-powerpoint",
         Some("pptx") => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_file_name;
+
+    /// Reference vectors for the file-name rules. The Kotlin
+    /// (`ShareBackendImpl.sanitize`) and Swift (`IstmoShareHandoff.sanitize`)
+    /// ports must map every input here to the same output.
+    const SANITIZE_VECTORS: &[(&str, &str)] = &[
+        ("report.pdf", "report.pdf"),
+        ("../../etc/passwd", "passwd"),
+        ("..\\..\\evil.exe", "evil.exe"),
+        ("C:\\Users\\me\\photo.jpg", "photo.jpg"),
+        ("dir/", "dir"),
+        ("a:b*c?.txt", "a_b_c_.txt"),
+        ("<x>|\"y\"", "_x___y_"),
+        ("tab\there", "tab_here"),
+        ("nul\u{0}byte", "nul_byte"),
+        ("del\u{7f}c1\u{85}", "del_c1_"),
+        ("zero\u{200b}width", "zero\u{200b}width"),
+        ("naïve 日本.txt", "naïve 日本.txt"),
+        ("..hidden", "..hidden"),
+        (".", "shared"),
+        ("..", "shared"),
+        ("...", "shared"),
+        ("a/..", "shared"),
+        ("/", "shared"),
+        ("", "shared"),
+    ];
+
+    #[test]
+    fn sanitize_vectors() {
+        for (input, expected) in SANITIZE_VECTORS {
+            assert_eq!(sanitize_file_name(input), *expected, "input {input:?}");
+        }
     }
 }
