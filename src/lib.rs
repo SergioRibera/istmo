@@ -10,22 +10,27 @@
 //!
 //! Declare a plugin, wire the runtime, and call into it:
 //!
-//! ```ignore
-//! use istmo::{message, plugin, runtime, IstmoError};
+//! ```
+//! use istmo::{IstmoError, Runtime, message, plugin};
 //!
 //! #[message]
-//! pub struct EchoInput { pub text: String }
-//!
-//! #[plugin(id = "demo.echo")]
-//! pub trait Echo {
-//!     async fn echo(&self, input: EchoInput) -> Result<String, IstmoError>;
+//! pub struct EchoInput {
+//!     pub text: String,
 //! }
 //!
-//! # async fn demo() -> Result<(), IstmoError> {
-//! let rt = runtime! { plugins: [EchoClient] };
-//! let echo = EchoClient::from_runtime(&rt)?;
-//! let reply = echo.echo(EchoInput { text: "hi".into() }).await?;
-//! # Ok(()) }
+//! #[plugin(name = "demo.echo")]
+//! pub trait Echo {
+//!     async fn echo(&self, input: EchoInput) -> String;
+//! }
+//!
+//! // Module-level wiring; the platform transport calls the generated
+//! // `__istmo_configure_runtime` when the app starts.
+//! istmo::runtime!(plugins: [EchoClient]);
+//!
+//! async fn greet(rt: &std::sync::Arc<Runtime>) -> Result<String, IstmoError> {
+//!     let echo = EchoClient::from_runtime(rt)?;
+//!     echo.echo(EchoInput { text: "hi".into() }).await
+//! }
 //! ```
 //!
 //! # Crate layout
@@ -34,7 +39,8 @@
 //!   [`istmo_core`](https://docs.rs/istmo-core).
 //! - Proc-macros [`plugin`](macro@plugin), [`message`](macro@message),
 //!   [`service`](macro@service), [`worker`](macro@worker),
-//!   [`mobile_app`](macro@mobile_app), [`stream`](macro@stream) and the
+//!   [`mobile_app`](macro@mobile_app), [`stream`](macro@stream),
+//!   [`owned`](macro@owned), [`handle`](macro@handle) and the
 //!   [`runtime!`](macro@runtime) wiring macro from
 //!   [`istmo_macros`](https://docs.rs/istmo-macros).
 //! - [`plugins`] — first-party plugin surfaces (lifecycle, deep links,
@@ -77,7 +83,9 @@
 #![doc(html_root_url = "https://docs.rs/istmo")]
 
 pub use istmo_core::*;
-pub use istmo_macros::{app_icon, message, mobile_app, plugin, runtime, service, stream, worker};
+pub use istmo_macros::{
+    app_icon, handle, message, mobile_app, owned, plugin, runtime, service, stream, worker,
+};
 
 /// First-party plugin surfaces (lifecycle, deep links, permissions,
 /// notifications, ad slots, safe-area, …).
