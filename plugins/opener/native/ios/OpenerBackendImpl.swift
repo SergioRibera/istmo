@@ -5,12 +5,31 @@ import UIKit
 #endif
 
 /// Reference backend for `istmo.opener` on top of `UIApplication.open`.
+///
+/// Only URLs whose scheme is in `allowedSchemes` are opened, mirroring
+/// the Rust-side `SchemePolicy`; anything else fails with
+/// `OpenError.schemeNotAllowed`.
 public final class OpenerBackendImpl: OpenerBackend {
-    public init() {}
+    /// Same list as the Rust `DEFAULT_ALLOWED_SCHEMES`.
+    public static let defaultAllowedSchemes: Set<String> = [
+        "http", "https", "mailto", "tel", "sms", "geo",
+    ]
+
+    private let allowedSchemes: Set<String>
+
+    public init(allowedSchemes: Set<String> = OpenerBackendImpl.defaultAllowedSchemes) {
+        self.allowedSchemes = Set(allowedSchemes.map { $0.lowercased() })
+    }
 
     public func open(url: String) async throws {
-        guard let target = URL(string: url), target.scheme != nil else {
+        let hasControl = url.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+        guard !url.isEmpty, !url.hasPrefix("-"), !hasControl,
+              let target = URL(string: url), let scheme = target.scheme?.lowercased()
+        else {
             throw OpenError.invalid
+        }
+        guard allowedSchemes.contains(scheme) else {
+            throw OpenError.schemeNotAllowed(scheme)
         }
         #if canImport(UIKit)
         let opened = await withCheckedContinuation { cont in
