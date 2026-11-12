@@ -235,7 +235,11 @@ fn restore_skips_undecodable_payload_and_releases_its_handle() {
     let activities =
         TypedLiveActivity::<TimerAttributes, TimerState>::new(&rt, "timer").expect("bind");
     let restored = pollster::block_on(activities.restore()).expect("restore ok");
-    backend.join().unwrap();
+    let payload = backend.join().unwrap();
+
+    // The backend is asked for this adapter's type only.
+    let ((asked,), _) = codec::decode::<(String,)>(&payload).unwrap();
+    assert_eq!(asked, "timer");
 
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].handle.id(), NativeHandleId(1));
@@ -244,6 +248,36 @@ fn restore_skips_undecodable_payload_and_releases_its_handle() {
     let released = outbound.recv().expect("release frame");
     match released.frame {
         Frame::ReleaseNativeHandle { handle_id } => assert_eq!(handle_id, NativeHandleId(2)),
+        other => panic!("expected ReleaseNativeHandle, got {other:?}"),
+    }
+}
+
+#[test]
+fn restore_releases_activities_reported_under_another_type() {
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let outbound = init.outbound;
+    let foreign = istmo_live_activity::RestoredActivity {
+        handle: NativeHandleId(3),
+        activity_type: "delivery".into(),
+        attributes: codec::encode(&TimerAttributes { title: "b".into() }).unwrap(),
+        state: codec::encode(&TimerState { elapsed: 1 }).unwrap(),
+    };
+    let backend = spawn_backend(
+        rt.clone(),
+        outbound.clone(),
+        "restore_active",
+        Ok(codec::encode(&vec![foreign]).unwrap()),
+    );
+
+    let activities =
+        TypedLiveActivity::<TimerAttributes, TimerState>::new(&rt, "timer").expect("bind");
+    let restored = pollster::block_on(activities.restore()).expect("restore ok");
+    backend.join().unwrap();
+
+    assert!(restored.is_empty());
+    match outbound.recv().expect("release frame").frame {
+        Frame::ReleaseNativeHandle { handle_id } => assert_eq!(handle_id, NativeHandleId(3)),
         other => panic!("expected ReleaseNativeHandle, got {other:?}"),
     }
 }

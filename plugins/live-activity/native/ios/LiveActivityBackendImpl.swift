@@ -107,19 +107,17 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
         #endif
     }
 
-    public func restore_active() async throws -> [RestoredActivity] {
-        let handlers = queue.sync { Array(handlersByType.values) }
-        var out: [RestoredActivity] = []
-        for handler in handlers {
-            let restored = try await handler.restoreActive()
+    // Only the requested type's handler runs: every id it allocates is
+    // returned to a Rust adapter that adopts (and later releases) it.
+    public func restore_active(activity_type: String) async throws -> [RestoredActivity] {
+        let handler = try handler(for: activity_type)
+        let restored = try await handler.restoreActive()
+        queue.sync {
             for item in restored {
-                queue.sync {
-                    typeByHandle[item.handle] = handler.activityType
-                }
-                out.append(item)
+                typeByHandle[item.handle] = handler.activityType
             }
         }
-        return out
+        return restored
     }
 
     public func releaseNativeHandle(_ handleId: UInt64) {

@@ -120,8 +120,11 @@ fn dispatch(
         "are_activities_enabled" => codec::encode(&true).map_err(encode_backend),
         "capabilities" => codec::encode(&PlatformCapabilities::Unsupported).map_err(encode_backend),
         "restore_active" => {
+            let ((activity_type,), _) =
+                codec::decode::<(String,)>(payload).map_err(encode_backend)?;
             let snapshot: Vec<RestoredActivity> = activities
                 .iter()
+                .filter(|(_, rec)| rec.activity_type == activity_type)
                 .map(|(id, rec)| RestoredActivity {
                     handle: NativeHandleId(*id),
                     activity_type: rec.activity_type.clone(),

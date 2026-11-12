@@ -25,8 +25,15 @@ them. Register one `LiveActivityHandler` per activity type on the
 native `LiveActivityBackendImpl`.
 
 After a restart, `TypedLiveActivity::restore` returns the activities
-that are still running. An activity whose stored payload no longer
-decodes is skipped with a warning and released.
+of its type that are still running; call it once per process. An
+activity whose stored payload no longer decodes is skipped with a
+warning and released.
+
+`restore_active` takes the activity type, and native backends only
+allocate handles for activities of that type (an unregistered type
+fails with `UnknownActivityType`). Custom `LiveActivityBackend`
+implementations must update `restore_active()` to
+`restore_active(activity_type)`.
 
 Without a registered native backend (e.g. on desktop) every call fails;
 probe `LiveActivityClient::capabilities` first.

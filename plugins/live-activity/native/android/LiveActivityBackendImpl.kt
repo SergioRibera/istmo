@@ -101,16 +101,15 @@ class LiveActivityBackendImpl(
         )
     }
 
-    override suspend fun restore_active(): List<RestoredActivity> {
-        val out = mutableListOf<RestoredActivity>()
-        for (handler in handlersByType.values) {
-            val restored = handler.restoreActive()
-            for (item in restored) {
-                typeByHandle[item.handle] = handler.activityType
-            }
-            out.addAll(restored)
+    // Only the requested type's handler runs: every id it allocates is
+    // returned to a Rust adapter that adopts (and later releases) it.
+    override suspend fun restore_active(activity_type: String): List<RestoredActivity> {
+        val handler = handlerFor(activity_type)
+        val restored = handler.restoreActive()
+        for (item in restored) {
+            typeByHandle[item.handle] = handler.activityType
         }
-        return out
+        return restored
     }
 
     override fun releaseNativeHandle(handleId: Long) {

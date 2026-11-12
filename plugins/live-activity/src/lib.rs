@@ -246,5 +246,13 @@ pub trait LiveActivity {
 
     async fn capabilities(&self) -> Result<PlatformCapabilities, ActivityError>;
 
-    async fn restore_active(&self) -> Result<Vec<RestoredActivity>, ActivityError>;
+    /// The activities of `activity_type` that outlived a previous
+    /// process, each under a freshly allocated handle the caller now
+    /// owns. Backends only allocate handles for that type: activities of
+    /// other types stay untouched until their own adapter restores them,
+    /// so nothing is handed out that no one will release.
+    async fn restore_active(
+        &self,
+        activity_type: String,
+    ) -> Result<Vec<RestoredActivity>, ActivityError>;
 }

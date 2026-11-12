@@ -141,23 +141,37 @@ where
     /// Recover the activities of this adapter's `activity_type` that
     /// outlived a previous process.
     ///
+    /// The backend only hands out handles for this `activity_type`.
     /// Every handle is adopted before any payload is decoded, so an
     /// activity whose payload no longer decodes (e.g. after a schema
-    /// change) is skipped with a warning and its handle released
-    /// instead of leaking or failing the whole batch.
+    /// change), or that a misbehaving backend reports under another
+    /// type, is skipped with a warning and its handle released instead
+    /// of leaking or failing the whole batch.
+    ///
+    /// Call it once per process: each call allocates new handles for
+    /// the same activities.
     pub async fn restore(&self) -> Result<Vec<Restored<A, C>>, ActivityError> {
-        let all: Vec<RestoredActivity> = translate(self.client.restore_active().await)?;
+        let all: Vec<RestoredActivity> =
+            translate(self.client.restore_active(self.activity_type.clone()).await)?;
         let adopted: Vec<_> = all
             .into_iter()
-            .filter(|r| r.activity_type == self.activity_type)
             .map(|r| {
                 let handle = NativeHandle::<LiveActivityToken>::adopt(self.runtime(), r.handle);
-                (handle, r.attributes, r.state)
+                (handle, r.activity_type, r.attributes, r.state)
             })
             .collect();
 
         let mut out = Vec::with_capacity(adopted.len());
-        for (handle, attributes, state) in adopted {
+        for (handle, activity_type, attributes, state) in adopted {
+            if activity_type != self.activity_type {
+                tracing::warn!(
+                    expected = %self.activity_type,
+                    got = %activity_type,
+                    handle = handle.id().0,
+                    "skipping restored live activity of another type",
+                );
+                continue;
+            }
             let decoded = codec::decode::<A>(&attributes).and_then(|(attributes, _)| {
                 codec::decode::<C>(&state).map(|(s, _)| (attributes, s))
             });
