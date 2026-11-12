@@ -1,16 +1,19 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use syn::ext::IdentExt as _;
 use syn::punctuated::Punctuated;
 use syn::{
     AngleBracketedGenericArguments, Attribute, Expr, ExprLit, ExprPath, File, FnArg,
-    GenericArgument, Item, ItemEnum, ItemStruct, ItemTrait, Lit, MetaNameValue, PathArguments,
-    ReturnType, Token, TraitItem, TraitItemFn, Type, TypePath,
+    GenericArgument, Ident, Item, ItemEnum, ItemMod, ItemStruct, ItemTrait, Lit, Meta,
+    MetaNameValue, PathArguments, ReturnType, Token, TraitItem, TraitItemFn, Type, TypePath,
 };
 
 use crate::contract::{
-    Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
+    Arg, Contract, ContractError, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef,
+    TypeDef, TypeRef,
 };
 
 #[derive(Debug)]
@@ -28,7 +31,15 @@ impl std::fmt::Display for ExtractError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "reading plugin source: {e}"),
-            Self::Parse(e) => write!(f, "parsing plugin source: {e}"),
+            Self::Parse(e) => {
+                let start = e.span().start();
+                write!(
+                    f,
+                    "parsing plugin source at line {}, column {}: {e}",
+                    start.line,
+                    start.column + 1
+                )
+            }
             Self::TraitNotFound(name) => {
                 write!(f, "no `#[istmo::plugin]` trait named `{name}` in source")
             }
@@ -51,21 +62,52 @@ impl From<syn::Error> for ExtractError {
     }
 }
 
+impl From<ContractError> for ExtractError {
+    fn from(e: ContractError) -> Self {
+        Self::Unsupported(e.to_string())
+    }
+}
+
+/// Derives the [`Contract`] of the `#[istmo::plugin]` trait `trait_name`
+/// declared in `source_path`.
+///
+/// Message types come from that file and from the modules it declares,
+/// inline or in their own files. The result is checked with
+/// [`Contract::validate`].
 pub fn extract_contract(
     source_path: impl AsRef<Path>,
     trait_name: &str,
 ) -> Result<Contract, ExtractError> {
-    let source = fs::read_to_string(source_path.as_ref())?;
+    let path = source_path.as_ref();
+    let source = fs::read_to_string(path)?;
     let file: File = syn::parse_file(&source)?;
-    lower_contract(&file, trait_name)
+    let contract = lower_contract(&file, trait_name, Some(&module_dir(path)))?;
+    contract.validate()?;
+    Ok(contract)
 }
 
-fn lower_contract(file: &File, trait_name: &str) -> Result<Contract, ExtractError> {
-    let (trait_def, attr_args) = find_plugin_trait(file, trait_name)?;
+/// Directory holding the files of `mod foo;` items declared in `path`:
+/// its own directory for `lib.rs` / `main.rs` / `mod.rs`, a sibling
+/// directory named after the file otherwise.
+fn module_dir(path: &Path) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    match path.file_stem().and_then(|s| s.to_str()) {
+        Some("lib" | "main" | "mod") | None => parent.to_path_buf(),
+        Some(stem) => parent.join(stem),
+    }
+}
+
+fn lower_contract(
+    file: &File,
+    trait_name: &str,
+    dir: Option<&Path>,
+) -> Result<Contract, ExtractError> {
+    let (trait_def, attr_args) = find_plugin_trait(&file.items, trait_name)?
+        .ok_or_else(|| ExtractError::TraitNotFound(trait_name.to_owned()))?;
     let plugin_id = attr_args.plugin_id.ok_or_else(|| {
         ExtractError::Unsupported("plugin attribute missing `name = \"…\"`".into())
     })?;
-    let type_name = trait_def.ident.to_string();
+    let type_name = ident(&trait_def.ident);
 
     let mut methods = Vec::new();
     for item in &trait_def.items {
@@ -73,7 +115,8 @@ fn lower_contract(file: &File, trait_name: &str) -> Result<Contract, ExtractErro
         methods.push(lower_method(func)?);
     }
 
-    let types = collect_message_types(file)?;
+    let mut types = Vec::new();
+    collect_message_types(&file.items, dir, &mut types)?;
 
     Ok(Contract {
         plugin_id,
@@ -84,29 +127,40 @@ fn lower_contract(file: &File, trait_name: &str) -> Result<Contract, ExtractErro
     })
 }
 
+/// An identifier as the generated code spells it: `r#type` → `type`.
+fn ident(id: &Ident) -> String {
+    id.unraw().to_string()
+}
+
 struct PluginAttrArgs {
     plugin_id: Option<String>,
     init: Option<TypeRef>,
 }
 
+/// Searches `items` and the inline modules among them.
 fn find_plugin_trait<'f>(
-    file: &'f File,
+    items: &'f [Item],
     trait_name: &str,
-) -> Result<(&'f ItemTrait, PluginAttrArgs), ExtractError> {
-    for item in &file.items {
-        let Item::Trait(t) = item else { continue };
-        if t.ident != trait_name {
-            continue;
-        }
-        for attr in &t.attrs {
-            if !is_istmo_attr(attr, "plugin") {
-                continue;
+) -> Result<Option<(&'f ItemTrait, PluginAttrArgs)>, ExtractError> {
+    for item in items {
+        match item {
+            Item::Trait(t) if t.ident.unraw() == trait_name => {
+                if let Some(attr) = t.attrs.iter().find(|a| is_istmo_attr(a, "plugin")) {
+                    return Ok(Some((t, parse_plugin_attr(attr)?)));
+                }
             }
-            let args = parse_plugin_attr(attr)?;
-            return Ok((t, args));
+            Item::Mod(ItemMod {
+                content: Some((_, inner)),
+                ..
+            }) => {
+                if let Some(found) = find_plugin_trait(inner, trait_name)? {
+                    return Ok(Some(found));
+                }
+            }
+            _ => {}
         }
     }
-    Err(ExtractError::TraitNotFound(trait_name.to_owned()))
+    Ok(None)
 }
 
 fn parse_plugin_attr(attr: &Attribute) -> Result<PluginAttrArgs, ExtractError> {
@@ -127,10 +181,15 @@ fn parse_plugin_attr(attr: &Attribute) -> Result<PluginAttrArgs, ExtractError> {
             }
             "init" => {
                 let ty = expect_type(&pair.value)?;
-                init = Some(type_to_ref(&ty)?);
+                init = Some(type_to_ref(&ty).map_err(|e| in_site(e, "plugin `init`"))?);
             }
+            // Codegen paths only; they do not change the contract.
             "crate" | "wincode" => {}
-            _ => {}
+            other => {
+                return Err(ExtractError::Unsupported(format!(
+                    "unknown `#[istmo::plugin]` argument `{other}`; expected `name`, `init` or `crate`"
+                )));
+            }
         }
     }
     Ok(PluginAttrArgs { plugin_id, init })
@@ -157,8 +216,16 @@ fn expect_type(expr: &Expr) -> Result<Type, ExtractError> {
     }
 }
 
+/// Prefixes an [`ExtractError::Unsupported`] message with where it occurred.
+fn in_site(err: ExtractError, site: &str) -> ExtractError {
+    match err {
+        ExtractError::Unsupported(msg) => ExtractError::Unsupported(format!("{site}: {msg}")),
+        other => other,
+    }
+}
+
 fn lower_method(func: &TraitItemFn) -> Result<Method, ExtractError> {
-    let name = func.sig.ident.to_string();
+    let name = ident(&func.sig.ident);
     let kind = if func.attrs.iter().any(|a| is_istmo_attr(a, "stream")) {
         MethodKind::Stream
     } else {
@@ -173,16 +240,17 @@ fn lower_method(func: &TraitItemFn) -> Result<Method, ExtractError> {
         if is_cancel_token(ty) {
             continue;
         }
-        let name = pat_name(&pat.pat).unwrap_or_else(|| format!("arg{}", args.len()));
-        args.push(Arg {
-            name,
-            ty: type_to_ref(ty)?,
-        });
+        let arg_name = pat_name(&pat.pat).unwrap_or_else(|| format!("arg{}", args.len()));
+        let ty = type_to_ref(ty)
+            .map_err(|e| in_site(e, &format!("method `{name}` argument `{arg_name}`")))?;
+        args.push(Arg { name: arg_name, ty });
     }
 
     let (returns, error) = match &func.sig.output {
         ReturnType::Default => (TypeRef::Unit, None),
-        ReturnType::Type(_, ty) => split_result(ty)?,
+        ReturnType::Type(_, ty) => {
+            split_result(ty).map_err(|e| in_site(e, &format!("method `{name}` return type")))?
+        }
     };
 
     Ok(Method {
@@ -201,50 +269,75 @@ fn split_result(ty: &Type) -> Result<(TypeRef, Option<TypeRef>), ExtractError> {
         && let PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }) =
             &seg.arguments
     {
-        let mut it = args.iter();
-        let ok = it.next().and_then(generic_type);
-        let err = it.next().and_then(generic_type);
-        if let (Some(ok), Some(err)) = (ok, err) {
-            return Ok((type_to_ref(ok)?, Some(type_to_ref(err)?)));
-        }
+        let mut it = args.iter().filter_map(generic_type);
+        return match (it.next(), it.next(), it.next()) {
+            (Some(ok), Some(err), None) => Ok((type_to_ref(ok)?, Some(type_to_ref(err)?))),
+            _ => Err(ExtractError::Unsupported(format!(
+                "`{}` is not `Result<T, E>`; spell out both type arguments instead of an \
+                 alias such as `io::Result<T>`",
+                tokens(ty)
+            ))),
+        };
     }
     Ok((type_to_ref(ty)?, None))
 }
 
-fn generic_type(arg: &GenericArgument) -> Option<&Type> {
+const fn generic_type(arg: &GenericArgument) -> Option<&Type> {
     match arg {
         GenericArgument::Type(t) => Some(t),
         _ => None,
     }
 }
 
+/// Why a Rust primitive has no wire mapping, `None` when it has one or is
+/// not a primitive.
+fn unsupported_primitive(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "usize" | "isize" => "its width depends on the platform; use a fixed-width integer",
+        "u128" | "i128" => "128-bit integers have no Kotlin/Swift codec",
+        "char" | "str" => "use `String`",
+        _ => return None,
+    })
+}
+
 fn type_to_ref(ty: &Type) -> Result<TypeRef, ExtractError> {
     match ty {
         Type::Tuple(t) if t.elems.is_empty() => Ok(TypeRef::Unit),
-        Type::Path(TypePath { path, .. }) => {
+        Type::Paren(inner) => type_to_ref(&inner.elem),
+        Type::Path(TypePath { path, qself: None }) => {
             let Some(seg) = path.segments.last() else {
                 return Err(ExtractError::Unsupported(format!(
                     "empty type path in `{}`",
                     tokens(ty)
                 )));
             };
-            let name = seg.ident.to_string();
+            let name = ident(&seg.ident);
+            if let Some(why) = unsupported_primitive(&name) {
+                return Err(ExtractError::Unsupported(format!(
+                    "type `{name}` is not supported: {why}"
+                )));
+            }
+            let scalar = match name.as_str() {
+                "bool" => Some(TypeRef::Bool),
+                "u8" => Some(TypeRef::U8),
+                "i8" => Some(TypeRef::I8),
+                "u16" => Some(TypeRef::U16),
+                "i16" => Some(TypeRef::I16),
+                "u32" => Some(TypeRef::U32),
+                "i32" => Some(TypeRef::I32),
+                "u64" => Some(TypeRef::U64),
+                "i64" => Some(TypeRef::I64),
+                "f32" => Some(TypeRef::F32),
+                "f64" => Some(TypeRef::F64),
+                "String" => Some(TypeRef::String),
+                _ => None,
+            };
+            if let Some(scalar) = scalar {
+                return Ok(scalar);
+            }
             match name.as_str() {
-                "bool" => Ok(TypeRef::Bool),
-                "u8" => Ok(TypeRef::U8),
-                "i8" => Ok(TypeRef::I8),
-                "u16" => Ok(TypeRef::U16),
-                "i16" => Ok(TypeRef::I16),
-                "u32" => Ok(TypeRef::U32),
-                "i32" => Ok(TypeRef::I32),
-                "u64" => Ok(TypeRef::U64),
-                "i64" => Ok(TypeRef::I64),
-                "f32" => Ok(TypeRef::F32),
-                "f64" => Ok(TypeRef::F64),
-                "String" => Ok(TypeRef::String),
                 "Vec" => {
                     let inner = generic_arg_ty(&seg.arguments, "Vec")?;
-
                     if is_u8(inner) {
                         Ok(TypeRef::Bytes)
                     } else {
@@ -255,6 +348,11 @@ fn type_to_ref(ty: &Type) -> Result<TypeRef, ExtractError> {
                     let inner = generic_arg_ty(&seg.arguments, "Option")?;
                     Ok(TypeRef::Option(Box::new(type_to_ref(inner)?)))
                 }
+                _ if !seg.arguments.is_none() => Err(ExtractError::Unsupported(format!(
+                    "generic type `{}` is not supported; only `Vec<T>` and `Option<T>` \
+                     map to Kotlin/Swift",
+                    tokens(ty)
+                ))),
                 _ => Ok(TypeRef::Named(name)),
             }
         }
@@ -288,14 +386,22 @@ fn is_cancel_token(ty: &Type) -> bool {
 
 fn pat_name(pat: &syn::Pat) -> Option<String> {
     match pat {
-        syn::Pat::Ident(id) => Some(id.ident.to_string()),
+        syn::Pat::Ident(id) => Some(ident(&id.ident)),
         _ => None,
     }
 }
 
-fn collect_message_types(file: &File) -> Result<Vec<TypeDef>, ExtractError> {
-    let mut out = Vec::new();
-    for item in &file.items {
+/// Appends the message types of `items`, descending into inline modules
+/// and, when `dir` is known, into `mod foo;` files resolved the way rustc
+/// does (`#[path]`, `foo.rs`, `foo/mod.rs`). A module file that does not
+/// exist is skipped; a type it would have declared then surfaces as an
+/// unknown type in [`Contract::validate`].
+fn collect_message_types(
+    items: &[Item],
+    dir: Option<&Path>,
+    out: &mut Vec<TypeDef>,
+) -> Result<(), ExtractError> {
+    for item in items {
         match item {
             Item::Struct(s) if has_message_attr(&s.attrs) => {
                 out.push(TypeDef::Struct(lower_struct(s)?));
@@ -303,10 +409,51 @@ fn collect_message_types(file: &File) -> Result<Vec<TypeDef>, ExtractError> {
             Item::Enum(e) if has_message_attr(&e.attrs) => {
                 out.push(TypeDef::Enum(lower_enum(e)?));
             }
+            Item::Mod(m) => collect_module(m, dir, out)?,
             _ => {}
         }
     }
-    Ok(out)
+    Ok(())
+}
+
+fn collect_module(
+    m: &ItemMod,
+    dir: Option<&Path>,
+    out: &mut Vec<TypeDef>,
+) -> Result<(), ExtractError> {
+    let name = ident(&m.ident);
+    let child_dir = dir.map(|d| d.join(&name));
+    if let Some((_, items)) = &m.content {
+        return collect_message_types(items, child_dir.as_deref(), out);
+    }
+    let Some(dir) = dir else { return Ok(()) };
+    let candidates = path_attr(&m.attrs).map_or_else(
+        || {
+            vec![
+                dir.join(format!("{name}.rs")),
+                dir.join(&name).join("mod.rs"),
+            ]
+        },
+        |p| vec![dir.join(p)],
+    );
+    let Some(file_path) = candidates.into_iter().find(|p| p.is_file()) else {
+        return Ok(());
+    };
+    let source = fs::read_to_string(&file_path)?;
+    let file = syn::parse_file(&source)?;
+    collect_message_types(&file.items, Some(&module_dir(&file_path)), out)
+}
+
+fn path_attr(attrs: &[Attribute]) -> Option<String> {
+    attrs.iter().find_map(|a| match &a.meta {
+        Meta::NameValue(nv) if nv.path.is_ident("path") => match &nv.value {
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) => Some(s.value()),
+            _ => None,
+        },
+        _ => None,
+    })
 }
 
 fn has_message_attr(attrs: &[Attribute]) -> bool {
@@ -314,61 +461,68 @@ fn has_message_attr(attrs: &[Attribute]) -> bool {
 }
 
 fn lower_struct(s: &ItemStruct) -> Result<StructDef, ExtractError> {
+    let struct_name = ident(&s.ident);
     let syn::Fields::Named(named) = &s.fields else {
         return Err(ExtractError::Unsupported(format!(
-            "`#[istmo::message]` on `{}`: only named-field structs are supported",
-            s.ident
+            "`#[istmo::message]` on `{struct_name}`: only named-field structs are supported"
         )));
     };
     let mut fields = Vec::with_capacity(named.named.len());
+    // camelCase wire name → Rust field it came from.
+    let mut wire_names: BTreeMap<String, String> = BTreeMap::new();
     for f in &named.named {
-        let name = f
-            .ident
-            .as_ref()
-            .ok_or_else(|| {
-                ExtractError::Unsupported(format!(
-                    "unnamed field in `#[istmo::message]` struct `{}`",
-                    s.ident
-                ))
-            })?
-            .to_string();
+        let name = f.ident.as_ref().map(ident).ok_or_else(|| {
+            ExtractError::Unsupported(format!(
+                "unnamed field in `#[istmo::message]` struct `{struct_name}`"
+            ))
+        })?;
 
         let wire_name = snake_to_camel(&name);
+        if let Some(previous) = wire_names.insert(wire_name.clone(), name.clone()) {
+            return Err(ExtractError::Unsupported(format!(
+                "fields `{previous}` and `{name}` of `{struct_name}` both become \
+                 `{wire_name}` in Kotlin/Swift"
+            )));
+        }
+        let ty = type_to_ref(&f.ty)
+            .map_err(|e| in_site(e, &format!("type `{struct_name}` field `{name}`")))?;
         fields.push(Field {
             name: wire_name,
-            ty: type_to_ref(&f.ty)?,
+            ty,
         });
     }
     Ok(StructDef {
-        name: s.ident.to_string(),
+        name: struct_name,
         fields,
     })
 }
 
 fn lower_enum(e: &ItemEnum) -> Result<EnumDef, ExtractError> {
+    let enum_name = ident(&e.ident);
     let mut variants = Vec::with_capacity(e.variants.len());
     for v in &e.variants {
+        let variant = ident(&v.ident);
         let payload = match &v.fields {
             syn::Fields::Unit => Vec::new(),
             syn::Fields::Unnamed(u) => u
                 .unnamed
                 .iter()
                 .map(|f| type_to_ref(&f.ty))
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| in_site(err, &format!("type `{enum_name}` variant `{variant}`")))?,
             syn::Fields::Named(_) => {
                 return Err(ExtractError::Unsupported(format!(
-                    "`#[istmo::message]` enum `{}::{}`: named-field variants unsupported",
-                    e.ident, v.ident
+                    "`#[istmo::message]` enum `{enum_name}::{variant}`: named-field variants unsupported"
                 )));
             }
         };
         variants.push(EnumVariant {
-            name: v.ident.to_string(),
+            name: variant,
             payload,
         });
     }
     Ok(EnumDef {
-        name: e.ident.to_string(),
+        name: enum_name,
         variants,
     })
 }

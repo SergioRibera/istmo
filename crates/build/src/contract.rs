@@ -1,6 +1,9 @@
 use wincode::{SchemaRead, SchemaWrite};
 
+mod validate;
 mod wire;
+
+pub use validate::ContractError;
 
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct Contract {

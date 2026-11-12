@@ -96,7 +96,8 @@ pub use crate::apple_plist::{
 };
 pub use crate::assets::{AssetResolveError, AssetsPayload, ResolvedAsset, resolve_assets};
 pub use crate::contract::{
-    Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
+    Arg, Contract, ContractError, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef,
+    TypeDef, TypeRef,
 };
 pub use crate::desktop::{
     DesktopAppContract, DesktopServiceContract, RestartPolicy, ServiceScope, StartType,

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use istmo_build::{
-    Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
+    Arg, Contract, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
     extract_contract,
 };
 
@@ -103,7 +103,7 @@ fn stateful_result_with_error_and_stream() {
     assert_eq!(got.types.len(), 2);
     match &got.types[0] {
         TypeDef::Struct(s) => assert_eq!(s.name, "Config"),
-        other => panic!("expected struct Config, got {other:?}"),
+        other @ TypeDef::Enum(_) => panic!("expected struct Config, got {other:?}"),
     }
     match &got.types[1] {
         TypeDef::Enum(e) => {
@@ -122,7 +122,7 @@ fn stateful_result_with_error_and_stream() {
                 ]
             );
         }
-        other => panic!("expected enum Fail, got {other:?}"),
+        other @ TypeDef::Struct(_) => panic!("expected enum Fail, got {other:?}"),
     }
 }
 
@@ -244,7 +244,7 @@ fn matches_hand_built_google_sign_in_contract() {
             assert_eq!(s.name, "SignInConfig");
             s.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>()
         }
-        other => panic!("expected SignInConfig struct, got {other:?}"),
+        other @ TypeDef::Enum(_) => panic!("expected SignInConfig struct, got {other:?}"),
     };
     assert_eq!(
         config_fields,
@@ -274,7 +274,7 @@ fn matches_hand_built_google_sign_in_contract() {
                 ]
             );
         }
-        other => panic!("expected SignInAccount struct, got {other:?}"),
+        other @ TypeDef::Enum(_) => panic!("expected SignInAccount struct, got {other:?}"),
     }
 }
 
@@ -288,4 +288,142 @@ fn trait_not_found() {
     );
     let err = extract_contract(&path, "Missing").unwrap_err();
     assert!(matches!(err, istmo_build::ExtractError::TraitNotFound(_)));
+}
+
+fn unsupported(source: &str) -> String {
+    let path = write_source(source);
+    match extract_contract(&path, "P") {
+        Err(istmo_build::ExtractError::Unsupported(msg)) => msg,
+        other => panic!("expected Unsupported, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_types_without_a_wire_mapping() {
+    for (ty, needle) in [
+        ("usize", "`usize`"),
+        ("u128", "`u128`"),
+        ("char", "`char`"),
+        ("std::collections::HashMap<String, u32>", "generic type"),
+        ("Box<u32>", "generic type"),
+        ("(u32, u32)", "type not supported"),
+        ("Missing", "`Missing`"),
+    ] {
+        let msg = unsupported(&format!(
+            r#"
+            #[istmo::plugin(name = "p")]
+            pub trait P {{ async fn go(&self, value: {ty}); }}
+            "#
+        ));
+        assert!(msg.contains(needle), "{ty}: {msg}");
+        assert!(msg.contains("method `go`"), "{ty}: {msg}");
+    }
+}
+
+#[test]
+fn rejects_single_argument_result_alias() {
+    let msg = unsupported(
+        r#"
+        #[istmo::plugin(name = "p")]
+        pub trait P { async fn go(&self) -> io::Result<u32>; }
+        "#,
+    );
+    assert!(msg.contains("Result<T, E>"), "{msg}");
+}
+
+#[test]
+fn rejects_nested_option_and_unknown_attribute_keys() {
+    let msg = unsupported(
+        r#"
+        #[istmo::plugin(name = "p")]
+        pub trait P { async fn go(&self) -> Option<Option<u8>>; }
+        "#,
+    );
+    assert!(msg.contains("Option<Option"), "{msg}");
+
+    let msg = unsupported(
+        r#"
+        #[istmo::plugin(name = "p", nmae = "typo")]
+        pub trait P { async fn go(&self); }
+        "#,
+    );
+    assert!(msg.contains("`nmae`"), "{msg}");
+}
+
+#[test]
+fn rejects_fields_colliding_after_camel_case() {
+    let msg = unsupported(
+        r#"
+        #[istmo::message]
+        pub struct S { pub foo_bar: u8, pub fooBar: u8 }
+
+        #[istmo::plugin(name = "p")]
+        pub trait P { async fn go(&self, s: S); }
+        "#,
+    );
+    assert!(
+        msg.contains("`foo_bar`") && msg.contains("`fooBar`"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn raw_identifiers_lose_their_prefix() {
+    let path = write_source(
+        r#"
+        #[istmo::message]
+        pub struct r#Item { pub r#type: String }
+
+        #[istmo::plugin(name = "p")]
+        pub trait P { async fn r#in(&self, r#where: r#Item); }
+        "#,
+    );
+    let got = extract_contract(&path, "P").expect("extract");
+    assert_eq!(got.methods[0].name, "in");
+    assert_eq!(got.methods[0].args[0].name, "where");
+    assert_eq!(got.methods[0].args[0].ty, TypeRef::Named("Item".to_owned()));
+    match &got.types[0] {
+        TypeDef::Struct(s) => assert_eq!(s.fields[0].name, "type"),
+        other @ TypeDef::Enum(_) => panic!("expected struct, got {other:?}"),
+    }
+}
+
+#[test]
+fn collects_message_types_from_inline_and_file_modules() {
+    let path = write_source(
+        r#"
+        mod inline {
+            #[istmo::message]
+            pub struct A { pub x: u8 }
+        }
+        mod on_disk;
+
+        #[istmo::plugin(name = "p")]
+        pub trait P { async fn go(&self, a: inline::A, b: on_disk::B); }
+        "#,
+    );
+    let dir = path.parent().unwrap();
+    std::fs::write(
+        dir.join("on_disk.rs"),
+        "mod deeper;\n#[istmo::message]\npub struct B { pub inner: C }\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("on_disk")).unwrap();
+    std::fs::write(
+        dir.join("on_disk/deeper.rs"),
+        "#[istmo::message]\npub enum C { One, Two(u16) }\n",
+    )
+    .unwrap();
+
+    let got = extract_contract(&path, "P").expect("extract");
+    let names: Vec<&str> = got.types.iter().map(TypeDef::name).collect();
+    assert_eq!(names, ["A", "C", "B"], "source order, modules in place");
+}
+
+#[test]
+fn parse_errors_report_line_and_column() {
+    let path = write_source("pub struct Broken {\n    x: u8,,\n}\n");
+    let err = extract_contract(&path, "P").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("line 2"), "{msg}");
 }
