@@ -33,6 +33,14 @@ public enum Bincode {
         writeVarintU64(&out, zigzag(value))
     }
 
+    public static func writeVarintU16(_ out: inout Data, _ value: UInt16) {
+        writeVarintU64(&out, UInt64(value))
+    }
+
+    public static func writeVarintI16(_ out: inout Data, _ value: Int16) {
+        writeVarintI64(&out, Int64(value))
+    }
+
     public static func writeVarintU32(_ out: inout Data, _ value: UInt32) {
         writeVarintU64(&out, UInt64(value))
     }
@@ -110,6 +118,8 @@ public enum Bincode {
         case unexpectedEnd
         case invalidTag(UInt8)
         case invalidUtf8
+        /// A decoded integer or length does not fit the target type.
+        case outOfRange(UInt64)
     }
 
     public static func readU8(_ c: inout Cursor) throws -> UInt8 {
@@ -119,8 +129,17 @@ public enum Bincode {
         return b
     }
 
+    public static func readI8(_ c: inout Cursor) throws -> Int8 {
+        Int8(bitPattern: try readU8(&c))
+    }
+
     public static func readBool(_ c: inout Cursor) throws -> Bool {
-        try readU8(&c) != 0
+        let b = try readU8(&c)
+        switch b {
+        case 0: return false
+        case 1: return true
+        default: throw DecodeError.invalidTag(b)
+        }
     }
 
     public static func readVarintU64(_ c: inout Cursor) throws -> UInt64 {
@@ -143,12 +162,40 @@ public enum Bincode {
         unzigzag(try readVarintU64(&c))
     }
 
+    public static func readVarintU16(_ c: inout Cursor) throws -> UInt16 {
+        let raw = try readVarintU64(&c)
+        guard let value = UInt16(exactly: raw) else { throw DecodeError.outOfRange(raw) }
+        return value
+    }
+
+    public static func readVarintI16(_ c: inout Cursor) throws -> Int16 {
+        let raw = try readVarintI64(&c)
+        guard let value = Int16(exactly: raw) else {
+            throw DecodeError.outOfRange(UInt64(bitPattern: raw))
+        }
+        return value
+    }
+
     public static func readVarintU32(_ c: inout Cursor) throws -> UInt32 {
-        UInt32(try readVarintU64(&c))
+        let raw = try readVarintU64(&c)
+        guard let value = UInt32(exactly: raw) else { throw DecodeError.outOfRange(raw) }
+        return value
     }
 
     public static func readVarintI32(_ c: inout Cursor) throws -> Int32 {
-        Int32(try readVarintI64(&c))
+        let raw = try readVarintI64(&c)
+        guard let value = Int32(exactly: raw) else {
+            throw DecodeError.outOfRange(UInt64(bitPattern: raw))
+        }
+        return value
+    }
+
+    /// Reads a length prefix and checks the cursor still holds `len` bytes.
+    private static func readLength(_ c: inout Cursor) throws -> Int {
+        let raw = try readVarintU64(&c)
+        guard let len = Int(exactly: raw) else { throw DecodeError.outOfRange(raw) }
+        guard c.remaining >= len else { throw DecodeError.unexpectedEnd }
+        return len
     }
 
     public static func readF32(_ c: inout Cursor) throws -> Float {
@@ -162,8 +209,7 @@ public enum Bincode {
     }
 
     public static func readString(_ c: inout Cursor) throws -> String {
-        let len = Int(try readVarintU64(&c))
-        guard c.remaining >= len else { throw DecodeError.unexpectedEnd }
+        let len = try readLength(&c)
         let slice = c.data.subdata(in: c.offset ..< c.offset + len)
         c.offset += len
         guard let s = String(data: slice, encoding: .utf8) else {
@@ -173,8 +219,7 @@ public enum Bincode {
     }
 
     public static func readData(_ c: inout Cursor) throws -> Data {
-        let len = Int(try readVarintU64(&c))
-        guard c.remaining >= len else { throw DecodeError.unexpectedEnd }
+        let len = try readLength(&c)
         let slice = c.data.subdata(in: c.offset ..< c.offset + len)
         c.offset += len
         return slice
@@ -184,9 +229,12 @@ public enum Bincode {
         _ c: inout Cursor,
         _ reader: (inout Cursor) throws -> T
     ) throws -> [T] {
-        let len = Int(try readVarintU64(&c))
+        let raw = try readVarintU64(&c)
+        guard let len = Int(exactly: raw) else { throw DecodeError.outOfRange(raw) }
         var out: [T] = []
-        out.reserveCapacity(len)
+        // The claimed length is untrusted: never reserve past what the
+        // remaining bytes could possibly hold.
+        out.reserveCapacity(min(len, c.remaining))
         for _ in 0 ..< len {
             out.append(try reader(&c))
         }
