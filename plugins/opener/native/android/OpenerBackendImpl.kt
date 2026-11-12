@@ -31,7 +31,9 @@ class OpenerBackendImpl(
         if (url.isEmpty() || url.startsWith("-") || url.any { it.isISOControl() }) {
             throw BackendException(OpenError.Invalid)
         }
-        val uri = runCatching { Uri.parse(url) }.getOrNull()
+        // Intent filters match schemes case-sensitively and declare them
+        // lowercase, so `HTTPS://…` must be lowercased to find a browser.
+        val uri = runCatching { Uri.parse(url).normalizeScheme() }.getOrNull()
         val scheme = uri?.scheme?.lowercase()
         if (uri == null || scheme.isNullOrEmpty()) {
             throw BackendException(OpenError.Invalid)

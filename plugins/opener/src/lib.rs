@@ -158,6 +158,28 @@ fn parse_scheme(url: &str) -> Option<&str> {
     valid.then_some(scheme)
 }
 
+/// `url` with whitespace and `"` percent-encoded, so it stays a single
+/// unquoted token on a raw command line.
+#[cfg_attr(
+    not(any(target_os = "windows", test)),
+    expect(dead_code, reason = "Windows-only")
+)]
+fn encode_for_rundll32(url: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(url.len());
+    for c in url.chars() {
+        if c == '"' || c.is_whitespace() {
+            let mut buf = [0; 4];
+            for byte in c.encode_utf8(&mut buf).bytes() {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 impl OpenerClient {
     /// [`Self::open`] after checking `url` against `policy`, so a
     /// disallowed URL never leaves the process.
@@ -191,17 +213,32 @@ impl DesktopOpener {
     // shell, so `&`, `|` or quotes in the URL stay inert.
     fn command(url: &str) -> Command {
         #[cfg(target_os = "macos")]
-        let mut cmd = Command::new("open");
+        let mut cmd = {
+            let mut cmd = Command::new("open");
+            cmd.arg(url);
+            cmd
+        };
+        // rundll32 does not split its command line into argv: everything
+        // after the entry point reaches `FileProtocolHandler` verbatim,
+        // so the quotes and backslashes `Command::arg` would add stay in
+        // the URL. Pass it raw instead, with the only characters that
+        // could end or quote it (whitespace, `"`) percent-encoded — they
+        // are not valid unencoded in a URL anyway.
         #[cfg(target_os = "windows")]
         let mut cmd = {
+            use std::os::windows::process::CommandExt as _;
             let mut cmd = Command::new("rundll32");
-            cmd.arg("url.dll,FileProtocolHandler");
+            cmd.arg("url.dll,FileProtocolHandler")
+                .raw_arg(encode_for_rundll32(url));
             cmd
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        let mut cmd = Command::new("xdg-open");
-        cmd.arg(url)
-            .stdin(Stdio::null())
+        let mut cmd = {
+            let mut cmd = Command::new("xdg-open");
+            cmd.arg(url);
+            cmd
+        };
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         cmd
@@ -273,5 +310,26 @@ impl Opener for DesktopOpener {
                 .await
                 .unwrap_or_else(|_| Err(OpenError::Backend("opener wait thread vanished".into())))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_for_rundll32;
+
+    #[test]
+    fn rundll32_argument_stays_one_unquoted_token() {
+        assert_eq!(
+            encode_for_rundll32("https://a.test/?q=x y&r=\"z\""),
+            "https://a.test/?q=x%20y&r=%22z%22"
+        );
+        assert_eq!(
+            encode_for_rundll32("mailto:a@b?subject=hi\u{3000}"),
+            "mailto:a@b?subject=hi%E3%80%80"
+        );
+        assert_eq!(
+            encode_for_rundll32("https://a.test/%20"),
+            "https://a.test/%20"
+        );
     }
 }
