@@ -103,6 +103,7 @@ fn endpoint_stem(key: &InstanceKey) -> String {
 pub struct InstanceKey(String);
 
 impl InstanceKey {
+    /// The validated key.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -152,12 +153,23 @@ pub fn instance_key_from_build(
     }
 }
 
+/// Failure of the desktop single-instance documents channel.
 #[derive(Debug)]
 pub enum DocumentsError {
+    /// The bundle id is not a valid [`InstanceKey`].
     InvalidKey(String),
-    Io { op: &'static str, source: io::Error },
+    /// An I/O step of the endpoint failed.
+    Io {
+        /// What was being done.
+        op: &'static str,
+        /// The OS error.
+        source: io::Error,
+    },
+    /// A forwarded message did not encode or decode.
     Codec(CodecError),
+    /// The runtime refused the publish.
     Runtime(IstmoError),
+    /// The peer broke the forwarding protocol.
     Protocol(&'static str),
 }
 

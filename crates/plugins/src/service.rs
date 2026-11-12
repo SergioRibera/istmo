@@ -88,36 +88,42 @@ impl std::error::Error for ServiceControlError {}
 /// locks and self-stop.
 #[plugin(name = "istmo.service_control", crate = "::istmo_core")]
 pub trait ServiceControl {
+    /// Promote `service_id` to a foreground service showing `spec`.
     async fn start_foreground(
         &self,
         service_id: String,
         spec: NotificationSpec,
     ) -> Result<(), ServiceControlError>;
 
+    /// Replace the foreground notification of `service_id`.
     async fn update_notification(
         &self,
         service_id: String,
         spec: NotificationSpec,
     ) -> Result<(), ServiceControlError>;
 
+    /// Leave the foreground, optionally removing the notification.
     async fn stop_foreground(
         &self,
         service_id: String,
         remove_notification: bool,
     ) -> Result<(), ServiceControlError>;
 
+    /// Acquire a partial wake lock tagged `tag` for `service_id`.
     async fn acquire_wakelock(
         &self,
         service_id: String,
         tag: String,
     ) -> Result<WakelockToken, ServiceControlError>;
 
+    /// Release a wake lock from [`acquire_wakelock`](Self::acquire_wakelock).
     async fn release_wakelock(
         &self,
         service_id: String,
         token: WakelockToken,
     ) -> Result<(), ServiceControlError>;
 
+    /// Stop the platform service hosting `service_id`.
     async fn stop_self(&self, service_id: String) -> Result<(), ServiceControlError>;
 }
 
