@@ -100,6 +100,13 @@ class BiometricBackendImpl(
     /** `BiometricPrompt` only tolerates one prompt at a time. */
     private val promptMutex = Mutex()
 
+    /**
+     * Serialises vault reads and writes: a read racing a store could load
+     * an entry whose key the store then deletes, and wipe the new secret
+     * as invalidated. Always taken before [promptMutex].
+     */
+    private val vaultMutex = Mutex()
+
     // ---------------------------------------------------------- Biometric impl
 
     override suspend fun availability(policy: AuthPolicy): Availability {
@@ -132,11 +139,16 @@ class BiometricBackendImpl(
     override suspend fun store_secret(alias: String, secret: ByteArray, prompt: AuthPrompt) {
         checkAlias(alias)
         checkPrompt(prompt)
+        vaultMutex.withLock { storeLocked(alias, secret, prompt) }
+    }
+
+    private suspend fun storeLocked(alias: String, secret: ByteArray, prompt: AuthPrompt) {
         val mode = KeyMode.of(prompt.policy)
         // The new secret gets a key under a fresh alias; the previous key
         // and ciphertext stay usable until the new one is sealed, so a
-        // cancelled or failed prompt leaves the stored secret intact.
-        val previous = storedSecret(alias)
+        // cancelled or failed prompt leaves the stored secret intact. A
+        // corrupt previous entry must not block overwriting it.
+        val previous = runCatching { storedSecret(alias) }.getOrNull()
         val newKeyAlias = freshKeyAlias(alias)
         val sealed = try {
             val key = withContext(Dispatchers.IO) { createKey(newKeyAlias, mode) }
@@ -149,7 +161,12 @@ class BiometricBackendImpl(
         }
         withContext(Dispatchers.IO) {
             // `commit` so the entry is durable before the old key is gone.
-            vault.edit().putString(alias, sealed.encode()).commit()
+            if (!vault.edit().putString(alias, sealed.encode()).commit()) {
+                // Nothing durable references the new key, and the previous
+                // entry and its key are untouched.
+                deleteKey(newKeyAlias)
+                throw BackendException(BiometricError.Backend("could not persist the vault entry"))
+            }
             previous?.keyAlias?.takeIf { it != newKeyAlias }?.let(::deleteKey)
         }
     }
@@ -157,6 +174,10 @@ class BiometricBackendImpl(
     override suspend fun read_secret(alias: String, prompt: AuthPrompt): ByteArray {
         checkAlias(alias)
         checkPrompt(prompt)
+        return vaultMutex.withLock { readLocked(alias, prompt) }
+    }
+
+    private suspend fun readLocked(alias: String, prompt: AuthPrompt): ByteArray {
         val stored = storedSecret(alias) ?: throw BackendException(BiometricError.SecretNotFound)
         val key = withContext(Dispatchers.IO) { keyStore.getKey(stored.keyAlias, null) as? SecretKey }
             ?: invalidated(alias)
@@ -172,7 +193,7 @@ class BiometricBackendImpl(
 
     override suspend fun delete_secret(alias: String) {
         checkAlias(alias)
-        withContext(Dispatchers.IO) { deleteQuietly(alias) }
+        vaultMutex.withLock { withContext(Dispatchers.IO) { deleteQuietly(alias) } }
     }
 
     override suspend fun has_secret(alias: String): Boolean {
