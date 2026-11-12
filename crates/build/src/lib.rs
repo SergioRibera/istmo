@@ -48,7 +48,8 @@
 //! - [`contract`] — the [`Contract`] IR shared by every generator.
 //! - [`extract`] — parse a plugin crate's `src/lib.rs` into a
 //!   [`Contract`].
-//! - [`manifest`] — parse and emit `istmo.toml` metadata.
+//! - [`manifest`] — parse `istmo.toml`; it also re-exports the [`emit`]
+//!   build-script entry points.
 //! - [`app_config`] — the app crate's `[app]` section: codegen targets
 //!   and app identity (id, name, version, build, `[app.icon]`).
 //! - [`handover`] — hex-encoded metadata piped between plugin
@@ -84,6 +85,7 @@ mod directive;
 pub mod doc_extract;
 pub mod doctor;
 pub mod document_types;
+mod emit;
 pub mod emit_app;
 pub mod entitlements;
 pub mod extract;
