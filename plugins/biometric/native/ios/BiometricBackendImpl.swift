@@ -118,7 +118,39 @@ public final class BiometricBackendImpl: BiometricBackend {
             let reason = error?.takeRetainedValue().localizedDescription ?? "unknown"
             throw BiometricError.backend("SecAccessControlCreateWithFlags: \(reason)")
         }
-        try Self.deleteItem(alias)
+        // Update in place so a failed or cancelled store keeps the previous
+        // secret; deleting first would lose it. Replacing an access-controlled
+        // item can require the user, hence the context carrying the prompt.
+        let context = LAContext()
+        context.localizedReason = prompt.reason
+        if let label = prompt.cancelLabel {
+            context.localizedCancelTitle = label
+        }
+        var query = Self.itemQuery(alias)
+        query[kSecUseAuthenticationContext as String] = context
+        let lookup = QueryBox(query)
+        let changes = QueryBox([
+            kSecValueData as String: secret,
+            kSecAttrAccessControl as String: access,
+        ])
+        let box = ContextBox(context)
+        let status: OSStatus = await withTaskCancellationHandler {
+            await withCheckedContinuation { (cont: CheckedContinuation<OSStatus, Never>) in
+                // `SecItemUpdate` blocks while the Face ID sheet is up.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    cont.resume(returning: SecItemUpdate(
+                        lookup.query as CFDictionary,
+                        changes.query as CFDictionary
+                    ))
+                }
+            }
+        } onCancel: {
+            box.context.invalidate()
+        }
+        guard status == errSecItemNotFound else {
+            try Self.check(status)
+            return
+        }
         var attributes = Self.itemQuery(alias)
         attributes[kSecValueData as String] = secret
         attributes[kSecAttrAccessControl as String] = access
