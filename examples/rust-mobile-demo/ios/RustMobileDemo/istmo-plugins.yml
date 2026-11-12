@@ -6,6 +6,13 @@
 # in project.yml take precedence over the ones here.
 targets:
   RustMobileDemo:
+    sources:
+      - path: "../../../../plugins/google-sign-in/native/ios"
+        name: ISTMO_GOOGLE_SIGN_IN
+        type: group
+        createIntermediateGroups: true
+        excludes:
+          - "*.fragment"
     settings:
       base:
         ISTMO_LIB_NAME: "rust_mobile_demo"
