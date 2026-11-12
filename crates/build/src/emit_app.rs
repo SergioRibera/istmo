@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use crate::android_project::{AndroidPlugin, AndroidProject};
 use crate::app_config::{AppConfig, AppMetadata, AppPluginOpts, CrateInfo, Platform, Role};
-use crate::app_icon::AppIcon;
+use crate::app_icon::{AppIcon, IconError};
 use crate::apple_plist::{
     ENTITLEMENTS_FRAGMENT, INFO_PLIST_FRAGMENT, PLUGINS_MARK_END, PLUGINS_MARK_START,
     PlistFragments, app_keys_outside_block,
@@ -490,9 +490,21 @@ fn sync_android_project(
         &project.metadata_path(),
         &project.render_metadata(app, &plugins, &deps),
     );
-    project
-        .write_icon(icon, &app.icon)
-        .unwrap_or_else(|err| panic!("istmo-build: {err}"));
+    report_icon(project.write_icon(icon, &app.icon));
+}
+
+/// Crate error policy for icon output: an unreadable or undecodable
+/// source is bad user configuration and fails the build; a failed write
+/// into a generated directory only warns. Returns whether it succeeded.
+fn report_icon(result: Result<(), IconError>) -> bool {
+    match result {
+        Ok(()) => true,
+        Err(err @ IconError::Write { .. }) => {
+            crate::directive::warning(&err.to_string());
+            false
+        }
+        Err(err) => panic!("istmo-build: {err}"),
+    }
 }
 
 struct IosSync<'a> {
@@ -523,9 +535,7 @@ fn sync_ios_project(project: &IosProject, sync: &IosSync<'_>) {
 
     project.write_generated(sync.app);
     if let Some(icon) = sync.icon {
-        project
-            .write_icon(icon)
-            .unwrap_or_else(|err| panic!("istmo-build: {err}"));
+        report_icon(project.write_icon(icon));
     }
     let plugin_min_ios = sync
         .dep_manifests
@@ -1313,9 +1323,10 @@ fn emit_desktop_icon(
     });
     if let Some(icon) = &icon {
         let png = out_dir.join(DESKTOP_ICON_PNG);
-        icon.write_png(&png, DESKTOP_ICON_EDGE)
-            .unwrap_or_else(|err| panic!("istmo-build: {err}"));
-        println!("cargo::rustc-env=ISTMO_APP_ICON_PNG={}", png.display());
+        // Without the PNG `istmo::app_icon!()` falls back to `None`.
+        if report_icon(icon.write_png(&png, DESKTOP_ICON_EDGE)) {
+            println!("cargo::rustc-env=ISTMO_APP_ICON_PNG={}", png.display());
+        }
     }
     if target_os != "windows" {
         return;

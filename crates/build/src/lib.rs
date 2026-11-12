@@ -24,6 +24,25 @@
 //! [`istmo::runtime!`](../../istmo_macros/macro.runtime.html) macro can
 //! pick them up transparently.
 //!
+//! # Error policy
+//!
+//! The `emit` entry points run inside a build script, where panicking is
+//! how the build fails. They split failures in two:
+//!
+//! - **Bad user configuration fails the build**, naming the file: a
+//!   malformed or invalid `istmo.toml` (unknown keys, bad plugin ids or
+//!   client types, duplicate `[[plugin]]` ids), unresolvable `[[assets]]`,
+//!   an unreadable `[app.icon]` source, a contract that cannot be
+//!   extracted, or a plugin requiring a newer OS than the app targets.
+//! - **I/O on generated output only warns** (`cargo::warning`): a file
+//!   istmo-build could not write into a directory it generates is
+//!   retried on the next build, so the build carries on.
+//!
+//! Every generated file is written only when its contents change, so
+//! repeated builds leave mtimes (and Gradle / Xcode up-to-date checks)
+//! alone, and every input the pass reads is tracked with
+//! `cargo:rerun-if-changed`.
+//!
 //! # Module map
 //!
 //! - [`contract`] — the [`Contract`] IR shared by every generator.
