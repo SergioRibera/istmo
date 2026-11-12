@@ -21,8 +21,8 @@
 //! Inside the root directory:
 //!
 //! - App-owned assets live directly at the root (`<root>/img/logo.png`).
-//! - Plugin-owned assets live in a `plugin:<id>/` subdirectory
-//!   (`<root>/plugin:istmo.data_store/schema.sql`). This mirrors the
+//! - Plugin-owned assets live in a `plugin-<id>/` subdirectory
+//!   (`<root>/plugin-istmo.data_store/schema.sql`). This mirrors the
 //!   copy layout `emit_app` writes.
 
 use std::fs::File;
@@ -103,16 +103,25 @@ impl DesktopAssetBackend {
         self.root.get_or_init(resolve_root).clone()
     }
 
-    fn resolve(&self, scope: AssetScope<'_>, key: &str) -> PathBuf {
-        let mut path = self.root();
-        match scope {
-            AssetScope::App => {}
-            AssetScope::Plugin(id) => path.push(format!("plugin:{id}")),
-        }
-        for segment in key.split('/') {
-            path.push(segment);
-        }
-        path
+    /// Candidate paths for `key`, in lookup order.
+    fn resolve(&self, scope: AssetScope<'_>, key: &str) -> Vec<PathBuf> {
+        let root = self.root();
+        let bases = match scope {
+            AssetScope::App => vec![root],
+            AssetScope::Plugin(id) => super::plugin_asset_dirs(id)
+                .iter()
+                .map(|dir| root.join(dir))
+                .collect(),
+        };
+        bases
+            .into_iter()
+            .map(|mut path| {
+                for segment in key.split('/') {
+                    path.push(segment);
+                }
+                path
+            })
+            .collect()
     }
 }
 
@@ -124,8 +133,12 @@ impl Default for DesktopAssetBackend {
 
 impl AssetBackend for DesktopAssetBackend {
     fn open(&self, scope: AssetScope<'_>, key: &str) -> io::Result<AssetReader> {
-        let path = self.resolve(scope, key);
-        let file = File::open(&path).map_err(|err| annotate(&err, &path))?;
+        let candidates = self.resolve(scope, key);
+        let path = candidates
+            .iter()
+            .find(|path| path.is_file())
+            .unwrap_or(&candidates[0]);
+        let file = File::open(path).map_err(|err| annotate(&err, path))?;
         Ok(AssetReader::new(file))
     }
 }

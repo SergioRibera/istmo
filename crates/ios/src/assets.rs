@@ -4,7 +4,7 @@
 //! filesystem — iOS `.app` bundles expose their Resources directly at
 //! the bundle root, so `<bundle_path>/<key>` is the correct file path.
 //!
-//! Plugin-scoped assets live under `plugin:<id>/` subdirectories to
+//! Plugin-scoped assets live under `plugin-<id>/` subdirectories to
 //! match the layout `emit_app` writes into the Xcode project.
 
 use std::fs::File;
@@ -53,14 +53,28 @@ impl IosAssetBackend {
 
 impl AssetBackend for IosAssetBackend {
     fn open(&self, scope: AssetScope<'_>, key: &str) -> io::Result<AssetReader> {
-        let mut path = self.root();
-        if let AssetScope::Plugin(id) = scope {
-            path.push(format!("plugin:{id}"));
-        }
-        for segment in key.split('/') {
-            path.push(segment);
-        }
-        let file = File::open(&path).map_err(|err| annotate(err, &path))?;
+        let root = self.root();
+        let bases: Vec<PathBuf> = match scope {
+            AssetScope::App => vec![root],
+            AssetScope::Plugin(id) => istmo_core::assets::plugin_asset_dirs(id)
+                .iter()
+                .map(|dir| root.join(dir))
+                .collect(),
+        };
+        let candidates: Vec<PathBuf> = bases
+            .into_iter()
+            .map(|mut path| {
+                for segment in key.split('/') {
+                    path.push(segment);
+                }
+                path
+            })
+            .collect();
+        let path = candidates
+            .iter()
+            .find(|path| path.is_file())
+            .unwrap_or(&candidates[0]);
+        let file = File::open(path).map_err(|err| annotate(err, path))?;
         Ok(AssetReader::new(file))
     }
 }
@@ -108,9 +122,9 @@ mod tests {
     fn for_root_reads_scoped_paths() {
         let tmp = std::env::temp_dir().join("istmo-ios-assets-scoped");
         let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(tmp.join("plugin:istmo.demo")).unwrap();
+        fs::create_dir_all(tmp.join("plugin-istmo.demo")).unwrap();
         fs::write(tmp.join("root.txt"), b"root").unwrap();
-        fs::write(tmp.join("plugin:istmo.demo/leaf.txt"), b"leaf").unwrap();
+        fs::write(tmp.join("plugin-istmo.demo/leaf.txt"), b"leaf").unwrap();
         let backend = IosAssetBackend::for_root(tmp);
         let mut r = backend.open(AssetScope::App, "root.txt").unwrap();
         let mut buf = Vec::new();

@@ -3,7 +3,7 @@
 //! Wraps an `android.content.res.AssetManager` handed from Kotlin. The
 //! JNI helper [`install_from_java`] hands a pointer to
 //! [`AAssetManager`](ndk_sys::AAssetManager); the resulting backend
-//! opens assets under `<key>` and `plugin:<id>/<key>` — matching the
+//! opens assets under `<key>` and `plugin-<id>/<key>` — matching the
 //! layout `emit_app` writes into `android/app/src/main/assets/`.
 
 #[cfg(target_os = "android")]
@@ -58,31 +58,36 @@ mod imp {
 
     impl AssetBackend for AndroidAssetBackend {
         fn open(&self, scope: AssetScope<'_>, key: &str) -> io::Result<AssetReader> {
-            let full = match scope {
-                AssetScope::App => key.to_owned(),
-                AssetScope::Plugin(id) => format!("plugin:{id}/{key}"),
+            let candidates: Vec<String> = match scope {
+                AssetScope::App => vec![key.to_owned()],
+                AssetScope::Plugin(id) => istmo_core::assets::plugin_asset_dirs(id)
+                    .iter()
+                    .map(|dir| format!("{dir}/{key}"))
+                    .collect(),
             };
-            let cstring = CString::new(full.clone()).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "asset key contains NUL byte")
-            })?;
-            // SAFETY: `manager` came from `AAssetManager_fromJava` and
-            // stays valid because `_java_manager` keeps its Java peer
-            // alive; `cstring` is a nul-terminated buffer we own for the
-            // duration of the call.
-            let asset_ptr = unsafe {
-                ndk_sys::AAssetManager_open(
-                    self.manager.0.as_ptr(),
-                    cstring.as_ptr(),
-                    AASSET_MODE_STREAMING,
-                )
-            };
-            let asset = NonNull::new(asset_ptr).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("android asset not found: {full}"),
-                )
-            })?;
-            Ok(AssetReader::new(AAssetReader { asset }))
+            for full in &candidates {
+                let cstring = CString::new(full.as_str()).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "asset key contains NUL byte")
+                })?;
+                // SAFETY: `manager` came from `AAssetManager_fromJava` and
+                // stays valid because `_java_manager` keeps its Java peer
+                // alive; `cstring` is a nul-terminated buffer we own for the
+                // duration of the call.
+                let asset_ptr = unsafe {
+                    ndk_sys::AAssetManager_open(
+                        self.manager.0.as_ptr(),
+                        cstring.as_ptr(),
+                        AASSET_MODE_STREAMING,
+                    )
+                };
+                if let Some(asset) = NonNull::new(asset_ptr) {
+                    return Ok(AssetReader::new(AAssetReader { asset }));
+                }
+            }
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("android asset not found: {}", candidates[0]),
+            ))
         }
     }
 

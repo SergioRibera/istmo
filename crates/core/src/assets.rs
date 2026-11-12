@@ -65,6 +65,16 @@ pub enum AssetScope<'a> {
     Plugin(&'a str),
 }
 
+/// Directory names, relative to an asset root, that may hold plugin
+/// `id`'s assets, in lookup order: `plugin-<id>` as staged by
+/// istmo-build, then the `plugin:<id>` form older releases staged
+/// (`:` is not a valid file-name character on NTFS).
+#[doc(hidden)]
+#[must_use]
+pub fn plugin_asset_dirs(id: &str) -> [String; 2] {
+    [format!("plugin-{id}"), format!("plugin:{id}")]
+}
+
 /// Streaming reader returned by [`open`].
 ///
 /// Impls [`Read`] and [`Seek`] so it slots into any function that
@@ -390,9 +400,9 @@ mod tests {
     fn desktop_backend_reads_from_env_dir() {
         let tmp = std::env::temp_dir().join("istmo-assets-desktop-env");
         let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(tmp.join("plugin:istmo.example")).unwrap();
+        fs::create_dir_all(tmp.join("plugin-istmo.example")).unwrap();
         fs::write(tmp.join("root.txt"), b"root").unwrap();
-        fs::write(tmp.join("plugin:istmo.example/deep.txt"), b"deep").unwrap();
+        fs::write(tmp.join("plugin-istmo.example/deep.txt"), b"deep").unwrap();
         // Exercise the desktop backend end-to-end without installing it
         // globally (which would race with `read_all_returns_full_bytes`
         // that already installed a mock).
@@ -407,5 +417,22 @@ mod tests {
         let mut buf2 = Vec::new();
         plugin_reader.read_to_end(&mut buf2).unwrap();
         assert_eq!(buf2, b"deep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn desktop_backend_still_reads_the_legacy_plugin_dir() {
+        let tmp = std::env::temp_dir().join("istmo-assets-desktop-legacy");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("plugin:istmo.old")).unwrap();
+        fs::write(tmp.join("plugin:istmo.old/data.txt"), b"old").unwrap();
+        let backend = desktop::DesktopAssetBackend::for_root(tmp);
+        let mut buf = Vec::new();
+        backend
+            .open(AssetScope::Plugin("istmo.old"), "data.txt")
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
+        assert_eq!(buf, b"old");
     }
 }
