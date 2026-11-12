@@ -139,6 +139,9 @@ pub enum DispatchError {
     /// A codegen stub is present but the concrete implementation hasn't
     /// been supplied yet.
     Unimplemented(&'static str),
+    /// The OS refused a thread needed to serve the call (a hosted call,
+    /// a stream encoder or pump, a service body or its cancel watcher).
+    Spawn(std::io::Error),
 }
 
 impl fmt::Display for DispatchError {
@@ -148,6 +151,7 @@ impl fmt::Display for DispatchError {
             Self::Encode(err) => write!(f, "dispatch encode: {err}"),
             Self::UnknownMethod(name) => write!(f, "unknown method: {name}"),
             Self::Unimplemented(name) => write!(f, "unimplemented method: {name}"),
+            Self::Spawn(err) => write!(f, "could not spawn a dispatch thread: {err}"),
         }
     }
 }
@@ -156,6 +160,7 @@ impl std::error::Error for DispatchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Decode(err) | Self::Encode(err) => Some(err),
+            Self::Spawn(err) => Some(err),
             Self::UnknownMethod(_) | Self::Unimplemented(_) => None,
         }
     }

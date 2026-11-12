@@ -181,9 +181,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                                 })
                                 .map_err(|err| {
                                     #core::__private::tracing::error!(?err, "failed to spawn the service cancel watcher");
-                                    #core::DispatchError::Unimplemented(
-                                        "service cancel watcher thread could not be spawned",
-                                    )
+                                    #core::DispatchError::Spawn(err)
                                 })?;
 
                             let inner = ::std::sync::Arc::clone(&self.__inner);
@@ -199,9 +197,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                                     // Releases the watcher thread.
                                     cancel.cancel();
                                     #core::__private::tracing::error!(?err, "failed to spawn the service thread");
-                                    return ::core::result::Result::Err(#core::DispatchError::Unimplemented(
-                                        "service thread could not be spawned",
-                                    ));
+                                    return ::core::result::Result::Err(#core::DispatchError::Spawn(err));
                                 }
                             };
 

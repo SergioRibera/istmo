@@ -798,9 +798,7 @@ fn expand_stream_arm_body(
                 method = #method_name_str,
                 "failed to spawn the hosted stream encoder thread",
             );
-            return ::core::result::Result::Err(#root::DispatchError::Unimplemented(
-                "hosted stream encoder thread could not be spawned",
-            ));
+            return ::core::result::Result::Err(#root::DispatchError::Spawn(err));
         }
         ::core::result::Result::Ok(#root::Outcome::StreamOpened(__istmo_erx))
     }
