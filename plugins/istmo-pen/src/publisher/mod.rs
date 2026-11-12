@@ -172,11 +172,29 @@ impl WindowState {
         }
     }
 
-    /// Detach and end every subscriber's streams.
+    /// End every subscriber's streams and detach.
+    ///
+    /// Closing comes first so an [`Self::install`] racing this call
+    /// either sees the window closed or stores its attachment before
+    /// the detach below takes it.
     fn shut_down(&self) {
-        self.detach_native();
         self.events_tx.0.close();
         self.hover_tx.0.close();
+        self.detach_native();
+    }
+
+    /// Put `attachment` in `slot` unless the window was shut down
+    /// meanwhile, in which case it is handed back for the caller to
+    /// detach. Otherwise an unregister racing an attach would leave a
+    /// hook (and, on Linux, a pump thread holding this state) behind.
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    fn install<A>(&self, slot: &Mutex<Option<A>>, attachment: A) -> Option<A> {
+        let mut slot = lock(slot);
+        if self.events_tx.0.closed.load(Ordering::Acquire) {
+            return Some(attachment);
+        }
+        *slot = Some(attachment);
+        None
     }
 }
 
@@ -265,13 +283,17 @@ impl PenPublisher {
         if let Some(hwnd) = native.hwnd() {
             let attachment = windows::attach_hwnd(hwnd, Arc::clone(&state))
                 .map_err(|err| PenError::Backend(err.to_string()))?;
-            *lock(&state.windows_attachment) = Some(attachment);
+            if let Some(stale) = state.install(&state.windows_attachment, attachment) {
+                windows::detach_hwnd(stale);
+            }
         }
         #[cfg(target_os = "macos")]
         if let Some(ns_view) = native.ns_view() {
             let attachment = macos::attach_view(ns_view, Arc::clone(&state))
                 .map_err(|err| PenError::Backend(err.to_string()))?;
-            *lock(&state.macos_attachment) = Some(attachment);
+            if let Some(stale) = state.install(&state.macos_attachment, attachment) {
+                macos::detach_view(stale);
+            }
         }
         #[cfg(target_os = "linux")]
         match native {
@@ -279,18 +301,19 @@ impl PenPublisher {
                 let attachment =
                     linux_wayland::attach_wayland(surface, display, Arc::clone(&state))
                         .map_err(|err| PenError::Backend(err.to_string()))?;
-                *lock(&state.linux_wayland_attachment) = Some(attachment);
+                // A stale attachment stops and joins its pump on drop.
+                drop(state.install(&state.linux_wayland_attachment, attachment));
             }
             NativeWindow::Xlib { window, display } => {
                 let attachment =
                     linux_xinput2::attach_xlib(window.get(), display, Arc::clone(&state))
                         .map_err(|err| PenError::Backend(err.to_string()))?;
-                *lock(&state.linux_xinput2_attachment) = Some(attachment);
+                drop(state.install(&state.linux_xinput2_attachment, attachment));
             }
             NativeWindow::Xcb { window, connection } => {
                 let attachment = linux_xinput2::attach_xcb(window, connection, Arc::clone(&state))
                     .map_err(|err| PenError::Backend(err.to_string()))?;
-                *lock(&state.linux_xinput2_attachment) = Some(attachment);
+                drop(state.install(&state.linux_xinput2_attachment, attachment));
             }
             // Non-Linux variants or `Detached` land here on Linux
             // builds — the symbolic id still maps, backends simply

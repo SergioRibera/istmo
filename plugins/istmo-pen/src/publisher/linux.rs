@@ -114,7 +114,9 @@ mod libinput_backend {
     }
 
     fn drain_pump(context: &mut Libinput, publisher: &Weak<PenPublisher>, clock: &Arc<Clock>) {
-        loop {
+        // Checked every round, not only when an event arrives: an idle
+        // seat must not keep the thread alive after the publisher is gone.
+        while publisher.strong_count() > 0 {
             if context.dispatch().is_err() {
                 std::thread::sleep(Duration::from_millis(8));
                 continue;
