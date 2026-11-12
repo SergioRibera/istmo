@@ -1,4 +1,5 @@
 import Foundation
+import IstmoFFI
 
 public final class IstmoRuntime {
 
@@ -6,6 +7,9 @@ public final class IstmoRuntime {
 
     private let queue = DispatchQueue(label: "dev.istmo.runtime", qos: .userInitiated)
     private var started = false
+    /// The `ctx` handed to Rust holds a strong reference so a callback can
+    /// never observe a freed runtime; released once the pump is joined.
+    private var retainedCtx: Unmanaged<IstmoRuntime>?
     private var nextId: UInt64 = 1_000_000_000
     private var pending: [UInt64: CheckedContinuation<Data, Error>] = [:]
     private var streams: [UInt64: AsyncThrowingStream<Data, Error>.Continuation] = [:]
@@ -41,9 +45,9 @@ public final class IstmoRuntime {
     public func start() throws {
         try queue.sync {
             guard !started else { return }
-            let ctx = Unmanaged.passUnretained(self).toOpaque()
+            let retained = Unmanaged.passRetained(self)
             let cb = IstmoIosCallbacks(
-                ctx: ctx,
+                ctx: retained.toOpaque(),
                 on_call: Trampolines.onCall,
                 on_cancel: Trampolines.onCancel,
                 on_create_instance: Trampolines.onCreateInstance,
@@ -51,17 +55,37 @@ public final class IstmoRuntime {
                 on_respond: Trampolines.onRespond,
                 on_event: Trampolines.onEvent,
                 on_stream_end: Trampolines.onStreamEnd,
-                on_release_native_handle: Trampolines.onReleaseNativeHandle
+                on_release_native_handle: Trampolines.onReleaseNativeHandle,
+                on_notify: Trampolines.onNotify
             )
-            let ok = istmo_ios_start(cb)
-            guard ok else { throw IstmoRuntimeError.startFailed }
+            guard istmo_ios_start(cb) else {
+                retained.release()
+                throw IstmoRuntimeError.startFailed
+            }
+            retainedCtx = retained
             started = true
         }
     }
 
     public func shutdown() {
+        let wasStarted = queue.sync { () -> Bool in
+            let was = started
+            started = false
+            return was
+        }
+        guard wasStarted else { return }
+        // Outside `queue`: the join waits for the in-flight callback, and
+        // callbacks themselves hop onto `queue`.
+        if istmo_ios_shutdown() {
+            // Joined: no callback can still be using `ctx`. Otherwise
+            // (shutdown from inside a callback) the reference is leaked
+            // on purpose rather than freed under a running callback.
+            queue.sync {
+                retainedCtx?.release()
+                retainedCtx = nil
+            }
+        }
         queue.sync {
-            istmo_ios_shutdown()
             for (_, cont) in pending {
                 cont.resume(throwing: IstmoRuntimeError.shutdown)
             }
@@ -74,7 +98,6 @@ public final class IstmoRuntime {
                 task.cancel()
             }
             hostedTasks.removeAll()
-            started = false
         }
     }
 
@@ -162,6 +185,27 @@ public final class IstmoRuntime {
         }
     }
 
+    /// Fire-and-forget call to a Rust-hosted plugin: no response comes
+    /// back and failures are only logged on the Rust side.
+    /// `instanceId` 0 targets the stateless plugin.
+    public func notify(pluginId: String, instanceId: UInt64 = 0, method: String, payload: Data) {
+        let pidBytes = Array(pluginId.utf8)
+        let mBytes = Array(method.utf8)
+        payload.withUnsafeBytes { payloadPtr in
+            pidBytes.withUnsafeBufferPointer { pidBuf in
+                mBytes.withUnsafeBufferPointer { mBuf in
+                    istmo_ios_submit_notify(
+                        pidBuf.baseAddress, pidBuf.count,
+                        instanceId,
+                        mBuf.baseAddress, mBuf.count,
+                        payloadPtr.bindMemory(to: UInt8.self).baseAddress,
+                        payload.count
+                    )
+                }
+            }
+        }
+    }
+
     public func publishEarlyLatest(channel: String, payload: Data) {
         let chBytes = Array(channel.utf8)
         payload.withUnsafeBytes { payloadPtr in
@@ -240,6 +284,19 @@ public final class IstmoRuntime {
             try await handler.handleCall(instanceId: instanceId, method: method, payload: payload)
         } onFailure: { error in
             NSLog("IstmoRuntime: handleCall failed plugin=\(pluginId) method=\(method): \(error)")
+        }
+    }
+
+    /// No response and no cancel token: Rust never tracks a notify, so the
+    /// task is not registered in `hostedTasks`.
+    fileprivate func handleNotify(pluginId: String, instanceId: UInt64, method: String, payload: Data) {
+        let handler = queue.sync { self.handlers[pluginId] }
+        guard let handler = handler else {
+            NSLog("IstmoRuntime: onNotify for unregistered plugin=\(pluginId)")
+            return
+        }
+        Task {
+            await handler.handleNotify(instanceId: instanceId, method: method, payload: payload)
         }
     }
 
@@ -379,6 +436,20 @@ private enum Trampolines {
     ) -> Void = { ctx, handleId in
         guard let runtime = ctxRuntime(ctx) else { return }
         runtime.handleReleaseNativeHandle(handleId: handleId)
+    }
+
+    static let onNotify: @convention(c) (
+        UnsafeMutableRawPointer?,
+        UnsafePointer<UInt8>?, Int,
+        UInt64,
+        UnsafePointer<UInt8>?, Int,
+        UnsafePointer<UInt8>?, Int
+    ) -> Void = { ctx, pidPtr, pidLen, instanceId, methodPtr, methodLen, payloadPtr, payloadLen in
+        guard let runtime = ctxRuntime(ctx) else { return }
+        let pluginId = decodeUtf8(pidPtr, pidLen) ?? ""
+        let method = decodeUtf8(methodPtr, methodLen) ?? ""
+        let payload = copyData(payloadPtr, payloadLen)
+        runtime.handleNotify(pluginId: pluginId, instanceId: instanceId, method: method, payload: payload)
     }
 
     private static func ctxRuntime(_ ctx: UnsafeMutableRawPointer?) -> IstmoRuntime? {

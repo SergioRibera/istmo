@@ -1,0 +1,4 @@
+module IstmoFFI {
+    header "istmo_ffi.h"
+    export *
+}
