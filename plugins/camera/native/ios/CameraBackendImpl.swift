@@ -380,10 +380,12 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
                 switch sub.continuation.yield(delivered) {
                 case .enqueued:
                     subscribers[id]?.dropped = 0
-                case .dropped:
-                    // `delivered` is buffered with the old count; an
-                    // older buffered frame was evicted for it.
-                    subscribers[id]?.dropped = 1
+                case .dropped(let evicted):
+                    // `delivered` is buffered with the old count; the
+                    // oldest buffered frame was evicted for it, taking the
+                    // losses it was carrying along with it.
+                    let (lost, overflow) = evicted.droppedBefore.addingReportingOverflow(1)
+                    subscribers[id]?.dropped = overflow ? .max : lost
                 case .terminated:
                     subscribers.removeValue(forKey: id)
                 @unknown default:

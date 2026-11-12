@@ -363,7 +363,8 @@ class CameraBackendImpl(
             val channel = Channel<CameraFrame>(
                 capacity = depth,
                 onBufferOverflow = BufferOverflow.DROP_OLDEST,
-                onUndeliveredElement = { dropped.incrementAndGet() },
+                // An evicted frame takes the losses it was carrying with it.
+                onUndeliveredElement = { dropped.addAndGet(it.droppedBefore.toInt() + 1) },
             )
             if (closed) {
                 channel.close()
@@ -434,7 +435,7 @@ class CameraBackendImpl(
             if (!fanout.hasSubscribers()) return
             val (planes, bytes) = when (format) {
                 is PixelFormat.Nv21 -> toNv21(it)
-                is PixelFormat.Bgra8 -> extractPlanes(it).also { (_, data) -> swapRedBlue(data) }
+                is PixelFormat.Bgra8 -> extractPlanes(it).also { (planes, data) -> swapRedBlue(planes[0], data) }
                 else -> extractPlanes(it)
             }
             fanout.send(
@@ -521,14 +522,24 @@ class CameraBackendImpl(
         return planes to out
     }
 
-    /** `RGBA_8888` → BGRA in place. */
-    private fun swapRedBlue(bytes: ByteArray) {
-        var i = 0
-        while (i + 3 < bytes.size) {
-            val r = bytes[i]
-            bytes[i] = bytes[i + 2]
-            bytes[i + 2] = r
-            i += 4
+    /**
+     * `RGBA_8888` → BGRA in place, row by row: a row may end in padding
+     * (`rowStride > 4 * width`) whose length need not be a multiple of 4,
+     * so stepping through the buffer as a whole would drift off pixels.
+     */
+    private fun swapRedBlue(plane: FramePlane, bytes: ByteArray) {
+        val rowStride = plane.rowStride.toInt()
+        val pixelStride = plane.pixelStride.toInt()
+        val width = plane.width.toInt()
+        for (row in 0 until plane.height.toInt()) {
+            val base = plane.offset.toInt() + row * rowStride
+            for (col in 0 until width) {
+                val i = base + col * pixelStride
+                if (i + 2 >= bytes.size) return
+                val r = bytes[i]
+                bytes[i] = bytes[i + 2]
+                bytes[i + 2] = r
+            }
         }
     }
 
