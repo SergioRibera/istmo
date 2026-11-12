@@ -1,6 +1,25 @@
-#![allow(unreachable_pub)]
+//! `extern "system"` entry points bound by `dev.istmo.runtime.IstmoRuntime`.
+//!
+//! Every export runs its body under [`guarded`]: a panic is caught (an
+//! unwind out of an `extern "system"` fn aborts the process) and turned
+//! into a Java `IllegalStateException`, and so is every failure that
+//! points at a caller bug (runtime not started, malformed bytes, bad
+//! arguments). Expected races such as a response arriving after its call
+//! was cancelled are only logged — see
+//! [`AndroidRuntimeError::is_benign_race`].
+//!
+//! The runtime is process-scoped: `nativeStart` is idempotent while the
+//! runtime runs, and after `nativeShutdown` it cannot be started again
+//! in the same process (the core runtime sits in a `OnceLock`).
 
-use std::sync::Arc;
+#![allow(
+    unreachable_pub,
+    reason = "exports are re-exported from the crate root so the symbols survive linking"
+)]
+
+use std::any::Any;
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::Mutex;
 
 use istmo_core::{
     CallId, EarlyEventKind, Envelope, Frame, InstanceId, Runtime, RuntimeConfig, RuntimeInit,
@@ -13,39 +32,148 @@ use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong};
 use crate::assets;
 use crate::error::AndroidRuntimeError;
 use crate::path as path_provider;
-use crate::pump;
+use crate::pump::{self, PumpMethods};
 use crate::state::{self, RuntimeState};
 
 unsafe extern "Rust" {
     safe fn __istmo_configure_runtime(init: RuntimeInit) -> RuntimeInit;
 }
 
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeStart<'local>(
-    env: JNIEnv<'local>,
-    _caller: JClass<'local>,
-    runtime_class: JClass<'local>,
-) -> jboolean {
-    match start(&env, runtime_class) {
-        Ok(()) => JNI_TRUE,
-        Err(err) => {
-            tracing::error!(?err, "istmo nativeStart failed");
-            JNI_FALSE
+const ILLEGAL_STATE: &str = "java/lang/IllegalStateException";
+
+/// Serialises `nativeStart` so two concurrent callers cannot both get
+/// past the "already running" check.
+static START_LOCK: Mutex<()> = Mutex::new(());
+
+/// Run an export body, converting panics and caller-bug failures into a
+/// pending `IllegalStateException` and returning `fallback` in that case.
+fn guarded<'local, R>(
+    env: &mut JNIEnv<'local>,
+    export: &'static str,
+    fallback: R,
+    body: impl FnOnce(&mut JNIEnv<'local>) -> Result<R, AndroidRuntimeError>,
+) -> R {
+    match panic::catch_unwind(AssertUnwindSafe(|| body(env))) {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            report(env, export, &err);
+            fallback
+        }
+        Err(payload) => {
+            let message = panic_message(payload.as_ref());
+            tracing::error!(export, %message, "istmo jni export panicked");
+            throw_illegal_state(env, &format!("istmo {export} panicked: {message}"));
+            fallback
         }
     }
 }
 
-fn start<'local>(
-    env: &JNIEnv<'local>,
+fn report(env: &mut JNIEnv<'_>, export: &'static str, err: &AndroidRuntimeError) {
+    if err.is_benign_race() {
+        tracing::debug!(export, %err, "istmo jni export dropped a stale frame");
+        return;
+    }
+    tracing::error!(export, %err, "istmo jni export failed");
+    if err.is_java_exception() && env.exception_check().unwrap_or(false) {
+        // Let Kotlin see the original Java exception.
+        return;
+    }
+    throw_illegal_state(env, &format!("istmo {export}: {err}"));
+}
+
+fn throw_illegal_state(env: &mut JNIEnv<'_>, message: &str) {
+    if env.exception_check().unwrap_or(false) {
+        return;
+    }
+    if let Err(err) = env.throw_new(ILLEGAL_STATE, message) {
+        tracing::error!(?err, "istmo could not throw IllegalStateException");
+    }
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&'static str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("<non-string panic payload>")
+}
+
+/// Ids cross JNI as `jlong` holding the same 64 bits as the Rust `u64`.
+const fn wire_id(value: jlong) -> u64 {
+    value.cast_unsigned()
+}
+
+/// `0` is the Kotlin side's "no instance" sentinel.
+const fn instance_from_wire(value: jlong) -> Option<InstanceId> {
+    if value == 0 {
+        None
+    } else {
+        Some(InstanceId(wire_id(value)))
+    }
+}
+
+fn stream_end_reason(
+    env: &JNIEnv<'_>,
+    reason: jint,
+    error_payload: &JByteArray<'_>,
+) -> Result<StreamEndReason, AndroidRuntimeError> {
+    match reason {
+        0 => Ok(StreamEndReason::Complete),
+        1 => Ok(StreamEndReason::Cancelled),
+        2 => {
+            let bytes = if error_payload.is_null() {
+                Vec::new()
+            } else {
+                env.convert_byte_array(error_payload)?
+            };
+            Ok(StreamEndReason::Error(bytes))
+        }
+        other => Err(AndroidRuntimeError::InvalidArgument(format!(
+            "unknown stream-end reason tag {other}"
+        ))),
+    }
+}
+
+/// Start the runtime and its pump.
+///
+/// Returns `true` once the runtime is running — also when it already
+/// was. Throws `IllegalStateException` (and returns `false`) when
+/// startup fails or the runtime was shut down.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeStart<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
     runtime_class: JClass<'local>,
-) -> Result<(), AndroidRuntimeError> {
-    let jvm = Arc::new(env.get_java_vm()?);
+) -> jboolean {
+    guarded(&mut env, "nativeStart", JNI_FALSE, |env| {
+        start(env, &runtime_class).map(|()| JNI_TRUE)
+    })
+}
+
+fn start(env: &mut JNIEnv<'_>, runtime_class: &JClass<'_>) -> Result<(), AndroidRuntimeError> {
+    let _guard = START_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Ok(state) = state::get() {
+        return if state.is_shut_down() {
+            Err(AndroidRuntimeError::ShutDown)
+        } else {
+            Ok(())
+        };
+    }
+
+    // Everything that can fail on the JNI side happens before the core
+    // runtime is installed: once `Runtime::init` succeeds it cannot be
+    // undone, so a failure after it would leave a runtime with no pump.
     let class_ref = env.new_global_ref(runtime_class)?;
+    let methods = PumpMethods::resolve(env, &class_ref)?;
+    let jvm = env.get_java_vm()?;
 
     let init = Runtime::init(RuntimeConfig::inline())?;
     let runtime = init.runtime.clone();
     let init = __istmo_configure_runtime(init);
-    let (handles, remote_sender) = pump::spawn(jvm, class_ref, init.outbound);
+    let (handles, remote_sender) =
+        pump::spawn(jvm, class_ref, methods, init.outbound).map_err(AndroidRuntimeError::Pump)?;
 
     runtime.install_remote_envelope_sink(std::sync::Arc::new(move |bytes: Vec<u8>| {
         if let Err(err) = remote_sender.send(bytes) {
@@ -53,116 +181,65 @@ fn start<'local>(
         }
     }));
 
-    state::install(RuntimeState {
-        pump_shutdown: std::sync::Mutex::new(Some(handles.shutdown)),
-        pump_join: std::sync::Mutex::new(Some(handles.join)),
-    })?;
-    Ok(())
+    state::install(RuntimeState::new(handles.shutdown, handles.join))
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse<'local>(
-    env: JNIEnv<'local>,
+    mut env: JNIEnv<'local>,
     _caller: JClass<'local>,
     call_id: jlong,
     ok: jboolean,
     payload: JByteArray<'local>,
 ) {
-    if let Err(err) = submit_response(&env, call_id, ok, &payload) {
-        tracing::error!(?err, "istmo nativeSubmitResponse failed");
-    }
-}
-
-#[allow(clippy::cast_sign_loss)]
-fn submit_response<'local>(
-    env: &JNIEnv<'local>,
-    call_id: jlong,
-    ok: jboolean,
-    payload: &JByteArray<'local>,
-) -> Result<(), AndroidRuntimeError> {
-    let bytes = env.convert_byte_array(payload)?;
-    let result = if ok == JNI_TRUE {
-        Ok(bytes)
-    } else {
-        Err(bytes)
-    };
-    let envelope = Envelope::new(Frame::Respond {
-        call_id: CallId(call_id as u64),
-        result,
+    guarded(&mut env, "nativeSubmitResponse", (), |env| {
+        let bytes = env.convert_byte_array(&payload)?;
+        let result = if ok == JNI_TRUE {
+            Ok(bytes)
+        } else {
+            Err(bytes)
+        };
+        Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Respond {
+            call_id: CallId(wire_id(call_id)),
+            result,
+        }))?;
+        Ok(())
     });
-    Runtime::global()?.dispatch_inbound(envelope)?;
-    Ok(())
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent<'local>(
-    env: JNIEnv<'local>,
+    mut env: JNIEnv<'local>,
     _caller: JClass<'local>,
     stream_id: jlong,
     payload: JByteArray<'local>,
 ) {
-    if let Err(err) = submit_event(&env, stream_id, &payload) {
-        tracing::error!(?err, "istmo nativeSubmitEvent failed");
-    }
-}
-
-#[allow(clippy::cast_sign_loss)]
-fn submit_event<'local>(
-    env: &JNIEnv<'local>,
-    stream_id: jlong,
-    payload: &JByteArray<'local>,
-) -> Result<(), AndroidRuntimeError> {
-    let bytes = env.convert_byte_array(payload)?;
-    let envelope = Envelope::new(Frame::Event {
-        stream_id: StreamId(stream_id as u64),
-        payload: bytes,
+    guarded(&mut env, "nativeSubmitEvent", (), |env| {
+        let bytes = env.convert_byte_array(&payload)?;
+        Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Event {
+            stream_id: StreamId(wire_id(stream_id)),
+            payload: bytes,
+        }))?;
+        Ok(())
     });
-    Runtime::global()?.dispatch_inbound(envelope)?;
-    Ok(())
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitStreamEnd<'local>(
-    env: JNIEnv<'local>,
+    mut env: JNIEnv<'local>,
     _caller: JClass<'local>,
     stream_id: jlong,
     reason: jint,
     error_payload: JByteArray<'local>,
 ) {
-    if let Err(err) = submit_stream_end(&env, stream_id, reason, &error_payload) {
-        tracing::error!(?err, "istmo nativeSubmitStreamEnd failed");
-    }
-}
-
-#[allow(clippy::cast_sign_loss)]
-fn submit_stream_end<'local>(
-    env: &JNIEnv<'local>,
-    stream_id: jlong,
-    reason: jint,
-    error_payload: &JByteArray<'local>,
-) -> Result<(), AndroidRuntimeError> {
-    let reason = match reason {
-        0 => StreamEndReason::Complete,
-        1 => StreamEndReason::Cancelled,
-        2 => {
-            let bytes = if error_payload.is_null() {
-                Vec::new()
-            } else {
-                env.convert_byte_array(error_payload)?
-            };
-            StreamEndReason::Error(bytes)
-        }
-        other => {
-            tracing::error!(other, "istmo nativeSubmitStreamEnd unknown reason tag");
-            return Ok(());
-        }
-    };
-    let envelope = Envelope::new(Frame::StreamEnd {
-        stream_id: StreamId(stream_id as u64),
-        reason,
+    guarded(&mut env, "nativeSubmitStreamEnd", (), |env| {
+        let reason = stream_end_reason(env, reason, &error_payload)?;
+        Runtime::global()?.dispatch_inbound(Envelope::new(Frame::StreamEnd {
+            stream_id: StreamId(wire_id(stream_id)),
+            reason,
+        }))?;
+        Ok(())
     });
-    Runtime::global()?.dispatch_inbound(envelope)?;
-    Ok(())
 }
 
 #[unsafe(no_mangle)]
@@ -175,44 +252,35 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall<'loc
     method: JString<'local>,
     payload: JByteArray<'local>,
 ) {
-    if let Err(err) = submit_call(
-        &mut env,
-        call_id,
-        &plugin_id,
-        instance_id,
-        &method,
-        &payload,
-    ) {
-        tracing::error!(?err, "istmo nativeSubmitCall failed");
-    }
+    guarded(&mut env, "nativeSubmitCall", (), |env| {
+        let plugin_id: String = env.get_string(&plugin_id)?.into();
+        let method: String = env.get_string(&method)?.into();
+        let payload = env.convert_byte_array(&payload)?;
+        Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Call {
+            call_id: CallId(wire_id(call_id)),
+            plugin_id,
+            instance_id: instance_from_wire(instance_id),
+            method,
+            payload,
+        }))?;
+        Ok(())
+    });
 }
 
-#[allow(clippy::cast_sign_loss)]
-fn submit_call<'local>(
-    env: &mut JNIEnv<'local>,
+/// Cooperatively cancel a Rust-hosted call that Kotlin started through
+/// `nativeSubmitCall`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCancel<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
     call_id: jlong,
-    plugin_id: &JString<'local>,
-    instance_id: jlong,
-    method: &JString<'local>,
-    payload: &JByteArray<'local>,
-) -> Result<(), AndroidRuntimeError> {
-    let plugin_id: String = env.get_string(plugin_id)?.into();
-    let method: String = env.get_string(method)?.into();
-    let payload = env.convert_byte_array(payload)?;
-    let instance_id = if instance_id == 0 {
-        None
-    } else {
-        Some(InstanceId(instance_id as u64))
-    };
-    let envelope = Envelope::new(Frame::Call {
-        call_id: CallId(call_id as u64),
-        plugin_id,
-        instance_id,
-        method,
-        payload,
+) {
+    guarded(&mut env, "nativeSubmitCancel", (), |_env| {
+        Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Cancel {
+            call_id: CallId(wire_id(call_id)),
+        }))?;
+        Ok(())
     });
-    Runtime::global()?.dispatch_inbound(envelope)?;
-    Ok(())
 }
 
 #[unsafe(no_mangle)]
@@ -224,34 +292,18 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitNotify<'l
     method: JString<'local>,
     payload: JByteArray<'local>,
 ) {
-    if let Err(err) = submit_notify(&mut env, &plugin_id, instance_id, &method, &payload) {
-        tracing::error!(?err, "istmo nativeSubmitNotify failed");
-    }
-}
-
-#[allow(clippy::cast_sign_loss)]
-fn submit_notify<'local>(
-    env: &mut JNIEnv<'local>,
-    plugin_id: &JString<'local>,
-    instance_id: jlong,
-    method: &JString<'local>,
-    payload: &JByteArray<'local>,
-) -> Result<(), AndroidRuntimeError> {
-    let plugin_id: String = env.get_string(plugin_id)?.into();
-    let method: String = env.get_string(method)?.into();
-    let payload = env.convert_byte_array(payload)?;
-    let instance_id = if instance_id == 0 {
-        None
-    } else {
-        Some(InstanceId(instance_id as u64))
-    };
-    Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Notify {
-        plugin_id,
-        instance_id,
-        method,
-        payload,
-    }))?;
-    Ok(())
+    guarded(&mut env, "nativeSubmitNotify", (), |env| {
+        let plugin_id: String = env.get_string(&plugin_id)?.into();
+        let method: String = env.get_string(&method)?.into();
+        let payload = env.convert_byte_array(&payload)?;
+        Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Notify {
+            plugin_id,
+            instance_id: instance_from_wire(instance_id),
+            method,
+            payload,
+        }))?;
+        Ok(())
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -261,20 +313,12 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLate
     channel: JString<'local>,
     payload: JByteArray<'local>,
 ) {
-    if let Err(err) = submit_early_latest(&mut env, &channel, &payload) {
-        tracing::error!(?err, "istmo nativeSubmitEarlyLatest failed");
-    }
-}
-
-fn submit_early_latest<'local>(
-    env: &mut JNIEnv<'local>,
-    channel: &JString<'local>,
-    payload: &JByteArray<'local>,
-) -> Result<(), AndroidRuntimeError> {
-    let channel: String = env.get_string(channel)?.into();
-    let bytes = env.convert_byte_array(payload)?;
-    Runtime::submit_early_event(channel, EarlyEventKind::Latest, bytes)?;
-    Ok(())
+    guarded(&mut env, "nativeSubmitEarlyLatest", (), |env| {
+        let channel: String = env.get_string(&channel)?.into();
+        let bytes = env.convert_byte_array(&payload)?;
+        Runtime::submit_early_event(channel, EarlyEventKind::Latest, bytes)?;
+        Ok(())
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -285,43 +329,26 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyQueu
     capacity: jint,
     payload: JByteArray<'local>,
 ) {
-    if let Err(err) = submit_early_queue(&mut env, &channel, capacity, &payload) {
-        tracing::error!(?err, "istmo nativeSubmitEarlyQueue failed");
-    }
-}
-
-#[allow(clippy::cast_sign_loss)]
-fn submit_early_queue<'local>(
-    env: &mut JNIEnv<'local>,
-    channel: &JString<'local>,
-    capacity: jint,
-    payload: &JByteArray<'local>,
-) -> Result<(), AndroidRuntimeError> {
-    let channel: String = env.get_string(channel)?.into();
-    let bytes = env.convert_byte_array(payload)?;
-    let capacity = if capacity <= 0 { 0 } else { capacity as u32 };
-    Runtime::submit_early_event(channel, EarlyEventKind::Queue { capacity }, bytes)?;
-    Ok(())
+    guarded(&mut env, "nativeSubmitEarlyQueue", (), |env| {
+        let channel: String = env.get_string(&channel)?.into();
+        let bytes = env.convert_byte_array(&payload)?;
+        let capacity = u32::try_from(capacity).unwrap_or(0);
+        Runtime::submit_early_event(channel, EarlyEventKind::Queue { capacity }, bytes)?;
+        Ok(())
+    });
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeInjectEnvelope<'local>(
-    env: JNIEnv<'local>,
+    mut env: JNIEnv<'local>,
     _caller: JClass<'local>,
     bytes: JByteArray<'local>,
 ) {
-    if let Err(err) = inject_envelope(&env, &bytes) {
-        tracing::error!(?err, "istmo nativeInjectEnvelope failed");
-    }
-}
-
-fn inject_envelope<'local>(
-    env: &JNIEnv<'local>,
-    bytes: &JByteArray<'local>,
-) -> Result<(), AndroidRuntimeError> {
-    let payload = env.convert_byte_array(bytes)?;
-    Runtime::global()?.inject_wire_envelope(&payload)?;
-    Ok(())
+    guarded(&mut env, "nativeInjectEnvelope", (), |env| {
+        let payload = env.convert_byte_array(&bytes)?;
+        Runtime::global()?.inject_wire_envelope(&payload)?;
+        Ok(())
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -330,9 +357,9 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeInstallAssets<'
     _caller: JClass<'local>,
     assets: JObject<'local>,
 ) {
-    if let Err(err) = assets::install_from_java(&mut env, &assets) {
-        tracing::error!(?err, "istmo nativeInstallAssets failed");
-    }
+    guarded(&mut env, "nativeInstallAssets", (), |env| {
+        assets::install_from_java(env, &assets).map_err(AndroidRuntimeError::Assets)
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -344,32 +371,31 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths<'l
     no_backup_dir: JString<'local>,
     external_files_dir: JString<'local>,
 ) {
-    match install_paths(
-        &mut env,
-        files_dir,
-        cache_dir,
-        no_backup_dir,
-        external_files_dir,
-    ) {
-        Ok(()) => {}
-        Err(err) => tracing::error!(?err, "istmo nativeInstallPaths failed"),
-    }
+    guarded(&mut env, "nativeInstallPaths", (), |env| {
+        install_paths(
+            env,
+            &files_dir,
+            &cache_dir,
+            &no_backup_dir,
+            &external_files_dir,
+        )
+    });
 }
 
-fn install_paths<'local>(
-    env: &mut JNIEnv<'local>,
-    files: JString<'local>,
-    cache: JString<'local>,
-    no_backup: JString<'local>,
-    external_files: JString<'local>,
+fn install_paths(
+    env: &mut JNIEnv<'_>,
+    files: &JString<'_>,
+    cache: &JString<'_>,
+    no_backup: &JString<'_>,
+    external_files: &JString<'_>,
 ) -> Result<(), AndroidRuntimeError> {
-    let files: String = env.get_string(&files)?.into();
-    let cache: String = env.get_string(&cache)?.into();
-    let no_backup: String = env.get_string(&no_backup)?.into();
+    let files: String = env.get_string(files)?.into();
+    let cache: String = env.get_string(cache)?.into();
+    let no_backup: String = env.get_string(no_backup)?.into();
     let external = if external_files.is_null() {
         None
     } else {
-        let s: String = env.get_string(&external_files)?.into();
+        let s: String = env.get_string(external_files)?.into();
         if s.is_empty() {
             None
         } else {
@@ -385,28 +411,84 @@ fn install_paths<'local>(
     Ok(())
 }
 
+/// Cancel pending operations and stop the pump. Idempotent, and a no-op
+/// before `nativeStart`. The runtime cannot be restarted afterwards.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeShutdown(
-    _env: JNIEnv<'_>,
-    _caller: JClass<'_>,
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeShutdown<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
 ) {
-    if let Err(err) = shutdown() {
-        tracing::error!(?err, "istmo nativeShutdown failed");
-    }
+    guarded(&mut env, "nativeShutdown", (), |_env| {
+        shutdown();
+        Ok(())
+    });
 }
 
-fn shutdown() -> Result<(), AndroidRuntimeError> {
-    let state = state::get()?;
+fn shutdown() {
+    let Ok(state) = state::get() else {
+        return;
+    };
+    if !state.begin_shutdown() {
+        return;
+    }
     if let Ok(runtime) = Runtime::global() {
         runtime.shutdown();
     }
-    if let Ok(mut guard) = state.pump_shutdown.lock() {
-        guard.take();
+    // Dropping the sender wakes the pump's selector with a disconnect.
+    state
+        .pump_shutdown
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    let handle = state
+        .pump_join
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(handle) = handle {
+        // A Kotlin callback running on the pump thread may call
+        // `shutdown`; joining ourselves would deadlock. The pump exits on
+        // its own once the callback returns.
+        if handle.thread().id() == std::thread::current().id() {
+            return;
+        }
+        if handle.join().is_err() {
+            tracing::error!("istmo pump thread panicked");
+        }
     }
-    if let Ok(mut guard) = state.pump_join.lock()
-        && let Some(handle) = guard.take()
-    {
-        let _ = handle.join();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wire_ids_round_trip_all_64_bits() {
+        assert_eq!(wire_id(0), 0);
+        assert_eq!(wire_id(42), 42);
+        assert_eq!(wire_id(-1), u64::MAX);
+        assert_eq!(wire_id(i64::MIN), 1 << 63);
     }
-    Ok(())
+
+    #[test]
+    fn zero_instance_id_means_none() {
+        assert_eq!(instance_from_wire(0), None);
+        assert_eq!(instance_from_wire(9), Some(InstanceId(9)));
+        assert_eq!(instance_from_wire(-1), Some(InstanceId(u64::MAX)));
+    }
+
+    #[test]
+    fn panic_message_reads_str_and_string_payloads() {
+        let s: Box<dyn Any + Send> = Box::new("boom");
+        assert_eq!(panic_message(s.as_ref()), "boom");
+        let owned: Box<dyn Any + Send> = Box::new(String::from("bang"));
+        assert_eq!(panic_message(owned.as_ref()), "bang");
+        let other: Box<dyn Any + Send> = Box::new(7_u8);
+        assert_eq!(panic_message(other.as_ref()), "<non-string panic payload>");
+    }
+
+    #[test]
+    fn shutdown_before_start_is_a_no_op() {
+        shutdown();
+    }
 }

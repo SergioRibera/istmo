@@ -48,4 +48,6 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 missing_safety_doc = "allow"
 redundant_pub_crate = "allow"
+# JNI + NDK FFI crate: every unsafe block must state its invariants.
+undocumented_unsafe_blocks = "deny"
 
