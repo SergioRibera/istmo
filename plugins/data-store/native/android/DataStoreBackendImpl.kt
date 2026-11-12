@@ -8,46 +8,55 @@ import dev.istmo.runtime.DataStoreBackend
 import dev.istmo.runtime.DataStoreConfig
 import dev.istmo.runtime.DataStoreError
 
+/**
+ * `SharedPreferences` backend: one preferences file per namespace.
+ *
+ * A key read as the wrong type fails with `DataStoreError.Corrupted`,
+ * like the desktop backend. `SharedPreferences` has no `f64` or bytes
+ * type, so `f64` values are stored as their `Long` bit pattern and
+ * bytes as Base64 strings; reading an `f64` key with `get_i64` (or a
+ * bytes key with `get_string`) therefore cannot be told apart from a
+ * real value of that type.
+ */
 class DataStoreBackendImpl(context: Context, config: DataStoreConfig) : DataStoreBackend {
 
-    private val prefs: SharedPreferences =
+    private val prefs: SharedPreferences = try {
         context.getSharedPreferences(config.namespace, Context.MODE_PRIVATE)
+    } catch (e: IllegalArgumentException) {
+        // The namespace becomes a file name; a path separator is refused.
+        throw BackendException(DataStoreError.Backend("invalid namespace ${config.namespace}: ${e.message}"))
+    }
 
     override suspend fun get_string(key: String): String? =
-        if (prefs.contains(key)) prefs.getString(key, null) else null
+        typed(key, "string") { prefs.getString(key, null) }
 
     override suspend fun set_string(key: String, value: String) {
         commit { it.putString(key, value) }
     }
 
     override suspend fun get_i64(key: String): Long? =
-        if (prefs.contains(key)) prefs.getLong(key, 0L) else null
+        typed(key, "i64") { prefs.getLong(key, 0L) }
 
     override suspend fun set_i64(key: String, value: Long) {
         commit { it.putLong(key, value) }
     }
 
-    override suspend fun get_f64(key: String): Double? {
-        if (!prefs.contains(key)) return null
-
-        val bits = prefs.getLong(key, 0L)
-        return Double.fromBits(bits)
-    }
+    override suspend fun get_f64(key: String): Double? =
+        typed(key, "f64") { Double.fromBits(prefs.getLong(key, 0L)) }
 
     override suspend fun set_f64(key: String, value: Double) {
         commit { it.putLong(key, value.toRawBits()) }
     }
 
     override suspend fun get_bool(key: String): Boolean? =
-        if (prefs.contains(key)) prefs.getBoolean(key, false) else null
+        typed(key, "bool") { prefs.getBoolean(key, false) }
 
     override suspend fun set_bool(key: String, value: Boolean) {
         commit { it.putBoolean(key, value) }
     }
 
     override suspend fun get_bytes(key: String): ByteArray? {
-        val encoded = if (prefs.contains(key)) prefs.getString(key, null) else null
-        if (encoded == null) return null
+        val encoded = typed(key, "bytes") { prefs.getString(key, null) } ?: return null
         return try {
             Base64.decode(encoded, Base64.NO_WRAP)
         } catch (e: IllegalArgumentException) {
@@ -74,6 +83,18 @@ class DataStoreBackendImpl(context: Context, config: DataStoreConfig) : DataStor
         commit { it.clear() }
     }
 
+    /** `null` for a missing key; `Corrupted` when the stored value has another type. */
+    private inline fun <T> typed(key: String, wanted: String, read: () -> T): T? {
+        if (!prefs.contains(key)) return null
+        return try {
+            read()
+        } catch (e: ClassCastException) {
+            throw BackendException(
+                DataStoreError.Corrupted("key `$key` holds another type but caller asked for $wanted"),
+            )
+        }
+    }
+
     private inline fun commit(edit: (SharedPreferences.Editor) -> Unit) {
         val editor = prefs.edit()
         edit(editor)
@@ -82,4 +103,3 @@ class DataStoreBackendImpl(context: Context, config: DataStoreConfig) : DataStor
         }
     }
 }
-

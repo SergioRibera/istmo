@@ -29,15 +29,21 @@ pub const DATA_STORE_PLUGIN_ID: &str = "istmo.data_store";
 /// Instance-scoped configuration for a [`DataStoreClient`].
 ///
 /// The `namespace` is the isolation boundary the native backend uses
-/// to segregate values — on Android it maps to a `SharedPreferences`
-/// file name, on iOS to a `UserDefaults` suite name. Two instances
-/// with different namespaces cannot see each other's keys.
+/// to segregate values. Two instances with different namespaces cannot
+/// see each other's keys:
+///
+/// * Android — the `SharedPreferences` file name, used verbatim (so it
+///   must not contain `/`).
+/// * iOS — the `UserDefaults` suite `<bundle id>.istmo.<namespace>`.
+/// * Desktop — a percent-encoded file name under the app's preference
+///   directory (see the `desktop` module).
 #[message(wincode = "::wincode")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DataStoreConfig {
-    /// Backend namespace. Convention: reverse-DNS app id
-    /// (`com.example.myapp`) so different apps on the same device
-    /// cannot collide.
+    /// Backend namespace: a short name for one group of values within
+    /// this app, e.g. `"settings"` or `"session"`. Every platform
+    /// already keeps one app's storage apart from another's, so there
+    /// is no need to embed the app id.
     pub namespace: String,
 }
 
