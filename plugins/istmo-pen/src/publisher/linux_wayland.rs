@@ -13,10 +13,9 @@
 //! `0..=65535`; tilt / rotation are `fixed` degrees.
 //!
 //! A dedicated pump thread drives the queue with `blocking_dispatch`.
-//! It outlives the [`WaylandAttachment`] on drop (no co-operative
-//! shutdown yet); events route through a `send` on the shared
-//! [`WindowState`] senders, which no-op cleanly once the receivers go
-//! away.
+//! Dropping the [`WaylandAttachment`] raises a stop flag, wakes the pump
+//! with a `wl_display.sync` round-trip on its queue, and joins it; the
+//! pump destroys its tablet objects on the way out.
 
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(
@@ -28,11 +27,13 @@
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use wayland_backend::client::{Backend, ObjectId};
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
+use wayland_client::protocol::wl_callback::WlCallback;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;
@@ -50,13 +51,31 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_v2::ZwpTabletV2;
 use super::WindowState;
 use crate::{PenButtonChange, PenEvent, PenHoverEvent, PenMove, PenSample, PenToolKind};
 
-/// Book-keeping returned from [`attach_wayland`]. The pump thread owns
-/// its own clone of the shared state; this handle only keeps the
-/// window-handle pointers around for debuggability.
+/// Handle on the pump thread [`attach_wayland`] started. Dropping it stops
+/// and joins the thread.
 #[derive(Debug)]
 pub(super) struct WaylandAttachment {
-    _surface: NonZeroUsize,
-    _display: NonZeroUsize,
+    stop: Arc<AtomicBool>,
+    conn: Connection,
+    qh: QueueHandle<PumpState>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for WaylandAttachment {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        // The pump blocks in `blocking_dispatch` until its queue gets an
+        // event; the compositor answers this sync on that queue.
+        let _callback = self.conn.display().sync(&self.qh, ());
+        if let Err(err) = self.conn.flush() {
+            tracing::warn!(target: "istmo.pen.wayland", %err, "flush on detach");
+        }
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            tracing::warn!(target: "istmo.pen.wayland", "pump thread panicked");
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -113,6 +132,8 @@ pub(super) fn attach_wayland(
         .map_err(|err| AttachError::InitFailed(format!("zwp_tablet_manager_v2 bind: {err}")))?;
     let tablet_seat = manager.get_tablet_seat(&seat, &qh, ());
 
+    let stop = Arc::new(AtomicBool::new(false));
+    let pump_stop = Arc::clone(&stop);
     let mut pump_state = PumpState {
         state,
         clock: Arc::new(AttachClock::new()),
@@ -120,25 +141,34 @@ pub(super) fn attach_wayland(
         tools: HashMap::new(),
         _globals: globals,
         _seat: seat,
-        _manager: manager,
-        _tablet_seat: tablet_seat,
+        manager,
+        tablet_seat,
     };
 
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("istmo-pen-wayland".into())
         .spawn(move || {
-            loop {
+            while !pump_stop.load(Ordering::Acquire) {
                 if let Err(err) = event_queue.blocking_dispatch(&mut pump_state) {
-                    eprintln!("istmo-pen: wayland pump exited: {err}");
-                    break;
+                    tracing::warn!(target: "istmo.pen.wayland", %err, "pump exited");
+                    return;
                 }
+            }
+            // The connection is the app's own `wl_display`: release the
+            // protocol objects this pump created instead of leaking them.
+            pump_state.tablet_seat.destroy();
+            pump_state.manager.destroy();
+            if let Err(err) = event_queue.flush() {
+                tracing::debug!(target: "istmo.pen.wayland", %err, "flush on exit");
             }
         })
         .map_err(|err| AttachError::ThreadSpawn(err.to_string()))?;
 
     Ok(WaylandAttachment {
-        _surface: surface,
-        _display: display,
+        stop,
+        conn,
+        qh,
+        thread: Some(thread),
     })
 }
 
@@ -182,8 +212,8 @@ struct PumpState {
     tools: HashMap<ObjectId, ToolState>,
     _globals: GlobalList,
     _seat: WlSeat,
-    _manager: ZwpTabletManagerV2,
-    _tablet_seat: ZwpTabletSeatV2,
+    manager: ZwpTabletManagerV2,
+    tablet_seat: ZwpTabletSeatV2,
 }
 
 // SAFETY: `target_surface` is a raw address used only for equality in
@@ -262,6 +292,7 @@ impl Dispatch<WlRegistry, GlobalListContents> for PumpState {
     }
 }
 
+delegate_noop!(PumpState: ignore WlCallback);
 delegate_noop!(PumpState: ignore WlSeat);
 delegate_noop!(PumpState: ZwpTabletManagerV2);
 delegate_noop!(PumpState: ignore ZwpTabletV2);

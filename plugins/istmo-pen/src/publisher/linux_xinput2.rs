@@ -41,7 +41,8 @@ use std::collections::HashMap;
 use std::ffi::c_ulong;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use x11rb::connection::Connection;
@@ -50,16 +51,47 @@ use x11rb::protocol::xinput::{
     ConnectionExt as _, DeviceClassData, DeviceType, EventMask, Fp1616, Fp3232, HierarchyMask,
     XIDeviceInfo, XIEventMask,
 };
-use x11rb::protocol::xproto::{Atom, ConnectionExt as _, Window};
+use x11rb::protocol::xproto::{
+    Atom, AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux,
+    EventMask as CoreEventMask, Window, WindowClass,
+};
 use x11rb::rust_connection::RustConnection;
 
 use super::WindowState;
 use crate::{PenButtonChange, PenEvent, PenHoverEvent, PenMove, PenSample, PenToolKind};
 
-/// Book-keeping returned from either attach entry point.
+/// Handle on the pump thread either attach entry point started. Dropping
+/// it stops and joins the thread, which closes its X connection (and so
+/// the event selection on the app window).
 #[derive(Debug)]
 pub(super) struct XInputAttachment {
-    _window: Window,
+    stop: Arc<AtomicBool>,
+    conn: Arc<RustConnection>,
+    /// Unmapped `InputOnly` window owned by this connection; a
+    /// `ClientMessage` sent to it wakes the pump out of `wait_for_event`.
+    wake_window: Window,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for XInputAttachment {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let wake = ClientMessageEvent::new(32, self.wake_window, AtomEnum::NONE, [0u32; 5]);
+        let sent = self
+            .conn
+            .send_event(false, self.wake_window, CoreEventMask::NO_EVENT, wake)
+            .map(drop)
+            .and_then(|()| self.conn.flush());
+        if let Err(err) = sent {
+            // The connection is gone, so the pump already exited.
+            tracing::debug!(target: "istmo.pen.xinput2", %err, "waking pump on detach");
+        }
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            tracing::warn!(target: "istmo.pen.xinput2", "pump thread panicked");
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -115,8 +147,9 @@ pub(super) fn attach_xcb(
 }
 
 fn attach_window(window: Window, state: Arc<WindowState>) -> Result<XInputAttachment, AttachError> {
-    let (conn, _screen) =
+    let (conn, screen) =
         RustConnection::connect(None).map_err(|err| AttachError::ConnectFailed(err.to_string()))?;
+    let conn = Arc::new(conn);
 
     // XI2 handshake. 2.0 is enough for `XI_Motion` + `XI_ButtonPress`.
     let version = conn
@@ -141,6 +174,10 @@ fn attach_window(window: Window, state: Arc<WindowState>) -> Result<XInputAttach
     device_ids.dedup();
 
     select_events(&conn, window, &device_ids)?;
+    let wake_window = create_wake_window(&conn, screen)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let pump_stop = Arc::clone(&stop);
+    let pump_conn = Arc::clone(&conn);
 
     let mut pump_state = PumpState {
         state,
@@ -151,22 +188,57 @@ fn attach_window(window: Window, state: Arc<WindowState>) -> Result<XInputAttach
         tools: HashMap::new(),
     };
 
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("istmo-pen-xinput2".into())
         .spawn(move || {
-            loop {
-                match conn.wait_for_event() {
-                    Ok(event) => handle_event(&conn, &mut pump_state, event),
+            while !pump_stop.load(Ordering::Acquire) {
+                match pump_conn.wait_for_event() {
+                    Ok(Event::ClientMessage(msg)) if msg.window == wake_window => {}
+                    Ok(event) => handle_event(&pump_conn, &mut pump_state, event),
                     Err(err) => {
-                        eprintln!("istmo-pen: xinput2 pump exited: {err}");
-                        break;
+                        tracing::warn!(target: "istmo.pen.xinput2", %err, "pump exited");
+                        return;
                     }
                 }
             }
         })
         .map_err(|err| AttachError::ThreadSpawn(err.to_string()))?;
 
-    Ok(XInputAttachment { _window: window })
+    Ok(XInputAttachment {
+        stop,
+        conn,
+        wake_window,
+        thread: Some(thread),
+    })
+}
+
+fn create_wake_window(conn: &RustConnection, screen: usize) -> Result<Window, AttachError> {
+    let root = conn
+        .setup()
+        .roots
+        .get(screen)
+        .ok_or_else(|| AttachError::XiRequestFailed(format!("no X screen {screen}")))?
+        .root;
+    let window = conn
+        .generate_id()
+        .map_err(|err| AttachError::XiRequestFailed(err.to_string()))?;
+    conn.create_window(
+        0,
+        window,
+        root,
+        0,
+        0,
+        1,
+        1,
+        0,
+        WindowClass::INPUT_ONLY,
+        x11rb::COPY_FROM_PARENT,
+        &CreateWindowAux::new(),
+    )
+    .map_err(|err| AttachError::XiRequestFailed(err.to_string()))?
+    .check()
+    .map_err(|err| AttachError::XiRequestFailed(err.to_string()))?;
+    Ok(window)
 }
 
 fn select_events(

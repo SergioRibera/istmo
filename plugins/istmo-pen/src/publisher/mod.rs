@@ -14,10 +14,12 @@
 //! runs — events simply never fire until the backend lands.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use flume::{Receiver, Sender};
+use flume::{Receiver, Sender, TrySendError};
 use istmo_core::Runtime;
+use istmo_core::sync::lock;
 use istmo_window::{NativeWindow, WindowId, WindowListener, WindowRegistry};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -36,26 +38,90 @@ mod linux_wayland;
 #[cfg(target_os = "linux")]
 mod linux_xinput2;
 
+/// Items each subscriber may have queued before new ones are dropped.
+/// A pen reports at up to ~500 Hz, so this is a couple of seconds of
+/// samples for a consumer that stopped draining.
+pub const SUBSCRIBER_CAPACITY: usize = 1024;
+
+/// One window's stream, fanned out to every subscriber through its own
+/// bounded queue.
+///
+/// A subscriber that falls behind loses the *newest* items once its
+/// queue is full (counted in [`Fanout::dropped`]); it never blocks the
+/// native event source nor starves other subscribers.
+#[derive(Debug)]
+struct Fanout<T> {
+    subscribers: Mutex<Vec<Sender<T>>>,
+    dropped: AtomicU64,
+    closed: AtomicBool,
+}
+
+impl<T: Clone> Fanout<T> {
+    const fn new() -> Self {
+        Self {
+            subscribers: Mutex::new(Vec::new()),
+            dropped: AtomicU64::new(0),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    /// New subscriber. Already closed when the window is gone.
+    fn subscribe(&self) -> Receiver<T> {
+        let (tx, rx) = flume::bounded(SUBSCRIBER_CAPACITY);
+        let mut subscribers = lock(&self.subscribers);
+        if !self.closed.load(Ordering::Acquire) {
+            subscribers.push(tx);
+        }
+        rx
+    }
+
+    /// Deliver `item` to every live subscriber, pruning dropped ones.
+    /// `true` while at least one subscriber remains.
+    fn send(&self, item: &T) -> bool {
+        let mut subscribers = lock(&self.subscribers);
+        subscribers.retain(|tx| match tx.try_send(item.clone()) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            Err(TrySendError::Disconnected(_)) => false,
+        });
+        !subscribers.is_empty()
+    }
+
+    /// End every subscriber's stream; later subscribers start closed.
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        lock(&self.subscribers).clear();
+    }
+
+    fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+}
+
+/// Sending half the native backends feed. `send` mirrors
+/// [`flume::Sender::send`]'s call shape so backends stay agnostic of the
+/// fan-out behind it.
+#[derive(Debug)]
+struct StreamTx<T>(Fanout<T>);
+
+impl<T: Clone> StreamTx<T> {
+    fn send(&self, item: T) -> bool {
+        self.0.send(&item)
+    }
+}
+
 /// Per-registered-window state kept by the publisher.
 ///
-/// [`RawWindowHandle`] is not `Send + Sync` (variants carry platform
-/// pointers) so we store only the parts each backend actually needs —
-/// the extracted `HWND` on Windows, nothing on other targets until
-/// their backends land.
+/// [`RawWindowHandle`](raw_window_handle::RawWindowHandle) is not
+/// `Send + Sync` (variants carry platform pointers) so we store only the
+/// parts each backend actually needs.
 #[derive(Debug)]
 struct WindowState {
-    #[cfg_attr(
-        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
-        allow(dead_code)
-    )]
-    events_tx: Sender<PenEvent>,
-    events_rx: Mutex<Option<Receiver<PenEvent>>>,
-    #[cfg_attr(
-        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
-        allow(dead_code)
-    )]
-    hover_tx: Sender<PenHoverEvent>,
-    hover_rx: Mutex<Option<Receiver<PenHoverEvent>>>,
+    events_tx: StreamTx<PenEvent>,
+    hover_tx: StreamTx<PenHoverEvent>,
     #[cfg(target_os = "windows")]
     windows_attachment: Mutex<Option<windows::WindowAttachment>>,
     #[cfg(target_os = "macos")]
@@ -67,14 +133,10 @@ struct WindowState {
 }
 
 impl WindowState {
-    fn new() -> Self {
-        let (events_tx, events_rx) = flume::unbounded();
-        let (hover_tx, hover_rx) = flume::unbounded();
+    const fn new() -> Self {
         Self {
-            events_tx,
-            events_rx: Mutex::new(Some(events_rx)),
-            hover_tx,
-            hover_rx: Mutex::new(Some(hover_rx)),
+            events_tx: StreamTx(Fanout::new()),
+            hover_tx: StreamTx(Fanout::new()),
             #[cfg(target_os = "windows")]
             windows_attachment: Mutex::new(None),
             #[cfg(target_os = "macos")]
@@ -84,6 +146,37 @@ impl WindowState {
             #[cfg(target_os = "linux")]
             linux_xinput2_attachment: Mutex::new(None),
         }
+    }
+
+    /// Tear down every native hook feeding this window. Linux pump
+    /// threads are stopped and joined when their attachment drops.
+    fn detach_native(&self) {
+        #[cfg(target_os = "windows")]
+        {
+            let attachment = lock(&self.windows_attachment).take();
+            if let Some(attachment) = attachment {
+                windows::detach_hwnd(attachment);
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let attachment = lock(&self.macos_attachment).take();
+            if let Some(attachment) = attachment {
+                macos::detach_view(attachment);
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            drop(lock(&self.linux_wayland_attachment).take());
+            drop(lock(&self.linux_xinput2_attachment).take());
+        }
+    }
+
+    /// Detach and end every subscriber's streams.
+    fn shut_down(&self) {
+        self.detach_native();
+        self.events_tx.0.close();
+        self.hover_tx.0.close();
     }
 }
 
@@ -97,6 +190,9 @@ impl WindowState {
 /// through a shared [`WindowRegistry`] the publisher follows via
 /// [`Self::follow_registry`], so apps that also use other window-aware
 /// plugins register each window only once.
+///
+/// Dropping the publisher detaches every window and stops the
+/// background threads the Linux backends run.
 #[derive(Debug)]
 pub struct PenPublisher {
     runtime: Arc<Runtime>,
@@ -124,9 +220,11 @@ impl PenPublisher {
     /// ids leave the client with no event stream.
     ///
     /// On Windows this installs a `SetWindowSubclass` hook that
-    /// intercepts `WM_POINTER*` messages; on other desktop OSes it
-    /// currently only records the mapping (backend lands in a later
-    /// milestone). Fails only when the raw handle cannot be resolved.
+    /// intercepts `WM_POINTER*` messages and **must be called on the
+    /// thread that created the window**; on macOS it adds an `NSEvent`
+    /// monitor; on Linux it starts a Wayland tablet-v2 or `XInput2` pump
+    /// thread. Registering an id again replaces (and tears down) the
+    /// previous native hook while keeping existing subscribers.
     pub fn register_window<W>(&self, id: u64, window: W) -> Result<(), PenError>
     where
         W: HasWindowHandle + HasDisplayHandle,
@@ -152,89 +250,62 @@ impl PenPublisher {
     )]
     fn attach(&self, id: u64, native: NativeWindow) -> Result<(), PenError> {
         // Reuse an existing state entry when the id was pre-registered
-        // (e.g. via `register_window_id` so a `PenClient` could claim
-        // its receivers before the real window handle was available).
-        // Replacing the state here would strand the client's taken
-        // receivers against senders that are about to be dropped —
-        // which is exactly what caused Wayland samples to vanish
-        // silently when the symbolic registration happened pre-attach.
-        let state = {
-            let guard = match self.windows.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
-            guard.get(&id).map(Arc::clone)
-        };
-        let state = state.unwrap_or_else(|| Arc::new(WindowState::new()));
+        // (e.g. via `register_window_id` so a `PenClient` could subscribe
+        // before the real window handle was available). Replacing the
+        // state would strand those subscribers.
+        let state = Arc::clone(
+            lock(&self.windows)
+                .entry(id)
+                .or_insert_with(|| Arc::new(WindowState::new())),
+        );
+        // A second attach for the same id replaces the first hook.
+        state.detach_native();
 
         #[cfg(target_os = "windows")]
         if let Some(hwnd) = native.hwnd() {
             let attachment = windows::attach_hwnd(hwnd, Arc::clone(&state))
                 .map_err(|err| PenError::Backend(err.to_string()))?;
-            match state.windows_attachment.lock() {
-                Ok(mut guard) => *guard = Some(attachment),
-                Err(poisoned) => *poisoned.into_inner() = Some(attachment),
-            }
+            *lock(&state.windows_attachment) = Some(attachment);
         }
         #[cfg(target_os = "macos")]
         if let Some(ns_view) = native.ns_view() {
             let attachment = macos::attach_view(ns_view, Arc::clone(&state))
                 .map_err(|err| PenError::Backend(err.to_string()))?;
-            match state.macos_attachment.lock() {
-                Ok(mut guard) => *guard = Some(attachment),
-                Err(poisoned) => *poisoned.into_inner() = Some(attachment),
-            }
+            *lock(&state.macos_attachment) = Some(attachment);
         }
         #[cfg(target_os = "linux")]
-        {
-            match native {
-                NativeWindow::Wayland { surface, display } => {
-                    let attachment =
-                        linux_wayland::attach_wayland(surface, display, Arc::clone(&state))
-                            .map_err(|err| PenError::Backend(err.to_string()))?;
-                    match state.linux_wayland_attachment.lock() {
-                        Ok(mut guard) => *guard = Some(attachment),
-                        Err(poisoned) => *poisoned.into_inner() = Some(attachment),
-                    }
-                }
-                NativeWindow::Xlib { window, display } => {
-                    let attachment =
-                        linux_xinput2::attach_xlib(window.get(), display, Arc::clone(&state))
-                            .map_err(|err| PenError::Backend(err.to_string()))?;
-                    match state.linux_xinput2_attachment.lock() {
-                        Ok(mut guard) => *guard = Some(attachment),
-                        Err(poisoned) => *poisoned.into_inner() = Some(attachment),
-                    }
-                }
-                NativeWindow::Xcb { window, connection } => {
-                    let attachment =
-                        linux_xinput2::attach_xcb(window, connection, Arc::clone(&state))
-                            .map_err(|err| PenError::Backend(err.to_string()))?;
-                    match state.linux_xinput2_attachment.lock() {
-                        Ok(mut guard) => *guard = Some(attachment),
-                        Err(poisoned) => *poisoned.into_inner() = Some(attachment),
-                    }
-                }
-                // Non-Linux variants or `Detached` land here on Linux
-                // builds — the symbolic id still maps, backends simply
-                // never fire.
-                _ => {}
+        match native {
+            NativeWindow::Wayland { surface, display } => {
+                let attachment =
+                    linux_wayland::attach_wayland(surface, display, Arc::clone(&state))
+                        .map_err(|err| PenError::Backend(err.to_string()))?;
+                *lock(&state.linux_wayland_attachment) = Some(attachment);
             }
+            NativeWindow::Xlib { window, display } => {
+                let attachment =
+                    linux_xinput2::attach_xlib(window.get(), display, Arc::clone(&state))
+                        .map_err(|err| PenError::Backend(err.to_string()))?;
+                *lock(&state.linux_xinput2_attachment) = Some(attachment);
+            }
+            NativeWindow::Xcb { window, connection } => {
+                let attachment = linux_xinput2::attach_xcb(window, connection, Arc::clone(&state))
+                    .map_err(|err| PenError::Backend(err.to_string()))?;
+                *lock(&state.linux_xinput2_attachment) = Some(attachment);
+            }
+            // Non-Linux variants or `Detached` land here on Linux
+            // builds — the symbolic id still maps, backends simply
+            // never fire.
+            _ => {}
         }
-        let mut guard = match self.windows.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.insert(id, state);
         Ok(())
     }
 
     /// Register a window under `id` without binding it to a native
-    /// window handle.
+    /// window handle. A no-op when `id` is already registered.
     ///
     /// Suitable for apps that source stylus samples themselves via
     /// [`Self::push_event`] / [`Self::push_hover`] (Wayland tablet-v2,
-    /// XInput2, egui pointer fallback, unit tests) and for the
+    /// `XInput2`, egui pointer fallback, unit tests) and for the
     /// `install_libinput` broadcast path — the id must still be present
     /// so [`Self::state_for`] can resolve it, but no `WM_POINTER*` /
     /// `NSEvent` local monitor gets installed. On Windows and macOS the
@@ -242,76 +313,49 @@ impl PenPublisher {
     /// the recommended path since it wires the OS-level pointer stream
     /// into the plugin.
     pub fn register_window_id(&self, id: u64) {
-        let state = Arc::new(WindowState::new());
-        let mut guard = match self.windows.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.insert(id, state);
+        lock(&self.windows)
+            .entry(id)
+            .or_insert_with(|| Arc::new(WindowState::new()));
     }
 
-    /// Unregister a previously registered window. Silently ignores ids
-    /// that were never registered.
+    /// Unregister a previously registered window: its native hook is
+    /// removed, background threads are stopped and joined, and every
+    /// subscriber's streams end. Silently ignores ids that were never
+    /// registered.
     pub fn unregister_window(&self, id: u64) {
-        let removed = {
-            let mut guard = match self.windows.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            guard.remove(&id)
-        };
-        if let Some(_state) = removed {
-            #[cfg(target_os = "windows")]
-            {
-                let attachment = match _state.windows_attachment.lock() {
-                    Ok(mut guard) => guard.take(),
-                    Err(poisoned) => poisoned.into_inner().take(),
-                };
-                if let Some(attachment) = attachment {
-                    windows::detach_hwnd(attachment);
-                }
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let attachment = match _state.macos_attachment.lock() {
-                    Ok(mut guard) => guard.take(),
-                    Err(poisoned) => poisoned.into_inner().take(),
-                };
-                if let Some(attachment) = attachment {
-                    macos::detach_view(attachment);
-                }
-            }
+        let removed = lock(&self.windows).remove(&id);
+        if let Some(state) = removed {
+            state.shut_down();
         }
     }
 
-    /// Take ownership of the [`PenEvent`] stream for a registered
-    /// window. Returns `None` if the window was never registered or if
-    /// the events receiver was already handed out.
+    /// Subscribe to the [`PenEvent`] stream of a registered window.
+    /// Every call returns an independent receiver that sees every
+    /// event from then on. `None` if the window was never registered.
     #[must_use]
     pub fn subscribe_events(&self, id: u64) -> Option<Receiver<PenEvent>> {
-        let state = self.state_for(id)?;
-        let mut slot = match state.events_rx.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        slot.take()
+        Some(self.state_for(id)?.events_tx.0.subscribe())
     }
 
-    /// Take ownership of the [`PenHoverEvent`] stream for a registered
+    /// Subscribe to the [`PenHoverEvent`] stream of a registered
     /// window. Same semantics as [`Self::subscribe_events`].
     #[must_use]
     pub fn subscribe_hover(&self, id: u64) -> Option<Receiver<PenHoverEvent>> {
+        Some(self.state_for(id)?.hover_tx.0.subscribe())
+    }
+
+    /// Events and hover events dropped for `id` because a subscriber's
+    /// queue ([`SUBSCRIBER_CAPACITY`]) was full, counted once per
+    /// subscriber that missed one. `None` for unknown ids.
+    #[must_use]
+    pub fn dropped(&self, id: u64) -> Option<u64> {
         let state = self.state_for(id)?;
-        let mut slot = match state.hover_rx.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        slot.take()
+        Some(state.events_tx.0.dropped() + state.hover_tx.0.dropped())
     }
 
     /// Runtime the publisher is bound to.
     #[must_use]
-    pub fn runtime(&self) -> &Arc<Runtime> {
+    pub const fn runtime(&self) -> &Arc<Runtime> {
         &self.runtime
     }
 
@@ -321,11 +365,7 @@ impl PenPublisher {
     /// than per-window).
     #[must_use]
     pub fn window_ids(&self) -> Vec<u64> {
-        let guard = match self.windows.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.keys().copied().collect()
+        lock(&self.windows).keys().copied().collect()
     }
 
     /// Install the `libinput`-backed sample source on this publisher.
@@ -350,17 +390,18 @@ impl PenPublisher {
         linux::install_libinput(self)
     }
 
-    /// Manually publish a [`PenEvent`] into a registered window's event
-    /// stream. Escape hatch for apps that source stylus samples from
-    /// somewhere the built-in backends do not cover — Wayland
-    /// tablet-v2, GTK / Qt event pipes, custom compositors, or unit
-    /// tests. Returns `true` if the window is registered and the event
-    /// was queued; `false` if `id` maps to nothing.
+    /// Manually publish a [`PenEvent`] to every subscriber of a
+    /// registered window. Escape hatch for apps that source stylus
+    /// samples from somewhere the built-in backends do not cover —
+    /// Wayland tablet-v2, GTK / Qt event pipes, custom compositors, or
+    /// unit tests. Returns `true` if the window is registered; `false`
+    /// if `id` maps to nothing.
     pub fn push_event(&self, id: u64, event: PenEvent) -> bool {
         let Some(state) = self.state_for(id) else {
             return false;
         };
-        state.events_tx.send(event).is_ok()
+        let _ = state.events_tx.send(event);
+        true
     }
 
     /// Manually publish a [`PenHoverEvent`]. Symmetric with
@@ -369,15 +410,21 @@ impl PenPublisher {
         let Some(state) = self.state_for(id) else {
             return false;
         };
-        state.hover_tx.send(event).is_ok()
+        let _ = state.hover_tx.send(event);
+        true
     }
 
     fn state_for(&self, id: u64) -> Option<Arc<WindowState>> {
-        let guard = match self.windows.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.get(&id).cloned()
+        lock(&self.windows).get(&id).cloned()
+    }
+}
+
+impl Drop for PenPublisher {
+    fn drop(&mut self) {
+        let windows = std::mem::take(&mut *lock(&self.windows));
+        for state in windows.into_values() {
+            state.shut_down();
+        }
     }
 }
 

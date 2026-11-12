@@ -1,8 +1,7 @@
 //! Desktop-side factory that pairs the macro-emitted [`PenHost`] with
 //! a [`PenPublisher`]. Each `CreateInstance` frame the runtime routes
-//! to this host produces a fresh [`PenBackend`] whose flume receivers
-//! are already subscribed to the matching per-window channel on the
-//! publisher.
+//! to this host produces a fresh [`PenBackend`]; every stream it opens
+//! is a new subscription to the matching window on the publisher.
 //!
 //! Wiring pattern for a desktop app:
 //!
@@ -28,7 +27,6 @@
 //! mobile plugins are hosted by their language-side backends.
 
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use flume::Receiver;
 use istmo_core::CancelToken;
@@ -36,32 +34,24 @@ use istmo_core::CancelToken;
 use crate::publisher::PenPublisher;
 use crate::{Pen, PenCapabilities, PenConfig, PenError, PenEvent, PenFactory, PenHoverEvent};
 
-/// Per-instance [`Pen`] implementation. Holds the [`Receiver`] halves
-/// handed out by [`PenPublisher::subscribe_events`] /
-/// [`PenPublisher::subscribe_hover`] plus a static capability
-/// descriptor for the compile target.
+/// Per-instance [`Pen`] implementation bound to one window of a
+/// [`PenPublisher`]. Each [`Pen::events`] / [`Pen::hover`] call
+/// subscribes anew, so several streams on one instance each see every
+/// sample.
 #[derive(Debug)]
 pub struct PenBackend {
     window_id: u64,
-    events_rx: Mutex<Option<Receiver<PenEvent>>>,
-    hover_rx: Mutex<Option<Receiver<PenHoverEvent>>>,
+    publisher: Arc<PenPublisher>,
 }
 
 impl PenBackend {
-    /// Attach a backend to the flume receivers a publisher hands out
-    /// for `window_id`. `None` receivers mean the window was never
-    /// registered on the publisher or its receivers were already
-    /// consumed — the client will still see empty streams.
+    /// Backend for `window_id` on `publisher`. An id the publisher does
+    /// not know yields streams that are already closed.
     #[must_use]
-    pub fn new(
-        window_id: u64,
-        events_rx: Option<Receiver<PenEvent>>,
-        hover_rx: Option<Receiver<PenHoverEvent>>,
-    ) -> Self {
+    pub const fn new(window_id: u64, publisher: Arc<PenPublisher>) -> Self {
         Self {
             window_id,
-            events_rx: Mutex::new(events_rx),
-            hover_rx: Mutex::new(hover_rx),
+            publisher,
         }
     }
 
@@ -74,11 +64,15 @@ impl PenBackend {
 
 impl Pen for PenBackend {
     fn events(&self) -> Receiver<PenEvent> {
-        take_or_closed(&self.events_rx)
+        self.publisher
+            .subscribe_events(self.window_id)
+            .unwrap_or_else(closed)
     }
 
     fn hover(&self) -> Receiver<PenHoverEvent> {
-        take_or_closed(&self.hover_rx)
+        self.publisher
+            .subscribe_hover(self.window_id)
+            .unwrap_or_else(closed)
     }
 
     async fn capabilities(&self) -> Result<PenCapabilities, PenError> {
@@ -97,18 +91,9 @@ impl Pen for PenBackend {
     }
 }
 
-fn take_or_closed<T>(slot: &Mutex<Option<Receiver<T>>>) -> Receiver<T> {
-    let taken = {
-        let mut guard = match slot.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.take()
-    };
-    taken.unwrap_or_else(|| {
-        let (_tx, rx) = flume::bounded(0);
-        rx
-    })
+fn closed<T>() -> Receiver<T> {
+    let (_tx, rx) = flume::bounded(0);
+    rx
 }
 
 const fn platform_capabilities() -> PenCapabilities {
@@ -183,8 +168,6 @@ impl PenFactory for PenPublisherFactory {
     type Instance = PenBackend;
 
     fn create(&self, config: PenConfig) -> PenBackend {
-        let events_rx = self.publisher.subscribe_events(config.window_id);
-        let hover_rx = self.publisher.subscribe_hover(config.window_id);
-        PenBackend::new(config.window_id, events_rx, hover_rx)
+        PenBackend::new(config.window_id, Arc::clone(&self.publisher))
     }
 }

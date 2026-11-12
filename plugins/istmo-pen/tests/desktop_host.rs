@@ -6,28 +6,35 @@ use istmo_pen::{
     backend::PenPublisherFactory, publisher::PenPublisher,
 };
 use raw_window_handle::{
-    HandleError, HasWindowHandle, RawWindowHandle, WindowHandle, XlibWindowHandle,
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
+    RawWindowHandle, UiKitDisplayHandle, UiKitWindowHandle, WindowHandle,
 };
 
+/// A `UIView` handle: every desktop backend ignores it, so registering it
+/// exercises the pure Rust bookkeeping without touching a display server.
 struct MockHandle;
 
 impl HasWindowHandle for MockHandle {
     fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        // A fake Xlib handle is enough to exercise the pure Rust
-        // bookkeeping path — the Windows subclass installer is
-        // `cfg(target_os = "windows")`, so on the test host this is a
-        // silent no-op.
-        let raw = RawWindowHandle::Xlib(XlibWindowHandle::new(0));
-        // SAFETY: the handle is inert; no consumer dereferences the
-        // zero-valued `Window` id during this test.
+        let raw = RawWindowHandle::UiKit(UiKitWindowHandle::new(std::ptr::NonNull::dangling()));
+        // SAFETY: the handle is inert; no desktop backend dereferences a
+        // `UIView` pointer.
         Ok(unsafe { WindowHandle::borrow_raw(raw) })
+    }
+}
+
+impl HasDisplayHandle for MockHandle {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        let raw = RawDisplayHandle::UiKit(UiKitDisplayHandle::new());
+        // SAFETY: as above, nothing reads it.
+        Ok(unsafe { DisplayHandle::borrow_raw(raw) })
     }
 }
 
 #[test]
 fn create_instance_and_open_streams_via_hosted_dispatch() {
     let init = Runtime::mock();
-    let rt = init.runtime.clone();
+    let rt = init.runtime;
     rt.declare_plugin(PEN_PLUGIN_ID);
 
     let publisher = PenPublisher::install(&rt);
@@ -53,7 +60,7 @@ fn create_instance_and_open_streams_via_hosted_dispatch() {
 #[test]
 fn capabilities_round_trip_through_hosted_dispatch() {
     let init = Runtime::mock();
-    let rt = init.runtime.clone();
+    let rt = init.runtime;
     rt.declare_plugin(PEN_PLUGIN_ID);
 
     let publisher = PenPublisher::install(&rt);
@@ -96,7 +103,7 @@ fn zero_sample() -> PenSample {
 #[test]
 fn push_event_delivers_to_registered_window() {
     let init = Runtime::mock();
-    let rt = init.runtime.clone();
+    let rt = init.runtime;
     rt.declare_plugin(PEN_PLUGIN_ID);
 
     let publisher = PenPublisher::install(&rt);
@@ -109,11 +116,13 @@ fn push_event_delivers_to_registered_window() {
         .expect("from_runtime_with");
     let stream = client.events().expect("events stream");
 
-    assert!(publisher.push_event(11, PenEvent::Down(zero_sample())));
     assert!(!publisher.push_event(999, PenEvent::Down(zero_sample())));
 
+    // The host subscribes when it dispatches the stream call, which may
+    // land after `events()` returns; samples before that reach no one.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     loop {
+        assert!(publisher.push_event(11, PenEvent::Down(zero_sample())));
         if let Some(item) = stream.try_recv() {
             let msg = item.expect("stream item");
             assert!(matches!(
@@ -133,7 +142,7 @@ fn push_event_delivers_to_registered_window() {
 #[test]
 fn push_hover_delivers_to_registered_window() {
     let init = Runtime::mock();
-    let rt = init.runtime.clone();
+    let rt = init.runtime;
     rt.declare_plugin(PEN_PLUGIN_ID);
 
     let publisher = PenPublisher::install(&rt);
@@ -146,10 +155,9 @@ fn push_hover_delivers_to_registered_window() {
         .expect("from_runtime_with");
     let stream = client.hover().expect("hover stream");
 
-    assert!(publisher.push_hover(12, PenHoverEvent::ProximityLeave));
-
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     loop {
+        assert!(publisher.push_hover(12, PenHoverEvent::ProximityLeave));
         if let Some(item) = stream.try_recv() {
             let msg = item.expect("stream item");
             assert!(matches!(
@@ -169,7 +177,7 @@ fn push_hover_delivers_to_registered_window() {
 #[test]
 fn set_prediction_enabled_returns_ok_on_desktop() {
     let init = Runtime::mock();
-    let rt = init.runtime.clone();
+    let rt = init.runtime;
     rt.declare_plugin(PEN_PLUGIN_ID);
 
     let publisher = PenPublisher::install(&rt);
@@ -204,4 +212,59 @@ fn follows_shared_window_registry() {
 
     registry.unregister(istmo_window::WindowId(3));
     assert_eq!(publisher.window_ids(), [4]);
+}
+
+#[test]
+fn every_subscriber_sees_every_event() {
+    let init = Runtime::mock();
+    let publisher = PenPublisher::install(&init.runtime);
+    publisher.register_window_id(5);
+    let first = publisher.subscribe_events(5).expect("first");
+    let second = publisher.subscribe_events(5).expect("second");
+
+    assert!(publisher.push_event(5, PenEvent::Down(zero_sample())));
+    assert!(matches!(first.try_recv(), Ok(PenEvent::Down(_))));
+    assert!(matches!(second.try_recv(), Ok(PenEvent::Down(_))));
+}
+
+#[test]
+fn unregister_ends_streams() {
+    let init = Runtime::mock();
+    let publisher = PenPublisher::install(&init.runtime);
+    publisher.register_window_id(6);
+    let events = publisher.subscribe_events(6).expect("events");
+    let hover = publisher.subscribe_hover(6).expect("hover");
+
+    publisher.unregister_window(6);
+    assert!(events.recv().is_err(), "events stream ends");
+    assert!(hover.recv().is_err(), "hover stream ends");
+    assert!(publisher.subscribe_events(6).is_none());
+}
+
+#[test]
+fn slow_subscriber_drops_newest_and_counts() {
+    let init = Runtime::mock();
+    let publisher = PenPublisher::install(&init.runtime);
+    publisher.register_window_id(8);
+    let events = publisher.subscribe_events(8).expect("events");
+
+    let extra = 5;
+    for _ in 0..istmo_pen::publisher::SUBSCRIBER_CAPACITY + extra {
+        publisher.push_event(8, PenEvent::Down(zero_sample()));
+    }
+    assert_eq!(events.len(), istmo_pen::publisher::SUBSCRIBER_CAPACITY);
+    assert_eq!(publisher.dropped(8), Some(extra as u64));
+}
+
+#[test]
+fn pen_error_try_from_keeps_transport_errors() {
+    let bytes = istmo_core::codec::encode(&istmo_pen::PenError::NotAttached).expect("encode");
+    assert_eq!(
+        istmo_pen::PenError::try_from(istmo_core::IstmoError::PluginError { bytes }).ok(),
+        Some(istmo_pen::PenError::NotAttached)
+    );
+    assert!(matches!(
+        istmo_pen::PenError::try_from(istmo_core::IstmoError::ChannelClosed),
+        Err(istmo_core::IstmoError::ChannelClosed)
+    ));
 }

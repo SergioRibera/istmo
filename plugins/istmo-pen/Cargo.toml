@@ -28,6 +28,7 @@ istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
+tracing = { workspace = true }
 istmo-build = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
@@ -42,6 +43,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_Input_Pointer",
     "Win32_Graphics_Gdi",
+    "Win32_System_Threading",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
