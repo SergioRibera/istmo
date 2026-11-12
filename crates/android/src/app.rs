@@ -19,6 +19,9 @@ pub fn android_app() -> Option<AndroidApp> {
 /// an `ANativeActivity*`): a JNI global reference owned by the
 /// `AndroidApp`, valid while the stored app is alive — which is the
 /// whole process, since [`set_android_app`] keeps it in a `static`.
+/// Only the first `AndroidApp` is kept, so after the activity is
+/// recreated in the same process the reference still names the first
+/// (possibly destroyed) activity instance.
 /// Do not wrap it in an owning `GlobalRef` / `AutoLocal`; it is not
 /// yours to delete.
 #[must_use]
