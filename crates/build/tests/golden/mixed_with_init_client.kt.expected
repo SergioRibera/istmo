@@ -28,11 +28,11 @@ class WatchClient(
 
     suspend fun history(since: ULong?): List<Position> {
         val payloadBuf = ByteArrayOutputStream()
-        Bincode.writeOption(payloadBuf, since) { s, v -> Bincode.writeVarintU64(s, v.toLong()) }
+        Bincode.writeOption(payloadBuf, since) { s1, v1 -> Bincode.writeU64(s1, v1) }
         val payload = payloadBuf.toByteArray()
         val bytes = IstmoRuntime.call(PLUGIN_ID, "history", payload)
         var cursor = 0
-        val d_result = Bincode.readVec(bytes, cursor) { p, o -> codecs.readPosition(p, o) }; cursor = d_result.consumed
+        val d_result = Bincode.readVec(bytes, cursor) { b1, c1 -> codecs.readPosition(b1, c1) }; cursor = d_result.consumed
         val result = d_result.value
         return result
     }

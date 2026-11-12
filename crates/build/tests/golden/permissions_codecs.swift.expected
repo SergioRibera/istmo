@@ -21,12 +21,12 @@ public final class PermissionsCodecsImpl: PermissionsCodecs {
 
     public func readPermissionOutcome(_ c: inout Bincode.Cursor) throws -> PermissionOutcome {
         let permission = try Bincode.readString(&c)
-        let status = try readPermissionStatus(&c)
+        let status = try self.readPermissionStatus(&c)
         return PermissionOutcome(permission: permission, status: status)
     }
 
     public func writePermissionOutcome(_ out: inout Data, _ value: PermissionOutcome) {
         Bincode.writeString(&out, value.permission)
-        writePermissionStatus(&out, value.status)
+        self.writePermissionStatus(&out, value.status)
     }
 }

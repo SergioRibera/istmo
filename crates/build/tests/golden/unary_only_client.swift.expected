@@ -2,27 +2,49 @@
 // plugin id: com.example.echo
 
 import Foundation
+import IstmoRuntime
+
+/// Reader / writer per `Named` type referenced by the `Echo` contract.
+/// User provides one impl; each entry typically delegates to a
+/// helper on the type itself.
+public protocol EchoCodecs {
+    func readEchoError(_ c: inout Bincode.Cursor) throws -> EchoError
+    func writeEchoError(_ out: inout Data, _ value: EchoError)
+}
 
 /// Rust-hosted `Echo` plugin. Ships each call across the frame
 /// protocol via `IstmoRuntime.shared.call(...)`.
-public final class EchoClient: Echo {
+public final class EchoClient {
     public static let PLUGIN_ID: String = "com.example.echo"
 
-    public init() {}
+    private let codecs: EchoCodecs
+
+    public init(codecs: EchoCodecs) {
+        self.codecs = codecs
+    }
 
     public func ping(msg: String) async throws -> String {
         var payload = Data()
-        Bincode.encode(&payload, msg)
-        let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "ping", payload: payload)
-        return try Bincode.decode(bytes) as String
+        Bincode.writeString(&payload, msg)
+        let bytes: Data
+        do {
+            bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "ping", payload: payload)
+        } catch let e as PluginException {
+            var errCursor = Bincode.Cursor(e.payload)
+            let decoded: EchoError? = try? codecs.readEchoError(&errCursor)
+            throw EchoException(payload: e.payload, decoded: decoded)
+        }
+        var c = Bincode.Cursor(bytes)
+        return try Bincode.readString(&c)
     }
 
     public func add(a: Int32, b: Int32) async throws -> Int32 {
         var payload = Data()
-        Bincode.encode(&payload, a)
-        Bincode.encode(&payload, b)
+        Bincode.writeVarintI32(&payload, a)
+        Bincode.writeVarintI32(&payload, b)
         let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "add", payload: payload)
-        return try Bincode.decode(bytes) as Int32
+        var c = Bincode.Cursor(bytes)
+        return try Bincode.readVarintI32(&c)
     }
 }
 

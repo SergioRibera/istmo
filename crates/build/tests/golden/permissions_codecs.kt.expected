@@ -5,9 +5,9 @@ import java.io.ByteArrayOutputStream
 class PermissionsCodecsImpl : PermissionsCodecs {
 
     override fun readPermissionStatus(bytes: ByteArray, offset: Int): Bincode.Decoded<PermissionStatus> {
-        val d = Bincode.readVarintU64(bytes, offset)
-        val variant = PermissionStatus.entries.getOrNull(d.value.toInt())
-            ?: error("PermissionStatus: unknown discriminant ${d.value}")
+        val d = Bincode.readEnumDiscriminant(bytes, offset)
+        val variant = PermissionStatus.entries.getOrNull(d.value)
+            ?: throw Bincode.DecodeException("PermissionStatus: unknown discriminant ${d.value}")
         return Bincode.Decoded(variant, d.consumed)
     }
 
@@ -17,11 +17,9 @@ class PermissionsCodecsImpl : PermissionsCodecs {
 
     override fun readPermissionOutcome(bytes: ByteArray, offset: Int): Bincode.Decoded<PermissionOutcome> {
         var cursor = offset
-        val d_permission = Bincode.readString(bytes, cursor)
-        cursor = d_permission.consumed
+        val d_permission = Bincode.readString(bytes, cursor); cursor = d_permission.consumed
         val permission = d_permission.value
-        val d_status = readPermissionStatus(bytes, cursor)
-        cursor = d_status.consumed
+        val d_status = readPermissionStatus(bytes, cursor); cursor = d_status.consumed
         val status = d_status.value
         return Bincode.Decoded(PermissionOutcome(permission = permission, status = status), cursor)
     }

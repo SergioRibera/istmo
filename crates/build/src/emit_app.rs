@@ -983,9 +983,8 @@ fn emit_swift(
 
 fn kotlin_with_package(package: &str, body: &str) -> String {
     const RUNTIME_PACKAGE: &str = "dev.istmo.runtime";
-    let coroutine_imports = "import kotlinx.coroutines.flow.map\n";
     if package == RUNTIME_PACKAGE {
-        return format!("package {package}\n\n{coroutine_imports}\n{body}");
+        return format!("package {package}\n\n{body}");
     }
     let imports = "\
 import dev.istmo.runtime.BackendException\n\
@@ -995,7 +994,7 @@ import dev.istmo.runtime.IstmoRuntime\n\
 import dev.istmo.runtime.PluginException\n\
 import dev.istmo.runtime.PluginHandler\n\
 import dev.istmo.runtime.PluginResult\n";
-    format!("package {package}\n\n{imports}{coroutine_imports}\n{body}")
+    format!("package {package}\n\n{imports}\n{body}")
 }
 
 /// Merge every plugin's `Info.plist.fragment` / `App.entitlements.fragment`

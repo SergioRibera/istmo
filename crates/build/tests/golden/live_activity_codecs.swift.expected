@@ -44,14 +44,14 @@ public final class LiveActivityCodecsImpl: LiveActivityCodecs {
     public func readAlertConfig(_ c: inout Bincode.Cursor) throws -> AlertConfig {
         let title = try Bincode.readString(&c)
         let body = try Bincode.readString(&c)
-        let sound = try readAlertSound(&c)
+        let sound = try self.readAlertSound(&c)
         return AlertConfig(title: title, body: body, sound: sound)
     }
 
     public func writeAlertConfig(_ out: inout Data, _ value: AlertConfig) {
         Bincode.writeString(&out, value.title)
         Bincode.writeString(&out, value.body)
-        writeAlertSound(&out, value.sound)
+        self.writeAlertSound(&out, value.sound)
     }
 
     public func readDismissalPolicy(_ c: inout Bincode.Cursor) throws -> DismissalPolicy {
@@ -72,7 +72,7 @@ public final class LiveActivityCodecsImpl: LiveActivityCodecs {
             Bincode.writeVarintU32(&out, 1)
         case .afterSeconds(let payload):
             Bincode.writeVarintU32(&out, 2)
-            Bincode.writeVarintU32(&out, UInt32(payload))
+            Bincode.writeVarintU32(&out, payload)
         }
     }
 
@@ -121,8 +121,8 @@ public final class LiveActivityCodecsImpl: LiveActivityCodecs {
     public func readPlatformCapabilities(_ c: inout Bincode.Cursor) throws -> PlatformCapabilities {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
-        case 0: return .ios(try readIosCapabilities(&c))
-        case 1: return .android(try readAndroidCapabilities(&c))
+        case 0: return .ios(try self.readIosCapabilities(&c))
+        case 1: return .android(try self.readAndroidCapabilities(&c))
         case 2: return .unsupported
         default: throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
@@ -132,17 +132,17 @@ public final class LiveActivityCodecsImpl: LiveActivityCodecs {
         switch value {
         case .ios(let payload):
             Bincode.writeVarintU32(&out, 0)
-            writeIosCapabilities(&out, payload)
+            self.writeIosCapabilities(&out, payload)
         case .android(let payload):
             Bincode.writeVarintU32(&out, 1)
-            writeAndroidCapabilities(&out, payload)
+            self.writeAndroidCapabilities(&out, payload)
         case .unsupported:
             Bincode.writeVarintU32(&out, 2)
         }
     }
 
     public func readRestoredActivity(_ c: inout Bincode.Cursor) throws -> RestoredActivity {
-        let handle = try readNativeHandleId(&c)
+        let handle = try self.readNativeHandleId(&c)
         let activity_type = try Bincode.readString(&c)
         let attributes = try Bincode.readData(&c)
         let state = try Bincode.readData(&c)
@@ -150,7 +150,7 @@ public final class LiveActivityCodecsImpl: LiveActivityCodecs {
     }
 
     public func writeRestoredActivity(_ out: inout Data, _ value: RestoredActivity) {
-        writeNativeHandleId(&out, value.handle)
+        self.writeNativeHandleId(&out, value.handle)
         Bincode.writeString(&out, value.activity_type)
         Bincode.writeData(&out, value.attributes)
         Bincode.writeData(&out, value.state)

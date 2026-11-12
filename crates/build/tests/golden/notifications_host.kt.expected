@@ -11,10 +11,10 @@ interface NotificationsBackend {
 
     suspend fun request_authorization(): Boolean
 
-     // Throw BackendException(NotificationError) for domain errors.
+    // Throw BackendException(NotificationError) for domain errors.
     suspend fun schedule(request: NotificationRequest): NotificationHandle
 
-     // Throw BackendException(NotificationError) for domain errors.
+    // Throw BackendException(NotificationError) for domain errors.
     suspend fun cancel(id: UInt): Unit
 }
 
@@ -76,9 +76,9 @@ class NotificationsDispatcher(
             "cancel" -> {
                 try {
                     var cursor = 0
-                    val d_id = Bincode.readVarintU64(payload, cursor).let { Bincode.Decoded(it.value.toUInt(), it.consumed) }; cursor = d_id.consumed
-                    val id = d_id.value
-                    backend.cancel(id)
+                    val d_id_ = Bincode.readU32(payload, cursor); cursor = d_id_.consumed
+                    val id_ = d_id_.value
+                    backend.cancel(id_)
                     PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
                     val err = e.error as? NotificationError ?: throw e

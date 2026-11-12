@@ -49,11 +49,11 @@ class PermissionsDispatcher(
             }
             "request" -> {
                 var cursor = 0
-                val d_permissions = Bincode.readVec(payload, cursor) { p, o -> Bincode.readString(p, o) }; cursor = d_permissions.consumed
+                val d_permissions = Bincode.readVec(payload, cursor) { b1, c1 -> Bincode.readString(b1, c1) }; cursor = d_permissions.consumed
                 val permissions = d_permissions.value
                 val result = backend.request(permissions)
                 val out = ByteArrayOutputStream()
-                Bincode.writeVec(out, result) { s, v -> codecs.writePermissionOutcome(s, v) }
+                Bincode.writeVec(out, result) { s1, v1 -> codecs.writePermissionOutcome(s1, v1) }
                 PluginResult.Unary(out.toByteArray())
             }
             "should_show_rationale" -> {

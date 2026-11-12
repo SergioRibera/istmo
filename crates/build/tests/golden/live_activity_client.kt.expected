@@ -19,8 +19,8 @@ class LiveActivityClient(
         Bincode.writeBytes(payloadBuf, attributes)
         Bincode.writeBytes(payloadBuf, initial_state)
         codecs.writeActivityStyle(payloadBuf, style)
-        Bincode.writeOption(payloadBuf, stale_after_seconds) { s, v -> Bincode.writeVarintU64(s, v.toLong()) }
-        Bincode.writeOption(payloadBuf, android_tier_hint) { s, v -> codecs.writeAndroidTierHint(s, v) }
+        Bincode.writeOption(payloadBuf, stale_after_seconds) { s1, v1 -> Bincode.writeU32(s1, v1) }
+        Bincode.writeOption(payloadBuf, android_tier_hint) { s1, v1 -> codecs.writeAndroidTierHint(s1, v1) }
         val payload = payloadBuf.toByteArray()
         val bytes = try {
             IstmoRuntime.call(PLUGIN_ID, "start", payload)
@@ -38,7 +38,7 @@ class LiveActivityClient(
         val payloadBuf = ByteArrayOutputStream()
         codecs.writeNativeHandleId(payloadBuf, handle)
         Bincode.writeBytes(payloadBuf, state)
-        Bincode.writeOption(payloadBuf, alert) { s, v -> codecs.writeAlertConfig(s, v) }
+        Bincode.writeOption(payloadBuf, alert) { s1, v1 -> codecs.writeAlertConfig(s1, v1) }
         val payload = payloadBuf.toByteArray()
         try {
             IstmoRuntime.call(PLUGIN_ID, "update", payload)
@@ -51,7 +51,7 @@ class LiveActivityClient(
     suspend fun end(handle: NativeHandleId, final_state: ByteArray?, dismissal: DismissalPolicy) {
         val payloadBuf = ByteArrayOutputStream()
         codecs.writeNativeHandleId(payloadBuf, handle)
-        Bincode.writeOption(payloadBuf, final_state) { s, v -> Bincode.writeBytes(s, v) }
+        Bincode.writeOption(payloadBuf, final_state) { s1, v1 -> Bincode.writeBytes(s1, v1) }
         codecs.writeDismissalPolicy(payloadBuf, dismissal)
         val payload = payloadBuf.toByteArray()
         try {
@@ -99,7 +99,7 @@ class LiveActivityClient(
             throw LiveActivityException(e.payload, decoded)
         }
         var cursor = 0
-        val d_result = Bincode.readVec(bytes, cursor) { p, o -> codecs.readRestoredActivity(p, o) }; cursor = d_result.consumed
+        val d_result = Bincode.readVec(bytes, cursor) { b1, c1 -> codecs.readRestoredActivity(b1, c1) }; cursor = d_result.consumed
         val result = d_result.value
         return result
     }

@@ -38,7 +38,7 @@ class SignInClient(
             throw SignInException(e.payload, decoded)
         }
         var cursor = 0
-        val d_result = Bincode.readOption(bytes, cursor) { p, o -> codecs.readSignInAccount(p, o) }; cursor = d_result.consumed
+        val d_result = Bincode.readOption(bytes, cursor) { b1, c1 -> codecs.readSignInAccount(b1, c1) }; cursor = d_result.consumed
         val result = d_result.value
         return result
     }

@@ -7,19 +7,19 @@ import java.io.ByteArrayOutputStream
 /// impl with the SDK-specific logic; the dispatcher below handles
 /// wire encode/decode.
 interface SignInBackend {
-     // Throw BackendException(SignInError) for domain errors.
+    // Throw BackendException(SignInError) for domain errors.
     suspend fun sign_in(mode: SignInMode): SignInAccount
 
-     // Throw BackendException(SignInError) for domain errors.
+    // Throw BackendException(SignInError) for domain errors.
     suspend fun silent_sign_in(): SignInAccount?
 
-     // Throw BackendException(SignInError) for domain errors.
+    // Throw BackendException(SignInError) for domain errors.
     suspend fun refresh(credential: NativeHandleId): SignInAccount
 
-     // Throw BackendException(SignInError) for domain errors.
+    // Throw BackendException(SignInError) for domain errors.
     suspend fun sign_out(): Unit
 
-     // Throw BackendException(SignInError) for domain errors.
+    // Throw BackendException(SignInError) for domain errors.
     suspend fun revoke(): Unit
 }
 
@@ -103,7 +103,7 @@ class SignInDispatcher(
                 try {
                     val result = backend.silent_sign_in()
                     val out = ByteArrayOutputStream()
-                    Bincode.writeOption(out, result) { s, v -> codecs.writeSignInAccount(s, v) }
+                    Bincode.writeOption(out, result) { s1, v1 -> codecs.writeSignInAccount(s1, v1) }
                     PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e

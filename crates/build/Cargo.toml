@@ -39,3 +39,5 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 
+# Conflicts with `unreachable_pub` for items of private modules.
+redundant_pub_crate = "allow"

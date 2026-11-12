@@ -76,8 +76,8 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
                 let attributes = try Bincode.readData(&c)
                 let initial_state = try Bincode.readData(&c)
                 let style = try codecs.readActivityStyle(&c)
-                let stale_after_seconds = try Bincode.readOption(&c) { try Bincode.readVarintU32(&$0) }
-                let android_tier_hint = try Bincode.readOption(&c) { try codecs.readAndroidTierHint(&$0) }
+                let stale_after_seconds = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU32(&c1) }
+                let android_tier_hint = try Bincode.readOption(&c) { c1 in try codecs.readAndroidTierHint(&c1) }
                 let result = try await backend.start(activity_type: activity_type, attributes: attributes, initial_state: initial_state, style: style, stale_after_seconds: stale_after_seconds, android_tier_hint: android_tier_hint)
                 var out = Data()
                 codecs.writeNativeHandleId(&out, result)
@@ -92,7 +92,7 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
                 var c = Bincode.Cursor(payload)
                 let handle = try codecs.readNativeHandleId(&c)
                 let state = try Bincode.readData(&c)
-                let alert = try Bincode.readOption(&c) { try codecs.readAlertConfig(&$0) }
+                let alert = try Bincode.readOption(&c) { c1 in try codecs.readAlertConfig(&c1) }
                 try await backend.update(handle: handle, state: state, alert: alert)
                 return Data()
             } catch let err as ActivityError {
@@ -104,7 +104,7 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
             do {
                 var c = Bincode.Cursor(payload)
                 let handle = try codecs.readNativeHandleId(&c)
-                let final_state = try Bincode.readOption(&c) { try Bincode.readData(&$0) }
+                let final_state = try Bincode.readOption(&c) { c1 in try Bincode.readData(&c1) }
                 let dismissal = try codecs.readDismissalPolicy(&c)
                 try await backend.end(handle: handle, final_state: final_state, dismissal: dismissal)
                 return Data()
@@ -139,7 +139,7 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
             do {
                 let result = try await backend.restore_active()
                 var out = Data()
-                Bincode.writeVec(&out, result) { codecs.writeRestoredActivity(&$0, $1) }
+                Bincode.writeVec(&out, result) { o1, v1 in codecs.writeRestoredActivity(&o1, v1) }
                 return out
             } catch let err as ActivityError {
                 var errOut = Data()

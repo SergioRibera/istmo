@@ -102,7 +102,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
             do {
                 let result = try await backend.silent_sign_in()
                 var out = Data()
-                Bincode.writeOption(&out, result) { codecs.writeSignInAccount(&$0, $1) }
+                Bincode.writeOption(&out, result) { o1, v1 in codecs.writeSignInAccount(&o1, v1) }
                 return out
             } catch let err as SignInError {
                 var errOut = Data()

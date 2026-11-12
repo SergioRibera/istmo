@@ -7,22 +7,22 @@ import java.io.ByteArrayOutputStream
 /// impl with the SDK-specific logic; the dispatcher below handles
 /// wire encode/decode.
 interface LiveActivityBackend {
-     // Throw BackendException(ActivityError) for domain errors.
+    // Throw BackendException(ActivityError) for domain errors.
     suspend fun start(activity_type: String, attributes: ByteArray, initial_state: ByteArray, style: ActivityStyle, stale_after_seconds: UInt?, android_tier_hint: AndroidTierHint?): NativeHandleId
 
-     // Throw BackendException(ActivityError) for domain errors.
+    // Throw BackendException(ActivityError) for domain errors.
     suspend fun update(handle: NativeHandleId, state: ByteArray, alert: AlertConfig?): Unit
 
-     // Throw BackendException(ActivityError) for domain errors.
+    // Throw BackendException(ActivityError) for domain errors.
     suspend fun end(handle: NativeHandleId, final_state: ByteArray?, dismissal: DismissalPolicy): Unit
 
-     // Throw BackendException(ActivityError) for domain errors.
+    // Throw BackendException(ActivityError) for domain errors.
     suspend fun are_activities_enabled(): Boolean
 
-     // Throw BackendException(ActivityError) for domain errors.
+    // Throw BackendException(ActivityError) for domain errors.
     suspend fun capabilities(): PlatformCapabilities
 
-     // Throw BackendException(ActivityError) for domain errors.
+    // Throw BackendException(ActivityError) for domain errors.
     suspend fun restore_active(): List<RestoredActivity>
 }
 
@@ -92,9 +92,9 @@ class LiveActivityDispatcher(
                     val initial_state = d_initial_state.value
                     val d_style = codecs.readActivityStyle(payload, cursor); cursor = d_style.consumed
                     val style = d_style.value
-                    val d_stale_after_seconds = Bincode.readOption(payload, cursor) { p, o -> Bincode.readVarintU64(p, o).let { Bincode.Decoded(it.value.toUInt(), it.consumed) } }; cursor = d_stale_after_seconds.consumed
+                    val d_stale_after_seconds = Bincode.readOption(payload, cursor) { b1, c1 -> Bincode.readU32(b1, c1) }; cursor = d_stale_after_seconds.consumed
                     val stale_after_seconds = d_stale_after_seconds.value
-                    val d_android_tier_hint = Bincode.readOption(payload, cursor) { p, o -> codecs.readAndroidTierHint(p, o) }; cursor = d_android_tier_hint.consumed
+                    val d_android_tier_hint = Bincode.readOption(payload, cursor) { b1, c1 -> codecs.readAndroidTierHint(b1, c1) }; cursor = d_android_tier_hint.consumed
                     val android_tier_hint = d_android_tier_hint.value
                     val result = backend.start(activity_type, attributes, initial_state, style, stale_after_seconds, android_tier_hint)
                     val out = ByteArrayOutputStream()
@@ -114,7 +114,7 @@ class LiveActivityDispatcher(
                     val handle = d_handle.value
                     val d_state = Bincode.readBytes(payload, cursor); cursor = d_state.consumed
                     val state = d_state.value
-                    val d_alert = Bincode.readOption(payload, cursor) { p, o -> codecs.readAlertConfig(p, o) }; cursor = d_alert.consumed
+                    val d_alert = Bincode.readOption(payload, cursor) { b1, c1 -> codecs.readAlertConfig(b1, c1) }; cursor = d_alert.consumed
                     val alert = d_alert.value
                     backend.update(handle, state, alert)
                     PluginResult.Unary(ByteArray(0))
@@ -130,7 +130,7 @@ class LiveActivityDispatcher(
                     var cursor = 0
                     val d_handle = codecs.readNativeHandleId(payload, cursor); cursor = d_handle.consumed
                     val handle = d_handle.value
-                    val d_final_state = Bincode.readOption(payload, cursor) { p, o -> Bincode.readBytes(p, o) }; cursor = d_final_state.consumed
+                    val d_final_state = Bincode.readOption(payload, cursor) { b1, c1 -> Bincode.readBytes(b1, c1) }; cursor = d_final_state.consumed
                     val final_state = d_final_state.value
                     val d_dismissal = codecs.readDismissalPolicy(payload, cursor); cursor = d_dismissal.consumed
                     val dismissal = d_dismissal.value
@@ -173,7 +173,7 @@ class LiveActivityDispatcher(
                 try {
                     val result = backend.restore_active()
                     val out = ByteArrayOutputStream()
-                    Bincode.writeVec(out, result) { s, v -> codecs.writeRestoredActivity(s, v) }
+                    Bincode.writeVec(out, result) { s1, v1 -> codecs.writeRestoredActivity(s1, v1) }
                     PluginResult.Unary(out.toByteArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e

@@ -2,32 +2,59 @@
 // plugin id: com.example.watch
 
 import Foundation
+import IstmoRuntime
+
+/// Reader / writer per `Named` type referenced by the `Watch` contract.
+/// User provides one impl; each entry typically delegates to a
+/// helper on the type itself.
+public protocol WatchCodecs {
+    func readAccuracy(_ c: inout Bincode.Cursor) throws -> Accuracy
+    func writeAccuracy(_ out: inout Data, _ value: Accuracy)
+    func readPosition(_ c: inout Bincode.Cursor) throws -> Position
+    func writePosition(_ out: inout Data, _ value: Position)
+    func readWatchConfig(_ c: inout Bincode.Cursor) throws -> WatchConfig
+    func writeWatchConfig(_ out: inout Data, _ value: WatchConfig)
+    func readWatchError(_ c: inout Bincode.Cursor) throws -> WatchError
+    func writeWatchError(_ out: inout Data, _ value: WatchError)
+}
 
 /// Rust-hosted `Watch` plugin. Ships each call across the frame
 /// protocol via `IstmoRuntime.shared.call(...)`.
-public final class WatchClient: Watch {
+public final class WatchClient {
     public static let PLUGIN_ID: String = "com.example.watch"
 
-    public init() {}
+    private let codecs: WatchCodecs
+
+    public init(codecs: WatchCodecs) {
+        self.codecs = codecs
+    }
 
     public func watchLocation(accuracy: Accuracy) -> AsyncThrowingStream<Position, Error> {
+        let codecs = self.codecs
         var payload = Data()
-        Bincode.encode(&payload, accuracy)
-        return IstmoRuntime.shared.stream(pluginId: Self.PLUGIN_ID, method: "watchLocation", payload: payload)
+        codecs.writeAccuracy(&payload, accuracy)
+        var events = IstmoRuntime.shared.stream(pluginId: Self.PLUGIN_ID, method: "watchLocation", payload: payload).makeAsyncIterator()
+        return AsyncThrowingStream(unfolding: {
+            guard let bytes = try await events.next() else { return nil }
+            var c = Bincode.Cursor(bytes)
+            return try codecs.readPosition(&c)
+        })
     }
 
     public func history(since: UInt64?) async throws -> [Position] {
         var payload = Data()
-        Bincode.encode(&payload, since)
+        Bincode.writeOption(&payload, since) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
         let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "history", payload: payload)
-        return try Bincode.decode(bytes) as [Position]
+        var c = Bincode.Cursor(bytes)
+        return try Bincode.readVec(&c) { c1 in try codecs.readPosition(&c1) }
     }
 
     public func raw(packet: Data) async throws -> Bool {
         var payload = Data()
-        Bincode.encode(&payload, packet)
+        Bincode.writeData(&payload, packet)
         let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "raw", payload: payload)
-        return try Bincode.decode(bytes) as Bool
+        var c = Bincode.Cursor(bytes)
+        return try Bincode.readBool(&c)
     }
 }
 

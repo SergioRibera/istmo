@@ -31,12 +31,12 @@ class EchoClient(
 
     suspend fun add(a: Int, b: Int): Int {
         val payloadBuf = ByteArrayOutputStream()
-        Bincode.writeVarintI64(payloadBuf, a.toLong())
-        Bincode.writeVarintI64(payloadBuf, b.toLong())
+        Bincode.writeI32(payloadBuf, a)
+        Bincode.writeI32(payloadBuf, b)
         val payload = payloadBuf.toByteArray()
         val bytes = IstmoRuntime.call(PLUGIN_ID, "add", payload)
         var cursor = 0
-        val d_result = Bincode.readVarintI64(bytes, cursor).let { Bincode.Decoded(it.value.toInt(), it.consumed) }; cursor = d_result.consumed
+        val d_result = Bincode.readI32(bytes, cursor); cursor = d_result.consumed
         val result = d_result.value
         return result
     }

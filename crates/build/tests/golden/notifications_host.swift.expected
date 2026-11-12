@@ -69,8 +69,8 @@ public final class NotificationsDispatcher: PluginHandler {
         case "cancel":
             do {
                 var c = Bincode.Cursor(payload)
-                let id = try Bincode.readVarintU32(&c)
-                try await backend.cancel(id: id)
+                let id_ = try Bincode.readVarintU32(&c)
+                try await backend.cancel(id: id_)
                 return Data()
             } catch let err as NotificationError {
                 var errOut = Data()
