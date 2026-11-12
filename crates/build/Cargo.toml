@@ -26,6 +26,12 @@ image = { version = "0.25", default-features = false, features = ["png", "ico"] 
 embed-resource = "3.0"
 globset = { version = "0.4", default-features = false }
 
+[dev-dependencies]
+# `tests/native_wire.rs` compiles the generated Rust golden and pins the
+# bytes the Kotlin/Swift codecs must produce for it.
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+
 [lints.rust]
 # `contract::wire` hand-writes wincode impls for a recursive type; the
 # rest of the crate stays free of `unsafe` (each impl carries a SAFETY note).
