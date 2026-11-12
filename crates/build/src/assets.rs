@@ -49,7 +49,7 @@ impl ResolvedAsset {
 #[derive(Debug, Clone, PartialEq, Eq, Default, SchemaWrite, SchemaRead)]
 pub struct AssetsPayload {
     /// Every plugin id in the emitting crate — an asset lookup issued
-    /// under any of these ids resolves to entries in [`resolved`].
+    /// under any of these ids resolves to entries in [`resolved`](Self::resolved).
     pub plugin_ids: Vec<String>,
     pub resolved: Vec<ResolvedAsset>,
 }
