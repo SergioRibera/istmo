@@ -26,7 +26,7 @@
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fmt;
-use std::num::{NonZeroIsize, NonZeroU32, NonZeroUsize};
+use std::num::{NonZero, NonZeroIsize, NonZeroU32, NonZeroUsize};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
@@ -74,9 +74,10 @@ pub enum NativeWindow {
     },
     /// X11 window id paired with the Xlib `Display*` the app opened.
     /// The display pointer is required — a window id alone is not
-    /// enough to send XInput2 selects against the server.
+    /// enough to send `XInput2` selects against the server. 0 is X11's
+    /// `None` ("no window"), hence the non-zero id.
     Xlib {
-        window: std::ffi::c_ulong,
+        window: NonZero<std::ffi::c_ulong>,
         display: NonZeroUsize,
     },
     /// X11 window id paired with the XCB `xcb_connection_t*`.
@@ -92,7 +93,7 @@ pub enum NativeWindow {
 impl NativeWindow {
     /// Resolve the platform window behind `window`. The display handle
     /// is required on Linux (Wayland surface alone is useless without
-    /// the matching `wl_display`; XInput2 selects need the Xlib
+    /// the matching `wl_display`; `XInput2` selects need the Xlib
     /// `Display*` or an XCB connection). Non-Linux variants ignore the
     /// display payload.
     pub fn from_window<W>(window: &W) -> Result<Self, WindowError>
@@ -155,10 +156,10 @@ impl TryFrom<(RawWindowHandle, RawDisplayHandle)> for NativeWindow {
                 }
             }
             (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => {
-                addr_opt(d.display).map(|display| Self::Xlib {
-                    window: w.window,
-                    display,
-                })
+                match (NonZero::new(w.window), addr_opt(d.display)) {
+                    (Some(window), Some(display)) => Some(Self::Xlib { window, display }),
+                    _ => None,
+                }
             }
             (RawWindowHandle::Xcb(w), RawDisplayHandle::Xcb(d)) => {
                 addr_opt(d.connection).map(|connection| Self::Xcb {
@@ -219,8 +220,21 @@ pub trait WindowListener: Send + Sync {
 }
 
 /// Registry mapping [`WindowId`]s to [`NativeWindow`]s.
+///
+/// Listener callbacks run on the thread that registers, unregisters or
+/// subscribes, outside the window map's lock (so they may call
+/// [`WindowRegistry::get`] and the other readers) but inside the
+/// registry's operation lock: a listener must not call back into
+/// [`WindowRegistry::register`], [`WindowRegistry::unregister`] or
+/// [`WindowRegistry::add_listener`] on the same registry.
 #[derive(Default)]
 pub struct WindowRegistry {
+    /// Serialises the mutating operations so the map and every
+    /// listener's view of it change together. Without it a window
+    /// registered while a listener is being added can reach that
+    /// listener twice (live and through the replay), and two
+    /// registrations of one id can both miss the other's entry.
+    ops: Mutex<()>,
     windows: Mutex<BTreeMap<WindowId, NativeWindow>>,
     listeners: Mutex<Vec<Weak<dyn WindowListener>>>,
 }
@@ -259,9 +273,8 @@ impl WindowRegistry {
     /// Register an already-resolved [`NativeWindow`] (or
     /// [`NativeWindow::Detached`]) under `id`.
     pub fn register_native(&self, id: WindowId, window: NativeWindow) -> Result<(), WindowError> {
-        if lock(&self.windows).contains_key(&id) {
-            self.unregister(id);
-        }
+        let _ops = lock(&self.ops);
+        self.unregister_locked(id);
         let listeners = self.live_listeners();
         for (index, listener) in listeners.iter().enumerate() {
             if let Err(msg) = listener.window_registered(id, window) {
@@ -277,6 +290,12 @@ impl WindowRegistry {
 
     /// Remove `id`. Unknown ids are ignored.
     pub fn unregister(&self, id: WindowId) {
+        let _ops = lock(&self.ops);
+        self.unregister_locked(id);
+    }
+
+    /// Body of [`Self::unregister`]; the caller holds `ops`.
+    fn unregister_locked(&self, id: WindowId) {
         if lock(&self.windows).remove(&id).is_none() {
             return;
         }
@@ -311,6 +330,7 @@ impl WindowRegistry {
     /// Replay errors are returned but do not unregister the window —
     /// other plugins may already depend on it.
     pub fn add_listener(&self, listener: &Arc<dyn WindowListener>) -> Result<(), WindowError> {
+        let _ops = lock(&self.ops);
         lock(&self.listeners).push(Arc::downgrade(listener));
         let snapshot: Vec<_> = lock(&self.windows)
             .iter()
@@ -426,5 +446,47 @@ mod tests {
             .expect("register");
         assert_eq!(registry.any_attached(), Some((WindowId(2), hwnd)));
         assert_eq!(hwnd.hwnd().map(NonZeroIsize::get), Some(0x10));
+    }
+
+    #[test]
+    fn xlib_window_zero_is_rejected() {
+        let display = NonNull::<c_void>::dangling();
+        let raw_display =
+            RawDisplayHandle::Xlib(raw_window_handle::XlibDisplayHandle::new(Some(display), 0));
+        let none = RawWindowHandle::Xlib(raw_window_handle::XlibWindowHandle::new(0));
+        assert!(matches!(
+            NativeWindow::try_from((none, raw_display)),
+            Err(WindowError::UnsupportedHandle)
+        ));
+        let some = RawWindowHandle::Xlib(raw_window_handle::XlibWindowHandle::new(7));
+        let native = NativeWindow::try_from((some, raw_display)).expect("valid xlib window");
+        assert!(matches!(native, NativeWindow::Xlib { window, .. } if window.get() == 7));
+    }
+
+    #[test]
+    fn concurrent_subscribe_never_announces_a_window_twice() {
+        for _ in 0..50 {
+            let registry = Arc::new(WindowRegistry::default());
+            let recorder = Arc::new(Recorder::default());
+            let listener: Arc<dyn WindowListener> = recorder.clone();
+            let registering = {
+                let registry = Arc::clone(&registry);
+                std::thread::spawn(move || {
+                    for id in 0..20 {
+                        registry
+                            .register_native(WindowId(id), NativeWindow::Detached)
+                            .expect("register");
+                    }
+                })
+            };
+            registry.add_listener(&listener).expect("add");
+            registering.join().expect("registering thread");
+            let mut events = lock(&recorder.events).clone();
+            let total = events.len();
+            events.sort();
+            events.dedup();
+            assert_eq!(events.len(), total, "duplicate announcement");
+            assert_eq!(total, 20);
+        }
     }
 }

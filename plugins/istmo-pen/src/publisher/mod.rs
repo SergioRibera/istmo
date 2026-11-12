@@ -199,7 +199,7 @@ impl PenPublisher {
                 }
                 NativeWindow::Xlib { window, display } => {
                     let attachment =
-                        linux_xinput2::attach_xlib(window, display, Arc::clone(&state))
+                        linux_xinput2::attach_xlib(window.get(), display, Arc::clone(&state))
                             .map_err(|err| PenError::Backend(err.to_string()))?;
                     match state.linux_xinput2_attachment.lock() {
                         Ok(mut guard) => *guard = Some(attachment),
