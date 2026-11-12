@@ -51,9 +51,6 @@ windows = { version = "0.62", features = [
 windows-collections = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Share Extension hand-off manifest (`share.json`).
-serde = { version = "1", default-features = false, features = ["std", "derive"] }
-serde_json = { version = "1", default-features = false, features = ["std"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
@@ -86,8 +83,6 @@ istmo-build = { workspace = true }
 istmo-window = { workspace = true }
 pollster = { workspace = true }
 flume = { workspace = true }
-serde = { version = "1", default-features = false, features = ["std", "derive"] }
-serde_json = { version = "1", default-features = false, features = ["std"] }
 
 [lints.rust]
 missing_debug_implementations = "warn"

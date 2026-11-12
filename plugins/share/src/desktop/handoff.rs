@@ -2,40 +2,30 @@
 //! (`native/ios/ShareHandoff.swift` writes it).
 //!
 //! ```text
-//! <inbox>/<uuid>/share.json
+//! <inbox>/<uuid>/share.bin
 //! <inbox>/<uuid>/<file>…
 //! <inbox>/<uuid>.partial/…   ← still being written, skipped
 //! ```
+//!
+//! `share.bin` is an [`IncomingShare`] in the istmo wire layout (bincode
+//! 2 `standard()`), the bytes `ShareCodecsImpl.writeIncomingShare`
+//! produces. Each [`IncomingFile::path`] in it is the file's name inside
+//! the entry directory; the drain rewrites it to the moved copy's
+//! absolute path.
 //!
 //! Only macOS uses it at runtime (App Group container), but it is plain
 //! filesystem code, so it compiles — and is tested — on every desktop.
 
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-
 use crate::{IncomingFile, IncomingShare, ShareError, ShareInbox};
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Manifest {
-    text: Option<String>,
-    url: Option<String>,
-    subject: Option<String>,
-    #[serde(default)]
-    files: Vec<ManifestFile>,
-    source_app: Option<String>,
-    received_at_ms: Option<u64>,
-    target_id: Option<String>,
-}
+/// Manifest file name inside an entry.
+const MANIFEST: &str = "share.bin";
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ManifestFile {
-    file: String,
-    name: String,
-    mime_type: Option<String>,
-}
+/// Upper bound on a manifest: text, a URL and a few hundred file names
+/// fit in a fraction of it. Anything larger is not from the extension.
+const MANIFEST_CAP: usize = 1 << 20;
 
 /// Publish every complete entry of `inbox_dir` to `inbox`, moving its
 /// files under `dest_root/<uuid>/`. Malformed entries are logged and
@@ -76,10 +66,10 @@ pub(crate) fn drain_dir(
 }
 
 fn read_entry(dir: &Path, dest_root: &Path) -> Result<IncomingShare, ShareError> {
-    let manifest_path = dir.join("share.json");
-    let json = std::fs::read(&manifest_path)
+    let manifest_path = dir.join(MANIFEST);
+    let bytes = std::fs::read(&manifest_path)
         .map_err(|err| ShareError::Io(format!("{}: {err}", manifest_path.display())))?;
-    let manifest: Manifest = serde_json::from_slice(&json)
+    let manifest: IncomingShare = istmo_core::codec::decode_exact_capped(&bytes, MANIFEST_CAP)
         .map_err(|err| ShareError::Backend(format!("{}: {err}", manifest_path.display())))?;
     let dest = dest_root.join(dir.file_name().unwrap_or_default());
     std::fs::create_dir_all(&dest)
@@ -89,21 +79,16 @@ fn read_entry(dir: &Path, dest_root: &Path) -> Result<IncomingShare, ShareError>
         .into_iter()
         .filter_map(|file| move_file(dir, &dest, file))
         .collect();
-    Ok(IncomingShare {
-        text: manifest.text,
-        url: manifest.url,
-        subject: manifest.subject,
-        files,
-        source_app: manifest.source_app,
-        received_at_ms: manifest.received_at_ms,
-        target_id: manifest.target_id,
-    })
+    Ok(IncomingShare { files, ..manifest })
 }
 
-fn move_file(from_dir: &Path, to_dir: &Path, file: ManifestFile) -> Option<IncomingFile> {
-    // `file` comes from disk: never let it name anything outside the
-    // entry directory.
-    let name = Path::new(&file.file).file_name()?;
+fn move_file(from_dir: &Path, to_dir: &Path, file: IncomingFile) -> Option<IncomingFile> {
+    // `path` comes from disk: never let it name anything outside the
+    // entry directory, nor the manifest itself.
+    let name = Path::new(&file.path).file_name()?;
+    if name == MANIFEST {
+        return None;
+    }
     let src = from_dir.join(name);
     let dest: PathBuf = to_dir.join(name);
     if std::fs::rename(&src, &dest).is_err() {
@@ -112,9 +97,8 @@ fn move_file(from_dir: &Path, to_dir: &Path, file: ManifestFile) -> Option<Incom
     let size = std::fs::metadata(&dest).ok().map(|m| m.len());
     Some(IncomingFile {
         path: dest.display().to_string(),
-        name: file.name,
-        mime_type: file.mime_type,
         size,
+        ..file
     })
 }
 
@@ -131,6 +115,61 @@ mod tests {
         dir
     }
 
+    fn manifest() -> IncomingShare {
+        IncomingShare {
+            text: Some("look".into()),
+            url: None,
+            subject: Some("Hi".into()),
+            files: vec![
+                IncomingFile {
+                    path: "photo.png".into(),
+                    name: "Photo.png".into(),
+                    mime_type: Some("image/png".into()),
+                    size: None,
+                },
+                IncomingFile {
+                    path: "../../escape".into(),
+                    name: "x".into(),
+                    mime_type: None,
+                    size: None,
+                },
+            ],
+            source_app: None,
+            received_at_ms: Some(42),
+            target_id: Some("chat-7".into()),
+        }
+    }
+
+    /// The bytes `IstmoShareHandoff.Manifest.encode()` (Swift) writes for
+    /// [`manifest`]. Keep the two in sync: this pins the layout the Share
+    /// Extension, the iOS drain and this reader agree on.
+    #[rustfmt::skip]
+    const SWIFT_MANIFEST: &[u8] = &[
+        1, 4, b'l', b'o', b'o', b'k',            // text: Some("look")
+        0,                                       // url: None
+        1, 2, b'H', b'i',                        // subject: Some("Hi")
+        2,                                       // files: 2 entries
+        9, b'p', b'h', b'o', b't', b'o', b'.', b'p', b'n', b'g',
+        9, b'P', b'h', b'o', b't', b'o', b'.', b'p', b'n', b'g',
+        1, 9, b'i', b'm', b'a', b'g', b'e', b'/', b'p', b'n', b'g',
+        0,                                       // size: None
+        12, b'.', b'.', b'/', b'.', b'.', b'/', b'e', b's', b'c', b'a', b'p', b'e',
+        1, b'x',
+        0,                                       // mime_type: None
+        0,                                       // size: None
+        0,                                       // source_app: None
+        1, 42,                                   // received_at_ms: Some(42)
+        1, 6, b'c', b'h', b'a', b't', b'-', b'7', // target_id: Some("chat-7")
+    ];
+
+    #[test]
+    fn manifest_layout_matches_the_swift_writer() {
+        assert_eq!(
+            istmo_core::codec::encode(&manifest()).expect("encode"),
+            SWIFT_MANIFEST
+        );
+    }
+
     #[test]
     fn drains_complete_entries_and_skips_partial_ones() {
         let root = scratch("drain");
@@ -138,11 +177,7 @@ mod tests {
         let entry = inbox_dir.join("A1");
         std::fs::create_dir_all(&entry).expect("entry");
         std::fs::write(entry.join("photo.png"), b"png").expect("file");
-        std::fs::write(
-            entry.join("share.json"),
-            br#"{"text":"look","url":null,"subject":"Hi","files":[{"file":"photo.png","name":"Photo.png","mimeType":"image/png"},{"file":"../../escape","name":"x"}],"sourceApp":null,"receivedAtMs":42,"targetId":"chat-7"}"#,
-        )
-        .expect("manifest");
+        std::fs::write(entry.join(MANIFEST), SWIFT_MANIFEST).expect("manifest");
         std::fs::create_dir_all(inbox_dir.join("B2.partial")).expect("partial");
 
         let init = Runtime::mock();
@@ -159,6 +194,7 @@ mod tests {
         assert_eq!(share.files.len(), 1, "escaping entry must be ignored");
         let file = &share.files[0];
         assert_eq!(file.name, "Photo.png");
+        assert_eq!(file.mime_type.as_deref(), Some("image/png"));
         assert_eq!(file.size, Some(3));
         assert_eq!(std::fs::read(&file.path).expect("moved"), b"png");
         assert!(!entry.exists(), "drained entry is removed");
@@ -166,6 +202,25 @@ mod tests {
             inbox_dir.join("B2.partial").exists(),
             "partial entry untouched"
         );
+
+        drop(std::fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn malformed_manifest_is_dropped() {
+        let root = scratch("malformed");
+        let inbox_dir = root.join("inbox");
+        let entry = inbox_dir.join("C3");
+        std::fs::create_dir_all(&entry).expect("entry");
+        std::fs::write(entry.join(MANIFEST), [7, 7, 7]).expect("manifest");
+
+        let init = Runtime::mock();
+        let inbox = ShareInbox::from_runtime(&init.runtime).expect("inbox");
+        assert_eq!(
+            drain_dir(&inbox_dir, &root.join("caches"), &inbox).expect("drain"),
+            0
+        );
+        assert!(!entry.exists(), "malformed entry is removed");
 
         drop(std::fs::remove_dir_all(&root));
     }

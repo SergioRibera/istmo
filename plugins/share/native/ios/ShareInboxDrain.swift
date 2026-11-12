@@ -86,15 +86,20 @@ public enum IstmoShareInbox {
         var published = 0
         for entry in entries where entry.pathExtension != "partial" {
             defer { try? fm.removeItem(at: entry) }
-            guard let data = try? Data(contentsOf: entry.appendingPathComponent("share.json")),
-                  let manifest = try? JSONDecoder().decode(IstmoShareHandoff.Manifest.self, from: data) else {
+            guard let data = try? Data(contentsOf: entry.appendingPathComponent(IstmoShareHandoff.manifestName)),
+                  let manifest = try? IstmoShareHandoff.Manifest.decode(data) else {
                 continue
             }
             let dest = caches.appendingPathComponent(entry.lastPathComponent, isDirectory: true)
             try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
             let files: [IncomingFile] = manifest.files.compactMap { file in
-                let src = entry.appendingPathComponent(file.file)
-                let target = dest.appendingPathComponent(file.file)
+                // `file` comes from disk: keep it inside the entry directory.
+                let name = (file.file as NSString).lastPathComponent
+                guard !name.isEmpty, name != ".", name != "..", name != IstmoShareHandoff.manifestName else {
+                    return nil
+                }
+                let src = entry.appendingPathComponent(name)
+                let target = dest.appendingPathComponent(name)
                 guard (try? fm.moveItem(at: src, to: target)) != nil else { return nil }
                 let size = (try? fm.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.uint64Value
                 return IncomingFile(path: target.path, name: file.name, mimeType: file.mimeType, size: size)
