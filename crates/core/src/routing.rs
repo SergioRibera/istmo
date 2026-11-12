@@ -95,28 +95,38 @@ impl RoutingTables {
     ///
     /// - [`IstmoError::UnknownCallId`] if no registration exists.
     /// - [`IstmoError::RoutingMismatch`] if the id was registered as a
-    ///   stream; the stream registration is left untouched.
+    ///   stream and the response is a success; the stream registration
+    ///   is left untouched.
+    ///
+    /// An error response to a stream registration ends the stream with
+    /// [`StreamEndReason::Error`]: a host whose stream method fails
+    /// before opening the stream (undecodable arguments, unknown method,
+    /// a refused thread) can only answer with a unary error.
     pub(crate) fn deliver_response(
         &self,
         call_id: CallId,
         result: CallResult,
     ) -> Result<(), IstmoError> {
         let mut inner = lock(&self.inner);
-        // Peek before removing: a stray Respond carrying a live stream's
+        // Peek before removing: a stray success carrying a live stream's
         // id must not tear down that stream's registration.
-        match inner.pending.get(&call_id.get()) {
-            None => return Err(IstmoError::UnknownCallId(call_id)),
-            Some(PendingReceiver::Stream(_)) => {
+        match (inner.pending.get(&call_id.get()), &result) {
+            (None, _) => return Err(IstmoError::UnknownCallId(call_id)),
+            (Some(PendingReceiver::Stream(_)), Ok(_)) => {
                 return Err(IstmoError::RoutingMismatch(
                     "response landed on a stream registration",
                 ));
             }
-            Some(PendingReceiver::Call(_)) => {}
+            (Some(PendingReceiver::Call(_) | PendingReceiver::Stream(_)), _) => {}
         }
         let entry = inner.pending.remove(&call_id.get());
         drop(inner);
-        if let Some(PendingReceiver::Call(tx)) = entry {
-            drop(tx.send(result));
+        match (entry, result) {
+            (Some(PendingReceiver::Call(tx)), result) => drop(tx.send(result)),
+            (Some(PendingReceiver::Stream(tx)), Err(bytes)) => {
+                drop(tx.send(StreamMessage::End(StreamEndReason::Error(bytes))));
+            }
+            (Some(PendingReceiver::Stream(_)), Ok(_)) | (None, _) => {}
         }
         Ok(())
     }
@@ -172,21 +182,29 @@ impl RoutingTables {
         stream_id: StreamId,
         payload: Vec<u8>,
     ) -> Result<(), IstmoError> {
-        let sender = {
-            let inner = lock(&self.inner);
-            match inner.pending.get(&stream_id.get()) {
-                Some(PendingReceiver::Stream(tx)) => tx.clone(),
-                Some(PendingReceiver::Call(_)) => {
-                    return Err(IstmoError::RoutingMismatch(
-                        "event landed on a call registration",
-                    ));
-                }
-                None => return Err(IstmoError::UnknownStreamId(stream_id)),
-            }
-        };
-        sender
+        self.stream_sender(stream_id)?
             .send(StreamMessage::Event(payload))
             .map_err(|_| IstmoError::ChannelClosed)
+    }
+
+    /// Sender of a live stream registration, so the caller can wait on a
+    /// full buffer without holding the table lock.
+    ///
+    /// # Errors
+    ///
+    /// As [`deliver_event`](Self::deliver_event), minus the closed
+    /// channel.
+    pub(crate) fn stream_sender(
+        &self,
+        stream_id: StreamId,
+    ) -> Result<FlumeSender<StreamMessage>, IstmoError> {
+        match lock(&self.inner).pending.get(&stream_id.get()) {
+            Some(PendingReceiver::Stream(tx)) => Ok(tx.clone()),
+            Some(PendingReceiver::Call(_)) => Err(IstmoError::RoutingMismatch(
+                "event landed on a call registration",
+            )),
+            None => Err(IstmoError::UnknownStreamId(stream_id)),
+        }
     }
 
     /// Close a stream registration with the given `reason`.

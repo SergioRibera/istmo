@@ -143,16 +143,21 @@ pub type NativeHandleReleaseHook = Arc<dyn Fn(NativeHandleId) + Send + Sync>;
 /// Who issued a call served by a host registered on this runtime.
 ///
 /// Decides where the response, events and stream end go: straight into
-/// this runtime's routing tables, or out to the peer. Ids allocated by
-/// the peer and by this runtime can coincide, so tables keyed by call id
-/// for hosted work also carry the origin.
+/// this runtime's routing tables, out to the peer, or through the remote
+/// sink. Each issuer allocates call ids on its own, so ids from two
+/// origins can coincide; tables keyed by call id for hosted work also
+/// carry the origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Origin {
     /// This runtime's own [`Runtime::call`] / [`Runtime::stream`] /
     /// [`Runtime::create_instance`].
     Local,
-    /// A [`Frame::Call`] / [`Frame::CreateInstance`] from the peer.
+    /// A [`Frame::Call`] / [`Frame::CreateInstance`] from the peer
+    /// (the platform transport), through [`Runtime::dispatch_inbound`].
     Peer,
+    /// A [`Frame::Call`] / [`Frame::CreateInstance`] from a runtime in
+    /// another process, through [`Runtime::inject_remote_envelope`].
+    Remote,
 }
 
 /// Cancellation state for calls served by hosts on this runtime.
@@ -161,34 +166,46 @@ struct HostedCalls {
     /// Hosted calls whose dispatch is running, and hosted streams whose
     /// pump is running.
     active: HashMap<(Origin, CallId), CancelToken>,
-    /// Cancels from the peer for ids not in `active`; see
-    /// [`EARLY_CANCEL_CAPACITY`].
-    early_cancels: HashSet<CallId>,
+    /// Cancels for ids not in `active`; see [`EARLY_CANCEL_CAPACITY`].
+    early_cancels: HashSet<(Origin, CallId)>,
     /// Insertion order of `early_cancels`, oldest first.
-    early_order: VecDeque<CallId>,
+    early_order: VecDeque<(Origin, CallId)>,
+    /// Set by [`cancel_all`](Self::cancel_all): no call starts any more.
+    closed: bool,
 }
 
 impl HostedCalls {
     /// Start tracking a hosted call and hand back its token, already
-    /// cancelled when the peer's cancel overtook the call.
-    fn begin(&mut self, origin: Origin, call_id: CallId) -> CancelToken {
+    /// cancelled when the issuer's cancel overtook the call. `None` once
+    /// the runtime shut down.
+    fn begin(&mut self, origin: Origin, call_id: CallId) -> Option<CancelToken> {
+        if self.closed {
+            return None;
+        }
         let token = CancelToken::new();
-        if origin == Origin::Peer && self.early_cancels.remove(&call_id) {
+        if self.early_cancels.remove(&(origin, call_id)) {
             token.cancel();
         }
         self.active.insert((origin, call_id), token.clone());
-        token
+        Some(token)
     }
 
     /// Cancel a hosted call or stream from `origin`.
+    ///
+    /// An active call is cancelled at once. Anything else is remembered
+    /// until its call begins, in a FIFO of at most
+    /// [`EARLY_CANCEL_CAPACITY`] ids. A running call is always in
+    /// `active`, so eviction only ever forgets a cancel whose call has
+    /// not arrived yet (or already finished).
     fn cancel(&mut self, origin: Origin, call_id: CallId) {
         if let Some(token) = self.active.get(&(origin, call_id)) {
             token.cancel();
             return;
         }
         // Local calls register before their handle exists, so only a
-        // peer cancel can arrive ahead of its call.
-        if origin == Origin::Local || !self.early_cancels.insert(call_id) {
+        // peer or remote cancel can arrive ahead of its call.
+        let key = (origin, call_id);
+        if origin == Origin::Local || self.closed || !self.early_cancels.insert(key) {
             return;
         }
         if self.early_order.len() == EARLY_CANCEL_CAPACITY
@@ -196,7 +213,7 @@ impl HostedCalls {
         {
             self.early_cancels.remove(&oldest);
         }
-        self.early_order.push_back(call_id);
+        self.early_order.push_back(key);
     }
 
     fn finish(&mut self, origin: Origin, call_id: CallId) {
@@ -204,6 +221,7 @@ impl HostedCalls {
     }
 
     fn cancel_all(&mut self) {
+        self.closed = true;
         for token in self.active.values() {
             token.cancel();
         }
@@ -259,6 +277,23 @@ struct RemoteCalls {
 /// thread. Hosts may block for as long as they like and may call back
 /// into the same runtime while serving a call; a fixed-size pool would
 /// deadlock once every worker waits on a call queued behind it.
+///
+/// A host thread that would wait on a full channel (the outbound
+/// envelope channel, or a local consumer's bounded stream) gives up as
+/// soon as its call is cancelled, so neither a consumer that stopped
+/// reading nor a transport that stopped draining after
+/// [`shutdown`](Self::shutdown) pins it forever.
+///
+/// # Locking
+///
+/// No mutex of the runtime is acquired while another one is held: every
+/// critical section is a single map or slot operation, and the remote
+/// sink, release hooks and channel sends run with no runtime lock held.
+/// The only nesting is the hosted-call table cancelling a
+/// [`CancelToken`], which takes that token's own lock inside, and
+/// [`Runtime::init`] replaying the pre-start buffer into the early-event
+/// store while holding the buffer's lock. Keep it that way: a new nested
+/// acquisition needs a documented order.
 ///
 /// [`istmo-android`]: https://docs.rs/istmo-android
 /// [`istmo-ios`]: https://docs.rs/istmo-ios
@@ -448,6 +483,20 @@ impl Runtime {
         }
     }
 
+    /// Undo the registration under `id` when [`shutdown`](Self::shutdown)
+    /// ran since the caller's [`ensure_running`](Self::ensure_running).
+    ///
+    /// `shutdown` raises the flag before clearing the routing tables, and
+    /// both sides go through the routing lock, so a registration either
+    /// lands before the clear (and is cleared) or sees the flag here.
+    fn recheck_running(&self, id: u64) -> Result<(), IstmoError> {
+        if self.is_shut_down() {
+            self.routing.remove_pending(id);
+            return Err(IstmoError::RuntimeShutDown);
+        }
+        Ok(())
+    }
+
     fn host(&self, plugin_id: &str) -> Option<Arc<dyn Dispatch>> {
         lock(&self.hosts).get(plugin_id).cloned()
     }
@@ -482,6 +531,7 @@ impl Runtime {
         let plugin_id = plugin_id.into();
         let call_id = CallId(self.next_id());
         let rx = self.routing.register_call(call_id);
+        self.recheck_running(call_id.get())?;
         let host = self.host(&plugin_id);
         let hosted = host.is_some();
         if let Some(dispatcher) = host {
@@ -539,6 +589,7 @@ impl Runtime {
         let call_id = CallId(id);
         let stream_id = StreamId(id);
         let rx = self.routing.register_stream(stream_id, capacity);
+        self.recheck_running(id)?;
         let host = self.host(&plugin_id);
         let hosted = host.is_some();
         if let Some(dispatcher) = host {
@@ -589,6 +640,7 @@ impl Runtime {
         let plugin_id = plugin_id.into();
         let call_id = CallId(self.next_id());
         let rx = self.routing.register_call(call_id);
+        self.recheck_running(call_id.get())?;
         let host = self.host(&plugin_id);
         let hosted = host.is_some();
         if let Some(dispatcher) = host {
@@ -622,6 +674,7 @@ impl Runtime {
     fn send_or_unregister(&self, id: u64, envelope: Envelope) -> Result<(), IstmoError> {
         self.send_outbound(envelope).inspect_err(|_| {
             self.routing.remove_pending(id);
+            lock(&self.remote_calls).outgoing.remove(&id);
         })
     }
 
@@ -771,10 +824,15 @@ impl Runtime {
         self.cancel_call(CallId(stream_id.get()))
     }
 
-    /// Decode a wire envelope and dispatch it through the runtime.
+    /// Decode a wire envelope from a runtime in another process and
+    /// dispatch it.
     ///
-    /// Used by transport crates to hand received bytes back to the
-    /// runtime.
+    /// The receive side of a process bridge (see
+    /// [`install_remote_envelope_sink`](Self::install_remote_envelope_sink)).
+    /// Calls it carries are served under their own origin: their ids may
+    /// coincide with ids the platform transport uses, and their
+    /// responses, events and stream ends go back through the remote sink
+    /// (or the outbound channel while no sink is installed).
     ///
     /// # Errors
     ///
@@ -782,7 +840,7 @@ impl Runtime {
     /// [`Envelope::from_wire_bytes`] or [`Runtime::dispatch_inbound`].
     pub fn inject_wire_envelope(self: &Arc<Self>, bytes: &[u8]) -> Result<(), IstmoError> {
         let envelope = Envelope::from_wire_bytes(bytes)?;
-        self.dispatch_inbound(envelope)
+        self.dispatch_from(Origin::Remote, envelope)
     }
 
     /// Dispatch an already-decoded envelope from the peer.
@@ -792,6 +850,8 @@ impl Runtime {
     /// stream events, and so on. A call for a plugin with no registered
     /// host is answered with an error response rather than an `Err`
     /// here; so is any call arriving after [`shutdown`](Self::shutdown).
+    /// An error response to a stream call ends that stream with
+    /// [`StreamEndReason::Error`].
     ///
     /// # Errors
     ///
@@ -804,6 +864,14 @@ impl Runtime {
     ///   of registration.
     /// - [`IstmoError::ChannelClosed`] when the stream's consumer is gone.
     pub fn dispatch_inbound(self: &Arc<Self>, envelope: Envelope) -> Result<(), IstmoError> {
+        self.dispatch_from(Origin::Peer, envelope)
+    }
+
+    fn dispatch_from(
+        self: &Arc<Self>,
+        origin: Origin,
+        envelope: Envelope,
+    ) -> Result<(), IstmoError> {
         if envelope.version != PROTOCOL_VERSION {
             return Err(IstmoError::ProtocolVersionMismatch {
                 expected: PROTOCOL_VERSION,
@@ -830,18 +898,18 @@ impl Runtime {
                 match self.host(&plugin_id) {
                     Some(dispatcher) => self.dispatch_hosted_call(
                         dispatcher,
-                        Origin::Peer,
+                        origin,
                         call_id,
                         instance_id,
                         method,
                         payload,
                     ),
-                    None => self.reject_unhosted(call_id, &plugin_id, "Call"),
+                    None => self.reject_unhosted(origin, call_id, &plugin_id, "Call"),
                 }
                 Ok(())
             }
             Frame::Cancel { call_id } => {
-                lock(&self.hosted).cancel(Origin::Peer, call_id);
+                lock(&self.hosted).cancel(origin, call_id);
                 Ok(())
             }
             Frame::EarlyEvent {
@@ -874,13 +942,9 @@ impl Runtime {
             } => {
                 match self.host(&plugin_id) {
                     Some(dispatcher) => self.dispatch_hosted_create_instance(
-                        dispatcher,
-                        Origin::Peer,
-                        call_id,
-                        plugin_id,
-                        payload,
+                        dispatcher, origin, call_id, plugin_id, payload,
                     ),
-                    None => self.reject_unhosted(call_id, &plugin_id, "CreateInstance"),
+                    None => self.reject_unhosted(origin, call_id, &plugin_id, "CreateInstance"),
                 }
                 Ok(())
             }
@@ -895,14 +959,15 @@ impl Runtime {
         }
     }
 
-    fn reject_unhosted(&self, call_id: CallId, plugin_id: &str, frame: &str) {
+    fn reject_unhosted(&self, origin: Origin, call_id: CallId, plugin_id: &str, frame: &str) {
         tracing::warn!(plugin_id = %plugin_id, frame, "inbound request for unregistered plugin");
         self.respond(
-            Origin::Peer,
+            origin,
             call_id,
             Err(encode_dispatch_error_string(&format!(
                 "no host registered for `{plugin_id}`"
             ))),
+            Wait::Block,
         );
     }
 
@@ -970,9 +1035,7 @@ impl Runtime {
         let Some(envelope) = self.route_remote(envelope)? else {
             return Ok(());
         };
-        self.outbound
-            .send(envelope)
-            .map_err(|_| IstmoError::ChannelClosed)
+        self.push_outbound(envelope, Wait::Block).map(drop)
     }
 
     /// Send a frame without blocking: for drop, cancel and release
@@ -981,26 +1044,83 @@ impl Runtime {
         let Some(envelope) = self.route_remote(envelope)? else {
             return Ok(());
         };
-        self.outbound.try_send(envelope).map_err(|err| match err {
-            TrySendError::Full(envelope) => {
-                tracing::warn!(frame = ?envelope.frame, "outbound channel full; frame dropped");
-                IstmoError::OutboundFull
+        self.push_outbound(envelope, Wait::Never).map(drop)
+    }
+
+    /// Put `envelope` on the outbound channel. `Ok(false)` when `wait`
+    /// gave up because the call was cancelled first.
+    fn push_outbound(&self, envelope: Envelope, wait: Wait<'_>) -> Result<bool, IstmoError> {
+        match wait {
+            Wait::Block => self
+                .outbound
+                .send(envelope)
+                .map(|()| true)
+                .map_err(|_| IstmoError::ChannelClosed),
+            Wait::UnlessCancelled(cancel) => {
+                match send_unless_cancelled(&self.outbound, envelope, cancel) {
+                    Delivery::Sent => Ok(true),
+                    Delivery::Cancelled => Ok(false),
+                    Delivery::Disconnected => Err(IstmoError::ChannelClosed),
+                }
             }
-            TrySendError::Disconnected(_) => IstmoError::ChannelClosed,
-        })
+            Wait::Never => {
+                self.outbound
+                    .try_send(envelope)
+                    .map(|()| true)
+                    .map_err(|err| match err {
+                        TrySendError::Full(envelope) => {
+                            tracing::warn!(frame = ?envelope.frame, "outbound channel full; frame dropped");
+                            IstmoError::OutboundFull
+                        }
+                        TrySendError::Disconnected(_) => IstmoError::ChannelClosed,
+                    })
+            }
+        }
+    }
+
+    /// Send a frame of a hosted call to whoever issued it, other than
+    /// this runtime. `Ok(false)` when `wait` gave up because the call
+    /// was cancelled first.
+    fn send_to_issuer(
+        &self,
+        origin: Origin,
+        envelope: Envelope,
+        wait: Wait<'_>,
+    ) -> Result<bool, IstmoError> {
+        let envelope = match origin {
+            Origin::Remote => {
+                let sink = lock(&self.remote_sink).clone();
+                let Some(sink) = sink else {
+                    // A bridge without a sink shuttles the outbound
+                    // channel instead.
+                    return self.push_outbound(envelope, wait);
+                };
+                sink(envelope.to_wire_bytes()?);
+                return Ok(true);
+            }
+            Origin::Peer | Origin::Local => match self.route_remote(envelope)? {
+                Some(envelope) => envelope,
+                None => return Ok(true),
+            },
+        };
+        self.push_outbound(envelope, wait)
     }
 
     /// Hand `envelope` to the remote sink when it belongs to a remote
     /// call; otherwise give it back for the outbound channel.
+    ///
+    /// Frames are classified even while no sink is installed, so remote
+    /// tracking entries still leave on their call's terminal frame.
     fn route_remote(&self, envelope: Envelope) -> Result<Option<Envelope>, IstmoError> {
-        let sink = lock(&self.remote_sink).clone();
-        if let Some(sink) = sink
-            && self.classify_and_track(&envelope.frame)
-        {
-            sink(envelope.to_wire_bytes()?);
-            return Ok(None);
+        if !self.classify_and_track(&envelope.frame) {
+            return Ok(Some(envelope));
         }
-        Ok(Some(envelope))
+        let sink = lock(&self.remote_sink).clone();
+        let Some(sink) = sink else {
+            return Ok(Some(envelope));
+        };
+        sink(envelope.to_wire_bytes()?);
+        Ok(None)
     }
 
     /// Decide whether an outbound frame goes to the remote sink, keeping
@@ -1069,9 +1189,13 @@ impl Runtime {
 
     /// Record that a given [`CallId`] originated on a remote process.
     ///
-    /// The remote-bridge receive side calls this before injecting the
-    /// call, so the eventual [`Frame::Respond`] (or the stream's events
-    /// and end) is steered back through the sink.
+    /// For a bridge that hands remote calls to
+    /// [`dispatch_inbound`](Self::dispatch_inbound): call this before
+    /// injecting the call, so the eventual [`Frame::Respond`] (or the
+    /// stream's events and end) is steered back through the sink.
+    /// [`inject_wire_envelope`](Self::inject_wire_envelope) needs no
+    /// marking, and keeps remote ids apart from the platform
+    /// transport's, which this marking cannot.
     #[doc(hidden)]
     pub fn mark_call_remote(&self, call_id: CallId) {
         lock(&self.remote_calls).incoming.insert(call_id.get());
@@ -1102,45 +1226,66 @@ impl Runtime {
         method: String,
         payload: Vec<u8>,
     ) {
-        if self.is_shut_down() {
-            self.respond(
-                origin,
-                call_id,
-                Err(encode_dispatch_error_string("istmo runtime shut down")),
-            );
+        let Some(cancel) = self.begin_hosted(origin, call_id) else {
             return;
-        }
-        let cancel = lock(&self.hosted).begin(origin, call_id);
+        };
         let runtime = Arc::clone(self);
+        let thread_cancel = cancel.clone();
         let spawned = spawn_named("istmo-call", move || {
+            // The dispatcher is shared, so a panic can leave its state
+            // half-updated for later calls whether or not it is caught.
+            // Catching it at least answers this call instead of leaving
+            // the caller waiting forever; the generated hosts recover
+            // poisoned locks as `sync::lock` does.
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 pollster::block_on(dispatcher.dispatch(
                     instance_id,
                     &method,
                     &payload,
-                    cancel.clone(),
+                    thread_cancel.clone(),
                 ))
             }));
-            runtime.finish_hosted_call(origin, call_id, cancel, outcome);
+            runtime.finish_hosted_call(origin, call_id, &thread_cancel, outcome);
         });
         if let Err(err) = spawned {
             tracing::error!(?err, ?call_id, "failed to spawn a host thread");
+            let message = DispatchError::Spawn(err).to_string();
+            self.respond(
+                origin,
+                call_id,
+                Err(encode_dispatch_error_string(&message)),
+                Wait::UnlessCancelled(&cancel),
+            );
             lock(&self.hosted).finish(origin, call_id);
+        }
+    }
+
+    /// Start tracking a hosted call, or answer it with an error when the
+    /// runtime shut down.
+    fn begin_hosted(&self, origin: Origin, call_id: CallId) -> Option<CancelToken> {
+        let cancel = if self.is_shut_down() {
+            None
+        } else {
+            lock(&self.hosted).begin(origin, call_id)
+        };
+        if cancel.is_none() {
             self.respond(
                 origin,
                 call_id,
                 Err(encode_dispatch_error_string(
-                    "failed to spawn a host thread",
+                    &IstmoError::RuntimeShutDown.to_string(),
                 )),
+                Wait::Never,
             );
         }
+        cancel
     }
 
     fn finish_hosted_call(
         self: &Arc<Self>,
         origin: Origin,
         call_id: CallId,
-        cancel: CancelToken,
+        cancel: &CancelToken,
         outcome: std::thread::Result<Result<Outcome, DispatchError>>,
     ) {
         let result = match outcome {
@@ -1161,13 +1306,10 @@ impl Runtime {
                 Err(encode_dispatch_error_string("host panicked"))
             }
         };
+        // The call leaves the table only once its response is out, so a
+        // cancel still frees a response waiting on a full channel.
+        self.respond_unless_cancelled(origin, call_id, result, cancel);
         lock(&self.hosted).finish(origin, call_id);
-        if cancel.is_cancelled() {
-            tracing::debug!(?call_id, "hosted call cancelled; discarding response");
-            self.forget_incoming_remote(origin, call_id);
-            return;
-        }
-        self.respond(origin, call_id, result);
     }
 
     fn dispatch_hosted_create_instance(
@@ -1178,27 +1320,27 @@ impl Runtime {
         plugin_id: String,
         payload: Vec<u8>,
     ) {
-        if self.is_shut_down() {
-            self.respond(
-                origin,
-                call_id,
-                Err(encode_dispatch_error_string("istmo runtime shut down")),
-            );
+        let Some(cancel) = self.begin_hosted(origin, call_id) else {
             return;
-        }
-        let cancel = lock(&self.hosted).begin(origin, call_id);
+        };
         let runtime = Arc::clone(self);
+        let thread_cancel = cancel.clone();
         let spawned = spawn_named("istmo-create", move || {
+            // Same unwind reasoning as `dispatch_hosted_call`.
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                pollster::block_on(dispatcher.create_instance(&payload, cancel.clone()))
+                pollster::block_on(dispatcher.create_instance(&payload, thread_cancel.clone()))
             }));
-            lock(&runtime.hosted).finish(origin, call_id);
             let result = match outcome {
                 Ok(Ok(Outcome::Ok(bytes))) => {
                     match crate::codec::decode::<InstanceId>(&bytes) {
-                        Ok((instance_id, _)) if cancel.is_cancelled() => {
+                        Ok((instance_id, _)) if thread_cancel.is_cancelled() => {
                             // Nobody will learn the id: reap the instance.
-                            dispatcher.destroy_instance(instance_id);
+                            let reaped = catch_unwind(AssertUnwindSafe(|| {
+                                dispatcher.destroy_instance(instance_id);
+                            }));
+                            if reaped.is_err() {
+                                tracing::error!(?call_id, "hosted destroy_instance panicked");
+                            }
                         }
                         Ok((instance_id, _)) => {
                             runtime.register_instance(instance_id, plugin_id);
@@ -1227,26 +1369,19 @@ impl Runtime {
                     Err(encode_dispatch_error_string("host panicked"))
                 }
             };
-            if cancel.is_cancelled() {
-                tracing::debug!(
-                    ?call_id,
-                    "hosted create_instance cancelled; discarding response"
-                );
-                runtime.forget_incoming_remote(origin, call_id);
-                return;
-            }
-            runtime.respond(origin, call_id, result);
+            runtime.respond_unless_cancelled(origin, call_id, result, &thread_cancel);
+            lock(&runtime.hosted).finish(origin, call_id);
         });
         if let Err(err) = spawned {
             tracing::error!(?err, ?call_id, "failed to spawn a host thread");
-            lock(&self.hosted).finish(origin, call_id);
+            let message = DispatchError::Spawn(err).to_string();
             self.respond(
                 origin,
                 call_id,
-                Err(encode_dispatch_error_string(
-                    "failed to spawn a host thread",
-                )),
+                Err(encode_dispatch_error_string(&message)),
+                Wait::UnlessCancelled(&cancel),
             );
+            lock(&self.hosted).finish(origin, call_id);
         }
     }
 
@@ -1265,26 +1400,29 @@ impl Runtime {
         self: &Arc<Self>,
         origin: Origin,
         call_id: CallId,
-        cancel: CancelToken,
+        cancel: &CancelToken,
         receiver: FlumeReceiver<Vec<u8>>,
     ) {
         let stream_id = StreamId(call_id.get());
         let runtime = Arc::clone(self);
+        let pump_cancel = cancel.clone();
         let spawned = spawn_named("istmo-stream", move || {
-            let reason = runtime.pump_stream(origin, stream_id, &cancel, &receiver);
+            let reason = runtime.pump_stream(origin, stream_id, &pump_cancel, &receiver);
+            // Release the producer before the end goes out.
+            drop(receiver);
+            runtime.end_stream(origin, stream_id, reason, &pump_cancel);
             lock(&runtime.hosted).finish(origin, call_id);
-            runtime.end_stream(origin, stream_id, reason);
         });
         if let Err(err) = spawned {
             tracing::error!(?err, ?stream_id, "failed to spawn a stream pump thread");
-            lock(&self.hosted).finish(origin, call_id);
+            let message = DispatchError::Spawn(err).to_string();
             self.end_stream(
                 origin,
                 stream_id,
-                StreamEndReason::Error(encode_dispatch_error_string(
-                    "failed to spawn a stream pump thread",
-                )),
+                StreamEndReason::Error(encode_dispatch_error_string(&message)),
+                cancel,
             );
+            lock(&self.hosted).finish(origin, call_id);
         }
     }
 
@@ -1305,37 +1443,77 @@ impl Runtime {
                 .recv(receiver, |item| item.map_or(Step::Closed, Step::Item))
                 .recv(cancel.disconnect_signal(), |_| Step::Cancelled)
                 .wait();
+            // A producer that never stops sending keeps its receiver
+            // ready, so the flag is what guarantees a cancel is seen.
+            if cancel.is_cancelled() {
+                return StreamEndReason::Cancelled;
+            }
             match step {
-                Step::Item(payload) if !cancel.is_cancelled() => {
-                    if !self.emit_event(origin, stream_id, payload) {
+                Step::Item(payload) => {
+                    if !self.emit_event(origin, stream_id, payload, cancel) {
                         return StreamEndReason::Cancelled;
                     }
                 }
-                Step::Closed if !cancel.is_cancelled() => return StreamEndReason::Complete,
-                Step::Item(_) | Step::Closed | Step::Cancelled => {
-                    return StreamEndReason::Cancelled;
-                }
+                Step::Closed => return StreamEndReason::Complete,
+                Step::Cancelled => return StreamEndReason::Cancelled,
             }
         }
     }
 
-    /// Forward one hosted stream item. `false` once nobody can receive
-    /// further items.
-    fn emit_event(&self, origin: Origin, stream_id: StreamId, payload: Vec<u8>) -> bool {
+    /// Forward one hosted stream item, waiting out a full consumer or
+    /// outbound channel unless the stream is cancelled meanwhile.
+    /// `false` once nobody can receive further items.
+    fn emit_event(
+        &self,
+        origin: Origin,
+        stream_id: StreamId,
+        payload: Vec<u8>,
+        cancel: &CancelToken,
+    ) -> bool {
         let delivered = match origin {
-            Origin::Local => self.routing.deliver_event(stream_id, payload),
-            Origin::Peer => self.send_outbound(Envelope::new(Frame::Event { stream_id, payload })),
+            Origin::Local => self.routing.stream_sender(stream_id).map(|tx| {
+                matches!(
+                    send_unless_cancelled(&tx, StreamMessage::Event(payload), cancel),
+                    Delivery::Sent
+                )
+            }),
+            Origin::Peer | Origin::Remote => self.send_to_issuer(
+                origin,
+                Envelope::new(Frame::Event { stream_id, payload }),
+                Wait::UnlessCancelled(cancel),
+            ),
         };
         delivered
             .inspect_err(|err| tracing::debug!(?err, ?stream_id, "hosted stream event undelivered"))
-            .is_ok()
+            .unwrap_or(false)
     }
 
-    fn end_stream(&self, origin: Origin, stream_id: StreamId, reason: StreamEndReason) {
+    /// Send a hosted stream's end. Once the stream is cancelled the end
+    /// is best effort and never blocks: its issuer left, or the runtime
+    /// shut down and the transport may have stopped draining.
+    fn end_stream(
+        &self,
+        origin: Origin,
+        stream_id: StreamId,
+        reason: StreamEndReason,
+        cancel: &CancelToken,
+    ) {
         let delivered = match origin {
-            Origin::Local => self.routing.deliver_stream_end(stream_id, reason),
-            Origin::Peer => {
-                self.send_outbound(Envelope::new(Frame::StreamEnd { stream_id, reason }))
+            Origin::Local => self
+                .routing
+                .deliver_stream_end(stream_id, reason)
+                .map(|()| true),
+            Origin::Peer | Origin::Remote => {
+                let wait = if cancel.is_cancelled() {
+                    Wait::Never
+                } else {
+                    Wait::UnlessCancelled(cancel)
+                };
+                self.send_to_issuer(
+                    origin,
+                    Envelope::new(Frame::StreamEnd { stream_id, reason }),
+                    wait,
+                )
             }
         };
         if let Err(err) = delivered {
@@ -1343,21 +1521,42 @@ impl Runtime {
         }
     }
 
+    /// Deliver a finished hosted call's result, unless the issuer
+    /// cancelled it: a cancelled call from another runtime is answered
+    /// by nobody.
+    fn respond_unless_cancelled(
+        &self,
+        origin: Origin,
+        call_id: CallId,
+        result: CallResult,
+        cancel: &CancelToken,
+    ) {
+        // A local caller that left already removed its registration, so
+        // completing it anyway is a harmless no-op.
+        if origin != Origin::Local && cancel.is_cancelled() {
+            tracing::debug!(?call_id, "hosted call cancelled; discarding response");
+            self.forget_incoming_remote(origin, call_id);
+            return;
+        }
+        self.respond(origin, call_id, result, Wait::UnlessCancelled(cancel));
+    }
+
     /// Deliver a hosted call's result to whoever issued it.
-    fn respond(&self, origin: Origin, call_id: CallId, result: CallResult) {
-        match origin {
-            Origin::Local => {
-                if let Err(err) = self.routing.complete(call_id, result) {
-                    tracing::debug!(?err, ?call_id, "hosted call finished after its caller left");
-                }
+    fn respond(&self, origin: Origin, call_id: CallId, result: CallResult, wait: Wait<'_>) {
+        if origin == Origin::Local {
+            if let Err(err) = self.routing.complete(call_id, result) {
+                tracing::debug!(?err, ?call_id, "hosted call finished after its caller left");
             }
-            Origin::Peer => {
-                if let Err(err) =
-                    self.send_outbound(Envelope::new(Frame::Respond { call_id, result }))
-                {
-                    tracing::warn!(?err, ?call_id, "failed to send Respond frame");
-                }
+            return;
+        }
+        let envelope = Envelope::new(Frame::Respond { call_id, result });
+        match self.send_to_issuer(origin, envelope, wait) {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!(?call_id, "hosted call cancelled while its response waited");
+                self.forget_incoming_remote(origin, call_id);
             }
+            Err(err) => tracing::warn!(?err, ?call_id, "failed to send Respond frame"),
         }
     }
 
@@ -1408,6 +1607,11 @@ impl Runtime {
     /// instance tables are cleared. The outbound channel itself stays
     /// open until the runtime is dropped, so frames already queued still
     /// reach a transport that keeps draining.
+    ///
+    /// Host threads still running finish on their own: their responses
+    /// to other runtimes are discarded, and their streams stop at the
+    /// next item, so none of them waits on a transport that stopped
+    /// draining.
     pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
         let count = self.routing.clear();
@@ -1420,6 +1624,48 @@ impl Runtime {
     }
 }
 
+/// How long a send for a hosted call may wait on a full channel.
+#[derive(Debug, Clone, Copy)]
+enum Wait<'a> {
+    /// Until there is room.
+    Block,
+    /// Until there is room, or until the call is cancelled.
+    UnlessCancelled(&'a CancelToken),
+    /// Not at all: a full channel drops the frame.
+    Never,
+}
+
+/// What became of a [`send_unless_cancelled`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delivery {
+    Sent,
+    Cancelled,
+    Disconnected,
+}
+
+/// Send `message`, waiting while `tx` is full, unless `cancel` trips
+/// first.
+fn send_unless_cancelled<T>(tx: &FlumeSender<T>, message: T, cancel: &CancelToken) -> Delivery {
+    if cancel.is_cancelled() {
+        return Delivery::Cancelled;
+    }
+    let message = match tx.try_send(message) {
+        Ok(()) => return Delivery::Sent,
+        Err(TrySendError::Disconnected(_)) => return Delivery::Disconnected,
+        Err(TrySendError::Full(message)) => message,
+    };
+    flume::Selector::new()
+        .send(tx, message, |sent| {
+            if sent.is_ok() {
+                Delivery::Sent
+            } else {
+                Delivery::Disconnected
+            }
+        })
+        .recv(cancel.disconnect_signal(), |_| Delivery::Cancelled)
+        .wait()
+}
+
 /// Run a notification on its own thread; nothing is sent back.
 fn dispatch_notify(
     dispatcher: Arc<dyn Dispatch>,
@@ -1428,6 +1674,7 @@ fn dispatch_notify(
     payload: Vec<u8>,
 ) {
     let spawned = spawn_named("istmo-notify", move || {
+        // Same unwind reasoning as `Runtime::dispatch_hosted_call`.
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             pollster::block_on(dispatcher.dispatch(
                 instance_id,
@@ -1664,14 +1911,24 @@ mod tests {
         }
         assert_eq!(hosted.early_cancels.len(), EARLY_CANCEL_CAPACITY);
         assert_eq!(hosted.early_order.len(), EARLY_CANCEL_CAPACITY);
-        assert!(!hosted.begin(Origin::Peer, CallId(0)).is_cancelled());
-        assert!(hosted.begin(Origin::Peer, CallId(ids - 1)).is_cancelled());
+        assert!(
+            !hosted
+                .begin(Origin::Peer, CallId(0))
+                .expect("open")
+                .is_cancelled()
+        );
+        assert!(
+            hosted
+                .begin(Origin::Peer, CallId(ids - 1))
+                .expect("open")
+                .is_cancelled()
+        );
     }
 
     #[test]
     fn cancels_of_running_or_local_calls_are_not_remembered() {
         let mut hosted = HostedCalls::default();
-        let token = hosted.begin(Origin::Peer, CallId(1));
+        let token = hosted.begin(Origin::Peer, CallId(1)).expect("open");
         hosted.cancel(Origin::Peer, CallId(1));
         assert!(token.is_cancelled());
         hosted.finish(Origin::Peer, CallId(1));
@@ -1683,8 +1940,8 @@ mod tests {
     #[test]
     fn local_and_peer_calls_with_the_same_id_cancel_separately() {
         let mut hosted = HostedCalls::default();
-        let local = hosted.begin(Origin::Local, CallId(1));
-        let peer = hosted.begin(Origin::Peer, CallId(1));
+        let local = hosted.begin(Origin::Local, CallId(1)).expect("open");
+        let peer = hosted.begin(Origin::Peer, CallId(1)).expect("open");
         hosted.cancel(Origin::Peer, CallId(1));
         assert!(peer.is_cancelled());
         assert!(!local.is_cancelled());
