@@ -9,6 +9,8 @@ import UIKit
 ///
 /// Presents a full-screen camera over the top view controller and
 /// resolves with the first code read. Needs `NSCameraUsageDescription`.
+/// Codes whose payload is not text are skipped (AVFoundation exposes no
+/// raw bytes), so `ScannedCode.raw` is always `nil` here.
 public final class BarcodeScannerBackendImpl: BarcodeScannerBackend {
 
     #if canImport(UIKit) && canImport(AVFoundation)
@@ -35,6 +37,15 @@ public final class BarcodeScannerBackendImpl: BarcodeScannerBackend {
                 }
                 let controller = ScannerViewController(config: config) { result in
                     cont.resume(with: result)
+                }
+                // Wire up the capture session before presenting, so a
+                // camera failure resumes the caller here instead of from
+                // inside a presentation that is still animating in.
+                do {
+                    try controller.configureSession()
+                } catch {
+                    cont.resume(throwing: error)
+                    return
                 }
                 controller.modalPresentationStyle = .fullScreen
                 root.present(controller, animated: true)
@@ -63,6 +74,11 @@ public final class BarcodeScannerBackendImpl: BarcodeScannerBackend {
 
 #if canImport(UIKit) && canImport(AVFoundation)
 private final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    private static let allFormats: [BarcodeFormat] = [
+        .qr, .aztec, .dataMatrix, .pdf417, .code128, .ean13,
+        .ean8, .upcE, .code39, .code93, .itf, .codabar,
+    ]
+
     private let config: ScanConfig
     private var finish: ((Result<ScannedCode?, Error>) -> Void)?
     private let session = AVCaptureSession()
@@ -77,30 +93,35 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .black
+    /// Attach camera input and metadata output. Throws instead of
+    /// presenting a scanner that can never read anything.
+    func configureSession() throws {
         guard
             let device = AVCaptureDevice.default(for: .video),
             let input = try? AVCaptureDeviceInput(device: device),
             session.canAddInput(input)
         else {
-            complete(.failure(ScanError.unavailable))
-            return
+            throw ScanError.unavailable
         }
         session.addInput(input)
         let output = AVCaptureMetadataOutput()
         guard session.canAddOutput(output) else {
-            complete(.failure(ScanError.backend("cannot attach metadata output")))
-            return
+            throw ScanError.backend("cannot attach metadata output")
         }
         session.addOutput(output)
         output.setMetadataObjectsDelegate(self, queue: .main)
-        let wanted = config.formats.isEmpty
-            ? [BarcodeFormat.qr, .aztec, .dataMatrix, .pdf417, .code128, .ean13]
-            : config.formats
-        output.metadataObjectTypes = wanted.map(Self.metadataType)
+        let wanted = config.formats.isEmpty ? Self.allFormats : config.formats
+        let types = Set(wanted.flatMap(Self.metadataTypes))
             .filter { output.availableMetadataObjectTypes.contains($0) }
+        guard !types.isEmpty else {
+            throw ScanError.backend("none of the requested formats can be scanned")
+        }
+        output.metadataObjectTypes = Array(types)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
 
         let preview = AVCaptureVideoPreviewLayer(session: session)
         preview.videoGravity = .resizeAspectFill
@@ -142,6 +163,13 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
             close.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
             close.centerXAnchor.constraint(equalTo: view.centerXAnchor),
         ])
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // Start only once the presentation finished: a code read during
+        // the animation would otherwise dismiss a controller that is
+        // still being presented, and that dismissal may never complete.
         sessionQueue.async { [session] in session.startRunning() }
     }
 
@@ -155,11 +183,15 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
         didOutput metadataObjects: [AVMetadataObject],
         from connection: AVCaptureConnection
     ) {
+        // A code without `stringValue` carries a non-text payload; keep
+        // scanning rather than report it as a cancel.
         guard
-            let code = metadataObjects.compactMap({ $0 as? AVMetadataMachineReadableCodeObject }).first,
+            let code = metadataObjects
+                .compactMap({ $0 as? AVMetadataMachineReadableCodeObject })
+                .first(where: { $0.stringValue != nil }),
             let text = code.stringValue
         else { return }
-        complete(.success(ScannedCode(text: text, format: Self.format(of: code.type))))
+        complete(.success(ScannedCode(text: text, format: Self.format(of: code.type), raw: nil)))
     }
 
     @objc private func cancel() {
@@ -170,28 +202,54 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
         guard let finish else { return }
         self.finish = nil
         sessionQueue.async { [session] in session.stopRunning() }
+        guard presentingViewController != nil else {
+            finish(result)
+            return
+        }
         dismiss(animated: true) { finish(result) }
     }
 
-    private static func metadataType(_ format: BarcodeFormat) -> AVMetadataObject.ObjectType {
+    /// AVFoundation types to ask for; empty when the platform has none.
+    private static func metadataTypes(_ format: BarcodeFormat) -> [AVMetadataObject.ObjectType] {
         switch format {
+        case .qr: return [.qr]
+        case .aztec: return [.aztec]
+        case .dataMatrix: return [.dataMatrix]
+        case .pdf417: return [.pdf417]
+        case .code128: return [.code128]
+        // AVFoundation reports UPC-A as EAN-13 with a leading zero.
+        case .ean13, .upcA: return [.ean13]
+        case .ean8: return [.ean8]
+        case .upcE: return [.upce]
+        case .code39: return [.code39, .code39Mod43]
+        case .code93: return [.code93]
+        case .itf: return [.interleaved2of5, .itf14]
+        case .codabar:
+            if #available(iOS 15.4, *) {
+                return [.codabar]
+            }
+            return []
+        case .other: return []
+        }
+    }
+
+    private static func format(of type: AVMetadataObject.ObjectType) -> BarcodeFormat {
+        if #available(iOS 15.4, *), type == .codabar {
+            return .codabar
+        }
+        switch type {
         case .qr: return .qr
         case .aztec: return .aztec
         case .dataMatrix: return .dataMatrix
         case .pdf417: return .pdf417
         case .code128: return .code128
         case .ean13: return .ean13
-        }
-    }
-
-    private static func format(of type: AVMetadataObject.ObjectType) -> BarcodeFormat {
-        switch type {
-        case .aztec: return .aztec
-        case .dataMatrix: return .dataMatrix
-        case .pdf417: return .pdf417
-        case .code128: return .code128
-        case .ean13: return .ean13
-        default: return .qr
+        case .ean8: return .ean8
+        case .upce: return .upcE
+        case .code39, .code39Mod43: return .code39
+        case .code93: return .code93
+        case .interleaved2of5, .itf14: return .itf
+        default: return .other
         }
     }
 }
