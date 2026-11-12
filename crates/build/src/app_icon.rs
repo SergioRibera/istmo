@@ -12,8 +12,10 @@
 
 use std::fmt;
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use image::codecs::ico::{IcoEncoder, IcoFrame};
 use image::imageops::FilterType;
@@ -96,19 +98,82 @@ impl std::error::Error for IconError {
     }
 }
 
-/// Decoded `[app.icon] image` (or a PNG adaptive layer).
+/// `[app.icon] image` (or a PNG adaptive layer), decoded on first use.
+///
+/// Resizing with Lanczos3 dominates an icon pass, so every group of
+/// outputs is guarded by a stamp in `OUT_DIR`: when the source bytes,
+/// the output set and their parameters match the previous run and every
+/// output still exists, the group is skipped without decoding.
 #[derive(Debug)]
 pub struct AppIcon {
-    image: DynamicImage,
+    path: PathBuf,
+    bytes: Vec<u8>,
+    image: OnceLock<DynamicImage>,
+    /// Where stamps live; `None` (no `OUT_DIR`) always regenerates.
+    stamp_dir: Option<PathBuf>,
 }
 
 impl AppIcon {
     pub fn open(path: &Path) -> Result<Self, IconError> {
-        let image = image::open(path).map_err(|source| IconError::Read {
+        let bytes = fs::read(path).map_err(|source| IconError::Read {
             path: path.to_path_buf(),
+            source: image::ImageError::IoError(source),
+        })?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            bytes,
+            image: OnceLock::new(),
+            stamp_dir: std::env::var_os("OUT_DIR").map(PathBuf::from),
+        })
+    }
+
+    #[cfg(test)]
+    fn with_stamp_dir(mut self, dir: &Path) -> Self {
+        self.stamp_dir = Some(dir.to_path_buf());
+        self
+    }
+
+    fn image(&self) -> Result<&DynamicImage, IconError> {
+        if let Some(image) = self.image.get() {
+            return Ok(image);
+        }
+        let image = image::load_from_memory(&self.bytes).map_err(|source| IconError::Read {
+            path: self.path.clone(),
             source,
         })?;
-        Ok(Self { image })
+        Ok(self.image.get_or_init(|| image))
+    }
+
+    /// Run `write` unless the stamp for (`params`, `outputs`) matches
+    /// the current source and every output exists.
+    fn stamped(
+        &self,
+        params: &str,
+        outputs: &[PathBuf],
+        write: impl FnOnce(&Self) -> Result<(), IconError>,
+    ) -> Result<(), IconError> {
+        let Some(stamp_dir) = &self.stamp_dir else {
+            return write(self);
+        };
+        let mut slot = DefaultHasher::new();
+        params.hash(&mut slot);
+        outputs.hash(&mut slot);
+        let stamp = stamp_dir.join(format!("istmo-icon-{:016x}.stamp", slot.finish()));
+        let mut content = DefaultHasher::new();
+        self.bytes.hash(&mut content);
+        params.hash(&mut content);
+        outputs.hash(&mut content);
+        env!("CARGO_PKG_VERSION").hash(&mut content);
+        let key = format!("{:016x}\n", content.finish());
+        if fs::read_to_string(&stamp).is_ok_and(|previous| previous == key)
+            && outputs.iter().all(|output| output.is_file())
+        {
+            return Ok(());
+        }
+        write(self)?;
+        // A lost stamp only costs a regeneration next run.
+        let _ = crate::fsx::write_if_changed(&stamp, key.as_bytes());
+        Ok(())
     }
 
     /// Write `mipmap-<density>/istmo_launcher.png` under `res_dir`.
@@ -124,14 +189,23 @@ impl AppIcon {
         name: &str,
         edge_of: impl Fn(u32) -> u32,
     ) -> Result<(), IconError> {
-        for (density, edge) in ANDROID_DENSITIES {
-            let png = encode_png(&self.resized(edge_of(*edge)))?;
-            let dest = res_dir
-                .join(format!("mipmap-{density}"))
-                .join(format!("{name}.png"));
-            write_bytes_if_changed(&dest, &png)?;
-        }
-        Ok(())
+        let outputs: Vec<(PathBuf, u32)> = ANDROID_DENSITIES
+            .iter()
+            .map(|(density, edge)| {
+                let dest = res_dir
+                    .join(format!("mipmap-{density}"))
+                    .join(format!("{name}.png"));
+                (dest, edge_of(*edge))
+            })
+            .collect();
+        let edges: Vec<u32> = outputs.iter().map(|(_, edge)| *edge).collect();
+        let paths: Vec<PathBuf> = outputs.iter().map(|(dest, _)| dest.clone()).collect();
+        self.stamped(&format!("mipmaps {edges:?}"), &paths, |icon| {
+            for (dest, edge) in &outputs {
+                write_bytes_if_changed(dest, &encode_png(&icon.resized(*edge)?)?)?;
+            }
+            Ok(())
+        })
     }
 
     /// Write an `IstmoAppIcon.appiconset` (plus the catalog's root
@@ -139,9 +213,13 @@ impl AppIcon {
     /// icons with an alpha channel, so transparency is flattened onto
     /// white.
     pub fn write_ios_app_icon_set(&self, xcassets_dir: &Path) -> Result<(), IconError> {
-        let flattened = DynamicImage::ImageRgb8(flatten_on_white(&self.resized(IOS_ICON_EDGE)));
         let set_dir = xcassets_dir.join(format!("{IOS_APP_ICON_SET}.appiconset"));
-        write_bytes_if_changed(&set_dir.join(IOS_ICON_FILE), &encode_png(&flattened)?)?;
+        let icon_file = set_dir.join(IOS_ICON_FILE);
+        self.stamped("ios app icon", std::slice::from_ref(&icon_file), |icon| {
+            let flattened =
+                DynamicImage::ImageRgb8(flatten_on_white(&icon.resized(IOS_ICON_EDGE)?));
+            write_bytes_if_changed(&icon_file, &encode_png(&flattened)?)
+        })?;
         let set_contents = format!(
             "{{\n  \"images\" : [\n    {{\n      \"filename\" : \"{IOS_ICON_FILE}\",\n      \
              \"idiom\" : \"universal\",\n      \"platform\" : \"ios\",\n      \
@@ -159,28 +237,37 @@ impl AppIcon {
 
     /// Write a square PNG of `edge` pixels, keeping transparency.
     pub fn write_png(&self, dest: &Path, edge: u32) -> Result<(), IconError> {
-        write_bytes_if_changed(dest, &encode_png(&self.resized(edge))?)
+        let dest = dest.to_path_buf();
+        self.stamped(
+            &format!("png {edge}"),
+            std::slice::from_ref(&dest),
+            |icon| write_bytes_if_changed(&dest, &encode_png(&icon.resized(edge)?)?),
+        )
     }
 
     /// Write a multi-resolution Windows `.ico` (PNG-compressed frames).
     pub fn write_ico(&self, dest: &Path) -> Result<(), IconError> {
-        let frames = WINDOWS_ICO_EDGES
-            .iter()
-            .map(|edge| {
-                let rgba = self.resized(*edge).to_rgba8();
-                IcoFrame::as_png(rgba.as_raw(), *edge, *edge, ExtendedColorType::Rgba8)
-                    .map_err(IconError::Encode)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut bytes = Vec::new();
-        IcoEncoder::new(&mut bytes)
-            .encode_images(&frames)
-            .map_err(IconError::Encode)?;
-        write_bytes_if_changed(dest, &bytes)
+        let dest = dest.to_path_buf();
+        let params = format!("ico {WINDOWS_ICO_EDGES:?}");
+        self.stamped(&params, std::slice::from_ref(&dest), |icon| {
+            let frames = WINDOWS_ICO_EDGES
+                .iter()
+                .map(|edge| {
+                    let rgba = icon.resized(*edge)?.to_rgba8();
+                    IcoFrame::as_png(rgba.as_raw(), *edge, *edge, ExtendedColorType::Rgba8)
+                        .map_err(IconError::Encode)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut bytes = Vec::new();
+            IcoEncoder::new(&mut bytes)
+                .encode_images(&frames)
+                .map_err(IconError::Encode)?;
+            write_bytes_if_changed(&dest, &bytes)
+        })
     }
 
-    fn resized(&self, edge: u32) -> DynamicImage {
-        self.image.resize_exact(edge, edge, FilterType::Lanczos3)
+    fn resized(&self, edge: u32) -> Result<DynamicImage, IconError> {
+        Ok(self.image()?.resize_exact(edge, edge, FilterType::Lanczos3))
     }
 }
 
@@ -593,10 +680,62 @@ mod tests {
         dir
     }
 
+    fn red_image() -> DynamicImage {
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(64, 64, Rgba([255, 0, 0, 0])))
+    }
+
     fn icon() -> AppIcon {
         AppIcon {
-            image: DynamicImage::ImageRgba8(RgbaImage::from_pixel(64, 64, Rgba([255, 0, 0, 0]))),
+            path: PathBuf::from("red.png"),
+            bytes: encode_png(&red_image()).unwrap(),
+            image: OnceLock::new(),
+            stamp_dir: None,
         }
+    }
+
+    #[test]
+    fn matching_stamp_skips_regeneration() {
+        let dir = temp_dir("stamp");
+        let source = dir.join("icon.png");
+        red_image().save(&source).unwrap();
+        let dest = dir.join("out/icon.png");
+        let open = || AppIcon::open(&source).unwrap().with_stamp_dir(&dir);
+        open().write_png(&dest, 32).unwrap();
+        assert_eq!(image::open(&dest).unwrap().width(), 32);
+
+        // Unchanged inputs: the (tampered) output is left alone.
+        fs::write(&dest, b"tampered").unwrap();
+        open().write_png(&dest, 32).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"tampered");
+
+        // A different edge is a different output set.
+        open().write_png(&dest, 16).unwrap();
+        assert_eq!(image::open(&dest).unwrap().width(), 16);
+
+        // A missing output is regenerated.
+        fs::remove_file(&dest).unwrap();
+        open().write_png(&dest, 16).unwrap();
+        assert!(dest.is_file());
+
+        // A changed source is regenerated.
+        fs::write(&dest, b"tampered").unwrap();
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 8, Rgba([0, 0, 255, 255])))
+            .save(&source)
+            .unwrap();
+        open().write_png(&dest, 16).unwrap();
+        assert_eq!(image::open(&dest).unwrap().width(), 16);
+    }
+
+    #[test]
+    fn corrupt_source_fails_when_decoded() {
+        let dir = temp_dir("corrupt");
+        let source = dir.join("icon.png");
+        fs::write(&source, b"not a png").unwrap();
+        let icon = AppIcon::open(&source).unwrap();
+        assert!(matches!(
+            icon.write_png(&dir.join("out.png"), 16),
+            Err(IconError::Read { .. })
+        ));
     }
 
     #[test]
@@ -642,7 +781,7 @@ mod tests {
 
     fn png_layer(dir: &Path, name: &str) -> IconLayer {
         let path = dir.join(name);
-        icon().image.save(&path).unwrap();
+        red_image().save(&path).unwrap();
         IconLayer::Png(path)
     }
 
