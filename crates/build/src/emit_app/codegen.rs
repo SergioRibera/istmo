@@ -128,7 +128,9 @@ pub(super) fn emit_swift(
 }
 
 /// [`crate::fsx::mark_generated_dir`] for a codegen output directory,
-/// unless it holds a seeded `*BackendImpl` the user now owns.
+/// unless it holds a seeded `*BackendImpl` the user now owns; then a
+/// marker left by an earlier build is dropped so that file is not
+/// ignored.
 pub(super) fn mark_codegen_dir(dir: &Path) {
     let holds_user_code = fs::read_dir(dir).is_ok_and(|entries| {
         entries.filter_map(Result::ok).any(|entry| {
@@ -138,7 +140,9 @@ pub(super) fn mark_codegen_dir(dir: &Path) {
                 .is_some_and(|name| name.contains("BackendImpl."))
         })
     });
-    if !holds_user_code {
+    if holds_user_code {
+        crate::fsx::unmark_generated_dir(dir);
+    } else {
         crate::fsx::mark_generated_dir(dir);
     }
 }
@@ -272,6 +276,18 @@ mod tests {
         assert!(kotlin.contains("fun `in`(`is`: Any): Any"), "{kotlin}");
         let swift = fs::read_to_string(dir.join("KBackendImpl.swift")).unwrap();
         assert!(swift.contains("func `in`(`is`: Any)"), "{swift}");
+    }
+
+    #[test]
+    fn seeding_a_backend_into_a_marked_dir_unhides_it() {
+        let dir = std::env::temp_dir().join(format!("istmo-seed-mark-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        mark_codegen_dir(&dir);
+        assert!(dir.join(".gitignore").exists());
+        fs::write(dir.join("KBackendImpl.swift"), "// mine\n").unwrap();
+        mark_codegen_dir(&dir);
+        assert!(!dir.join(".gitignore").exists());
     }
 
     #[test]
