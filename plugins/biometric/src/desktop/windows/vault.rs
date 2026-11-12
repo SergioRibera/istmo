@@ -20,7 +20,7 @@ use windows::Security::Credentials::{
 use windows::Security::Cryptography::CryptographicBuffer;
 use windows::core::{Array, HSTRING};
 
-use super::super::app_namespace;
+use super::super::{app_namespace, namespace_of};
 use super::{complete, raise_credential_dialog, winrt_error};
 use crate::{BiometricError, BiometricStatus, SecretAlias};
 
@@ -32,20 +32,89 @@ const NONCE_LEN: usize = 12;
 #[derive(Debug, Clone)]
 pub(super) struct Vault {
     /// Keeps apps sharing the per-user Hello key store and
-    /// `%LOCALAPPDATA%` apart: the executable's file stem.
+    /// `%LOCALAPPDATA%` apart: the app id, or the executable's file stem.
     app: String,
-}
-
-impl Default for Vault {
-    fn default() -> Self {
-        Self {
-            app: app_namespace(),
-        }
-    }
+    /// Namespace secrets were kept under before the app set an id (the
+    /// executable's file stem). Still read so they survive the switch.
+    legacy_app: Option<String>,
 }
 
 impl Vault {
+    pub(super) fn new(app_id: Option<&str>) -> Self {
+        let exe = app_namespace();
+        match app_id.map(namespace_of) {
+            Some(app) if !app.is_empty() && app != exe => Self {
+                app,
+                legacy_app: Some(exe),
+            },
+            _ => Self {
+                app: exe,
+                legacy_app: None,
+            },
+        }
+    }
+
+    fn legacy(&self) -> Option<Self> {
+        self.legacy_app.clone().map(|app| Self {
+            app,
+            legacy_app: None,
+        })
+    }
+
+    /// Seal `secret` under the current namespace, then drop any copy left
+    /// under the legacy one.
     pub(super) async fn store(
+        &self,
+        alias: &SecretAlias,
+        secret: &[u8],
+        parent_window: Option<isize>,
+        cancel: &CancelToken,
+    ) -> Result<(), BiometricError> {
+        self.store_here(alias, secret, parent_window, cancel)
+            .await?;
+        if let Some(legacy) = self.legacy() {
+            // Best effort: a stale legacy copy is shadowed by the new one.
+            let _ = legacy.delete_here(alias).await;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn read(
+        &self,
+        alias: &SecretAlias,
+        parent_window: Option<isize>,
+        cancel: &CancelToken,
+    ) -> Result<Vec<u8>, BiometricError> {
+        match (
+            self.read_here(alias, parent_window, cancel).await,
+            self.legacy(),
+        ) {
+            (Err(BiometricError::SecretNotFound), Some(legacy)) => {
+                legacy.read_here(alias, parent_window, cancel).await
+            }
+            (outcome, _) => outcome,
+        }
+    }
+
+    pub(super) async fn delete(&self, alias: &SecretAlias) -> Result<(), BiometricError> {
+        self.delete_here(alias).await?;
+        match self.legacy() {
+            Some(legacy) => legacy.delete_here(alias).await,
+            None => Ok(()),
+        }
+    }
+
+    pub(super) async fn contains(&self, alias: &SecretAlias) -> Result<bool, BiometricError> {
+        if self.contains_here(alias).await? {
+            return Ok(true);
+        }
+        match self.legacy() {
+            Some(legacy) => legacy.contains_here(alias).await,
+            None => Ok(false),
+        }
+    }
+
+    async fn store_here(
         &self,
         alias: &SecretAlias,
         secret: &[u8],
@@ -81,7 +150,7 @@ impl Vault {
         std::fs::rename(&staging, &path).map_err(io_error)
     }
 
-    pub(super) async fn read(
+    async fn read_here(
         &self,
         alias: &SecretAlias,
         parent_window: Option<isize>,
@@ -134,7 +203,7 @@ impl Vault {
             .map_err(|_| BiometricError::KeyInvalidated)
     }
 
-    pub(super) async fn delete(&self, alias: &SecretAlias) -> Result<(), BiometricError> {
+    async fn delete_here(&self, alias: &SecretAlias) -> Result<(), BiometricError> {
         self.discard(alias)?;
         // Deleting a missing credential fails; nothing is left either way.
         if let Ok(action) = KeyCredentialManager::DeleteAsync(&self.credential_name(alias)) {
@@ -143,7 +212,7 @@ impl Vault {
         Ok(())
     }
 
-    pub(super) async fn contains(&self, alias: &SecretAlias) -> Result<bool, BiometricError> {
+    async fn contains_here(&self, alias: &SecretAlias) -> Result<bool, BiometricError> {
         if !self.path(alias)?.is_file() {
             return Ok(false);
         }
@@ -227,10 +296,19 @@ impl Vault {
         .map_err(winrt_error)?;
 
         let mut key = Key::<Aes256Gcm>::default();
-        Hkdf::<Sha256>::new(Some(DOMAIN.as_bytes()), &signature)
-            .expand(name.to_string_lossy().as_bytes(), &mut key)
-            .map_err(|_| BiometricError::Backend("HKDF expansion failed".to_owned()))?;
-        Ok(Aes256Gcm::new(&key))
+        let expanded = Hkdf::<Sha256>::new(Some(DOMAIN.as_bytes()), &signature)
+            .expand(name.to_string_lossy().as_bytes(), &mut key);
+        // The signature is the input key material: anyone holding it can
+        // re-derive every key. Wipe it and the derived key once the cipher
+        // holds its own copy. HKDF's internal PRK and the cipher's round
+        // keys are dropped without wiping; neither crate is built with its
+        // `zeroize` feature.
+        wipe(&mut signature);
+        let cipher = expanded
+            .map(|()| Aes256Gcm::new(&key))
+            .map_err(|_| BiometricError::Backend("HKDF expansion failed".to_owned()));
+        wipe(&mut key);
+        cipher
     }
 
     fn credential_name(&self, alias: &SecretAlias) -> HSTRING {
@@ -253,6 +331,18 @@ impl Vault {
             _ => Ok(()),
         }
     }
+}
+
+/// Overwrite key material before its memory is released. Volatile
+/// stores cannot be elided as dead writes the way a plain `fill(0)` on
+/// memory about to be freed can; `zeroize` would do the same but is not
+/// in the dependency tree.
+fn wipe(bytes: &mut [u8]) {
+    for byte in bytes.iter_mut() {
+        // SAFETY: `byte` is a valid, aligned, exclusive `&mut u8`.
+        unsafe { std::ptr::write_volatile(byte, 0) };
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
 }
 
 #[allow(clippy::needless_pass_by_value)] // Used as `map_err(io_error)`.

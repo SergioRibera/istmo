@@ -14,7 +14,8 @@
 //!   [`AuthPolicy::BiometricOrDeviceCredential`] and success is reported
 //!   as [`AuthMethod::Unspecified`]. Secrets are sealed with a key
 //!   derived from a Hello credential signature and stored under
-//!   `%LOCALAPPDATA%\istmo\biometric\<exe name>\`; storing the first
+//!   `%LOCALAPPDATA%\istmo\biometric\<app>\`, `<app>` being
+//!   [`DesktopBiometric::with_app_id`] or else the executable name; storing the first
 //!   secret of an alias shows Hello twice (create the key, then sign).
 //!   Sensor kinds come from the Windows Biometric Framework; Hello
 //!   exposes no enrollment state.
@@ -74,6 +75,9 @@ struct DesktopOptions {
     /// Linux: keep secrets in the Secret Service keyring behind an
     /// fprintd check.
     ui_gated_vault: bool,
+    /// Windows: identifier namespacing the vault; `None` falls back to
+    /// the executable name.
+    app_id: Option<String>,
 }
 
 impl DesktopBiometric {
@@ -114,6 +118,18 @@ impl DesktopBiometric {
     #[must_use]
     pub const fn with_ui_gated_vault(mut self) -> Self {
         self.options.ui_gated_vault = true;
+        self
+    }
+
+    /// Windows: namespace the vault by `id` (the app's bundle id, e.g.
+    /// `option_env!("ISTMO_APP_BUNDLE_ID")` in the app crate) instead of
+    /// the executable name, so renaming the binary keeps its secrets.
+    /// Secrets stored under the executable name are still read, and
+    /// move to the new namespace the next time they are stored. Ignored
+    /// elsewhere.
+    #[must_use]
+    pub fn with_app_id(mut self, id: impl Into<String>) -> Self {
+        self.options.app_id = Some(id.into());
         self
     }
 }
@@ -210,18 +226,22 @@ async fn until_cancelled<F: Future>(fut: F, cancel: &CancelToken) -> Option<F::O
 /// process (Windows Hello keys, the Secret Service keyring): the
 /// executable's file stem, restricted to alias-safe characters.
 fn app_namespace() -> String {
-    let sanitize = |c: char| {
-        if c.is_ascii_alphanumeric() || matches!(c, '.' | '-') {
-            c
-        } else {
-            '_'
-        }
-    };
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))
-        .map_or_else(
-            || "app".to_owned(),
-            |stem| stem.chars().map(sanitize).collect(),
-        )
+        .and_then(|exe| exe.file_stem().map(|s| namespace_of(&s.to_string_lossy())))
+        .unwrap_or_else(|| "app".to_owned())
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+/// `name` restricted to alias-safe characters.
+fn namespace_of(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }

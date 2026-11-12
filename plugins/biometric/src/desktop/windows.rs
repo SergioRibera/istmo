@@ -29,9 +29,7 @@ const WINBIO_TYPE_FINGERPRINT: u32 = 0x0000_0008;
 const WINBIO_TYPE_IRIS: u32 = 0x0000_0010;
 
 #[derive(Debug, Default, Clone)]
-pub(super) struct Backend {
-    vault: vault::Vault,
-}
+pub(super) struct Backend;
 
 impl Backend {
     pub(super) async fn availability(
@@ -76,7 +74,7 @@ impl Backend {
         _prompt: AuthPrompt,
         cancel: CancelToken,
     ) -> Result<(), BiometricError> {
-        self.vault
+        vault::Vault::new(options.app_id.as_deref())
             .store(alias, &secret, options.parent_window, &cancel)
             .await
     }
@@ -88,23 +86,29 @@ impl Backend {
         _prompt: AuthPrompt,
         cancel: CancelToken,
     ) -> Result<Vec<u8>, BiometricError> {
-        self.vault.read(alias, options.parent_window, &cancel).await
+        vault::Vault::new(options.app_id.as_deref())
+            .read(alias, options.parent_window, &cancel)
+            .await
     }
 
     pub(super) async fn delete_secret(
         &self,
-        _options: &DesktopOptions,
+        options: &DesktopOptions,
         alias: &SecretAlias,
     ) -> Result<(), BiometricError> {
-        self.vault.delete(alias).await
+        vault::Vault::new(options.app_id.as_deref())
+            .delete(alias)
+            .await
     }
 
     pub(super) async fn has_secret(
         &self,
-        _options: &DesktopOptions,
+        options: &DesktopOptions,
         alias: &SecretAlias,
     ) -> Result<bool, BiometricError> {
-        self.vault.contains(alias).await
+        vault::Vault::new(options.app_id.as_deref())
+            .contains(alias)
+            .await
     }
 
     /// Windows Hello exposes no view of its enrollment.
