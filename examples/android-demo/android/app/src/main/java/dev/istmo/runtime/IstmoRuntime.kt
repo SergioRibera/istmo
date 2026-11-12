@@ -54,10 +54,18 @@ object IstmoRuntime {
         val callId = nextCallId.getAndIncrement()
         outboundCalls[callId] = PendingCall(cont)
         cont.invokeOnCancellation {
-            outboundCalls.remove(callId)
-            nativeSubmitCall(callId, pluginId, instanceId, method, EMPTY_PAYLOAD)
+            // Cancellation handlers must not throw; a cancel racing
+            // shutdown has nothing left to stop anyway.
+            if (outboundCalls.remove(callId) != null) {
+                runCatching { nativeSubmitCancel(callId) }
+            }
         }
-        nativeSubmitCall(callId, pluginId, instanceId, method, payload)
+        try {
+            nativeSubmitCall(callId, pluginId, instanceId, method, payload)
+        } catch (e: Throwable) {
+            outboundCalls.remove(callId)
+            throw e
+        }
     }
 
     suspend fun call(pluginId: String, method: String, payload: ByteArray): ByteArray =
@@ -170,6 +178,7 @@ object IstmoRuntime {
     }
 
     external fun nativeStart(runtimeClass: Class<*>): Boolean
+    external fun nativeSubmitCancel(callId: Long)
     external fun nativeSubmitCall(
         callId: Long,
         pluginId: String,
