@@ -13,21 +13,16 @@ pub fn android_app() -> Option<AndroidApp> {
     APP.get().cloned()
 }
 
+/// The `android.app.Activity` instance as a raw JNI `jobject`.
+///
+/// `android-activity` 0.6 already returns the Java activity here (not
+/// an `ANativeActivity*`): a JNI global reference owned by the
+/// `AndroidApp`, valid while the stored app is alive — which is the
+/// whole process, since [`set_android_app`] keeps it in a `static`.
+/// Do not wrap it in an owning `GlobalRef` / `AutoLocal`; it is not
+/// yours to delete.
 #[must_use]
 pub fn android_activity_object() -> Option<*mut std::ffi::c_void> {
-    use std::ffi::c_void;
-    let app = android_app()?;
-    let ptr = app.activity_as_ptr();
-    if ptr.is_null() {
-        return None;
-    }
-    // SAFETY: `activity_as_ptr` returns a pointer at a live
-    // `ANativeActivity` struct kept alive by the NDK glue for the
-    // entire process lifetime; the `clazz` field at offset 3 is a
-    // stable jobject reference.
-    unsafe {
-        let clazz_ptr = (ptr as *mut *mut c_void).add(3);
-        let clazz = *clazz_ptr;
-        if clazz.is_null() { None } else { Some(clazz) }
-    }
+    let ptr = android_app()?.activity_as_ptr();
+    (!ptr.is_null()).then_some(ptr)
 }
