@@ -20,9 +20,9 @@ class WatchClient(
         val payload = payloadBuf.toByteArray()
         return IstmoRuntime.stream(PLUGIN_ID, "watchLocation", payload).map { bytes ->
             var cursor = 0
-            val d_item = codecs.readPosition(bytes, cursor); cursor = d_item.consumed
-            val item = d_item.value
-            item
+            val d_result = codecs.readPosition(bytes, cursor); cursor = d_result.consumed
+            val result = d_result.value
+            result
         }
     }
 

@@ -13,9 +13,9 @@ mod kotlin_wire;
 mod swift_wire;
 
 pub(crate) use ident::{
-    comment_text, fresh, kt_ident, kt_string, local, swift_ident, swift_string,
+    comment_text, fresh, kt_ident, kt_string, local, rust_ident, swift_ident, swift_string,
 };
-pub(crate) use kotlin_wire::KotlinWire;
+pub(crate) use kotlin_wire::{KotlinWire, ReadSource};
 pub(crate) use swift_wire::SwiftWire;
 
 /// Runtime-provided named type every generator knows how to encode.

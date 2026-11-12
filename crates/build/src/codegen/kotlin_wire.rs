@@ -142,19 +142,37 @@ impl KotlinWire {
         }
     }
 
-    /// Emits `val <local>` holding `ty` decoded from `bytes` at the
-    /// `cursor` variable, and advances `cursor`.
+    /// Emits `val <local>` holding `ty` decoded from `src.bytes` at the
+    /// `src.cursor` variable, and advances that cursor.
     pub(crate) fn read_into(
         self,
         out: &mut String,
         indent: &str,
         ty: &TypeRef,
         local: &str,
-        bytes: &str,
+        src: ReadSource<'_>,
     ) {
+        let ReadSource { bytes, cursor } = src;
         let tmp = format!("d_{}", local.trim_matches('`'));
-        let expr = self.read(ty, bytes, "cursor");
-        let _ = writeln!(out, "{indent}val {tmp} = {expr}; cursor = {tmp}.consumed");
+        let expr = self.read(ty, bytes, cursor);
+        let _ = writeln!(out, "{indent}val {tmp} = {expr}; {cursor} = {tmp}.consumed");
         let _ = writeln!(out, "{indent}val {local} = {tmp}.value");
+    }
+}
+
+/// The buffer and the mutable cursor variable a Kotlin reader consumes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReadSource<'a> {
+    pub(crate) bytes: &'a str,
+    pub(crate) cursor: &'a str,
+}
+
+impl<'a> ReadSource<'a> {
+    /// `bytes` read through the conventional `cursor` variable.
+    pub(crate) const fn at_cursor(bytes: &'a str) -> Self {
+        Self {
+            bytes,
+            cursor: "cursor",
+        }
     }
 }

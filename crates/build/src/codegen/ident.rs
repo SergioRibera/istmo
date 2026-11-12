@@ -120,6 +120,24 @@ pub(crate) fn swift_ident(name: &str) -> String {
     }
 }
 
+/// Rust strict and reserved keywords that a raw identifier can spell.
+const RUST_KEYWORDS: &[&str] = &[
+    "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do", "dyn",
+    "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in", "let",
+    "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref", "return",
+    "static", "struct", "trait", "true", "try", "type", "typeof", "unsafe", "unsized", "use",
+    "virtual", "where", "while", "yield",
+];
+
+/// `name` as a Rust identifier, raw (`r#type`) when it is a keyword.
+pub(crate) fn rust_ident(name: &str) -> String {
+    if RUST_KEYWORDS.contains(&name) {
+        format!("r#{name}")
+    } else {
+        name.to_owned()
+    }
+}
+
 /// A local variable for a contract-supplied name inside a generated body
 /// that already declares `reserved` locals. A clash gets a trailing `_`
 /// (never a keyword), anything else goes through `escape`.

@@ -1,6 +1,8 @@
 use std::fmt::Write as _;
 
-use crate::codegen::{KotlinWire, NamedAccess, kt_ident, kt_string, local, write_header};
+use crate::codegen::{
+    KotlinWire, NamedAccess, ReadSource, kt_ident, kt_string, local, write_header,
+};
 use crate::contract::{Contract, Method, MethodKind};
 
 const WIRE: KotlinWire = KotlinWire::new(NamedAccess::Codecs);
@@ -256,7 +258,13 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
         "    override suspend fun handleCreateInstance(payload: ByteArray): ByteArray {{",
     );
     let _ = writeln!(out, "        var cursor = 0");
-    WIRE.read_into(out, "        ", init, "config", "payload");
+    WIRE.read_into(
+        out,
+        "        ",
+        init,
+        "config",
+        ReadSource::at_cursor("payload"),
+    );
     let _ = writeln!(out, "        val backend = factory.create(config)");
     let _ = writeln!(out, "        val id = nextInstanceId.getAndIncrement()");
     let _ = writeln!(out, "        instances[id] = backend");
@@ -312,7 +320,13 @@ fn write_method_arm(out: &mut String, method: &Method) {
     let mut locals = Vec::with_capacity(method.args.len());
     for arg in &method.args {
         let name = local(&arg.name, DISPATCH_LOCALS, kt_ident);
-        WIRE.read_into(out, indent, &arg.ty, &name, "payload");
+        WIRE.read_into(
+            out,
+            indent,
+            &arg.ty,
+            &name,
+            ReadSource::at_cursor("payload"),
+        );
         locals.push(name);
     }
     let call = format!("backend.{}({})", kt_ident(&method.name), locals.join(", "));

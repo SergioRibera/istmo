@@ -1,6 +1,8 @@
 use std::fmt::Write as _;
 
-use crate::codegen::{KotlinWire, NamedAccess, fresh, kt_ident, kt_string, write_header};
+use crate::codegen::{
+    KotlinWire, NamedAccess, ReadSource, fresh, kt_ident, kt_string, write_header,
+};
 use crate::contract::{Contract, Method, MethodKind, TypeRef};
 
 const WIRE: KotlinWire = KotlinWire::new(NamedAccess::Codecs);
@@ -55,11 +57,50 @@ pub fn generate_kotlin_client(contract: &Contract) -> String {
     out
 }
 
+/// Locals a client method declares. Each avoids the method's parameter
+/// names so a contract argument called `payload` or `cursor` is never
+/// shadowed or misread.
+struct Locals {
+    payload_buf: String,
+    payload: String,
+    bytes: String,
+    cursor: String,
+    result: String,
+}
+
+impl Locals {
+    fn for_method(method: &Method) -> Self {
+        let names: Vec<&str> = method.args.iter().map(|a| a.name.as_str()).collect();
+        Self {
+            payload_buf: fresh("payloadBuf", &names),
+            payload: fresh("payload", &names),
+            bytes: fresh("bytes", &names),
+            cursor: fresh("cursor", &names),
+            result: fresh("result", &names),
+        }
+    }
+
+    fn source(&self) -> ReadSource<'_> {
+        ReadSource {
+            bytes: &self.bytes,
+            cursor: &self.cursor,
+        }
+    }
+}
+
 fn write_client_method(out: &mut String, contract: &Contract, method: &Method) {
     let arg_sig = format_args(method);
     let ret_kt = method.returns.to_kotlin();
     let fn_name = kt_ident(&method.name);
     let wire_name = kt_string(&method.name);
+    let locals = Locals::for_method(method);
+    let Locals {
+        payload,
+        bytes,
+        cursor,
+        result,
+        ..
+    } = &locals;
     match method.kind {
         MethodKind::Unary => {
             let returns_unit = method.returns.is_unit();
@@ -69,9 +110,13 @@ fn write_client_method(out: &mut String, contract: &Contract, method: &Method) {
                 format!(": {ret_kt}")
             };
             let _ = writeln!(out, "    suspend fun {fn_name}({arg_sig}){sig_ret} {{");
-            write_payload_build(out, method, "        ");
-            let assign = if returns_unit { "" } else { "val bytes = " };
-            let call = format!("IstmoRuntime.call(PLUGIN_ID, {wire_name}, payload)");
+            write_payload_build(out, method, &locals, "        ");
+            let assign = if returns_unit {
+                String::new()
+            } else {
+                format!("val {bytes} = ")
+            };
+            let call = format!("IstmoRuntime.call(PLUGIN_ID, {wire_name}, {payload})");
             if let Some(err) = &method.error {
                 let decode = WIRE.read(err, "e.payload", "0");
                 let _ = writeln!(out, "        {assign}try {{");
@@ -91,9 +136,9 @@ fn write_client_method(out: &mut String, contract: &Contract, method: &Method) {
                 let _ = writeln!(out, "        {assign}{call}");
             }
             if !returns_unit {
-                let _ = writeln!(out, "        var cursor = 0");
-                WIRE.read_into(out, "        ", &method.returns, "result", "bytes");
-                let _ = writeln!(out, "        return result");
+                let _ = writeln!(out, "        var {cursor} = 0");
+                WIRE.read_into(out, "        ", &method.returns, result, locals.source());
+                let _ = writeln!(out, "        return {result}");
             }
             let _ = writeln!(out, "    }}");
         }
@@ -102,42 +147,44 @@ fn write_client_method(out: &mut String, contract: &Contract, method: &Method) {
                 out,
                 "    fun {fn_name}({arg_sig}): kotlinx.coroutines.flow.Flow<{ret_kt}> {{",
             );
-            write_payload_build(out, method, "        ");
+            write_payload_build(out, method, &locals, "        ");
             let _ = writeln!(
                 out,
-                "        return IstmoRuntime.stream(PLUGIN_ID, {wire_name}, payload).map {{ bytes ->",
+                "        return IstmoRuntime.stream(PLUGIN_ID, {wire_name}, {payload}).map {{ {bytes} ->",
             );
-            write_stream_map_body(out, &method.returns, "            ");
+            write_stream_map_body(out, &method.returns, &locals, "            ");
             let _ = writeln!(out, "        }}");
             let _ = writeln!(out, "    }}");
         }
     }
 }
 
-/// Emits `val payload` holding the encoded arguments. The buffer is
-/// declared before the arguments are read, so it must not shadow one.
-fn write_payload_build(out: &mut String, method: &Method, indent: &str) {
+/// Emits the `payload` local holding the encoded arguments.
+fn write_payload_build(out: &mut String, method: &Method, locals: &Locals, indent: &str) {
+    let Locals {
+        payload_buf,
+        payload,
+        ..
+    } = locals;
     if method.args.is_empty() {
-        let _ = writeln!(out, "{indent}val payload = ByteArray(0)");
+        let _ = writeln!(out, "{indent}val {payload} = ByteArray(0)");
         return;
     }
-    let names: Vec<&str> = method.args.iter().map(|a| a.name.as_str()).collect();
-    let buf = fresh("payloadBuf", &names);
-    let _ = writeln!(out, "{indent}val {buf} = ByteArrayOutputStream()");
+    let _ = writeln!(out, "{indent}val {payload_buf} = ByteArrayOutputStream()");
     for arg in &method.args {
-        WIRE.write_stmt(out, indent, &arg.ty, &buf, &kt_ident(&arg.name));
+        WIRE.write_stmt(out, indent, &arg.ty, payload_buf, &kt_ident(&arg.name));
     }
-    let _ = writeln!(out, "{indent}val payload = {buf}.toByteArray()");
+    let _ = writeln!(out, "{indent}val {payload} = {payload_buf}.toByteArray()");
 }
 
-fn write_stream_map_body(out: &mut String, ret: &TypeRef, indent: &str) {
+fn write_stream_map_body(out: &mut String, ret: &TypeRef, locals: &Locals, indent: &str) {
     if ret.is_unit() {
         let _ = writeln!(out, "{indent}Unit");
         return;
     }
-    let _ = writeln!(out, "{indent}var cursor = 0");
-    WIRE.read_into(out, indent, ret, "item", "bytes");
-    let _ = writeln!(out, "{indent}item");
+    let _ = writeln!(out, "{indent}var {} = 0", locals.cursor);
+    WIRE.read_into(out, indent, ret, &locals.result, locals.source());
+    let _ = writeln!(out, "{indent}{}", locals.result);
 }
 
 fn format_args(method: &Method) -> String {

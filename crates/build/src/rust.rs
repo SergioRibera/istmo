@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::codegen::{NATIVE_HANDLE_ID, write_header};
+use crate::codegen::{NATIVE_HANDLE_ID, rust_ident, write_header};
 use crate::contract::{Contract, EnumDef, StructDef, TypeDef, TypeRef};
 
 #[must_use]
@@ -28,7 +28,7 @@ fn write_struct(out: &mut String, s: &StructDef, derives: &[&str]) {
         let _ = writeln!(
             out,
             "    pub {}: {},",
-            to_rust_field(&f.name),
+            rust_ident(&to_rust_field(&f.name)),
             rust_ty(&f.ty)
         );
     }

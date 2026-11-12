@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::codegen::{KotlinWire, NamedAccess, kt_ident, local, write_header};
+use crate::codegen::{KotlinWire, NamedAccess, ReadSource, kt_ident, local, write_header};
 use crate::contract::{Contract, EnumDef, StructDef, TypeDef};
 
 /// Codecs implementations call their own `read<T>` / `write<T>`.
@@ -112,7 +112,13 @@ fn write_struct_codec(out: &mut String, s: &StructDef) {
     let mut field_list = Vec::with_capacity(s.fields.len());
     for f in &s.fields {
         let name = local(&f.name, READER_LOCALS, kt_ident);
-        WIRE.read_into(out, "        ", &f.ty, &name, "bytes");
+        WIRE.read_into(
+            out,
+            "        ",
+            &f.ty,
+            &name,
+            ReadSource::at_cursor("bytes"),
+        );
         field_list.push(format!("{} = {name}", kt_ident(&f.name)));
     }
     let _ = writeln!(
@@ -165,7 +171,13 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
                 (0..v.payload.len()).map(|idx| format!("f{idx}")).collect()
             };
             for (binding, ty) in bindings.iter().zip(&v.payload) {
-                WIRE.read_into(out, "                ", ty, binding, "bytes");
+                WIRE.read_into(
+                    out,
+                    "                ",
+                    ty,
+                    binding,
+                    ReadSource::at_cursor("bytes"),
+                );
             }
             let _ = writeln!(
                 out,
@@ -200,7 +212,10 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
     }
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
+    write_enum_writer(out, e, has_payload);
+}
 
+fn write_enum_writer(out: &mut String, e: &EnumDef, has_payload: bool) {
     let _ = writeln!(
         out,
         "    override fun write{}(out: ByteArrayOutputStream, value: {}) {{",
