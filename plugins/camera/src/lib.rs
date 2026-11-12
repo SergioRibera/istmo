@@ -753,13 +753,16 @@ impl SessionHandle {
     /// swallowing it.
     ///
     /// # Errors
-    /// Propagates [`CameraError`] from the backend.
+    /// Propagates [`CameraError`] from the backend. On failure (or when
+    /// the future is dropped before it resolves) the handle is dropped
+    /// normally, so the release path still closes the native session.
     pub async fn close(self) -> Result<(), CameraError> {
         let id = self.session.id();
-        // Consume the native handle so its drop path doesn't fire a
-        // second release.
+        self.client.close(id).await.map_err(CameraError::from)?;
+        // The backend already closed the session; consume the handle so
+        // its drop path doesn't fire a second release.
         let _: NativeHandleId = self.session.into_id();
-        self.client.close(id).await.map_err(CameraError::from)
+        Ok(())
     }
 }
 
