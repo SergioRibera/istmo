@@ -26,6 +26,7 @@ use crate::apple_plist::{
     PlistFragments, app_keys_outside_block,
 };
 use crate::assets::{AssetsPayload, ResolvedAsset, resolve_assets};
+use crate::codegen::{kt_ident, swift_ident};
 use crate::contract::Contract;
 use crate::doctor::Doctor;
 use crate::document_types::DocumentTypes;
@@ -1165,58 +1166,54 @@ fn write_if_absent(dest: &Path, contents: &str) {
 }
 
 fn seed_kotlin_backend_impl(gen_dir: &Path, package: &str, contract: &Contract) {
+    use std::fmt::Write as _;
     let ty = &contract.type_name;
-    let mut body = String::new();
-    body.push_str(&format!("package {package}\n\n"));
-    body.push_str(&format!(
-        "// Seeded by istmo-build. Fill in each `TODO()` with your logic;\n\
-         // regenerate is a no-op once this file exists.\n\n"
-    ));
-    body.push_str(&format!("class {ty}BackendImpl : {ty}Backend {{\n"));
+    let mut body = format!(
+        "package {package}\n\n\
+         // Seeded by istmo-build. Fill in each `TODO()` with your logic;\n\
+         // regenerate is a no-op once this file exists.\n\n\
+         class {ty}BackendImpl : {ty}Backend {{\n"
+    );
     for method in &contract.methods {
-        body.push_str("    override suspend fun ");
-        body.push_str(&kotlin_method_name(&method.name));
-        body.push('(');
         let args = method
             .args
             .iter()
-            .map(|a| format!("{}: Any", kotlin_arg_name(&a.name)))
+            .map(|a| format!("{}: Any", kt_ident(&kotlin_method_name(&a.name))))
             .collect::<Vec<_>>()
             .join(", ");
-        body.push_str(&args);
-        body.push_str("): Any {\n");
-        body.push_str("        TODO(\"implement ");
-        body.push_str(&method.name);
-        body.push_str("\")\n    }\n");
+        let _ = write!(
+            body,
+            "    override suspend fun {}({args}): Any {{\n        TODO(\"implement {}\")\n    }}\n",
+            kt_ident(&kotlin_method_name(&method.name)),
+            method.name,
+        );
     }
     body.push_str("}\n");
     write_if_absent(&gen_dir.join(format!("{ty}BackendImpl.kt")), &body);
 }
 
 fn seed_swift_backend_impl(gen_dir: &Path, contract: &Contract) {
+    use std::fmt::Write as _;
     let ty = &contract.type_name;
-    let mut body = String::new();
-    body.push_str("import Foundation\n\n");
-    body.push_str(
-        "// Seeded by istmo-build. Fill in each `fatalError` with your\n\
-         // logic; regenerate is a no-op once this file exists.\n\n",
+    let mut body = format!(
+        "import Foundation\n\n\
+         // Seeded by istmo-build. Fill in each `fatalError` with your\n\
+         // logic; regenerate is a no-op once this file exists.\n\n\
+         final class {ty}BackendImpl: {ty}Backend {{\n"
     );
-    body.push_str(&format!("final class {ty}BackendImpl: {ty}Backend {{\n"));
     for method in &contract.methods {
-        body.push_str("    func ");
-        body.push_str(&method.name);
-        body.push('(');
         let args = method
             .args
             .iter()
-            .map(|a| format!("{}: Any", a.name))
+            .map(|a| format!("{}: Any", swift_ident(&a.name)))
             .collect::<Vec<_>>()
             .join(", ");
-        body.push_str(&args);
-        body.push_str(") async throws -> Any {\n");
-        body.push_str("        fatalError(\"implement ");
-        body.push_str(&method.name);
-        body.push_str("\")\n    }\n");
+        let _ = write!(
+            body,
+            "    func {}({args}) async throws -> Any {{\n        fatalError(\"implement {}\")\n    }}\n",
+            swift_ident(&method.name),
+            method.name,
+        );
     }
     body.push_str("}\n");
     write_if_absent(&gen_dir.join(format!("{ty}BackendImpl.swift")), &body);
@@ -1236,10 +1233,6 @@ fn kotlin_method_name(rust_snake: &str) -> String {
         }
     }
     out
-}
-
-fn kotlin_arg_name(rust_snake: &str) -> String {
-    kotlin_method_name(rust_snake)
 }
 
 #[must_use]
@@ -1837,6 +1830,35 @@ mod tests {
         tree.finish();
         assert!(dir.join("out/plugin-istmo.demo/a.txt").exists());
         assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn seeded_backends_escape_keyword_names() {
+        use crate::contract::{Arg, Method, MethodKind, TypeRef};
+        let dir = std::env::temp_dir().join(format!("istmo-seed-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let contract = Contract {
+            plugin_id: "istmo.k".into(),
+            type_name: "K".into(),
+            methods: vec![Method {
+                name: "in".into(),
+                kind: MethodKind::Unary,
+                args: vec![Arg {
+                    name: "is".into(),
+                    ty: TypeRef::Bool,
+                }],
+                returns: TypeRef::Unit,
+                error: None,
+            }],
+            init: None,
+            types: Vec::new(),
+        };
+        seed_kotlin_backend_impl(&dir, "com.example", &contract);
+        seed_swift_backend_impl(&dir, &contract);
+        let kotlin = fs::read_to_string(dir.join("KBackendImpl.kt")).unwrap();
+        assert!(kotlin.contains("fun `in`(`is`: Any): Any"), "{kotlin}");
+        let swift = fs::read_to_string(dir.join("KBackendImpl.swift")).unwrap();
+        assert!(swift.contains("func `in`(`is`: Any)"), "{swift}");
     }
 
     #[test]
