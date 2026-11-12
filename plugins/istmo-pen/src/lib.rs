@@ -280,6 +280,37 @@ impl std::fmt::Display for PenError {
 
 impl std::error::Error for PenError {}
 
+/// Recover the typed domain error from a failed [`PenClient`] call.
+/// Transport failures (runtime shut down, unknown plugin, …) are handed
+/// back unchanged as the `Err` value.
+impl TryFrom<istmo_core::IstmoError> for PenError {
+    type Error = istmo_core::IstmoError;
+
+    fn try_from(err: istmo_core::IstmoError) -> Result<Self, Self::Error> {
+        Self::try_from_istmo(err)
+    }
+}
+
+impl PenError {
+    /// Same as the [`TryFrom`] impl, under the name every istmo plugin
+    /// error shares.
+    ///
+    /// # Errors
+    /// Hands back `err` unchanged when it is a transport failure or
+    /// carries bytes that do not decode as a [`PenError`].
+    pub fn try_from_istmo(err: istmo_core::IstmoError) -> Result<Self, istmo_core::IstmoError> {
+        match err {
+            istmo_core::IstmoError::PluginError { bytes } => {
+                match istmo_core::codec::decode::<Self>(&bytes) {
+                    Ok((domain, _)) => Ok(domain),
+                    Err(_) => Err(istmo_core::IstmoError::PluginError { bytes }),
+                }
+            }
+            other => Err(other),
+        }
+    }
+}
+
 #[plugin(
     name = "istmo.pen",
     init = PenConfig,
