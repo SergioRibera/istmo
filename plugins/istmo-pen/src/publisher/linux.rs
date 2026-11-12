@@ -46,6 +46,8 @@ mod libinput_backend {
     use std::path::Path;
     use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+    use istmo_core::sync::lock;
     use std::time::{Duration, Instant};
 
     use flume::{Receiver, Sender};
@@ -80,10 +82,7 @@ mod libinput_backend {
     pub(crate) fn install_libinput(publisher: &Arc<PenPublisher>) -> Result<(), String> {
         static INSTALLED: OnceLock<Mutex<Result<(), String>>> = OnceLock::new();
         let slot = INSTALLED.get_or_init(|| Mutex::new(spawn(Arc::downgrade(publisher))));
-        match slot.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
+        lock(slot).clone()
     }
 
     // `Libinput` holds an `Rc<dyn LibinputInterface>` and therefore is
@@ -187,10 +186,7 @@ mod libinput_backend {
         let tool = event.tool();
         let serial = tool.serial();
         let (new_bitmap, changed) = {
-            let mut guard = match clock.button_state.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let mut guard = lock(&clock.button_state);
             let entry = guard.entry(serial).or_insert(0);
             let old = *entry;
             match event.button_state() {
@@ -299,10 +295,7 @@ mod libinput_backend {
         let serial = tool.serial();
         let tool_id = (serial & 0xFFFF_FFFF) as u32;
         let buttons = {
-            let guard = match clock.button_state.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let guard = lock(&clock.button_state);
             guard.get(&serial).copied().unwrap_or(0)
         };
         PenSample {
