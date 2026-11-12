@@ -2,8 +2,9 @@
 
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
-use istmo_core::{Envelope, Frame, InstanceId, NativeHandleId, Runtime, codec};
+use istmo_core::{CallId, Envelope, Frame, InstanceId, NativeHandleId, Runtime, codec};
 use istmo_plugins::{
     ADMOB_PLUGIN_ID, AdMobClient, AdMobConfig, BannerRect, BannerSlot, SlotStatus, SlotTarget,
     banner_rect_from_logical,
@@ -601,4 +602,164 @@ fn injected_spawn_is_the_only_executor_used() {
     backend.join().unwrap();
 
     assert_eq!(*counter.lock().unwrap(), 1, "exactly one spawn per action");
+}
+
+fn expect_call(outbound: &flume::Receiver<Envelope>, want: &str) -> (CallId, Vec<u8>) {
+    match outbound.recv().expect("call").frame {
+        Frame::Call {
+            call_id,
+            method,
+            payload,
+            ..
+        } => {
+            assert_eq!(method, want);
+            (call_id, payload)
+        }
+        other => panic!("expected {want}, got {other:?}"),
+    }
+}
+
+fn respond(rt: &Arc<Runtime>, call_id: CallId, payload: Vec<u8>) {
+    rt.dispatch_inbound(Envelope::new(Frame::Respond {
+        call_id,
+        result: Ok(payload),
+    }))
+    .unwrap();
+}
+
+fn wait_for(slot: &BannerSlot, status: SlotStatus) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while slot.status() != status {
+        assert!(
+            Instant::now() < deadline,
+            "slot stuck at {:?}, wanted {status:?}",
+            slot.status()
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+const RECT_A: BannerRect = BannerRect {
+    x: 0,
+    y: 0,
+    width: 320,
+    height: 50,
+};
+
+const RECT_B: BannerRect = BannerRect {
+    x: 0,
+    y: 600,
+    width: 320,
+    height: 50,
+};
+
+#[test]
+fn hide_while_loading_hides_the_banner_once_it_arrives() {
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let outbound = init.outbound.clone();
+    let (go_tx, go_rx) = flume::bounded::<()>(1);
+
+    let backend_rt = rt.clone();
+    let backend_outbound = outbound.clone();
+    let backend = thread::spawn(move || {
+        spawn_create_instance(&backend_rt, &backend_outbound, InstanceId(1));
+        let (show, _) = expect_call(&backend_outbound, "show_banner");
+        go_rx.recv().unwrap();
+        respond(&backend_rt, show, codec::encode(&NativeHandleId(9)).unwrap());
+
+        let (hide, payload) = expect_call(&backend_outbound, "hide_banner");
+        let ((id,), _) = codec::decode::<(NativeHandleId,)>(&payload).unwrap();
+        assert_eq!(id, NativeHandleId(9));
+        respond(&backend_rt, hide, Vec::new());
+    });
+
+    let client = build_client(&rt);
+    let slot = BannerSlot::new("u", client);
+    slot.sync(SlotTarget::Show(RECT_A));
+    assert_eq!(slot.status(), SlotStatus::Loading);
+    slot.sync(SlotTarget::Hide);
+    go_tx.send(()).unwrap();
+    backend.join().unwrap();
+
+    wait_for(&slot, SlotStatus::Idle);
+    assert!(slot.last_error().is_none());
+    assert!(outbound.try_recv().is_err(), "hide must not also release");
+}
+
+#[test]
+fn show_while_hiding_shows_again_at_the_latest_rect() {
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let outbound = init.outbound.clone();
+    let (go_tx, go_rx) = flume::bounded::<()>(1);
+
+    let backend_rt = rt.clone();
+    let backend_outbound = outbound.clone();
+    let backend = thread::spawn(move || {
+        spawn_create_instance(&backend_rt, &backend_outbound, InstanceId(1));
+        let (show, _) = expect_call(&backend_outbound, "show_banner");
+        respond(&backend_rt, show, codec::encode(&NativeHandleId(1)).unwrap());
+
+        let (hide, _) = expect_call(&backend_outbound, "hide_banner");
+        go_rx.recv().unwrap();
+        respond(&backend_rt, hide, Vec::new());
+
+        let (show, payload) = expect_call(&backend_outbound, "show_banner");
+        let ((req,), _) = codec::decode::<(istmo_plugins::BannerRequest,)>(&payload).unwrap();
+        assert_eq!(req.rect, RECT_B);
+        respond(&backend_rt, show, codec::encode(&NativeHandleId(2)).unwrap());
+    });
+
+    let client = build_client(&rt);
+    let slot = BannerSlot::new("u", client);
+    slot.sync(SlotTarget::Show(RECT_A));
+    wait_for(&slot, SlotStatus::Live);
+    slot.sync(SlotTarget::Hide);
+    assert_eq!(slot.status(), SlotStatus::Hiding);
+    slot.sync(SlotTarget::Show(RECT_B));
+    go_tx.send(()).unwrap();
+    backend.join().unwrap();
+
+    wait_for(&slot, SlotStatus::Live);
+}
+
+#[test]
+fn rect_change_queued_behind_a_hide_never_reaches_the_released_banner() {
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let outbound = init.outbound.clone();
+    let (seen_tx, seen_rx) = flume::bounded::<()>(1);
+    let (go_tx, go_rx) = flume::bounded::<()>(1);
+
+    let backend_rt = rt.clone();
+    let backend_outbound = outbound.clone();
+    let backend = thread::spawn(move || {
+        spawn_create_instance(&backend_rt, &backend_outbound, InstanceId(1));
+        let (show, _) = expect_call(&backend_outbound, "show_banner");
+        respond(&backend_rt, show, codec::encode(&NativeHandleId(3)).unwrap());
+
+        let (update, _) = expect_call(&backend_outbound, "update_banner");
+        seen_tx.send(()).unwrap();
+        let (hide, _) = expect_call(&backend_outbound, "hide_banner");
+        go_rx.recv().unwrap();
+        respond(&backend_rt, update, Vec::new());
+        respond(&backend_rt, hide, Vec::new());
+    });
+
+    let client = build_client(&rt);
+    let slot = BannerSlot::new("u", client);
+    slot.sync(SlotTarget::Show(RECT_A));
+    wait_for(&slot, SlotStatus::Live);
+    slot.sync(SlotTarget::Show(RECT_B));
+    seen_rx.recv().unwrap();
+    slot.sync(SlotTarget::Hide);
+    slot.sync(SlotTarget::Show(RECT_A));
+    slot.sync(SlotTarget::Hide);
+    go_tx.send(()).unwrap();
+    backend.join().unwrap();
+
+    wait_for(&slot, SlotStatus::Idle);
+    thread::sleep(Duration::from_millis(50));
+    assert!(outbound.try_recv().is_err(), "no call after the hide");
 }
