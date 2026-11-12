@@ -68,13 +68,19 @@ impl ShareInbox {
         Ok(())
     }
 
-    /// Delete the app-owned copies of `share`'s files. Missing files are
-    /// ignored; the first other I/O error is returned after attempting
-    /// every file.
+    /// Delete the app-owned copies of `share`'s files.
+    ///
+    /// Only regular files that, once canonicalised, sit inside an
+    /// [`INCOMING_DIR`] directory — where every backend copies received
+    /// files — are deleted; any other path (`..` tricks, symlinks out of
+    /// the inbox, arbitrary files named by a crafted share) is refused
+    /// with [`std::io::ErrorKind::PermissionDenied`]. Missing files are
+    /// ignored; the first other error is returned after attempting every
+    /// file.
     pub fn cleanup(share: &IncomingShare) -> std::io::Result<()> {
         let mut first_error = None;
         for file in &share.files {
-            match std::fs::remove_file(Path::new(&file.path)) {
+            match remove_incoming(Path::new(&file.path)) {
                 Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
                     first_error.get_or_insert(err);
                 }
@@ -83,6 +89,34 @@ impl ShareInbox {
         }
         first_error.map_or(Ok(()), Err)
     }
+}
+
+/// Directory (as path components) every backend copies received files
+/// into: Android and iOS under the app cache, macOS under
+/// `~/Library/Caches`, Windows under the temp dir.
+pub const INCOMING_DIR: &str = "istmo-share/incoming";
+
+fn remove_incoming(path: &Path) -> std::io::Result<()> {
+    let canonical = std::fs::canonicalize(path)?;
+    if !is_in_incoming_dir(&canonical) || !std::fs::symlink_metadata(&canonical)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{} is not a received share file", path.display()),
+        ));
+    }
+    std::fs::remove_file(canonical)
+}
+
+/// Whether `path` (already canonical) lies strictly below a directory
+/// whose last components are [`INCOMING_DIR`].
+fn is_in_incoming_dir(path: &Path) -> bool {
+    let marker: Vec<_> = Path::new(INCOMING_DIR).components().collect();
+    let components: Vec<_> = path.components().collect();
+    // The marker must be followed by at least the file itself.
+    components
+        .windows(marker.len())
+        .enumerate()
+        .any(|(at, window)| window == marker.as_slice() && at + marker.len() < components.len())
 }
 
 /// Stream of [`IncomingShare`]s. Mirrors the receive shapes of

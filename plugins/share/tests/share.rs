@@ -149,8 +149,10 @@ fn inbox_buffers_until_first_subscriber_and_cleans_up() {
     let (rt, _client) = build_runtime(RecordingBackend::default());
     let inbox = ShareInbox::from_runtime(&rt).expect("inbox");
 
-    let file_path =
-        std::env::temp_dir().join(format!("istmo-share-inbox-{}.txt", std::process::id()));
+    let root = std::env::temp_dir().join(format!("istmo-share-inbox-{}", std::process::id()));
+    let entry = root.join(istmo_share::INCOMING_DIR).join("entry");
+    std::fs::create_dir_all(&entry).expect("entry dir");
+    let file_path = entry.join("a.txt");
     std::fs::write(&file_path, b"shared").expect("write");
     inbox
         .publish(IncomingShare {
@@ -173,6 +175,44 @@ fn inbox_buffers_until_first_subscriber_and_cleans_up() {
     ShareInbox::cleanup(&share).expect("cleanup");
     assert!(!file_path.exists());
     ShareInbox::cleanup(&share).expect("cleanup is idempotent");
+    drop(std::fs::remove_dir_all(&root));
+}
+
+#[test]
+fn inbox_cleanup_refuses_files_outside_the_incoming_dir() {
+    let root = std::env::temp_dir().join(format!("istmo-share-escape-{}", std::process::id()));
+    let entry = root.join(istmo_share::INCOMING_DIR).join("entry");
+    std::fs::create_dir_all(&entry).expect("entry dir");
+    let victim = root.join("victim.txt");
+    std::fs::write(&victim, b"keep").expect("write");
+    let file = |path: std::path::PathBuf| IncomingFile {
+        path: path.display().to_string(),
+        name: "x".to_owned(),
+        mime_type: None,
+        size: None,
+    };
+    let mut files = vec![
+        file(victim.clone()),
+        file(entry.join("../../../victim.txt")),
+        // The incoming directory itself is not a received file.
+        file(entry.clone()),
+    ];
+    #[cfg(unix)]
+    {
+        let link = entry.join("link.txt");
+        std::os::unix::fs::symlink(&victim, &link).expect("symlink");
+        files.push(file(link));
+    }
+    let share = IncomingShare {
+        files,
+        ..IncomingShare::default()
+    };
+
+    let err = ShareInbox::cleanup(&share).expect_err("refused");
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(std::fs::read(&victim).expect("victim kept"), b"keep");
+    assert!(entry.is_dir(), "directories are never removed");
+    drop(std::fs::remove_dir_all(&root));
 }
 
 #[test]

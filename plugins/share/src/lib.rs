@@ -58,7 +58,9 @@ mod picked;
 
 mod inbox;
 
-pub use inbox::{INCOMING_CHANNEL, INCOMING_QUEUE_CAPACITY, IncomingStream, ShareInbox};
+pub use inbox::{
+    INCOMING_CHANNEL, INCOMING_DIR, INCOMING_QUEUE_CAPACITY, IncomingStream, ShareInbox,
+};
 
 use istmo_core::CancelToken;
 use istmo_macros::{message, plugin};
