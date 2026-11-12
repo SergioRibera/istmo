@@ -279,16 +279,27 @@ impl BannerSlot {
     /// rect. Carries the raw id rather than a [`NativeHandle`]: a handle
     /// built here would release the live banner if this future were
     /// dropped mid-call.
+    ///
+    /// While this runs, `sync` starts no other updater, so on exit the
+    /// slot reconciles once more: the banner may have been replaced by
+    /// one that is not at the desired rect yet, or the target may have
+    /// moved during a failed call.
     async fn update(self, id: NativeHandleId) {
         loop {
-            let Some(rect) = self.shared.lock().next_update(id) else {
-                return;
+            let rect = {
+                let mut guard = self.shared.lock();
+                match guard.next_update(id) {
+                    Some(rect) => rect,
+                    None => break,
+                }
             };
             let outcome = self.shared.client.update_banner(id, rect).await;
             if !self.shared.lock().update_done(outcome) {
-                return;
+                break;
             }
         }
+        let action = self.shared.lock().reconcile();
+        self.run(action);
     }
 
     async fn hide(self, handle: NativeHandle<Banner>) {
