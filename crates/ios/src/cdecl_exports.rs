@@ -358,6 +358,17 @@ pub unsafe extern "C" fn istmo_ios_submit_call(
     });
 }
 
+/// Cooperatively cancel a Rust-hosted call that Swift started through
+/// [`istmo_ios_submit_call`]. A late or unknown `call_id` is ignored.
+#[unsafe(no_mangle)]
+pub extern "C" fn istmo_ios_submit_cancel(call_id: u64) {
+    ffi_guard("istmo_ios_submit_cancel", (), || {
+        dispatch_inbound(Envelope::new(Frame::Cancel {
+            call_id: CallId(call_id),
+        }));
+    });
+}
+
 /// Fire-and-forget call to a Rust-hosted plugin; no response follows.
 /// Instance id 0 = stateless.
 ///

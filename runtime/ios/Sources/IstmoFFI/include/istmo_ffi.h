@@ -136,6 +136,10 @@ void istmo_ios_submit_call(
     const uint8_t *payload,
     size_t payload_len);
 
+/* Cooperatively cancels a call started with `istmo_ios_submit_call`.
+ * A late or unknown call_id is ignored. */
+void istmo_ios_submit_cancel(uint64_t call_id);
+
 /* Fire-and-forget call: no response follows. instance_id 0 = stateless. */
 void istmo_ios_submit_notify(
     const uint8_t *plugin_id_utf8,

@@ -1,4 +1,5 @@
 use std::os::raw::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -7,7 +8,7 @@ use istmo_core::{
 };
 use istmo_ios::{
     IstmoIosCallbacks, istmo_ios_shutdown, istmo_ios_start, istmo_ios_submit_call,
-    istmo_ios_submit_notify, istmo_ios_submit_response,
+    istmo_ios_submit_cancel, istmo_ios_submit_notify, istmo_ios_submit_response,
 };
 
 const PLUGIN_ID: &str = "test.ios.echo";
@@ -28,10 +29,15 @@ impl Dispatch for EchoHost {
         _instance_id: Option<InstanceId>,
         method: &'a str,
         payload: &'a [u8],
-        _cancel: CancelToken,
+        cancel: CancelToken,
     ) -> DispatchFuture<'a> {
         Box::pin(async move {
             match method {
+                "hang" => {
+                    cancel.cancelled().await;
+                    HANG_CANCELLED.store(true, Ordering::SeqCst);
+                    Ok(Outcome::Ok(Vec::new()))
+                }
                 "echo" => {
                     let ((msg,), _): ((String,), _) =
                         istmo_core::codec::decode(payload).map_err(DispatchError::Decode)?;
@@ -106,6 +112,9 @@ static SINK: OnceLock<ReceivedSink> = OnceLock::new();
 fn sink() -> &'static ReceivedSink {
     SINK.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
 }
+
+/// Set once the host's `hang` call observed its cancel token.
+static HANG_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// Payloads of the `ping` notifications the Rust host received.
 fn pings() -> &'static Mutex<Vec<Vec<u8>>> {
@@ -436,6 +445,32 @@ fn ios_transport_end_to_end() {
             .then_some(())
     });
 
+    // A Swift-side cancel reaches the Rust host's token, and the
+    // cancelled call gets no response.
+    let hang_call_id: u64 = 55;
+    // SAFETY: every pointer/length pair borrows a live buffer.
+    unsafe {
+        istmo_ios_submit_call(
+            hang_call_id,
+            PLUGIN_ID.as_ptr(),
+            PLUGIN_ID.len(),
+            0,
+            "hang".as_ptr(),
+            "hang".len(),
+            std::ptr::null(),
+            0,
+        );
+    }
+    istmo_ios_submit_cancel(hang_call_id);
+    wait_for(|| HANG_CANCELLED.load(Ordering::SeqCst).then_some(()));
+    // Unknown ids are ignored.
+    istmo_ios_submit_cancel(9_999);
+    settle();
+    assert_eq!(
+        received(|r| matches!(r, Received::Respond { call_id, .. } if *call_id == hang_call_id)),
+        0
+    );
+
     // Invalid UTF-8 is rejected before reaching the runtime.
     let bad_utf8 = [0xff_u8, 0xfe];
     let bad_call_id: u64 = 77;
@@ -501,6 +536,7 @@ fn ios_transport_end_to_end() {
             args.len(),
         );
         istmo_ios_submit_response(remote_call_id, true, std::ptr::null(), 0);
+        istmo_ios_submit_cancel(hang_call_id);
         istmo_ios_submit_notify(
             PLUGIN_ID.as_ptr(),
             PLUGIN_ID.len(),
