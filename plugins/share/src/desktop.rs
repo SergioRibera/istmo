@@ -248,8 +248,9 @@ const STAGING_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// name with `create_dir` — which refuses an existing path, so nothing
 /// another local user planted there (a symlink, a pre-made directory)
 /// is ever reused — and owner-only permissions (`0o700`, files
-/// `0o600`). It lives under `$XDG_RUNTIME_DIR/istmo-share/` (private to
-/// the user) or, without one, directly in the sticky temp directory.
+/// `0o600`). It lives under `$XDG_RUNTIME_DIR/istmo-share/` when that
+/// is a directory only this user can write to, otherwise directly in the
+/// sticky temp directory.
 /// [`Staging::purge`] and drop remove it; directories a crashed process
 /// left behind are removed after [`STAGING_TTL`] when the next backend
 /// starts.
@@ -264,6 +265,11 @@ impl Default for Staging {
     fn default() -> Self {
         let parent = Self::parent();
         purge_stale(&parent, STAGING_TTL);
+        let temp = std::env::temp_dir();
+        if parent != temp {
+            // Where staging falls back to when `parent` is not private.
+            purge_stale(&temp, STAGING_TTL);
+        }
         Self {
             parent,
             root: Mutex::new(None),
@@ -290,13 +296,22 @@ impl Staging {
         if let Some(root) = root.as_ref() {
             return Ok(root.clone());
         }
-        if self.parent != std::env::temp_dir() {
+        let temp = std::env::temp_dir();
+        let mut parent = self.parent.as_path();
+        if parent != temp {
             private_dir_builder()
                 .recursive(true)
-                .create(&self.parent)
-                .map_err(|e| io_error(&self.parent, &e))?;
+                .create(parent)
+                .map_err(|e| io_error(parent, &e))?;
+            // `recursive` accepts whatever already sits at that path. A
+            // directory someone else controls could have the staging dir
+            // renamed and swapped under it; the sticky temp dir cannot.
+            if !is_private_dir(parent) {
+                tracing::warn!(dir = %parent.display(), "share staging parent is not private; using the temp dir");
+                parent = temp.as_path();
+            }
         }
-        let created = create_unique_dir(&self.parent)?;
+        let created = create_unique_dir(parent)?;
         *root = Some(created.clone());
         Ok(created)
     }
@@ -457,6 +472,33 @@ fn owned_by_current_user(meta: &std::fs::Metadata) -> bool {
     uid.is_some_and(|uid| uid == meta.uid())
 }
 
+/// Whether `dir` and the directory holding it are real directories of
+/// this user that nobody else can write to.
+#[cfg(unix)]
+fn is_private_dir(dir: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let private = |path: &Path| {
+        std::fs::symlink_metadata(path).is_ok_and(|meta| {
+            meta.is_dir() && owned_by_current_user(&meta) && meta.permissions().mode() & 0o022 == 0
+        })
+    };
+    // The holder (`$XDG_RUNTIME_DIR`) may itself be reached through a
+    // symlink; what matters is the directory it resolves to.
+    let holder_private = dir
+        .parent()
+        .and_then(|holder| std::fs::canonicalize(holder).ok())
+        .is_some_and(|holder| private(&holder));
+    holder_private && private(dir)
+}
+
+#[cfg(not(unix))]
+const fn is_private_dir(_dir: &Path) -> bool {
+    // Only Unix reads `XDG_RUNTIME_DIR`; elsewhere the parent is the
+    // per-user temp directory and never reaches this check.
+    true
+}
+
 #[cfg(not(unix))]
 const fn owned_by_current_user(_meta: &std::fs::Metadata) -> bool {
     // The Windows temp directory is already per user.
@@ -567,6 +609,34 @@ mod tests {
             "dirs without the prefix are never touched"
         );
         drop(std::fs::remove_dir_all(&parent));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_staging_parents_are_not_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let holder =
+            std::env::temp_dir().join(format!("istmo-share-test-holder-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&holder));
+        private_dir_builder().create(&holder).expect("holder");
+        let dir = holder.join("istmo-share");
+        private_dir_builder().create(&dir).expect("dir");
+        assert!(is_private_dir(&dir));
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+        assert!(!is_private_dir(&dir), "world-writable dir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+
+        std::fs::set_permissions(&holder, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+        assert!(!is_private_dir(&dir), "world-writable holder");
+        std::fs::set_permissions(&holder, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+
+        let link = holder.join("link");
+        std::os::unix::fs::symlink(&dir, &link).expect("symlink");
+        assert!(!is_private_dir(&link), "symlink");
+
+        drop(std::fs::remove_dir_all(&holder));
     }
 
     #[test]
