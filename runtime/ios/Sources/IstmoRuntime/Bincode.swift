@@ -104,6 +104,8 @@ public enum Bincode {
         writeBool(&out, value)
     }
 
+    /// Reads `data` from its first byte. `offset` counts from there, not
+    /// from index 0: a `Data` slice keeps its parent's indices.
     public struct Cursor {
         public var data: Data
         public var offset: Int
@@ -112,6 +114,8 @@ public enum Bincode {
             self.offset = 0
         }
         public var remaining: Int { data.count - offset }
+        /// `data` index of the byte `ahead` positions past the cursor.
+        func index(_ ahead: Int = 0) -> Data.Index { data.startIndex + offset + ahead }
     }
 
     public enum DecodeError: Error {
@@ -124,7 +128,7 @@ public enum Bincode {
 
     public static func readU8(_ c: inout Cursor) throws -> UInt8 {
         guard c.remaining >= 1 else { throw DecodeError.unexpectedEnd }
-        let b = c.data[c.offset]
+        let b = c.data[c.index()]
         c.offset += 1
         return b
     }
@@ -210,7 +214,7 @@ public enum Bincode {
 
     public static func readString(_ c: inout Cursor) throws -> String {
         let len = try readLength(&c)
-        let slice = c.data.subdata(in: c.offset ..< c.offset + len)
+        let slice = c.data.subdata(in: c.index() ..< c.index(len))
         c.offset += len
         guard let s = String(data: slice, encoding: .utf8) else {
             throw DecodeError.invalidUtf8
@@ -220,7 +224,7 @@ public enum Bincode {
 
     public static func readData(_ c: inout Cursor) throws -> Data {
         let len = try readLength(&c)
-        let slice = c.data.subdata(in: c.offset ..< c.offset + len)
+        let slice = c.data.subdata(in: c.index() ..< c.index(len))
         c.offset += len
         return slice
     }
@@ -263,8 +267,9 @@ public enum Bincode {
     }
 
     private static func unzigzag(_ value: UInt64) -> Int64 {
-        let raw = Int64(bitPattern: value)
-        return (raw >> 1) ^ -(raw & 1)
+        // The shift must be logical: an arithmetic one sign-extends every
+        // zigzag value with the top bit set (|n| >= 2^62, `Int64.min`).
+        Int64(bitPattern: value >> 1) ^ -Int64(bitPattern: value & 1)
     }
 
     private static func appendLE(_ out: inout Data, _ value: UInt16) {
@@ -289,7 +294,7 @@ public enum Bincode {
         guard c.remaining >= size else { throw DecodeError.unexpectedEnd }
         var out: T = 0
         for i in 0 ..< size {
-            out |= T(c.data[c.offset + i]) << (i * 8)
+            out |= T(c.data[c.index(i)]) << (i * 8)
         }
         c.offset += size
         return out
