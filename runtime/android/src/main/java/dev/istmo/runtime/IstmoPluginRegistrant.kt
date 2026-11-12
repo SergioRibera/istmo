@@ -10,9 +10,9 @@ import android.content.Context
  *
  * Handlers outlive any single activity, so context-bound backends are
  * built with the application context. Backends that need the activity
- * are registered through [registerActivityPlugins] and named in
- * [activityPluginIds], so [IstmoHost] can rebind or drop them when that
- * activity goes away instead of keeping it reachable.
+ * go through [registerActivityPlugins] and [releaseActivityPlugins], so
+ * [IstmoHost] can move them to a new activity or drop them instead of
+ * keeping a finished one reachable.
  */
 interface IstmoPluginRegistrant {
     /**
@@ -22,10 +22,17 @@ interface IstmoPluginRegistrant {
      */
     fun registerAll(context: Context)
 
-    /** Ids of the plugins whose backend holds the host activity. */
-    val activityPluginIds: List<String>
-        get() = emptyList()
-
-    /** Register, or re-register, only the activity-bound plugins with [activity]. */
+    /**
+     * Give [activity] to the activity-bound plugins: an [IstmoActivityBound]
+     * backend already registered is handed it, any other is built and
+     * registered anew.
+     */
     fun registerActivityPlugins(activity: Activity) {}
+
+    /**
+     * No activity is left: unregister the activity-bound backends that
+     * would otherwise keep the last one alive. [IstmoActivityBound]
+     * backends hold it weakly and stay registered.
+     */
+    fun releaseActivityPlugins() {}
 }

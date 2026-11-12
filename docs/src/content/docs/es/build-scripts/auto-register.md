@@ -76,9 +76,7 @@ encuentra sin configuración:
 package dev.istmo.generated
 
 object IstmoPluginRegistry : IstmoPluginRegistrant {
-    override val activityPluginIds: List<String> = listOf(
-        com.myapp.gen.ShareDispatcher.PLUGIN_ID,
-    )
+    private var shareBackend: Any? = null
 
     override fun registerAll(context: Context) {
         val appContext = context.applicationContext ?: context
@@ -97,13 +95,29 @@ object IstmoPluginRegistry : IstmoPluginRegistrant {
     }
 
     override fun registerActivityPlugins(activity: Activity) {
-        IstmoRuntime.registerHandler(
-            com.myapp.gen.ShareDispatcher.PLUGIN_ID,
-            com.myapp.gen.ShareDispatcher(
-                dev.istmo.plugins.share.ShareBackendImpl(hostActivity<androidx.activity.ComponentActivity>(activity, "istmo.share")),
-                com.myapp.gen.ShareCodecsImpl(),
-            ),
-        )
+        hostActivity<androidx.activity.ComponentActivity>(activity, "istmo.share").let { host ->
+            val current = shareBackend
+            if (current is IstmoActivityBound) {
+                current.attachActivity(host)
+            } else {
+                val backend = dev.istmo.plugins.share.ShareBackendImpl(host)
+                shareBackend = backend
+                IstmoRuntime.registerHandler(
+                    com.myapp.gen.ShareDispatcher.PLUGIN_ID,
+                    com.myapp.gen.ShareDispatcher(
+                        backend,
+                        com.myapp.gen.ShareCodecsImpl(),
+                    ),
+                )
+            }
+        }
+    }
+
+    override fun releaseActivityPlugins() {
+        if (shareBackend !is IstmoActivityBound) {
+            IstmoRuntime.unregisterHandler(com.myapp.gen.ShareDispatcher.PLUGIN_ID)
+            shareBackend = null
+        }
     }
     // …
 }
@@ -151,10 +165,16 @@ ios_backend         = "ShareBackendImpl"
   un error claro cuando la activity host no es del tipo requerido. Los
   handlers son de todo el proceso, así que los backends `"context"`
   reciben el application context; los atados a una activity siguen a
-  la activity viva creada más recientemente (`IstmoHost` los vuelve a
-  registrar en cada `onCreate`) y se desregistran cuando se destruye la
-  última, así una activity terminada nunca queda alcanzable desde el
-  runtime.
+  la activity viva creada más recientemente. Un backend que implementa
+  `dev.istmo.runtime.IstmoActivityBound` se construye una sola vez por
+  proceso, guarda la activity con una referencia débil y recibe cada
+  activity nueva por `attachActivity`, así su estado sobrevive a la
+  recreación. Cualquier otro backend atado a una activity se reconstruye
+  en cada `onCreate` (necesario si registra launchers de activity
+  result) y se desregistra cuando se destruye la última activity, así
+  una activity terminada nunca queda alcanzable desde el runtime.
+  `IstmoHost.currentActivity()` devuelve la activity host actual para
+  el código que la busca en el momento.
 - **`ios_backend`**: tipo Swift, construido sin argumentos. Default:
   `<T>BackendImpl` / `<T>FactoryImpl`.
 

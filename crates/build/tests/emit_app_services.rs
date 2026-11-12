@@ -422,7 +422,7 @@ fn emit_app_writes_registry_in_fixed_package_and_drops_legacy_one() {
     )
     .unwrap();
     assert!(
-        registry.contains("dev.acme.DummyBackendImpl(hostActivity<androidx.activity.ComponentActivity>(activity, \"myapp.dummy\"))"),
+        registry.contains("val backend = dev.acme.DummyBackendImpl(host)"),
         "{registry}"
     );
     assert!(registry.contains("com.example.app.gen.DummyDispatcher.PLUGIN_ID"));

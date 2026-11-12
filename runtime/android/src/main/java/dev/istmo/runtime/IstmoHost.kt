@@ -18,8 +18,10 @@ import java.lang.ref.WeakReference
  *
  * Plugin handlers are process-wide, so only plugins whose backend needs
  * an activity are tied to one: they follow the most recently created
- * live activity and are unregistered once none is left, which keeps a
- * finished activity from staying reachable through the runtime.
+ * live activity. [IstmoActivityBound] backends are built once and handed
+ * each activity; other activity-bound backends are rebuilt per activity
+ * and unregistered once none is left, so a finished activity never stays
+ * reachable through the runtime.
  */
 object IstmoHost {
 
@@ -53,7 +55,7 @@ object IstmoHost {
      * given.
      *
      * Context-bound plugins are registered once per process; activity-bound
-     * ones are re-registered with every new activity.
+     * ones are given every new activity (see [IstmoActivityBound]).
      *
      * Also wires [IstmoBuiltinObservers] so wire-only system plugins
      * ([dev.istmo.runtime] system-info / theme / network / battery…)
@@ -82,7 +84,7 @@ object IstmoHost {
 
     /**
      * Release what [activity] holds: activity-bound plugins move to the
-     * most recent activity still alive, or are unregistered when there is
+     * most recent activity still alive, or are released when there is
      * none (a configuration change leaves them to the recreated activity).
      *
      * Builtin observers stop once the last istmo activity is finishing for
@@ -103,9 +105,7 @@ object IstmoHost {
             // recreated activity counts itself again in onCreate.
             liveActivities.removeAll { ref -> ref.get().let { it == null || it === activity } }
             if (pluginActivity?.get() === activity && !activity.isChangingConfigurations) {
-                rebindTo = liveActivities
-                    .asReversed()
-                    .firstNotNullOfOrNull { ref -> ref.get()?.takeUnless { it.isFinishing || it.isDestroyed } }
+                rebindTo = latestLiveActivity()
                 if (rebindTo == null) {
                     pluginActivity = null
                     dropActivityPlugins = true
@@ -118,9 +118,23 @@ object IstmoHost {
         }
         rebindTo?.let(::bindActivityPlugins)
         if (dropActivityPlugins) {
-            registrant()?.activityPluginIds?.forEach(IstmoRuntime::unregisterHandler)
+            registrant()?.releaseActivityPlugins()
         }
     }
+
+    /**
+     * The most recently created istmo activity that is still alive, or
+     * `null`. Backends that outlive activities look their host up here (or
+     * through [IstmoActivityBound]) instead of keeping one strongly.
+     */
+    @JvmStatic
+    fun currentActivity(): Activity? = synchronized(this) { latestLiveActivity() }
+
+    /** Caller holds the lock. */
+    private fun latestLiveActivity(): Activity? =
+        liveActivities.asReversed().firstNotNullOfOrNull { ref ->
+            ref.get()?.takeUnless { it.isFinishing || it.isDestroyed }
+        }
 
     /**
      * Wire [IstmoBuiltinObservers] so wire-only system plugins publish
@@ -157,7 +171,6 @@ object IstmoHost {
 
     private fun bindActivityPlugins(activity: Activity) {
         val registrant = registrant() ?: return
-        if (registrant.activityPluginIds.isEmpty()) return
         registrant.registerActivityPlugins(activity)
         synchronized(this) { pluginActivity = WeakReference(activity) }
     }

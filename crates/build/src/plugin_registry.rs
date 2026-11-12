@@ -79,25 +79,72 @@ impl RegistryEntry {
         matches!(self.android_arg, AndroidBackendArg::Activity(_))
     }
 
-    /// Register call for this plugin; `arg` is the Kotlin expression
-    /// handed to the backend constructor.
-    fn write_kotlin(&self, out: &mut String, codegen_package: &str, arg: &str) {
-        let ty = &self.type_name;
-        let backend = self
-            .android_class
+    fn backend_class(&self, codegen_package: &str) -> String {
+        self.android_class
             .clone()
-            .unwrap_or_else(|| format!("{codegen_package}.{}", self.default_class()));
-        out.push_str("        IstmoRuntime.registerHandler(\n");
+            .unwrap_or_else(|| format!("{codegen_package}.{}", self.default_class()))
+    }
+
+    /// Name of the registry field caching an activity-bound backend.
+    fn backend_field(&self) -> String {
+        let mut chars = self.type_name.chars();
+        chars.next().map_or_else(String::new, |first| {
+            format!("{}{}Backend", first.to_lowercase(), chars.as_str())
+        })
+    }
+
+    /// `IstmoRuntime.registerHandler(...)` for this plugin at `indent`;
+    /// `backend` is the Kotlin expression for the backend instance.
+    fn write_register(&self, out: &mut String, codegen_package: &str, indent: &str, backend: &str) {
+        let ty = &self.type_name;
+        writeln!(out, "{indent}IstmoRuntime.registerHandler(").ok();
         writeln!(
             out,
-            "            {codegen_package}.{ty}Dispatcher.PLUGIN_ID,"
+            "{indent}    {codegen_package}.{ty}Dispatcher.PLUGIN_ID,"
         )
         .ok();
-        writeln!(out, "            {codegen_package}.{ty}Dispatcher(").ok();
-        writeln!(out, "                {backend}({arg}),").ok();
-        writeln!(out, "                {codegen_package}.{ty}CodecsImpl(),").ok();
-        out.push_str("            ),\n");
-        out.push_str("        )\n");
+        writeln!(out, "{indent}    {codegen_package}.{ty}Dispatcher(").ok();
+        writeln!(out, "{indent}        {backend},").ok();
+        writeln!(out, "{indent}        {codegen_package}.{ty}CodecsImpl(),").ok();
+        writeln!(out, "{indent}    ),").ok();
+        writeln!(out, "{indent})").ok();
+    }
+
+    /// Hand `activity` to the cached backend when it is
+    /// `IstmoActivityBound`, otherwise build and register a new one.
+    fn write_kotlin_activity(&self, out: &mut String, codegen_package: &str, class: &str) {
+        let field = self.backend_field();
+        let backend = self.backend_class(codegen_package);
+        writeln!(
+            out,
+            "        hostActivity<{class}>(activity, {}).let {{ host ->",
+            kt_string(&self.plugin_id)
+        )
+        .ok();
+        writeln!(out, "            val current = {field}").ok();
+        out.push_str("            if (current is IstmoActivityBound) {\n");
+        out.push_str("                current.attachActivity(host)\n");
+        out.push_str("            } else {\n");
+        writeln!(out, "                val backend = {backend}(host)").ok();
+        writeln!(out, "                {field} = backend").ok();
+        self.write_register(out, codegen_package, "                ", "backend");
+        out.push_str("            }\n");
+        out.push_str("        }\n");
+    }
+
+    /// Drop a backend that would keep its activity alive; an
+    /// `IstmoActivityBound` one holds it weakly and stays registered.
+    fn write_kotlin_release(&self, out: &mut String, codegen_package: &str) {
+        let field = self.backend_field();
+        writeln!(out, "        if ({field} !is IstmoActivityBound) {{").ok();
+        writeln!(
+            out,
+            "            IstmoRuntime.unregisterHandler({codegen_package}.{}Dispatcher.PLUGIN_ID)",
+            self.type_name
+        )
+        .ok();
+        writeln!(out, "            {field} = null").ok();
+        out.push_str("        }\n");
     }
 }
 
@@ -108,10 +155,11 @@ impl RegistryEntry {
 ///
 /// Handlers live in the process-wide `IstmoRuntime`, so context-bound
 /// backends get the application context and never pin an activity.
-/// Activity-bound backends are registered apart through
-/// `registerActivityPlugins` and listed in `activityPluginIds`, which
-/// lets `IstmoHost` rebind them to another live activity, or drop them,
-/// once their activity is destroyed.
+/// Activity-bound backends go through `registerActivityPlugins`, which
+/// `IstmoHost` calls for every new activity: a backend implementing
+/// `IstmoActivityBound` is built once and handed each activity, any
+/// other is rebuilt. `releaseActivityPlugins` unregisters the latter
+/// once no activity is left.
 #[must_use]
 pub fn generate_kotlin_plugin_registry(codegen_package: &str, entries: &[RegistryEntry]) -> String {
     let (activity_bound, context_bound): (Vec<_>, Vec<_>) =
@@ -131,21 +179,21 @@ pub fn generate_kotlin_plugin_registry(codegen_package: &str, entries: &[Registr
     out.push_str("import android.content.Context\n");
     if needs_activity {
         out.push_str("import android.util.Log\n");
+        out.push_str("import dev.istmo.runtime.IstmoActivityBound\n");
     }
     out.push_str("import dev.istmo.runtime.IstmoPluginRegistrant\n");
     out.push_str("import dev.istmo.runtime.IstmoRuntime\n\n");
     out.push_str("object IstmoPluginRegistry : IstmoPluginRegistrant {\n");
+    for entry in &activity_bound {
+        writeln!(
+            &mut out,
+            "    private var {}: Any? = null",
+            entry.backend_field()
+        )
+        .ok();
+    }
     if needs_activity {
-        out.push_str("    override val activityPluginIds: List<String> = listOf(\n");
-        for entry in &activity_bound {
-            writeln!(
-                &mut out,
-                "        {codegen_package}.{}Dispatcher.PLUGIN_ID,",
-                entry.type_name
-            )
-            .ok();
-        }
-        out.push_str("    )\n\n");
+        out.push('\n');
     }
     out.push_str("    override fun registerAll(context: Context) {\n");
     if entries.is_empty() {
@@ -155,7 +203,8 @@ pub fn generate_kotlin_plugin_registry(codegen_package: &str, entries: &[Registr
         out.push_str("        val appContext = context.applicationContext ?: context\n");
     }
     for entry in &context_bound {
-        entry.write_kotlin(&mut out, codegen_package, "appContext");
+        let backend = format!("{}(appContext)", entry.backend_class(codegen_package));
+        entry.write_register(&mut out, codegen_package, "        ", &backend);
     }
     if needs_activity {
         out.push_str(KOTLIN_REGISTER_ACTIVITY_PLUGINS_CALL);
@@ -164,14 +213,14 @@ pub fn generate_kotlin_plugin_registry(codegen_package: &str, entries: &[Registr
     if needs_activity {
         out.push_str("\n    override fun registerActivityPlugins(activity: Activity) {\n");
         for entry in &activity_bound {
-            let AndroidBackendArg::Activity(class) = &entry.android_arg else {
-                continue;
-            };
-            let arg = format!(
-                "hostActivity<{class}>(activity, {})",
-                kt_string(&entry.plugin_id)
-            );
-            entry.write_kotlin(&mut out, codegen_package, &arg);
+            if let AndroidBackendArg::Activity(class) = &entry.android_arg {
+                entry.write_kotlin_activity(&mut out, codegen_package, class);
+            }
+        }
+        out.push_str("    }\n");
+        out.push_str("\n    override fun releaseActivityPlugins() {\n");
+        for entry in &activity_bound {
+            entry.write_kotlin_release(&mut out, codegen_package);
         }
         out.push_str("    }\n");
         out.push_str(KOTLIN_HOST_ACTIVITY_HELPER);
@@ -329,7 +378,7 @@ mod tests {
         assert!(src.contains("com.example.gen.ADispatcher.PLUGIN_ID"));
         assert!(src.contains("com.example.gen.ABackendImpl(appContext)"));
         assert!(src.contains("com.example.gen.BCodecsImpl()"));
-        assert!(!src.contains("activityPluginIds"));
+        assert!(!src.contains("IstmoActivityBound"));
         assert!(!src.contains("registerActivityPlugins"));
     }
 
@@ -340,15 +389,23 @@ mod tests {
         share.android_arg =
             AndroidBackendArg::Activity("androidx.activity.ComponentActivity".into());
         let src = generate_kotlin_plugin_registry("dev.istmo.runtime", &[entry("A", false), share]);
-        assert!(src.contains(
-            "    override val activityPluginIds: List<String> = listOf(\n        \
-             dev.istmo.runtime.ShareDispatcher.PLUGIN_ID,\n    )\n"
-        ));
+        assert!(src.contains("    private var shareBackend: Any? = null\n"));
         assert!(src.contains("override fun registerActivityPlugins(activity: Activity) {"));
         assert!(src.contains(
-            "dev.istmo.plugins.share.ShareBackendImpl(\
-             hostActivity<androidx.activity.ComponentActivity>(activity, \"acme.share\")),"
+            "        hostActivity<androidx.activity.ComponentActivity>(activity, \"acme.share\").let { host ->\n\
+             \x20           val current = shareBackend\n\
+             \x20           if (current is IstmoActivityBound) {\n\
+             \x20               current.attachActivity(host)\n\
+             \x20           } else {\n\
+             \x20               val backend = dev.istmo.plugins.share.ShareBackendImpl(host)\n\
+             \x20               shareBackend = backend\n"
         ));
+        assert!(src.contains(
+            "        if (shareBackend !is IstmoActivityBound) {\n\
+             \x20           IstmoRuntime.unregisterHandler(dev.istmo.runtime.ShareDispatcher.PLUGIN_ID)\n\
+             \x20           shareBackend = null\n"
+        ));
+        assert!(src.contains("import dev.istmo.runtime.IstmoActivityBound"));
         assert!(src.contains("registerActivityPlugins(context)"));
         assert!(src.contains("private inline fun <reified A : Activity> hostActivity"));
         assert!(src.contains("import android.app.Activity"));
