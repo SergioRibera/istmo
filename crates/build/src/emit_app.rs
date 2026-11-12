@@ -229,11 +229,10 @@ pub fn emit_app_with(opts: AppOpts) {
 
         let plugin_entry = plugin_entries.get(contract.plugin_id.as_str()).copied();
         let plugin_declared_auto = plugin_entry.is_none_or(|p| p.auto_register);
-        let registry_entry =
-            RegistryEntry::from_contract(contract).map(|entry| match plugin_entry {
-                Some(plugin) => entry.with_plugin(plugin),
-                None => entry,
-            });
+        let mut registry_entry = RegistryEntry::from_contract(contract);
+        if let Some(plugin) = plugin_entry {
+            registry_entry = registry_entry.with_plugin(plugin);
+        }
         let app_override = overrides.and_then(|o| o.auto_register);
         let auto_register_this = app_auto_register
             && plugin_declared_auto
@@ -255,7 +254,7 @@ pub fn emit_app_with(opts: AppOpts) {
                     };
                     emit_kotlin(&android_root, pkg, contract, role, opts.seed_backends);
                     if auto_register_this {
-                        kotlin_registry.extend(registry_entry.clone());
+                        kotlin_registry.push(registry_entry.clone());
                     }
                 }
                 Platform::Ios => {
@@ -278,7 +277,7 @@ pub fn emit_app_with(opts: AppOpts) {
                         opts.seed_backends,
                     );
                     if auto_register_this {
-                        swift_registry.extend(registry_entry.clone());
+                        swift_registry.push(registry_entry.clone());
                     }
                 }
             }

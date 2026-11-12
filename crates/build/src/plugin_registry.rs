@@ -15,6 +15,7 @@
 
 use std::fmt::Write as _;
 
+use crate::codegen::kt_string;
 use crate::contract::Contract;
 use crate::manifest::{AndroidBackendArg, PluginEntry};
 
@@ -44,15 +45,15 @@ pub struct RegistryEntry {
 
 impl RegistryEntry {
     #[must_use]
-    pub fn from_contract(contract: &Contract) -> Option<Self> {
-        Some(Self {
+    pub fn from_contract(contract: &Contract) -> Self {
+        Self {
             plugin_id: contract.plugin_id.clone(),
             type_name: contract.type_name.clone(),
             stateful: contract.init.is_some(),
             android_class: None,
             android_arg: AndroidBackendArg::Context,
             ios_class: None,
-        })
+        }
     }
 
     /// Apply the backend overrides the plugin declares in its
@@ -85,8 +86,8 @@ impl RegistryEntry {
             AndroidBackendArg::Activity(class) => {
                 writeln!(
                     out,
-                    "        hostActivity<{class}>(context, \"{}\")?.let {{ activity ->",
-                    self.plugin_id
+                    "        hostActivity<{class}>(context, {})?.let {{ activity ->",
+                    kt_string(&self.plugin_id)
                 )
                 .ok();
                 ("            ", "activity")
@@ -257,7 +258,7 @@ mod tests {
     #[test]
     fn stateless_contract_becomes_entry() {
         let c = stateless("acme.foo", "Foo");
-        let entry = RegistryEntry::from_contract(&c).unwrap();
+        let entry = RegistryEntry::from_contract(&c);
         assert_eq!(entry.plugin_id, "acme.foo");
         assert_eq!(entry.type_name, "Foo");
         assert!(!entry.stateful);
@@ -268,7 +269,7 @@ mod tests {
     fn stateful_contract_records_stateful_flag() {
         let mut c = stateless("acme.bar", "Bar");
         c.init = Some(crate::contract::TypeRef::U32);
-        let entry = RegistryEntry::from_contract(&c).unwrap();
+        let entry = RegistryEntry::from_contract(&c);
         assert!(entry.stateful);
     }
 
