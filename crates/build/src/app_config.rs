@@ -525,10 +525,9 @@ mod tests {
     fn single_instance_follows_document_types() {
         let plain = AppConfig::parse("[app]\nname = \"x\"\n").unwrap();
         assert!(!plain.single_instance());
-        let with_docs = AppConfig::parse(
-            "[[app.document_type]]\nname = \"PDF\"\nextensions = [\"pdf\"]\n",
-        )
-        .unwrap();
+        let with_docs =
+            AppConfig::parse("[[app.document_type]]\nname = \"PDF\"\nextensions = [\"pdf\"]\n")
+                .unwrap();
         assert!(with_docs.single_instance());
         let opted_out = AppConfig::parse(
             "[app]\nsingle_instance = false\n[[app.document_type]]\nname = \"PDF\"\nextensions = [\"pdf\"]\n",

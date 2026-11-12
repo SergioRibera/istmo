@@ -573,19 +573,12 @@ fn encode_png(image: &DynamicImage) -> Result<Vec<u8>, IconError> {
 }
 
 fn write_bytes_if_changed(dest: &Path, contents: &[u8]) -> Result<(), IconError> {
-    if fs::read(dest).is_ok_and(|existing| existing == contents) {
-        return Ok(());
-    }
-    let write = || -> std::io::Result<()> {
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(dest, contents)
-    };
-    write().map_err(|source| IconError::Write {
-        path: dest.to_path_buf(),
-        source,
-    })
+    crate::fsx::write_if_changed(dest, contents)
+        .map(drop)
+        .map_err(|source| IconError::Write {
+            path: dest.to_path_buf(),
+            source,
+        })
 }
 
 #[cfg(test)]

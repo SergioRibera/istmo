@@ -168,39 +168,43 @@ pub fn generate_launchd_plist(contract: &DesktopServiceContract) -> String {
     let _ = writeln!(out, "<plist version=\"1.0\">");
     let _ = writeln!(out, "<dict>");
     let _ = writeln!(out, "    <key>Label</key>");
-    let _ = writeln!(out, "    <string>{}</string>", xml_escape(&contract.label));
+    let _ = writeln!(
+        out,
+        "    <string>{}</string>",
+        crate::xml::escape(&contract.label)
+    );
     let _ = writeln!(out, "    <key>ProgramArguments</key>");
     let _ = writeln!(out, "    <array>");
     let _ = writeln!(
         out,
         "        <string>{}</string>",
-        xml_escape(&contract.exec_path)
+        crate::xml::escape(&contract.exec_path)
     );
     for arg in &contract.args {
-        let _ = writeln!(out, "        <string>{}</string>", xml_escape(arg));
+        let _ = writeln!(out, "        <string>{}</string>", crate::xml::escape(arg));
     }
     let _ = writeln!(out, "    </array>");
     if let Some(wd) = &contract.working_directory {
         let _ = writeln!(out, "    <key>WorkingDirectory</key>");
-        let _ = writeln!(out, "    <string>{}</string>", xml_escape(wd));
+        let _ = writeln!(out, "    <string>{}</string>", crate::xml::escape(wd));
     }
     if !contract.env.is_empty() {
         let _ = writeln!(out, "    <key>EnvironmentVariables</key>");
         let _ = writeln!(out, "    <dict>");
         for (k, v) in &contract.env {
-            let _ = writeln!(out, "        <key>{}</key>", xml_escape(k));
-            let _ = writeln!(out, "        <string>{}</string>", xml_escape(v));
+            let _ = writeln!(out, "        <key>{}</key>", crate::xml::escape(k));
+            let _ = writeln!(out, "        <string>{}</string>", crate::xml::escape(v));
         }
         let _ = writeln!(out, "    </dict>");
     }
     if contract.scope == ServiceScope::System {
         if let Some(user) = &contract.user {
             let _ = writeln!(out, "    <key>UserName</key>");
-            let _ = writeln!(out, "    <string>{}</string>", xml_escape(user));
+            let _ = writeln!(out, "    <string>{}</string>", crate::xml::escape(user));
         }
         if let Some(group) = &contract.group {
             let _ = writeln!(out, "    <key>GroupName</key>");
-            let _ = writeln!(out, "    <string>{}</string>", xml_escape(group));
+            let _ = writeln!(out, "    <string>{}</string>", crate::xml::escape(group));
         }
     }
     let run_at_load = matches!(contract.start_type, StartType::Auto);
@@ -454,21 +458,6 @@ fn escape_double_quote(value: &str) -> String {
                 out.push('\\');
                 out.push(ch);
             }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-fn xml_escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
             other => out.push(other),
         }
     }

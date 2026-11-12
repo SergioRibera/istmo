@@ -11,7 +11,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::app_icon::{AppIcon, IconError};
@@ -158,13 +157,12 @@ fn rc_path(path: &Path) -> String {
 }
 
 fn write(path: &Path, contents: &str) -> Result<(), WindowsResourceError> {
-    if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
-        return Ok(());
-    }
-    fs::write(path, contents).map_err(|source| WindowsResourceError::Write {
-        path: path.to_path_buf(),
-        source,
-    })
+    crate::fsx::write_if_changed(path, contents.as_bytes())
+        .map(drop)
+        .map_err(|source| WindowsResourceError::Write {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 #[cfg(test)]

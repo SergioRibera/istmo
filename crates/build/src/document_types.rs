@@ -308,7 +308,11 @@ impl DocumentTypes {
                     out.push_str("    <data android:scheme=\"file\"/>\n");
                 }
                 for mime in &mimes {
-                    let _ = writeln!(out, "    <data android:mimeType=\"{}\"/>", xml_escape(mime));
+                    let _ = writeln!(
+                        out,
+                        "    <data android:mimeType=\"{}\"/>",
+                        crate::xml::escape(mime)
+                    );
                 }
                 out.push_str("</intent-filter>\n");
             }
@@ -326,7 +330,7 @@ impl DocumentTypes {
             out.push_str("    <data android:host=\"*\"/>\n");
             out.push_str("    <data android:mimeType=\"*/*\"/>\n");
             for ext in &exported_exts {
-                let ext = xml_escape(ext);
+                let ext = crate::xml::escape(ext);
                 for dots in 0..4 {
                     let prefix = ".*\\\\.".repeat(dots);
                     let _ = writeln!(
@@ -400,7 +404,7 @@ fn plist_string(out: &mut String, depth: usize, key: &str, value: &str) {
     let _ = writeln!(
         out,
         "{indent}<key>{key}</key>\n{indent}<string>{}</string>",
-        xml_escape(value)
+        crate::xml::escape(value)
     );
 }
 
@@ -411,7 +415,11 @@ fn plist_array(out: &mut String, depth: usize, key: &str, values: &[String]) {
     let indent = "    ".repeat(depth);
     let _ = writeln!(out, "{indent}<key>{key}</key>\n{indent}<array>");
     for value in values {
-        let _ = writeln!(out, "{indent}    <string>{}</string>", xml_escape(value));
+        let _ = writeln!(
+            out,
+            "{indent}    <string>{}</string>",
+            crate::xml::escape(value)
+        );
     }
     let _ = writeln!(out, "{indent}</array>");
 }
@@ -461,21 +469,6 @@ fn invalid(key: &str, value: &str, expected: &'static str) -> ManifestError {
         value: value.to_owned(),
         expected,
     }
-}
-
-fn xml_escape(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for ch in raw.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

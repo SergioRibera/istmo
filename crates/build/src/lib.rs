@@ -61,12 +61,14 @@ pub mod builtins;
 mod codegen;
 pub mod contract;
 pub mod desktop;
+mod directive;
 pub mod doc_extract;
 pub mod doctor;
 pub mod document_types;
 pub mod emit_app;
 pub mod entitlements;
 pub mod extract;
+mod fsx;
 pub mod handover;
 pub mod ios;
 pub mod ios_project;
@@ -86,6 +88,7 @@ pub mod swift_types;
 pub mod windows_resources;
 pub mod wired_plugins;
 pub mod worker;
+mod xml;
 
 pub use crate::app_config::{
     AppConfig, AppId, AppIdentity, AppMetadata, AppPluginOpts, CrateInfo, Platform, Role,

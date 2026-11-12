@@ -130,7 +130,7 @@ pub fn emit_app_with(opts: AppOpts) {
         return;
     }
     for source in app.icon.source_files() {
-        println!("cargo:rerun-if-changed={}", source.display());
+        crate::directive::rerun_if_changed(source);
     }
     emit_desktop_icon(&app, &dep_manifests_by_links, app_manifest.as_ref());
     let ios_app_dir = opts
@@ -296,7 +296,7 @@ pub fn emit_app_with(opts: AppOpts) {
         }
         // Set by the `io.github.sergioribera.istmo` Gradle plugin to force a rewrite of
         // `android/.istmo/istmo.json` when it bootstraps the metadata.
-        println!("cargo:rerun-if-env-changed=ISTMO_METADATA_REFRESH");
+        crate::directive::rerun_if_env_changed("ISTMO_METADATA_REFRESH");
         if std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "android") {
             sync_android_project(
                 &android_root,
@@ -374,9 +374,9 @@ pub fn emit_app_with(opts: AppOpts) {
     )
     .report();
 
-    println!("cargo:rerun-if-changed=build.rs");
+    crate::directive::rerun_if_changed(Path::new("build.rs"));
     if manifest_path.exists() {
-        println!("cargo:rerun-if-changed=istmo.toml");
+        crate::directive::rerun_if_changed(Path::new("istmo.toml"));
     }
 }
 
@@ -1036,7 +1036,7 @@ fn merge_plist_fragments(
         if !path.is_file() {
             continue;
         }
-        println!("cargo:rerun-if-changed={}", path.display());
+        crate::directive::rerun_if_changed(&path);
         if let Err(err) = fragments.add_file(name, &path) {
             println!("cargo::warning=istmo-build: {err}");
         }
@@ -1105,37 +1105,13 @@ pub(crate) fn relativise(base: &Path, target: &Path) -> Option<String> {
     Some(out.to_string_lossy().into_owned())
 }
 
-pub(crate) fn write_if_changed(dest: &Path, contents: &str) {
-    let run = || -> std::io::Result<()> {
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        if let Ok(existing) = fs::read_to_string(dest) {
-            if existing == contents {
-                return Ok(());
-            }
-        }
-        fs::write(dest, contents)
-    };
-    if let Err(err) = run() {
-        println!(
-            "cargo::warning=istmo-build: failed to write {}: {err}",
-            dest.display()
-        );
-    }
-}
+pub(crate) use crate::fsx::write_generated as write_if_changed;
 
 fn write_if_absent(dest: &Path, contents: &str) {
     if dest.exists() {
         return;
     }
-    let run = || -> std::io::Result<()> {
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(dest, contents)
-    };
-    if let Err(err) = run() {
+    if let Err(err) = crate::fsx::write_if_changed(dest, contents.as_bytes()) {
         println!(
             "cargo::warning=istmo-build: failed to seed {}: {err}",
             dest.display()
@@ -1396,11 +1372,11 @@ fn sync_assets(
 
     for (_links, payload) in &dep_assets {
         for asset in &payload.resolved {
-            println!("cargo:rerun-if-changed={}", asset.source().display());
+            crate::directive::rerun_if_changed(asset.source());
         }
     }
     for asset in &app_assets {
-        println!("cargo:rerun-if-changed={}", asset.source().display());
+        crate::directive::rerun_if_changed(asset.source());
     }
 
     stage_desktop_assets(&app_assets, &dep_assets)

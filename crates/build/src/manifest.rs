@@ -267,11 +267,11 @@ impl InfoPlistEntry {
     #[must_use]
     pub fn render(&self) -> String {
         let value = match &self.value {
-            InfoPlistValue::String(s) => format!("<string>{}</string>", xml_escape(s)),
+            InfoPlistValue::String(s) => format!("<string>{}</string>", crate::xml::escape(s)),
             InfoPlistValue::Bool(true) => "<true/>".to_owned(),
             InfoPlistValue::Bool(false) => "<false/>".to_owned(),
         };
-        format!("<key>{}</key>\n{value}\n", xml_escape(&self.key))
+        format!("<key>{}</key>\n{value}\n", crate::xml::escape(&self.key))
     }
 
     /// Parse every key of an `info_plist` TOML table. `context` is the
@@ -301,21 +301,6 @@ impl InfoPlistEntry {
             })
             .collect()
     }
-}
-
-fn xml_escape(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for ch in raw.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
@@ -1254,7 +1239,7 @@ fn static_field(context: &'static str, field: &'static str) -> &'static str {
 
 pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
     let path = path.as_ref();
-    println!("cargo:rerun-if-changed={}", path.display());
+    crate::directive::rerun_if_changed(path);
     let manifest = Manifest::from_path(path).unwrap_or_else(|err| {
         panic!("istmo-build: {err}");
     });
@@ -1272,7 +1257,7 @@ pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
             panic!("istmo-build: {err}");
         });
         for asset in &resolved {
-            println!("cargo:rerun-if-changed={}", asset.source().display());
+            crate::directive::rerun_if_changed(asset.source());
         }
         let payload = AssetsPayload {
             plugin_ids: manifest.plugin_ids().map(str::to_owned).collect(),
@@ -1292,7 +1277,7 @@ pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
         let dir = native_root.join(platform);
         if dir.is_dir() {
             let display = fs::canonicalize(&dir).unwrap_or(dir);
-            println!("cargo:rerun-if-changed={}", display.display());
+            crate::directive::rerun_if_changed(&display);
             println!("cargo:ISTMO_NATIVE_{env_suffix}={}", display.display());
         }
     }
@@ -1338,7 +1323,7 @@ pub fn emit_from(manifest_path: impl AsRef<Path>, source_path: impl AsRef<Path>)
 
     let has_client = manifest.plugins.iter().any(|p| p.client_type.is_some());
     if has_client {
-        println!("cargo:rerun-if-changed={}", source_path.display());
+        crate::directive::rerun_if_changed(source_path);
     }
 
     for plugin in &manifest.plugins {
@@ -1415,7 +1400,7 @@ pub fn resolve_wiring(
 pub fn emit_wiring_env(app_manifest_path: Option<&Path>) -> ResolvedWiring {
     let dep_manifests = crate::handover::collect_dep_manifests();
     let app_manifest = app_manifest_path.and_then(|path| {
-        println!("cargo:rerun-if-changed={}", path.display());
+        crate::directive::rerun_if_changed(path);
         match Manifest::from_path(path) {
             Ok(m) => Some(m),
             Err(err) => {

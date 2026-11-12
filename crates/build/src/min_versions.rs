@@ -310,10 +310,10 @@ pub fn enforce_min_versions(dep_manifests: &[Manifest], app: Option<&Manifest>, 
     };
     match platform {
         MinVersionPlatform::Ios => {
-            println!("cargo:rerun-if-env-changed=IPHONEOS_DEPLOYMENT_TARGET");
+            crate::directive::rerun_if_env_changed("IPHONEOS_DEPLOYMENT_TARGET");
         }
         MinVersionPlatform::Macos => {
-            println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+            crate::directive::rerun_if_env_changed("MACOSX_DEPLOYMENT_TARGET");
         }
         MinVersionPlatform::Android | MinVersionPlatform::Windows => {}
     }

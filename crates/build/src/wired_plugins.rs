@@ -329,7 +329,7 @@ pub fn render_android_permissions_manifest(entries: &[PluginEntry]) -> String {
     out.push_str("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n");
     for perm in &perms {
         out.push_str("    <uses-permission android:name=\"");
-        out.push_str(&xml_escape(&perm.name));
+        out.push_str(&crate::xml::escape(&perm.name));
         out.push('"');
         if let Some(max_sdk) = perm.max_sdk_version {
             out.push_str(" android:maxSdkVersion=\"");
@@ -367,21 +367,6 @@ pub fn write_android_permissions_sidecar(
     }
     fs::write(&dest, render_android_permissions_manifest(entries))?;
     Ok(dest)
-}
-
-fn xml_escape(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
