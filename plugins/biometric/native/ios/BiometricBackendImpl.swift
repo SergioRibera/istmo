@@ -147,14 +147,28 @@ public final class BiometricBackendImpl: BiometricBackend {
         } onCancel: {
             box.context.invalidate()
         }
-        guard status == errSecItemNotFound else {
+        switch status {
+        case errSecItemNotFound:
+            break
+        case errSecParam:
+            // The Keychain may refuse to change an item's access control in
+            // place (a different policy than the stored one); replace it.
+            try Self.deleteItem(alias)
+        default:
             try Self.check(status)
             return
         }
         var attributes = Self.itemQuery(alias)
         attributes[kSecValueData as String] = secret
         attributes[kSecAttrAccessControl as String] = access
-        try Self.check(SecItemAdd(attributes as CFDictionary, nil))
+        var added = SecItemAdd(attributes as CFDictionary, nil)
+        if added == errSecDuplicateItem {
+            // An item invalidated by a biometry change is not found by the
+            // update but still occupies the slot.
+            try Self.deleteItem(alias)
+            added = SecItemAdd(attributes as CFDictionary, nil)
+        }
+        try Self.check(added)
         #else
         throw BiometricError.unsupportedOperation("the Keychain is unavailable on this platform")
         #endif

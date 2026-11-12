@@ -36,6 +36,8 @@ const ERR_SEC_AUTH_FAILED: OSStatus = errSecAuthFailed;
 /// `OSStatus` values missing from `security-framework-sys`
 /// (`<Security/SecBase.h>`).
 const ERR_SEC_USER_CANCELED: OSStatus = -128;
+const ERR_SEC_PARAM: OSStatus = -50;
+const ERR_SEC_DUPLICATE_ITEM: OSStatus = -25299;
 const ERR_SEC_INTERACTION_NOT_ALLOWED: OSStatus = -25308;
 const ERR_SEC_MISSING_ENTITLEMENT: OSStatus = -34018;
 
@@ -174,20 +176,35 @@ impl VaultQuery {
         };
         match status {
             ERR_SEC_ITEM_NOT_FOUND => self.add(secret, policy),
+            // The keychain may refuse to change an item's access control in
+            // place (a policy other than the stored one): replace the item.
+            ERR_SEC_PARAM => {
+                self.delete()?;
+                self.add(secret, policy)
+            }
             other => KeychainStatus(other).into_result(),
         }
     }
 
-    fn add(self, secret: &[u8], policy: AuthPolicy) -> Result<(), BiometricError> {
+    fn add(&self, secret: &[u8], policy: AuthPolicy) -> Result<(), BiometricError> {
         // SAFETY: immutable Security.framework constants.
         let query = unsafe {
-            self.with(kSecValueData, CFData::from_buffer(secret))
+            Self(self.0.clone())
+                .with(kSecValueData, CFData::from_buffer(secret))
                 .with(kSecAttrAccessControl, access_control(policy)?)
         };
-        // SAFETY: the dictionary is a valid add query; no result is
-        // requested.
-        let status =
-            unsafe { SecItemAdd(query.dictionary().as_concrete_TypeRef(), ptr::null_mut()) };
+        let add = || {
+            // SAFETY: the dictionary is a valid add query; no result is
+            // requested.
+            unsafe { SecItemAdd(query.dictionary().as_concrete_TypeRef(), ptr::null_mut()) }
+        };
+        let mut status = add();
+        if status == ERR_SEC_DUPLICATE_ITEM {
+            // An item invalidated by a biometry change is not found by
+            // `SecItemUpdate` but still occupies the slot.
+            self.delete()?;
+            status = add();
+        }
         KeychainStatus(status).into_result()
     }
 
