@@ -581,14 +581,29 @@ impl std::fmt::Display for CameraError {
 
 impl std::error::Error for CameraError {}
 
+impl CameraError {
+    /// Recover the typed domain error from a failed [`CameraClient`] call.
+    ///
+    /// # Errors
+    /// Hands back `err` unchanged when it is a transport failure (runtime
+    /// shut down, unknown plugin, …) or carries bytes that do not decode
+    /// as a [`CameraError`].
+    pub fn try_from_istmo(err: IstmoError) -> Result<Self, IstmoError> {
+        match err {
+            IstmoError::PluginError { bytes } => match istmo_core::codec::decode::<Self>(&bytes) {
+                Ok((domain, _)) => Ok(domain),
+                Err(_) => Err(IstmoError::PluginError { bytes }),
+            },
+            other => Err(other),
+        }
+    }
+}
+
+/// Lossy: transport failures flatten into [`CameraError::Backend`]. Use
+/// [`CameraError::try_from_istmo`] to tell them apart from domain errors.
 impl From<IstmoError> for CameraError {
     fn from(err: IstmoError) -> Self {
-        if let IstmoError::PluginError { ref bytes } = err {
-            if let Ok((decoded, _)) = istmo_core::codec::decode::<Self>(bytes) {
-                return decoded;
-            }
-        }
-        Self::Backend(err.to_string())
+        Self::try_from_istmo(err).unwrap_or_else(|err| Self::Backend(err.to_string()))
     }
 }
 

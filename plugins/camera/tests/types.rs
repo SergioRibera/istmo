@@ -252,6 +252,20 @@ fn error_decode_from_plugin_bytes() {
 }
 
 #[test]
+fn try_from_istmo_keeps_transport_errors() {
+    let original = CameraError::SessionClosed;
+    let payload = istmo_core::codec::encode(&original).expect("encode error");
+    assert_eq!(
+        CameraError::try_from_istmo(IstmoError::PluginError { bytes: payload }).ok(),
+        Some(original)
+    );
+    assert!(matches!(
+        CameraError::try_from_istmo(IstmoError::ChannelClosed),
+        Err(IstmoError::ChannelClosed)
+    ));
+}
+
+#[test]
 fn error_display_messages() {
     assert!(
         CameraError::PermissionDenied
