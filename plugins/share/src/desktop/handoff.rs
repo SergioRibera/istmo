@@ -67,7 +67,7 @@ pub(crate) fn drain_dir(
 
 fn read_entry(dir: &Path, dest_root: &Path) -> Result<IncomingShare, ShareError> {
     let manifest_path = dir.join(MANIFEST);
-    let bytes = std::fs::read(&manifest_path)
+    let bytes = read_capped(&manifest_path, MANIFEST_CAP)
         .map_err(|err| ShareError::Io(format!("{}: {err}", manifest_path.display())))?;
     let manifest: IncomingShare = istmo_core::codec::decode_exact_capped(&bytes, MANIFEST_CAP)
         .map_err(|err| ShareError::Backend(format!("{}: {err}", manifest_path.display())))?;
@@ -80,6 +80,24 @@ fn read_entry(dir: &Path, dest_root: &Path) -> Result<IncomingShare, ShareError>
         .filter_map(|file| move_file(dir, &dest, file))
         .collect();
     Ok(IncomingShare { files, ..manifest })
+}
+
+/// Read at most `cap` bytes of `path`; a longer file is an error, found
+/// without reading (or allocating) the rest of it.
+fn read_capped(path: &Path, cap: usize) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > cap {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("larger than {cap} bytes"),
+        ));
+    }
+    Ok(bytes)
 }
 
 fn move_file(from_dir: &Path, to_dir: &Path, file: IncomingFile) -> Option<IncomingFile> {
@@ -221,6 +239,24 @@ mod tests {
             0
         );
         assert!(!entry.exists(), "malformed entry is removed");
+
+        drop(std::fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn oversized_manifest_is_dropped() {
+        let root = scratch("oversized");
+        let entry = root.join("inbox").join("D4");
+        std::fs::create_dir_all(&entry).expect("entry");
+        std::fs::write(entry.join(MANIFEST), vec![0u8; MANIFEST_CAP + 1]).expect("manifest");
+
+        let init = Runtime::mock();
+        let inbox = ShareInbox::from_runtime(&init.runtime).expect("inbox");
+        assert_eq!(
+            drain_dir(&root.join("inbox"), &root.join("caches"), &inbox).expect("drain"),
+            0
+        );
+        assert!(!entry.exists(), "oversized entry is removed");
 
         drop(std::fs::remove_dir_all(&root));
     }

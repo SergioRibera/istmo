@@ -55,6 +55,9 @@ public enum IstmoShareInbox {
     /// never cleaned up are deleted after this long.
     public static let incomingRetention: TimeInterval = 7 * 24 * 60 * 60
 
+    /// Mirrors `MANIFEST_CAP` in `istmo_share::desktop::handoff`.
+    private static let manifestCap = 1 << 20
+
     private static func pruneStale(_ root: URL) {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else {
@@ -86,7 +89,12 @@ public enum IstmoShareInbox {
         var published = 0
         for entry in entries where entry.pathExtension != "partial" {
             defer { try? fm.removeItem(at: entry) }
-            guard let data = try? Data(contentsOf: entry.appendingPathComponent(IstmoShareHandoff.manifestName)),
+            let manifestURL = entry.appendingPathComponent(IstmoShareHandoff.manifestName)
+            // Same bound as the macOS reader: a larger manifest is not from
+            // the extension and must not be loaded whole.
+            guard let manifestSize = (try? fm.attributesOfItem(atPath: manifestURL.path)[.size] as? NSNumber)?.intValue,
+                  manifestSize <= manifestCap,
+                  let data = try? Data(contentsOf: manifestURL),
                   let manifest = try? IstmoShareHandoff.Manifest.decode(data) else {
                 continue
             }
