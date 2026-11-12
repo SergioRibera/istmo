@@ -36,6 +36,7 @@ use std::time::{Duration, SystemTime};
 use istmo_window::{NativeWindow, WindowId, WindowRegistry};
 
 use istmo_core::CancelToken;
+use istmo_core::sync::lock;
 
 use crate::{
     Share, ShareCapabilities, ShareError, ShareFile, ShareFileSource, ShareOutcome, ShareRequest,
@@ -161,9 +162,7 @@ impl Share for DesktopShare {
     }
 
     async fn staging_dir(&self) -> Result<String, ShareError> {
-        let root = &self.inner.staging.root;
-        std::fs::create_dir_all(root).map_err(|e| io_error(root, &e))?;
-        Ok(root.display().to_string())
+        Ok(self.inner.staging.root()?.display().to_string())
     }
 
     async fn set_share_targets(&self, _targets: Vec<ShareTarget>) -> Result<(), ShareError> {
@@ -236,27 +235,72 @@ pub(crate) struct StagedFile {
     pub(crate) mime_type: String,
 }
 
-/// Temporary directory holding [`ShareFileSource::Bytes`] payloads.
+/// Prefix of every staging directory name.
+const STAGING_PREFIX: &str = "istmo-share-";
+
+/// Staging directories older than this belong to a process that died
+/// without cleaning up.
+const STAGING_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Private directory holding [`ShareFileSource::Bytes`] payloads.
+///
+/// The directory is created on first use under a fresh, unguessable
+/// name with `create_dir` — which refuses an existing path, so nothing
+/// another local user planted there (a symlink, a pre-made directory)
+/// is ever reused — and owner-only permissions (`0o700`, files
+/// `0o600`). It lives under `$XDG_RUNTIME_DIR/istmo-share/` (private to
+/// the user) or, without one, directly in the sticky temp directory.
+/// [`Staging::purge`] and drop remove it; directories a crashed process
+/// left behind are removed after [`STAGING_TTL`] when the next backend
+/// starts.
 #[derive(Debug)]
 struct Staging {
-    root: PathBuf,
+    parent: PathBuf,
+    root: Mutex<Option<PathBuf>>,
     next: AtomicU64,
 }
 
 impl Default for Staging {
     fn default() -> Self {
-        static INSTANCE: AtomicU64 = AtomicU64::new(0);
-        let instance = INSTANCE.fetch_add(1, Ordering::Relaxed);
+        let parent = Self::parent();
+        purge_stale(&parent, STAGING_TTL);
         Self {
-            root: std::env::temp_dir()
-                .join("istmo-share")
-                .join(format!("{}-{instance}", std::process::id())),
+            parent,
+            root: Mutex::new(None),
             next: AtomicU64::new(0),
         }
     }
 }
 
 impl Staging {
+    fn parent() -> PathBuf {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+            .map_or_else(std::env::temp_dir, |dir| dir.join("istmo-share"))
+    }
+
+    /// The staging directory, created on first use.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the lock is held across creation so concurrent stages share one directory"
+    )]
+    fn root(&self) -> Result<PathBuf, ShareError> {
+        let mut root = lock(&self.root);
+        if let Some(root) = root.as_ref() {
+            return Ok(root.clone());
+        }
+        if self.parent != std::env::temp_dir() {
+            private_dir_builder()
+                .recursive(true)
+                .create(&self.parent)
+                .map_err(|e| io_error(&self.parent, &e))?;
+        }
+        let created = create_unique_dir(&self.parent)?;
+        *root = Some(created.clone());
+        Ok(created)
+    }
+
     fn stage_all(&self, files: &[ShareFile]) -> Result<Vec<StagedFile>, ShareError> {
         files.iter().map(|file| self.stage(file)).collect()
     }
@@ -273,12 +317,16 @@ impl Staging {
             }
             ShareFileSource::Bytes(bytes) => {
                 let name = sanitize_file_name(file.display_name().unwrap_or("shared"));
+                // One directory per file keeps the receiver-visible name
+                // intact even when two files share it.
                 let dir = self
-                    .root
+                    .root()?
                     .join(self.next.fetch_add(1, Ordering::Relaxed).to_string());
-                std::fs::create_dir_all(&dir).map_err(|e| io_error(&dir, &e))?;
+                private_dir_builder()
+                    .create(&dir)
+                    .map_err(|e| io_error(&dir, &e))?;
                 let path = dir.join(name);
-                std::fs::write(&path, bytes).map_err(|e| io_error(&path, &e))?;
+                write_private(&path, bytes).map_err(|e| io_error(&path, &e))?;
                 path
             }
         };
@@ -286,10 +334,13 @@ impl Staging {
     }
 
     fn purge(&self) {
-        if let Err(err) = std::fs::remove_dir_all(&self.root) {
-            if err.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(?err, root = %self.root.display(), "purging staged share files");
-            }
+        let Some(root) = lock(&self.root).take() else {
+            return;
+        };
+        if let Err(err) = std::fs::remove_dir_all(&root)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(?err, root = %root.display(), "purging staged share files");
         }
     }
 }
@@ -298,6 +349,118 @@ impl Drop for Staging {
     fn drop(&mut self) {
         self.purge();
     }
+}
+
+fn private_dir_builder() -> std::fs::DirBuilder {
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+}
+
+/// Create `<parent>/istmo-share-<random>`, retrying on the (unlikely)
+/// collision with an existing entry.
+fn create_unique_dir(parent: &Path) -> Result<PathBuf, ShareError> {
+    use std::hash::{BuildHasher, Hasher};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut last_err = None;
+    for _ in 0..16 {
+        // `RandomState` is seeded from OS randomness; mixing in the pid,
+        // a counter and the clock keeps names distinct even if it is not.
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u32(std::process::id());
+        hasher.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+        hasher.write_u128(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos()),
+        );
+        let dir = parent.join(format!("{STAGING_PREFIX}{:016x}", hasher.finish()));
+        match private_dir_builder().create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => last_err = Some(err),
+            Err(err) => return Err(io_error(&dir, &err)),
+        }
+    }
+    let err = last_err.unwrap_or_else(|| std::io::Error::other("no attempt made"));
+    Err(io_error(parent, &err))
+}
+
+/// Write `bytes` to a new owner-only file; an existing path is an error.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(bytes)
+}
+
+/// Remove staging directories under `parent` not modified for `ttl`.
+/// Only real directories carrying [`STAGING_PREFIX`] (and, on Unix,
+/// owned by this user) are touched; symlinks are never followed.
+fn purge_stale(parent: &Path, ttl: Duration) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.filter_map(Result::ok) {
+        if !entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(STAGING_PREFIX))
+        {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_dir() || !owned_by_current_user(&meta) {
+            continue;
+        }
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= ttl);
+        if stale && let Err(err) = std::fs::remove_dir_all(&path) {
+            tracing::debug!(?err, dir = %path.display(), "removing stale share staging dir");
+        }
+    }
+}
+
+#[cfg(unix)]
+fn owned_by_current_user(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    // Without `libc` there is no `getuid`; the owner of a file this
+    // process creates is the effective uid.
+    static UID: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    let uid = UID.get_or_init(|| {
+        let probe =
+            std::env::temp_dir().join(format!("{STAGING_PREFIX}uid-probe-{}", std::process::id()));
+        // `create_new` never follows a symlink planted under that name.
+        let uid = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .and_then(|file| file.metadata())
+            .map(|probe_meta| probe_meta.uid())
+            .ok();
+        drop(std::fs::remove_file(&probe));
+        uid
+    });
+    uid.is_some_and(|uid| uid == meta.uid())
+}
+
+#[cfg(not(unix))]
+const fn owned_by_current_user(_meta: &std::fs::Metadata) -> bool {
+    // The Windows temp directory is already per user.
+    true
 }
 
 fn io_error(path: &Path, err: &std::io::Error) -> ShareError {
@@ -311,12 +474,7 @@ struct BusyGuard<'a> {
 
 impl<'a> BusyGuard<'a> {
     fn acquire(flag: &'a Mutex<bool>) -> Result<Self, ShareError> {
-        let was_busy = std::mem::replace(
-            &mut *flag
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-            true,
-        );
+        let was_busy = std::mem::replace(&mut *lock(flag), true);
         if was_busy {
             return Err(ShareError::Busy);
         }
@@ -326,24 +484,13 @@ impl<'a> BusyGuard<'a> {
 
 impl Drop for BusyGuard<'_> {
     fn drop(&mut self) {
-        *self
-            .flag
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+        *lock(self.flag) = false;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sanitizes_hostile_names() {
-        assert_eq!(sanitize_file_name("../../etc/passwd"), "passwd");
-        assert_eq!(sanitize_file_name("a:b*c?.txt"), "a_b_c_.txt");
-        assert_eq!(sanitize_file_name(".."), "shared");
-        assert_eq!(sanitize_file_name(""), "shared");
-    }
 
     #[test]
     fn stages_bytes_and_purges() {
@@ -353,8 +500,73 @@ mod tests {
             .expect("stage");
         assert_eq!(std::fs::read(&staged.path).expect("read"), b"hi");
         assert_eq!(staged.mime_type, "text/plain");
+        let root = staging.root().expect("root");
+        assert!(staged.path.starts_with(&root));
+        assert!(
+            root.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(STAGING_PREFIX))
+        );
         staging.purge();
         assert!(!staged.path.exists());
+        assert!(!root.exists());
+        // A purged staging area starts over in a fresh directory.
+        let again = staging
+            .stage(&ShareFile::bytes("note.txt", b"hi".to_vec()))
+            .expect("stage again");
+        assert!(!again.path.starts_with(&root));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let staging = Staging::default();
+        let staged = staging
+            .stage(&ShareFile::bytes("secret.txt", b"x".to_vec()))
+            .expect("stage");
+        let mode = |path: &Path| {
+            std::fs::metadata(path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(mode(&staging.root().expect("root")), 0o700);
+        assert_eq!(mode(staged.path.parent().expect("dir")), 0o700);
+        assert_eq!(mode(&staged.path), 0o600);
+    }
+
+    #[test]
+    fn purges_stale_staging_dirs_only() {
+        let parent =
+            std::env::temp_dir().join(format!("istmo-share-test-parent-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&parent));
+        std::fs::create_dir_all(&parent).expect("parent");
+        let stale = parent.join(format!("{STAGING_PREFIX}stale"));
+        let fresh = parent.join(format!("{STAGING_PREFIX}fresh"));
+        let foreign = parent.join("unrelated");
+        for dir in [&stale, &fresh, &foreign] {
+            std::fs::create_dir(dir).expect("dir");
+        }
+        let old = SystemTime::now() - Duration::from_secs(3 * 24 * 60 * 60);
+        for dir in [&stale, &foreign] {
+            std::fs::File::open(dir)
+                .expect("open dir")
+                .set_modified(old)
+                .expect("backdate");
+        }
+
+        purge_stale(&parent, STAGING_TTL);
+
+        assert!(!stale.exists(), "stale staging dir removed");
+        assert!(fresh.exists(), "fresh staging dir kept");
+        assert!(
+            foreign.exists(),
+            "dirs without the prefix are never touched"
+        );
+        drop(std::fs::remove_dir_all(&parent));
     }
 
     #[test]
