@@ -411,17 +411,32 @@ impl std::fmt::Display for ShareError {
 
 impl std::error::Error for ShareError {}
 
-impl From<istmo_core::IstmoError> for ShareError {
-    /// Decode the plugin's own error from a failed [`ShareClient`] call;
-    /// transport failures become [`ShareError::Backend`].
-    fn from(err: istmo_core::IstmoError) -> Self {
+impl ShareError {
+    /// Recover the typed domain error from a failed [`ShareClient`] call.
+    ///
+    /// # Errors
+    /// Hands back `err` unchanged when it is a transport failure (runtime
+    /// shut down, unknown plugin, …) or carries bytes that do not decode
+    /// as a [`ShareError`].
+    pub fn try_from_istmo(err: istmo_core::IstmoError) -> Result<Self, istmo_core::IstmoError> {
         match err {
             istmo_core::IstmoError::PluginError { bytes } => {
-                istmo_core::codec::decode::<Self>(&bytes)
-                    .map_or_else(|e| Self::Backend(e.to_string()), |(err, _)| err)
+                match istmo_core::codec::decode::<Self>(&bytes) {
+                    Ok((domain, _)) => Ok(domain),
+                    Err(_) => Err(istmo_core::IstmoError::PluginError { bytes }),
+                }
             }
-            other => Self::Backend(other.to_string()),
+            other => Err(other),
         }
+    }
+}
+
+impl From<istmo_core::IstmoError> for ShareError {
+    /// Lossy: transport failures (and undecodable plugin errors) flatten
+    /// into [`ShareError::Backend`]. Use [`ShareError::try_from_istmo`] to
+    /// tell them apart from domain errors.
+    fn from(err: istmo_core::IstmoError) -> Self {
+        Self::try_from_istmo(err).unwrap_or_else(|err| Self::Backend(err.to_string()))
     }
 }
 

@@ -95,6 +95,15 @@ fn domain_errors_decode_into_share_error() {
         matches!(ShareError::from(err), ShareError::InvalidRequest(_)),
         "empty requests are rejected by validate()"
     );
+    let err = pollster::block_on(client.share(ShareRequest::default())).expect_err("empty");
+    assert!(matches!(
+        ShareError::try_from_istmo(err),
+        Ok(ShareError::InvalidRequest(_))
+    ));
+    assert!(matches!(
+        ShareError::try_from_istmo(istmo_core::IstmoError::ChannelClosed),
+        Err(istmo_core::IstmoError::ChannelClosed)
+    ));
 }
 
 #[test]
