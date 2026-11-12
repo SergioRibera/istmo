@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import Foundation
+import IstmoRuntime
 
 /// AVFoundation-backed implementation of `CameraBackend`.
 ///
@@ -10,14 +11,16 @@ import Foundation
 /// (`isMultiCamSupported` is checked in `concurrent_support`).
 ///
 /// Frames are produced on `AVCaptureVideoDataOutput`'s sample buffer
-/// delegate queue and forwarded through a per-session
-/// `AsyncStream<CameraFrame>` continuation stored in `sessions`.
+/// delegate queue and fanned out to every subscriber of
+/// `frames(session:)`; each subscriber owns its own bounded buffer.
 final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
 
     private let config: CameraInitConfig
-    private var sessions: [UInt64: SessionState] = [:]
+    /// Serialises every access to `sessions`. The async protocol methods
+    /// run on arbitrary executors and `releaseNativeHandle` arrives on the
+    /// runtime's pump thread.
     private let queue = DispatchQueue(label: "istmo.camera.backend", qos: .userInitiated)
-    private var sampleQueues: [UInt64: DispatchQueue] = [:]
+    private var sessions: [NativeHandleId: SessionState] = [:]
 
     init(config: CameraInitConfig) {
         self.config = config
@@ -48,9 +51,9 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
     func concurrent_support() async throws -> ConcurrentSupport {
         let supported = AVCaptureMultiCamSession.isMultiCamSupported
         return ConcurrentSupport(
-            max_concurrent: supported ? UInt32(4) : UInt32(1),
-            approved_pairs: [],
-            any_combination: supported
+            maxConcurrent: supported ? UInt32(4) : UInt32(1),
+            approvedPairs: [],
+            anyCombination: supported
         )
     }
 
@@ -76,8 +79,15 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
     // MARK: Session lifecycle
 
     func open(config: SessionConfig) async throws -> CameraSession {
-        guard let device = AVCaptureDevice(uniqueID: config.device_id) else {
-            throw BackendException(CameraError.deviceNotFound(config.device_id))
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .denied, .restricted: throw CameraError.permissionDenied
+        default: break
+        }
+        guard let device = AVCaptureDevice(uniqueID: config.deviceId) else {
+            throw CameraError.deviceNotFound(config.deviceId)
+        }
+        guard let captureType = pixelFormatType(for: config.pixelFormat) else {
+            throw CameraError.formatUnsupported
         }
 
         let captureSession: AVCaptureSession = AVCaptureMultiCamSession.isMultiCamSupported
@@ -85,131 +95,149 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             : AVCaptureSession()
         captureSession.beginConfiguration()
 
-        let input = try AVCaptureDeviceInput(device: device)
+        let input: AVCaptureDeviceInput
+        do {
+            input = try AVCaptureDeviceInput(device: device)
+        } catch {
+            captureSession.commitConfiguration()
+            throw CameraError.backend("cannot open camera input: \(error.localizedDescription)")
+        }
         guard captureSession.canAddInput(input) else {
-            throw BackendException(CameraError.backend("cannot add camera input"))
+            captureSession.commitConfiguration()
+            throw CameraError.backend("cannot add camera input")
         }
         captureSession.addInput(input)
 
         let output = AVCaptureVideoDataOutput()
         output.alwaysDiscardsLateVideoFrames = true
-        output.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: pixelFormatType(for: config.pixel_format)
-        ]
+        guard output.availableVideoPixelFormatTypes.contains(captureType) else {
+            captureSession.commitConfiguration()
+            throw CameraError.formatUnsupported
+        }
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: captureType]
         guard captureSession.canAddOutput(output) else {
-            throw BackendException(CameraError.backend("cannot add video output"))
+            captureSession.commitConfiguration()
+            throw CameraError.backend("cannot add video output")
         }
         captureSession.addOutput(output)
 
-        // Pin resolution preset when requested.
+        // Optional: a session without a photo output still streams, and
+        // `capture_still` then reports `formatUnsupported`.
+        let photoOutput = AVCapturePhotoOutput()
+        let hasPhotoOutput = captureSession.canAddOutput(photoOutput)
+        if hasPhotoOutput {
+            captureSession.addOutput(photoOutput)
+        }
+
         if let res = config.resolution {
-            captureSession.sessionPreset = closestPreset(width: res.width, height: res.height)
+            let preset = closestPreset(width: res.width, height: res.height)
+            if captureSession.canSetSessionPreset(preset) {
+                captureSession.sessionPreset = preset
+            }
         }
 
-        // Target FPS: lockForConfiguration + activeVideoMinFrameDuration.
-        if let fps = config.target_fps {
-            try? device.lockForConfiguration()
-            device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
-            device.unlockForConfiguration()
+        let fanout = FrameFanout(depth: Int(max(self.config.framePoolDepth, 1)))
+        let sampleQueue = DispatchQueue(label: "istmo.camera.samples")
+        var delegate: SampleDelegate?
+        if config.emitFrames {
+            let sampleDelegate = SampleDelegate(pixelFormat: config.pixelFormat, fanout: fanout)
+            output.setSampleBufferDelegate(sampleDelegate, queue: sampleQueue)
+            delegate = sampleDelegate
         }
-
-        let handleId = IstmoRuntime.shared.allocHandleId(pluginId: "istmo.camera")
-        let (stream, continuation) = AsyncStream<CameraFrame>.makeStream(
-            bufferingPolicy: .bufferingOldest(Int(max(config.frame_pool_depth, 1)))
-        )
-        let sampleQueue = DispatchQueue(label: "istmo.camera.samples.\(handleId)")
-        sampleQueues[handleId] = sampleQueue
-
-        if config.emit_frames {
-            let delegate = SampleDelegate(
-                sessionId: handleId,
-                pixelFormat: config.pixel_format,
-                continuation: continuation
-            )
-            output.setSampleBufferDelegate(delegate, queue: sampleQueue)
-            // Keep the delegate alive for the lifetime of the session.
-            captureSession.beginConfiguration()
-            captureSession.commitConfiguration()
-            let state = SessionState(
-                captureSession: captureSession,
-                device: device,
-                output: output,
-                delegate: delegate,
-                stream: stream,
-                continuation: continuation
-            )
-            sessions[handleId] = state
-        } else {
-            let state = SessionState(
-                captureSession: captureSession,
-                device: device,
-                output: output,
-                delegate: nil,
-                stream: stream,
-                continuation: continuation
-            )
-            sessions[handleId] = state
-        }
-
         captureSession.commitConfiguration()
+
+        // The preset picks the active format, so the frame rate is set
+        // once configuration is committed.
+        if let fps = config.targetFps {
+            setFrameRate(fps, on: device)
+        }
+        do {
+            try apply(initial: config.initialControls, to: device)
+        } catch {
+            throw CameraError.backend("cannot apply initial controls: \(error.localizedDescription)")
+        }
+
         captureSession.startRunning()
 
-        try apply(initial: config.initial_controls, to: device)
+        let handleId = IstmoRuntime.shared.allocHandleId(pluginId: "istmo.camera")
+        let state = SessionState(
+            captureSession: captureSession,
+            device: device,
+            output: output,
+            photoOutput: hasPhotoOutput ? photoOutput : nil,
+            delegate: delegate,
+            fanout: fanout
+        )
+        queue.sync { sessions[handleId] = state }
 
-        let (negW, negH) = resolution(from: output)
+        let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         return CameraSession(
             session: handleId,
             negotiated: NegotiatedFormat(
-                resolution: Resolution(width: negW, height: negH),
-                pixel_format: config.pixel_format,
-                fps: config.target_fps ?? 30,
-                rotation_degrees: 0
+                resolution: Resolution(width: UInt32(dims.width), height: UInt32(dims.height)),
+                pixelFormat: config.pixelFormat,
+                fps: currentFrameRate(of: device),
+                rotationDegrees: 0
             )
         )
     }
 
-    func close(session: UInt64) async throws {
-        guard let state = sessions.removeValue(forKey: session) else { return }
+    func close(session: NativeHandleId) async throws {
+        closeSession(session)
+    }
+
+    func frames(session: NativeHandleId) -> AsyncThrowingStream<CameraFrame, Error> {
+        guard let fanout = queue.sync(execute: { sessions[session]?.fanout }) else {
+            return AsyncThrowingStream { $0.finish(throwing: CameraError.sessionClosed) }
+        }
+        return fanout.subscribe()
+    }
+
+    func releaseNativeHandle(_ handleId: UInt64) {
+        // Every release in the runtime reaches every releaser; ids this
+        // backend never handed out are not in `sessions` and no-op.
+        closeSession(handleId)
+    }
+
+    private func closeSession(_ id: NativeHandleId) {
+        guard let state = queue.sync(execute: { sessions.removeValue(forKey: id) }) else { return }
+        state.output.setSampleBufferDelegate(nil, queue: nil)
         state.captureSession.stopRunning()
-        state.continuation.finish()
-        sampleQueues.removeValue(forKey: session)
-        IstmoRuntime.shared.forgetHandle(session)
+        state.fanout.finish()
+        IstmoRuntime.shared.forgetHandle(id)
     }
 
-    func frames(session: UInt64) -> AsyncThrowingStream<CameraFrame, Error> {
-        guard let state = sessions[session] else {
-            return AsyncThrowingStream { $0.finish(throwing: BackendException(CameraError.sessionClosed)) }
+    private func lookup(_ id: NativeHandleId) throws -> SessionState {
+        guard let state = queue.sync(execute: { sessions[id] }) else {
+            throw CameraError.sessionClosed
         }
-        return AsyncThrowingStream { continuation in
-            Task {
-                for await frame in state.stream {
-                    continuation.yield(frame)
-                }
-                continuation.finish()
-            }
-        }
-    }
-
-    func releaseNativeHandle(handleId: UInt64) {
-        Task { try? await close(session: handleId) }
+        return state
     }
 
     // MARK: Controls
 
-    func apply_controls(session: UInt64, controls: CameraControls) async throws -> AppliedControls {
-        guard let state = sessions[session] else {
-            throw BackendException(CameraError.sessionClosed)
+    func apply_controls(session: NativeHandleId, controls: CameraControls) async throws -> AppliedControls {
+        let device = try lookup(session).device
+        do {
+            try device.lockForConfiguration()
+        } catch {
+            throw CameraError.backend("cannot lock camera configuration: \(error.localizedDescription)")
         }
-        let device = state.device
-        try device.lockForConfiguration()
         defer { device.unlockForConfiguration() }
 
-        if let zoom = controls.zoom { device.videoZoomFactor = CGFloat(zoom) }
+        if let zoom = controls.zoom {
+            let clamped = min(
+                max(CGFloat(zoom), device.minAvailableVideoZoomFactor),
+                device.maxAvailableVideoZoomFactor
+            )
+            device.videoZoomFactor = clamped
+        }
         if let torch = controls.torch, device.hasTorch {
             device.torchMode = torch ? .on : .off
         }
-        if let ev = controls.exposure_compensation_ev {
-            device.setExposureTargetBias(ev, completionHandler: nil)
+        if let ev = controls.exposureCompensationEv {
+            let clamped = min(max(ev, device.minExposureTargetBias), device.maxExposureTargetBias)
+            device.setExposureTargetBias(clamped, completionHandler: nil)
         }
         if let focus = controls.focus {
             switch focus {
@@ -228,16 +256,54 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             zoom: Float(device.videoZoomFactor),
             torch: device.torchMode == .on,
             focus: controls.focus ?? .continuousVideo,
-            exposure_compensation_ev: Float(device.exposureTargetBias),
-            white_balance: controls.white_balance ?? .auto,
+            exposureCompensationEv: Float(device.exposureTargetBias),
+            whiteBalance: controls.whiteBalance ?? .auto,
             flash: controls.flash ?? .off
         )
     }
 
-    func capture_still(session: UInt64, request: StillCaptureRequest) async throws -> StillPhoto {
-        // Wire an `AVCapturePhotoOutput` into the session on open()
-        // and call it from here. Left as an app-side exercise.
-        throw BackendException(CameraError.backend("capture_still: wire AVCapturePhotoOutput"))
+    // MARK: Stills
+
+    func capture_still(session: NativeHandleId, request: StillCaptureRequest) async throws -> StillPhoto {
+        let state = try lookup(session)
+        guard let photoOutput = state.photoOutput,
+              case .jpeg(let quality) = request.pixelFormat,
+              photoOutput.availablePhotoCodecTypes.contains(.jpeg) else {
+            throw CameraError.formatUnsupported
+        }
+        let settings = AVCapturePhotoSettings(format: [
+            AVVideoCodecKey: AVVideoCodecType.jpeg,
+            AVVideoCompressionPropertiesKey: [AVVideoQualityKey: Double(min(quality, 100)) / 100.0],
+        ])
+        let flash: AVCaptureDevice.FlashMode
+        switch request.flash {
+        case .off: flash = .off
+        case .on: flash = .on
+        case .auto: flash = .auto
+        }
+        if photoOutput.supportedFlashModes.contains(flash) {
+            settings.flashMode = flash
+        }
+
+        // AVCapturePhotoOutput holds its delegate weakly.
+        let delegate = PhotoDelegate()
+        let photo: AVCapturePhoto = try await withCheckedThrowingContinuation { cont in
+            delegate.continuation = cont
+            photoOutput.capturePhoto(with: settings, delegate: delegate)
+        }
+        withExtendedLifetime(delegate) {}
+
+        guard let data = photo.fileDataRepresentation() else {
+            throw CameraError.backend("photo has no JPEG representation")
+        }
+        let dims = photo.resolvedSettings.photoDimensions
+        return StillPhoto(
+            resolution: Resolution(width: UInt32(dims.width), height: UInt32(dims.height)),
+            rotationDegrees: 0,
+            pixelFormat: request.pixelFormat,
+            bytes: data,
+            timestampNs: nanoseconds(photo.timestamp)
+        )
     }
 
     // MARK: Internals
@@ -246,21 +312,113 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         let captureSession: AVCaptureSession
         let device: AVCaptureDevice
         let output: AVCaptureVideoDataOutput
+        let photoOutput: AVCapturePhotoOutput?
         let delegate: SampleDelegate?
-        let stream: AsyncStream<CameraFrame>
-        let continuation: AsyncStream<CameraFrame>.Continuation
+        let fanout: FrameFanout
+    }
+
+    /// Per-subscriber fan-out of one session's frames. Called from the
+    /// sample queue (`yield`), the backend queue (`finish`) and whatever
+    /// executor consumes a stream (`onTermination`), hence the lock.
+    private final class FrameFanout {
+        private struct Subscriber {
+            let continuation: AsyncThrowingStream<CameraFrame, Error>.Continuation
+            /// Frames lost since the last one this subscriber was handed.
+            var dropped: UInt32
+        }
+
+        private let lock = NSLock()
+        private let depth: Int
+        private var subscribers: [UInt64: Subscriber] = [:]
+        private var nextId: UInt64 = 0
+        private var finished = false
+
+        init(depth: Int) {
+            self.depth = depth
+        }
+
+        var hasSubscribers: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return !subscribers.isEmpty
+        }
+
+        func subscribe() -> AsyncThrowingStream<CameraFrame, Error> {
+            // `bufferingNewest` drops the oldest buffered frame when the
+            // consumer falls behind, matching the Android backend.
+            let (stream, continuation) = AsyncThrowingStream<CameraFrame, Error>.makeStream(
+                bufferingPolicy: .bufferingNewest(depth)
+            )
+            lock.lock()
+            if finished {
+                lock.unlock()
+                continuation.finish()
+                return stream
+            }
+            let id = nextId
+            nextId &+= 1
+            subscribers[id] = Subscriber(continuation: continuation, dropped: 0)
+            lock.unlock()
+            continuation.onTermination = { [weak self] _ in self?.remove(id) }
+            return stream
+        }
+
+        func yield(_ frame: CameraFrame) {
+            lock.lock()
+            defer { lock.unlock() }
+            for (id, sub) in subscribers {
+                let delivered = CameraFrame(
+                    seq: frame.seq,
+                    timestampNs: frame.timestampNs,
+                    resolution: frame.resolution,
+                    rotationDegrees: frame.rotationDegrees,
+                    pixelFormat: frame.pixelFormat,
+                    planes: frame.planes,
+                    bytes: frame.bytes,
+                    droppedBefore: sub.dropped
+                )
+                switch sub.continuation.yield(delivered) {
+                case .enqueued:
+                    subscribers[id]?.dropped = 0
+                case .dropped:
+                    // `delivered` is buffered with the old count; an
+                    // older buffered frame was evicted for it.
+                    subscribers[id]?.dropped = 1
+                case .terminated:
+                    subscribers.removeValue(forKey: id)
+                @unknown default:
+                    break
+                }
+            }
+        }
+
+        func finish() {
+            lock.lock()
+            finished = true
+            let current = subscribers.values.map(\.continuation)
+            subscribers.removeAll()
+            lock.unlock()
+            for continuation in current {
+                continuation.finish()
+            }
+        }
+
+        private func remove(_ id: UInt64) {
+            lock.lock()
+            subscribers.removeValue(forKey: id)
+            lock.unlock()
+        }
     }
 
     private final class SampleDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-        let sessionId: UInt64
         let pixelFormat: PixelFormat
-        let continuation: AsyncStream<CameraFrame>.Continuation
+        let fanout: FrameFanout
+        /// Only touched on the sample queue.
         private var seq: UInt64 = 0
 
-        init(sessionId: UInt64, pixelFormat: PixelFormat, continuation: AsyncStream<CameraFrame>.Continuation) {
-            self.sessionId = sessionId
+        init(pixelFormat: PixelFormat, fanout: FrameFanout) {
             self.pixelFormat = pixelFormat
-            self.continuation = continuation
+            self.fanout = fanout
         }
 
         func captureOutput(
@@ -268,25 +426,26 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             didOutput sampleBuffer: CMSampleBuffer,
             from connection: AVCaptureConnection
         ) {
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            let frameSeq = seq
+            seq &+= 1
+            // Skip the copy entirely while nobody listens.
+            guard fanout.hasSubscribers,
+                  let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
             let ts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-            let timestampNs = UInt64(CMTimeGetSeconds(ts) * 1_000_000_000)
             let (planes, bytes) = extractPlanes(pixelBuffer)
-            let frame = CameraFrame(
-                seq: seq,
-                timestamp_ns: timestampNs,
+            fanout.yield(CameraFrame(
+                seq: frameSeq,
+                timestampNs: nanoseconds(ts),
                 resolution: Resolution(
                     width: UInt32(CVPixelBufferGetWidth(pixelBuffer)),
                     height: UInt32(CVPixelBufferGetHeight(pixelBuffer))
                 ),
-                rotation_degrees: 0,
-                pixel_format: pixelFormat,
+                rotationDegrees: 0,
+                pixelFormat: pixelFormat,
                 planes: planes,
                 bytes: bytes,
-                dropped_before: 0
-            )
-            seq &+= 1
-            _ = continuation.yield(frame)
+                droppedBefore: 0
+            ))
         }
 
         private func extractPlanes(_ buffer: CVPixelBuffer) -> ([FramePlane], Data) {
@@ -295,13 +454,26 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
 
             let planeCount = CVPixelBufferGetPlaneCount(buffer)
             if planeCount == 0 {
-                let size = CVPixelBufferGetBytesPerRow(buffer) * CVPixelBufferGetHeight(buffer)
-                let ptr = CVPixelBufferGetBaseAddress(buffer)
-                let data = Data(bytes: ptr!, count: size)
+                let rowStride = CVPixelBufferGetBytesPerRow(buffer)
+                let size = rowStride * CVPixelBufferGetHeight(buffer)
+                guard let ptr = CVPixelBufferGetBaseAddress(buffer) else { return ([], Data()) }
+                var data = Data(bytes: ptr, count: size)
+                if case .rgba8 = pixelFormat {
+                    // Captured as BGRA (the only packed format the video
+                    // data output emits); swap to the requested order.
+                    data.withUnsafeMutableBytes { raw in
+                        let px = raw.bindMemory(to: UInt8.self)
+                        var i = 0
+                        while i + 3 < px.count {
+                            px.swapAt(i, i + 2)
+                            i += 4
+                        }
+                    }
+                }
                 let plane = FramePlane(
                     offset: 0,
-                    row_stride: UInt32(CVPixelBufferGetBytesPerRow(buffer)),
-                    pixel_stride: 4,
+                    rowStride: UInt32(rowStride),
+                    pixelStride: 4,
                     width: UInt32(CVPixelBufferGetWidth(buffer)),
                     height: UInt32(CVPixelBufferGetHeight(buffer))
                 )
@@ -315,44 +487,77 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             }
             var data = Data(count: totalSize)
             var planes: [FramePlane] = []
-            var offset: UInt32 = 0
+            var offset = 0
+            let swapChroma: Bool = { if case .nv21 = pixelFormat { return true } else { return false } }()
             data.withUnsafeMutableBytes { raw in
-                let dst = raw.bindMemory(to: UInt8.self).baseAddress!
+                guard let dst = raw.bindMemory(to: UInt8.self).baseAddress else { return }
                 for i in 0..<planeCount {
                     let rowStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, i)
                     let height = CVPixelBufferGetHeightOfPlane(buffer, i)
                     let planeSize = rowStride * height
-                    let src = CVPixelBufferGetBaseAddressOfPlane(buffer, i)!
-                    memcpy(dst.advanced(by: Int(offset)), src, planeSize)
+                    guard let src = CVPixelBufferGetBaseAddressOfPlane(buffer, i) else { continue }
+                    memcpy(dst.advanced(by: offset), src, planeSize)
+                    if i == 1 && swapChroma {
+                        // The capture is NV12 (Cb before Cr); NV21 wants
+                        // Cr first, so swap every interleaved pair.
+                        let chroma = dst.advanced(by: offset)
+                        var j = 0
+                        while j + 1 < planeSize {
+                            let cb = chroma[j]
+                            chroma[j] = chroma[j + 1]
+                            chroma[j + 1] = cb
+                            j += 2
+                        }
+                    }
                     planes.append(
                         FramePlane(
-                            offset: offset,
-                            row_stride: UInt32(rowStride),
-                            pixel_stride: i == 0 ? 1 : 2,
+                            offset: UInt32(offset),
+                            rowStride: UInt32(rowStride),
+                            pixelStride: i == 0 ? 1 : 2,
                             width: UInt32(CVPixelBufferGetWidthOfPlane(buffer, i)),
                             height: UInt32(height)
                         )
                     )
-                    offset += UInt32(planeSize)
+                    offset += planeSize
                 }
             }
             return (planes, data)
         }
     }
 
-    private func pixelFormatType(for format: PixelFormat) -> UInt32 {
+    private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
+        var continuation: CheckedContinuation<AVCapturePhoto, Error>?
+
+        func photoOutput(
+            _ output: AVCapturePhotoOutput,
+            didFinishProcessingPhoto photo: AVCapturePhoto,
+            error: Error?
+        ) {
+            guard let continuation else { return }
+            self.continuation = nil
+            if let error {
+                continuation.resume(throwing: CameraError.backend(error.localizedDescription))
+            } else {
+                continuation.resume(returning: photo)
+            }
+        }
+    }
+
+    /// Capture pixel format for a requested stream format, or `nil` when
+    /// the video data output cannot produce it.
+    ///
+    /// - `yuv420` is delivered as bi-planar NV12.
+    /// - `nv21` is captured as NV12 and its chroma pairs are swapped.
+    /// - `rgba8` is captured as BGRA and swapped per pixel.
+    /// - `jpeg` is a still-only format (see `capture_still`).
+    private func pixelFormatType(for format: PixelFormat) -> OSType? {
         switch format {
         case .nv21, .yuv420:
             return kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-        case .bgra8:
+        case .bgra8, .rgba8:
             return kCVPixelFormatType_32BGRA
-        case .rgba8:
-            return kCVPixelFormatType_32RGBA
         case .jpeg:
-            // AVCaptureVideoDataOutput doesn't emit JPEG directly —
-            // the app should hook an `AVCapturePhotoOutput` for
-            // stills; stream path downsamples via a transform.
-            return kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            return nil
         }
     }
 
@@ -366,21 +571,37 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         }
     }
 
+    /// Request `fps` when the active format supports it; otherwise the
+    /// device keeps its default rate, which `currentFrameRate` reports.
+    private func setFrameRate(_ fps: UInt32, on device: AVCaptureDevice) {
+        let rate = Double(fps)
+        let supported = device.activeFormat.videoSupportedFrameRateRanges.contains {
+            $0.minFrameRate <= rate && rate <= $0.maxFrameRate
+        }
+        guard supported, (try? device.lockForConfiguration()) != nil else { return }
+        let duration = CMTime(value: 1, timescale: CMTimeScale(fps))
+        device.activeVideoMinFrameDuration = duration
+        device.activeVideoMaxFrameDuration = duration
+        device.unlockForConfiguration()
+    }
+
+    private func currentFrameRate(of device: AVCaptureDevice) -> UInt32 {
+        let duration = device.activeVideoMinFrameDuration
+        guard duration.isValid, duration.value > 0 else { return 0 }
+        return UInt32((Double(duration.timescale) / Double(duration.value)).rounded())
+    }
+
     private func apply(initial: CameraControls, to device: AVCaptureDevice) throws {
         guard initial.zoom != nil || initial.torch != nil else { return }
         try device.lockForConfiguration()
         defer { device.unlockForConfiguration() }
-        if let z = initial.zoom { device.videoZoomFactor = CGFloat(z) }
-        if let t = initial.torch, device.hasTorch { device.torchMode = t ? .on : .off }
-    }
-
-    private func resolution(from output: AVCaptureVideoDataOutput) -> (UInt32, UInt32) {
-        guard let settings = output.recommendedVideoSettings(forVideoCodecType: .h264, assetWriterOutputFileType: .mov),
-              let w = settings[AVVideoWidthKey] as? Int,
-              let h = settings[AVVideoHeightKey] as? Int else {
-            return (0, 0)
+        if let z = initial.zoom {
+            device.videoZoomFactor = min(
+                max(CGFloat(z), device.minAvailableVideoZoomFactor),
+                device.maxAvailableVideoZoomFactor
+            )
         }
-        return (UInt32(w), UInt32(h))
+        if let t = initial.torch, device.hasTorch { device.torchMode = t ? .on : .off }
     }
 
     private func describe(device: AVCaptureDevice) -> CameraDevice {
@@ -403,33 +624,37 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             default: return .unknown
             }
         }()
+        let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         let caps = CameraCapabilities(
-            min_zoom: Float(device.minAvailableVideoZoomFactor),
-            max_zoom: Float(device.maxAvailableVideoZoomFactor),
-            optical_zoom_steps: device.virtualDeviceSwitchOverVideoZoomFactors.map { Float(truncating: $0) },
-            focal_lengths_mm: [],
-            supports_flash: device.hasFlash,
-            supports_torch: device.hasTorch,
-            supports_autofocus: device.isFocusModeSupported(.continuousAutoFocus),
-            supports_manual_focus: device.isLockingFocusWithCustomLensPositionSupported,
-            supports_ois: device.activeFormat.isVideoHDRSupported,
-            supports_eis: false, // see AVCaptureConnection.preferredVideoStabilizationMode
-            supports_hdr: device.activeFormat.isVideoHDRSupported,
-            supports_depth: !device.activeFormat.supportedDepthDataFormats.isEmpty,
-            supports_raw: false,
-            max_still_resolution: Resolution(
-                width: UInt32(CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription).width),
-                height: UInt32(CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription).height)
-            )
+            minZoom: Float(device.minAvailableVideoZoomFactor),
+            maxZoom: Float(device.maxAvailableVideoZoomFactor),
+            opticalZoomSteps: device.virtualDeviceSwitchOverVideoZoomFactors.map { Float(truncating: $0) },
+            focalLengthsMm: [],
+            supportsFlash: device.hasFlash,
+            supportsTorch: device.hasTorch,
+            supportsAutofocus: device.isFocusModeSupported(.continuousAutoFocus),
+            supportsManualFocus: device.isLockingFocusWithCustomLensPositionSupported,
+            supportsOis: device.activeFormat.isVideoStabilizationModeSupported(.cinematic),
+            supportsEis: device.activeFormat.isVideoStabilizationModeSupported(.standard),
+            supportsHdr: device.activeFormat.isVideoHDRSupported,
+            supportsDepth: !device.activeFormat.supportedDepthDataFormats.isEmpty,
+            supportsRaw: false,
+            maxStillResolution: Resolution(width: UInt32(dims.width), height: UInt32(dims.height))
         )
         return CameraDevice(
             id: device.uniqueID,
             label: device.localizedName,
             facing: facing,
             lens: lens,
-            physical_sensors: device.constituentDevices.map { $0.uniqueID },
+            physicalSensors: device.constituentDevices.map { $0.uniqueID },
             capabilities: caps,
-            supported_formats: []
+            supportedFormats: []
         )
     }
+}
+
+private func nanoseconds(_ time: CMTime) -> UInt64 {
+    let seconds = CMTimeGetSeconds(time)
+    guard seconds.isFinite, seconds > 0 else { return 0 }
+    return UInt64(seconds * 1_000_000_000)
 }
