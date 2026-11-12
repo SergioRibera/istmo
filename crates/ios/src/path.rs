@@ -32,9 +32,14 @@ fn resolve() -> PlatformPaths {
     };
 
     fn dir_for(kind: NSSearchPathDirectory) -> PathBuf {
+        // SAFETY: `defaultManager` is a thread-safe class getter with no
+        // preconditions; objc2 marks it unsafe only because it is generated.
         let fm = unsafe { NSFileManager::defaultManager() };
+        // SAFETY: `kind` and the domain mask are valid enum values; the
+        // method has no other preconditions.
         let urls = unsafe { fm.URLsForDirectory_inDomains(kind, NSSearchPathDomainMask::User) };
         if let Some(url) = urls.first() {
+            // SAFETY: `url` is a live file URL returned by the file manager.
             let path = unsafe { url.path() };
             if let Some(path) = path {
                 let _ = std::fs::create_dir_all(PathBuf::from(path.to_string()));
@@ -45,7 +50,9 @@ fn resolve() -> PlatformPaths {
     }
 
     fn temporary_directory() -> PathBuf {
+        // SAFETY: as in `dir_for`; `temporaryDirectory` has no preconditions.
         let ns = unsafe { NSFileManager::defaultManager().temporaryDirectory() };
+        // SAFETY: `ns` is a live file URL returned by the file manager.
         let path = unsafe { ns.path() };
         match path {
             Some(p) => PathBuf::from(p.to_string()),
