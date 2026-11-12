@@ -45,7 +45,7 @@ fn wired_builtin_emits_matching_permission_sidecar() {
 
     emit_app_with(opts);
 
-    let sidecar = android_root.join("app/src/main/istmo-permissions.xml");
+    let sidecar = android_root.join(".istmo/istmo-permissions.xml");
     assert!(
         sidecar.is_file(),
         "sidecar missing at {}",
@@ -72,7 +72,7 @@ fn unwired_builtin_omits_permission() {
 
     emit_app_with(opts);
 
-    let sidecar = android_root.join("app/src/main/istmo-permissions.xml");
+    let sidecar = android_root.join(".istmo/istmo-permissions.xml");
     assert!(sidecar.is_file());
     let body = fs::read_to_string(&sidecar).unwrap();
     assert!(
@@ -105,7 +105,7 @@ android_permissions = [
 
     emit_app_with(opts);
 
-    let sidecar = android_root.join("app/src/main/istmo-permissions.xml");
+    let sidecar = android_root.join(".istmo/istmo-permissions.xml");
     assert!(sidecar.is_file());
     let body = fs::read_to_string(&sidecar).unwrap();
     assert!(body.contains("android.permission.INTERNET"));
@@ -138,7 +138,7 @@ android_permissions = ["android.permission.BLUETOOTH"]
 
     emit_app_with(opts);
 
-    let sidecar = android_root.join("app/src/main/istmo-permissions.xml");
+    let sidecar = android_root.join(".istmo/istmo-permissions.xml");
     assert!(sidecar.is_file());
     let body = fs::read_to_string(&sidecar).unwrap();
     assert!(
@@ -161,7 +161,7 @@ fn empty_wired_set_emits_empty_manifest() {
 
     emit_app_with(opts);
 
-    let sidecar = android_root.join("app/src/main/istmo-permissions.xml");
+    let sidecar = android_root.join(".istmo/istmo-permissions.xml");
     assert!(sidecar.is_file());
     let body = fs::read_to_string(&sidecar).unwrap();
     assert!(body.contains("<manifest"));

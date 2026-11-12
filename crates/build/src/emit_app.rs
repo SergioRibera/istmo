@@ -731,21 +731,15 @@ fn resolve_wired_plugin_entries(root: &Path, dep_manifests: &[Manifest]) -> Vec<
     crate::wired_plugins::resolve_wired_entries(dep_manifests, &wired_paths)
 }
 
+/// Written even when no wired plugin declares a permission, so the
+/// Gradle plugin always finds a current file; the AGP manifest merger
+/// ignores a `<manifest>` without children.
 fn emit_wired_android_permissions(android_root: &Path, wired: &[PluginEntry]) {
-    let android_app_dir = android_root.join("app");
-    if !android_app_dir.is_dir() {
+    if !android_root.join("app").is_dir() {
         return;
     }
-    let has_any = wired.iter().any(|e| !e.android_permissions.is_empty());
-    if !has_any {
-        // Still write an empty sidecar so the Gradle plugin's picker
-        // sees a stable file; the AGP manifest merger ignores a
-        // `<manifest>` without children.
-    }
-    if let Err(err) =
-        crate::wired_plugins::write_android_permissions_sidecar(&android_app_dir, wired)
-    {
-        println!("cargo::warning=istmo-build: failed to write istmo-permissions.xml: {err}");
+    if let Err(err) = crate::wired_plugins::write_android_permissions_sidecar(android_root, wired) {
+        crate::directive::warning(&format!("failed to write istmo-permissions.xml: {err}"));
     }
 }
 

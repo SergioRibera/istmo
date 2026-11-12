@@ -195,16 +195,19 @@ class IstmoAppPlugin : Plugin<Project> {
     }
 
     /**
-     * `app/src/main/istmo-permissions.xml` is emitted by istmo-build when the
-     * app wires one or more plugins that declare `android_permissions`. The
-     * file is a plain `<manifest>` fragment with `<uses-permission>` children
-     * — fed into the same overlay / AGP 8.3+ variant manifest merger as every
-     * plugin's own `AndroidManifest.xml` snippet.
+     * `.istmo/istmo-permissions.xml` (next to `istmo.json` in the Android
+     * project root) is emitted by istmo-build with the `<uses-permission>`
+     * entries of every plugin the app wires. The file is a plain
+     * `<manifest>` fragment — fed into the same overlay / AGP 8.3+ variant
+     * manifest merger as every plugin's own `AndroidManifest.xml` snippet.
+     * Older istmo-build releases wrote it to `app/src/main/`, which is
+     * still read when the new file is absent.
      */
-    internal fun istmoPermissionsSidecar(project: Project): File? {
-        val file = project.file("src/main/istmo-permissions.xml")
-        return if (file.isFile) file else null
-    }
+    internal fun istmoPermissionsSidecar(project: Project): File? =
+        listOf(
+            File(project.rootDir, PERMISSIONS_SIDECAR),
+            project.file(LEGACY_PERMISSIONS_SIDECAR),
+        ).firstOrNull { it.isFile }
 
     private fun addDependencies(project: Project, dependencies: List<GradleDependency>) {
         for (dep in dependencies) {
@@ -267,5 +270,7 @@ class IstmoAppPlugin : Plugin<Project> {
         const val ICON_PLACEHOLDER = "istmoIcon"
         const val DEFAULT_ICON = "@android:drawable/sym_def_app_icon"
         const val GENERATED_RES_DIR = ".istmo/res"
+        const val PERMISSIONS_SIDECAR = ".istmo/istmo-permissions.xml"
+        const val LEGACY_PERMISSIONS_SIDECAR = "src/main/istmo-permissions.xml"
     }
 }
