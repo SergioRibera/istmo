@@ -110,8 +110,12 @@ fn typed_update_encodes_new_state() {
 
     let activities =
         TypedLiveActivity::<TimerAttributes, TimerState>::new(&rt, "timer").expect("bind");
-    pollster::block_on(activities.update(NativeHandleId(42), TimerState { elapsed: 30 }, None))
-        .expect("update ok");
+    pollster::block_on(activities.update_by_id(
+        NativeHandleId(42),
+        TimerState { elapsed: 30 },
+        None,
+    ))
+    .expect("update ok");
 
     let payload = backend.join().unwrap();
     type UpdateTuple = (
@@ -135,7 +139,7 @@ fn typed_end_forwards_dismissal_policy() {
 
     let activities =
         TypedLiveActivity::<TimerAttributes, TimerState>::new(&rt, "timer").expect("bind");
-    pollster::block_on(activities.end(
+    pollster::block_on(activities.end_by_id(
         NativeHandleId(9),
         Some(TimerState { elapsed: 300 }),
         DismissalPolicy::AfterSeconds(10),
@@ -202,4 +206,44 @@ fn base_client_capabilities_round_trips() {
     let value = pollster::block_on(client.capabilities()).expect("capabilities ok");
     assert_eq!(value, caps);
     backend.join().unwrap();
+}
+
+#[test]
+fn restore_skips_undecodable_payload_and_releases_its_handle() {
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let outbound = init.outbound;
+    let good = istmo_live_activity::RestoredActivity {
+        handle: NativeHandleId(1),
+        activity_type: "timer".into(),
+        attributes: codec::encode(&TimerAttributes { title: "a".into() }).unwrap(),
+        state: codec::encode(&TimerState { elapsed: 5 }).unwrap(),
+    };
+    let bad = istmo_live_activity::RestoredActivity {
+        handle: NativeHandleId(2),
+        activity_type: "timer".into(),
+        attributes: vec![0xff],
+        state: vec![],
+    };
+    let backend = spawn_backend(
+        rt.clone(),
+        outbound.clone(),
+        "restore_active",
+        Ok(codec::encode(&vec![good, bad]).unwrap()),
+    );
+
+    let activities =
+        TypedLiveActivity::<TimerAttributes, TimerState>::new(&rt, "timer").expect("bind");
+    let restored = pollster::block_on(activities.restore()).expect("restore ok");
+    backend.join().unwrap();
+
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].handle.id(), NativeHandleId(1));
+    assert_eq!(restored[0].state, TimerState { elapsed: 5 });
+
+    let released = outbound.recv().expect("release frame");
+    match released.frame {
+        Frame::ReleaseNativeHandle { handle_id } => assert_eq!(handle_id, NativeHandleId(2)),
+        other => panic!("expected ReleaseNativeHandle, got {other:?}"),
+    }
 }

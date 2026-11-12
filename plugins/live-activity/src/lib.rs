@@ -6,9 +6,12 @@
 //! types at compile time. Live activity tokens are carried as opaque
 //! [`NativeHandle`](istmo_core::NativeHandle)s.
 //!
-//! On non-Apple platforms the plugin is a no-op stub — callers can
-//! share the same Rust code path across platforms without conditional
-//! compilation.
+//! The Rust surface is identical on every target; what happens behind
+//! it depends on the native backend the app registers. The reference
+//! backends under `native/` render `ActivityKit` activities on iOS and
+//! ongoing notifications on Android. Without a registered backend
+//! (e.g. on desktop) every call fails, so probe
+//! [`LiveActivityClient::capabilities`] before relying on the feature.
 
 #![doc(html_root_url = "https://docs.rs/istmo-live-activity")]
 
@@ -19,7 +22,7 @@ mod typed;
 
 use istmo_macros::{message, plugin};
 
-pub use typed::TypedLiveActivity;
+pub use typed::{Restored, TypedLiveActivity};
 
 /// Wire identifier for the live-activity plugin.
 pub const LIVE_ACTIVITY_PLUGIN_ID: &str = "istmo.live_activity";

@@ -22,6 +22,7 @@ istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 wincode = { workspace = true }
 pollster = { workspace = true }
+tracing = { workspace = true }
 istmo-build = { workspace = true, optional = true }
 
 [build-dependencies]

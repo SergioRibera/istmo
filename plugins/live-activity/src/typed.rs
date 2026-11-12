@@ -8,6 +8,8 @@ use crate::{
     LiveActivityClient, LiveActivityToken, PlatformCapabilities, RestoredActivity,
 };
 
+/// [`LiveActivityClient`] bound to one `activity_type`, with the
+/// attributes (`A`) and content-state (`C`) types fixed at compile time.
 pub struct TypedLiveActivity<A, C>
 where
     A: Message,
@@ -80,7 +82,19 @@ where
         Ok(NativeHandle::adopt(self.runtime(), id))
     }
 
+    /// Push a new content state to the activity behind `handle`.
     pub async fn update(
+        &self,
+        handle: &NativeHandle<LiveActivityToken>,
+        state: C,
+        alert: Option<AlertConfig>,
+    ) -> Result<(), ActivityError> {
+        self.update_by_id(handle.id(), state, alert).await
+    }
+
+    /// [`Self::update`] for callers that only kept the raw id, e.g.
+    /// because the owning [`NativeHandle`] lives behind a lock.
+    pub async fn update_by_id(
         &self,
         handle: NativeHandleId,
         state: C,
@@ -90,18 +104,29 @@ where
         self.call_update(handle, state, alert).await
     }
 
+    /// End the activity behind `handle`.
+    ///
+    /// Dropping `handle` afterwards is harmless: the native side has
+    /// already forgotten the id and ignores the release.
     pub async fn end(
+        &self,
+        handle: &NativeHandle<LiveActivityToken>,
+        final_state: Option<C>,
+        dismissal: DismissalPolicy,
+    ) -> Result<(), ActivityError> {
+        self.end_by_id(handle.id(), final_state, dismissal).await
+    }
+
+    /// [`Self::end`] for callers that only kept the raw id.
+    pub async fn end_by_id(
         &self,
         handle: NativeHandleId,
         final_state: Option<C>,
         dismissal: DismissalPolicy,
     ) -> Result<(), ActivityError> {
-        let final_state = match final_state {
-            Some(state) => {
-                Some(codec::encode(&state).map_err(|e| ActivityError::Decode(e.to_string()))?)
-            }
-            None => None,
-        };
+        let final_state = final_state
+            .map(|state| codec::encode(&state).map_err(|e| ActivityError::Decode(e.to_string())))
+            .transpose()?;
         self.call_end(handle, final_state, dismissal).await
     }
 
@@ -113,22 +138,42 @@ where
         translate(self.client.capabilities().await)
     }
 
+    /// Recover the activities of this adapter's `activity_type` that
+    /// outlived a previous process.
+    ///
+    /// Every handle is adopted before any payload is decoded, so an
+    /// activity whose payload no longer decodes (e.g. after a schema
+    /// change) is skipped with a warning and its handle released
+    /// instead of leaking or failing the whole batch.
     pub async fn restore(&self) -> Result<Vec<Restored<A, C>>, ActivityError> {
         let all: Vec<RestoredActivity> = translate(self.client.restore_active().await)?;
-        let mut out = Vec::new();
-        for r in all {
-            if r.activity_type != self.activity_type {
-                continue;
-            }
-            let (attributes, _) = codec::decode::<A>(&r.attributes)
-                .map_err(|e| ActivityError::Decode(e.to_string()))?;
-            let (state, _) =
-                codec::decode::<C>(&r.state).map_err(|e| ActivityError::Decode(e.to_string()))?;
-            out.push(Restored {
-                handle: NativeHandle::adopt(self.runtime(), r.handle),
-                attributes,
-                state,
+        let adopted: Vec<_> = all
+            .into_iter()
+            .filter(|r| r.activity_type == self.activity_type)
+            .map(|r| {
+                let handle = NativeHandle::<LiveActivityToken>::adopt(self.runtime(), r.handle);
+                (handle, r.attributes, r.state)
+            })
+            .collect();
+
+        let mut out = Vec::with_capacity(adopted.len());
+        for (handle, attributes, state) in adopted {
+            let decoded = codec::decode::<A>(&attributes).and_then(|(attributes, _)| {
+                codec::decode::<C>(&state).map(|(s, _)| (attributes, s))
             });
+            match decoded {
+                Ok((attributes, state)) => out.push(Restored {
+                    handle,
+                    attributes,
+                    state,
+                }),
+                Err(err) => tracing::warn!(
+                    activity_type = %self.activity_type,
+                    handle = handle.id().0,
+                    %err,
+                    "skipping restored live activity with undecodable payload",
+                ),
+            }
         }
         Ok(out)
     }
@@ -175,13 +220,18 @@ where
     }
 }
 
+/// A restored activity with its payloads decoded, returned by
+/// [`TypedLiveActivity::restore`].
 pub struct Restored<A, C>
 where
     A: Message,
     C: Message,
 {
+    /// Owning handle; dropping it releases the platform activity.
     pub handle: NativeHandle<LiveActivityToken>,
+    /// Attributes as passed to `start()`.
     pub attributes: A,
+    /// Latest content state observed for the activity.
     pub state: C,
 }
 
