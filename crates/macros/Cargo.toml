@@ -21,6 +21,10 @@ quote = { workspace = true }
 syn = { workspace = true }
 
 [dev-dependencies]
+# UI tests and doctests expand the macros through the facade, as users do.
+istmo = { path = "../.." }
+flume = { workspace = true }
+trybuild = "1.0"
 
 [lints]
 workspace = true

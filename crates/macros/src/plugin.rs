@@ -1,18 +1,28 @@
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{
-    Attribute, Expr, ExprLit, ExprPath, FnArg, GenericArgument, Ident, ItemTrait, Lit, LitStr,
-    MetaNameValue, Path, PathArguments, ReturnType, Token, TraitItem, TraitItemFn, Type, TypePath,
-    parse_quote, parse_str, parse2,
+    Attribute, Expr, ExprPath, FnArg, GenericArgument, Ident, ItemTrait, LitStr, MetaNameValue,
+    Path, PathArguments, ReturnType, Token, TraitItem, TraitItemFn, Type, TypePath, parse_quote,
+    parse2,
 };
 
-#[allow(unreachable_pub, clippy::too_many_lines)]
-pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+use crate::common::{
+    ReturnShape, TraitKind, classify_return, desugar_async_methods, expect_lit_str,
+    expect_path_lit, reject_unsupported_trait_shape,
+};
+
+/// Capacity of the hop between a hosted stream's encoder thread and the
+/// runtime pump. Bounded so a slow consumer pushes back on the producer
+/// instead of buffering encoded items without limit.
+const STREAM_ENCODER_CAPACITY: usize = 64;
+
+pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let args: PluginArgs = parse2(attr)?;
     let mut trait_def: ItemTrait = parse2(item)?;
 
-    reject_unsupported_trait_shape(&trait_def)?;
+    reject_unsupported_trait_shape(&trait_def, TraitKind::Plugin)?;
 
     let trait_ident = trait_def.ident.clone();
     let vis = trait_def.vis.clone();
@@ -21,38 +31,32 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let client_ident = format_ident!("{}Client", trait_ident);
     let host_ident = format_ident!("{}Host", trait_ident);
 
-    let methods_source: Vec<TraitItemFn> = trait_def
+    let specs = trait_def
         .items
         .iter()
         .filter_map(|item| match item {
-            TraitItem::Fn(f) => Some(f.clone()),
+            TraitItem::Fn(f) => Some(MethodSpec::parse(f)),
             _ => None,
         })
+        .collect::<syn::Result<Vec<_>>>()?;
+
+    rewrite_trait_signatures(&mut trait_def, root);
+
+    let client_methods: Vec<TokenStream> = specs
+        .iter()
+        .map(|spec| expand_client_method(&plugin_id, root, spec))
+        .collect::<syn::Result<_>>()?;
+    let host_arms: Vec<TokenStream> = specs
+        .iter()
+        .map(|spec| expand_host_arm(root, spec))
         .collect();
-    let methods: Vec<&TraitItemFn> = methods_source.iter().collect();
+    let error_bounds = expand_error_bounds(&specs);
+    let message_bounds = expand_message_bounds(root, &specs);
 
-    add_send_bound_to_async_methods(&mut trait_def);
-
-    let client_methods = methods
-        .iter()
-        .map(|m| expand_client_method(&plugin_id, root, m))
-        .collect::<syn::Result<Vec<_>>>()?;
-    let host_arms = methods
-        .iter()
-        .map(|m| expand_host_arm(root, m))
-        .collect::<syn::Result<Vec<_>>>()?;
-    let error_bounds = expand_error_bounds(&methods);
-
-    let stateless_ctors = if args.init.is_none() {
-        Some(expand_stateless_ctors(&client_ident, root))
-    } else {
-        None
-    };
-
-    let stateful_ctors = args
-        .init
-        .as_ref()
-        .map(|init_ty| expand_stateful_ctors(&client_ident, &plugin_id, init_ty, root));
+    let ctors = args.init.as_ref().map_or_else(
+        || expand_stateless_ctors(&client_ident, root),
+        |init_ty| expand_stateful_ctors(&client_ident, &plugin_id, init_ty, root),
+    );
 
     let client_struct = quote! {
         #vis struct #client_ident {
@@ -84,38 +88,41 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     };
 
     let factory_ident = format_ident!("{}Factory", trait_ident);
-    let host_def = if let Some(init_ty) = args.init.as_ref() {
-        expand_stateful_host(
-            &vis,
-            &trait_ident,
-            &factory_ident,
-            &host_ident,
-            init_ty,
-            &plugin_id,
-            root,
-            &host_arms,
-        )
-    } else {
-        expand_stateless_host(
-            &vis,
-            &trait_ident,
-            &host_ident,
-            &plugin_id,
-            root,
-            &host_arms,
-        )
-    };
+    let host_def = args.init.as_ref().map_or_else(
+        || {
+            expand_stateless_host(
+                &vis,
+                &trait_ident,
+                &host_ident,
+                &plugin_id,
+                root,
+                &host_arms,
+            )
+        },
+        |init_ty| {
+            expand_stateful_host(
+                &vis,
+                &trait_ident,
+                &factory_ident,
+                &host_ident,
+                init_ty,
+                &plugin_id,
+                root,
+                &host_arms,
+            )
+        },
+    );
 
     Ok(quote! {
         #trait_def
 
         #error_bounds
 
+        #message_bounds
+
         #client_struct
 
-        #stateless_ctors
-
-        #stateful_ctors
+        #ctors
 
         impl #client_ident {
             #[must_use]
@@ -137,7 +144,6 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn expand_stateless_host(
     vis: &syn::Visibility,
     trait_ident: &Ident,
@@ -218,7 +224,11 @@ fn expand_stateless_host(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "one quote! block holding the whole host; each argument is a distinct piece of it"
+)]
 fn expand_stateful_host(
     vis: &syn::Visibility,
     trait_ident: &Ident,
@@ -370,49 +380,24 @@ fn expand_stateful_host(
     }
 }
 
-fn add_send_bound_to_async_methods(trait_def: &mut ItemTrait) {
+/// Stream methods return a receiver of their declared item type; every
+/// other method is an `async fn` desugared to a `Send` future.
+fn rewrite_trait_signatures(trait_def: &mut ItemTrait, root: &Path) {
     for item in &mut trait_def.items {
         let TraitItem::Fn(f) = item else { continue };
-        if is_stream_method(&f.attrs) {
-            let item_ty = match &f.sig.output {
-                ReturnType::Default => quote! { () },
-                ReturnType::Type(_, t) => quote! { #t },
-            };
-            let new_output: syn::Type = parse_quote! {
-                ::flume::Receiver<#item_ty>
-            };
-            f.sig.output = ReturnType::Type(<Token![->]>::default(), Box::new(new_output));
+        if !is_stream_method(&f.attrs) {
             continue;
         }
-        if f.sig.asyncness.is_none() {
-            continue;
-        }
-        f.sig.asyncness = None;
-        let return_ty = match &f.sig.output {
+        let item_ty = match &f.sig.output {
             ReturnType::Default => quote! { () },
             ReturnType::Type(_, t) => quote! { #t },
         };
-        let new_output: syn::Type = parse_quote! {
-            impl ::core::future::Future<Output = #return_ty> + ::core::marker::Send + '_
+        let new_output: Type = parse_quote! {
+            #root::__private::flume::Receiver<#item_ty>
         };
         f.sig.output = ReturnType::Type(<Token![->]>::default(), Box::new(new_output));
     }
-}
-
-fn reject_unsupported_trait_shape(t: &ItemTrait) -> syn::Result<()> {
-    if !t.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &t.generics,
-            "generic plugin traits are not supported yet",
-        ));
-    }
-    if !t.supertraits.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &t.supertraits,
-            "supertraits on a plugin trait are not supported",
-        ));
-    }
-    Ok(())
+    desugar_async_methods(trait_def);
 }
 
 fn expand_stateless_ctors(client_ident: &Ident, root: &Path) -> TokenStream {
@@ -420,7 +405,6 @@ fn expand_stateless_ctors(client_ident: &Ident, root: &Path) -> TokenStream {
         impl #client_ident {
             pub fn acquire() -> ::core::result::Result<Self, #root::IstmoError> {
                 let rt = #root::Runtime::global()?;
-                <Self as #root::Plugin>::PLUGIN_ID;
                 rt.check_declared(<Self as #root::Plugin>::PLUGIN_ID)?;
                 ::core::result::Result::Ok(Self {
                     __runtime: rt,
@@ -509,12 +493,7 @@ impl syn::parse::Parse for PluginArgs {
                 "init" => {
                     init = Some(expect_type(&pair.value)?);
                 }
-                "crate" => {
-                    let path_str = expect_lit_str(&pair.value)?;
-                    crate_path = Some(parse_str::<Path>(&path_str.value()).map_err(|e| {
-                        syn::Error::new_spanned(&pair.value, format!("invalid `crate` path: {e}"))
-                    })?);
-                }
+                "crate" => crate_path = Some(expect_path_lit(&pair.value, "crate")?),
                 other => {
                     return Err(syn::Error::new_spanned(
                         &pair.path,
@@ -537,15 +516,6 @@ impl syn::parse::Parse for PluginArgs {
     }
 }
 
-fn expect_lit_str(expr: &Expr) -> syn::Result<LitStr> {
-    match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Str(s), ..
-        }) => Ok(s.clone()),
-        _ => Err(syn::Error::new_spanned(expr, "expected string literal")),
-    }
-}
-
 fn expect_type(expr: &Expr) -> syn::Result<Type> {
     match expr {
         Expr::Path(ExprPath { path, qself, .. }) => Ok(Type::Path(TypePath {
@@ -559,15 +529,106 @@ fn expect_type(expr: &Expr) -> syn::Result<Type> {
     }
 }
 
-struct MethodCtx<'a> {
-    plugin_id: &'a LitStr,
-    root: &'a Path,
-    name: &'a Ident,
+/// One trait method, parsed and validated once so the client and host
+/// halves are generated from the same reading of its signature.
+struct MethodSpec {
+    name: Ident,
     method_name_str: LitStr,
-    arg_pats: Vec<TokenStream>,
-    payload_expr: TokenStream,
-
+    args: Vec<WireArg>,
+    ret: ReturnShape,
+    kind: MethodKind,
     doc_attrs: Vec<Attribute>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MethodKind {
+    /// `async fn` answered with one response.
+    Unary { owned: bool },
+    /// `#[stream] fn` answered with a stream of events.
+    Stream,
+}
+
+impl MethodSpec {
+    fn parse(method: &TraitItemFn) -> syn::Result<Self> {
+        let sig = &method.sig;
+        let stream = is_stream_method(&method.attrs);
+        let owned = is_owned_method(&method.attrs);
+        let ret = classify_return(&sig.output)?;
+
+        let kind = if stream {
+            if let Some(asyncness) = &sig.asyncness {
+                return Err(syn::Error::new_spanned(
+                    asyncness,
+                    "`#[istmo::stream]` methods are not `async`: drop `async` and \
+                     declare the stream item as the return type",
+                ));
+            }
+            if owned {
+                return Err(syn::Error::new_spanned(
+                    &sig.ident,
+                    "`#[istmo::owned]` is not supported on stream methods yet",
+                ));
+            }
+            if let ReturnShape::Result { .. } = &ret {
+                return Err(syn::Error::new_spanned(
+                    &sig.output,
+                    "`#[istmo::stream]` items cannot be `Result<T, E>`: hosted streams only \
+                     end with `StreamEnd::Complete`, so an error would travel as an item; \
+                     use a `#[message]` enum item that carries the failure",
+                ));
+            }
+            MethodKind::Stream
+        } else {
+            if sig.asyncness.is_none() {
+                return Err(syn::Error::new_spanned(
+                    &sig.ident,
+                    "unary plugin methods must be `async fn`; mark stream methods with `#[istmo::stream]`",
+                ));
+            }
+            MethodKind::Unary { owned }
+        };
+
+        Ok(Self {
+            name: sig.ident.clone(),
+            method_name_str: LitStr::new(&sig.ident.to_string(), sig.ident.span()),
+            args: extract_wire_args(sig)?,
+            ret,
+            kind,
+            doc_attrs: method
+                .attrs
+                .iter()
+                .filter(|a| a.path().is_ident("doc"))
+                .cloned()
+                .collect(),
+        })
+    }
+
+    fn wire_args(&self) -> impl Iterator<Item = &WireArg> {
+        self.args.iter().filter(|a| a.role == ArgRole::Wire)
+    }
+
+    fn wire_arg_names(&self) -> Vec<&Ident> {
+        self.wire_args().map(|a| &a.ident).collect()
+    }
+
+    /// `name: Type` for every wire argument, as written in the client.
+    fn client_params(&self) -> Vec<TokenStream> {
+        self.wire_args()
+            .map(|a| {
+                let n = &a.ident;
+                let t = &a.ty;
+                quote! { #n: #t }
+            })
+            .collect()
+    }
+
+    /// Every type that crosses the wire for this method.
+    fn wire_types(&self) -> impl Iterator<Item = &Type> {
+        self.wire_args()
+            .map(|a| &a.ty)
+            .chain(std::iter::once(self.ret.ok_ty()))
+            .chain(self.ret.err_ty())
+    }
 }
 
 #[derive(Clone)]
@@ -591,6 +652,10 @@ fn arg_role(ty: &Type) -> ArgRole {
     }
 }
 
+/// Detection is by the last path segment's name, so `CancelToken`,
+/// `istmo::CancelToken` and `::istmo_core::CancelToken` all match. An
+/// alias under another name, `&CancelToken` or `Option<CancelToken>` do
+/// not, and are treated as wire arguments.
 fn is_cancel_token(ty: &Type) -> bool {
     let Type::Path(tp) = ty else { return false };
     tp.path
@@ -602,99 +667,37 @@ fn is_cancel_token(ty: &Type) -> bool {
 fn expand_client_method(
     plugin_id: &LitStr,
     root: &Path,
-    method: &TraitItemFn,
+    spec: &MethodSpec,
 ) -> syn::Result<TokenStream> {
-    let sig = &method.sig;
-    let name = &sig.ident;
-    let method_name_str = LitStr::new(&name.to_string(), name.span());
-
-    let all_args = extract_wire_args(sig)?;
-
-    let wire_args: Vec<&WireArg> = all_args
-        .iter()
-        .filter(|a| a.role == ArgRole::Wire)
-        .collect();
-    let arg_pats: Vec<TokenStream> = wire_args
-        .iter()
-        .map(|a| {
-            let n = &a.ident;
-            let t = &a.ty;
-            quote! { #n: #t }
-        })
-        .collect();
-    let arg_names: Vec<Ident> = wire_args.iter().map(|a| a.ident.clone()).collect();
-    let payload_expr = build_payload_expr(root, &arg_names);
-
-    let return_ty = match &sig.output {
-        ReturnType::Default => Type::Verbatim(quote! { () }),
-        ReturnType::Type(_, t) => (**t).clone(),
-    };
-    let (ok_ty, err_ty) = extract_result(&return_ty);
-
-    let doc_attrs: Vec<Attribute> = method
-        .attrs
-        .iter()
-        .filter(|a| a.path().is_ident("doc"))
-        .cloned()
-        .collect();
-
-    let ctx = MethodCtx {
-        plugin_id,
-        root,
-        name,
-        method_name_str,
-        arg_pats,
-        payload_expr,
-        doc_attrs,
-    };
-
-    if is_stream_method(&method.attrs) {
-        if is_owned_method(&method.attrs) {
-            return Err(syn::Error::new_spanned(
-                method,
-                "`#[istmo::owned]` is not supported on stream methods yet",
-            ));
-        }
-        Ok(expand_stream_method(
-            &ctx,
-            ok_ty.as_ref().unwrap_or(&return_ty),
-            err_ty.as_ref(),
-        ))
-    } else {
-        let base = expand_unary_method(
-            &ctx,
-            sig.asyncness.is_some(),
-            ok_ty.as_ref().unwrap_or(&return_ty),
-        )?;
-        if is_owned_method(&method.attrs) {
-            let owned = expand_unary_owned_method(&ctx, ok_ty.as_ref().unwrap_or(&return_ty))?;
-            Ok(quote! { #base #owned })
-        } else {
-            Ok(base)
+    match spec.kind {
+        MethodKind::Stream => Ok(expand_stream_method(plugin_id, root, spec)),
+        MethodKind::Unary { owned } => {
+            let base = expand_unary_method(plugin_id, root, spec);
+            if owned {
+                let owned = expand_unary_owned_method(root, spec)?;
+                Ok(quote! { #base #owned })
+            } else {
+                Ok(base)
+            }
         }
     }
 }
 
-#[allow(clippy::too_many_lines)]
-fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream> {
-    let sig = &method.sig;
-    let name = &sig.ident;
-    let method_name_str = LitStr::new(&name.to_string(), name.span());
-
-    let all_args = extract_wire_args(sig)?;
-    let wire_arg_names: Vec<Ident> = all_args
-        .iter()
-        .filter(|a| a.role == ArgRole::Wire)
-        .map(|a| a.ident.clone())
-        .collect();
-    let arg_tuple_type = wire_arg_tuple_type(&all_args);
+fn expand_host_arm(root: &Path, spec: &MethodSpec) -> TokenStream {
+    let MethodSpec {
+        name,
+        method_name_str,
+        args,
+        ..
+    } = spec;
+    let arg_tuple_type = wire_arg_tuple_type(spec);
     let decode = quote! {
         let (args, _) = #root::codec::decode::<#arg_tuple_type>(payload)
             .map_err(#root::DispatchError::Decode)?;
     };
-    let destructure = destructure_arg_tuple(&wire_arg_names);
+    let destructure = destructure_arg_tuple(&spec.wire_arg_names());
 
-    let cancel_bindings: Vec<TokenStream> = all_args
+    let cancel_bindings: Vec<TokenStream> = args
         .iter()
         .filter(|a| a.role == ArgRole::Cancel)
         .map(|a| {
@@ -702,96 +705,105 @@ fn expand_host_arm(root: &Path, method: &TraitItemFn) -> syn::Result<TokenStream
             quote! { let #n = cancel.clone(); }
         })
         .collect();
-    let call_args: Vec<Ident> = all_args.iter().map(|a| a.ident.clone()).collect();
+    let call_args: Vec<&Ident> = args.iter().map(|a| &a.ident).collect();
 
-    if is_stream_method(&method.attrs) {
-        let item_ty = match &sig.output {
-            ReturnType::Default => Type::Verbatim(quote! { () }),
-            ReturnType::Type(_, t) => (**t).clone(),
-        };
-        return Ok(quote! {
-            #method_name_str => {
-                #decode
-                #destructure
-                let __istmo_source: ::flume::Receiver<#item_ty> = {
-                    #(#cancel_bindings)*
-                    __istmo_impl.#name(#(#call_args),*)
-                };
-                let (__istmo_etx, __istmo_erx) = ::flume::unbounded::<::std::vec::Vec<u8>>();
-                ::std::thread::spawn(move || {
-                    while let ::core::result::Result::Ok(item) = __istmo_source.recv() {
-                        match #root::codec::encode(&item) {
-                            ::core::result::Result::Ok(bytes) => {
-                                if __istmo_etx.send(bytes).is_err() {
-                                    break;
-                                }
-                            }
-                            ::core::result::Result::Err(err) => {
-                                #root::__private::tracing::error!(
-                                    ?err,
-                                    "hosted stream encode failed",
-                                );
-                                break;
-                            }
-                        }
-                    }
-                });
-                ::core::result::Result::Ok(#root::Outcome::StreamOpened(__istmo_erx))
-            }
-        });
-    }
-
-    let return_ty = match &sig.output {
-        ReturnType::Default => Type::Verbatim(quote! { () }),
-        ReturnType::Type(_, t) => (**t).clone(),
-    };
-    let (ok_ty, err_ty) = extract_result(&return_ty);
-    let call_expr = quote! {
+    let call = quote! {
         {
             #(#cancel_bindings)*
-            __istmo_impl.#name(#(#call_args),*).await
+            __istmo_impl.#name(#(#call_args),*)
         }
     };
 
-    let body = if let (Some(_), Some(_)) = (ok_ty.as_ref(), err_ty.as_ref()) {
-        quote! {
-            match #call_expr {
-                ::core::result::Result::Ok(value) => {
-                    let bytes = #root::codec::encode(&value)
-                        .map_err(#root::DispatchError::Encode)?;
-                    ::core::result::Result::Ok(#root::Outcome::Ok(bytes))
-                }
-                ::core::result::Result::Err(err) => {
-                    let bytes = #root::codec::encode(&err)
-                        .map_err(#root::DispatchError::Encode)?;
-                    ::core::result::Result::Ok(#root::Outcome::DomainError(bytes))
+    let body = match (spec.kind, &spec.ret) {
+        (MethodKind::Stream, ret) => {
+            expand_stream_arm_body(root, method_name_str, ret.ok_ty(), &call)
+        }
+        (MethodKind::Unary { .. }, ReturnShape::Result { ok, err }) => {
+            let encode_ok = quote_spanned! {ok.span()=> #root::codec::encode(&value) };
+            let encode_err = quote_spanned! {err.span()=> #root::codec::encode(&err) };
+            quote! {
+                match #call.await {
+                    ::core::result::Result::Ok(value) => {
+                        let bytes = #encode_ok.map_err(#root::DispatchError::Encode)?;
+                        ::core::result::Result::Ok(#root::Outcome::Ok(bytes))
+                    }
+                    ::core::result::Result::Err(err) => {
+                        let bytes = #encode_err.map_err(#root::DispatchError::Encode)?;
+                        ::core::result::Result::Ok(#root::Outcome::DomainError(bytes))
+                    }
                 }
             }
         }
-    } else {
-        quote! {
-            let value = #call_expr;
-            let bytes = #root::codec::encode(&value)
-                .map_err(#root::DispatchError::Encode)?;
-            ::core::result::Result::Ok(#root::Outcome::Ok(bytes))
+        (MethodKind::Unary { .. }, ReturnShape::Plain(ty)) => {
+            let encode = quote_spanned! {ty.span()=> #root::codec::encode(&value) };
+            quote! {
+                let value = #call.await;
+                let bytes = #encode.map_err(#root::DispatchError::Encode)?;
+                ::core::result::Result::Ok(#root::Outcome::Ok(bytes))
+            }
         }
     };
 
-    Ok(quote! {
+    quote! {
         #method_name_str => {
             #decode
             #destructure
             #body
         }
-    })
+    }
 }
 
-fn wire_arg_tuple_type(args: &[WireArg]) -> TokenStream {
-    let types: Vec<&Type> = args
-        .iter()
-        .filter(|a| a.role == ArgRole::Wire)
-        .map(|a| &a.ty)
-        .collect();
+/// Host side of a stream method: a named encoder thread turns the
+/// implementation's typed receiver into the byte receiver the runtime
+/// pumps out as `Event` frames.
+fn expand_stream_arm_body(
+    root: &Path,
+    method_name_str: &LitStr,
+    item_ty: &Type,
+    call: &TokenStream,
+) -> TokenStream {
+    let encode = quote_spanned! {item_ty.span()=> #root::codec::encode(&item) };
+    quote! {
+        let __istmo_source: #root::__private::flume::Receiver<#item_ty> = #call;
+        let (__istmo_etx, __istmo_erx) =
+            #root::__private::flume::bounded::<::std::vec::Vec<u8>>(#STREAM_ENCODER_CAPACITY);
+        let __istmo_spawned = ::std::thread::Builder::new()
+            .name(::std::string::String::from("istmo-stream-enc"))
+            .spawn(move || {
+                while let ::core::result::Result::Ok(item) = __istmo_source.recv() {
+                    match #encode {
+                        ::core::result::Result::Ok(bytes) => {
+                            if __istmo_etx.send(bytes).is_err() {
+                                break;
+                            }
+                        }
+                        ::core::result::Result::Err(err) => {
+                            #root::__private::tracing::error!(
+                                ?err,
+                                method = #method_name_str,
+                                "hosted stream encode failed",
+                            );
+                            break;
+                        }
+                    }
+                }
+            });
+        if let ::core::result::Result::Err(err) = __istmo_spawned {
+            #root::__private::tracing::error!(
+                ?err,
+                method = #method_name_str,
+                "failed to spawn the hosted stream encoder thread",
+            );
+            return ::core::result::Result::Err(#root::DispatchError::Unimplemented(
+                "hosted stream encoder thread could not be spawned",
+            ));
+        }
+        ::core::result::Result::Ok(#root::Outcome::StreamOpened(__istmo_erx))
+    }
+}
+
+fn wire_arg_tuple_type(spec: &MethodSpec) -> TokenStream {
+    let types: Vec<&Type> = spec.wire_args().map(|a| &a.ty).collect();
     if types.is_empty() {
         quote! { () }
     } else {
@@ -799,7 +811,7 @@ fn wire_arg_tuple_type(args: &[WireArg]) -> TokenStream {
     }
 }
 
-fn destructure_arg_tuple(arg_names: &[Ident]) -> TokenStream {
+fn destructure_arg_tuple(arg_names: &[&Ident]) -> TokenStream {
     if arg_names.is_empty() {
         quote! { let _ = args; }
     } else {
@@ -809,54 +821,56 @@ fn destructure_arg_tuple(arg_names: &[Ident]) -> TokenStream {
 
 fn extract_wire_args(sig: &syn::Signature) -> syn::Result<Vec<WireArg>> {
     let mut args = Vec::new();
-    for input in sig.inputs.iter().skip(1) {
-        match input {
-            FnArg::Typed(pat_type) => {
-                let ident = match pat_type.pat.as_ref() {
-                    syn::Pat::Ident(pi) => pi.ident.clone(),
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            &pat_type.pat,
-                            "argument patterns must be plain identifiers",
-                        ));
-                    }
-                };
-                let ty = (*pat_type.ty).clone();
-                let role = arg_role(&ty);
-                args.push(WireArg { ident, ty, role });
-            }
-            FnArg::Receiver(_) => {}
+    for input in &sig.inputs {
+        let FnArg::Typed(pat_type) = input else {
+            // The receiver; `reject_unsupported_trait_shape` already
+            // required it to be `&self`.
+            continue;
+        };
+        let syn::Pat::Ident(pi) = pat_type.pat.as_ref() else {
+            return Err(syn::Error::new_spanned(
+                &pat_type.pat,
+                "argument patterns must be plain identifiers",
+            ));
+        };
+        if pi.by_ref.is_some() || pi.subpat.is_some() {
+            return Err(syn::Error::new_spanned(
+                &pat_type.pat,
+                "argument patterns must be plain identifiers",
+            ));
         }
+        let ty = (*pat_type.ty).clone();
+        let role = arg_role(&ty);
+        args.push(WireArg {
+            ident: pi.ident.clone(),
+            ty,
+            role,
+        });
     }
     Ok(args)
 }
 
-fn build_payload_expr(root: &Path, arg_names: &[Ident]) -> TokenStream {
-    if arg_names.is_empty() {
+fn build_payload_expr(root: &Path, spec: &MethodSpec) -> TokenStream {
+    let names = spec.wire_arg_names();
+    if names.is_empty() {
         quote! { #root::codec::encode(&())? }
     } else {
-        quote! { #root::codec::encode(&( #(#arg_names,)* ))? }
+        quote! { #root::codec::encode(&( #(#names,)* ))? }
     }
 }
 
-fn expand_error_bounds(methods: &[&TraitItemFn]) -> TokenStream {
+fn expand_error_bounds(specs: &[MethodSpec]) -> TokenStream {
     let mut seen = std::collections::BTreeSet::new();
     let mut asserts = Vec::new();
-    for m in methods {
-        let ReturnType::Type(_, ty) = &m.sig.output else {
-            continue;
-        };
-        let (_, err_ty) = extract_result(ty);
-        let Some(err_ty) = err_ty else { continue };
-
-        if is_unit(&err_ty) {
+    for err_ty in specs.iter().filter_map(|s| s.ret.err_ty()) {
+        if is_unit(err_ty) {
             continue;
         }
         let key = quote! { #err_ty }.to_string();
         if !seen.insert(key) {
             continue;
         }
-        asserts.push(quote! {
+        asserts.push(quote_spanned! {err_ty.span()=>
             const _: fn() = || {
                 fn __istmo_assert_error<T>()
                 where
@@ -870,35 +884,30 @@ fn expand_error_bounds(methods: &[&TraitItemFn]) -> TokenStream {
     quote! { #(#asserts)* }
 }
 
-fn is_unit(ty: &Type) -> bool {
-    matches!(ty, Type::Tuple(t) if t.elems.is_empty())
+/// Assert, at the type's own span, that every wire type is a
+/// [`Message`](https://docs.rs/istmo-core/latest/istmo_core/message/trait.Message.html),
+/// so a missing `#[message]` points at the offending argument or return
+/// type instead of at the macro invocation.
+fn expand_message_bounds(root: &Path, specs: &[MethodSpec]) -> TokenStream {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut asserts = Vec::new();
+    for ty in specs.iter().flat_map(MethodSpec::wire_types) {
+        if !seen.insert(quote! { #ty }.to_string()) {
+            continue;
+        }
+        let call = quote_spanned! {ty.span()=> __istmo_assert_message::<#ty>() };
+        asserts.push(quote! {
+            const _: fn() = || {
+                fn __istmo_assert_message<T: #root::Message>() {}
+                #call;
+            };
+        });
+    }
+    quote! { #(#asserts)* }
 }
 
-fn extract_result(ty: &Type) -> (Option<Type>, Option<Type>) {
-    let Type::Path(tp) = ty else {
-        return (None, None);
-    };
-    let Some(last) = tp.path.segments.last() else {
-        return (None, None);
-    };
-    if last.ident != "Result" {
-        return (None, None);
-    }
-    let PathArguments::AngleBracketed(args) = &last.arguments else {
-        return (None, None);
-    };
-    let mut ok = None;
-    let mut err = None;
-    for arg in &args.args {
-        if let GenericArgument::Type(t) = arg {
-            if ok.is_none() {
-                ok = Some(t.clone());
-            } else if err.is_none() {
-                err = Some(t.clone());
-            }
-        }
-    }
-    (ok, err)
+fn is_unit(ty: &Type) -> bool {
+    matches!(ty, Type::Tuple(t) if t.elems.is_empty())
 }
 
 fn is_stream_method(attrs: &[Attribute]) -> bool {
@@ -922,29 +931,20 @@ fn is_istmo_leaf_attr(attr: &Attribute, tail: &str) -> bool {
     false
 }
 
-fn expand_unary_method(
-    ctx: &MethodCtx<'_>,
-    is_async: bool,
-    ok_ty: &Type,
-) -> syn::Result<TokenStream> {
-    if !is_async {
-        return Err(syn::Error::new_spanned(
-            ctx.name,
-            "unary plugin methods must be `async fn`",
-        ));
-    }
-    let MethodCtx {
-        plugin_id,
-        root,
+fn expand_unary_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> TokenStream {
+    let MethodSpec {
         name,
         method_name_str,
-        arg_pats,
-        payload_expr,
         doc_attrs,
-    } = ctx;
-    Ok(quote! {
+        ..
+    } = spec;
+    let params = spec.client_params();
+    let payload_expr = build_payload_expr(root, spec);
+    let ok_ty = spec.ret.ok_ty();
+    let decode = quote_spanned! {ok_ty.span()=> #root::codec::decode::<#ok_ty>(&bytes) };
+    quote! {
         #(#doc_attrs)*
-        pub async fn #name(&self, #(#arg_pats),*) -> ::core::result::Result<
+        pub async fn #name(&self, #(#params),*) -> ::core::result::Result<
             #ok_ty,
             #root::IstmoError,
         > {
@@ -958,7 +958,7 @@ fn expand_unary_method(
             let response = handle.await?;
             match response {
                 ::core::result::Result::Ok(bytes) => {
-                    let (value, _) = #root::codec::decode::<#ok_ty>(&bytes)?;
+                    let (value, _) = #decode?;
                     ::core::result::Result::Ok(value)
                 }
                 ::core::result::Result::Err(bytes) => {
@@ -966,40 +966,57 @@ fn expand_unary_method(
                 }
             }
         }
-    })
+    }
 }
 
-fn expand_unary_owned_method(ctx: &MethodCtx<'_>, ok_ty: &Type) -> syn::Result<TokenStream> {
-    let MethodCtx {
-        root,
-        name,
-        arg_pats,
-        doc_attrs,
-        ..
-    } = ctx;
+fn expand_unary_owned_method(root: &Path, spec: &MethodSpec) -> syn::Result<TokenStream> {
+    let MethodSpec {
+        name, doc_attrs, ..
+    } = spec;
     let owned_name = format_ident!("{}_owned", name);
-    let arg_names: Vec<TokenStream> = arg_pats
-        .iter()
-        .filter_map(|p| {
-            let tokens = p.to_string();
-            let (ident, _) = tokens.split_once(':')?;
-            let ident = ident.trim();
-            let id: Ident = syn::parse_str(ident).ok()?;
-            Some(quote! { #id })
-        })
-        .collect();
-    let (owned_return_ty, adopter_expr) = build_owned_return(ok_ty)?;
+    let params = spec.client_params();
+    let arg_names = spec.wire_arg_names();
+    let (owned_return_ty, adopter_expr) = build_owned_return(spec.ret.ok_ty())?;
     Ok(quote! {
         #(#doc_attrs)*
         pub async fn #owned_name(
             &self,
-            #(#arg_pats),*
+            #(#params),*
         ) -> ::core::result::Result<#owned_return_ty, #root::IstmoError> {
             let __wire = self.#name(#(#arg_names),*).await?;
             let __rt = &self.__runtime;
             ::core::result::Result::Ok(#adopter_expr)
         }
     })
+}
+
+fn expand_stream_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> TokenStream {
+    let MethodSpec {
+        name,
+        method_name_str,
+        doc_attrs,
+        ..
+    } = spec;
+    let params = spec.client_params();
+    let payload_expr = build_payload_expr(root, spec);
+    let item_ty = spec.ret.ok_ty();
+    quote! {
+        #(#doc_attrs)*
+        pub fn #name(&self, #(#params),*) -> ::core::result::Result<
+            #root::TypedStream<#item_ty>,
+            #root::IstmoError,
+        > {
+            let payload = #payload_expr;
+            let handle = self.__runtime.stream(
+                #plugin_id,
+                self.__instance_id,
+                #method_name_str,
+                payload,
+                0,
+            )?;
+            ::core::result::Result::Ok(#root::TypedStream::new(handle))
+        }
+    }
 }
 
 fn build_owned_return(ok_ty: &Type) -> syn::Result<(TokenStream, TokenStream)> {
@@ -1065,34 +1082,4 @@ fn as_generic<'a>(wrapper: &str, ty: &'a Type) -> Option<&'a Type> {
         GenericArgument::Type(t) => Some(t),
         _ => None,
     })
-}
-
-fn expand_stream_method(ctx: &MethodCtx<'_>, item_ty: &Type, err_ty: Option<&Type>) -> TokenStream {
-    let MethodCtx {
-        plugin_id,
-        root,
-        name,
-        method_name_str,
-        arg_pats,
-        payload_expr,
-        doc_attrs,
-    } = ctx;
-    let err_ty_tokens = err_ty.map_or_else(|| quote! { () }, |t| quote! { #t });
-    quote! {
-        #(#doc_attrs)*
-        pub fn #name(&self, #(#arg_pats),*) -> ::core::result::Result<
-            #root::TypedStream<#item_ty, #err_ty_tokens>,
-            #root::IstmoError,
-        > {
-            let payload = #payload_expr;
-            let handle = self.__runtime.stream(
-                #plugin_id,
-                self.__instance_id,
-                #method_name_str,
-                payload,
-                0,
-            )?;
-            ::core::result::Result::Ok(#root::TypedStream::new(handle))
-        }
-    }
 }

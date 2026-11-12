@@ -73,6 +73,7 @@ pub use crate::typed_stream::{StreamItem, TypedStream};
 
 #[doc(hidden)]
 pub mod __private {
+    pub use flume;
     pub use pollster::block_on;
     pub use tracing;
 

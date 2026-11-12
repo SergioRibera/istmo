@@ -2,8 +2,7 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{ItemFn, parse::Parse, parse::ParseStream, parse2};
 
-#[allow(unreachable_pub)]
-pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let _args = parse2::<MobileAppArgs>(attr)?;
     let user_fn = parse2::<ItemFn>(item)?;
     let user_ident = user_fn.sig.ident.clone();
