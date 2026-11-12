@@ -1,14 +1,15 @@
 [package]
 name = "istmo-opener"
 version = "0.1.1-alpha.5"
-description = "Open URLs with the system for the istmo framework — browser, mail, maps and files via Android intents, UIApplication.open and the desktop opener."
+description = "Open URLs with the system for the istmo framework — browser, mail, phone and maps via Android intents, UIApplication.open and the desktop opener."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-readme.workspace = true
+readme = "README.md"
+include = ["/src", "/build.rs", "/istmo.toml", "/native", "/README.md", "/LICENSE*"]
 keywords = ["istmo", "url", "open", "browser", "mobile"]
 categories = ["os", "api-bindings"]
 links = "istmo_opener"
