@@ -42,10 +42,16 @@ istmo-build = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
 
+# Copy of `[workspace.lints]` except that `unsafe_code` is `deny`
+# instead of `forbid`: adopting the native fd / HANDLE in `fd_bridge`
+# needs `unsafe`, and `forbid` cannot be lifted by an inner `#[expect]`,
+# while `deny` still keeps every other module unsafe-free. The one
+# addition, `undocumented_unsafe_blocks`, holds those blocks to a
+# SAFETY comment. Keep the rest in sync with the workspace table.
 [lints.rust]
+unsafe_code = "deny"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
-unsafe_code = "allow"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -53,5 +59,4 @@ nursery = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
-missing_safety_doc = "allow"
-redundant_pub_crate = "allow"
+undocumented_unsafe_blocks = "warn"

@@ -43,7 +43,7 @@ impl PickedFileReader {
     ) -> Result<Self, FilePickerError> {
         let raw = call_open_read(picker, keep_alive.handle.id()).await?;
         Ok(Self {
-            file: file_from_raw(raw),
+            file: file_from_raw(raw)?,
             _keep: keep_alive,
         })
     }
@@ -68,7 +68,7 @@ impl PickedFileWriter {
     ) -> Result<Self, FilePickerError> {
         let raw = call_open_write(picker, keep_alive.handle.id()).await?;
         Ok(Self {
-            file: file_from_raw(raw),
+            file: file_from_raw(raw)?,
             _keep: keep_alive,
         })
     }
@@ -207,35 +207,56 @@ mod windows_handle {
 
 // ------------------------------------------------------------------ fd bridge
 
+// The only `unsafe` in the crate: adopting the fd / `HANDLE` the native
+// side hands over. The crate lints set `unsafe_code = "deny"` (not the
+// workspace's `forbid`, which cannot be lifted locally) so these two
+// functions can opt out one by one.
+
 #[cfg(unix)]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn file_from_raw(raw: RawFileHandle) -> std::fs::File {
+#[expect(
+    unsafe_code,
+    reason = "adopting a native-owned fd needs `File::from_raw_fd`"
+)]
+fn file_from_raw(raw: RawFileHandle) -> Result<std::fs::File, FilePickerError> {
     use std::os::fd::{FromRawFd, RawFd};
-    // Safety: `raw.raw` is a POSIX fd produced by a successful
-    // open_read/open_write on the native side. The native side has
-    // detached the fd (Android `ParcelFileDescriptor.detachFd`) or
-    // returned an owned open() result (iOS/macOS/Linux/desktop) so the
-    // Rust side becomes the sole owner. Wrapping in `File` gives it a
-    // canonical closer.
-    unsafe { std::fs::File::from_raw_fd(raw.raw as RawFd) }
+    // The wire carries an `i64`; a value that does not fit a `RawFd` or
+    // is negative cannot be an fd the native side opened, and adopting
+    // a truncated number would close some unrelated descriptor later.
+    let fd = RawFd::try_from(raw.raw)
+        .ok()
+        .filter(|fd| *fd >= 0)
+        .ok_or_else(|| FilePickerError::Io(format!("invalid file descriptor {}", raw.raw)))?;
+    // SAFETY: `fd` is a non-negative descriptor produced by a successful
+    // open_read/open_write on the native side, which has detached it
+    // (Android `ParcelFileDescriptor.detachFd`) or returned an owned
+    // `open()` result (iOS/macOS/Linux/desktop), so it is open and this
+    // process's Rust side is its sole owner. `File` becomes its closer.
+    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
 }
 
 #[cfg(windows)]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn file_from_raw(raw: RawFileHandle) -> std::fs::File {
+#[expect(
+    unsafe_code,
+    reason = "adopting a native-owned HANDLE needs `File::from_raw_handle`"
+)]
+fn file_from_raw(raw: RawFileHandle) -> Result<std::fs::File, FilePickerError> {
     use std::os::windows::io::{FromRawHandle, RawHandle};
-    // Safety: same invariant as the unix path — the native side has
-    // handed us sole ownership of a `HANDLE` opened for the requested
-    // access mode.
-    unsafe { std::fs::File::from_raw_handle(raw.raw as usize as RawHandle) }
+    // Kernel handles are positive; `0`, `INVALID_HANDLE_VALUE` (-1) and
+    // the negative pseudo-handles are never files the backend opened.
+    let handle = isize::try_from(raw.raw)
+        .ok()
+        .filter(|h| *h > 0)
+        .ok_or_else(|| FilePickerError::Io(format!("invalid file handle {}", raw.raw)))?;
+    // SAFETY: `handle` is a positive `HANDLE` the native side opened for
+    // the requested access mode and handed over with sole ownership.
+    Ok(unsafe { std::fs::File::from_raw_handle(handle as RawHandle) })
 }
 
 #[cfg(not(any(unix, windows)))]
-fn file_from_raw(_raw: RawFileHandle) -> std::fs::File {
-    // No cross-platform recipe for adopting a raw handle on this target;
-    // fall back to panicking at call time so callers see a clear error
-    // instead of a mysterious link failure.
-    panic!("istmo-file-picker: fd bridging is not supported on this target");
+fn file_from_raw(_raw: RawFileHandle) -> Result<std::fs::File, FilePickerError> {
+    Err(FilePickerError::UnsupportedOperation(
+        "fd bridging is not supported on this target".into(),
+    ))
 }
 
 // ------------------------------------------------------------------ error decoding
