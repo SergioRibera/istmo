@@ -20,17 +20,56 @@ pub(crate) struct PumpHandles {
 
 pub(crate) type RemoteEnvelopeSender = flume::Sender<Vec<u8>>;
 
+/// A pump thread already attached to the JVM, parked until it is handed
+/// the runtime's outbound receiver.
+///
+/// Splitting attach from start lets `nativeStart` finish every fallible
+/// JNI step before the core runtime is installed. Dropping it unstarted
+/// lets the thread exit on its own.
+pub(crate) struct AttachedPump {
+    outbound_tx: FlumeSender<FlumeReceiver<Envelope>>,
+    shutdown: FlumeSender<()>,
+    remote: RemoteEnvelopeSender,
+    join: JoinHandle<()>,
+}
+
+impl AttachedPump {
+    /// Hand the pump its outbound receiver and let it start delivering.
+    pub(crate) fn start(
+        self,
+        outbound: FlumeReceiver<Envelope>,
+    ) -> (PumpHandles, RemoteEnvelopeSender) {
+        // The pump stays parked on the other end until this sender is
+        // dropped; the send can only fail if the thread died, which
+        // shutdown already tolerates.
+        let _ = self.outbound_tx.send(outbound);
+        (
+            PumpHandles {
+                shutdown: self.shutdown,
+                join: self.join,
+            },
+            self.remote,
+        )
+    }
+}
+
+impl std::fmt::Debug for AttachedPump {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AttachedPump").finish_non_exhaustive()
+    }
+}
+
 /// Spawn the pump thread and wait until it has attached to the JVM, so
-/// an attach failure surfaces to `nativeStart` instead of leaving a
-/// runtime whose outbound frames go nowhere.
+/// an attach failure surfaces to `nativeStart` before the core runtime
+/// is installed.
 pub(crate) fn spawn(
     jvm: JavaVM,
     runtime_class: GlobalRef,
     methods: PumpMethods,
-    outbound: FlumeReceiver<Envelope>,
-) -> io::Result<(PumpHandles, RemoteEnvelopeSender)> {
+) -> io::Result<AttachedPump> {
     let (shutdown_tx, shutdown_rx) = unbounded::<()>();
     let (remote_tx, remote_rx) = unbounded::<Vec<u8>>();
+    let (outbound_tx, outbound_rx) = flume::bounded::<FlumeReceiver<Envelope>>(1);
     let (ready_tx, ready_rx) = flume::bounded::<Result<(), jni::errors::Error>>(1);
     let pump = Pump {
         class: runtime_class,
@@ -47,6 +86,11 @@ pub(crate) fn spawn(
                 }
             };
             let _ = ready_tx.send(Ok(()));
+            // Disconnected: startup failed after the attach and the
+            // `AttachedPump` was dropped unstarted.
+            let Ok(outbound) = outbound_rx.recv() else {
+                return;
+            };
             pump.run(&mut env, &outbound, &remote_rx, &shutdown_rx);
         })?;
     match ready_rx.recv() {
@@ -64,13 +108,12 @@ pub(crate) fn spawn(
             ));
         }
     }
-    Ok((
-        PumpHandles {
-            shutdown: shutdown_tx,
-            join,
-        },
-        remote_tx,
-    ))
+    Ok(AttachedPump {
+        outbound_tx,
+        shutdown: shutdown_tx,
+        remote: remote_tx,
+        join,
+    })
 }
 
 enum PumpStep {

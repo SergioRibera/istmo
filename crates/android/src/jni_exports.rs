@@ -162,18 +162,19 @@ fn start(env: &mut JNIEnv<'_>, runtime_class: &JClass<'_>) -> Result<(), Android
         };
     }
 
-    // Everything that can fail on the JNI side happens before the core
-    // runtime is installed: once `Runtime::init` succeeds it cannot be
-    // undone, so a failure after it would leave a runtime with no pump.
+    // Everything that can fail on the JNI side, attaching the pump
+    // thread included, happens before the core runtime is installed:
+    // once `Runtime::init` succeeds it cannot be undone, so a failure
+    // after it would leave a runtime with no pump.
     let class_ref = env.new_global_ref(runtime_class)?;
     let methods = PumpMethods::resolve(env, &class_ref)?;
     let jvm = env.get_java_vm()?;
+    let pump = pump::spawn(jvm, class_ref, methods).map_err(AndroidRuntimeError::Pump)?;
 
     let init = Runtime::init(RuntimeConfig::inline())?;
     let runtime = init.runtime.clone();
     let init = __istmo_configure_runtime(init);
-    let (handles, remote_sender) =
-        pump::spawn(jvm, class_ref, methods, init.outbound).map_err(AndroidRuntimeError::Pump)?;
+    let (handles, remote_sender) = pump.start(init.outbound);
 
     runtime.install_remote_envelope_sink(std::sync::Arc::new(move |bytes: Vec<u8>| {
         if let Err(err) = remote_sender.send(bytes) {
