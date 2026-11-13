@@ -218,7 +218,7 @@ class ShareBackendImpl(
 
     private fun buildChooser(request: ShareRequest, uris: List<StagedUri>, thumbnail: StagedUri?): Intent {
         val send = Intent(if (uris.size > 1) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND).apply {
-            type = commonMimeType(request, uris)
+            type = commonMimeType(uris)
             textWithUrl(request)?.let { putExtra(Intent.EXTRA_TEXT, it) }
             request.subject?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
             when (uris.size) {
@@ -252,7 +252,7 @@ class ShareBackendImpl(
         return Intent.createChooser(send, request.subject, callback.intentSender)
     }
 
-    private fun commonMimeType(request: ShareRequest, uris: List<StagedUri>): String {
+    private fun commonMimeType(uris: List<StagedUri>): String {
         if (uris.isEmpty()) return "text/plain"
         val types = uris.map { it.mimeType }.distinct()
         if (types.size == 1) return types[0]
