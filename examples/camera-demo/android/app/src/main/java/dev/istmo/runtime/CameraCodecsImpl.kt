@@ -532,6 +532,6 @@ class CameraCodecsImpl : CameraCodecs {
     }
 
     override fun writeNativeHandleId(out: ByteArrayOutputStream, value: NativeHandleId) {
-        Bincode.writeVarintU64(out, value)
+        Bincode.writeU64(out, value.toULong())
     }
 }
