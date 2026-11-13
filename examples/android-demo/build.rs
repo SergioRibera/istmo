@@ -151,10 +151,10 @@ fn write_if_changed(dest: &Path, contents: &str) -> std::io::Result<()> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
-    if let Ok(existing) = fs::read_to_string(dest) {
-        if existing == contents {
-            return Ok(());
-        }
+    if let Ok(existing) = fs::read_to_string(dest)
+        && existing == contents
+    {
+        return Ok(());
     }
     fs::write(dest, contents)
 }
