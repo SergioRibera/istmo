@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-use super::{remove_generated, write_if_changed};
+use super::write_if_changed;
 use crate::app_config::Role;
 use crate::codegen::{kt_string, swift_string};
 use crate::contract::Contract;
@@ -33,13 +33,6 @@ pub(super) fn emit_kotlin_registry(
     );
     if let Some(dir) = dest.parent() {
         mark_codegen_dir(dir);
-    }
-    // Before 0.2 the registry lived in the codegen package.
-    let legacy = java_root
-        .join(codegen_package.replace('.', "/"))
-        .join("IstmoPluginRegistry.kt");
-    if legacy != dest {
-        remove_generated(&legacy);
     }
 }
 

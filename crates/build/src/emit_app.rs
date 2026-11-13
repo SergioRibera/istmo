@@ -436,7 +436,6 @@ impl<'a> AppPass<'a> {
         // in this package: a seeded `<T>BackendImpl` would clash with it.
         emit_kotlin(&java_root, plugin_package, contract, role, false);
         mark_codegen_dir(&java_root.join(plugin_package.replace('.', "/")));
-        remove_relocated_kotlin(&java_root, target.app, plugin_package, &contract.type_name);
         true
     }
 
@@ -715,27 +714,6 @@ fn sync_ios_project(project: &IosProject, sync: &IosSync<'_>) {
         sync.asset_folder,
     );
     emit_ios_plist_fragments(project.root(), project.app_dir(), sync.native_dirs);
-}
-
-/// Generated files a contract left in the app's codegen package (or in
-/// `dev.istmo.runtime`, the package apps used to pin) before its plugin
-/// declared `[plugin] android_package`. Left in place they would compile
-/// as a second, unregistered copy of the plugin's types.
-fn remove_relocated_kotlin(
-    java_root: &Path,
-    app_package: Option<&str>,
-    plugin_package: &str,
-    type_name: &str,
-) {
-    const LEGACY_PACKAGE: &str = "dev.istmo.runtime";
-    let mut stale: Vec<&str> = app_package.into_iter().chain([LEGACY_PACKAGE]).collect();
-    stale.dedup();
-    for package in stale.into_iter().filter(|p| *p != plugin_package) {
-        let dir = java_root.join(package.replace('.', "/"));
-        for suffix in ["Dispatcher", "Types", "CodecsImpl", "Codecs", "Client"] {
-            remove_generated(&dir.join(format!("{type_name}{suffix}.kt")));
-        }
-    }
 }
 
 /// Delete a file istmo-build generated earlier and no longer emits.
