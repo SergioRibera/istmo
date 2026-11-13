@@ -37,13 +37,12 @@ launches on an attached device:
 just camera-demo
 ```
 
-(Expands to `build camera-demo` → `install camera-demo` → `run camera-demo`,
-mirroring `just pen-demo` / `just data-store`.)
+(Expands to `build camera-demo` → `install camera-demo` → `run camera-demo`.)
 
 Watch logs:
 
 ```sh
-adb logcat -s camera-demo istmo.camera RustStdoutStderr
+adb logcat --pid="$(adb shell pidof dev.istmo.camerademo)"
 ```
 
 Without docker: install the Android SDK (API 34), NDK r26 or later,
@@ -70,7 +69,8 @@ Then from `examples/camera-demo`:
 trunk serve --release
 ```
 
-Trunk serves at <http://127.0.0.1:8080> by default. **The browser's
+`Trunk.toml` serves on port 8080 on every interface; open
+<http://localhost:8080>. **The browser's
 Permissions-Policy requires a secure origin — `getUserMedia` only
 fires on `https://` or `http://localhost`.** For mobile testing,
 tunnel through `cloudflared`, `localhost.run`, or similar.

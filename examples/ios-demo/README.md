@@ -14,20 +14,20 @@ examples/ios-demo/
 └── ios/
     ├── project.yml                xcodegen spec
     ├── build-rust.sh              Xcode pre-build phase → cargo per arch
-    ├── IstmoDemo/                 App sources
-    │   ├── App.swift              @main + IstmoRuntime.shared.start()
-    │   ├── ContentView.swift      Text field + button + result label
-    │   ├── EchoClient.swift       Hand-written mirror of generate_swift_client
-    │   ├── Info.plist
-    │   └── Assets.xcassets/
-    └── IstmoRuntime/              SPM package (Swift-side runtime)
-        ├── Package.swift
-        └── Sources/IstmoRuntime/
-            ├── IstmoRuntime.swift      Singleton, call/stream, continuations map
-            ├── IstmoTransport.swift    @_silgen_name for istmo_ios_* + callback trampolines
-            ├── Bincode.swift           Varint + string + data primitives
-            └── PluginException.swift
+    └── IstmoDemo/                 App sources
+        ├── App.swift              @main + IstmoRuntime.shared.start()
+        ├── ContentView.swift      Text field + button + result label
+        ├── EchoClient.swift       Hand-written mirror of generate_swift_client
+        ├── Info.plist
+        └── Assets.xcassets/
 ```
+
+The Swift runtime is not copied into the demo: `project.yml` points
+the `IstmoRuntime` package at the repo root `Package.swift`, which
+builds `runtime/ios/Sources/IstmoRuntime` (call/stream API, `Bincode`
+codec, `PluginException`) on top of the `IstmoFFI` C module
+(`runtime/ios/Sources/IstmoFFI/include/istmo_ffi.h`, the
+`istmo_ios_*` exports).
 
 ## Prerequisites
 
@@ -90,5 +90,3 @@ owns all FFI.
   fixture already pins the contract.
 * Extend `Echo` with methods that internally consume iOS-side
   platform plugins once those land (`PushClient`, `HealthClient`, …).
-* Replace the Bincode.swift primitive-only port with a fuller port as
-  new payload shapes appear.

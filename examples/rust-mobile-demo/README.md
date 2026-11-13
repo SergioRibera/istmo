@@ -1,15 +1,19 @@
 # rust-mobile-demo
 
 A full-Rust mobile app driven by [egui](https://github.com/emilk/egui) that
-talks to real Android platform APIs through istmo plugins. One button on
-screen. Tap it and the demo:
+talks to real platform APIs through istmo plugins, on Android and iOS.
+Tapping **Sign in**:
 
-1. Requests `POST_NOTIFICATIONS` via the `istmo.permissions` plugin.
-2. Runs the Google Sign-In flow via the `istmo.google_sign_in` plugin
-   (Credential Manager + Google Identity Services).
-3. Posts a welcome notification via the `istmo.notifications` plugin.
+1. requests `POST_NOTIFICATIONS` via the `istmo.permissions` plugin;
+2. runs the Google Sign-In flow via the `istmo.google_sign_in` plugin;
+3. posts a welcome notification via the `istmo.notifications` plugin.
 
-Every plugin call is a `Frame::Call` across the JNI boundary; every result
+A second card loads and shows AdMob interstitial and rewarded ads
+(`istmo.admob`, Google test ad units), and a feed hosts banner slots
+(`BannerSlot`). The layout follows the safe-area insets the host
+publishes (`SafeArea`).
+
+Every plugin call is a `Frame::Call` across the FFI boundary; every result
 is a `Frame::Respond` on the way back. Rust code owns the UI, the async
 control flow, the RAII lifetime of the returned Google credential (via
 `NativeHandle<Credential>`), and the type shape of every wire payload.
@@ -18,101 +22,95 @@ control flow, the RAII lifetime of the returned Google credential (via
 
 ```
 examples/rust-mobile-demo/
-├── Cargo.toml             — cdylib crate, Android-only egui/winit deps
+├── Cargo.toml             — cdylib + staticlib crate
+├── istmo.toml             — [app] identity, auto_register = false, min versions
+├── build.rs               — istmo_build::emit_with(extra_contracts: permissions, notifications, admob)
 ├── src/
 │   ├── lib.rs             — istmo::runtime!(plugins: [...])
-│   └── android.rs         — android_main + eframe app (cfg android)
-└── android/
-    ├── build.gradle.kts / settings.gradle.kts / gradle.properties
-    └── app/
-        ├── build.gradle.kts        — `io.github.sergioribera.istmo` (cargo build, plugins, `[app]`) + native deps
-        └── src/main/
-            ├── AndroidManifest.xml — NativeActivity subclass + POST_NOTIFICATIONS
-            └── java/dev/istmo/
-                ├── rustdemo/RustMobileActivity.kt
-                └── runtime/
-                    ├── IstmoRuntime.kt         — JNI singleton + pump callbacks
-                    ├── PluginHandler.kt
-                    ├── Bincode.kt
-                    ├── PermissionsHandler.kt   — ActivityCompat.requestPermissions
-                    ├── NotificationsHandler.kt — NotificationManagerCompat
-                    └── GoogleSignInHandler.kt  — Credential Manager + GoogleIdOption
+│   └── app.rs             — #[istmo::mobile_app] entry + eframe app (mobile only)
+├── android/
+│   └── app/src/main/
+│       ├── AndroidManifest.xml — RustMobileActivity + permissions + AdMob app id
+│       └── java/dev/istmo/
+│           ├── rustdemo/RustMobileActivity.kt — NativeActivity, registers the backends
+│           └── runtime/        — hand-written *BackendImpl / *FactoryImpl next to
+│                                 the generated dispatchers (android_package = "dev.istmo.runtime")
+└── ios/
+    ├── project.yml        — xcodegen spec (includes the generated istmo-plugins.yml)
+    └── RustMobileDemo/
+        ├── main.swift     — IstmoApp.run(registerPlugins:entry:)
+        └── Plugins/       — hand-written backends + generated dispatchers
 ```
+
+The Google Sign-In wire types come from `istmo-google-sign-in`
+(generated into `dev.istmo.plugins.googlesignin`); the demo ships its
+own Android backend on the legacy `GoogleSignInClient` API instead of
+the plugin's Credential Manager one.
 
 ## Before you build
 
-1. **Server client id.** `src/android.rs` embeds
-   `REPLACE_WITH_YOUR_SERVER_CLIENT_ID.apps.googleusercontent.com`. Replace
-   it with the OAuth 2.0 client id issued for your *backend* in the Google
-   Cloud Console. The Android app also needs to be registered with the
-   correct SHA-1 fingerprint against your Firebase / GCP project — read
-   Google's Credential Manager docs.
-2. **Device (or emulator) with Google Play Services.** The Credential
-   Manager backing store lives in Play Services; an image without them
-   returns `NoCredentialException` for every call.
+1. **Server client id.** `src/app.rs` embeds `SERVER_CLIENT_ID`, the
+   OAuth 2.0 *web* client id of the demo's Google Cloud project. Replace
+   it with your own backend's client id, and register the Android app
+   (package + SHA-1 of the signing key) in the same project. The
+   justfile mounts `~/.android` into the build container so the debug
+   keystore matches the SHA-1 you registered.
+2. **Device (or emulator) with Google Play Services** for sign-in and
+   ads.
 3. **`rustup target add aarch64-linux-android`** (or the ABI you're
-   building for). `./gradlew istmoDoctor` lists anything else the
-   toolchain is missing.
+   building for) when building outside Docker. `gradle istmoDoctor`
+   (from `android/`) lists anything else the toolchain is missing.
 
 ## Building
 
-The repo uses the same Docker recipe as `android-demo`; the Kotlin build
-lives at `examples/rust-mobile-demo/android/`, and `just` wraps the
-Gradle invocation.
+### Android
+
+The Gradle build lives at `examples/rust-mobile-demo/android/`; `just`
+wraps it in the project's Docker image.
 
 ```bash
-# Build APK inside the docker image (Gradle drives cargo).
-just build rust-mobile-demo
+just build rust-mobile-demo    # Gradle drives cargo
+just install rust-mobile-demo  # adb install
+just run rust-mobile-demo      # launch RustMobileActivity
+just rust-mobile-demo          # all three
+```
 
-# Install on the connected device / emulator.
-just install rust-mobile-demo
+### iOS (macOS, Xcode 15+, `xcodegen`)
 
-# Launch RustMobileActivity.
-just run rust-mobile-demo
-
-# All three in one shot (flutter-run-style).
-just rust-mobile-demo
+```bash
+just rust-mobile-ios-bootstrap  # cargo check (writes ios/.istmo + istmo-plugins.yml), xcodegen
+just rust-mobile-ios-build      # simulator build
+just rust-mobile-ios-run        # install + launch on the booted simulator
+just rust-mobile-ios            # bootstrap if needed, then run
 ```
 
 ## How it wires together at runtime
 
-1. Android launches `dev.istmo.rustdemo.RustMobileActivity`
-   (a `NativeActivity` subclass declared in the manifest).
-2. `RustMobileActivity.onCreate` calls `IstmoHost.onCreate(this)` *before*
-   `super.onCreate()`, which starts `IstmoRuntime`:
-   - `System.loadLibrary("rust_mobile_demo")` — loads the cdylib the
-     manifest's `android.app.lib_name` metadata also references.
-   - `nativeStart(...)` — resolves `__istmo_configure_runtime` (emitted
-     by the `istmo::runtime!` macro in `src/lib.rs`), initialises the
-     process-global `Runtime`, spawns the outbound pump thread.
-3. `RustMobileActivity.onCreate` registers three `PluginHandler`s under
-   the plugin ids `istmo.permissions`, `istmo.notifications`,
-   `istmo.google_sign_in`, then calls `super.onCreate(...)`.
-4. `NativeActivity`'s super.onCreate triggers `ANativeActivity_onCreate`,
-   which the `android-activity` crate hooks; a fresh thread runs
-   `android_main` (`src/android.rs`).
-5. `android_main` starts `eframe`; when the user taps the button, a
-   background thread runs the plugin chain via `pollster::block_on`.
-6. Every `SignInClient::...` / `PermissionsClient::...` /
-   `NotificationsClient::...` call emits `Frame::Call`; the Rust pump
-   invokes `IstmoRuntime.onCall(...)` in Kotlin; the matching
-   `PluginHandler` produces wire-encoded response bytes;
-   `IstmoRuntime.nativeSubmitResponse(...)` ships them back to Rust.
+1. Android launches `dev.istmo.rustdemo.RustMobileActivity` (a
+   `NativeActivity` subclass).
+2. `onCreate` calls `IstmoHost.onCreate(this)`, which loads
+   `librust_mobile_demo.so` and starts the runtime with the
+   declarations from `istmo::runtime!` in `src/lib.rs`.
+3. Because `istmo.toml` sets `auto_register = false` (the backends need
+   this activity's permission and activity-result callbacks), the
+   activity registers the Permissions, Notifications, SignIn and AdMob
+   dispatchers itself, then calls `super.onCreate(...)`. On iOS,
+   `main.swift` does the same inside `IstmoApp.run(registerPlugins:)`.
+4. `NativeActivity` starts `android_main`, emitted by
+   `#[istmo::mobile_app]` in `src/app.rs`, which runs `eframe`. Button
+   handlers run the plugin flows on a background thread via
+   `pollster::block_on`.
+5. Each client call emits `Frame::Call`; the pump invokes the Kotlin /
+   Swift dispatcher, whose backend answers with wire-encoded bytes that
+   travel back as `Frame::Respond`.
+6. `RustMobileActivity` forwards window insets to
+   `IstmoRuntime.publishSafeArea(...)`; the app reads them through
+   `SafeArea`.
 
 ## Known limitations
 
-- The Google Sign-In handler does not implement backend-side OAuth
-  revocation for the `revoke()` method — it only clears the local
-  credential cache. Real apps must call their backend's
-  `/token/revoke` endpoint.
-- `Notifications::schedule` honours zero delay only. Delayed posts
-  would require an `AlarmManager` + `BroadcastReceiver` shim; deferred
-  until a real use case surfaces.
-- iOS parity is stubbed: an iOS twin of this demo needs Swift
-  dispatchers for the three plugins (Credential Manager equivalents,
-  `UNUserNotificationCenter`, `UNAuthorizationOptions`). Follow-up
-  behind the M5 iOS-demo scaffold.
-- `NativeHandle<Credential>` release fires on Rust drop, but the
-  Kotlin `IstmoRuntime.onReleaseNativeHandle` currently no-ops. Wire
-  it into `GoogleSignInHandler.releaseCredential(handleId)` when a
-  real app needs deterministic release.
+- The Android sign-in backend's `revoke()` calls
+  `GoogleSignInClient.revokeAccess()` from the device; apps with a
+  backend usually revoke the grant there too.
+- The demo's notification backends are app-local reference code, not
+  a published plugin.

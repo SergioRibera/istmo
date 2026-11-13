@@ -19,7 +19,7 @@ just run share-demo
 ```
 
 The APK lands in `examples/share-demo/android/app/build/outputs/apk/debug/`.
-Logs: `adb logcat -s share_demo istmo RustStdoutStderr`.
+Logs: `adb logcat --pid="$(adb shell pidof dev.istmo.sharedemo)"`.
 
 ### What to try
 
