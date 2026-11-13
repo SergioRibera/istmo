@@ -1,6 +1,6 @@
 ---
 title: Data Store
-description: Storage key/value cross-plataforma respaldado por SharedPreferences en Android y UserDefaults en iOS.
+description: Storage key/value por namespace respaldado por SharedPreferences en Android, UserDefaults en iOS y un archivo por namespace en desktop.
 sidebar:
   order: 2
 ---
@@ -9,8 +9,9 @@ import PluginTypes from '../../../../generated/plugins/data-store-types.mdx';
 
 `istmo-data-store` es un store key/value native-hosted. La API Rust es
 idéntica en cada plataforma; el backend usa `SharedPreferences` en
-Android y `UserDefaults` en iOS. Los dos backends viajan en el crate
-del plugin bajo `native/{android,ios}/` con cero deps externas.
+Android, `UserDefaults` en iOS y un archivo por namespace en desktop.
+Los backends móviles viajan en el crate del plugin bajo
+`native/{android,ios}/` con cero deps externas.
 
 ## Instala
 
@@ -22,13 +23,18 @@ istmo-data-store = "0.1.1-alpha.5"
 ## Úsalo
 
 `DataStore` es stateful (`init = DataStoreConfig`) — la config lleva
-el namespace bajo el que el backend segrega valores:
+el namespace bajo el que el backend segrega valores. Un namespace es
+un nombre corto para un grupo de valores dentro de la app
+(`"settings"`, `"session"`); las plataformas ya separan unas apps de
+otras, así que no necesita el id de la app. En Android forma parte de
+un nombre de archivo y no puede contener `/`.
 
 ```rust
 use istmo_data_store::{DataStoreClient, DataStoreConfig};
 
-let cfg = DataStoreConfig::new("com.example.app");
-let store = DataStoreClient::from_runtime_with(&runtime, cfg).await?;
+let store = DataStoreClient::from_runtime_with(&runtime, DataStoreConfig::new("settings")).await?;
+// …o sobre el runtime global del proceso:
+// let store = DataStoreClient::acquire_with(DataStoreConfig::new("settings")).await?;
 
 store.set_string("user.email".into(), "iris@example.com".into()).await?;
 store.set_bool("onboarding.completed".into(), true).await?;
@@ -39,12 +45,18 @@ let done  = store.get_bool("onboarding.completed".into()).await?;
 ```
 
 Cada getter retorna `Option<T>` — keys faltantes son `None`, no un
-error. `set_bytes` / `get_bytes` cubren `Vec<u8>` para blobs opacos.
+error. `set_f64` / `get_f64` cubren floats y `set_bytes` / `get_bytes`
+cubren `Vec<u8>` para blobs opacos.
+
+Leer una key con un tipo distinto al que se escribió falla con
+`DataStoreError::Corrupted` en todas las plataformas. Los errores de
+dominio llegan como `IstmoError::PluginError { bytes }`; decodéalos con
+`istmo::codec::decode::<DataStoreError>(&bytes)`.
 
 ### Eliminar y listar
 
 ```rust
-store.remove("user.email".into()).await?;   // retorna bool: estaba presente?
+store.remove("user.email".into()).await?;   // retorna bool: ¿estaba presente?
 store.clear().await?;                       // borra el namespace
 let all_keys = store.keys().await?;         // Vec<String>
 let has_key  = store.contains("theme".into()).await?;
@@ -56,14 +68,27 @@ let has_key  = store.contains("theme".into()).await?;
 
 ## Storage subyacente
 
-| Plataforma | Backend                | Ubicación                            |
-| ---------- | ---------------------- | ------------------------------------ |
-| Android    | `SharedPreferences`    | XML app-privado en el data dir       |
-| iOS        | `UserDefaults`         | El suite default de la app           |
+| Plataforma | Backend | Ubicación |
+| ---------- | ------- | --------- |
+| Android | `SharedPreferences` | archivo `<package name>.istmo.<namespace>` en el data dir de la app |
+| iOS | `UserDefaults` | suite `<bundle id>.istmo.<namespace>` |
+| Windows | `DesktopDataStore` | `%APPDATA%\<bundle-id>\config\data-store\<namespace>.bin` |
+| macOS | `DesktopDataStore` | `~/Library/Preferences/<bundle-id>/data-store/<namespace>.bin` |
+| Linux | `DesktopDataStore` | `$XDG_CONFIG_HOME/<bundle-id>/data-store/<namespace>.bin` (por defecto `~/.config/…`) |
 
-Ambos backends son **solo key/value** — sin queries, sin encriptación.
-No lo uses para secretos (usa `EncryptedSharedPreferences` /
-`Keychain`); úsalo para preferencias de usuario y cache low-security.
+El namespace nunca se usa solo como nombre de archivo o de suite, así
+que no puede chocar con las preferencias propias de la app. En desktop
+se codifica con percent-encoding (mayúsculas incluidas), así que
+namespaces distintos van a archivos distintos también en sistemas de
+archivos case-insensitive, y un archivo que ya no decodifica se mueve
+a `<file>.corrupt` y el namespace arranca vacío. El `<bundle-id>` de
+desktop sale de `ISTMO_APP_BUNDLE_ID` (lo fija `istmo-build`), con el
+nombre del crate como fallback.
+
+Todos los backends son **solo key/value** — sin queries, sin
+encriptación. No lo uses para secretos (ver
+[Biometric](/istmo/es/plugins/biometric/) para secretos ligados a
+biometría); úsalo para preferencias de usuario y cache low-security.
 
 ## Cablealo
 
@@ -94,29 +119,36 @@ IstmoApp.run() // arranca el runtime + IstmoPluginRegistry, luego corre Rust
 
 Los archivos `DataStoreBackendImpl` / `DataStoreFactoryImpl` de
 referencia viven en `plugins/data-store/native/{android,ios}/`
-(paquete Kotlin `dev.istmo.plugins.datastore`). El plugin de Gradle y
-el fragmento xcodegen `istmo-plugins.yml` los compilan dentro de la
-app; no hay nada que copiar.
+(paquete Kotlin `dev.istmo.plugins.datastore`, que es también donde
+`istmo-build` genera el Kotlin del plugin, sea cual sea el
+`[app] android_package` de tu app). El plugin de Gradle y el fragmento
+xcodegen `istmo-plugins.yml` los compilan dentro de la app; no hay
+nada que copiar.
 
 Ver [Auto-registración](/istmo/es/build-scripts/auto-register/) para
 detalles de cómo se genera el registry y cómo opt-out.
 
-## Sample: emulador desktop
+### Desktop
 
-El crate [`examples/data-store-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/data-store-demo)
-envía un **emulador nativo in-process** — un pequeño thread que
-responde frames del `DataStoreDispatcher` usando un `HashMap`
-in-memory. Genial para iterar sobre UI sin bootear un emulador.
+Las apps desktop hospedan el plugin en Rust. Registra el host stateful
+una vez; cada `DataStoreConfig` abre luego un `DesktopDataStore`:
 
 ```rust
-// examples/data-store-demo/src/emulator.rs (excerpt)
-pub fn spawn(runtime: &Arc<Runtime>) {
-    let store = Arc::new(Mutex::new(HashMap::<String, Vec<u8>>::new()));
-    runtime.register_handler("istmo.data_store", move |envelope| {
-        // decodea call, responde desde `store`
-    });
-}
+use istmo_data_store::{DataStoreHost, DesktopDataStoreFactory};
+
+runtime.register_host(DataStoreHost::new(DesktopDataStoreFactory));
 ```
+
+Las instancias abiertas para el mismo namespace en un proceso
+comparten un único mapa en memoria; procesos distintos que escriben el
+mismo namespace no se coordinan.
+
+## Ejemplo
+
+[`examples/data-store-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/data-store-demo)
+es un solo crate que produce un binario desktop (con
+`DesktopDataStoreFactory` hospedado en el proceso) y la app Android /
+iOS a partir de la misma UI egui.
 
 ## Threading
 
@@ -125,12 +157,9 @@ referencia usan el dispatcher default / cualquier thread. Si
 reemplazas el backend por algo con threading más estricto, gatéalo
 apropiadamente.
 
-## No enviado (por ahora)
+## No incluido (por ahora)
 
-- Encriptación. Usa `EncryptedSharedPreferences` / Keychain envolviendo
-  el plugin detrás de tu propio trait, o espera un follow-up
-  `istmo-secure-store`.
-- Suscripción a cambios. Streams sobre el store entero están en el
-  roadmap.
-- Aislamiento multi-suite en iOS. Actualmente fijado a
-  `UserDefaults.standard`.
+- Encriptación. Envuelve el plugin detrás de tu propio trait si la
+  necesitas.
+- Suscripción a cambios. No hay un stream de cambios sobre un
+  namespace.
