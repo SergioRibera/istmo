@@ -103,7 +103,7 @@ process = ":sync"                              # optional
 The app's `build.rs` (a one-line `istmo_build::emit()`) picks the spec
 up through the standard manifest handover and materialises:
 
-- `android/app/src/main/java/<namespace>.gen/SyncForegroundService.kt`
+- `android/app/src/main/java/<namespace>/gen/SyncForegroundService.kt`
   — the `LifecycleService` shim that forwards `onStartCommand` /
   `onDestroy` into the Rust adapter registered under the same plugin
   id. `System.loadLibrary(...)` uses your app crate's Cargo package
