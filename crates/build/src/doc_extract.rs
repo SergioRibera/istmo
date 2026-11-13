@@ -91,7 +91,7 @@ pub fn render_types_mdx(types: &[PluginTypeDoc]) -> String {
         }
         let _ = write!(out, "### `{}`\n\n", ty.name);
         if !ty.docs.trim().is_empty() {
-            out.push_str(ty.docs.trim());
+            out.push_str(&escape_mdx(ty.docs.trim()));
             out.push_str("\n\n");
         }
         match &ty.kind {
@@ -272,7 +272,60 @@ fn oneline(text: &str) -> String {
     if collapsed.is_empty() {
         "—".to_owned()
     } else {
-        escape_pipes(&collapsed)
+        escape_pipes(&escape_mdx(&collapsed))
+    }
+}
+
+/// Escape what MDX reads as JSX (`<`, `>`) or an expression (`{`, `}`)
+/// in rustdoc prose. Code spans and fenced code blocks stay verbatim:
+/// MDX takes their contents literally already.
+fn escape_mdx(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_fence = false;
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            out.push_str(line);
+        } else if in_fence {
+            out.push_str(line);
+        } else {
+            escape_mdx_line(line, &mut out);
+        }
+    }
+    out
+}
+
+fn escape_mdx_line(line: &str, out: &mut String) {
+    let mut rest = line;
+    while let Some(ch) = rest.chars().next() {
+        if ch == '`' {
+            let ticks = rest.len() - rest.trim_start_matches('`').len();
+            let (fence, after) = rest.split_at(ticks);
+            // A code span closes on a run of exactly as many backticks;
+            // an unclosed run is literal text.
+            let close = after
+                .match_indices(fence)
+                .map(|(at, _)| at)
+                .find(|&at| !after[at + ticks..].starts_with('`') && !after[..at].ends_with('`'));
+            if let Some(at) = close {
+                let end = ticks + at + ticks;
+                out.push_str(&rest[..end]);
+                rest = &rest[end..];
+            } else {
+                out.push_str(fence);
+                rest = after;
+            }
+            continue;
+        }
+        if matches!(ch, '<' | '>' | '{' | '}') {
+            out.push('\\');
+        }
+        out.push(ch);
+        rest = &rest[ch.len_utf8()..];
     }
 }
 
@@ -406,6 +459,47 @@ pub enum SignInError {
         assert_eq!(variants[0].payload, Vec::<String>::new());
         assert_eq!(variants[0].docs, "User cancelled.");
         assert_eq!(variants[1].payload, vec!["String".to_owned()]);
+    }
+
+    #[test]
+    fn mdx_escape_spares_code_spans_and_fences() {
+        assert_eq!(
+            escape_mdx("Takes <T> or {a} > b, see `Vec<u8>` and ``a ` {b}``."),
+            "Takes \\<T\\> or \\{a\\} \\> b, see `Vec<u8>` and ``a ` {b}``."
+        );
+        assert_eq!(escape_mdx("an `unclosed <span"), "an `unclosed \\<span");
+        assert_eq!(
+            escape_mdx("Before {x}\n```rust\nlet v: Vec<u8> = {};\n```\nAfter <y>"),
+            "Before \\{x\\}\n```rust\nlet v: Vec<u8> = {};\n```\nAfter \\<y\\>"
+        );
+    }
+
+    #[test]
+    fn mdx_tables_escape_prose_but_keep_typed_code_spans() {
+        let ty = PluginTypeDoc {
+            name: "Frame".to_owned(),
+            docs: "Holds a `HashMap<K, V>` of {pixels} <raw>.".to_owned(),
+            kind: PluginTypeDocKind::Struct {
+                fields: vec![FieldDoc {
+                    name: "data".to_owned(),
+                    wire_name: "data".to_owned(),
+                    ty: "Option<Vec<u8>>".to_owned(),
+                    docs: "Bytes in {0, 255} | `a|b` <b>bold</b>.".to_owned(),
+                }],
+            },
+        };
+        let out = render_types_mdx(&[ty]);
+        assert!(
+            out.contains("Holds a `HashMap<K, V>` of \\{pixels\\} \\<raw\\>."),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "| `data` | `data` | `Option<Vec<u8>>` | \
+                 Bytes in \\{0, 255\\} \\| `a\\|b` \\<b\\>bold\\</b\\>. |"
+            ),
+            "{out}"
+        );
     }
 
     #[test]
