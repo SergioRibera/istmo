@@ -108,7 +108,7 @@ pluginManagement {
         gradlePluginPortal()
     }
     plugins {
-        id("io.github.sergioribera.istmo") version "<istmo version>"
+        id("io.github.sergioribera.istmo") version "0.1.1-alpha.5" // same as the istmo crates
     }
 }
 ```
@@ -220,9 +220,12 @@ hand-made Xcode project, base the target on `Istmo.xcconfig` and add
 app has assets, add `.istmo/Assets` to the target as a folder reference
 (not a group).
 
-The fragment does not declare SwiftPM packages: add the
-`[[swift_package]]` entries of your plugins to the `packages:` section
-of `project.yml` (or through Xcode) yourself.
+The fragment also declares the SwiftPM packages your plugins and your
+own `istmo.toml` ask for (`[[swift_package]]`) under `packages:` and
+links their products into the app target, so nothing has to be added
+by hand; a package `project.yml` declares under the same name keeps
+its own `url` / version. A hand-made Xcode project adds those packages
+through File → Add Package Dependencies.
 
 In `Info.plist`, reference the generated values:
 

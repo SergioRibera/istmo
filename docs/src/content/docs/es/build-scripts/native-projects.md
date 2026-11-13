@@ -98,7 +98,7 @@ forma.
 
 ## Android
 
-El plugin está publicado en Maven Central; declará su versión una sola
+El plugin está publicado en Maven Central; declara su versión una sola
 vez en `android/settings.gradle.kts`, junto a los repositorios de los
 que se resuelve:
 
@@ -110,7 +110,7 @@ pluginManagement {
         gradlePluginPortal()
     }
     plugins {
-        id("io.github.sergioribera.istmo") version "<versión de istmo>"
+        id("io.github.sergioribera.istmo") version "0.1.1-alpha.5" // la misma que los crates de istmo
     }
 }
 ```
@@ -226,9 +226,12 @@ agrega `"${PROJECT_DIR}/.istmo/build-rust.sh"` como fase Run Script; si
 la app tiene assets, agrega `.istmo/Assets` al target como folder
 reference (no como grupo).
 
-El fragmento no declara paquetes SwiftPM: agrega tú mismo las entradas
-`[[swift_package]]` de tus plugins a la sección `packages:` de
-`project.yml` (o desde Xcode).
+El fragmento también declara bajo `packages:` los paquetes SwiftPM que
+piden tus plugins y tu propio `istmo.toml` (`[[swift_package]]`) y
+enlaza sus productos en el target de la app, así que no hay que
+agregar nada a mano; un paquete que `project.yml` declare con el mismo
+nombre conserva su `url` / versión. Un proyecto de Xcode hecho a mano
+agrega esos paquetes con File → Add Package Dependencies.
 
 En `Info.plist`, referencia los valores generados:
 
