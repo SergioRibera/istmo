@@ -33,7 +33,7 @@ de UI, versión de istmo) y `cd` al nuevo directorio.
 
 El template envía dos arquetipos — `app` y `plugin` — bajo carpetas
 anidadas dentro del repo template. Post-generate el hook **aplasta el
-arquetipo elegido a la raíz del proyecto**, así que lo que obtenés es
+arquetipo elegido a la raíz del proyecto**, así que lo que obtienes es
 un layout plano:
 
 ```
@@ -63,7 +63,7 @@ en lugar de las carpetas de proyecto de plataforma.
 - `src/lib.rs` es tu entry point. En Android la activity launcher,
   `dev.istmo.runtime.IstmoGameActivity`, carga la librería y lo corre;
   en iOS `main.swift` le pasa el control con `IstmoApp.run()`.
-- `build.rs` corre en cada compilación. Como tenés `android/` e `ios/`
+- `build.rs` corre en cada compilación. Como tienes `android/` e `ios/`
   al lado de `Cargo.toml`, `istmo_build::emit()` además genera los
   shims Kotlin/Swift para cada plugin del que la app depende **y** un
   `IstmoPluginRegistry` para registración nativa one-shot.
@@ -89,7 +89,7 @@ directamente la activity del runtime:
 </activity>
 ```
 
-Hacé una subclase de `IstmoGameActivity` y apuntá el manifest a tu
+Haz una subclase de `IstmoGameActivity` y apunta el manifest a tu
 clase solo cuando necesites código Kotlin propio.
 
 ```swift
@@ -110,7 +110,7 @@ mecanismo.
 El id, nombre, versión, número de build, ícono y versiones mínimas de
 SO de la app viven en `istmo.toml`; el plugin de Gradle `io.github.sergioribera.istmo`
 y los settings de Xcode generados los aplican, y ese mismo plugin y la
-fase pre-build de Xcode corren cargo por vos. Si falta algo, `cargo
+fase pre-build de Xcode corren cargo por ti. Si falta algo, `cargo
 build` imprime avisos `istmo doctor:` y `./gradlew istmoDoctor` revisa
 el toolchain. Ver
 [Proyectos nativos](/istmo/es/build-scripts/native-projects/).
@@ -119,8 +119,8 @@ el toolchain. Ver
 
 ### Android
 
-El template no trae el Gradle wrapper; crealo una vez y después
-compilá e instalá:
+El template no trae el Gradle wrapper; créalo una vez y después
+compila e instala:
 
 ```bash
 cd android
@@ -135,7 +135,7 @@ el APK debug.
 
 ### iOS
 
-Corré primero un `cargo build` (o `cargo check`): escribe
+Corre primero un `cargo build` (o `cargo check`): escribe
 `ios/<Name>App/istmo-plugins.yml` (fuentes de los plugins, identidad de
 la app, settings de link, la fase pre-build de cargo), que
 `project.yml` incluye, e `ios/.istmo/`.

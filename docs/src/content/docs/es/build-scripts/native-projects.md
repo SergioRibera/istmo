@@ -42,13 +42,13 @@ android = 24                    # minSdk
 ios     = "15.0"                # IPHONEOS_DEPLOYMENT_TARGET
 ```
 
-Todas las claves son opcionales. Omití `id` cuando Android e iOS
+Todas las claves son opcionales. Omite `id` cuando Android e iOS
 necesitan identificadores distintos: los proyectos nativos conservan los
 suyos.
 
 ### Ícono de launcher: `[app.icon]`
 
-Todas las claves son opcionales; poné las que necesiten tus plataformas.
+Todas las claves son opcionales; pon las que necesiten tus plataformas.
 
 - `image` — una imagen cuadrada (se recomienda 1024 px). Sale de ahí el
   app icon set de iOS (aplanado sobre blanco: la App Store rechaza alfa)
@@ -59,7 +59,7 @@ Todas las claves son opcionales; poné las que necesiten tus plataformas.
   `monochrome` es opcional. Una capa es un vector drawable de Android
   (`.xml`, se copia tal cual a `drawable/`) o un PNG (se reescala a
   108 dp en cada densidad, 432 px en xxxhdpi). El fondo también puede
-  ser un color. Dejá el dibujo dentro de la zona segura central de
+  ser un color. Deja el dibujo dentro de la zona segura central de
   66 dp: los launchers recortan el borde.
 
 El ícono adaptativo se escribe como `mipmap-anydpi-v26/istmo_launcher.xml`,
@@ -77,7 +77,7 @@ forma.
 
 - **Ícono de la ventana.** Se deja un PNG de 256 px en `OUT_DIR`;
   `istmo::app_icon!()` se expande a `Option<&'static [u8]>` con sus bytes
-  (`None` en mobile o sin ícono). Pasáselo a tu toolkit de UI, por
+  (`None` en mobile o sin ícono). Pásaselo a tu toolkit de UI, por
   ejemplo Freya:
 
   ```rust
@@ -115,7 +115,7 @@ pluginManagement {
 }
 ```
 
-Después aplicalo al módulo de la app:
+Después aplícalo al módulo de la app:
 
 ```kotlin
 // android/app/build.gradle.kts
@@ -135,7 +135,7 @@ android {
 }
 ```
 
-y referenciá los placeholders desde el manifest:
+y referencia los placeholders desde el manifest:
 
 ```xml
 <application
@@ -201,7 +201,7 @@ y dentro de `ios/.istmo/`:
   sola folder reference, así quedan en `<bundle>/Assets/…`, donde las lee
   `istmo::assets`.
 
-Con xcodegen, incluí el fragmento: trae las fuentes de los plugins, los
+Con xcodegen, incluye el fragmento: trae las fuentes de los plugins, los
 mismos build settings, la fase pre-build y la carpeta de assets:
 
 ```yaml
@@ -220,17 +220,17 @@ targets:
 ```
 
 Los settings de `project.yml` le ganan a los del fragmento, así que
-sacá de ahí `PRODUCT_BUNDLE_IDENTIFIER`, `OTHER_LDFLAGS` y compañía. En
-un proyecto Xcode hecho a mano, basá el target en `Istmo.xcconfig` y
-agregá `"${PROJECT_DIR}/.istmo/build-rust.sh"` como fase Run Script; si
-la app tiene assets, agregá `.istmo/Assets` al target como folder
+saca de ahí `PRODUCT_BUNDLE_IDENTIFIER`, `OTHER_LDFLAGS` y compañía. En
+un proyecto Xcode hecho a mano, basa el target en `Istmo.xcconfig` y
+agrega `"${PROJECT_DIR}/.istmo/build-rust.sh"` como fase Run Script; si
+la app tiene assets, agrega `.istmo/Assets` al target como folder
 reference (no como grupo).
 
-El fragmento no declara paquetes SwiftPM: agregá vos mismo las entradas
+El fragmento no declara paquetes SwiftPM: agrega tú mismo las entradas
 `[[swift_package]]` de tus plugins a la sección `packages:` de
 `project.yml` (o desde Xcode).
 
-En `Info.plist`, referenciá los valores generados:
+En `Info.plist`, referencia los valores generados:
 
 ```xml
 <key>CFBundleDisplayName</key>        <string>$(ISTMO_DISPLAY_NAME)</string>
@@ -242,7 +242,7 @@ En `Info.plist`, referenciá los valores generados:
 (`0.3.0-beta.1` → `0.3.0`), como exige App Store Connect.
 
 Los archivos generados se regeneran en cada build; después de clonar,
-corré un `cargo build` (cualquier target) antes de `xcodegen generate`.
+corre un `cargo build` (cualquier target) antes de `xcodegen generate`.
 
 ## Doctor
 
@@ -295,9 +295,9 @@ ios/*/Plugins/IstmoMain.swift
 ios/*/Plugins/IstmoPluginRegistry.swift
 ```
 
-Un directorio que compartís con código escrito a mano (un
+Un directorio que compartes con código escrito a mano (un
 `android_package` explícito, un `<T>BackendImpl` sembrado) nunca se
 marca.
 
-Commiteá `istmo-plugins.yml` si tu `project.yml` lo incluye y querés
+Commitea `istmo-plugins.yml` si tu `project.yml` lo incluye y quieres
 que `xcodegen generate` funcione antes del primer build de cargo.

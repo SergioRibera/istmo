@@ -74,7 +74,7 @@ android_package = "com.myapp.battery"
 
 `istmo.toml` es la única fuente de verdad para la identidad del plugin,
 su path del cliente Rust, el paquete Kotlin de sus fuentes Android, y
-cualquier dependencia Gradle o SwiftPM que necesite. Mantené
+cualquier dependencia Gradle o SwiftPM que necesite. Mantén
 `android_package` separado del paquete propio de cualquier app (el
 template usa `<bundle_id>.<crate>`): es de `istmo-build`. Ver la
 [referencia del manifest](/istmo/es/build-scripts/istmo-toml-reference/).
@@ -222,7 +222,7 @@ Una app con su propia activity Android llama a
 `IstmoHost.onCreate(this)` antes de `super.onCreate` e
 `IstmoHost.onDestroy(this)` desde `onDestroy`. Ver
 [Auto-registración](/istmo/es/build-scripts/auto-register/) si
-necesitás opt-out o manejar un constructor bespoke.
+necesitas opt-out o manejar un constructor bespoke.
 
 ## Invócalo
 

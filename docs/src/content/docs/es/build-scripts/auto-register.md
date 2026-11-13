@@ -1,6 +1,6 @@
 ---
 title: Auto-registración
-description: Registrá cada plugin dispatcher con el runtime nativo en una sola llamada, generado por istmo-build.
+description: Registra cada plugin dispatcher con el runtime nativo en una sola llamada, generado por istmo-build.
 sidebar:
   order: 3
 ---
@@ -21,10 +21,10 @@ Flutter.
 
 ### Android
 
-Usá `IstmoGameActivity` (para UIs basadas en `GameActivity`, p. ej.
+Usa `IstmoGameActivity` (para UIs basadas en `GameActivity`, p. ej.
 winit / eframe con `android-game-activity`) o `IstmoNativeActivity`
 (`NativeActivity`, la feature default `native-activity` del facade)
-como tu activity. El template la nombra directo en el manifest; hacé
+como tu activity. El template la nombra directo en el manifest; haz
 una subclase solo para añadir código Kotlin:
 
 ```xml
@@ -64,7 +64,7 @@ IstmoApp.run()
 
 Arranca el runtime, llama a `IstmoPluginRegistry.registerAll()` y le
 pasa el control a Rust. El entry point se detecta en las fuentes del
-crate; seteá `[app] rust_entry = true | false` para forzarlo. Las apps
+crate; setea `[app] rust_entry = true | false` para forzarlo. Las apps
 con UI nativa llaman a `IstmoPluginRegistry.registerAll()` después de
 `try IstmoRuntime.shared.start()`.
 
@@ -129,7 +129,7 @@ object IstmoPluginRegistry : IstmoPluginRegistrant {
 
 El espejo de iOS vive en `ios/<AppDir>/Plugins/IstmoPluginRegistry.swift`.
 Ambos se regeneran en cada build (y se emiten aunque estén vacíos);
-agregalos al `.gitignore`.
+agrégalos al `.gitignore`.
 
 ## Qué significa "elegible"
 
@@ -207,7 +207,7 @@ id            = "istmo.data_store"
 auto_register = false
 ```
 
-El registry omite el plugin; registralo vos después de
+El registry omite el plugin; regístralo tú después de
 `IstmoHost.onCreate(this)` (Android) o dentro de
 `IstmoApp.run(registerPlugins:entry:)` (iOS).
 
@@ -224,10 +224,10 @@ Los registries se siguen generando, vacíos.
 
 Si al registry le falta un plugin que esperabas:
 
-- Confirmá que el `istmo.toml` del plugin no tenga `auto_register = false`.
-- Confirmá que no tengas un override `[[app.plugin]]` que matchee en tu
+- Confirma que el `istmo.toml` del plugin no tenga `auto_register = false`.
+- Confirma que no tengas un override `[[app.plugin]]` que matchee en tu
   app.
-- Confirmá que no estés usando `role = "client"` para ese plugin.
+- Confirma que no estés usando `role = "client"` para ese plugin.
 
 ## Siguiente
 

@@ -29,7 +29,7 @@ istmo-biometric = "0.1.1-alpha.5"
 
 ## Comprobar disponibilidad
 
-`availability` nunca muestra UI. Usalo para decidir si ofrecer un botón
+`availability` nunca muestra UI. Úsalo para decidir si ofrecer un botón
 "desbloquear con Face ID":
 
 ```rust
@@ -55,8 +55,8 @@ keychain y en Linux salvo que la app active la bóveda del keyring.
 ## Detectar cambios de enrolamiento
 
 `enrollment_state` devuelve un token opaco que cambia cuando se agregan
-o quitan huellas o rostros. Guardalo después de loguear al usuario y
-pedí tus propias credenciales de nuevo cuando cambie — eso cierra el
+o quitan huellas o rostros. Guárdalo después de loguear al usuario y
+pide tus propias credenciales de nuevo cuando cambie — eso cierra el
 agujero de "alguien agregó su huella al teléfono de la víctima":
 
 ```rust
@@ -81,7 +81,7 @@ son comparables en el mismo dispositivo e instalación de la app.
 ```rust
 use istmo_biometric::{AuthPolicy, AuthPrompt, BiometricError};
 
-let prompt = AuthPrompt::new("Desbloquear", "Confirmá que sos vos para abrir tus notas")
+let prompt = AuthPrompt::new("Desbloquear", "Confirma que eres tú para abrir tus notas")
     .subtitle("Notas")
     .cancel_label("Ahora no")
     .policy(AuthPolicy::BiometricOrDeviceCredential);
@@ -108,7 +108,7 @@ best-effort.
 :::caution
 Un `authenticate` exitoso es una barrera de UI: en un dispositivo
 rooteado o con jailbreak el callback de éxito se puede falsificar.
-Protegé los secretos reales con la bóveda de abajo.
+Protege los secretos reales con la bóveda de abajo.
 :::
 
 ## Secretos protegidos por biometría
@@ -125,7 +125,7 @@ let stored = biometric.has_secret("api.token".into()).await?; // sin UI
 ```
 
 Los alias tienen de 1 a 64 caracteres ASCII: letras, dígitos, `.`, `_`
-o `-`; validalos de antemano con `SecretAlias::try_from`.
+o `-`; valídalos de antemano con `SecretAlias::try_from`.
 
 | Plataforma | Cómo se protege el secreto                                                                    |
 | ---------- | --------------------------------------------------------------------------------------------- |
@@ -179,7 +179,7 @@ y funcionan sin firma.
 
 Para habilitarlo:
 
-1. Creá un App ID con la capability **Keychain Sharing** y un
+1. Crea un App ID con la capability **Keychain Sharing** y un
    provisioning profile para él (en Xcode, *Signing & Capabilities → +
    Keychain Sharing* hace ambas cosas).
 2. Declará el access group en tu archivo de entitlements:
@@ -197,7 +197,7 @@ Para habilitarlo:
    </plist>
    ```
 
-3. Empaquetá el binario como `.app`, embebé el profile y firmá con tu
+3. Empaqueta el binario como `.app`, embebe el profile y firma con tu
    certificado Apple Development o Developer ID:
 
    ```sh
@@ -226,7 +226,7 @@ registry le pasa la activity host al backend.
 ### Android
 
 La Activity tiene que ser una `FragmentActivity` — `IstmoGameActivity`
-(activá el feature `game-activity` del facade) o tu propia
+(activa el feature `game-activity` del facade) o tu propia
 `AppCompatActivity` llamando a `IstmoHost.onCreate(this)`, no
 `NativeActivity`:
 
@@ -243,9 +243,9 @@ Android), declarado en su `[min_versions]`.
 Antes de la API 30 el Keystore no puede atar una clave de uso único a la
 credencial del dispositivo, así que los secretos
 `BiometricOrDeviceCredential` usan una clave que queda desbloqueada unos
-segundos después de cualquier desbloqueo (10 por defecto). Ajustalo con
+segundos después de cualquier desbloqueo (10 por defecto). Ajústalo con
 `BiometricBackendImpl(this, credentialValiditySeconds = 5)` registrando
-el backend vos mismo, con `[[app.plugin]] id = "istmo.biometric"` /
+el backend tú mismo, con `[[app.plugin]] id = "istmo.biometric"` /
 `auto_register = false`.
 
 ### iOS
@@ -255,11 +255,11 @@ No hay nada que conectar: `IstmoApp.run()` (o
 
 iOS termina las apps que usan Face ID sin `NSFaceIDUsageDescription`.
 El plugin declara un valor por defecto con `[plugin.info_plist]`;
-localizalo en el `istmo.toml` de tu app:
+localízalo en el `istmo.toml` de tu app:
 
 ```toml
 [app.info_plist]
-NSFaceIDUsageDescription = "Usá Face ID para abrir tu bóveda."
+NSFaceIDUsageDescription = "Usa Face ID para abrir tu bóveda."
 ```
 
 `emit_app` lo escribe entre los marcadores
@@ -291,7 +291,7 @@ runtime.register_host(BiometricHost::new(
   ejecutable, así renombrar el binario conserva sus secretos. Se
   ignora en el resto.
 
-En Linux no hay prompt del sistema: indicale al usuario que toque el
+En Linux no hay prompt del sistema: indícale al usuario que toque el
 lector mientras `authenticate` está pendiente.
 
 ## Ejemplo
