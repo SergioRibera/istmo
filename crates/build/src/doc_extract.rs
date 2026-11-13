@@ -138,7 +138,7 @@ fn render_enum_variants(out: &mut String, variants: &[VariantDoc]) {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let _ = writeln!(out, "| `{}` | {} | {} |", v.name, payload, oneline(&v.docs),);
+        let _ = writeln!(out, "| `{}` | {} | {} |", v.name, payload, oneline(&v.docs));
     }
 }
 
