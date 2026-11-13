@@ -29,7 +29,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
     // MARK: Discovery
 
     func devices() async throws -> [CameraDevice] {
-        let types: [AVCaptureDevice.DeviceType] = [
+        var types: [AVCaptureDevice.DeviceType] = [
             .builtInWideAngleCamera,
             .builtInUltraWideCamera,
             .builtInTelephotoCamera,
@@ -37,9 +37,14 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             .builtInDualWideCamera,
             .builtInTripleCamera,
             .builtInTrueDepthCamera,
-            .builtInLiDARDepthCamera,
-            .external,
         ]
+        // Both types are newer than the plugin's iOS 13 floor.
+        if #available(iOS 15.4, *) {
+            types.append(.builtInLiDARDepthCamera)
+        }
+        if #available(iOS 17.0, *) {
+            types.append(.external)
+        }
         let session = AVCaptureDevice.DiscoverySession(
             deviceTypes: types,
             mediaType: .video,
@@ -616,11 +621,13 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             }
         }()
         let lens: LensKind = {
+            if #available(iOS 15.4, *), device.deviceType == .builtInLiDARDepthCamera {
+                return .lidar
+            }
             switch device.deviceType {
             case .builtInUltraWideCamera: return .ultraWide
             case .builtInTelephotoCamera: return .telephoto
             case .builtInTrueDepthCamera: return .trueDepth
-            case .builtInLiDARDepthCamera: return .lidar
             case .builtInDualCamera, .builtInDualWideCamera, .builtInTripleCamera: return .logical
             case .builtInWideAngleCamera: return .wide
             default: return .unknown
