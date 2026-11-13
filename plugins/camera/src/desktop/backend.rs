@@ -439,7 +439,7 @@ fn buffer_to_frame(
 /// convert the RGBA output nokhwa gives us into BGRA when the caller
 /// asked for [`PixelFormat::Bgra8`].
 fn swap_rb_in_place(bytes: &mut [u8]) {
-    for px in bytes.chunks_exact_mut(4) {
+    for px in bytes.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
     }
 }
