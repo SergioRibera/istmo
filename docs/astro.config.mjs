@@ -6,7 +6,7 @@ export default defineConfig({
   site: 'https://sergioribera.rs',
   base: '/istmo',
   outDir: './dist/istmo',
-  trailingSlash: 'ignore',
+  trailingSlash: 'always',
   integrations: [
     starlight({
       title: 'Istmo',
