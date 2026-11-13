@@ -18,7 +18,7 @@ interface PenBackend {
     suspend fun capabilities(): PenCapabilities
 
     // Throw BackendException(PenError) for domain errors.
-    suspend fun set_prediction_enabled(enabled: Boolean): Unit
+    suspend fun set_prediction_enabled(enabled: Boolean)
 }
 
 /// Reader / writer per `Named` type referenced by the `Pen` contract.
@@ -78,9 +78,7 @@ class PenDispatcher(
     private val nextInstanceId = java.util.concurrent.atomic.AtomicLong(1)
 
     override suspend fun handleCreateInstance(payload: ByteArray): ByteArray {
-        var cursor = 0
-        val d_config = codecs.readPenConfig(payload, cursor); cursor = d_config.consumed
-        val config = d_config.value
+        val config = codecs.readPenConfig(payload, 0).value
         val backend = factory.create(config)
         val id = nextInstanceId.getAndIncrement()
         instances[id] = backend
@@ -128,9 +126,7 @@ class PenDispatcher(
             }
             "set_prediction_enabled" -> {
                 try {
-                    var cursor = 0
-                    val d_enabled = Bincode.readBool(payload, cursor); cursor = d_enabled.consumed
-                    val enabled = d_enabled.value
+                    val enabled = Bincode.readBool(payload, 0).value
                     backend.set_prediction_enabled(enabled)
                     PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {

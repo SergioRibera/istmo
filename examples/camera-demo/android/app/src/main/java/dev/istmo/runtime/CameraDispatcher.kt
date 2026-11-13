@@ -26,7 +26,7 @@ interface CameraBackend {
     suspend fun open(config: SessionConfig): CameraSession
 
     // Throw BackendException(CameraError) for domain errors.
-    suspend fun close(session: NativeHandleId): Unit
+    suspend fun close(session: NativeHandleId)
 
     fun frames(session: NativeHandleId): kotlinx.coroutines.flow.Flow<CameraFrame>
 
@@ -142,9 +142,7 @@ class CameraDispatcher(
     }
 
     override suspend fun handleCreateInstance(payload: ByteArray): ByteArray {
-        var cursor = 0
-        val d_config = codecs.readCameraInitConfig(payload, cursor); cursor = d_config.consumed
-        val config = d_config.value
+        val config = codecs.readCameraInitConfig(payload, 0).value
         val backend = factory.create(config)
         val id = nextInstanceId.getAndIncrement()
         instances[id] = backend
@@ -211,9 +209,7 @@ class CameraDispatcher(
             }
             "open" -> {
                 try {
-                    var cursor = 0
-                    val d_config_ = codecs.readSessionConfig(payload, cursor); cursor = d_config_.consumed
-                    val config_ = d_config_.value
+                    val config_ = codecs.readSessionConfig(payload, 0).value
                     val result = backend.open(config_)
                     val out = ByteArrayOutputStream()
                     codecs.writeCameraSession(out, result)
@@ -227,9 +223,7 @@ class CameraDispatcher(
             }
             "close" -> {
                 try {
-                    var cursor = 0
-                    val d_session = codecs.readNativeHandleId(payload, cursor); cursor = d_session.consumed
-                    val session = d_session.value
+                    val session = codecs.readNativeHandleId(payload, 0).value
                     backend.close(session)
                     PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
@@ -240,9 +234,7 @@ class CameraDispatcher(
                 }
             }
             "frames" -> {
-                var cursor = 0
-                val d_session = codecs.readNativeHandleId(payload, cursor); cursor = d_session.consumed
-                val session = d_session.value
+                val session = codecs.readNativeHandleId(payload, 0).value
                 val __istmo_flow = backend.frames(session)
                 PluginResult.Stream(
                     __istmo_flow.map { __istmo_item ->
@@ -257,8 +249,7 @@ class CameraDispatcher(
                     var cursor = 0
                     val d_session = codecs.readNativeHandleId(payload, cursor); cursor = d_session.consumed
                     val session = d_session.value
-                    val d_controls = codecs.readCameraControls(payload, cursor); cursor = d_controls.consumed
-                    val controls = d_controls.value
+                    val controls = codecs.readCameraControls(payload, cursor).value
                     val result = backend.apply_controls(session, controls)
                     val out = ByteArrayOutputStream()
                     codecs.writeAppliedControls(out, result)
@@ -275,8 +266,7 @@ class CameraDispatcher(
                     var cursor = 0
                     val d_session = codecs.readNativeHandleId(payload, cursor); cursor = d_session.consumed
                     val session = d_session.value
-                    val d_request = codecs.readStillCaptureRequest(payload, cursor); cursor = d_request.consumed
-                    val request = d_request.value
+                    val request = codecs.readStillCaptureRequest(payload, cursor).value
                     val result = backend.capture_still(session, request)
                     val out = ByteArrayOutputStream()
                     codecs.writeStillPhoto(out, result)

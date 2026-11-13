@@ -19,7 +19,7 @@ interface ShareBackend {
     suspend fun staging_dir(): String
 
     // Throw BackendException(ShareError) for domain errors.
-    suspend fun set_share_targets(targets: List<ShareTarget>): Unit
+    suspend fun set_share_targets(targets: List<ShareTarget>)
 }
 
 /// Reader / writer per `Named` type referenced by the `Share` contract.
@@ -78,9 +78,7 @@ class ShareDispatcher(
         return when (method) {
             "share" -> {
                 try {
-                    var cursor = 0
-                    val d_request = codecs.readShareRequest(payload, cursor); cursor = d_request.consumed
-                    val request = d_request.value
+                    val request = codecs.readShareRequest(payload, 0).value
                     val result = backend.share(request)
                     val out = ByteArrayOutputStream()
                     codecs.writeShareOutcome(out, result)
@@ -120,9 +118,7 @@ class ShareDispatcher(
             }
             "set_share_targets" -> {
                 try {
-                    var cursor = 0
-                    val d_targets = Bincode.readVec(payload, cursor) { b1, c1 -> codecs.readShareTarget(b1, c1) }; cursor = d_targets.consumed
-                    val targets = d_targets.value
+                    val targets = Bincode.readVec(payload, 0) { b1, c1 -> codecs.readShareTarget(b1, c1) }.value
                     backend.set_share_targets(targets)
                     PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
