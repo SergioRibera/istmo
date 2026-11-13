@@ -2,6 +2,7 @@
 // plugin id: com.example."cov$"
 
 #[::istmo_macros::message(wincode = "::wincode")]
+#[allow(missing_docs, reason = "generated from a contract, which carries no docs")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Everything {
     pub unit: (),
@@ -31,6 +32,7 @@ pub struct Everything {
 }
 
 #[::istmo_macros::message(wincode = "::wincode")]
+#[allow(missing_docs, reason = "generated from a contract, which carries no docs")]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
     Default,
@@ -39,6 +41,7 @@ pub enum Shape {
 }
 
 #[::istmo_macros::message(wincode = "::wincode")]
+#[allow(missing_docs, reason = "generated from a contract, which carries no docs")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum Mode {
     In,
@@ -46,6 +49,7 @@ pub enum Mode {
 }
 
 #[::istmo_macros::message(wincode = "::wincode")]
+#[allow(missing_docs, reason = "generated from a contract, which carries no docs")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FirstError {
     Denied,
@@ -53,6 +57,7 @@ pub enum FirstError {
 }
 
 #[::istmo_macros::message(wincode = "::wincode")]
+#[allow(missing_docs, reason = "generated from a contract, which carries no docs")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub struct SecondError {
     pub code: u32,

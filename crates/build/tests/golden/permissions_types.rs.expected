@@ -2,6 +2,7 @@
 // plugin id: istmo.permissions
 
 #[::istmo_macros::message(wincode = "::wincode")]
+#[allow(missing_docs, reason = "generated from a contract, which carries no docs")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum PermissionStatus {
     Granted,
@@ -12,6 +13,7 @@ pub enum PermissionStatus {
 }
 
 #[::istmo_macros::message(wincode = "::wincode")]
+#[allow(missing_docs, reason = "generated from a contract, which carries no docs")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PermissionOutcome {
     pub permission: String,

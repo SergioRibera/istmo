@@ -20,8 +20,17 @@ pub fn generate_rust_types(contract: &Contract) -> String {
     out
 }
 
+/// A contract carries no documentation to give the generated items.
+fn write_allow_missing_docs(out: &mut String) {
+    let _ = writeln!(
+        out,
+        "#[allow(missing_docs, reason = \"generated from a contract, which carries no docs\")]"
+    );
+}
+
 fn write_struct(out: &mut String, s: &StructDef, derives: &[&str]) {
     let _ = writeln!(out, "#[::istmo_macros::message(wincode = \"::wincode\")]");
+    write_allow_missing_docs(out);
     let _ = writeln!(out, "#[derive({})]", derives.join(", "));
     let _ = writeln!(out, "pub struct {} {{", s.name);
     for f in &s.fields {
@@ -37,6 +46,7 @@ fn write_struct(out: &mut String, s: &StructDef, derives: &[&str]) {
 
 fn write_enum(out: &mut String, e: &EnumDef, derives: &[&str]) {
     let _ = writeln!(out, "#[::istmo_macros::message(wincode = \"::wincode\")]");
+    write_allow_missing_docs(out);
     let _ = writeln!(out, "#[derive({})]", derives.join(", "));
     let _ = writeln!(out, "pub enum {} {{", e.name);
     for v in &e.variants {
@@ -126,18 +136,11 @@ impl<'a> DeriveTable<'a> {
                 .fields
                 .iter()
                 .fold(Derives::ALL, |acc, f| acc.and(self.of_ref(&f.ty))),
-            TypeDef::Enum(e) => {
-                let members = e
-                    .variants
-                    .iter()
-                    .flat_map(|v| &v.payload)
-                    .fold(Derives::ALL, |acc, ty| acc.and(self.of_ref(ty)));
-                // Only field-less enums are marked `Copy`.
-                Derives {
-                    copy: e.variants.iter().all(|v| v.payload.is_empty()),
-                    ..members
-                }
-            }
+            TypeDef::Enum(e) => e
+                .variants
+                .iter()
+                .flat_map(|v| &v.payload)
+                .fold(Derives::ALL, |acc, ty| acc.and(self.of_ref(ty))),
         }
     }
 
