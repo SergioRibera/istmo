@@ -51,7 +51,10 @@ public final class PenBackendImpl: PenBackend {
 ///
 /// ```swift
 /// let view = PenCaptureView(frame: .zero)
-/// IstmoRuntime.shared.registerHandler(PenFactoryImpl(view: view))
+/// IstmoRuntime.shared.registerHandler(
+///     PenDispatcher.PLUGIN_ID,
+///     PenDispatcher(factory: PenFactoryImpl(view: view), codecs: PenCodecsImpl())
+/// )
 /// ```
 public final class PenFactoryImpl: PenFactory {
 

@@ -14,7 +14,10 @@ package dev.istmo.plugins.pen
  *
  * ```kotlin
  * val view = PenCaptureView(context)
- * IstmoRuntime.registerHandler(PenFactoryImpl(view))
+ * IstmoRuntime.registerHandler(
+ *     PenDispatcher.PLUGIN_ID,
+ *     PenDispatcher(PenFactoryImpl(view), PenCodecsImpl()),
+ * )
  * ```
  */
 class PenFactoryImpl(private val view: PenCaptureView) : PenFactory {
