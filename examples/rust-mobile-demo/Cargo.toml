@@ -21,7 +21,6 @@ pollster = { workspace = true }
 
 [build-dependencies]
 istmo-plugins-schema = { workspace = true }
-istmo-google-sign-in = { workspace = true, features = ["codegen"] }
 istmo-build = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
