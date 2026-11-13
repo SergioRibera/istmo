@@ -35,13 +35,17 @@ token material — obtain the ergonomic `OwnedSignInAccount` via
 `sign_in_owned` / `silent_sign_in_owned` to have it dropped
 deterministically.
 
+Deliberately not `Clone`: every copy would carry the same raw
+`credential` id, and adopting two copies with
+[`into_owned`](Self::into_owned) would release the credential twice.
+
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
 | `id` | `id` | `String` | Stable Google user id (`sub` claim of the id token). |
 | `email` | `email` | `Option<String>` | Verified email address, if the user granted the `email` scope. |
 | `display_name` | `displayName` | `Option<String>` | Full display name, if the user granted the `profile` scope. |
 | `photo_url` | `photoUrl` | `Option<String>` | Profile photo URL, if available. |
-| `id_token` | `idToken` | `String` | Signed OpenID Connect id token — forward to your backend to verify the user's identity server-side. |
+| `id_token` | `idToken` | `String` | Signed `OpenID` Connect id token — forward to your backend to verify the user's identity server-side. |
 | `granted_scopes` | `grantedScopes` | `Vec<String>` | Scopes actually granted by the user (may be a subset of what `SignInConfig::scopes` requested). |
 | `credential` | `credential` | `NativeHandleId` | Opaque credential handle. Native side releases the underlying token when `Frame::ReleaseNativeHandle` arrives — usually via `NativeHandle::drop` on the owned wrapper. |
 
