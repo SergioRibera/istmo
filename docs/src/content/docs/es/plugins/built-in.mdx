@@ -187,8 +187,8 @@ let padding = SafeArea::acquire()?.current_or_default()?.view_padding();
 - **Android** — publica desde el listener de window insets de la
   actividad con `IstmoRuntime.publishSafeArea(...)` (doce floats:
   barras del sistema, IME y recorte, cada uno top/right/bottom/left).
-- **iOS** — activa la feature `winit-publisher` de `istmo-plugins` y
-  llama una vez a `istmo_plugins::safe_area::SafeAreaPublisher::install(&rt)?`;
+- **iOS** — activa la feature `winit-publisher` de `istmo` y llama una
+  vez a `istmo::plugins::SafeAreaPublisher::install(&rt)?`;
   luego `tick()` desde el hilo de UI en cada frame: lee las
   `safeAreaInsets` de la ventana principal y publica solo los cambios.
   En otros targets `tick()` no hace nada.

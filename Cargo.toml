@@ -120,6 +120,9 @@ categories = ["development-tools::ffi", "os", "api-bindings"]
 default = ["native-activity"]
 native-activity = ["istmo-android/native-activity"]
 game-activity = ["istmo-android/game-activity"]
+# `istmo::plugins::SafeAreaPublisher`: a Rust frame loop publishes the
+# key window's safe-area insets itself (iOS / tvOS / visionOS).
+winit-publisher = ["istmo-plugins/winit-publisher"]
 
 [dependencies]
 istmo-core = { workspace = true }

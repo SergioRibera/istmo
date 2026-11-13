@@ -70,6 +70,14 @@
 //!   attaches — used for launch-intent payloads such as cold-start deep
 //!   links or notification taps.
 //!
+//! # Cargo features
+//!
+//! - `native-activity` (default) / `game-activity` — the Android
+//!   activity flavor of `istmo-android`; pick exactly one.
+//! - `winit-publisher` — enables `plugins::SafeAreaPublisher`, which
+//!   lets a Rust frame loop publish the key window's safe-area insets on
+//!   iOS / tvOS / visionOS.
+//!
 //! # Wire protocol
 //!
 //! All frames cross the FFI boundary as opaque wire-encoded byte

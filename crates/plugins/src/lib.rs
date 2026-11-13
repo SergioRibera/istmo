@@ -111,9 +111,9 @@ pub use crate::device_info::{
     FormFactor, ScreenInfo, rust_fallback as device_info_rust_fallback,
 };
 pub use crate::documents::{
-    ActivationStream, DOCUMENTS_ACTIVATION_CHANNEL, DOCUMENTS_CHANNEL, DOCUMENTS_PLUGIN_ID,
-    DocumentLocation, DocumentOrigin, DocumentStream, Documents, InstanceActivation,
-    OpenedDocument,
+    ActivationStream, DEFAULT_DOCUMENTS_CAPACITY, DOCUMENTS_ACTIVATION_CHANNEL, DOCUMENTS_CHANNEL,
+    DOCUMENTS_PLUGIN_ID, DocumentLocation, DocumentOrigin, DocumentStream, Documents,
+    InstanceActivation, OpenedDocument,
 };
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use crate::documents_publisher::{
@@ -137,6 +137,8 @@ pub use crate::permissions::{
     PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions, PermissionsClient,
     PermissionsHost,
 };
+#[cfg(feature = "winit-publisher")]
+pub use crate::safe_area::SafeAreaPublisher;
 pub use crate::safe_area::{
     EdgeInsets, SAFE_AREA_CHANNEL, SAFE_AREA_PLUGIN_ID, SafeArea, SafeAreaInsets, SafeAreaStream,
 };
