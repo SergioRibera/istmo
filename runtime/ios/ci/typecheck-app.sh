@@ -28,7 +28,7 @@ if [ -z "$plugins_yml" ]; then
 fi
 app_dir=$(dirname "$plugins_yml")
 
-swiftc -emit-module -parse-as-library \
+swiftc -emit-module -parse-as-library -warnings-as-errors \
     -sdk "$sdk" -target "$target" \
     -I "$ffi" \
     -module-name IstmoRuntime \
@@ -44,7 +44,7 @@ done
 
 echo "type-checking $(wc -l < "$work/sources" | tr -d ' ') files of $example"
 # shellcheck disable=SC2046 # one path per line, no spaces in the repo.
-swiftc -typecheck \
+swiftc -typecheck -warnings-as-errors \
     -sdk "$sdk" -target "$target" \
     -I "$work" -I "$ffi" \
     -module-name App \
