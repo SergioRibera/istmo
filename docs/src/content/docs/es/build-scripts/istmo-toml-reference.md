@@ -64,7 +64,10 @@ from_version = "1.5.0"
   `"local"`)* — dónde corre el backend del plugin por defecto. Las apps
   pueden sobrescribirlo con `[[remote_override]]`.
 - **`auto_register`** *(opcional, bool, default `true`)* — si `emit()`
-  incluye este plugin en el `IstmoPluginRegistry` generado. Ponlo en
+  incluye este plugin en el `IstmoPluginRegistry` generado en las
+  plataformas donde tiene un backend nativo (fuentes `native/<plataforma>/`
+  o `android_backend` / `ios_backend`; un plugin alojado en Rust nunca
+  se registra). Ponlo en
   `false` cuando la construcción del backend varía por app (una API key,
   una vista que es de la app) y el autor de la app debe registrar el
   dispatcher a mano. Ver [Auto-registro](/istmo/es/build-scripts/auto-register/).
@@ -135,9 +138,10 @@ from_version = "1.5.0"
   `Info.plist.background.xml`.
 
 Los permisos, las entradas de `Info.plist` y los shims de servicio y de
-background sólo llegan a la app para los plugins que conecta con
-`istmo::runtime!` (más los plugins sin `client_type`, que no se pueden
-listar ahí).
+background sólo llegan a la app para los plugins que conecta — los
+auto-conectados (cada dependencia directa con `client_type`) y los que
+nombran las secciones `plugins:` / `remote:` de `istmo::runtime!` —
+más los plugins sin `client_type`, que no se pueden conectar.
 
 ## `[[plugin]]` — forma array
 
@@ -191,13 +195,20 @@ product      = "NIO"                                  # obligatoria
 from_version = "2.62.0"                               # obligatoria
 ```
 
-Sólo se soporta `from_version` ("hasta la siguiente major"). Las
-entradas se combinan igual que las de Gradle (gana el `from_version` más
-alto) y se pueden leer desde un build script con
-`istmo_build::collect_dep_native_deps().swift_entries()`. El
-`istmo-plugins.yml` generado no declara paquetes, así que agrega cada
-uno a tu proyecto de Xcode (la sección `packages:` de `project.yml`, o
-File → Add Package Dependencies).
+Sólo se soporta `from_version` ("hasta la siguiente major"). La app
+combina las entradas de cada plugin con las de su propio `istmo.toml`,
+agrupadas por `url`: un paquete por repositorio con el `from_version`
+más alto que pida alguna entrada (la misma regla que en Gradle) y todos
+los productos pedidos. El `istmo-plugins.yml` generado declara cada
+paquete bajo la clave `packages:` de primer nivel (`url` + `from`) y
+enlaza sus productos en las `dependencies:` del target de la app, así
+que xcodegen los agrega al proyecto de Xcode. El nombre del paquete es
+el último segmento de la `url` sin `.git` (`GoogleSignIn-iOS`); dos
+repositorios que terminan en el mismo segmento reciben los sufijos
+`-2`, `-3`, … Un paquete que tu propio `project.yml` declare con el
+mismo nombre conserva su `url` / versión. Las entradas de los plugins
+también se pueden leer desde un build script con
+`istmo_build::collect_dep_native_deps().swift_entries()`.
 
 ## `[[assets]]`
 
@@ -319,6 +330,13 @@ role      = "client"
 Cada entrada necesita `id` o `type`; si están las dos, se usa `id`. Un
 contrato se busca primero por su id de plugin y luego por su nombre de
 tipo.
+
+`auto_register` (default: sin definir) — `false` deja el plugin fuera
+de `IstmoPluginRegistry`. `true` además lo registra en plataformas donde
+istmo no conoce ningún backend nativo (sin `native/<plataforma>/`, sin
+`android_backend` / `ios_backend`): así se registra un contrato local de
+la app cuyo `<T>BackendImpl` escribe la propia app. Ver
+[Auto-registro](/istmo/es/build-scripts/auto-register/#qué-significa-elegible).
 
 ### `[app.info_plist]`
 
