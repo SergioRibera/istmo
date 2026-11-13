@@ -89,7 +89,7 @@ dependencies {
 }
 ```
 
-### Swift — SPM (iOS / macOS)
+### Swift — SPM (iOS, tvOS, watchOS, visionOS)
 
 ```swift
 dependencies: [
