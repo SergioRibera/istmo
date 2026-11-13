@@ -392,7 +392,7 @@ fn collect_keyed<T>(
         }
     }
     for (var, payload) in collect_env_payloads(legacy) {
-        // `DEP_X_ISTMO_CONTRACT` also ends in `_CONTRACT`.
+        // `DEP_X_ISTMO_NATIVE_DEPS` also ends in `_NATIVE_DEPS`.
         if current.iter().any(|(v, _)| *v == var) {
             continue;
         }
