@@ -4,8 +4,7 @@
 //! an event loop (or on OS change notifications). Linux reads env +
 //! `/etc/localtime`; macOS calls Foundation via `objc2`; Windows uses
 //! `GetUserDefaultLocaleName` + `GetDynamicTimeZoneInformation` +
-//! `GetLocaleInfoEx` via `windows-sys`. WebAssembly / BSDs still
-//! expect an OS-level bridge from the surrounding runtime.
+//! `GetLocaleInfoEx` via `windows-sys`.
 //!
 //! Values are coarse by design — accurate wall-clock offset / DST on
 //! Linux requires a tz database crate (`chrono-tz`, `time-tz`); this
@@ -15,27 +14,19 @@
 //! may be a Windows id — downstream can map via CLDR
 //! `windowsZones.xml`.
 
-use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
-use istmo_core::{IstmoError, Runtime, codec};
+use istmo_core::{IstmoError, Runtime};
 
-use super::{Formats, Locale, SYSTEM_INFO_UPTIME_CHANNEL, TimeZone};
+use super::{Formats, Locale, TimeZone};
 use crate::early::LatestPublisher;
 
-/// Shortest time between two uptime publishes. Uptime changes on every
-/// tick, so without a floor a per-frame tick would publish (and wake
-/// every subscriber) every frame.
-pub const UPTIME_INTERVAL: Duration = Duration::from_secs(1);
-
-/// Publishes the host's locale, time zone, formats and uptime.
+/// Publishes the host's locale, time zone and formats.
 #[derive(Debug)]
 pub struct SystemInfoPublisher {
-    runtime: Weak<Runtime>,
     locale: LatestPublisher<Locale>,
     timezone: LatestPublisher<TimeZone>,
     formats: LatestPublisher<Formats>,
-    uptime_at: Option<Instant>,
 }
 
 impl SystemInfoPublisher {
@@ -47,116 +38,20 @@ impl SystemInfoPublisher {
     /// plugin was not declared.
     pub fn install(runtime: &Arc<Runtime>) -> Result<Self, IstmoError> {
         Ok(Self {
-            runtime: Arc::downgrade(runtime),
             locale: LatestPublisher::install(runtime)?,
             timezone: LatestPublisher::install(runtime)?,
             formats: LatestPublisher::install(runtime)?,
-            uptime_at: None,
         })
     }
 
     /// Sample the host and publish what changed. Safe to call every
-    /// frame: locale, time zone and formats publish only on change and
-    /// uptime at most once per [`UPTIME_INTERVAL`].
+    /// frame: each value publishes only on change.
     pub fn tick(&mut self) {
         if let Some(sample) = sample() {
             self.locale.publish_if_changed(sample.locale);
             self.timezone.publish_if_changed(sample.timezone);
             self.formats.publish_if_changed(sample.formats);
         }
-        self.publish_uptime(Instant::now());
-    }
-
-    fn publish_uptime(&mut self, now: Instant) {
-        if let Some(at) = self.uptime_at
-            && now.duration_since(at) < UPTIME_INTERVAL
-        {
-            return;
-        }
-        let Some(runtime) = self.runtime.upgrade() else {
-            return;
-        };
-        let Some(ms) = uptime::uptime_millis() else {
-            return;
-        };
-        match codec::encode(&ms) {
-            Ok(bytes) => {
-                runtime.publish_early_latest(SYSTEM_INFO_UPTIME_CHANNEL, bytes);
-                self.uptime_at = Some(now);
-            }
-            Err(err) => tracing::warn!(target: "istmo.system_info", %err, "uptime encode failed"),
-        }
-    }
-}
-
-mod uptime {
-    #[must_use]
-    #[allow(
-        clippy::unnecessary_wraps,
-        reason = "infallible on Windows only; the signature is shared"
-    )]
-    pub(super) fn uptime_millis() -> Option<u64> {
-        #[cfg(target_os = "linux")]
-        {
-            linux()
-        }
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        {
-            apple()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Some(windows())
-        }
-        #[cfg(not(any(
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "windows"
-        )))]
-        {
-            None
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn linux() -> Option<u64> {
-        let raw = std::fs::read_to_string("/proc/uptime").ok()?;
-        let seconds: f64 = raw.split_whitespace().next()?.parse().ok()?;
-        if !seconds.is_finite() || seconds < 0.0 {
-            return None;
-        }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        Some((seconds * 1000.0) as u64)
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    #[allow(unsafe_code)]
-    fn apple() -> Option<u64> {
-        use objc2::msg_send;
-        use objc2::runtime::{AnyClass, AnyObject};
-        // SAFETY: `NSProcessInfo.processInfo` is a Foundation singleton.
-        unsafe {
-            let cls = AnyClass::get(c"NSProcessInfo")?;
-            let obj: *mut AnyObject = msg_send![cls, processInfo];
-            if obj.is_null() {
-                return None;
-            }
-            let seconds: f64 = msg_send![obj, systemUptime];
-            if !seconds.is_finite() || seconds < 0.0 {
-                return None;
-            }
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            Some((seconds * 1000.0) as u64)
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    #[allow(unsafe_code)]
-    fn windows() -> u64 {
-        use windows_sys::Win32::System::SystemInformation::GetTickCount64;
-        // SAFETY: no pointer parameters.
-        unsafe { GetTickCount64() }
     }
 }
 

@@ -11,27 +11,27 @@
 //! - [`SYSTEM_INFO_FORMATS_CHANNEL`] — [`Formats`] (24h, first day of
 //!   week, measurement, currency, separators, calendar).
 //!
-//! Native sides push updates when the user changes OS settings
-//! (`Intent.ACTION_LOCALE_CHANGED` on Android,
-//! `NSCurrentLocaleDidChangeNotification` on iOS/macOS, etc.).
-//! Desktop targets (Linux / macOS / Windows) expose
-//! [`SystemInfoPublisher`] — a pure-Rust sampler that attached
-//! desktop apps can drive from their event loop; Web is stubbed and
-//! expects an OS-level bridge.
+//! The runtime observers push updates when the user changes OS settings
+//! (`ACTION_LOCALE_CHANGED` / `ACTION_TIMEZONE_CHANGED` /
+//! `ACTION_TIME_CHANGED` on Android,
+//! `NSLocale.currentLocaleDidChangeNotification` /
+//! `NSSystemTimeZoneDidChange` on Apple). Desktop targets (Linux /
+//! macOS / Windows) expose [`SystemInfoPublisher`], a pure-Rust sampler
+//! the app drives from its event loop. Other targets have no publisher.
 //!
-//! `now_utc_millis` is pure Rust (`SystemTime::now()`); every other
-//! value needs the platform to publish.
+//! `now_utc_millis` and `uptime_millis` read the OS clocks in Rust on
+//! every call; every other value needs a publisher.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use istmo_core::early_events::LatestValueSlot;
-use istmo_core::{IstmoError, Plugin, Runtime, codec};
+use istmo_core::{IstmoError, Plugin, Runtime};
 use istmo_macros::message;
 
 use crate::early::{EarlyStream, LatestClient, LatestValue};
 
 pub mod tables;
+mod uptime;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod publisher;
@@ -47,8 +47,6 @@ pub const SYSTEM_INFO_LOCALE_CHANNEL: &str = "istmo.system_info.locale";
 pub const SYSTEM_INFO_TIMEZONE_CHANNEL: &str = "istmo.system_info.timezone";
 /// Early-event channel of [`Formats`].
 pub const SYSTEM_INFO_FORMATS_CHANNEL: &str = "istmo.system_info.formats";
-/// Early-event channel of the uptime in milliseconds (`u64`).
-pub const SYSTEM_INFO_UPTIME_CHANNEL: &str = "istmo.system_info.uptime";
 
 /// The user's language and region.
 #[message(wincode = "::wincode")]
@@ -159,14 +157,13 @@ pub type TimeZoneStream = EarlyStream<TimeZone>;
 /// Formatting preferences as they are published.
 pub type FormatsStream = EarlyStream<Formats>;
 
-/// Reader for the locale, time zone, formats and uptime the platform
-/// publishes.
+/// Reader for the locale, time zone and formats the platform publishes,
+/// plus the wall clock and uptime.
 #[derive(Debug, Clone)]
 pub struct SystemInfoClient {
     locale: LatestClient<Locale>,
     timezone: LatestClient<TimeZone>,
     formats: LatestClient<Formats>,
-    uptime: Arc<LatestValueSlot>,
 }
 
 impl Plugin for SystemInfoClient {
@@ -195,7 +192,6 @@ impl SystemInfoClient {
             locale: LatestClient::from_runtime(rt)?,
             timezone: LatestClient::from_runtime(rt)?,
             formats: LatestClient::from_runtime(rt)?,
-            uptime: rt.early_events().latest_slot(SYSTEM_INFO_UPTIME_CHANNEL),
         })
     }
 
@@ -252,18 +248,11 @@ impl SystemInfoClient {
             .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
     }
 
-    /// Milliseconds since the device booted, as of the last publish.
-    /// `None` when no publisher has supplied a value — desktops wire
-    /// this through [`SystemInfoPublisher`], mobile through a native
-    /// bridge.
-    ///
-    /// # Errors
-    ///
-    /// [`IstmoError::Codec`] when the retained payload does not decode.
-    pub fn uptime_millis(&self) -> Result<Option<u64>, IstmoError> {
-        self.uptime
-            .peek()
-            .map(|bytes| Ok(codec::decode::<u64>(&bytes)?.0))
-            .transpose()
+    /// Milliseconds since the device booted, read from the OS clock on
+    /// every call. `None` on targets without a reader (anything but
+    /// Linux, Android, Apple and Windows) or when the clock read fails.
+    #[must_use]
+    pub fn uptime_millis(&self) -> Option<u64> {
+        uptime::uptime_millis()
     }
 }

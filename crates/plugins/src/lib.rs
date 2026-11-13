@@ -156,8 +156,8 @@ pub use crate::system_info::SystemInfoPublisher;
 pub use crate::system_info::{
     CalendarSystem, Formats, FormatsStream, LayoutDirection, Locale, LocaleStream,
     MeasurementSystem, SYSTEM_INFO_FORMATS_CHANNEL, SYSTEM_INFO_LOCALE_CHANNEL,
-    SYSTEM_INFO_PLUGIN_ID, SYSTEM_INFO_TIMEZONE_CHANNEL, SYSTEM_INFO_UPTIME_CHANNEL,
-    SystemInfoClient, TemperatureUnit, TimeZone, TimeZoneStream,
+    SYSTEM_INFO_PLUGIN_ID, SYSTEM_INFO_TIMEZONE_CHANNEL, SystemInfoClient, TemperatureUnit,
+    TimeZone, TimeZoneStream,
 };
 pub use crate::task_scheduler::{
     ExistingWorkPolicy, TASK_SCHEDULER_PLUGIN_ID, TaskHandle, TaskRequest, TaskScheduler,

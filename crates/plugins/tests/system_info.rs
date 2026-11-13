@@ -116,18 +116,24 @@ fn try_recv_returns_none_when_empty() {
 }
 
 #[test]
-fn uptime_is_none_before_publish() {
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn uptime_is_read_from_the_os_clock_without_a_publish() {
     let init = Runtime::mock();
     let plugin = SystemInfoClient::from_runtime(&init.runtime).expect("declared");
-    assert!(plugin.uptime_millis().unwrap().is_none());
-}
-
-#[test]
-fn uptime_roundtrips_via_publish() {
-    let init = Runtime::mock();
-    let rt = init.runtime;
-    let bytes = istmo_core::codec::encode(&123_456_u64).expect("encode");
-    rt.publish_early_latest(istmo_plugins::SYSTEM_INFO_UPTIME_CHANNEL, bytes);
-    let plugin = SystemInfoClient::from_runtime(&rt).expect("declared");
-    assert_eq!(plugin.uptime_millis().unwrap(), Some(123_456));
+    let first = plugin
+        .uptime_millis()
+        .expect("uptime readable on this host");
+    let second = plugin
+        .uptime_millis()
+        .expect("uptime readable on this host");
+    assert!(first > 0);
+    assert!(
+        second >= first,
+        "uptime went backwards: {first} -> {second}"
+    );
 }

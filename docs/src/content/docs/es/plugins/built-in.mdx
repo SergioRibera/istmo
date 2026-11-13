@@ -195,20 +195,19 @@ let padding = SafeArea::acquire()?.current_or_default()?.view_padding();
 
 ## Información del sistema
 
-`SystemInfoClient` agrupa cuatro canales:
+`SystemInfoClient` agrupa tres canales y dos relojes:
 
 | Método | Devuelve |
 | ------ | -------- |
 | `current_locale()` / `locale_stream()` | `Locale { bcp47, language, region, script, direction }` |
 | `current_timezone()` / `timezone_stream()` | `TimeZone { id, offset_seconds, is_dst, abbreviation }` |
 | `current_formats()` / `formats_stream()` | `Formats { uses_24h, first_day_of_week, measurement, temperature_unit, currency_code, decimal_separator, group_separator, calendar }` |
-| `uptime_millis()` | `Result<Option<u64>, IstmoError>` — milisegundos desde el arranque según la última publicación |
+| `uptime_millis()` | `Option<u64>`, milisegundos desde el arranque leídos del reloj del SO en Rust (`None` en targets sin lector) |
 | `now_utc_millis()` | `i64`, leído del reloj del sistema en Rust |
 
 Los observadores de Android e iOS publican locale, zona horaria y
-formatos; el uptime solo se publica en escritorio
-(`SystemInfoPublisher`) salvo que la app llame a
-`IstmoRuntime.publishUptimeMillis`.
+formatos; en escritorio lo hace `SystemInfoPublisher`. Los dos relojes no
+necesitan publicador.
 
 ## Información del dispositivo
 
@@ -268,7 +267,7 @@ storage.tick();
 
 | Publicador | Llamada | Linux | macOS | Windows |
 | ---------- | ------- | ----- | ----- | ------- |
-| `SystemInfoPublisher` | `tick()`, sirve en cada frame (uptime como mucho una vez por segundo) | entorno + `/etc/localtime` | Foundation | APIs Win32 de locale / zona horaria |
+| `SystemInfoPublisher` | `tick()`, sirve en cada frame | entorno + `/etc/localtime` | Foundation | APIs Win32 de locale / zona horaria |
 | `DeviceInfoPublisher` | `publish()` una vez | RAM, versión del kernel | versión del SO | RAM, versión del SO |
 | `ThemePreferencePublisher` | `tick()`, muestrea como mucho cada 2 s | `gsettings` | `defaults read` | registro `AppsUseLightTheme` |
 | `NetworkStatePublisher` | `tick()` | `/proc/net/route` + `/sys/class/net` | — | `GetAdaptersAddresses` |

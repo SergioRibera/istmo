@@ -12,7 +12,6 @@ import Foundation
 private let SYSTEM_INFO_LOCALE_CHANNEL = "istmo.system_info.locale"
 private let SYSTEM_INFO_TIMEZONE_CHANNEL = "istmo.system_info.timezone"
 private let SYSTEM_INFO_FORMATS_CHANNEL = "istmo.system_info.formats"
-private let SYSTEM_INFO_UPTIME_CHANNEL = "istmo.system_info.uptime"
 private let DEVICE_INFO_CHANNEL = "istmo.device_info"
 private let THEME_PREFERENCE_CHANNEL = "istmo.theme_preference"
 private let NETWORK_STATE_CHANNEL = "istmo.network_state"
@@ -227,12 +226,6 @@ extension IstmoRuntime {
         Bincode.writeString(&out, groupSeparator)
         writeCalendar(&out, calendar)
         publishEarlyLatest(channel: SYSTEM_INFO_FORMATS_CHANNEL, payload: out)
-    }
-
-    public func publishUptimeMillis(_ ms: UInt64) {
-        var out = Data()
-        Bincode.writeVarintU64(&out, ms)
-        publishEarlyLatest(channel: SYSTEM_INFO_UPTIME_CHANNEL, payload: out)
     }
 
     public func publishDeviceInfo(

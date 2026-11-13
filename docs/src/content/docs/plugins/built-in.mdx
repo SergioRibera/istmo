@@ -195,19 +195,18 @@ let padding = SafeArea::acquire()?.current_or_default()?.view_padding();
 
 ## System info
 
-`SystemInfoClient` groups four channels:
+`SystemInfoClient` groups three channels and two clocks:
 
 | Method | Returns |
 | ------ | ------- |
 | `current_locale()` / `locale_stream()` | `Locale { bcp47, language, region, script, direction }` |
 | `current_timezone()` / `timezone_stream()` | `TimeZone { id, offset_seconds, is_dst, abbreviation }` |
 | `current_formats()` / `formats_stream()` | `Formats { uses_24h, first_day_of_week, measurement, temperature_unit, currency_code, decimal_separator, group_separator, calendar }` |
-| `uptime_millis()` | `Result<Option<u64>, IstmoError>` — milliseconds since boot as of the last publish |
+| `uptime_millis()` | `Option<u64>`, milliseconds since boot read from the OS clock in Rust (`None` on targets without a reader) |
 | `now_utc_millis()` | `i64`, read from the system clock in Rust |
 
-Android and iOS observers publish locale, time zone and formats;
-uptime is only published on desktop (`SystemInfoPublisher`) unless the
-app calls `IstmoRuntime.publishUptimeMillis`.
+Android and iOS observers publish locale, time zone and formats; on
+desktop `SystemInfoPublisher` does. The two clocks need no publisher.
 
 ## Device info
 
@@ -267,7 +266,7 @@ storage.tick();
 
 | Publisher | Call | Linux | macOS | Windows |
 | --------- | ---- | ----- | ----- | ------- |
-| `SystemInfoPublisher` | `tick()`, every frame is fine (uptime at most once a second) | environment + `/etc/localtime` | Foundation | Win32 locale / time-zone APIs |
+| `SystemInfoPublisher` | `tick()`, every frame is fine | environment + `/etc/localtime` | Foundation | Win32 locale / time-zone APIs |
 | `DeviceInfoPublisher` | `publish()` once | RAM, kernel release | OS version | RAM, OS version |
 | `ThemePreferencePublisher` | `tick()`, samples at most every 2 s | `gsettings` | `defaults read` | registry `AppsUseLightTheme` |
 | `NetworkStatePublisher` | `tick()` | `/proc/net/route` + `/sys/class/net` | — | `GetAdaptersAddresses` |
