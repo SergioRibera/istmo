@@ -18,7 +18,7 @@ Kotlin / Swift.
 ```rust
 use istmo::plugin;
 
-#[plugin]
+#[plugin(name = "acme.location_tracker")]
 pub trait LocationTracker {
     #[istmo::stream]
     async fn updates(&self) -> LocationFix;

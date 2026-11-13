@@ -39,9 +39,11 @@ The macro reads three optional sections:
 - `remote:` — plugins whose backend lives in a **separate OS process**
   (Android `:remote` service pattern).
 
-At compile time it produces `Runtime::new()` returning an
-`Arc<Runtime>`. From there, every plugin client acquires the runtime
-with `SignInClient::from_runtime(&runtime)`.
+At compile time it produces the hook that configures the runtime when
+the platform starts it (`Runtime::init` on desktop). From there, every
+plugin client acquires the runtime with
+`SignInClient::from_runtime(&runtime)`, or `SignInClient::acquire()`
+from the process-global one.
 
 ## The Frame protocol
 

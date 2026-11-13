@@ -25,7 +25,7 @@ touch the platform's main thread, you probably want a
 // crates/image-hasher/src/lib.rs
 use istmo::plugin;
 
-#[plugin]
+#[plugin(name = "acme.image_hasher")]
 pub trait ImageHasher {
     async fn perceptual_hash(&self, bytes: Vec<u8>) -> Result<u64, HashError>;
     async fn dimensions(&self, bytes: Vec<u8>) -> Result<Dimensions, HashError>;
@@ -148,7 +148,7 @@ async fn hashes_a_png() {
 }
 ```
 
-For integration tests, spin up a runtime with `Runtime::new_isolated()`
+For integration tests, spin up a runtime with `Runtime::mock()`
 and call the client just as your app would.
 
 ## Next

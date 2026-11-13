@@ -41,7 +41,7 @@ pub struct NativeHandle<T: ?Sized> { /* id + Weak<Runtime> */ }
 ## Declaring a plugin that returns a handle
 
 ```rust
-#[plugin]
+#[plugin(name = "acme.auth")]
 pub trait Auth {
     async fn sign_in(&self, provider: Provider) -> Result<SignInResult, AuthError>;
     async fn refresh(&self, credential: NativeHandleId)
@@ -78,7 +78,7 @@ method with `#[istmo::owned]` and the generated client emits a
 companion `<method>_owned` returning the owned struct:
 
 ```rust
-#[plugin]
+#[plugin(name = "acme.auth")]
 pub trait Auth {
     #[istmo::owned]
     async fn sign_in(&self, provider: Provider) -> Result<SignInResult, AuthError>;
@@ -101,21 +101,40 @@ to `Frame::ReleaseNativeHandle` by tearing down its cached object:
 
 ```kotlin
 // Android
-IstmoRuntime.instance.registerReleaser("acme.auth.credential") { id ->
-    credentialCache.remove(id)?.close()
+class AuthBackendImpl(private val ctx: Context) : AuthBackend, HandleReleaser {
+    private val credentials = ConcurrentHashMap<Long, Credential>()
+
+    override suspend fun sign_in(provider: Provider): SignInResult {
+        val credential = /* … platform sign-in … */
+        // Records this plugin as the handle's owner.
+        val id = IstmoRuntime.allocHandleId(AuthDispatcher.PLUGIN_ID)
+        credentials[id] = credential
+        return SignInResult(email = credential.email, credential = id)
+    }
+
+    override fun releaseNativeHandle(handleId: Long) {
+        credentials.remove(handleId)?.close()
+    }
 }
 ```
 
 ```swift
 // iOS
-IstmoRuntime.shared.register(
-    handleOwner: "acme.auth.credential",
-    releaser: { id in credentialCache.removeValue(forKey: id)?.invalidate() },
-)
+final class AuthBackendImpl: AuthBackend, HandleReleaser {
+    private var credentials: [UInt64: Credential] = [:]
+
+    func releaseNativeHandle(_ handleId: UInt64) {
+        credentials.removeValue(forKey: handleId)?.invalidate()
+    }
+    // sign_in stores the credential under
+    // IstmoRuntime.shared.allocHandleId(pluginId: AuthDispatcher.PLUGIN_ID)
+}
 ```
 
-The runtime handles ID allocation and dispatch — you only supply the
-releaser closure.
+The runtime remembers which plugin allocated each id and hands the
+release to its generated dispatcher, which forwards it to the backend
+when the backend implements `HandleReleaser` (from `dev.istmo.runtime`
+/ `IstmoRuntime`).
 
 ## Round-tripping a handle back
 

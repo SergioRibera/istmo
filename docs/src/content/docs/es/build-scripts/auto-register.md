@@ -23,11 +23,15 @@ Flutter.
 
 Usá `IstmoGameActivity` (para UIs basadas en `GameActivity`, p. ej.
 winit / eframe con `android-game-activity`) o `IstmoNativeActivity`
-(`NativeActivity`) como tu activity, directo en el manifest o como una
-subclase vacía:
+(`NativeActivity`, la feature default `native-activity` del facade)
+como tu activity. El template la nombra directo en el manifest; hacé
+una subclase solo para añadir código Kotlin:
 
-```kotlin
-class MainActivity : IstmoGameActivity()
+```xml
+<activity android:name="dev.istmo.runtime.IstmoGameActivity" android:exported="true">
+    <meta-data android:name="android.app.lib_name" android:value="my_app" />
+    <!-- intent filter MAIN / LAUNCHER -->
+</activity>
 ```
 
 Antes de que corra el entry point de Rust, carga la librería que nombra
@@ -62,7 +66,7 @@ Arranca el runtime, llama a `IstmoPluginRegistry.registerAll()` y le
 pasa el control a Rust. El entry point se detecta en las fuentes del
 crate; seteá `[app] rust_entry = true | false` para forzarlo. Las apps
 con UI nativa llaman a `IstmoPluginRegistry.registerAll()` después de
-`IstmoRuntime.shared.start()`.
+`try IstmoRuntime.shared.start()`.
 
 ## Los archivos generados
 
@@ -81,10 +85,10 @@ object IstmoPluginRegistry : IstmoPluginRegistrant {
     override fun registerAll(context: Context) {
         val appContext = context.applicationContext ?: context
         IstmoRuntime.registerHandler(
-            com.myapp.gen.DataStoreDispatcher.PLUGIN_ID,
-            com.myapp.gen.DataStoreDispatcher(
+            dev.istmo.plugins.datastore.DataStoreDispatcher.PLUGIN_ID,
+            dev.istmo.plugins.datastore.DataStoreDispatcher(
                 dev.istmo.plugins.datastore.DataStoreFactoryImpl(appContext),
-                com.myapp.gen.DataStoreCodecsImpl(),
+                dev.istmo.plugins.datastore.DataStoreCodecsImpl(),
             ),
         )
         if (context is Activity) {
@@ -103,10 +107,10 @@ object IstmoPluginRegistry : IstmoPluginRegistrant {
                 val backend = dev.istmo.plugins.share.ShareBackendImpl(host)
                 shareBackend = backend
                 IstmoRuntime.registerHandler(
-                    com.myapp.gen.ShareDispatcher.PLUGIN_ID,
-                    com.myapp.gen.ShareDispatcher(
+                    dev.istmo.plugins.share.ShareDispatcher.PLUGIN_ID,
+                    dev.istmo.plugins.share.ShareDispatcher(
                         backend,
-                        com.myapp.gen.ShareCodecsImpl(),
+                        dev.istmo.plugins.share.ShareCodecsImpl(),
                     ),
                 )
             }
@@ -115,7 +119,7 @@ object IstmoPluginRegistry : IstmoPluginRegistrant {
 
     override fun releaseActivityPlugins() {
         if (shareBackend !is IstmoActivityBound) {
-            IstmoRuntime.unregisterHandler(com.myapp.gen.ShareDispatcher.PLUGIN_ID)
+            IstmoRuntime.unregisterHandler(dev.istmo.plugins.share.ShareDispatcher.PLUGIN_ID)
             shareBackend = null
         }
     }

@@ -28,7 +28,7 @@ Sign in with Google, HealthKit, Live Activities.
 // plugins/share-sheet/src/lib.rs
 use istmo::plugin;
 
-#[plugin]
+#[plugin(name = "acme.share_sheet")]
 pub trait ShareSheet {
     async fn share_text(&self, text: String, subject: Option<String>)
         -> Result<(), ShareError>;
@@ -173,30 +173,27 @@ los imports del runtime.
 ## Registra el backend
 
 Por default `istmo-build` genera un `IstmoPluginRegistry` que cablea
-cada dispatcher de plugin elegible por vos. Llamá `registerAll(...)`
-una vez desde tu `Activity.onCreate` / `App.init`:
+cada dispatcher de plugin elegible por vos, y los entry points del
+runtime lo llaman antes de que corra el entry point de Rust:
 
 ```kotlin
-// Android
+// IstmoGameActivity, la launcher del template, ya hace esto.
+// Una app con su propia activity llama a IstmoHost antes de super.onCreate:
 override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry (o heredá de IstmoGameActivity)
+    IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry
     super.onCreate(savedInstanceState)
 }
 ```
 
 ```swift
-// iOS
-@main
-struct MyApp: App {
-    init() {
-        IstmoRuntime.shared.start()
-        IstmoPluginRegistry.registerAll()
-    }
-}
+// ios/<Name>App/main.swift
+import IstmoRuntime
+
+IstmoApp.run() // arranca el runtime + IstmoPluginRegistry, luego corre Rust
 ```
 
-El registry asume que tu backend toma exactamente un argumento en
-Android (`context: Context`) y ninguno en iOS. Plugins que necesitan
+El registry construye el backend Android con un `Context` (o la
+activity host, con `android_backend_arg`) y el de iOS sin argumentos. Plugins que necesitan
 un constructor distinto setean `auto_register = false` en su
 `istmo.toml` y esperan que la app registre manualmente. Ver
 [Auto-registración](/istmo/es/build-scripts/auto-register/).

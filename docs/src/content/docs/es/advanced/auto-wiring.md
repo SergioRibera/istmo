@@ -54,12 +54,12 @@ istmo::runtime!(
 );
 
 // Post-expansión (conceptualmente):
-Runtime::new(RuntimeInit {
-    plugins: vec![MyOwnClient::expect(), SignInClient::expect(), DataStoreClient::expect()],
-    remotes: vec![],
-    services: vec![],
-    workers: vec![],
-})
+pub fn __istmo_configure_runtime(init: RuntimeInit) -> RuntimeInit {
+    init.expects::<MyOwnClient>()
+        .expects::<::istmo_google_sign_in::SignInClient>()
+        .expects::<::istmo_data_store::DataStoreClient>()
+        .finish()
+}
 ```
 
 Los duplicados (un plugin listado tanto manualmente como

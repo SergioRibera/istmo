@@ -30,16 +30,18 @@ The Rust plugin crate contributes:
 
 - The trait definition (`#[istmo::plugin]`).
 - The `Contract` (auto-derived).
-- Optionally, reference native backends under
-  `native/{android,ios}/`, published as templates the app copies once
-  and edits.
+- Optionally, native backends under `native/{android,ios}/` (Android
+  sources in the plugin's `android_package`), which the Gradle plugin
+  and the `istmo-plugins.yml` xcodegen fragment compile into every app
+  that depends on the crate.
 
 The app contributes:
 
 - A concrete `<T>BackendImpl` (Kotlin/Swift) that speaks to the
-  platform.
-- A registration line during `Activity.onCreate` / `App.init` to hook
-  the backend into `IstmoRuntime`.
+  platform, when the plugin ships none for that platform.
+- Nothing for registration: the generated `IstmoPluginRegistry`, called
+  by `IstmoGameActivity` / `IstmoHost.onCreate` and `IstmoApp.run()`,
+  hooks every backend into `IstmoRuntime`.
 
 Reference plugins: [`google-sign-in`](/istmo/plugins/google-sign-in/),
 [`data-store`](/istmo/plugins/data-store/),
@@ -63,7 +65,7 @@ The Rust plugin crate contributes:
 
 - The trait definition **and** its concrete impl:
   ```rust
-  #[istmo::plugin]
+  #[istmo::plugin(name = "acme.image_hasher")]
   pub trait ImageHasher {
       async fn perceptual_hash(&self, bytes: Vec<u8>) -> Result<u64, HashError>;
   }

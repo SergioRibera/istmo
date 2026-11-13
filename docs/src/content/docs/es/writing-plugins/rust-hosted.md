@@ -28,7 +28,7 @@ lugar.
 // crates/image-hasher/src/lib.rs
 use istmo::plugin;
 
-#[plugin]
+#[plugin(name = "acme.image_hasher")]
 pub trait ImageHasher {
     async fn perceptual_hash(&self, bytes: Vec<u8>) -> Result<u64, HashError>;
     async fn dimensions(&self, bytes: Vec<u8>) -> Result<Dimensions, HashError>;
@@ -152,7 +152,7 @@ async fn hashes_a_png() {
 ```
 
 Para tests de integración, levanta un runtime con
-`Runtime::new_isolated()` y llama al cliente como tu app lo haría.
+`Runtime::mock()` y llama al cliente como tu app lo haría.
 
 ## Siguiente
 

@@ -17,7 +17,7 @@ method; the macro rewrites it to return a receiver on Rust's side and a
 ```rust
 use istmo::plugin;
 
-#[plugin]
+#[plugin(name = "acme.location_tracker")]
 pub trait LocationTracker {
     #[istmo::stream]
     async fn updates(&self) -> LocationFix;

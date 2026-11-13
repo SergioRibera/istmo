@@ -33,7 +33,7 @@ llena desde el token runtime-provisto:
 use istmo::CancelToken;
 use istmo::plugin;
 
-#[plugin]
+#[plugin(name = "acme.long_task")]
 pub trait LongTask {
     async fn process(&self, data: Vec<u8>, cancel: CancelToken)
         -> Result<Output, TaskError>;

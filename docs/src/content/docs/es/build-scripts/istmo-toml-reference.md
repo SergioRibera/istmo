@@ -289,7 +289,7 @@ Cada entrada necesita `extensions` o `mime_types`.
   dentro del `<activity>` que recibe documentos:
 
   ```xml
-  <activity android:name=".MainActivity" ...>
+  <activity android:name="dev.istmo.runtime.IstmoGameActivity" ...>
       <!-- istmo:documents:start -->
       <!-- istmo:documents:end -->
   </activity>
