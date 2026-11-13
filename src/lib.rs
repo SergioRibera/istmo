@@ -113,7 +113,9 @@ pub mod __private {
 }
 
 /// Instance key of the app crate for
-/// [`plugins::DocumentsPublisher::start`]: `Some` when `istmo.toml`
+/// [`plugins::DocumentsPublisher::start`].
+///
+/// `Some` when `istmo.toml`
 /// enables `[app] single_instance` (on by default when the app declares
 /// `[[app.document_type]]`), `None` otherwise.
 ///

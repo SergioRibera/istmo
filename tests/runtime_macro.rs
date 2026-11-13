@@ -70,18 +70,16 @@ fn runtime_macro_registers_host_dispatcher() {
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     while std::time::Instant::now() < deadline {
-        if let Ok(env) = outbound.recv_timeout(std::time::Duration::from_millis(50)) {
-            if let Frame::Respond {
+        if let Ok(env) = outbound.recv_timeout(std::time::Duration::from_millis(50))
+            && let Frame::Respond {
                 call_id: cid,
                 result: Ok(bytes),
             } = env.frame
-            {
-                if cid == call_id {
-                    let (reply, _) = istmo::codec::decode::<String>(&bytes).expect("decode reply");
-                    assert_eq!(reply, "echo:bonjour");
-                    return;
-                }
-            }
+            && cid == call_id
+        {
+            let (reply, _) = istmo::codec::decode::<String>(&bytes).expect("decode reply");
+            assert_eq!(reply, "echo:bonjour");
+            return;
         }
     }
     panic!("timed out waiting for Respond");
