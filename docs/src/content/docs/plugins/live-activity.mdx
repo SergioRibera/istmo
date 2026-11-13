@@ -93,7 +93,9 @@ it for `n` seconds.
 
 ## iOS specifics
 
-- Requires iOS 16.2+ (`ActivityKit`).
+- Live Activities need iOS 16.2+ (`ActivityKit`). The plugin builds for
+  older releases too, where `capabilities()` reports
+  `activity_kit_available: false`.
 - Your `Info.plist` needs `NSSupportsLiveActivities = YES`.
 - You **must** implement an `ActivityAttributes` matching Swift
   struct with the same shape as your Rust `Attributes`/`State`. The
@@ -105,6 +107,8 @@ it for `n` seconds.
 
 ## Android specifics
 
+- Requires API 26+ (`NotificationChannel`), declared in the plugin's
+  `[min_versions]`.
 - Renders as an ongoing notification with custom content view.
 - Uses `NotificationChannel` with `IMPORTANCE_LOW` by default; adjust
   in your `NotificationLiveActivityHandler.kt` copy.

@@ -5,3 +5,6 @@ android_package = "dev.istmo.plugins.liveactivity"
 # Reference backend shipped in `native/android/`.
 android_backend = "dev.istmo.plugins.liveactivity.LiveActivityBackendImpl"
 
+[min_versions]
+# `NotificationChannel`, created by every `start`.
+android = 26

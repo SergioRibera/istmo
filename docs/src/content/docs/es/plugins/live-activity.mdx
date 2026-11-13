@@ -94,7 +94,9 @@ removida. `DismissalPolicy::Immediate` salta el render;
 
 ## Detalles de iOS
 
-- Requiere iOS 16.2+ (`ActivityKit`).
+- Las Live Activities necesitan iOS 16.2+ (`ActivityKit`). El plugin
+  compila también para versiones anteriores, donde `capabilities()`
+  reporta `activity_kit_available: false`.
 - Tu `Info.plist` necesita `NSSupportsLiveActivities = YES`.
 - **Debes** implementar un struct `ActivityAttributes` Swift
   matcheado con la misma forma que tus `Attributes`/`State` en Rust.
@@ -106,6 +108,8 @@ removida. `DismissalPolicy::Immediate` salta el render;
 
 ## Detalles de Android
 
+- Requiere API 26+ (`NotificationChannel`), declarado en el
+  `[min_versions]` del plugin.
 - Renderiza como una notification persistente con custom content
   view.
 - Usa `NotificationChannel` con `IMPORTANCE_LOW` por default; ajusta
