@@ -1,23 +1,28 @@
 ---
-title: Services y workers
-description: Corre código de background de larga duración sin convertir tu plugin en un gestor de services.
+title: Servicios y workers
+description: Corre código de background de larga vida sin convertir tu plugin en un service manager.
 sidebar:
   order: 6
 ---
 
 Dos adapters extienden las macros de plugin para cubrir las dos formas
-más comunes de larga duración:
+de larga duración más comunes:
 
-- `#[istmo::service]` — una task always-on de background que posee su
-  ciclo de vida (`on_start`, `on_stop`) y puede cancelarse desde
-  cualquier lado.
-- `#[istmo::worker]` — una unidad one-shot de trabajo con un id
-  estable (matchea el modelo de `WorkManager` de Android).
+- `#[istmo::service]` — una tarea de background siempre activa que
+  maneja su propio ciclo de vida (`on_start`, `on_stop`) y se puede
+  detener desde cualquiera de los dos lados.
+- `#[istmo::worker]` — una unidad de trabajo única identificada por un
+  task id y un nombre único (el modelo de `WorkManager` de Android).
 
-Ambos se enchufan al mismo `Runtime` y viajan por el mismo protocolo
-de frames que los plugins regulares.
+Ambos son Rust-hosted: se conectan al mismo `Runtime` que los plugins
+normales y viajan por el mismo protocolo de frames. Ambos aceptan los
+atributos `name = "…"` (obligatorio, el id del wire), `crate = "…"`
+(path del runtime, por defecto `::istmo`) y `plugins = "…"` (path a los
+tipos de plugins first-party, por defecto `<crate>::plugins`; un crate
+que pone `crate = "::istmo_core"` pone también
+`plugins = "::istmo_plugins"`).
 
-## Services
+## Servicios
 
 ```rust
 use istmo::plugins::ServiceContext;
@@ -29,6 +34,7 @@ pub trait SyncService {
 }
 
 #[istmo::message]
+#[derive(Debug)]
 pub struct SyncError { pub reason: String }
 impl core::fmt::Display for SyncError { /* ... */ }
 impl std::error::Error for SyncError {}
@@ -37,14 +43,12 @@ pub struct SyncImpl;
 
 impl SyncService for SyncImpl {
     async fn on_start(&self, ctx: ServiceContext) -> Result<(), SyncError> {
-        loop {
-            tokio::select! {
-                _ = ctx.stopped() => return Ok(()),
-                _ = tokio::time::sleep(Duration::from_secs(60)) => {
-                    self.tick().await;
-                }
-            }
+        while !ctx.is_stopped() {
+            self.sync_once().await?;
+            // espera la siguiente ronda — o `ctx.stopped()` — con el
+            // timer y el `select` de tu executor
         }
+        Ok(())
     }
 
     async fn on_stop(&self) {
@@ -53,67 +57,84 @@ impl SyncService for SyncImpl {
 }
 ```
 
-Notas sobre la forma del trait:
+Reglas que la macro aplica:
 
-- `#[istmo::service(name = "…")]` requiere un plugin id. Se vuelve el
-  identificador de wire para el service, exactamente como
-  `[plugin] id = "…"`.
-- `on_start` puede retornar `()` o `Result<(), E>` (con cualquier tipo
-  de error `#[istmo::message]`). `on_stop` retorna `()`.
-- `ServiceContext` es un tipo plano (no genérico). Carga un
-  `CancelToken`, una señal de stop, y un handle de vuelta al estado de
-  tu impl.
-- No hace falta `#[async_trait::async_trait]`. La macro desugara cada
-  `async fn` del trait a `impl Future + Send + '_`, y el async-fn-in-trait
-  de Rust 1.75+ acepta impls con `async fn` plano.
+- El trait declara solo `on_start` y, opcionalmente, `on_stop`;
+  cualquier otro método es un error.
+- `async fn on_start(&self, ctx: ServiceContext)` retorna `()` o
+  `Result<(), E>`. `async fn on_stop(&self)` no recibe otro argumento.
+- `async fn` planas; la macro las desazucara, sin `#[async_trait]`.
 
-Registralo con `istmo::runtime!`:
+`ServiceContext` es lo que el servicio ve de su host:
+
+| Método | Propósito |
+|---|---|
+| `stopped().await` / `is_stopped()` | Espera / consulta la señal de stop (pedido de stop, cancelación, host desaparecido). |
+| `cancel_token()` | El `CancelToken` de la ejecución. |
+| `service_id()`, `runtime()` | El id y el runtime del servicio. |
+| `set_foreground(spec)`, `update_notification(spec)`, `stop_foreground(remove)` | Notificación de foreground (`NotificationSpec`). |
+| `acquire_wakelock(tag)` | Un `WakeLock`, liberado con `release().await` o al soltarlo. |
+| `stop_self()` | Pide a la plataforma que detenga el servicio. |
+
+Las llamadas a la plataforma pasan por el plugin
+`istmo.service_control` (`ServiceControl` en `istmo::plugins`). El
+runtime no trae backend nativo para él: genera su dispatcher pasando
+`istmo_plugins_schema::service_control()` en
+`AppOpts::extra_contracts` e impleméntalo en Kotlin / Swift.
+
+Registra el servicio con `istmo::runtime!`:
 
 ```rust
 istmo::runtime!(
-    services: [
-        SyncService => SyncImpl,
-    ],
+    services: [SyncService => SyncImpl],
 );
 ```
 
-El mapping `Trait => Impl` le dice a la macro qué impl construir
-detrás del `<T>Adapter` auto-generado. El adapter se spawnea en su
-propio thread OS usando `pollster::block_on`, así que `on_start`
-nunca bloquea a un caller async.
+La macro registra `SyncServiceAdapter::new(SyncImpl)`, así que
+`<Trait>Adapter` tiene que resolverse en ese path. El adapter corre
+`on_start` en su propio thread del sistema (`pollster::block_on`), así
+que nunca bloquea a un caller async; un segundo `on_start` detiene y
+espera (join) la ejecución anterior primero, y `on_stop` o un
+`Frame::Cancel` lo detienen a través del contexto.
 
-### Android — wrapping como `Service`
+### Android — shim de `Service`
 
-Si querés que el service sobreviva al proceso de la app (media
-playback, tracking de ubicación), pareálo con un `ForegroundService`
-Android. Declará el shim en el `istmo.toml` del plugin:
+Para correr el servicio como un `Service` de Android (reproducción de
+media, seguimiento de ubicación, sincronización), declara el shim en el
+`istmo.toml` del crate que define el servicio:
 
 ```toml
 [plugin]
-id = "myapp.sync"
-client_type = "::myapp_sync::SyncServiceClient"
+id = "myapp.sync"   # igual que #[istmo::service(name = "…")]
 
 [plugin.android_service]
 class_name = "SyncForegroundService"
-foreground_service_type = "dataSync"           # opcional
-exported = false                               # default false
+foreground_service_type = "dataSync"          # opcional
+exported = false                              # por defecto false
 permission = "android.permission.FOREGROUND_SERVICE_DATA_SYNC" # opcional
-process = ":sync"                              # opcional
+process = ":sync"                             # opcional
 ```
 
-El `build.rs` de la app (un one-liner `istmo_build::emit()`) recoge
-el spec a través del handover estándar del manifest y materializa:
+Deja fuera `client_type`: la macro de servicio no emite cliente. Una
+entrada de plugin sin `client_type` siempre aporta sus shims; una con
+`client_type` los aporta solo cuando la app lista ese cliente en
+`istmo::runtime!`.
 
-- `android/app/src/main/java/<namespace>/gen/SyncForegroundService.kt`
-  — el shim `LifecycleService` que forwardea `onStartCommand` /
-  `onDestroy` al adapter Rust registrado bajo el mismo plugin id.
-  `System.loadLibrary(...)` usa el `CARGO_PKG_NAME` de tu crate app
-  (overrideable con `[app] lib_name = "..."`).
-- `android/app/src/main/AndroidManifest.services.xml` — un fragmento
-  `<service …/>` listo-para-copiar listando todos los services
-  declarados por plugins.
+El `build.rs` de la app (`istmo_build::emit()`) toma la spec del
+handover de manifests y escribe:
 
-Si tu `android/app/src/main/AndroidManifest.xml` real contiene los
+- `android/app/src/main/java/<paquete de la app>/SyncForegroundService.kt`
+  — un `LifecycleService` (así que la app necesita
+  `androidx.lifecycle:lifecycle-service`) que carga la librería Rust de
+  la app, arranca el runtime y reenvía `onStartCommand` / `onDestroy` a
+  `on_start` / `on_stop` del adapter bajo el mismo id de plugin. El
+  paquete es el paquete Kotlin de la app (`<namespace>.gen` o
+  `[app] android_package`); el nombre de la librería es el `[lib] name`
+  del crate, o su nombre de paquete con `-` reemplazado por `_`.
+- `android/app/src/main/AndroidManifest.services.xml` — el elemento
+  `<service …/>` de cada servicio declarado.
+
+Si tu `android/app/src/main/AndroidManifest.xml` contiene los
 marcadores
 
 ```xml
@@ -124,100 +145,122 @@ marcadores
 </application>
 ```
 
-`emit_app` parcha el bloque entre ellos idempotentemente en cada
-build, así nunca más tocás el XML. Sin los marcadores, copiá los
-contenidos del sidecar una vez a mano.
+el build parchea el bloque entre ellos en cada build, así que nunca
+vuelves a tocar el XML (el manifest del template los trae). Sin los
+marcadores, copia el contenido del sidecar una vez a mano.
 
 ### iOS — `BGTaskScheduler`
 
-La historia iOS es simétrica — declará el background task en
-`istmo.toml`:
+Declara la tarea de background en el mismo `istmo.toml`:
 
 ```toml
 [plugin.ios_background]
 class_name = "SyncBackgroundHandler"
 task_identifier = "com.myapp.sync.refresh"
 kind = "refresh"           # o "processing" | "continuous"
-interval_minutes = 15      # requerido para `refresh`
-# requires_power = true    # para `processing`
-# requires_network = true  # para `processing`
-# continuous_mode = "audio"  # para `continuous`
+interval_minutes = 15      # obligatorio para `refresh`
+# requires_power = true    # para `processing` (por defecto false)
+# requires_network = true  # para `processing` (por defecto false)
+# continuous_mode = "audio"  # obligatorio para `continuous`: audio | location | voip |
+#                            # external_accessory | bluetooth_central | bluetooth_peripheral
 ```
 
-`emit_app` escribe:
+El build escribe:
 
-- `ios/<AppDir>/Plugins/Background/SyncBackgroundHandler.swift` — el
-  shim `BGTaskScheduler.register(...)` + `expirationHandler` que
-  forwardea al `on_start` del adapter Rust y lo cancela
-  cooperativamente cuando expira.
-- `ios/<AppDir>/Info.plist.background.xml` — un fragmento listo-para-
-  copiar con `BGTaskSchedulerPermittedIdentifiers` (para refresh /
-  processing) o `UIBackgroundModes` (para continuous).
+- `ios/<AppDir>/Plugins/Background/SyncBackgroundHandler.swift` — un
+  enum con `register()` (registra el handler en `BGTaskScheduler`) y
+  `schedule()` (envía el siguiente pedido). El handler llama a
+  `on_start` del adapter y lo cancela desde el `expirationHandler` de
+  la tarea. Llama a `SyncBackgroundHandler.register()` una vez al
+  arrancar, antes de que la app termine de lanzarse, y a `schedule()`
+  para encolar la primera ejecución.
+- `ios/<AppDir>/Info.plist.background.xml` — las entradas
+  `BGTaskSchedulerPermittedIdentifiers` (refresh / processing) o
+  `UIBackgroundModes` (continuous).
 
-Agregá los marcadores `<!-- istmo:background:start -->` /
-`<!-- istmo:background:end -->` dentro del `<dict>` de tu `Info.plist`
-real y `emit_app` los parcha en cada build. Ver la [página de
-deployment de desktop](/istmo/es/advanced/desktop-deployment/) para el
-módulo hermano systemd / launchd / Windows Service.
+Con `<!-- istmo:background:start -->` / `<!-- istmo:background:end -->`
+dentro del `<dict>` de tu `Info.plist` (el del template los trae), el
+build parchea esas entradas en cada build. Ver la
+[página de despliegue en desktop](/istmo/es/advanced/desktop-deployment/)
+para el lado desktop.
 
 ## Workers
 
-Usa `#[istmo::worker]` cuando querés una unidad **discreta** de trabajo
-con un id estable único — la forma que quieren `WorkManager` de
-Android y `URLSession.background` de iOS:
+Usa `#[istmo::worker]` para una unidad de trabajo **discreta**:
 
 ```rust
-#[istmo::worker(name = "myapp.image_upload")]
-pub trait ImageUploadWorker {
-    async fn run(&self, task_id: u64, unique_name: String, input: UploadInput)
-        -> Result<UploadOutcome, UploadError>;
+use istmo::plugins::{TaskOutcome, WorkerContext};
+
+#[istmo::worker(name = "myapp.backup")]
+pub trait Backup {
+    async fn run(&self, ctx: WorkerContext) -> TaskOutcome;
 }
 
-pub struct ImageUploadWorkerImpl;
+pub struct Nightly;
 
-impl ImageUploadWorker for ImageUploadWorkerImpl {
-    async fn run(&self, task_id: u64, unique_name: String, input: UploadInput)
-        -> Result<UploadOutcome, UploadError>
-    { /* … */ }
+impl Backup for Nightly {
+    async fn run(&self, ctx: WorkerContext) -> TaskOutcome {
+        if ctx.is_cancelled() {
+            return TaskOutcome::Retry;
+        }
+        match upload(ctx.input()).await {
+            Ok(()) => TaskOutcome::Success,
+            Err(_) => TaskOutcome::Retry,
+        }
+    }
 }
 ```
 
-Registralo:
+El trait declara exactamente `async fn run(&self, ctx: WorkerContext)`,
+que retorna `TaskOutcome` (`Success`, `Retry`, `Failure`) o
+`Result<TaskOutcome, E>`. `WorkerContext` trae `task_id()`,
+`unique_name()`, los bytes crudos de `input()` (`into_input()` para
+tomarlos), `is_cancelled()` / `cancel_token()` y `runtime()`.
+
+Regístralo:
 
 ```rust
 istmo::runtime!(
-    workers: [
-        ImageUploadWorker => ImageUploadWorkerImpl,
-    ],
+    workers: [Backup => Nightly],
 );
 ```
 
-El `ImageUploadWorkerClient` generado expone un método
-`.schedule(unique_name, input, config)` que entrega el request al job
-scheduler de la plataforma. `WorkManager` en Android va a:
+La macro registra `BackupWorkerAdapter::new(Nightly)`, que responde al
+método `run` del plugin `myapp.backup` con un payload
+`(task_id, unique_name, input)`.
 
-- Persistir el job a través de muerte de proceso.
-- Reintentar con backoff en fallo transiente.
-- De-duplicar por `unique_name` (job existente con el mismo nombre o
-  reemplaza o se mantiene, dependiendo de `WorkPolicy`).
+Programar la ejecución es trabajo de la plataforma.
+`istmo::plugins::TaskSchedulerClient` (`istmo.task_scheduler`) declara
+la API — `enqueue(TaskRequest)` con `Constraints`, un retraso inicial,
+tags y una `ExistingWorkPolicy`, más `cancel`, `cancel_by_tag` y
+`cancel_by_unique_name` — pero el runtime no trae backend nativo:
+genera su dispatcher pasando `istmo_plugins_schema::task_scheduler()`
+en `AppOpts::extra_contracts` e impleméntalo con `WorkManager` /
+`BGTaskScheduler`. En Android,
+`istmo_build::generate_android_worker(&WorkerContract::new(..))`
+retorna el código de un `CoroutineWorker` que llama a `run` del worker
+y mapea el `TaskOutcome` a `Result.success()` / `retry()` /
+`failure()`; escríbelo desde tu `build.rs`.
 
-## Shutdown cooperativo
+## Apagado cooperativo
 
-Ambos `Context`s de service y worker exponen un `CancelToken`.
-Chequealo durante tu loop:
+Ambos contextos exponen el `CancelToken` de la ejecución. Consúltalo en
+un loop ocupado y espéralo cuando estés ocioso:
 
 ```rust
-if ctx.cancel().is_cancelled() { return; }
-tokio::select! {
-    _ = ctx.stopped()          => { /* stop signal */ }
-    _ = ctx.cancel().cancelled() => { /* platform cancel */ }
-    result = self.do_work()      => { /* work done */ }
-}
+// servicio
+if ctx.is_stopped() { return Ok(()); }
+ctx.stopped().await;
+
+// worker
+if ctx.is_cancelled() { return TaskOutcome::Retry; }
+ctx.cancel_token().cancelled().await;
 ```
 
-Ver [Cancelación](/istmo/es/writing-plugins/cancellation/) para los detalles.
+Ver [Cancelación](/istmo/es/writing-plugins/cancellation/) para los
+detalles.
 
 ## Siguiente
 
-- Bridge de proceso `:remote`: [Avanzado → Proceso remoto](/istmo/es/advanced/remote-process/).
-- Deployment de desktop: [Avanzado → Deployment de desktop](/istmo/es/advanced/desktop-deployment/).
+- Puente de proceso `:remote`: [Avanzado → Proceso remoto](/istmo/es/advanced/remote-process/).
+- Despliegue en desktop: [Avanzado → Despliegue en desktop](/istmo/es/advanced/desktop-deployment/).
