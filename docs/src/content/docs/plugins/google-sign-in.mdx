@@ -21,7 +21,7 @@ release deterministically.
 
 ```toml
 [dependencies]
-istmo-google-sign-in = "0.1"
+istmo-google-sign-in = "0.1.1-alpha.5"
 ```
 
 Restart your app build; `istmo_build::emit()` picks up the plugin's
@@ -119,9 +119,10 @@ version  = "1.1.1"
 Nothing to add to your app-side `build.gradle.kts` — the entries flow
 through `istmo-build`'s native-dep handover.
 
-The Credential Manager flow needs `Activity` context. The reference
-backend under `plugins/google-sign-in/native/android/` picks it up
-from `IstmoRuntime.instance.currentActivity`.
+The Credential Manager flow needs an `Activity`. The plugin declares
+`android_backend_arg = "activity"`, so the generated registry hands
+`GoogleSignInFactoryImpl` the host activity (`IstmoGameActivity` is a
+`ComponentActivity`).
 
 ## iOS specifics
 
@@ -131,38 +132,37 @@ The plugin declares the Swift package:
 [[swift_package]]
 url          = "https://github.com/google/GoogleSignIn-iOS.git"
 product      = "GoogleSignIn"
-from_version = "7.0.0"
+from_version = "7.1.0"
 ```
 
 Your `Info.plist` must include the reversed client id under
-`CFBundleURLSchemes`, and your `App.swift` must call
-`GIDSignIn.sharedInstance.handle(url:)` inside `.onOpenURL`. The
-plugin ships a `SignInAppDelegate` helper that does both for you if
-you register it in `IstmoRuntime.shared`.
+`CFBundleURLSchemes` and the iOS OAuth client id under `GIDClientID`,
+and the app must forward `application(_:open:options:)` to
+`GIDSignIn.sharedInstance.handle(_:)`.
 
 ## Wire it up
 
 `SignIn` is stateful (it carries an OAuth configuration per instance),
-so `istmo-build` generates it into `IstmoPluginRegistry.registerAll(...)`
-using its `SignInFactoryImpl`. As long as you copy the reference
-`SignInFactoryImpl.kt` / `SignInFactoryImpl.swift` into your app tree
-and call the registry once, the plugin is wired.
+so the generated `IstmoPluginRegistry` registers it through the
+plugin's `GoogleSignInFactoryImpl` (`android_backend` / `ios_backend`
+in its `istmo.toml`). The Gradle plugin and the `istmo-plugins.yml`
+xcodegen fragment compile the plugin's native sources into the app, so
+there is nothing to copy.
 
 ```kotlin
+// IstmoGameActivity, the template's launcher, already does this.
+// An app with its own activity calls IstmoHost before super.onCreate:
 override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoHost.onCreate(this) // starts the runtime + IstmoPluginRegistry (or extend IstmoGameActivity)
+    IstmoHost.onCreate(this) // starts the runtime + IstmoPluginRegistry
     super.onCreate(savedInstanceState)
 }
 ```
 
 ```swift
-@main
-struct MyApp: App {
-    init() {
-        IstmoRuntime.shared.start()
-        IstmoPluginRegistry.registerAll()
-    }
-}
+// ios/<Name>App/main.swift
+import IstmoRuntime
+
+IstmoApp.run() // starts the runtime + IstmoPluginRegistry, then runs Rust
 ```
 
 See [Auto-registration](/istmo/build-scripts/auto-register/) for the full
@@ -173,15 +173,16 @@ mechanism and opt-out flags.
 The plugin repo ships reference implementations under
 `plugins/google-sign-in/native/`:
 
-- `android/SignInBackendImpl.kt`
-- `ios/SignInBackendImpl.swift`
+- `android/GoogleSignInBackendImpl.kt` + `GoogleSignInFactoryImpl.kt`
+  (package `dev.istmo.plugins.googlesignin`)
+- `ios/GoogleSignInBackendImpl.swift`
 
-Copy these into your app tree the first time you enable the plugin,
-then customise as needed. Because the trait shape is fixed, most apps
-never need to touch them.
+They are compiled into every app that depends on the crate. To
+customise one, set `auto_register = false` for `istmo.google_sign_in`
+in the app's `[[app.plugin]]` and register your own backend.
 
 ## Full end-to-end sample
 
-See [`examples/rust-mobile-demo`](https://github.com/sergioribera/istmo/tree/main/examples/rust-mobile-demo)
+See [`examples/rust-mobile-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/rust-mobile-demo)
 in the repo — an egui-based app that combines sign-in, permissions,
 notifications, and AdMob in a single Rust binary.

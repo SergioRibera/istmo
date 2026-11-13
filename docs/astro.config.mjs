@@ -17,7 +17,7 @@ export default defineConfig({
         replacesTitle: false,
       },
       social: {
-        github: 'https://github.com/sergioribera/istmo',
+        github: 'https://github.com/SergioRibera/istmo',
       },
       defaultLocale: 'root',
       locales: {
@@ -58,7 +58,7 @@ export default defineConfig({
       ],
       editLink: {
         baseUrl:
-          'https://github.com/sergioribera/istmo/edit/main/docs/',
+          'https://github.com/SergioRibera/istmo/edit/main/docs/',
       },
       lastUpdated: true,
       pagination: true,

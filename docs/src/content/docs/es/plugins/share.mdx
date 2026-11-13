@@ -30,9 +30,9 @@ Hay un demo ejecutable que cubre todas las funciones en
 
 ```toml
 [dependencies]
-istmo-share = "0.1"
+istmo-share = "0.1.1-alpha.5"
 # Opcional: `ShareFile::from_picked` para archivos de istmo-file-picker.
-# istmo-share = { version = "0.1", features = ["file-picker"] }
+# istmo-share = { version = "0.1.1-alpha.5", features = ["file-picker"] }
 ```
 
 ## Enviar
@@ -155,8 +155,9 @@ fuentes `native/ios/` del plugin entran al target de la app a través de
 **Android** — usá `IstmoGameActivity` (o llamá a
 `IstmoHost.onCreate(this)` desde tu propia `ComponentActivity`):
 
-```kotlin
-class MainActivity : IstmoGameActivity()
+```xml
+<!-- AndroidManifest.xml, tal como lo trae el template -->
+<activity android:name="dev.istmo.runtime.IstmoGameActivity" ...>
 ```
 
 `io.github.sergioribera.istmo` mergea el `AndroidManifest.xml` del plugin

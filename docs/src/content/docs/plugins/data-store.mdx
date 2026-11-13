@@ -16,7 +16,7 @@ crate under `native/{android,ios}/` with zero external dependencies.
 
 ```toml
 [dependencies]
-istmo-data-store = "0.1"
+istmo-data-store = "0.1.1-alpha.5"
 ```
 
 ## Use it
@@ -67,16 +67,18 @@ not use it for secrets (use `EncryptedSharedPreferences` /
 
 ## Wire it up
 
-Every istmo app calls `IstmoPluginRegistry.registerAll(...)` once —
-that single call wires every eligible plugin's dispatcher, including
-this one. If you already have it in place, you don't need to do
-anything extra.
+The runtime's entry points call the generated
+`IstmoPluginRegistry` once — that single call wires every eligible
+plugin's dispatcher, including this one. Apps built from the template
+need nothing extra.
 
 ### Android
 
 ```kotlin
+// IstmoGameActivity, the template's launcher, already does this.
+// An app with its own activity calls IstmoHost before super.onCreate:
 override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoHost.onCreate(this) // starts the runtime + IstmoPluginRegistry (or extend IstmoGameActivity)
+    IstmoHost.onCreate(this) // starts the runtime + IstmoPluginRegistry
     super.onCreate(savedInstanceState)
 }
 ```
@@ -84,25 +86,24 @@ override fun onCreate(savedInstanceState: Bundle?) {
 ### iOS
 
 ```swift
-@main
-struct MyApp: App {
-    init() {
-        IstmoRuntime.shared.start()
-        IstmoPluginRegistry.registerAll()
-    }
-}
+// ios/<Name>App/main.swift
+import IstmoRuntime
+
+IstmoApp.run() // starts the runtime + IstmoPluginRegistry, then runs Rust
 ```
 
 The reference `DataStoreBackendImpl` / `DataStoreFactoryImpl` files
-live in `plugins/data-store/native/{android,ios}/`. Copy them into
-your app once — they compile as-is and rarely need customisation.
+live in `plugins/data-store/native/{android,ios}/` (Kotlin package
+`dev.istmo.plugins.datastore`). The Gradle plugin and the
+`istmo-plugins.yml` xcodegen fragment compile them into the app;
+there is nothing to copy.
 
 See [Auto-registration](/istmo/build-scripts/auto-register/) for details of
 how the registry is generated and how to opt out.
 
 ## Sample: desktop emulator
 
-The [`examples/data-store-demo`](https://github.com/sergioribera/istmo/tree/main/examples/data-store-demo)
+The [`examples/data-store-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/data-store-demo)
 crate ships an **in-process native emulator** — a small thread that
 answers `DataStoreDispatcher` frames using an in-memory `HashMap`.
 Great for iterating on UI without booting an emulator.

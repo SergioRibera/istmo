@@ -16,7 +16,7 @@ del plugin bajo `native/{android,ios}/` con cero deps externas.
 
 ```toml
 [dependencies]
-istmo-data-store = "0.1"
+istmo-data-store = "0.1.1-alpha.5"
 ```
 
 ## Úsalo
@@ -67,16 +67,18 @@ No lo uses para secretos (usa `EncryptedSharedPreferences` /
 
 ## Cablealo
 
-Cada app istmo llama `IstmoPluginRegistry.registerAll(...)` una sola
-vez — esa llamada cablea todos los dispatchers de plugins elegibles,
-incluyendo este. Si ya lo tenés en su lugar, no hace falta que hagas
-nada extra.
+Los entry points del runtime llaman una sola vez al
+`IstmoPluginRegistry` generado — esa llamada cablea todos los
+dispatchers de plugins elegibles, incluyendo este. Las apps creadas
+con el template no necesitan nada extra.
 
 ### Android
 
 ```kotlin
+// IstmoGameActivity, la launcher del template, ya hace esto.
+// Una app con su propia activity llama a IstmoHost antes de super.onCreate:
 override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry (o heredá de IstmoGameActivity)
+    IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry
     super.onCreate(savedInstanceState)
 }
 ```
@@ -84,26 +86,24 @@ override fun onCreate(savedInstanceState: Bundle?) {
 ### iOS
 
 ```swift
-@main
-struct MyApp: App {
-    init() {
-        IstmoRuntime.shared.start()
-        IstmoPluginRegistry.registerAll()
-    }
-}
+// ios/<Name>App/main.swift
+import IstmoRuntime
+
+IstmoApp.run() // arranca el runtime + IstmoPluginRegistry, luego corre Rust
 ```
 
 Los archivos `DataStoreBackendImpl` / `DataStoreFactoryImpl` de
-referencia viven en `plugins/data-store/native/{android,ios}/`.
-Copiálos a tu app una vez — compilan tal cual y raramente necesitan
-customización.
+referencia viven en `plugins/data-store/native/{android,ios}/`
+(paquete Kotlin `dev.istmo.plugins.datastore`). El plugin de Gradle y
+el fragmento xcodegen `istmo-plugins.yml` los compilan dentro de la
+app; no hay nada que copiar.
 
 Ver [Auto-registración](/istmo/es/build-scripts/auto-register/) para
 detalles de cómo se genera el registry y cómo opt-out.
 
 ## Sample: emulador desktop
 
-El crate [`examples/data-store-demo`](https://github.com/sergioribera/istmo/tree/main/examples/data-store-demo)
+El crate [`examples/data-store-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/data-store-demo)
 envía un **emulador nativo in-process** — un pequeño thread que
 responde frames del `DataStoreDispatcher` usando un `HashMap`
 in-memory. Genial para iterar sobre UI sin bootear un emulador.

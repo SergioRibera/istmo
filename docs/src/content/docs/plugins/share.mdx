@@ -30,9 +30,9 @@ A runnable demo covering every feature lives in
 
 ```toml
 [dependencies]
-istmo-share = "0.1"
+istmo-share = "0.1.1-alpha.5"
 # Optional: `ShareFile::from_picked` for files from istmo-file-picker.
-# istmo-share = { version = "0.1", features = ["file-picker"] }
+# istmo-share = { version = "0.1.1-alpha.5", features = ["file-picker"] }
 ```
 
 ## Send
@@ -153,8 +153,9 @@ the app target through `istmo-plugins.yml`.
 **Android** — use `IstmoGameActivity` (or call `IstmoHost.onCreate(this)`
 from your own `ComponentActivity`):
 
-```kotlin
-class MainActivity : IstmoGameActivity()
+```xml
+<!-- AndroidManifest.xml, as the template ships it -->
+<activity android:name="dev.istmo.runtime.IstmoGameActivity" ...>
 ```
 
 `io.github.sergioribera.istmo` merges the plugin's `AndroidManifest.xml`

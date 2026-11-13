@@ -16,7 +16,7 @@ idiomáticamente.
 
 ```toml
 [dependencies]
-istmo-live-activity = "0.1"
+istmo-live-activity = "0.1.1-alpha.5"
 ```
 
 ## Modela tu activity
@@ -115,25 +115,25 @@ removida. `DismissalPolicy::Immediate` salta el render;
 
 ## Cablealo
 
-Llamá `IstmoPluginRegistry.registerAll(...)` una vez al startup. El
-registry construye `LiveActivityDispatcher` con tu
-`LiveActivityBackendImpl` copiado y el handler apropiado.
+El `IstmoPluginRegistry` generado construye `LiveActivityDispatcher` con
+el `LiveActivityBackendImpl` del plugin (compilado dentro de la app
+desde `plugins/live-activity/native/`); los entry points del runtime
+lo llaman al startup.
 
 ```kotlin
+// IstmoGameActivity, la launcher del template, ya hace esto.
+// Una app con su propia activity llama a IstmoHost antes de super.onCreate:
 override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry (o heredá de IstmoGameActivity)
+    IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry
     super.onCreate(savedInstanceState)
 }
 ```
 
 ```swift
-@main
-struct MyApp: App {
-    init() {
-        IstmoRuntime.shared.start()
-        IstmoPluginRegistry.registerAll()
-    }
-}
+// ios/<Name>App/main.swift
+import IstmoRuntime
+
+IstmoApp.run() // arranca el runtime + IstmoPluginRegistry, luego corre Rust
 ```
 
 Ver [Auto-registración](/istmo/es/build-scripts/auto-register/) para el
@@ -154,6 +154,6 @@ codec) nunca cambia.
 
 ## Sample end-to-end
 
-Ver [`examples/live-activity-demo`](https://github.com/sergioribera/istmo/tree/main/examples/live-activity-demo)
+Ver [`examples/live-activity-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/live-activity-demo)
 en el repo. Handlers estilo timer + notification renderizados
 in-process via un pequeño thread "emulador nativo".

@@ -21,7 +21,7 @@ refresquear y liberar determinísticamente.
 
 ```toml
 [dependencies]
-istmo-google-sign-in = "0.1"
+istmo-google-sign-in = "0.1.1-alpha.5"
 ```
 
 Reinicia el build de tu app; `istmo_build::emit()` recoge las entradas
@@ -119,9 +119,10 @@ version  = "1.1.1"
 Nada que añadir a tu `build.gradle.kts` app-side — las entradas fluyen
 por el handover de deps nativas de `istmo-build`.
 
-El flow Credential Manager necesita contexto `Activity`. El backend de
-referencia bajo `plugins/google-sign-in/native/android/` lo toma de
-`IstmoRuntime.instance.currentActivity`.
+El flow Credential Manager necesita una `Activity`. El plugin declara
+`android_backend_arg = "activity"`, así que el registry generado le
+pasa a `GoogleSignInFactoryImpl` la activity host (`IstmoGameActivity`
+es una `ComponentActivity`).
 
 ## Detalles de iOS
 
@@ -131,39 +132,37 @@ El plugin declara el paquete Swift:
 [[swift_package]]
 url          = "https://github.com/google/GoogleSignIn-iOS.git"
 product      = "GoogleSignIn"
-from_version = "7.0.0"
+from_version = "7.1.0"
 ```
 
 Tu `Info.plist` debe incluir el reversed client id bajo
-`CFBundleURLSchemes`, y tu `App.swift` debe llamar
-`GIDSignIn.sharedInstance.handle(url:)` dentro de `.onOpenURL`. El
-plugin envía un helper `SignInAppDelegate` que hace ambos si lo
-registras en `IstmoRuntime.shared`.
+`CFBundleURLSchemes` y el client id OAuth de iOS bajo `GIDClientID`, y
+la app debe reenviar `application(_:open:options:)` a
+`GIDSignIn.sharedInstance.handle(_:)`.
 
 ## Cablealo
 
 `SignIn` es stateful (carga una configuración OAuth por instancia),
-así que `istmo-build` lo genera dentro de
-`IstmoPluginRegistry.registerAll(...)` usando su `SignInFactoryImpl`.
-Mientras copies el `SignInFactoryImpl.kt` / `SignInFactoryImpl.swift`
-de referencia a tu tree de app y llames al registry una vez, el
-plugin queda cableado.
+así que el `IstmoPluginRegistry` generado lo registra con el
+`GoogleSignInFactoryImpl` del plugin (`android_backend` / `ios_backend`
+en su `istmo.toml`). El plugin de Gradle y el fragmento xcodegen
+`istmo-plugins.yml` compilan las fuentes nativas del plugin dentro de
+la app, así que no hay nada que copiar.
 
 ```kotlin
+// IstmoGameActivity, la launcher del template, ya hace esto.
+// Una app con su propia activity llama a IstmoHost antes de super.onCreate:
 override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry (o heredá de IstmoGameActivity)
+    IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry
     super.onCreate(savedInstanceState)
 }
 ```
 
 ```swift
-@main
-struct MyApp: App {
-    init() {
-        IstmoRuntime.shared.start()
-        IstmoPluginRegistry.registerAll()
-    }
-}
+// ios/<Name>App/main.swift
+import IstmoRuntime
+
+IstmoApp.run() // arranca el runtime + IstmoPluginRegistry, luego corre Rust
 ```
 
 Ver [Auto-registración](/istmo/es/build-scripts/auto-register/) para el
@@ -174,15 +173,16 @@ mecanismo completo y flags de opt-out.
 El repo del plugin envía implementaciones de referencia bajo
 `plugins/google-sign-in/native/`:
 
-- `android/SignInBackendImpl.kt`
-- `ios/SignInBackendImpl.swift`
+- `android/GoogleSignInBackendImpl.kt` + `GoogleSignInFactoryImpl.kt`
+  (paquete `dev.istmo.plugins.googlesignin`)
+- `ios/GoogleSignInBackendImpl.swift`
 
-Copia estos a tu tree de app la primera vez que habilites el plugin,
-luego customiza según necesites. Como la forma del trait es fija, la
-mayoría de apps nunca necesita tocarlos.
+Se compilan en cada app que depende del crate. Para customizar uno,
+seteá `auto_register = false` para `istmo.google_sign_in` en el
+`[[app.plugin]]` de la app y registrá tu propio backend.
 
 ## Sample end-to-end completo
 
-Ver [`examples/rust-mobile-demo`](https://github.com/sergioribera/istmo/tree/main/examples/rust-mobile-demo)
+Ver [`examples/rust-mobile-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/rust-mobile-demo)
 en el repo — una app basada en egui que combina sign-in, permisos,
 notifications, y AdMob en un solo binario Rust.

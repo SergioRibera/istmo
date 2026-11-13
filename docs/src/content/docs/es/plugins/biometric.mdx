@@ -24,7 +24,7 @@ verificación exitosa. La API de Rust es la misma en todas partes:
 
 ```toml
 [dependencies]
-istmo-biometric = "0.1"
+istmo-biometric = "0.1.1-alpha.5"
 ```
 
 ## Comprobar disponibilidad
@@ -230,8 +230,9 @@ La Activity tiene que ser una `FragmentActivity` — `IstmoGameActivity`
 `AppCompatActivity` llamando a `IstmoHost.onCreate(this)`, no
 `NativeActivity`:
 
-```kotlin
-class MainActivity : IstmoGameActivity()
+```xml
+<!-- AndroidManifest.xml, tal como lo trae el template -->
+<activity android:name="dev.istmo.runtime.IstmoGameActivity" ...>
 ```
 
 `io.github.sergioribera.istmo` agrega `androidx.biometric:biometric` desde el
@@ -288,7 +289,7 @@ lector mientras `authenticate` está pendiente.
 
 ## Ejemplo
 
-[`examples/biometric-demo`](https://github.com/sergioribera/istmo/tree/main/examples/biometric-demo)
+[`examples/biometric-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/biometric-demo)
 corre la misma UI de egui en escritorio (`cargo run -p biometric-demo`),
 Android (`just biometric-demo`) e iOS (`xcodegen` + Xcode), cubriendo
 disponibilidad, autenticación con cancelación y la bóveda. Con

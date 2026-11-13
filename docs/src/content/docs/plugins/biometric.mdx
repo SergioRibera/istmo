@@ -24,7 +24,7 @@ API is the same everywhere:
 
 ```toml
 [dependencies]
-istmo-biometric = "0.1"
+istmo-biometric = "0.1.1-alpha.5"
 ```
 
 ## Check availability
@@ -224,8 +224,9 @@ The Activity must be a `FragmentActivity` — `IstmoGameActivity` (enable
 the facade's `game-activity` feature) or your own `AppCompatActivity`
 calling `IstmoHost.onCreate(this)`, not `NativeActivity`:
 
-```kotlin
-class MainActivity : IstmoGameActivity()
+```xml
+<!-- AndroidManifest.xml, as the template ships it -->
+<activity android:name="dev.istmo.runtime.IstmoGameActivity" ...>
 ```
 
 `io.github.sergioribera.istmo` adds `androidx.biometric:biometric` from the plugin's
@@ -280,7 +281,7 @@ while `authenticate` is pending.
 
 ## Sample
 
-[`examples/biometric-demo`](https://github.com/sergioribera/istmo/tree/main/examples/biometric-demo)
+[`examples/biometric-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/biometric-demo)
 runs the same egui UI on desktop (`cargo run -p biometric-demo`),
 Android (`just biometric-demo`) and iOS (`xcodegen` + Xcode), covering
 availability, authentication with cancellation, and the vault. Under
