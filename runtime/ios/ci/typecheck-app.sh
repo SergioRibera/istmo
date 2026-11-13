@@ -11,7 +11,10 @@ set -eu
 root=$(cd "$(dirname "$0")/../../.." && pwd)
 example=$1
 ios="$root/examples/$example/ios"
-target=${ISTMO_SWIFT_TARGET:-arm64-apple-ios16.0-simulator}
+# Type-check at the example's own iOS floor (`[min_versions] ios`, else
+# the runtime's 14.0) so APIs newer than it without `#available` fail.
+floor=$(sed -n 's/^ios *= *"\([0-9.]*\)".*/\1/p' "$root/examples/$example/istmo.toml" | head -n 1)
+target=${ISTMO_SWIFT_TARGET:-arm64-apple-ios${floor:-14.0}-simulator}
 sdk=$(xcrun --sdk iphonesimulator --show-sdk-path)
 ffi="$root/runtime/ios/Sources/IstmoFFI/include"
 work=$(mktemp -d)
