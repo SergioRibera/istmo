@@ -8,5 +8,8 @@ android_backend = "dev.istmo.plugins.opener.OpenerBackendImpl"
 android_backend_arg = "context"
 
 [min_versions]
+# `ACTION_VIEW` needs nothing newer than the runtime's own floor.
 android = 21
+# `UIApplication.open(_:options:completionHandler:)` (iOS 10) needs
+# nothing newer.
 ios = "13.0"
