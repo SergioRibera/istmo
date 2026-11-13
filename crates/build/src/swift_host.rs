@@ -261,18 +261,42 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
         out,
         "        let backend = try await factory.create(config: config)"
     );
-    let _ = writeln!(out, "        lock.lock()");
-    let _ = writeln!(out, "        let id = nextInstanceId");
-    let _ = writeln!(out, "        nextInstanceId += 1");
-    let _ = writeln!(out, "        instances[id] = backend");
-    let _ = writeln!(out, "        lock.unlock()");
+    let _ = writeln!(out, "        let id = insertInstance(backend)");
     let _ = writeln!(out, "        var out = Data()");
     let _ = writeln!(out, "        Bincode.writeVarintU64(&out, id)");
     let _ = writeln!(out, "        return out");
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
+    write_instance_table(out, name);
     write_handle_call(out, contract, true);
     let _ = writeln!(out, "}}");
+}
+
+/// Synchronous accessors for the instance table: `NSLock` cannot be
+/// taken directly inside the `async` handlers (unavailable from async
+/// contexts), and `withLock` needs iOS 16.
+fn write_instance_table(out: &mut String, name: &str) {
+    let _ = writeln!(
+        out,
+        "    private func insertInstance(_ backend: {name}Backend) -> UInt64 {{"
+    );
+    let _ = writeln!(out, "        lock.lock()");
+    let _ = writeln!(out, "        defer {{ lock.unlock() }}");
+    let _ = writeln!(out, "        let id = nextInstanceId");
+    let _ = writeln!(out, "        nextInstanceId += 1");
+    let _ = writeln!(out, "        instances[id] = backend");
+    let _ = writeln!(out, "        return id");
+    let _ = writeln!(out, "    }}");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "    private func instance(_ instanceId: UInt64) -> {name}Backend? {{"
+    );
+    let _ = writeln!(out, "        lock.lock()");
+    let _ = writeln!(out, "        defer {{ lock.unlock() }}");
+    let _ = writeln!(out, "        return instances[instanceId]");
+    let _ = writeln!(out, "    }}");
+    let _ = writeln!(out);
 }
 
 fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
@@ -281,12 +305,9 @@ fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
         "    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {{",
     );
     if stateful {
-        let _ = writeln!(out, "        lock.lock()");
-        let _ = writeln!(out, "        let backendOpt = instances[instanceId]");
-        let _ = writeln!(out, "        lock.unlock()");
         let _ = writeln!(
             out,
-            "        guard let backend = backendOpt else {{ throw PluginRuntimeError.unknownInstance(instanceId) }}",
+            "        guard let backend = instance(instanceId) else {{ throw PluginRuntimeError.unknownInstance(instanceId) }}",
         );
     }
     let _ = writeln!(out, "        switch method {{");

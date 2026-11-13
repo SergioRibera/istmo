@@ -77,21 +77,29 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
         var c = Bincode.Cursor(payload)
         let config = try codecs.readAdMobConfig(&c)
         let backend = try await factory.create(config: config)
-        lock.lock()
-        let id = nextInstanceId
-        nextInstanceId += 1
-        instances[id] = backend
-        lock.unlock()
+        let id = insertInstance(backend)
         var out = Data()
         Bincode.writeVarintU64(&out, id)
         return out
     }
 
-    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {
+    private func insertInstance(_ backend: AdMobBackend) -> UInt64 {
         lock.lock()
-        let backendOpt = instances[instanceId]
-        lock.unlock()
-        guard let backend = backendOpt else { throw PluginRuntimeError.unknownInstance(instanceId) }
+        defer { lock.unlock() }
+        let id = nextInstanceId
+        nextInstanceId += 1
+        instances[id] = backend
+        return id
+    }
+
+    private func instance(_ instanceId: UInt64) -> AdMobBackend? {
+        lock.lock()
+        defer { lock.unlock() }
+        return instances[instanceId]
+    }
+
+    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {
+        guard let backend = instance(instanceId) else { throw PluginRuntimeError.unknownInstance(instanceId) }
         switch method {
         case "load_interstitial":
             do {
