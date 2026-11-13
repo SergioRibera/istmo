@@ -129,11 +129,19 @@ implement the backend natively.
 ## Implement the native side
 
 The build script of every **app** that depends on this crate — not this
-crate — generates a Kotlin dispatcher (`BatteryDispatcher.kt`, with the
-`BatteryBackend` interface and the `BatteryError` type) into
-`com.myapp.battery`, and a Swift dispatcher (`BatteryDispatcher.swift`)
-into the app target. The backends live in the plugin crate, next to
-`istmo.toml`.
+crate — generates the native glue from the contract:
+
+- Kotlin, into the `com.myapp.battery` package:
+  `BatteryDispatcher.kt` (the `BatteryBackend` interface and the
+  dispatcher), `BatteryTypes.kt` (the `BatteryError` data class) and
+  `BatteryCodecsImpl.kt`.
+- Swift, into `ios/<App>/Plugins/Battery/Generated/`:
+  `BatteryDispatcher.swift` (the `BatteryBackend` protocol),
+  `BatteryTypes.swift` and `BatteryCodecsImpl.swift`.
+
+Backend methods keep the Rust spelling (a `sign_in` method stays
+`sign_in` in Kotlin and Swift). The backends themselves live in the
+plugin crate, next to `istmo.toml`.
 
 ### Android
 
@@ -192,8 +200,11 @@ That is all. The app's `build.rs` reads the plugin's manifest, so
 `istmo::runtime!()` in the app's `src/lib.rs` wires `BatteryClient`
 without listing it (see [auto-wiring](/istmo/advanced/auto-wiring/)),
 and the generated `IstmoPluginRegistry` constructs
-`com.myapp.battery.BatteryBackendImpl(context)` on Android and
-`BatteryBackendImpl()` on iOS.
+`com.myapp.battery.BatteryBackendImpl(context)` (with the application
+context) on Android and `BatteryBackendImpl()` on iOS. Name another
+class with `android_backend` / `ios_backend` in `istmo.toml`; a
+stateful plugin (`init = Config`) names its `<T>FactoryImpl` there, as
+the template does.
 
 The template's entry points call the registry before your Rust entry
 point runs: the manifest names `dev.istmo.runtime.IstmoGameActivity`
@@ -206,7 +217,8 @@ IstmoApp.run()
 ```
 
 An app with its own Android activity calls `IstmoHost.onCreate(this)`
-before `super.onCreate`. See
+before `super.onCreate` and `IstmoHost.onDestroy(this)` from
+`onDestroy`. See
 [Auto-registration](/istmo/build-scripts/auto-register/) to opt out or
 handle a bespoke constructor.
 

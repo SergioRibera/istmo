@@ -130,11 +130,18 @@ implementas el backend nativamente.
 ## Implementa el lado nativo
 
 El build script de cada **app** que depende de este crate — no el de
-este crate — genera un dispatcher Kotlin (`BatteryDispatcher.kt`, con
-la interfaz `BatteryBackend` y el tipo `BatteryError`) en
-`com.myapp.battery`, y un dispatcher Swift (`BatteryDispatcher.swift`)
-en el target de la app. Los backends viven en el crate del plugin, al
-lado de `istmo.toml`.
+este crate — genera el código nativo a partir del contrato:
+
+- Kotlin, en el paquete `com.myapp.battery`: `BatteryDispatcher.kt`
+  (la interfaz `BatteryBackend` y el dispatcher), `BatteryTypes.kt` (la
+  data class `BatteryError`) y `BatteryCodecsImpl.kt`.
+- Swift, en `ios/<App>/Plugins/Battery/Generated/`:
+  `BatteryDispatcher.swift` (el protocolo `BatteryBackend`),
+  `BatteryTypes.swift` y `BatteryCodecsImpl.swift`.
+
+Los métodos del backend conservan el nombre de Rust (un método
+`sign_in` sigue siendo `sign_in` en Kotlin y Swift). Los backends viven
+en el crate del plugin, al lado de `istmo.toml`.
 
 ### Android
 
@@ -194,8 +201,11 @@ que `istmo::runtime!()` en el `src/lib.rs` de la app cablea
 `BatteryClient` sin listarlo (ver
 [auto-wiring](/istmo/es/advanced/auto-wiring/)), y el
 `IstmoPluginRegistry` generado construye
-`com.myapp.battery.BatteryBackendImpl(context)` en Android y
-`BatteryBackendImpl()` en iOS.
+`com.myapp.battery.BatteryBackendImpl(context)` (con el contexto de la
+aplicación) en Android y `BatteryBackendImpl()` en iOS. Otra clase se
+nombra con `android_backend` / `ios_backend` en `istmo.toml`; un plugin
+stateful (`init = Config`) nombra ahí su `<T>FactoryImpl`, como hace el
+template.
 
 Los entry points del template llaman al registry antes de que corra tu
 entry point de Rust: el manifest nombra
@@ -209,7 +219,8 @@ IstmoApp.run()
 ```
 
 Una app con su propia activity Android llama a
-`IstmoHost.onCreate(this)` antes de `super.onCreate`. Ver
+`IstmoHost.onCreate(this)` antes de `super.onCreate` e
+`IstmoHost.onDestroy(this)` desde `onDestroy`. Ver
 [Auto-registración](/istmo/es/build-scripts/auto-register/) si
 necesitás opt-out o manejar un constructor bespoke.
 
