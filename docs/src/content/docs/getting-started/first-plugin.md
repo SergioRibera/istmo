@@ -9,7 +9,15 @@ A "plugin" in Istmo is any Rust trait annotated with
 `#[istmo::plugin]`. Depending on which side implements the trait — Rust
 or the native platform — it is either **Rust-hosted** or
 **native-hosted**. This walkthrough builds a small native-hosted plugin
-that reads the device battery level.
+that reads the device battery level, and ships its Android and iOS
+backends inside the plugin crate.
+
+:::tip[Start from the template]
+`cargo generate --git https://github.com/SergioRibera/istmo-template`
+with the `plugin` archetype scaffolds everything below — `Cargo.toml`,
+`istmo.toml`, `build.rs`, the trait and reference backends under
+`native/` — for a stateful example plugin.
+:::
 
 ## Create the crate
 
@@ -25,16 +33,21 @@ Update `plugins/battery/Cargo.toml`:
 [package]
 name = "battery-plugin"
 version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["rlib"]
+edition = "2024"
+rust-version = "1.89"
+# Cargo only forwards build-script metadata (the plugin manifest and
+# contract) to dependents of a crate that declares `links`.
+links = "battery_plugin"
 
 [dependencies]
-istmo = "0.1"
+# `istmo-core` + `istmo-macros` instead of the `istmo` facade: the
+# facade picks the Android activity flavour, which is the app's choice.
+istmo-core   = "0.1.1-alpha.5"
+istmo-macros = "0.1.1-alpha.5"
+wincode      = { version = "0.6", default-features = false, features = ["derive", "std"] }
 
 [build-dependencies]
-istmo-build = "0.1"
+istmo-build = "0.1.1-alpha.5"
 ```
 
 Add a build script:
@@ -52,32 +65,39 @@ fn main() {
 
 ```toml
 [plugin]
-id          = "myapp.battery"
-client_type = "::battery_plugin::BatteryClient"
+id              = "myapp.battery"
+client_type     = "::battery_plugin::BatteryClient"
+# Kotlin package of native/android/. Apps generate this plugin's
+# dispatcher and types into it.
+android_package = "com.myapp.battery"
 ```
 
 `istmo.toml` is the single source of truth for the plugin's identity,
-its Rust client path, and any Gradle or SwiftPM dependencies it needs.
-See the [manifest reference](/istmo/build-scripts/istmo-toml-reference/).
+its Rust client path, the Kotlin package of its Android sources, and
+any Gradle or SwiftPM dependencies it needs. Keep `android_package`
+apart from every app's own package (the template uses
+`<bundle_id>.<crate>`): `istmo-build` owns it. See the
+[manifest reference](/istmo/build-scripts/istmo-toml-reference/).
 
 ## Write the trait
 
 `plugins/battery/src/lib.rs`:
 
 ```rust
-use istmo::plugin;
+use istmo_macros::{message, plugin};
 
 /// Battery status reader.
 ///
 /// Implemented natively — Android uses `BatteryManager`, iOS uses
 /// `UIDevice.current.batteryLevel`.
-#[plugin]
+#[plugin(name = "myapp.battery", crate = "::istmo_core")]
 pub trait Battery {
     /// Percentage 0..=100 or -1 if the device does not report it.
     async fn level(&self) -> Result<i32, BatteryError>;
 }
 
-#[istmo::message]
+#[message(wincode = "::wincode")]
+#[derive(Debug, Clone)]
 pub struct BatteryError {
     pub reason: String,
 }
@@ -91,7 +111,12 @@ impl core::fmt::Display for BatteryError {
 impl std::error::Error for BatteryError {}
 ```
 
-`#[istmo::plugin]` emits three siblings at compile time:
+`name` is the wire id and matches `id` in `istmo.toml`. Because the
+crate depends on `istmo-core` directly, `crate = "::istmo_core"` points
+the generated code at it, and `wincode = "::wincode"` does the same for
+the message derives.
+
+`#[plugin]` emits three siblings at compile time:
 
 - `Battery` — the trait you just declared (with `async fn` desugared).
 - `BatteryClient` — the Rust caller-side wrapper, plus a `Plugin` impl.
@@ -103,15 +128,19 @@ implement the backend natively.
 
 ## Implement the native side
 
-The build script at your **app** ­— not this crate — will regenerate a
-Kotlin dispatcher (`BatteryDispatcher.kt`) and a Swift dispatcher
-(`BatteryDispatcher.swift`) the next time it runs. Each one exposes an
-interface for you to implement.
+The build script of every **app** that depends on this crate — not this
+crate — generates a Kotlin dispatcher (`BatteryDispatcher.kt`, with the
+`BatteryBackend` interface and the `BatteryError` type) into
+`com.myapp.battery`, and a Swift dispatcher (`BatteryDispatcher.swift`)
+into the app target. The backends live in the plugin crate, next to
+`istmo.toml`.
 
 ### Android
 
+`plugins/battery/native/android/BatteryBackendImpl.kt`:
+
 ```kotlin
-package com.myapp.gen
+package com.myapp.battery
 
 import android.content.Context
 import android.os.BatteryManager
@@ -124,7 +153,16 @@ class BatteryBackendImpl(private val ctx: Context) : BatteryBackend {
 }
 ```
 
+The source declares the `android_package` package, so it names the
+generated `BatteryBackend` without an import and compiles whatever
+Kotlin package the app uses. Only runtime types (`BackendException`,
+`IstmoRuntime`, …) come from `dev.istmo.runtime`. The
+`io.github.sergioribera.istmo` Gradle plugin compiles `native/android/`
+into every app that depends on the crate.
+
 ### iOS
+
+`plugins/battery/native/ios/BatteryBackendImpl.swift`:
 
 ```swift
 import UIKit
@@ -138,48 +176,39 @@ final class BatteryBackendImpl: BatteryBackend {
 }
 ```
 
+The generated `istmo-plugins.yml` xcodegen fragment adds `native/ios/`
+to the app target.
+
 ## Wire it up
 
-In your app's `src/lib.rs`:
+Add the plugin crate to the app:
 
-```rust
-use battery_plugin::BatteryClient;
-
-istmo::runtime!(
-    plugins: [BatteryClient],
-);
+```toml
+[dependencies]
+battery-plugin = { path = "../plugins/battery" }
 ```
 
-The `istmo::runtime!` macro accepts a comma-separated list of clients
-you plan to call. You can also let it auto-discover plugins from your
-`Cargo.toml` — see [auto-wiring](/istmo/advanced/auto-wiring/).
+That is all. The app's `build.rs` reads the plugin's manifest, so
+`istmo::runtime!()` in the app's `src/lib.rs` wires `BatteryClient`
+without listing it (see [auto-wiring](/istmo/advanced/auto-wiring/)),
+and the generated `IstmoPluginRegistry` constructs
+`com.myapp.battery.BatteryBackendImpl(context)` on Android and
+`BatteryBackendImpl()` on iOS.
 
-Register the native backend from your Activity / App. `istmo-build`
-generates a single `IstmoPluginRegistry.registerAll(...)` call that
-wires every eligible plugin — you don't hand-write the dispatcher
-registration.
-
-```kotlin
-// Android — Activity onCreate
-override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoHost.onCreate(this) // starts the runtime + IstmoPluginRegistry (or extend IstmoGameActivity)
-    super.onCreate(savedInstanceState)
-}
-```
+The template's entry points call the registry before your Rust entry
+point runs: the manifest names `dev.istmo.runtime.IstmoGameActivity`
+as the launcher activity, and `main.swift` is one line:
 
 ```swift
-// iOS — App init
-@main
-struct MyApp: App {
-    init() {
-        IstmoRuntime.shared.start()
-        IstmoPluginRegistry.registerAll()
-    }
-}
+import IstmoRuntime
+
+IstmoApp.run()
 ```
 
-See [Auto-registration](/istmo/build-scripts/auto-register/) if you need to
-opt out or handle a bespoke constructor.
+An app with its own Android activity calls `IstmoHost.onCreate(this)`
+before `super.onCreate`. See
+[Auto-registration](/istmo/build-scripts/auto-register/) to opt out or
+handle a bespoke constructor.
 
 ## Call it
 
@@ -188,7 +217,7 @@ Anywhere in your Rust code:
 ```rust
 let battery = BatteryClient::from_runtime(&runtime)?;
 let pct = battery.level().await?;
-tracing::info!("battery = {pct}%");
+log::info!("battery = {pct}%");
 ```
 
 That's the whole loop. Rust called a trait method → Istmo serialized
