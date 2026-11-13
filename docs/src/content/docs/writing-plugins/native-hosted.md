@@ -197,8 +197,8 @@ override fun onCreate(savedInstanceState: Bundle?) {
 }
 
 override fun onDestroy() {
-    IstmoHost.onDestroy(this)
     super.onDestroy()
+    IstmoHost.onDestroy(this)
 }
 ```
 
