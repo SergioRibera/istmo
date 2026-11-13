@@ -54,6 +54,14 @@ fn spawn_backend(
 
 #[test]
 fn typed_start_encodes_payload_and_returns_handle_id() {
+    type StartTuple = (
+        String,
+        Vec<u8>,
+        Vec<u8>,
+        ActivityStyle,
+        Option<u32>,
+        Option<istmo_live_activity::AndroidTierHint>,
+    );
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let handle_id = NativeHandleId(777);
@@ -79,20 +87,11 @@ fn typed_start_encodes_payload_and_returns_handle_id() {
     assert_eq!(issued, handle_id);
 
     let payload = backend.join().unwrap();
-
-    type StartTuple = (
-        String,
-        Vec<u8>,
-        Vec<u8>,
-        ActivityStyle,
-        Option<u32>,
-        Option<istmo_live_activity::AndroidTierHint>,
-    );
-    let ((activity_type, attrs_bytes, state_bytes, style, stale, hint), _) =
+    let ((activity_type, attrs_bytes, state_bytes, style, stale_after, hint), _) =
         codec::decode::<StartTuple>(&payload).unwrap();
     assert_eq!(activity_type, "timer");
     assert_eq!(style, ActivityStyle::Standard);
-    assert!(stale.is_none());
+    assert!(stale_after.is_none());
     assert!(hint.is_none());
 
     let (attrs, _) = codec::decode::<TimerAttributes>(&attrs_bytes).unwrap();
@@ -103,6 +102,11 @@ fn typed_start_encodes_payload_and_returns_handle_id() {
 
 #[test]
 fn typed_update_encodes_new_state() {
+    type UpdateTuple = (
+        NativeHandleId,
+        Vec<u8>,
+        Option<istmo_live_activity::AlertConfig>,
+    );
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let ok_bytes = codec::encode(&()).unwrap();
@@ -118,11 +122,6 @@ fn typed_update_encodes_new_state() {
     .expect("update ok");
 
     let payload = backend.join().unwrap();
-    type UpdateTuple = (
-        NativeHandleId,
-        Vec<u8>,
-        Option<istmo_live_activity::AlertConfig>,
-    );
     let ((handle, state_bytes, alert), _) = codec::decode::<UpdateTuple>(&payload).unwrap();
     assert_eq!(handle, NativeHandleId(42));
     assert!(alert.is_none());
@@ -132,6 +131,7 @@ fn typed_update_encodes_new_state() {
 
 #[test]
 fn typed_end_forwards_dismissal_policy() {
+    type EndTuple = (NativeHandleId, Option<Vec<u8>>, DismissalPolicy);
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let ok_bytes = codec::encode(&()).unwrap();
@@ -147,7 +147,6 @@ fn typed_end_forwards_dismissal_policy() {
     .expect("end ok");
 
     let payload = backend.join().unwrap();
-    type EndTuple = (NativeHandleId, Option<Vec<u8>>, DismissalPolicy);
     let ((handle, final_bytes, dismissal), _) = codec::decode::<EndTuple>(&payload).unwrap();
     assert_eq!(handle, NativeHandleId(9));
     assert_eq!(dismissal, DismissalPolicy::AfterSeconds(10));

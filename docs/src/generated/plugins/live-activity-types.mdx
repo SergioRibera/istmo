@@ -7,7 +7,7 @@ How prominently the platform should render the live activity.
 
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `Standard` | — | Full presentation — Lock Screen banner + Dynamic Island on iOS, full ongoing notification with custom RemoteViews on Android. |
+| `Standard` | — | Full presentation — Lock Screen banner + Dynamic Island on iOS, full ongoing notification with custom `RemoteViews` on Android. |
 | `Transient` | — | Compact / minimal presentation — Dynamic Island only on iOS, slim collapsed notification on Android. |
 
 ### `AlertConfig`
@@ -48,7 +48,7 @@ How to remove the activity when `end()` is called.
 
 Android-only hint that biases the backend towards a particular
 rendering strategy when several are available on the device (custom
-RemoteViews vs. `ProgressStyle` vs. Live Update APIs).
+`RemoteViews` vs. `ProgressStyle` vs. Live Update APIs).
 
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
@@ -65,17 +65,17 @@ enable Dynamic Island widgets when actually supported).
 
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `Ios` | `IosCapabilities` | Running on iOS with the ActivityKit surface. |
+| `Ios` | `IosCapabilities` | Running on iOS with the `ActivityKit` surface. |
 | `Android` | `AndroidCapabilities` | Running on Android — capabilities depend on OS version. |
 | `Unsupported` | — | Live activities are not available on this device / OS. |
 
 ### `IosCapabilities`
 
-iOS-specific ActivityKit feature availability.
+iOS-specific `ActivityKit` feature availability.
 
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
-| `activity_kit_available` | `activityKitAvailable` | `bool` | Whether the ActivityKit framework itself is available (iOS 16.1+). |
+| `activity_kit_available` | `activityKitAvailable` | `bool` | Whether the `ActivityKit` framework itself is available (iOS 16.1+). |
 | `activities_enabled` | `activitiesEnabled` | `bool` | Whether the user has activities enabled in system settings. |
 | `dynamic_island` | `dynamicIsland` | `bool` | Whether the device physically has a Dynamic Island. |
 | `push_updates` | `pushUpdates` | `bool` | Whether the app is configured to receive APNs push-token updates for its activities. |
@@ -86,7 +86,7 @@ Android-specific live-update / ongoing-notification capabilities.
 
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
-| `supports_custom` | `supportsCustom` | `bool` | Whether the plugin can render fully custom RemoteViews. |
+| `supports_custom` | `supportsCustom` | `bool` | Whether the plugin can render fully custom `RemoteViews`. |
 | `supports_progress_style` | `supportsProgressStyle` | `bool` | Whether the platform's `Notification.ProgressStyle` is available. |
 | `supports_live_update` | `supportsLiveUpdate` | `bool` | Whether the modern Live Update notification API is available (Android 15+). |
 | `notifications_enabled` | `notificationsEnabled` | `bool` | Whether the user has notifications enabled for this app. |

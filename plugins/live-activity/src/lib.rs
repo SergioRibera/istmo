@@ -1,4 +1,4 @@
-//! Apple Live Activities / ActivityKit plugin for
+//! Apple Live Activities / `ActivityKit` plugin for
 //! [`istmo`](https://docs.rs/istmo).
 //!
 //! Exposes a byte-oriented [`LiveActivity`] trait plus a typed adapter
@@ -36,7 +36,7 @@ pub enum LiveActivityToken {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActivityStyle {
     /// Full presentation — Lock Screen banner + Dynamic Island on iOS,
-    /// full ongoing notification with custom RemoteViews on Android.
+    /// full ongoing notification with custom `RemoteViews` on Android.
     Standard,
     /// Compact / minimal presentation — Dynamic Island only on iOS,
     /// slim collapsed notification on Android.
@@ -90,7 +90,7 @@ pub enum DismissalPolicy {
 
 /// Android-only hint that biases the backend towards a particular
 /// rendering strategy when several are available on the device (custom
-/// RemoteViews vs. `ProgressStyle` vs. Live Update APIs).
+/// `RemoteViews` vs. `ProgressStyle` vs. Live Update APIs).
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AndroidTierHint {
@@ -111,7 +111,7 @@ pub enum AndroidTierHint {
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlatformCapabilities {
-    /// Running on iOS with the ActivityKit surface.
+    /// Running on iOS with the `ActivityKit` surface.
     Ios(IosCapabilities),
     /// Running on Android — capabilities depend on OS version.
     Android(AndroidCapabilities),
@@ -119,11 +119,15 @@ pub enum PlatformCapabilities {
     Unsupported,
 }
 
-/// iOS-specific ActivityKit feature availability.
+/// iOS-specific `ActivityKit` feature availability.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent platform feature flags reported by the native host"
+)]
 pub struct IosCapabilities {
-    /// Whether the ActivityKit framework itself is available (iOS
+    /// Whether the `ActivityKit` framework itself is available (iOS
     /// 16.1+).
     pub activity_kit_available: bool,
     /// Whether the user has activities enabled in system settings.
@@ -138,8 +142,12 @@ pub struct IosCapabilities {
 /// Android-specific live-update / ongoing-notification capabilities.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent platform feature flags reported by the native host"
+)]
 pub struct AndroidCapabilities {
-    /// Whether the plugin can render fully custom RemoteViews.
+    /// Whether the plugin can render fully custom `RemoteViews`.
     pub supports_custom: bool,
     /// Whether the platform's `Notification.ProgressStyle` is
     /// available.

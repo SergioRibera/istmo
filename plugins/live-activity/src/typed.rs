@@ -44,7 +44,7 @@ where
     }
 
     #[must_use]
-    pub fn runtime(&self) -> &Arc<Runtime> {
+    pub const fn runtime(&self) -> &Arc<Runtime> {
         self.client.runtime()
     }
 
@@ -320,6 +320,6 @@ where
             .field("activity_type", &self.activity_type)
             .field("attributes", &std::any::type_name::<A>())
             .field("state", &std::any::type_name::<C>())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
