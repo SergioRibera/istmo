@@ -58,7 +58,7 @@ mavenPublishing {
     pom {
         name.set("istmo-gradle-plugin")
         description.set(
-            "Gradle plugin for istmo apps (`dev.istmo.app`): builds the Rust crate with cargo for every ABI, links every istmo plugin it depends on and applies istmo.toml [app].",
+            "Gradle plugin for istmo apps (`io.github.sergioribera.istmo`): builds the Rust crate with cargo for every ABI, links every istmo plugin it depends on and applies istmo.toml [app].",
         )
         url.set("https://github.com/SergioRibera/istmo")
         licenses {

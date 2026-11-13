@@ -30,7 +30,7 @@ data class LinkedPlugin(
     val minAndroidApi: Int?,
 )
 
-/** Plugin linking steps of `dev.istmo.app`: manifests and minimum API checks. */
+/** Plugin linking steps of `io.github.sergioribera.istmo`: manifests and minimum API checks. */
 internal object PluginLinking {
     private const val XMLNS_NS = "http://www.w3.org/2000/xmlns/"
     private const val ANDROID_NS = "http://schemas.android.com/apk/res/android"

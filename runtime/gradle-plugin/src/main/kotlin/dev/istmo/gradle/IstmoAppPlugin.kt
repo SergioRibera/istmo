@@ -259,7 +259,7 @@ class IstmoAppPlugin : Plugin<Project> {
     private fun String.capitalized(): String = replaceFirstChar { it.uppercaseChar() }
 
     private companion object {
-        const val TAG = "dev.istmo.app"
+        const val TAG = "io.github.sergioribera.istmo"
         const val DEFAULT_MIN_SDK = 21
         const val LABEL_PLACEHOLDER = "istmoLabel"
         const val ICON_PLACEHOLDER = "istmoIcon"

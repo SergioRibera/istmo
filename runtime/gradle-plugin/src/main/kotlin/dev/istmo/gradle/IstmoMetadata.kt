@@ -58,7 +58,7 @@ data class IstmoMetadata(
             if (schema != SCHEMA) {
                 throw GradleException(
                     "istmo: ${file.path} has schema $schema but this Gradle plugin reads schema $SCHEMA; " +
-                        "use matching versions of istmo-build and dev.istmo.app",
+                        "use matching versions of istmo-build and io.github.sergioribera.istmo",
                 )
             }
             val app = root["app"] as Map<*, *>
