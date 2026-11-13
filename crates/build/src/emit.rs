@@ -6,7 +6,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::assets::{AssetsPayload, resolve_assets};
-use crate::handover::{emit_assets, emit_contract, emit_manifest, emit_native_deps};
+use crate::handover::{
+    emit_assets, emit_contract, emit_contracts, emit_manifest, emit_native_deps,
+};
 use crate::manifest::{Deployment, IstmoToml, Manifest};
 
 pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
@@ -100,7 +102,7 @@ pub fn emit_with(app: crate::emit_app::AppOpts) {
 
     if let Some(manifest) = toml.manifest.clone() {
         let manifest = emit_plugin_metadata(&manifest_path, manifest);
-        emit_contracts(&manifest, &root.join("src/lib.rs"));
+        emit_plugin_contracts(&manifest, &root.join("src/lib.rs"));
     }
     let dep_manifests = crate::handover::collect_dep_manifests();
     let _ = emit_wiring_for(&dep_manifests, toml.manifest.as_ref());
@@ -110,31 +112,40 @@ pub fn emit_with(app: crate::emit_app::AppOpts) {
 
 pub fn emit_from(manifest_path: impl AsRef<Path>, source_path: impl AsRef<Path>) {
     let manifest = emit_manifest_metadata(manifest_path);
-    emit_contracts(&manifest, source_path.as_ref());
+    emit_plugin_contracts(&manifest, source_path.as_ref());
 }
 
-/// Extract and hand over the contract of every plugin entry that
-/// declares a `client_type`, from the trait in `source_path`.
-fn emit_contracts(manifest: &Manifest, source_path: &Path) {
-    let has_client = manifest.plugins.iter().any(|p| p.client_type.is_some());
-    if has_client {
+/// Extract the contract of every plugin entry that declares a
+/// `client_type` from the trait in `source_path`, and hand them over in
+/// one payload.
+fn emit_plugin_contracts(manifest: &Manifest, source_path: &Path) {
+    let contracts = plugin_contracts(manifest, source_path);
+    if !contracts.is_empty() {
         crate::directive::rerun_if_changed(source_path);
+        emit_contracts(&contracts);
     }
+}
 
-    for plugin in &manifest.plugins {
-        let Some(client_type) = plugin.client_type.as_deref() else {
-            continue;
-        };
-        let trait_name = trait_from_client_type(client_type);
-        let contract = crate::extract_contract(source_path, &trait_name).unwrap_or_else(|err| {
-            panic!(
-                "istmo-build emit(): extract `{trait_name}` for plugin `{}` from `{}`: {err}",
-                plugin.id,
-                source_path.display(),
-            )
-        });
-        emit_contract(&contract);
-    }
+/// Contracts of the plugin entries with a `client_type`, in manifest
+/// order.
+fn plugin_contracts(manifest: &Manifest, source_path: &Path) -> Vec<crate::Contract> {
+    manifest
+        .plugins
+        .iter()
+        .filter_map(|plugin| {
+            let client_type = plugin.client_type.as_deref()?;
+            let trait_name = trait_from_client_type(client_type);
+            let contract =
+                crate::extract_contract(source_path, &trait_name).unwrap_or_else(|err| {
+                    panic!(
+                        "istmo-build emit(): extract `{trait_name}` for plugin `{}` from `{}`: {err}",
+                        plugin.id,
+                        source_path.display(),
+                    )
+                });
+            Some(contract)
+        })
+        .collect()
 }
 
 fn trait_from_client_type(client_type: &str) -> String {
@@ -222,4 +233,46 @@ fn emit_wiring_for(dep_manifests: &[Manifest], app_manifest: Option<&Manifest>) 
         resolved.remote_clients.join(","),
     );
     resolved
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handover::{deserialize_contracts, serialize_contracts};
+
+    #[test]
+    fn a_crate_with_two_plugins_hands_over_both_contracts() {
+        let root = std::env::temp_dir().join(format!("istmo-emit-two-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("lib.rs");
+        fs::write(
+            &source,
+            r#"
+            #[istmo::plugin(name = "example.first")]
+            pub trait First {
+                async fn ping(&self) -> String;
+            }
+
+            #[istmo::plugin(name = "example.second")]
+            pub trait Second {
+                async fn pong(&self, n: u32) -> u32;
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest = Manifest::parse(
+            "[[plugin]]\nid = \"example.first\"\nclient_type = \"::example::FirstClient\"\n\n\
+             [[plugin]]\nid = \"example.second\"\nclient_type = \"::example::SecondClient\"\n\n\
+             [[plugin]]\nid = \"example.native_only\"\n",
+        )
+        .unwrap();
+
+        let contracts = plugin_contracts(&manifest, &source);
+        let ids: Vec<&str> = contracts.iter().map(|c| c.plugin_id.as_str()).collect();
+        assert_eq!(ids, ["example.first", "example.second"]);
+
+        let payload = serialize_contracts(&contracts).unwrap();
+        assert_eq!(deserialize_contracts(&payload).unwrap(), contracts);
+        let _ = fs::remove_dir_all(&root);
+    }
 }

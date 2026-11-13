@@ -19,7 +19,15 @@ const fn codec() -> Codec {
     Codec::new()
 }
 
+/// Key of a single-contract payload, emitted by `istmo-build` releases
+/// before [`CONTRACTS_KEY`]. Still collected so dependencies built by
+/// those releases keep working.
 pub const CONTRACT_KEY: &str = "ISTMO_CONTRACT";
+
+/// Key of the payload carrying every contract of one crate. Cargo keeps
+/// only the last value a build script prints per key, so a crate with
+/// several `[[plugin]]` entries must hand them over in one payload.
+pub const CONTRACTS_KEY: &str = "ISTMO_CONTRACTS";
 
 pub const NATIVE_DEPS_KEY: &str = "ISTMO_NATIVE_DEPS";
 
@@ -76,6 +84,28 @@ pub fn deserialize_contract(hex: &str) -> Result<Contract, HandoverError> {
     Ok(contract)
 }
 
+/// Hex payload for [`CONTRACTS_KEY`]: every contract of one crate.
+///
+/// # Errors
+///
+/// [`HandoverError::Encode`] when the contracts exceed the codec limit.
+pub fn serialize_contracts(contracts: &[Contract]) -> Result<String, HandoverError> {
+    let bytes = wincode::config::serialize(contracts, codec()).map_err(HandoverError::Encode)?;
+    Ok(hex_encode(&bytes))
+}
+
+/// Inverse of [`serialize_contracts`].
+///
+/// # Errors
+///
+/// [`HandoverError::InvalidHex`] or [`HandoverError::Decode`] for a
+/// payload that is not exactly one encoded contract list.
+pub fn deserialize_contracts(hex: &str) -> Result<Vec<Contract>, HandoverError> {
+    let bytes = hex_decode(hex)?;
+    wincode::config::deserialize_exact::<Vec<Contract>, _>(&bytes, codec())
+        .map_err(HandoverError::Decode)
+}
+
 pub fn serialize_native_deps(deps: &NativeDeps) -> Result<String, HandoverError> {
     let bytes = wincode::config::serialize(deps, codec()).map_err(HandoverError::Encode)?;
     Ok(hex_encode(&bytes))
@@ -88,9 +118,26 @@ pub fn deserialize_native_deps(hex: &str) -> Result<NativeDeps, HandoverError> {
     Ok(deps)
 }
 
+/// Hands `contracts` over to dependent build scripts as
+/// `DEP_<LINKS>_ISTMO_CONTRACTS`. Call it once per build script: Cargo
+/// keeps only the last value printed for a key.
+///
+/// # Panics
+///
+/// When the contracts exceed the codec limit, which fails the build.
+pub fn emit_contracts(contracts: &[Contract]) {
+    let payload = serialize_contracts(contracts).expect("serialize istmo contracts");
+    println!("cargo:{CONTRACTS_KEY}={payload}");
+}
+
+/// [`emit_contracts`] for a crate with a single contract. A second call
+/// replaces the first; pass every contract to [`emit_contracts`] instead.
+///
+/// # Panics
+///
+/// When the contract exceeds the codec limit, which fails the build.
 pub fn emit_contract(contract: &Contract) {
-    let payload = serialize_contract(contract).expect("serialize istmo contract");
-    println!("cargo:{CONTRACT_KEY}={payload}");
+    emit_contracts(std::slice::from_ref(contract));
 }
 
 pub fn emit_native_deps(deps: &NativeDeps) {
@@ -218,11 +265,96 @@ fn links_name(var: &str, key: &str) -> String {
         .to_owned()
 }
 
-/// Every dependency's contract, sorted by the advertising crate's `links`
-/// name so generated output does not depend on env-var order.
+/// Every dependency's contracts, ordered by the advertising crate's
+/// `links` name (then by the crate's own order) so generated output does
+/// not depend on env-var order.
+///
+/// A crate's [`CONTRACTS_KEY`] payload is read first, then a
+/// [`CONTRACT_KEY`] payload from an older `istmo-build`, then the
+/// unprefixed legacy key. A plugin id handed over twice keeps its first
+/// contract in that order; a second crate claiming the id gets a
+/// `cargo::warning`.
 #[must_use]
 pub fn collect_dep_contracts() -> Vec<Contract> {
-    collect_keyed(CONTRACT_KEY, LEGACY_CONTRACT_KEY, deserialize_contract)
+    collect_contracts_from(std::env::vars())
+}
+
+/// [`collect_dep_contracts`] over an explicit set of environment
+/// variables instead of the build script's own.
+#[must_use]
+pub fn collect_contracts_from<I>(vars: I) -> Vec<Contract>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    let mut by_links: BTreeMap<String, Vec<Contract>> = BTreeMap::new();
+    let mut legacy: BTreeMap<String, (String, String)> = BTreeMap::new();
+    let mut vars: Vec<(String, String)> = vars
+        .into_iter()
+        .filter(|(k, _)| k.starts_with("DEP_"))
+        .collect();
+    vars.sort();
+    // Most specific key first: `DEP_X_ISTMO_CONTRACT` also ends in
+    // `_CONTRACT`, and the multi payload must win for its crate.
+    for (var, payload) in &vars {
+        if let Some(links) = key_links(var, CONTRACTS_KEY) {
+            match deserialize_contracts(payload) {
+                Ok(contracts) => by_links.entry(links).or_default().extend(contracts),
+                Err(err) => warn_decode(var, &err),
+            }
+        }
+    }
+    for (var, payload) in &vars {
+        if let Some(links) = key_links(var, CONTRACT_KEY) {
+            match deserialize_contract(payload) {
+                Ok(contract) => by_links.entry(links).or_default().push(contract),
+                Err(err) => warn_decode(var, &err),
+            }
+        } else if let Some(links) = key_links(var, LEGACY_CONTRACT_KEY) {
+            legacy.insert(links, (var.clone(), payload.clone()));
+        }
+    }
+    for (links, (_, payload)) in legacy {
+        if by_links.contains_key(&links) {
+            continue;
+        }
+        // Any crate may emit a bare `CONTRACT`; only ours decode.
+        if let Ok(contract) = deserialize_contract(&payload) {
+            by_links.insert(links, vec![contract]);
+        }
+    }
+
+    let mut owners: BTreeMap<String, String> = BTreeMap::new();
+    let mut out = Vec::new();
+    for (links, contracts) in by_links {
+        for contract in contracts {
+            match owners.get(&contract.plugin_id) {
+                None => {
+                    owners.insert(contract.plugin_id.clone(), links.clone());
+                    out.push(contract);
+                }
+                Some(owner) if *owner == links => {}
+                Some(owner) => println!(
+                    "cargo::warning=istmo: plugin `{}` is handed over by both `{owner}` and \
+                     `{links}`; keeping the contract from `{owner}`",
+                    contract.plugin_id,
+                ),
+            }
+        }
+    }
+    out
+}
+
+/// `links` name of `DEP_<LINKS>_<key>`, or `None` for any other variable.
+fn key_links(var: &str, key: &str) -> Option<String> {
+    let links = var
+        .strip_prefix("DEP_")?
+        .strip_suffix(key)?
+        .strip_suffix('_')?;
+    (!links.is_empty()).then(|| links.to_owned())
+}
+
+fn warn_decode(var: &str, err: &HandoverError) {
+    println!("cargo::warning=istmo handover decode failed for {var}: {err}");
 }
 
 /// Every dependency's native deps merged in `links`-name order, so

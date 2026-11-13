@@ -67,6 +67,9 @@ pub struct AppOpts {
     pub ios_root: Option<PathBuf>,
     pub ios_app_dir: Option<String>,
     pub ios_plugins_subdir: Option<String>,
+    /// Contracts no dependency hands over, such as ones built inline in
+    /// the app's `build.rs`. One with the plugin id of a handed-over
+    /// contract replaces it.
     pub extra_contracts: Vec<Contract>,
     /// Additional [`Manifest`] values to merge alongside those found via
     /// the `DEP_*_ISTMO_MANIFEST` env-var handover. Useful for tests
@@ -350,8 +353,7 @@ impl<'a> AppPass<'a> {
             .auto_register
             .or(self.config.auto_register)
             .unwrap_or(true);
-        let mut contracts = collect_dep_contracts();
-        contracts.extend(self.opts.extra_contracts.iter().cloned());
+        let contracts = with_extra_contracts(collect_dep_contracts(), &self.opts.extra_contracts);
         let ships_swift = self.plugins_with_native_ios();
 
         let mut registries = Registries::default();
@@ -871,9 +873,53 @@ fn emit_runtime_env(
     }
 }
 
+/// `handed_over` plus `extra`, where an extra contract replaces any
+/// earlier one with its plugin id, so each id generates one set of
+/// sources.
+fn with_extra_contracts(mut handed_over: Vec<Contract>, extra: &[Contract]) -> Vec<Contract> {
+    for contract in extra {
+        if let Some(slot) = handed_over
+            .iter_mut()
+            .find(|c| c.plugin_id == contract.plugin_id)
+        {
+            println!(
+                "cargo::warning=istmo: an extra contract replaces the earlier contract of plugin `{}`",
+                contract.plugin_id,
+            );
+            *slot = contract.clone();
+        } else {
+            handed_over.push(contract.clone());
+        }
+    }
+    handed_over
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn named_contract(plugin_id: &str, type_name: &str) -> Contract {
+        Contract {
+            plugin_id: plugin_id.to_owned(),
+            type_name: type_name.to_owned(),
+            methods: vec![],
+            init: None,
+            types: vec![],
+        }
+    }
+
+    #[test]
+    fn an_extra_contract_replaces_the_handed_over_one_with_its_id() {
+        let merged = with_extra_contracts(
+            vec![named_contract("a", "A"), named_contract("b", "B")],
+            &[named_contract("b", "Override"), named_contract("c", "C")],
+        );
+        let names: Vec<(&str, &str)> = merged
+            .iter()
+            .map(|c| (c.plugin_id.as_str(), c.type_name.as_str()))
+            .collect();
+        assert_eq!(names, [("a", "A"), ("b", "Override"), ("c", "C")]);
+    }
 
     fn write(path: &Path, contents: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
