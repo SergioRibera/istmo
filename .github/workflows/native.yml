@@ -8,6 +8,11 @@ name: native
 # * `swift-core` — type-checks the UIKit-free core of the Swift runtime on
 #   Linux against a Foundation stub (`runtime/ios/ci/typecheck-stub.sh`).
 #   Fast feedback; the same script runs on a dev box with any swiftc.
+#   It also type-checks the generated Swift goldens with warnings as
+#   errors (`runtime/ios/ci/typecheck-goldens.sh`).
+# * `kotlin-goldens` — compiles the generated Kotlin goldens with `-Werror`
+#   on a plain JVM (`runtime/android/ci/compile-goldens.sh`), so a
+#   generator change cannot ship warnings into every app.
 # * `ios` — builds the `IstmoRuntime` package for the iOS Simulator and
 #   type-checks each example's generated Swift plus its plugins'
 #   `native/ios` sources against the real SDK
@@ -49,6 +54,32 @@ jobs:
           swift-version: "5.10"
       - name: Type-check runtime core
         run: runtime/ios/ci/typecheck-stub.sh
+      - name: Type-check generated Swift with warnings as errors
+        run: runtime/ios/ci/typecheck-goldens.sh
+
+  kotlin-goldens:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Matches the Kotlin Gradle plugin the examples apply.
+      KOTLIN_VERSION: "1.9.24"
+      COROUTINES_VERSION: "1.8.1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install kotlinc and kotlinx-coroutines
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/kotlinc.zip" \
+            "https://github.com/JetBrains/kotlin/releases/download/v$KOTLIN_VERSION/kotlin-compiler-$KOTLIN_VERSION.zip"
+          unzip -q "$RUNNER_TEMP/kotlinc.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/kotlinc/bin" >> "$GITHUB_PATH"
+          curl -fsSL -o "$RUNNER_TEMP/coroutines.jar" \
+            "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/$COROUTINES_VERSION/kotlinx-coroutines-core-jvm-$COROUTINES_VERSION.jar"
+      - name: Compile generated Kotlin with warnings as errors
+        run: KOTLIN_CLASSPATH="$RUNNER_TEMP/coroutines.jar" runtime/android/ci/compile-goldens.sh
 
   ios:
     runs-on: macos-latest

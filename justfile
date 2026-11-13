@@ -225,6 +225,16 @@ reset-owned name paths:
         --entrypoint sh {{image}} \
         -c 'rm -rf {{paths}}'
 
+# ---- Generated native code -------------------------------------------
+#
+# Compile the Kotlin / Swift golden fixtures `istmo-build` generates with
+# warnings as errors (`kotlinc` + kotlinx-coroutines on `KOTLIN_CLASSPATH`,
+# `swiftc` 5.10+), as the `native` workflow does.
+
+check-generated-native:
+    runtime/android/ci/compile-goldens.sh
+    runtime/ios/ci/typecheck-goldens.sh
+
 # ---- Docs -----------------------------------------------------------
 #
 # Regenerate MDX partials for every shipped plugin's `#[istmo::message]`
