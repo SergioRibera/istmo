@@ -1,0 +1,268 @@
+---
+title: Pen
+description: Entrada de stylus y lápiz — presión, inclinación, hover, botones del cuerpo y gestos del Apple Pencil — como streams de Rust por ventana en Android, iOS, Windows, macOS y Linux.
+sidebar:
+  order: 10
+---
+
+import PluginTypes from '../../../../generated/plugins/pen-types.mdx';
+
+`istmo-pen` convierte la entrada del stylus en dos streams por ventana:
+`PenEvent` para el contacto (bajar, mover, levantar, cancelar, cambios
+de botones, gestos) y `PenHoverEvent` para la herramienta flotando
+cerca de la superficie. Cada muestra lleva posición, presión,
+inclinación, azimut, altitud, giro, presión del cuerpo, distancia de
+hover, una marca de tiempo, un número de secuencia y la herramienta que
+la produjo; los canales que una plataforma no informa valen `0.0` y
+aparecen desactivados en `PenCapabilities`.
+
+| Plataforma | Fuente | Notas |
+| ---------- | ------ | ----- |
+| Android | `PenCaptureView` (`MotionEvent`, tipos de herramienta stylus y borrador) | muestras coalescidas de `getHistorical*`; botón principal pulsado en hover → `Gesture(DoubleTap)` |
+| iOS / iPadOS | `PenCaptureView` (`UITouch` de tipo `.pencil`, `UIHoverGestureRecognizer`) | toques coalescidos y predichos; doble toque y apretón del Apple Pencil → `Gesture` |
+| Windows | `WM_POINTER*` mediante un subclass de la ventana | muestras coalescidas del historial del puntero |
+| macOS | eventos de tableta `NSEvent` mediante un monitor local | presión del cuerpo (tangencial) |
+| Linux | Wayland `zwp_tablet_v2` o X11 `XInput2`, por ventana; `libinput` de todo el seat, opcional | — |
+
+Hay una demo ejecutable en
+[`examples/pen-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/pen-demo)
+(binario de escritorio más una app Android).
+
+## Instalación
+
+```toml
+[dependencies]
+istmo-pen = "0.1.1-alpha.5"
+# Builds kiosko en Linux: fuente libinput de todo el seat (`PenPublisher::install_libinput`).
+# istmo-pen = { version = "0.1.1-alpha.5", features = ["libinput_fallback"] }
+```
+
+## Leer los streams
+
+El plugin tiene estado: cada `PenClient` se crea para una ventana,
+identificada por `PenConfig::window_id`, un entero que elige la app y
+que el lado nativo asocia a una vista o ventana. Clientes con ids
+distintos reciben streams disjuntos.
+
+```rust
+// lib.rs
+istmo::runtime!(plugins: [PenClient]);
+```
+
+```rust
+use istmo::StreamItem;
+use istmo_pen::{PenClient, PenConfig, PenEvent, PenHoverEvent};
+
+let pen = PenClient::acquire_with(PenConfig::new(1)).await?;
+let caps = pen.capabilities().await?; // adapta la UI a caps.pressure, caps.hover, …
+let events = pen.events()?;
+let hover = pen.hover()?;
+
+std::thread::spawn(move || {
+    while let Ok(StreamItem::Event(event)) = events.recv() {
+        match event {
+            PenEvent::Down(s) => begin_stroke(s.x, s.y, s.pressure),
+            PenEvent::Move(m) => {
+                for s in m.coalesced.iter().chain(std::iter::once(&m.sample)) {
+                    extend_stroke(s.x, s.y, s.pressure);
+                }
+            }
+            PenEvent::Up(_) => end_stroke(),
+            PenEvent::Cancel(_) => discard_stroke(),
+            PenEvent::ButtonChanged(change) => toggle_tool(change.sample.buttons),
+            PenEvent::Gesture(gesture) => show_palette(gesture.kind),
+        }
+    }
+});
+
+std::thread::spawn(move || {
+    while let Ok(StreamItem::Event(event)) = hover.recv() {
+        match event {
+            PenHoverEvent::ProximityEnter(s) | PenHoverEvent::Move(s) => show_cursor(s.x, s.y),
+            PenHoverEvent::ProximityLeave => hide_cursor(),
+        }
+    }
+});
+```
+
+`acquire_with` usa el runtime global del proceso;
+`PenClient::from_runtime_with(&runtime, config)` recibe uno explícito.
+Los streams también ofrecen `recv_async` y `try_recv`, y terminan
+cuando se suelta el cliente.
+
+- Las coordenadas son lógicas (puntos / dp) relativas a la ventana
+  registrada, con `y` creciendo hacia abajo.
+- `PenSample::buttons` es un bitmap (bit 0 principal, bit 1
+  secundario, …); dimensiona cualquier UI de asignaciones según
+  `PenCapabilities::button_count`.
+- `PenSample::sequence` crece por ventana; las muestras predichas y
+  coalescidas comparten la secuencia de su muestra real, así que la
+  tinta predicha se puede reemplazar cuando llega una muestra real.
+- `PenEvent::Gesture` nunca dibuja: la app decide qué hace un doble
+  toque o un apretón.
+
+### Predicción
+
+`set_prediction_enabled(true)` pide a iOS los `predictedTouches`, que
+entonces llenan `PenMove::predicted`. El resto de plataformas acepta la
+llamada y deja `predicted` vacío.
+
+```rust
+pen.set_prediction_enabled(true).await?;
+```
+
+### Errores
+
+`PenError` viaja dentro del `IstmoError` del cliente; recupéralo con
+`PenError::try_from_istmo` (o `TryFrom`), que devuelve sin cambios los
+errores de transporte:
+
+```rust
+use istmo_pen::PenError;
+
+if let Err(err) = pen.capabilities().await {
+    match PenError::try_from_istmo(err) {
+        Ok(PenError::Backend(msg)) => tracing::warn!("pen backend: {msg}"),
+        Ok(other) => tracing::warn!("{other}"),
+        Err(transport) => tracing::error!("runtime: {transport}"),
+    }
+}
+```
+
+## Conectar el backend
+
+Los backends móviles necesitan una vista de captura que es de la app,
+así que el plugin declara `auto_register = false`: el
+`IstmoPluginRegistry` generado lo omite y la app registra el host por
+su cuenta.
+
+:::note[Paquete de Android]
+El plugin declara `android_package = "dev.istmo.plugins.pen"`, así que
+`istmo-build` genera `PenDispatcher`, `PenFactory`, `PenCodecsImpl`, …
+en ese paquete, junto a `PenCaptureView`, `PenBackendImpl` y
+`PenFactoryImpl`, sea cual sea el `[app] android_package` de tu app.
+:::
+
+**Android** — crea un `PenCaptureView`, registra el dispatcher con
+`PenFactoryImpl` y pásale a la vista los eventos de movimiento de la
+activity (o agrégala al árbol de vistas sobre tu superficie de dibujo).
+Tomado de `examples/pen-demo`:
+
+```kotlin
+import dev.istmo.plugins.pen.PenCaptureView
+import dev.istmo.plugins.pen.PenCodecsImpl
+import dev.istmo.plugins.pen.PenDispatcher
+import dev.istmo.plugins.pen.PenFactoryImpl
+import dev.istmo.runtime.IstmoHost
+import dev.istmo.runtime.IstmoRuntime
+
+class DrawActivity : GameActivity() {
+    private lateinit var penView: PenCaptureView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        IstmoHost.onCreate(this)
+        penView = PenCaptureView(this)
+        IstmoRuntime.registerHandler(
+            PenDispatcher.PLUGIN_ID,
+            PenDispatcher(PenFactoryImpl(penView), PenCodecsImpl()),
+        )
+        super.onCreate(savedInstanceState)
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        penView.onTouchEvent(event)
+        return super.dispatchTouchEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        penView.onGenericMotionEvent(event)
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        IstmoHost.onDestroy(this)
+    }
+}
+```
+
+`PenCaptureView` solo observa: los eventos que no son de stylus
+vuelven al framework. Las coordenadas se convierten a dp.
+
+**iOS** — agrega un `PenCaptureView` (un `UIView`) sobre la superficie
+de dibujo y registra el dispatcher:
+
+```swift
+let penView = PenCaptureView(frame: .zero)
+IstmoRuntime.shared.registerHandler(
+    PenDispatcher.PLUGIN_ID,
+    PenDispatcher(factory: PenFactoryImpl(view: penView), codecs: PenCodecsImpl())
+)
+```
+
+Los toques con el dedo siguen por la cadena de respondedores.
+
+`PenFactoryImpl` sirve una sola vista en ambas plataformas e ignora
+`window_id`; las apps con varias ventanas escriben su propio
+`PenFactory` que asocia `PenConfig.windowId` a la vista
+correspondiente y devuelve `PenBackendImpl(view, windowId)` (Kotlin) /
+`PenBackendImpl(view:windowId:)` (Swift).
+
+**Desktop** — instala un `PenPublisher` por proceso, únele las ventanas
+y aloja el plugin con `PenPublisherFactory`:
+
+```rust
+use std::sync::Arc;
+
+use istmo::Runtime;
+use istmo_pen::backend::PenPublisherFactory;
+use istmo_pen::publisher::PenPublisher;
+use istmo_pen::{PenClient, PenHost};
+
+let init = Runtime::init(config)?.expects::<PenClient>().finish();
+let publisher = PenPublisher::install(&init.runtime);
+init.runtime
+    .register_host(PenHost::new(PenPublisherFactory::new(Arc::clone(&publisher))));
+
+// Desde el hilo de UI de la ventana; el id es el `window_id` del cliente.
+publisher.register_window(1, &window)?;
+```
+
+`register_window` acepta cualquier cosa que implemente
+`HasWindowHandle` + `HasDisplayHandle` y engancha la fuente de la
+plataforma: un subclass de `WM_POINTER*` en Windows (llámalo en el hilo
+que creó la ventana), un monitor de `NSEvent` en macOS, un hilo que
+bombea Wayland tablet-v2 o `XInput2` en Linux. Registrar de nuevo un id
+reemplaza su enganche y conserva a los suscriptores existentes;
+`unregister_window` lo quita y termina sus streams.
+
+Otras formas de unir ventanas:
+
+- `publisher.follow_registry(WindowRegistry::global())` une cada ventana
+  registrada en el registry compartido de `istmo-window` (ahora y más
+  adelante) con el mismo id, así las apps que también usan otros
+  plugins que dependen de la ventana (como Share) registran cada
+  ventana una sola vez.
+- `publisher.register_window_id(id)` asocia un id sin enganche nativo;
+  aliméntalo con `push_event` / `push_hover` desde tu propia fuente
+  (eventos de puntero del toolkit, un compositor propio, tests).
+- Con la feature `libinput_fallback` en Linux,
+  `publisher.install_libinput()` arranca un lector `libinput` de todo
+  el seat que difunde las muestras de la tableta a cada id registrado.
+  Necesita acceso al seat (logind o permisos sobre `/dev/input`) y
+  sirve para apps kiosko que son dueñas de la pantalla.
+
+Un cliente cuyo `window_id` nunca se registró recibe streams que ya
+están cerrados. Cada suscriptor encola hasta 1024 eventos; si uno se
+retrasa, las muestras se descartan para él y se cuentan en
+`publisher.dropped(id)`.
+
+**Manifest de Windows** — la presión, la inclinación y el giro del
+stylus necesitan que el proceso sea DPI-aware por monitor, así que el
+plugin incluye un `[[windows_manifest_fragment]]` llamado `dpi_aware`.
+El `istmo_build::emit()` de la app lo incorpora al manifest del
+ejecutable al compilar para Windows; no hay que hacer nada a mano.
+
+## Tipos de wire
+
+<PluginTypes />

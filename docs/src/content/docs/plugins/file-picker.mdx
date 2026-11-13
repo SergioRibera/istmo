@@ -1,0 +1,229 @@
+---
+title: File Picker
+description: Open, multi-select and save files through the native pickers — Storage Access Framework, UIDocumentPicker, NSOpenPanel, IFileOpenDialog and the XDG portal — and read or write them through std::io.
+sidebar:
+  order: 6
+---
+
+import PluginTypes from '../../../generated/plugins/file-picker-types.mdx';
+
+`istmo-file-picker` presents the platform's own file pickers and hands
+every picked location back as a `NativeHandle<FileRef>`. Reads and
+writes go through a file descriptor (or Windows `HANDLE`) adopted into
+a `std::fs::File`, so any code that takes `Read` / `Write` / `Seek`
+works on picked files — including Android `content://` documents that
+have no filesystem path.
+
+| Platform | Backend | `path()` |
+| -------- | ------- | -------- |
+| Android | Storage Access Framework (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`) | always `None` |
+| iOS | `UIDocumentPickerViewController` | `Some` while the handle lives (security scope held) |
+| macOS | `NSOpenPanel` / `NSSavePanel` (through `rfd`) | `Some` |
+| Windows | `IFileOpenDialog` / `IFileSaveDialog` (through `rfd`) | `Some` |
+| Linux | XDG Desktop Portal `org.freedesktop.portal.FileChooser` (through `rfd`) | `Some` |
+
+The plugin declares no `[min_versions]`. File descriptors only make
+sense inside the process that opened them, so the plugin is pinned to
+`default_deployment = "local"` — do not move it to a `:remote` process.
+
+## Install
+
+```toml
+[dependencies]
+istmo-file-picker = "0.1.1-alpha.5"
+```
+
+## Pick and read
+
+```rust
+use std::io::Read;
+use std::sync::Arc;
+
+use istmo_file_picker::{FileFilter, FilePickerClient, PickConfig};
+
+let picker = FilePickerClient::from_runtime(&runtime)?;
+
+let config = PickConfig {
+    dialog_title: Some("Open a note".into()),
+    filter: FileFilter {
+        mime_types: vec!["text/plain".into()],
+        extensions: vec!["txt".into()],
+        uti_types: vec!["public.plain-text".into()],
+    },
+    ..PickConfig::default()
+};
+
+if let Some(file) = picker.pick_file_owned(config).await? {
+    tracing::info!("{} ({:?} bytes)", file.display_name, file.size);
+    let file = Arc::new(file);
+    let mut text = String::new();
+    file.open_reader(&picker).await?.read_to_string(&mut text)?;
+}
+```
+
+- `pick_file_owned` returns `Ok(None)` when the user cancels.
+- `pick_files_owned` returns every selected file (an empty `Vec` on
+  cancel). Set `PickConfig::allow_multiple` for multi-select on Android
+  and iOS; the desktop backend always allows it.
+- The `_owned` methods return `OwnedPickedFile`, whose `handle` is a
+  `NativeHandle<FileRef>`. Dropping the last reference releases the
+  native resource (SAF grant, iOS security scope, desktop path entry).
+  The raw `pick_file` / `pick_files` / `save_file` return `PickedFile`
+  with a bare `NativeHandleId`, for callers that re-ship the id.
+
+### Filters
+
+Each backend reads a different field of `FileFilter`; fill every one
+you can. An empty filter means "any file".
+
+| Platform | Field used |
+| -------- | ---------- |
+| Android | `mime_types` (`*/*` when empty) |
+| iOS 14+ | `uti_types`, plus `mime_types` and `extensions` converted to `UTType`s |
+| iOS 13 | none: the picker offers any item |
+| macOS, Windows, Linux | `extensions` |
+
+`dialog_title` and `start_directory_hint` are honoured by the desktop
+backend only.
+
+## Save and write
+
+```rust
+use std::io::Write;
+use std::sync::Arc;
+
+use istmo_file_picker::SaveConfig;
+
+let config = SaveConfig {
+    suggested_name: Some("export.csv".into()),
+    mime_type: Some("text/csv".into()),
+    ..SaveConfig::default()
+};
+
+if let Some(target) = picker.save_file_owned(config).await? {
+    let target = Arc::new(target);
+    let mut writer = target.open_writer(&picker).await?;
+    writer.write_all(csv.as_bytes())?;
+}
+```
+
+`save_file` returns a handle to a file that already exists: Android
+creates it through `ACTION_CREATE_DOCUMENT` (with `mime_type`, default
+`application/octet-stream`), iOS exports an empty placeholder to the
+chosen location, desktop creates the file. `open_write` truncates it
+on every platform.
+
+## Readers and writers
+
+`PickedFileReader` implements `Read` + `Seek`; `PickedFileWriter`
+implements `Write` + `Seek`. Both also implement `AsFd` / `AsRawFd` on
+unix and `AsHandle` / `AsRawHandle` on Windows, and keep an
+`Arc<OwnedPickedFile>` so the native handle outlives the descriptor.
+
+```rust
+use istmo_file_picker::{PickedFileReader, PickedFileWriter};
+
+let reader = PickedFileReader::open(&picker, Arc::clone(&file)).await?;
+let writer = PickedFileWriter::open(&picker, Arc::clone(&file)).await?;
+let std_file: std::fs::File = reader.into_inner();
+```
+
+`OwnedPickedFile::open_reader` / `open_writer` are shortcuts for the
+two `open` constructors. `into_inner` gives up the keep-alive: the
+native handle is released once the `Arc`s you still hold drop, while
+the returned `File` stays valid.
+
+When an API needs a real path, try `path`:
+
+```rust
+match picker.path(file.handle.id()).await? {
+    Some(path) => tracing::info!("on disk at {path}"),
+    None => { /* Android: copy through a PickedFileReader instead */ }
+}
+```
+
+`istmo-share` can share a picked file directly: enable its
+`file-picker` feature and use `ShareFile::from_picked` (see
+[Share](/istmo/plugins/share/#files)).
+
+## Errors
+
+Client calls return `IstmoError`; the plugin's own `FilePickerError`
+travels as `IstmoError::PluginError { bytes }`. Decode it with the
+runtime codec:
+
+```rust
+use istmo::IstmoError;
+use istmo_file_picker::FilePickerError;
+
+fn picker_error(err: IstmoError) -> Option<FilePickerError> {
+    match err {
+        IstmoError::PluginError { bytes } => istmo::codec::decode::<FilePickerError>(&bytes)
+            .ok()
+            .map(|(err, _)| err),
+        _ => None,
+    }
+}
+```
+
+`PickedFileReader::open` / `PickedFileWriter::open` (and the
+`open_reader` / `open_writer` shortcuts) already do this and return
+`FilePickerError` directly; transport failures come back as
+`FilePickerError::Backend`.
+
+## Wire the backend
+
+:::note[Android package]
+The plugin declares `android_package = "dev.istmo.plugins.filepicker"`,
+so `istmo-build` generates `FilePickerBackend`, `FilePickerDispatcher`,
+`FilePickerCodecsImpl`, … into that package, next to the plugin's
+Kotlin sources, whatever `[app] android_package` your app uses.
+:::
+
+**Android** — the generated `IstmoPluginRegistry` builds
+`dev.istmo.plugins.filepicker.FilePickerBackendImpl` with the host
+`ComponentActivity` (`android_backend_arg = "activity"`), from
+`onCreate`: the backend registers its activity-result launchers there,
+before the activity reaches `STARTED`. Use `IstmoGameActivity`, or call
+`IstmoHost.onCreate(this)` from your own `ComponentActivity`.
+
+- A picker still open when its activity is destroyed (for example a
+  configuration change) fails with `FilePickerError::Backend`; handles
+  picked earlier keep working.
+- The backend persists URI grants while a handle lives and releases
+  them when the last handle of that document drops, or at the next app
+  start for handles a killed process left behind. Picking a held
+  document again with write access upgrades its grant. Grants the app
+  had already persisted itself are left alone.
+
+**iOS** — nothing to wire: `IstmoApp.run()` (or
+`IstmoPluginRegistry.registerAll()`) registers
+`FilePickerBackendImpl()`, which presents from the top view controller.
+No `Info.plist` key is needed.
+
+**Desktop** — register `DesktopFilePicker` and attach it to the
+runtime before the first pick; until then picks fail with
+`FilePickerError::Backend`:
+
+```rust
+use istmo::Runtime;
+use istmo_file_picker::{DesktopFilePicker, FilePickerClient, FilePickerHost};
+
+let picker = DesktopFilePicker::new();
+let init = Runtime::init(config)?
+    .expects::<FilePickerClient>()
+    .host(FilePickerHost::new(picker.clone()))
+    .finish();
+picker.install_release_hook(&init.runtime);
+```
+
+`install_release_hook` makes handle ids come from
+`Runtime::alloc_native_handle_id` and drops the cached path when the
+client releases a handle; `DesktopFilePicker::purge` clears every
+cached path at once. The desktop dialogs are modal and block the
+calling thread until they close — keep them off a thread your UI or
+async executor needs.
+
+## Wire types
+
+<PluginTypes />
