@@ -30,6 +30,11 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let core = &args.core_path;
     let plugins = &args.plugins_path;
     let adapter_ident = format_ident!("{}WorkerAdapter", trait_ident);
+    let adapter_doc = format!(
+        " Runs a [`{trait_ident}`] implementation as the `{}` worker: decodes each\n \
+         scheduled task, awaits `run` and reports its outcome.",
+        plugin_id.value(),
+    );
 
     let encode_outcome = quote! {
         {
@@ -60,6 +65,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     Ok(quote! {
         #trait_def
 
+        #[doc = #adapter_doc]
         #vis struct #adapter_ident<Impl>
         where
             Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
@@ -72,6 +78,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
         where
             Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
         {
+            /// Adapter running `inner`.
             pub fn new(inner: Impl) -> Self {
                 Self {
                     __inner: ::std::sync::Arc::new(inner),

@@ -62,7 +62,13 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
         |init_ty| expand_stateful_ctors(&client_ident, &plugin_id, init_ty, root),
     );
 
+    let client_doc = format!(
+        " Caller-side client of the [`{trait_ident}`] plugin (`{}`): every method\n \
+         encodes its arguments, sends them through the runtime and decodes the reply.",
+        plugin_id.value(),
+    );
     let client_struct = quote! {
+        #[doc = #client_doc]
         #vis struct #client_ident {
             __runtime: ::std::sync::Arc<#root::Runtime>,
             __instance_id: ::core::option::Option<#root::InstanceId>,
@@ -129,11 +135,14 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
         #ctors
 
         impl #client_ident {
+            /// The runtime this client sends its calls through.
             #[must_use]
             pub const fn runtime(&self) -> &::std::sync::Arc<#root::Runtime> {
                 &self.__runtime
             }
 
+            /// The plugin instance this client addresses; `None` for a
+            /// stateless plugin.
             #[must_use]
             pub const fn instance_id(&self) -> ::core::option::Option<#root::InstanceId> {
                 self.__instance_id
@@ -156,7 +165,12 @@ fn expand_stateless_host(
     root: &Path,
     host_arms: &[TokenStream],
 ) -> TokenStream {
+    let host_doc = format!(
+        " Serves the [`{trait_ident}`] plugin from a Rust implementation; register it\n \
+         with `Runtime::register_host`."
+    );
     quote! {
+        #[doc = #host_doc]
         #vis struct #host_ident<Impl>
         where
             Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
@@ -168,15 +182,18 @@ fn expand_stateless_host(
         where
             Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
         {
+            /// Host answering calls with `inner`.
             pub const fn new(inner: Impl) -> Self {
                 Self { inner }
             }
 
+            /// The implementation answering calls.
             #[must_use]
             pub const fn inner(&self) -> &Impl {
                 &self.inner
             }
 
+            /// Unwraps the implementation.
             #[must_use]
             pub fn into_inner(self) -> Impl {
                 self.inner
@@ -243,6 +260,11 @@ fn expand_stateful_host(
     root: &Path,
     host_arms: &[TokenStream],
 ) -> TokenStream {
+    let host_doc = format!(
+        " Serves the [`{trait_ident}`] plugin from per-instance Rust\n \
+         implementations built by a [`{factory_ident}`]; register it with\n \
+         `Runtime::register_host`."
+    );
     quote! {
         /// Factory that constructs a per-instance implementation of the
         /// plugin trait from the wire-decoded configuration payload.
@@ -257,6 +279,7 @@ fn expand_stateful_host(
             fn create(&self, config: #init_ty) -> Self::Instance;
         }
 
+        #[doc = #host_doc]
         #vis struct #host_ident<F>
         where
             F: #factory_ident,
@@ -275,6 +298,8 @@ fn expand_stateful_host(
         where
             F: #factory_ident,
         {
+            /// Host creating one implementation per plugin instance through
+            /// `factory`.
             pub fn new(factory: F) -> Self {
                 Self {
                     factory,
@@ -283,6 +308,7 @@ fn expand_stateful_host(
                 }
             }
 
+            /// The factory plugin instances are created with.
             #[must_use]
             pub const fn factory(&self) -> &F {
                 &self.factory
@@ -407,6 +433,12 @@ fn rewrite_trait_signatures(trait_def: &mut ItemTrait, root: &Path) {
 fn expand_stateless_ctors(client_ident: &Ident, root: &Path) -> TokenStream {
     quote! {
         impl #client_ident {
+            /// Client on the process-global runtime.
+            ///
+            /// # Errors
+            ///
+            /// Fails when no global runtime is installed, or when the runtime
+            /// enforces declarations and does not declare this plugin.
             pub fn acquire() -> ::core::result::Result<Self, #root::IstmoError> {
                 let rt = #root::Runtime::global()?;
                 rt.check_declared(<Self as #root::Plugin>::PLUGIN_ID)?;
@@ -416,6 +448,12 @@ fn expand_stateless_ctors(client_ident: &Ident, root: &Path) -> TokenStream {
                 })
             }
 
+            /// Client on `rt`.
+            ///
+            /// # Errors
+            ///
+            /// Fails when `rt` enforces declarations and does not declare
+            /// this plugin.
             pub fn from_runtime(
                 rt: &::std::sync::Arc<#root::Runtime>,
             ) -> ::core::result::Result<Self, #root::IstmoError> {
@@ -437,6 +475,14 @@ fn expand_stateful_ctors(
 ) -> TokenStream {
     quote! {
         impl #client_ident {
+            /// Client on a new plugin instance created from `config` on the
+            /// process-global runtime.
+            ///
+            /// # Errors
+            ///
+            /// Fails when no global runtime is installed, when the runtime does
+            /// not declare this plugin, or when the host fails to create the
+            /// instance.
             pub async fn acquire_with(
                 config: #init_ty,
             ) -> ::core::result::Result<Self, #root::IstmoError> {
@@ -444,6 +490,12 @@ fn expand_stateful_ctors(
                 Self::from_runtime_with(&rt, config).await
             }
 
+            /// Client on a new plugin instance created from `config` on `rt`.
+            ///
+            /// # Errors
+            ///
+            /// Fails when `rt` does not declare this plugin, or when the host
+            /// fails to create the instance.
             pub async fn from_runtime_with(
                 rt: &::std::sync::Arc<#root::Runtime>,
                 config: #init_ty,
@@ -961,15 +1013,18 @@ fn expand_unary_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> To
     let MethodSpec {
         name,
         method_name_str,
-        doc_attrs,
         ..
     } = spec;
+    let attrs = client_method_attrs(
+        &spec.doc_attrs,
+        &format!("Calls the plugin's `{name}` method."),
+    );
     let params = spec.client_params();
     let payload_expr = build_payload_expr(root, spec);
     let ok_ty = spec.ret.ok_ty();
     let decode = quote_spanned! {ok_ty.span()=> #root::codec::decode::<#ok_ty>(&bytes) };
     quote! {
-        #(#doc_attrs)*
+        #attrs
         pub async fn #name(&self, #(#params),*) -> ::core::result::Result<
             #ok_ty,
             #root::IstmoError,
@@ -996,15 +1051,21 @@ fn expand_unary_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> To
 }
 
 fn expand_unary_owned_method(root: &Path, spec: &MethodSpec) -> syn::Result<TokenStream> {
-    let MethodSpec {
-        name, doc_attrs, ..
-    } = spec;
+    let name = &spec.name;
     let owned_name = format_ident!("{}_owned", name);
+    // The trait method's docs describe the wire call; this one adds adoption.
+    let attrs = client_method_attrs(
+        &[],
+        &format!(
+            "Like [`{name}`](Self::{name}), with every native handle id adopted \
+             into a `NativeHandle` that releases it on drop."
+        ),
+    );
     let params = spec.client_params();
     let arg_names = spec.wire_arg_names();
     let (owned_return_ty, adopter_expr) = build_owned_return(spec.ret.ok_ty())?;
     Ok(quote! {
-        #(#doc_attrs)*
+        #attrs
         pub async fn #owned_name(
             &self,
             #(#params),*
@@ -1020,9 +1081,12 @@ fn expand_stream_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> T
     let MethodSpec {
         name,
         method_name_str,
-        doc_attrs,
         ..
     } = spec;
+    let attrs = client_method_attrs(
+        &spec.doc_attrs,
+        &format!("Opens the plugin's `{name}` stream."),
+    );
     let params = spec.client_params();
     let payload_expr = build_payload_expr(root, spec);
     let item_ty = spec.ret.ok_ty();
@@ -1031,7 +1095,7 @@ fn expand_stream_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> T
         |err_ty| quote! { #root::TypedStream<#item_ty, #err_ty> },
     );
     quote! {
-        #(#doc_attrs)*
+        #attrs
         pub fn #name(&self, #(#params),*) -> ::core::result::Result<
             #stream_ty,
             #root::IstmoError,
@@ -1115,4 +1179,30 @@ fn as_generic<'a>(wrapper: &str, ty: &'a Type) -> Option<&'a Type> {
         GenericArgument::Type(t) => Some(t),
         _ => None,
     })
+}
+
+/// Doc and lint attributes shared by every generated client method: the
+/// trait method's own docs (or `fallback` when it has none) followed by an
+/// `# Errors` section, since the client turns transport failures into
+/// errors even for an infallible trait method.
+fn client_method_attrs(docs: &[Attribute], fallback: &str) -> TokenStream {
+    let docs = if docs.is_empty() {
+        let fallback = format!(" {fallback}");
+        quote! { #[doc = #fallback] }
+    } else {
+        quote! { #(#docs)* }
+    };
+    quote! {
+        #docs
+        #[doc = ""]
+        #[doc = " # Errors"]
+        #[doc = ""]
+        #[doc = " Fails when the call cannot reach the plugin host or its reply does"]
+        #[doc = " not decode; a domain error the host returns arrives as"]
+        #[doc = " `IstmoError::PluginError`."]
+        #[allow(
+            clippy::too_many_arguments,
+            reason = "the client mirrors the plugin trait method's arguments"
+        )]
+    }
 }

@@ -4,7 +4,7 @@ use syn::{ItemFn, parse::Parse, parse::ParseStream, parse2};
 
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let _args = parse2::<MobileAppArgs>(attr)?;
-    let user_fn = parse2::<ItemFn>(item)?;
+    let mut user_fn = parse2::<ItemFn>(item)?;
     let user_ident = user_fn.sig.ident.clone();
 
     if !user_fn.sig.inputs.is_empty() {
@@ -14,11 +14,25 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
         ));
     }
 
+    // Only the mobile entry points below call the function.
+    user_fn.attrs.push(syn::parse_quote! {
+        #[cfg_attr(
+            not(any(
+                target_os = "android",
+                target_os = "ios",
+                target_os = "tvos",
+                target_os = "watchos",
+                target_os = "visionos",
+            )),
+            allow(dead_code, reason = "called only by the mobile entry points")
+        )]
+    });
     let user_fn_tokens = user_fn.to_token_stream();
 
     Ok(quote! {
         #user_fn_tokens
 
+        /// Android entry point: stores the `AndroidApp` and runs the app.
         #[cfg(target_os = "android")]
         #[unsafe(no_mangle)]
         pub fn android_main(app: ::istmo::android::android_activity::AndroidApp) {
@@ -26,6 +40,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
             #user_ident();
         }
 
+        /// Apple entry point the Swift shell calls to run the app.
         #[cfg(any(
             target_os = "ios",
             target_os = "tvos",

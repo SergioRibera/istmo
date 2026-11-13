@@ -257,20 +257,31 @@ fn generate_owned_struct(
     let fields = named.named.iter().enumerate().map(|(idx, f)| {
         let field_vis = &f.vis;
         let name = &f.ident;
+        let docs: Vec<_> = f
+            .attrs
+            .iter()
+            .filter(|a| a.path().is_ident("doc"))
+            .collect();
         handles.iter().find(|h| h.index == idx).map_or_else(
             || {
                 let ty = &f.ty;
-                quote! { #field_vis #name: #ty }
+                quote! { #(#docs)* #field_vis #name: #ty }
             },
             |h| {
                 let marker = &h.marker;
-                quote! { #field_vis #name: #root::NativeHandle<#marker> }
+                quote! { #(#docs)* #field_vis #name: #root::NativeHandle<#marker> }
             },
         )
     });
     // The wire type's field list, minus whatever `#[redact]` hides.
     let debug = generate_debug(wire, &owned_ident, redacted);
+    let doc = format!(
+        " [`{wire}`] with every `#[handle]` id adopted into a `NativeHandle` that\n \
+         releases it on drop; see [`{wire}::into_owned`].",
+        wire = wire.ident,
+    );
     quote! {
+        #[doc = #doc]
         #vis struct #owned_ident #generics #where_clause {
             #(#fields,)*
         }
@@ -297,6 +308,7 @@ fn generate_into_owned(wire: &ItemStruct, handles: &[HandleField], root: &Path) 
     });
     quote! {
         impl #impl_generics #wire_ident #ty_generics #where_clause {
+            /// Adopts every `#[handle]` id into a `NativeHandle` bound to `rt`.
             #[must_use]
             pub fn into_owned(
                 self,

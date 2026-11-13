@@ -30,6 +30,11 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let core = &args.core_path;
     let plugins = &args.plugins_path;
     let adapter_ident = format_ident!("{}Adapter", trait_ident);
+    let adapter_doc = format!(
+        " Runs a [`{trait_ident}`] implementation as the `{}` service: `on_start` on\n \
+         its own thread, stopped by `on_stop`, a second start or a cancel.",
+        plugin_id.value(),
+    );
     let state_ident = format_ident!("{}AdapterState", trait_ident);
 
     let on_start_body = if on_start_returns_result {
@@ -81,6 +86,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
             }
         }
 
+        #[doc = #adapter_doc]
         #vis struct #adapter_ident<Impl>
         where
             Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
@@ -94,6 +100,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
         where
             Impl: #trait_ident + ::core::marker::Send + ::core::marker::Sync + 'static,
         {
+            /// Adapter running `inner`.
             pub fn new(inner: Impl) -> Self {
                 Self {
                     __inner: ::std::sync::Arc::new(inner),
