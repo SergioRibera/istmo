@@ -262,11 +262,9 @@ impl eframe::App for CameraApp {
             match &self.texture {
                 Some(tex) => {
                     let max = ui.available_size();
-                    let scale = {
-                        let [w, h] = tex.size().map(|v| v as f32);
-                        (max.x / w).min(max.y / h)
-                    };
-                    let size = tex.size_vec2() * scale;
+                    let tex_size = tex.size_vec2();
+                    let scale = (max.x / tex_size.x).min(max.y / tex_size.y);
+                    let size = tex_size * scale;
                     ui.image((tex.id(), size));
                 }
                 None => {
