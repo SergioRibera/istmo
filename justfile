@@ -1,7 +1,7 @@
 # Task runner for the istmo framework.
 #
-# Docker image: sergioribera/rust-android:1.96-sdk-37.0.
-# * Ships Rust 1.96, Android SDK/NDK and Gradle 8.2.
+# Docker image: sergioribera/rust-android:1.98-sdk-36.
+# * Ships Rust 1.98, Android SDK/NDK and Gradle 8.2.
 # * NDK toolchain env vars are pre-set for every android target, so plain
 #   `cargo build --target <triple>` links. No cargo-ndk.
 #
