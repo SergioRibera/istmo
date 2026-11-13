@@ -15,14 +15,6 @@ import java.io.File
  * itself) would otherwise be the app's own preferences, and `clear()`
  * would wipe them.
  *
- * Earlier versions did use the bare namespace. On first open of the
- * prefixed file, entries of such a legacy file are copied into it and
- * the legacy file is deleted. The migration is skipped when the
- * namespace is the app's default preferences name — that file is the
- * app's, so the namespace starts empty instead. An app that also wrote
- * a preferences file of the same name as a namespace itself must not
- * rely on that file surviving the first open after the upgrade.
- *
  * A key read as the wrong type fails with `DataStoreError.Corrupted`,
  * like the desktop backend. `SharedPreferences` has no `f64` or bytes
  * type, so `f64` values are stored as their `Long` bit pattern and
@@ -111,56 +103,17 @@ class DataStoreBackendImpl(context: Context, config: DataStoreConfig) : DataStor
     }
 
     private companion object {
-        /** Serialises the exists check and the legacy migration across instances. */
-        private val openLock = Any()
-
         fun openPrefs(context: Context, namespace: String): SharedPreferences {
             // The namespace becomes part of a file name.
             if (namespace.isEmpty() || namespace.contains('/') || namespace.contains(File.separatorChar)) {
                 throw BackendException(DataStoreError.Backend("invalid namespace `$namespace`"))
             }
             val name = "${context.packageName}.istmo.$namespace"
-            return synchronized(openLock) {
-                val prefsDir = File(context.applicationInfo.dataDir, "shared_prefs")
-                val firstOpen = !File(prefsDir, "$name.xml").exists()
-                val prefs = try {
-                    context.getSharedPreferences(name, Context.MODE_PRIVATE)
-                } catch (e: IllegalArgumentException) {
-                    throw BackendException(DataStoreError.Backend("invalid namespace `$namespace`: ${e.message}"))
-                }
-                if (firstOpen && namespace != "${context.packageName}_preferences") {
-                    migrateLegacy(context, prefsDir, namespace, prefs)
-                }
-                prefs
+            return try {
+                context.getSharedPreferences(name, Context.MODE_PRIVATE)
+            } catch (e: IllegalArgumentException) {
+                throw BackendException(DataStoreError.Backend("invalid namespace `$namespace`: ${e.message}"))
             }
-        }
-
-        /** Copy the unprefixed legacy file `legacyName` into [target], then delete it. */
-        private fun migrateLegacy(context: Context, prefsDir: File, legacyName: String, target: SharedPreferences) {
-            val legacyFile = File(prefsDir, "$legacyName.xml")
-            if (!legacyFile.exists()) return
-            val legacy = context.getSharedPreferences(legacyName, Context.MODE_PRIVATE)
-            val entries = legacy.all
-            if (entries.isNotEmpty()) {
-                val editor = target.edit()
-                for ((key, value) in entries) {
-                    when (value) {
-                        is String -> editor.putString(key, value)
-                        is Long -> editor.putLong(key, value)
-                        is Int -> editor.putInt(key, value)
-                        is Boolean -> editor.putBoolean(key, value)
-                        is Float -> editor.putFloat(key, value)
-                        is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
-                    }
-                }
-                // Keep the legacy file when the copy did not reach disk,
-                // so the values are not lost; the next open sees the
-                // prefixed file missing and retries.
-                if (!editor.commit()) return
-            }
-            legacy.edit().clear().commit()
-            legacyFile.delete()
-            File(prefsDir, "$legacyName.xml.bak").delete()
         }
     }
 }
