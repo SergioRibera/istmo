@@ -23,7 +23,7 @@ Tienen dos formas:
 | `AppLifecycle` | `istmo.lifecycle` | último valor | el shell nativo de la app |
 | `DeepLinks` | `istmo.deeplinks` | cola | el shell nativo de la app |
 | `Documents` | `istmo.documents` | cola | el shell nativo de la app; `DocumentsPublisher` en escritorio |
-| `SafeArea` | `istmo.safe_area` | último valor | la actividad Android; `SafeAreaPublisher` en iOS |
+| `SafeArea` | `istmo.safe_area` | último valor | la actividad Android; el view controller iOS o `SafeAreaPublisher` |
 | `SystemInfoClient` | `istmo.system_info` | últimos valores | observadores del runtime; `SystemInfoPublisher` en escritorio |
 | `DeviceInfoClient` | `istmo.device_info` | último valor | observadores del runtime; `DeviceInfoPublisher` en escritorio |
 | `ThemePreferenceClient` | `istmo.theme_preference` | último valor | observadores del runtime; `ThemePreferencePublisher` en escritorio |
@@ -99,11 +99,11 @@ while let Ok(state) = updates.recv_async().await {
   [publicadores de escritorio](#publicadores-de-escritorio) que necesites.
 
 El ciclo de vida, los deep links, los documentos y las insets del área
-segura en Android los publica la propia actividad o el app delegate de
-la app, con `IstmoRuntime.publishEarlyLatest` / `publishEarlyQueue`
-(Kotlin y Swift) o `IstmoRuntime.publishSafeArea` (Kotlin). Los payloads
-usan el formato de cable del tipo Rust; `examples/android-demo` muestra
-los publicadores de ciclo de vida y de deep links.
+segura los publica la propia actividad o el app delegate de la app, con
+`IstmoRuntime.publishEarlyLatest` / `publishEarlyQueue` o
+`IstmoRuntime.publishSafeArea` (Kotlin y Swift). Los payloads usan el
+formato de cable del tipo Rust; `examples/android-demo` muestra los
+publicadores de ciclo de vida y de deep links.
 
 ## Ciclo de vida
 
@@ -192,6 +192,10 @@ let padding = SafeArea::acquire()?.current_or_default()?.view_padding();
   luego `tick()` desde el hilo de UI en cada frame: lee las
   `safeAreaInsets` de la ventana principal y publica solo los cambios.
   En otros targets `tick()` no hace nada.
+  Las apps cuya UI no es un frame loop de Rust llaman a
+  `IstmoRuntime.shared.publishSafeArea(...)` (los mismos doce floats)
+  desde `viewSafeAreaInsetsDidChange` y las notificaciones de frame del
+  teclado.
 
 ## Información del sistema
 

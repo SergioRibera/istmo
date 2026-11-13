@@ -23,7 +23,7 @@ come in two shapes:
 | `AppLifecycle` | `istmo.lifecycle` | latest value | the app's native shell |
 | `DeepLinks` | `istmo.deeplinks` | queue | the app's native shell |
 | `Documents` | `istmo.documents` | queue | the app's native shell; `DocumentsPublisher` on desktop |
-| `SafeArea` | `istmo.safe_area` | latest value | Android activity; `SafeAreaPublisher` on iOS |
+| `SafeArea` | `istmo.safe_area` | latest value | Android activity; iOS view controller or `SafeAreaPublisher` |
 | `SystemInfoClient` | `istmo.system_info` | latest values | runtime observers; `SystemInfoPublisher` on desktop |
 | `DeviceInfoClient` | `istmo.device_info` | latest value | runtime observers; `DeviceInfoPublisher` on desktop |
 | `ThemePreferenceClient` | `istmo.theme_preference` | latest value | runtime observers; `ThemePreferencePublisher` on desktop |
@@ -98,10 +98,10 @@ while let Ok(state) = updates.recv_async().await {
 - **Desktop** — nothing publishes by itself; create the
   [desktop publishers](#desktop-publishers) you need.
 
-Lifecycle, deep links, documents and Android safe-area insets come from
-the app's own activity or app delegate, through
-`IstmoRuntime.publishEarlyLatest` / `publishEarlyQueue` (Kotlin and
-Swift) or `IstmoRuntime.publishSafeArea` (Kotlin). Payloads use the
+Lifecycle, deep links, documents and safe-area insets come from the
+app's own activity or app delegate, through
+`IstmoRuntime.publishEarlyLatest` / `publishEarlyQueue` or
+`IstmoRuntime.publishSafeArea` (Kotlin and Swift). Payloads use the
 wire layout of the Rust type; `examples/android-demo` shows the
 lifecycle and deep-link publishers.
 
@@ -192,6 +192,9 @@ let padding = SafeArea::acquire()?.current_or_default()?.view_padding();
   then `tick()` from the UI thread every frame; it reads the key
   window's `safeAreaInsets` and publishes only changes. On other targets
   `tick()` does nothing.
+  Apps whose UI is not a Rust frame loop call
+  `IstmoRuntime.shared.publishSafeArea(...)` instead (same twelve floats)
+  from `viewSafeAreaInsetsDidChange` and the keyboard frame notifications.
 
 ## System info
 

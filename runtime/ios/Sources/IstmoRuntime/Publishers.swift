@@ -18,6 +18,7 @@ private let NETWORK_STATE_CHANNEL = "istmo.network_state"
 private let BATTERY_STATE_CHANNEL = "istmo.battery_state"
 private let STORAGE_INFO_CHANNEL = "istmo.storage_info"
 private let CAPABILITIES_CHANNEL = "istmo.capabilities"
+private let SAFE_AREA_CHANNEL = "istmo.safe_area"
 
 public enum LayoutDirection: UInt64 {
     case ltr = 0
@@ -362,5 +363,27 @@ extension IstmoRuntime {
         Bincode.writeBool(&out, hasMicrophone)
         Bincode.writeBool(&out, hasTelephony)
         publishEarlyLatest(channel: CAPABILITIES_CHANNEL, payload: out)
+    }
+
+    /// Publishes `SafeAreaInsets` in logical points, each group in
+    /// top / right / bottom / left order — the Swift twin of the Kotlin
+    /// `IstmoRuntime.publishSafeArea`. For apps whose UI is not driven by
+    /// a Rust frame loop (which can use `SafeAreaPublisher` instead), call
+    /// it from `viewSafeAreaInsetsDidChange` and the keyboard frame
+    /// notifications.
+    public func publishSafeArea(
+        systemBarTop: Float, systemBarRight: Float, systemBarBottom: Float, systemBarLeft: Float,
+        imeTop: Float, imeRight: Float, imeBottom: Float, imeLeft: Float,
+        cutoutTop: Float, cutoutRight: Float, cutoutBottom: Float, cutoutLeft: Float
+    ) {
+        var out = Data()
+        for value in [
+            systemBarTop, systemBarRight, systemBarBottom, systemBarLeft,
+            imeTop, imeRight, imeBottom, imeLeft,
+            cutoutTop, cutoutRight, cutoutBottom, cutoutLeft,
+        ] {
+            Bincode.writeF32(&out, value)
+        }
+        publishEarlyLatest(channel: SAFE_AREA_CHANNEL, payload: out)
     }
 }
