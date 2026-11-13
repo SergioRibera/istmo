@@ -23,10 +23,7 @@ class ShareClient(
             val decoded = runCatching { codecs.readShareError(e.payload, 0).value }.getOrNull()
             throw ShareException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = codecs.readShareOutcome(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return codecs.readShareOutcome(bytes, 0).value
     }
 
     suspend fun capabilities(): ShareCapabilities {
@@ -37,10 +34,7 @@ class ShareClient(
             val decoded = runCatching { codecs.readShareError(e.payload, 0).value }.getOrNull()
             throw ShareException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = codecs.readShareCapabilities(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return codecs.readShareCapabilities(bytes, 0).value
     }
 
     suspend fun staging_dir(): String {
@@ -51,10 +45,7 @@ class ShareClient(
             val decoded = runCatching { codecs.readShareError(e.payload, 0).value }.getOrNull()
             throw ShareException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = Bincode.readString(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return Bincode.readString(bytes, 0).value
     }
 
     suspend fun set_share_targets(targets: List<ShareTarget>) {
