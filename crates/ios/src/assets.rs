@@ -2,10 +2,13 @@
 //!
 //! Reads bundled assets from `NSBundle.main.bundlePath` via the standard
 //! filesystem — iOS `.app` bundles expose their Resources directly at
-//! the bundle root, so `<bundle_path>/<key>` is the correct file path.
+//! the bundle root.
 //!
-//! Plugin-scoped assets live under `plugin-<id>/` subdirectories to
-//! match the layout `emit_app` writes into the Xcode project.
+//! `emit_app` stages every asset into one tree shipped as an `Assets`
+//! folder reference, so app assets resolve at `<bundle>/Assets/<key>`
+//! and plugin-scoped ones under `<bundle>/Assets/plugin-<id>/`. The
+//! bundle root itself is the fallback, for projects that copy assets
+//! flat into Resources.
 
 use std::fs::File;
 use std::io;
@@ -13,6 +16,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use istmo_core::assets::{AssetBackend, AssetReader, AssetScope, install_backend};
+
+/// Folder reference, inside the bundle, holding the staged assets —
+/// the directory name istmo-build gives the tree it stages.
+const ASSET_FOLDER: &str = "Assets";
 
 /// Filesystem-rooted asset backend anchored at the iOS `.app` bundle
 /// directory.
@@ -53,13 +60,17 @@ impl IosAssetBackend {
 
 impl AssetBackend for IosAssetBackend {
     fn open(&self, scope: AssetScope<'_>, key: &str) -> io::Result<AssetReader> {
-        let root = self.root();
+        let bundle = self.root();
+        let roots = [bundle.join(ASSET_FOLDER), bundle];
         let bases: Vec<PathBuf> = match scope {
-            AssetScope::App => vec![root],
-            AssetScope::Plugin(id) => istmo_core::assets::plugin_asset_dirs(id)
-                .iter()
-                .map(|dir| root.join(dir))
-                .collect(),
+            AssetScope::App => roots.to_vec(),
+            AssetScope::Plugin(id) => {
+                let dirs = istmo_core::assets::plugin_asset_dirs(id);
+                roots
+                    .iter()
+                    .flat_map(|root| dirs.iter().map(|dir| root.join(dir)))
+                    .collect()
+            }
         };
         let candidates: Vec<PathBuf> = bases
             .into_iter()
@@ -136,5 +147,33 @@ mod tests {
         let mut buf2 = Vec::new();
         r2.read_to_end(&mut buf2).unwrap();
         assert_eq!(buf2, b"leaf");
+    }
+
+    fn read(backend: &IosAssetBackend, scope: AssetScope<'_>, key: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        backend
+            .open(scope, key)
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn staged_folder_reference_wins_over_the_bundle_root() {
+        let tmp = std::env::temp_dir().join("istmo-ios-assets-folder");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("Assets/plugin-istmo.demo/sub")).unwrap();
+        fs::write(tmp.join("Assets/img.txt"), b"staged").unwrap();
+        fs::write(tmp.join("img.txt"), b"flat").unwrap();
+        fs::write(tmp.join("Assets/plugin-istmo.demo/sub/x.txt"), b"plugin").unwrap();
+        let backend = IosAssetBackend::for_root(tmp);
+        assert_eq!(read(&backend, AssetScope::App, "img.txt"), b"staged");
+        assert_eq!(
+            read(&backend, AssetScope::Plugin("istmo.demo"), "sub/x.txt"),
+            b"plugin"
+        );
+        let err = backend.open(AssetScope::App, "missing.txt").unwrap_err();
+        assert!(err.to_string().contains("Assets"), "{err}");
     }
 }
