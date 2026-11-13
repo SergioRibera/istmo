@@ -209,6 +209,16 @@ struct AppPass<'a> {
     dep_manifests_by_links: Vec<(String, Manifest)>,
 }
 
+/// Where one contract's Kotlin goes.
+#[derive(Debug, Clone, Copy)]
+struct KotlinTarget<'a> {
+    /// The app's codegen package (`[app] android_package`, else
+    /// `<namespace>.gen`), when it resolves.
+    app: Option<&'a str>,
+    /// The plugin's own `[plugin] android_package`; wins over [`Self::app`].
+    plugin: Option<&'a str>,
+}
+
 /// Plugin registrations collected while emitting contract sources.
 #[derive(Debug, Default)]
 struct Registries {
@@ -345,9 +355,17 @@ impl<'a> AppPass<'a> {
                 && overrides.and_then(|o| o.auto_register).unwrap_or(true)
                 && role == Role::Host;
 
+            let plugin_package = plugin_entry.and_then(|p| p.android_package.as_deref());
             for platform in &platforms {
                 let emitted = match platform {
-                    Platform::Android => self.emit_kotlin_sources(android_package, contract, role),
+                    Platform::Android => self.emit_kotlin_sources(
+                        KotlinTarget {
+                            app: android_package,
+                            plugin: plugin_package,
+                        },
+                        contract,
+                        role,
+                    ),
                     Platform::Ios => self.emit_swift_sources(contract, role),
                 };
                 if emitted && auto_register {
@@ -375,27 +393,32 @@ impl<'a> AppPass<'a> {
     /// Returns whether sources were written.
     fn emit_kotlin_sources(
         &self,
-        android_package: Option<&str>,
+        target: KotlinTarget<'_>,
         contract: &Contract,
         role: Role,
     ) -> bool {
         if !self.android_active {
             return false;
         }
-        let Some(pkg) = android_package else {
-            crate::directive::warning(&format!(
-                "cannot resolve Android namespace for `{}`; set `[app] android_package` in istmo.toml",
-                contract.type_name
-            ));
-            return false;
+        let java_root = self.android_root.join("app/src/main/java");
+        let Some(plugin_package) = target.plugin else {
+            let Some(pkg) = target.app else {
+                crate::directive::warning(&format!(
+                    "cannot resolve Android namespace for `{}`; set `[app] android_package` in istmo.toml",
+                    contract.type_name
+                ));
+                return false;
+            };
+            emit_kotlin(&java_root, pkg, contract, role, self.opts.seed_backends);
+            return true;
         };
-        emit_kotlin(
-            &self.android_root,
-            pkg,
-            contract,
-            role,
-            self.opts.seed_backends,
-        );
+        // The plugin's own `native/android/` sources implement the backend
+        // in this package: a seeded `<T>BackendImpl` would clash with it.
+        emit_kotlin(&java_root, plugin_package, contract, role, false);
+        mark_codegen_dir(&java_root.join(plugin_package.replace('.', "/")));
+        if let Some(app) = target.app.filter(|app| *app != plugin_package) {
+            remove_relocated_kotlin(&java_root, app, &contract.type_name);
+        }
         true
     }
 
@@ -444,13 +467,13 @@ impl<'a> AppPass<'a> {
         }
         // Registries are emitted even when empty: `IstmoHost` and the
         // generated `IstmoApp.run()` reference them unconditionally.
-        match android_package {
-            Some(pkg) => emit_kotlin_registry(&self.android_root, pkg, registry),
-            None if registry.is_empty() => {
-                emit_kotlin_registry(&self.android_root, KOTLIN_REGISTRY_PACKAGE, &[]);
-            }
-            None => {}
-        }
+        // Without an app package every listed plugin brought its own
+        // `[plugin] android_package`, so the fallback is never named.
+        emit_kotlin_registry(
+            &self.android_root,
+            android_package.unwrap_or(KOTLIN_REGISTRY_PACKAGE),
+            registry,
+        );
         // Set by the `io.github.sergioribera.istmo` Gradle plugin to force a rewrite of
         // `android/.istmo/istmo.json` when it bootstraps the metadata.
         crate::directive::rerun_if_env_changed("ISTMO_METADATA_REFRESH");
@@ -677,6 +700,16 @@ fn sync_ios_project(project: &IosProject, sync: &IosSync<'_>) {
 
 /// Delete a file istmo-build generated earlier and no longer emits.
 /// Files without the generated header are left alone.
+/// Generated files a contract left in the app's codegen package before
+/// its plugin declared `[plugin] android_package`. Left in place they
+/// would compile as a second, unregistered copy of the plugin's types.
+fn remove_relocated_kotlin(java_root: &Path, app_package: &str, type_name: &str) {
+    let dir = java_root.join(app_package.replace('.', "/"));
+    for suffix in ["Dispatcher", "Types", "CodecsImpl", "Codecs", "Client"] {
+        remove_generated(&dir.join(format!("{type_name}{suffix}.kt")));
+    }
+}
+
 fn remove_generated(path: &Path) {
     if fs::read_to_string(path).is_ok_and(|text| text.contains("GENERATED by istmo-build")) {
         let _ = fs::remove_file(path);

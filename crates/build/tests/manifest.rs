@@ -406,3 +406,21 @@ fn parses_backend_overrides() {
     );
     assert!(Manifest::parse("[plugin]\nid = \"a\"\nandroid_backend_arg = \"fragment\"\n").is_err());
 }
+
+#[test]
+fn parses_plugin_android_package() {
+    let manifest = Manifest::parse(
+        "[plugin]\nid = \"istmo.share\"\nandroid_package = \"dev.istmo.plugins.share\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        manifest.plugins[0].android_package.as_deref(),
+        Some("dev.istmo.plugins.share")
+    );
+    let bare = Manifest::parse("[plugin]\nid = \"a\"\n").unwrap();
+    assert!(bare.plugins[0].android_package.is_none());
+    for bad in ["dev..share", "dev.istmo-share", "1dev.share", ""] {
+        let src = format!("[plugin]\nid = \"a\"\nandroid_package = \"{bad}\"\n");
+        assert!(Manifest::parse(&src).is_err(), "{bad}");
+    }
+}

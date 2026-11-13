@@ -44,7 +44,7 @@ pub(super) fn emit_kotlin_registry(
 }
 
 pub(super) fn emit_kotlin(
-    android_root: &Path,
+    java_root: &Path,
     package: &str,
     contract: &Contract,
     role: Role,
@@ -52,7 +52,7 @@ pub(super) fn emit_kotlin(
 ) {
     let full_package = package.to_owned();
     let pkg_path = full_package.replace('.', "/");
-    let gen_dir = android_root.join("app/src/main/java").join(pkg_path);
+    let gen_dir = java_root.join(pkg_path);
     let ty = &contract.type_name;
 
     match role {

@@ -34,8 +34,12 @@ pub struct RegistryEntry {
     /// implementing the generated `<T>Factory` interface. Stateless
     /// plugins register their `<T>BackendImpl` directly.
     pub stateful: bool,
+    /// Package the plugin's dispatcher and codecs were generated into
+    /// (`[plugin] android_package`); `None` means the app's codegen
+    /// package.
+    pub android_package: Option<String>,
     /// Fully-qualified Kotlin class passed to the dispatcher; `None`
-    /// means `<T>BackendImpl` / `<T>FactoryImpl` in the codegen package.
+    /// means `<T>BackendImpl` / `<T>FactoryImpl` in the plugin's package.
     pub android_class: Option<String>,
     pub android_arg: AndroidBackendArg,
     /// Swift type passed to the dispatcher; `None` means
@@ -50,6 +54,7 @@ impl RegistryEntry {
             plugin_id: contract.plugin_id.clone(),
             type_name: contract.type_name.clone(),
             stateful: contract.init.is_some(),
+            android_package: None,
             android_class: None,
             android_arg: AndroidBackendArg::Context,
             ios_class: None,
@@ -60,6 +65,7 @@ impl RegistryEntry {
     /// `istmo.toml`.
     #[must_use]
     pub fn with_plugin(mut self, plugin: &PluginEntry) -> Self {
+        self.android_package.clone_from(&plugin.android_package);
         self.android_class.clone_from(&plugin.android_backend);
         self.android_arg = plugin.android_backend_arg.clone();
         self.ios_class.clone_from(&plugin.ios_backend);
@@ -79,10 +85,15 @@ impl RegistryEntry {
         matches!(self.android_arg, AndroidBackendArg::Activity(_))
     }
 
+    /// Package holding the generated dispatcher and codecs.
+    fn package<'a>(&'a self, codegen_package: &'a str) -> &'a str {
+        self.android_package.as_deref().unwrap_or(codegen_package)
+    }
+
     fn backend_class(&self, codegen_package: &str) -> String {
-        self.android_class
-            .clone()
-            .unwrap_or_else(|| format!("{codegen_package}.{}", self.default_class()))
+        self.android_class.clone().unwrap_or_else(|| {
+            format!("{}.{}", self.package(codegen_package), self.default_class())
+        })
     }
 
     /// Name of the registry field caching an activity-bound backend.
@@ -97,15 +108,12 @@ impl RegistryEntry {
     /// `backend` is the Kotlin expression for the backend instance.
     fn write_register(&self, out: &mut String, codegen_package: &str, indent: &str, backend: &str) {
         let ty = &self.type_name;
+        let package = self.package(codegen_package);
         writeln!(out, "{indent}IstmoRuntime.registerHandler(").ok();
-        writeln!(
-            out,
-            "{indent}    {codegen_package}.{ty}Dispatcher.PLUGIN_ID,"
-        )
-        .ok();
-        writeln!(out, "{indent}    {codegen_package}.{ty}Dispatcher(").ok();
+        writeln!(out, "{indent}    {package}.{ty}Dispatcher.PLUGIN_ID,").ok();
+        writeln!(out, "{indent}    {package}.{ty}Dispatcher(").ok();
         writeln!(out, "{indent}        {backend},").ok();
-        writeln!(out, "{indent}        {codegen_package}.{ty}CodecsImpl(),").ok();
+        writeln!(out, "{indent}        {package}.{ty}CodecsImpl(),").ok();
         writeln!(out, "{indent}    ),").ok();
         writeln!(out, "{indent})").ok();
     }
@@ -139,7 +147,8 @@ impl RegistryEntry {
         writeln!(out, "        if ({field} !is IstmoActivityBound) {{").ok();
         writeln!(
             out,
-            "            IstmoRuntime.unregisterHandler({codegen_package}.{}Dispatcher.PLUGIN_ID)",
+            "            IstmoRuntime.unregisterHandler({}.{}Dispatcher.PLUGIN_ID)",
+            self.package(codegen_package),
             self.type_name
         )
         .ok();
@@ -151,7 +160,8 @@ impl RegistryEntry {
 /// Emit `IstmoPluginRegistry.kt` in [`KOTLIN_REGISTRY_PACKAGE`].
 ///
 /// `codegen_package` is the package the per-plugin dispatchers, codecs
-/// and default backends were generated into (`[app] android_package`).
+/// and default backends were generated into (`[app] android_package`)
+/// for plugins that do not declare their own `[plugin] android_package`.
 ///
 /// Handlers live in the process-wide `IstmoRuntime`, so context-bound
 /// backends get the application context and never pin an activity.
@@ -328,6 +338,7 @@ mod tests {
             plugin_id: format!("acme.{}", type_name.to_lowercase()),
             type_name: type_name.into(),
             stateful,
+            android_package: None,
             android_class: None,
             android_arg: AndroidBackendArg::Context,
             ios_class: None,
@@ -413,6 +424,23 @@ mod tests {
         let register_all = &register_all[..register_all.find("\n    }\n").unwrap()];
         assert!(register_all.contains("ABackendImpl(appContext)"));
         assert!(!register_all.contains("ShareBackendImpl"));
+    }
+
+    #[test]
+    fn kotlin_registry_uses_the_plugin_package() {
+        let mut share = entry("Share", false);
+        share.android_package = Some("dev.istmo.plugins.share".into());
+        share.android_arg =
+            AndroidBackendArg::Activity("androidx.activity.ComponentActivity".into());
+        let src = generate_kotlin_plugin_registry("com.example.gen", &[entry("A", false), share]);
+        assert!(src.contains("com.example.gen.ADispatcher.PLUGIN_ID"));
+        assert!(src.contains("val backend = dev.istmo.plugins.share.ShareBackendImpl(host)"));
+        assert!(src.contains("dev.istmo.plugins.share.ShareDispatcher(\n"));
+        assert!(src.contains("dev.istmo.plugins.share.ShareCodecsImpl(),"));
+        assert!(src.contains(
+            "IstmoRuntime.unregisterHandler(dev.istmo.plugins.share.ShareDispatcher.PLUGIN_ID)"
+        ));
+        assert!(!src.contains("com.example.gen.Share"));
     }
 
     #[test]

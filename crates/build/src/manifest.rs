@@ -54,6 +54,7 @@ impl Default for PluginEntry {
             android_service: None,
             ios_background: None,
             info_plist: Vec::new(),
+            android_package: None,
             android_backend: None,
             android_backend_arg: AndroidBackendArg::default(),
             ios_backend: None,
@@ -96,10 +97,18 @@ pub struct PluginEntry {
     /// individual values through `[app.info_plist]`.
     pub info_plist: Vec<InfoPlistEntry>,
 
+    /// Kotlin package the app generates this plugin's contract sources
+    /// into (dispatcher, `<T>Backend`, types, codecs). A plugin that
+    /// ships `native/android/` sources sets it to the package those
+    /// sources declare, so they name the generated types without an
+    /// import and compile whatever `[app] android_package` the consuming
+    /// app picks. `None` generates into the app's codegen package.
+    pub android_package: Option<String>,
+
     /// Fully-qualified Kotlin class handed to the generated dispatcher
     /// by `IstmoPluginRegistry` (the backend, or the factory for
     /// stateful plugins). Defaults to `<T>BackendImpl` / `<T>FactoryImpl`
-    /// in the app's codegen package.
+    /// in [`Self::android_package`], else in the app's codegen package.
     pub android_backend: Option<String>,
 
     /// What that class's constructor receives.

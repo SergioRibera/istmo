@@ -42,6 +42,7 @@ const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "ios_background",
     "info_plist",
     "android_permissions",
+    "android_package",
     "android_backend",
     "android_backend_arg",
     "ios_backend",
@@ -289,6 +290,10 @@ fn parse_plugin_entry(
         android_service,
         ios_background,
         info_plist,
+        android_package: table
+            .get("android_package")
+            .map(|item| parse_kotlin_package(item, "plugin.android_package"))
+            .transpose()?,
         android_backend: optional_string("android_backend", "plugin.android_backend")?,
         android_backend_arg,
         ios_backend: optional_string("ios_backend", "plugin.ios_backend")?,
@@ -303,6 +308,29 @@ fn is_valid_plugin_id(id: &str) -> bool {
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// A dotted Kotlin package name: every segment a plain identifier, so it
+/// is both a valid `package` line and a source directory path.
+fn parse_kotlin_package(item: &Item, key: &'static str) -> Result<String, ManifestError> {
+    let literal = expect_string(item, key)?;
+    let is_segment = |segment: &str| {
+        segment
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    if !literal.split('.').all(is_segment) {
+        return Err(ManifestError::InvalidValue {
+            key: key.to_owned(),
+            value: literal.to_owned(),
+            expected: "a Kotlin package such as `dev.istmo.plugins.share`",
+        });
+    }
+    Ok(literal.to_owned())
 }
 
 /// `istmo::runtime!` parses every auto-wired client type as a path;
