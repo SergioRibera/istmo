@@ -52,11 +52,10 @@ jobs:
   swift-core:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    container:
+      image: swift:5.10-jammy
     steps:
-      - uses: actions/checkout@v4
-      - uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: "5.10"
+      - uses: actions/checkout@v7
       - name: Type-check runtime core
         run: runtime/ios/ci/typecheck-stub.sh
       - name: Type-check generated Swift with warnings as errors
@@ -70,8 +69,8 @@ jobs:
       KOTLIN_VERSION: "1.9.24"
       COROUTINES_VERSION: "1.8.1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -94,18 +93,24 @@ jobs:
       matrix:
         example: [data-store-demo, biometric-demo, live-activity-demo]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: ios-${{ matrix.example }}
       - name: Build IstmoRuntime for the iOS Simulator
-        run: >
-          xcodebuild build
-          -scheme IstmoRuntime
-          -destination "generic/platform=iOS Simulator"
-          -derivedDataPath "$RUNNER_TEMP/dd"
-          CODE_SIGNING_ALLOWED=NO
+        # Xcode names the scheme of a multi-target package `<name>-Package`
+        # and only adds per-product schemes for some layouts.
+        run: |
+          schemes=$(xcodebuild -list -json | jq -r '(.workspace // .project).schemes[]')
+          echo "$schemes"
+          scheme=$(printf '%s\n' "$schemes" | grep -xm1 -e IstmoRuntime -e istmo-Package || true)
+          test -n "$scheme"
+          xcodebuild build \
+            -scheme "$scheme" \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO
       - name: Type-check ${{ matrix.example }}
         run: runtime/ios/ci/typecheck-app.sh "${{ matrix.example }}"
 
@@ -114,18 +119,23 @@ jobs:
     timeout-minutes: 60
     container:
       image: sergioribera/rust-android:1.98-sdk-36
+    env:
+      # Actions sets HOME to /github/home in containers; the image
+      # installs rustup and its toolchain under /root.
+      RUSTUP_HOME: /root/.rustup
+      CARGO_HOME: /root/.cargo
     strategy:
       fail-fast: false
       matrix:
         example: [data-store-demo, biometric-demo, share-demo, camera-demo]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-            ~/.cargo/registry
+            /root/.cargo/registry
           key: android-${{ matrix.example }}-${{ hashFiles('**/*.gradle.kts', '**/Cargo.toml') }}
           restore-keys: android-${{ matrix.example }}-
       - name: Compile Kotlin
