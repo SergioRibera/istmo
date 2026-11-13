@@ -25,6 +25,15 @@ interface PluginHandler {
 
 class PluginException(val payload: ByteArray) : RuntimeException()
 
+/** The host of a stream opened with [IstmoRuntime.stream] cancelled it. */
+class StreamCancelledException(message: String) : java.util.concurrent.CancellationException(message)
+
+/**
+ * A stream opened with [IstmoRuntime.stream] received more items than its
+ * buffer holds before the collector took them; the call was cancelled.
+ */
+class StreamOverflowException : IllegalStateException("stream buffer overflowed; collector too slow")
+
 class BackendException(val error: Any) : RuntimeException()
 
 interface HandleReleaser {

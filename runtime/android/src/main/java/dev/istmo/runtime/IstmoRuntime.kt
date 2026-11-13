@@ -10,6 +10,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 
@@ -21,11 +26,13 @@ object IstmoRuntime {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val jobs = ConcurrentHashMap<Long, Job>()
     private val handlers = ConcurrentHashMap<String, PluginHandler>()
+    private val services = ConcurrentHashMap<String, android.app.Service>()
 
     private val handleOwners = ConcurrentHashMap<Long, String>()
     private val nextGlobalHandleId = AtomicLong(1)
 
     private val outboundCalls = ConcurrentHashMap<Long, PendingCall>()
+    private val outboundStreams = ConcurrentHashMap<Long, PendingStream>()
     private val nextCallId = AtomicLong(1)
 
     /** Early events published before the native library was loaded. */
@@ -43,6 +50,24 @@ object IstmoRuntime {
     fun unregisterHandler(pluginId: String) {
         handlers.remove(pluginId)
     }
+
+    /**
+     * Expose a running [android.app.Service] under [pluginId] so backends
+     * (foreground notification, wake locks, `stopSelf`) can reach it by
+     * the service id Rust passes them. Generated `#[istmo::service]`
+     * wrappers call this from `onCreate`.
+     */
+    fun registerService(pluginId: String, service: android.app.Service) {
+        services[pluginId] = service
+    }
+
+    /** Drop the service registered for [pluginId]; called from `onDestroy`. */
+    fun unregisterService(pluginId: String) {
+        services.remove(pluginId)
+    }
+
+    /** The running service registered for [pluginId], if any. */
+    fun service(pluginId: String): android.app.Service? = services[pluginId]
 
     fun allocHandleId(pluginId: String): Long {
         val id = nextGlobalHandleId.getAndIncrement()
@@ -120,9 +145,19 @@ object IstmoRuntime {
         }
     }
 
+    /**
+     * Publish [payload] as the current value of the early-event slot
+     * [channel] (see `istmo_core::early_events::LatestValueSlot`). Needs
+     * the native library loaded; the Rust side holds the value until the
+     * runtime is initialised.
+     */
+    fun publishEarlyLatest(channel: String, payload: ByteArray) {
+        nativeSubmitEarlyLatest(channel, payload)
+    }
+
     private fun flushPendingEarlyQueueLocked() {
         while (pendingEarlyQueue.isNotEmpty()) {
-            val (channel, capacity, payload) = pendingEarlyQueue.peekFirst()
+            val (channel, capacity, payload) = pendingEarlyQueue.peekFirst() ?: return
             try {
                 nativeSubmitEarlyQueue(channel, capacity, payload)
             } catch (_: UnsatisfiedLinkError) {
@@ -145,6 +180,10 @@ object IstmoRuntime {
             pending.cont.cancel()
         }
         outboundCalls.clear()
+        for ((_, pending) in outboundStreams) {
+            pending.channel.close(StreamCancelledException("runtime shut down"))
+        }
+        outboundStreams.clear()
     }
 
     suspend fun call(
@@ -175,6 +214,58 @@ object IstmoRuntime {
 
     suspend fun call(pluginId: String, method: String, payload: ByteArray): ByteArray =
         call(pluginId, NO_INSTANCE_ID, method, payload)
+
+    /**
+     * Open a stream on a Rust-hosted `#[istmo::stream]` method. Cold: the
+     * call goes out when the flow is collected, once per collection.
+     *
+     * The flow completes when the host closes the stream, fails with
+     * [PluginException] carrying the encoded domain error when the host
+     * ends it with an error (or rejects the call), and with
+     * [StreamCancelledException] when the host cancels it. Cancelling the
+     * collector cancels the call on the Rust side.
+     *
+     * Items arrive on the pump thread, which delivers every other frame
+     * too, so it never waits on a collector: up to [bufferCapacity]
+     * undelivered items are held here, and one more fails the flow with
+     * [StreamOverflowException] and cancels the call rather than block
+     * the pump or drop items silently. A collector that only wants the
+     * latest value applies `.conflate()` downstream, which drains this
+     * buffer as fast as items arrive.
+     */
+    fun stream(
+        pluginId: String,
+        instanceId: Long,
+        method: String,
+        payload: ByteArray,
+        bufferCapacity: Int = DEFAULT_STREAM_BUFFER,
+    ): Flow<ByteArray> {
+        require(bufferCapacity > 0) { "bufferCapacity must be positive" }
+        return callbackFlow {
+            val callId = nextCallId.getAndIncrement()
+            outboundStreams[callId] = PendingStream(channel)
+            try {
+                nativeSubmitCall(callId, pluginId, instanceId, method, payload)
+            } catch (e: Throwable) {
+                outboundStreams.remove(callId)
+                throw e
+            }
+            awaitClose {
+                // Still registered means the host has not ended it: the
+                // collector left early, so stop the producer.
+                if (outboundStreams.remove(callId) != null) {
+                    runCatching { nativeSubmitCancel(callId) }
+                }
+            }
+        }.buffer(bufferCapacity)
+    }
+
+    fun stream(
+        pluginId: String,
+        method: String,
+        payload: ByteArray,
+        bufferCapacity: Int = DEFAULT_STREAM_BUFFER,
+    ): Flow<ByteArray> = stream(pluginId, NO_INSTANCE_ID, method, payload, bufferCapacity)
 
     fun publishSafeArea(
         systemBarTop: Float, systemBarRight: Float, systemBarBottom: Float, systemBarLeft: Float,
@@ -306,7 +397,17 @@ object IstmoRuntime {
 
     @JvmStatic
     fun onRespond(callId: Long, ok: Boolean, payload: ByteArray) {
-        val pending = outboundCalls.remove(callId) ?: return
+        val pending = outboundCalls.remove(callId)
+        if (pending == null) {
+            // A stream call answered with a response instead of events:
+            // the host rejected it (unknown method, undecodable payload)
+            // or the method is unary.
+            val stream = outboundStreams.remove(callId) ?: return
+            stream.channel.close(
+                if (ok) IllegalStateException("unary response to a stream call") else PluginException(payload),
+            )
+            return
+        }
         if (ok) {
             pending.cont.resume(payload)
         } else {
@@ -315,15 +416,26 @@ object IstmoRuntime {
     }
 
     @JvmStatic
-    @Suppress("UNUSED_PARAMETER")
     fun onEvent(streamId: Long, payload: ByteArray) {
-
+        val stream = outboundStreams[streamId] ?: return
+        val sent = stream.channel.trySend(payload)
+        // A closed channel means the collector already left and its
+        // `awaitClose` cancels the call; only a full buffer is overflow.
+        if (sent.isFailure && !sent.isClosed && outboundStreams.remove(streamId) != null) {
+            stream.channel.close(StreamOverflowException())
+            runCatching { nativeSubmitCancel(streamId) }
+        }
     }
 
     @JvmStatic
-    @Suppress("UNUSED_PARAMETER")
     fun onStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray) {
-
+        val stream = outboundStreams.remove(streamId) ?: return
+        // Items already buffered stay receivable ahead of the close.
+        when (reason) {
+            STREAM_END_COMPLETE -> stream.channel.close()
+            STREAM_END_ERROR -> stream.channel.close(PluginException(errorPayload))
+            else -> stream.channel.close(StreamCancelledException("stream cancelled by its host"))
+        }
     }
 
     @JvmStatic
@@ -381,6 +493,10 @@ object IstmoRuntime {
 
     private val EMPTY_PAYLOAD = ByteArray(0)
 
+    private const val DEFAULT_STREAM_BUFFER = 256
+
     private class PendingCall(val cont: CancellableContinuation<ByteArray>)
+
+    private class PendingStream(val channel: SendChannel<ByteArray>)
 }
 
