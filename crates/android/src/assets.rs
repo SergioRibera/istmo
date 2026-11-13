@@ -2,7 +2,7 @@
 //!
 //! Wraps an `android.content.res.AssetManager` handed from Kotlin. The
 //! JNI helper [`install_from_java`] hands a pointer to
-//! [`AAssetManager`](ndk_sys::AAssetManager); the resulting backend
+//! `ndk_sys::AAssetManager`; the resulting backend
 //! opens assets under `<key>` and `plugin-<id>/<key>` — matching the
 //! layout `emit_app` writes into `android/app/src/main/assets/`.
 

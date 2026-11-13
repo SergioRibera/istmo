@@ -2,7 +2,7 @@
 //! `Context` accessors and hands them to
 //! [`istmo_core::path::install`].
 //!
-//! Kotlin invokes [`Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths`]
+//! Kotlin invokes [`crate::Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths`]
 //! with the standard `Context` getters:
 //!
 //! - `getFilesDir` — persistent internal storage. Backs `data_dir` and

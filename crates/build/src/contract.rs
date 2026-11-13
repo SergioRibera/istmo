@@ -75,8 +75,8 @@ pub struct Arg {
     pub ty: TypeRef,
 }
 
-/// Wire impls are hand-written in [`wire`]: wincode cannot derive a
-/// recursive type.
+/// Wire impls are hand-written in the private `wire` module:
+/// wincode cannot derive a recursive type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeRef {
     Unit,

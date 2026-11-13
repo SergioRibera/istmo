@@ -83,7 +83,7 @@ pub mod __private {
     /// resolution — called by `istmo::runtime!`-generated code so
     /// `env!("CARGO_PKG_NAME")` / `option_env!("ISTMO_APP_BUNDLE_ID")`
     /// resolve against the app crate's compile environment. See
-    /// [`crate::path::desktop::set_app_info`].
+    /// [`crate::path::set_app_info`].
     pub use crate::assets::set_app_assets;
     pub use crate::path::set_app_info;
 }

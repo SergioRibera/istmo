@@ -58,7 +58,7 @@ struct AppAssetsOverride {
 static APP_ASSETS_OVERRIDE: OnceLock<AppAssetsOverride> = OnceLock::new();
 
 /// Override the build-time asset-directory strings used by
-/// [`resolve_root`].
+/// `resolve_root`.
 ///
 /// Called by `istmo::runtime!`-generated code so `option_env!` /
 /// `env!` are evaluated in the app crate's compile environment

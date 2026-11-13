@@ -43,7 +43,7 @@ mod desktop;
 /// The transport-neutral trait every platform backend implements.
 ///
 /// Backends are installed exactly once per process via
-/// [`__install_backend`]. Users never touch this trait directly — they
+/// [`install_backend`]. Users never touch this trait directly — they
 /// call the free functions [`read`] / [`open`] or the plugin-scoped
 /// [`plugin`] helper.
 pub trait AssetBackend: Send + Sync + 'static {

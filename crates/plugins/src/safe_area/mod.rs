@@ -3,7 +3,7 @@
 //! Delivered as an early-event stream so subscribers attaching after
 //! the first insets update see the current value immediately.
 //!
-//! [`SafeAreaPublisher`] (behind the `winit-publisher` feature) lets a
+//! `SafeAreaPublisher` (behind the `winit-publisher` feature) lets a
 //! Rust-driven UI publish the insets itself: on iOS it reads the key
 //! window of the active scene, elsewhere it publishes nothing and the
 //! host (Android's window-insets listener, a desktop shell) is expected
