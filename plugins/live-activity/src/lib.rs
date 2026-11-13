@@ -169,9 +169,9 @@ pub struct RestoredActivity {
     /// Activity-type discriminator matching the `activity_type`
     /// supplied at `start()`.
     pub activity_type: String,
-    /// Bincode-encoded attributes as originally passed to `start()`.
+    /// Wire-encoded attributes as originally passed to `start()`.
     pub attributes: Vec<u8>,
-    /// Bincode-encoded latest state observed for the activity.
+    /// Wire-encoded latest state observed for the activity.
     pub state: Vec<u8>,
 }
 
@@ -193,7 +193,7 @@ pub enum ActivityError {
     /// No backend registered for the requested `activity_type`. Add
     /// the handler in the native `LiveActivityBackendImpl`.
     UnknownActivityType(String),
-    /// Bincode failed to encode / decode an attributes or state
+    /// The wire codec failed to encode / decode an attributes or state
     /// payload.
     Decode(String),
     /// Any other backend failure. Message is the raw platform error.

@@ -178,7 +178,7 @@ impl Envelope {
         }
     }
 
-    /// Bincode-encode this envelope to a byte buffer suitable for
+    /// Wire-encode this envelope to a byte buffer suitable for
     /// hopping across FFI or a process boundary.
     ///
     /// # Errors
@@ -227,7 +227,7 @@ pub enum Frame {
         instance_id: Option<InstanceId>,
         /// Method name as declared on the plugin trait.
         method: String,
-        /// Bincode-encoded arguments tuple.
+        /// Wire-encoded arguments tuple.
         payload: Vec<u8>,
     },
 
@@ -250,7 +250,7 @@ pub enum Frame {
     Event {
         /// Stream this event belongs to.
         stream_id: StreamId,
-        /// Bincode-encoded item.
+        /// Wire-encoded item.
         payload: Vec<u8>,
     },
 
@@ -268,7 +268,7 @@ pub enum Frame {
         call_id: CallId,
         /// Plugin whose constructor is being invoked.
         plugin_id: String,
-        /// Bincode-encoded constructor arguments.
+        /// Wire-encoded constructor arguments.
         payload: Vec<u8>,
     },
 
@@ -287,7 +287,7 @@ pub enum Frame {
         channel: String,
         /// Retention policy for the value.
         kind: EarlyEventKind,
-        /// Bincode-encoded value.
+        /// Wire-encoded value.
         payload: Vec<u8>,
     },
 
@@ -305,7 +305,7 @@ pub enum Frame {
         instance_id: Option<InstanceId>,
         /// Method name.
         method: String,
-        /// Bincode-encoded arguments tuple.
+        /// Wire-encoded arguments tuple.
         payload: Vec<u8>,
     },
 }

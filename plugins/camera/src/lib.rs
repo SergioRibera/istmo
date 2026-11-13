@@ -14,19 +14,19 @@
 //! Opening more than one session concurrently is the same code path
 //! — multi-camera support is a runtime property reported by
 //! [`Camera::concurrent_support`] (iOS A12+ exposes
-//! `AVCaptureMultiCamSession`, Android 11+ exposes
-//! `CameraX::ConcurrentCamera`).
+//! `AVCaptureMultiCamSession`, Android 11+ reports concurrent camera
+//! ids).
 //!
 //! # Real-time frames
 //!
-//! [`SessionHandle::frames`] returns a `flume::Receiver<CameraFrame>`
+//! [`SessionHandle::frames`] returns a [`TypedStream<CameraFrame>`](TypedStream)
 //! fed by the native sample-buffer callback. The native side keeps a
 //! bounded ring buffer sized by [`CameraInitConfig::frame_pool_depth`]
 //! and drops the oldest frame when the consumer falls behind — each
 //! delivered frame reports how many predecessors were dropped via
 //! [`CameraFrame::dropped_before`]. Pick [`PixelFormat::Nv21`] /
-//! [`PixelFormat::Yuv420`] for cheap pass-through, or
-//! [`PixelFormat::Jpeg`] when the receiver wants compressed bytes.
+//! [`PixelFormat::Yuv420`] for cheap pass-through; [`PixelFormat::Jpeg`]
+//! is for stills ([`SessionHandle::capture_still`]) on Android and iOS.
 //!
 //! # Permissions
 //!
@@ -35,7 +35,10 @@
 //! and gate the flow on the returned [`AccessStatus`]. Apps still
 //! need `NSCameraUsageDescription` in `Info.plist`; the plugin's
 //! `istmo.toml` ships a default string that apps are expected to
-//! reword via `[app.info_plist]`.
+//! reword via `[app.info_plist]`. Android apps declare
+//! `android.permission.CAMERA` themselves (for example through
+//! `[app] android_permissions` in their `istmo.toml`); `CameraX` does not
+//! add it.
 
 #![doc(html_root_url = "https://docs.rs/istmo-camera")]
 
@@ -244,9 +247,9 @@ pub struct ConcurrentSupport {
 /// Wire pixel format for streamed frames and still captures.
 ///
 /// Prefer the native YUV formats for cheap pass-through; the backend
-/// avoids a colour-conversion pass. Pick [`PixelFormat::Jpeg`] when
-/// the consumer wants compressed bytes (e.g. shipping over a network
-/// socket) — the backend asks the hardware encoder when available.
+/// avoids a colour-conversion pass. [`PixelFormat::Jpeg`] is for
+/// [`Camera::capture_still`] on Android and iOS, which use the hardware
+/// encoder.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PixelFormat {
@@ -726,8 +729,9 @@ impl SessionHandle {
 
     /// Subscribe to the capture stream.
     ///
-    /// Calling this twice on the same session yields two independent
-    /// receivers — the backend fans frames out to every subscriber.
+    /// Calling this twice on the same session yields two receivers. The
+    /// Android and iOS backends fan every frame out to each of them; the
+    /// desktop host shares one queue, so each frame reaches only one.
     ///
     /// # Errors
     /// [`CameraError::SessionClosed`] when the native session has

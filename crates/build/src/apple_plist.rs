@@ -6,8 +6,8 @@
 //! next to its Swift sources:
 //!
 //! ```text
-//! plugins/share/native/ios/Info.plist.fragment
-//! plugins/share/native/ios/App.entitlements.fragment
+//! <plugin crate>/native/ios/Info.plist.fragment
+//! <plugin crate>/native/ios/App.entitlements.fragment
 //! ```
 //!
 //! The `.fragment` suffix keeps Xcode from treating them as bundle

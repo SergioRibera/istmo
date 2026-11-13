@@ -10,7 +10,7 @@
 //! Zero-config default: auto-detects the Android namespace from
 //! `app/build.gradle{,.kts}` and the iOS app directory from a single
 //! `ios/*/` subdirectory. Configuration lives in `istmo.toml` under an
-//! `[app]` section — see the module docs for the schema — or is
+//! `[app]` section — see [`crate::app_config`] for the schema — or is
 //! passed programmatically via [`AppOpts`] to [`emit_app_with`].
 //!
 //! [`emit`](crate::emit) invokes [`emit_app`] automatically after the

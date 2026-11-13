@@ -8,7 +8,7 @@
 //! Wiring pattern for a desktop app:
 //!
 //! ```ignore
-//! use istmo::runtime;
+//! use std::sync::Arc;
 //! use istmo_pen::{
 //!     PenClient, PenConfig, PenHost, backend::PenPublisherFactory,
 //!     publisher::PenPublisher,
@@ -16,12 +16,9 @@
 //!
 //! let publisher = PenPublisher::install(&runtime);
 //! publisher.register_window(1, &window)?;
+//! runtime.register_host(PenHost::new(PenPublisherFactory::new(Arc::clone(&publisher))));
 //!
-//! let rt = runtime! {
-//!     plugins: [PenClient],
-//!     hosts: [PenHost::new(PenPublisherFactory::new(publisher))],
-//! };
-//! let client = PenClient::from_runtime_with(&rt, PenConfig::new(1)).await?;
+//! let client = PenClient::from_runtime_with(&runtime, PenConfig::new(1)).await?;
 //! let events = client.events()?;
 //! ```
 //!

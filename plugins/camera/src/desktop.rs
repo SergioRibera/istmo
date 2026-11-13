@@ -19,10 +19,9 @@
 //! non-zero `dropped_before`.
 //!
 //! ```ignore
-//! use std::sync::Arc;
-//! use istmo_camera::{DesktopCamera, CameraInitConfig};
-//! let host = Arc::new(DesktopCamera::new(CameraInitConfig::default()));
-//! // Register with the runtime via the host-side helper (see docs).
+//! use istmo_camera::{CameraHost, DesktopCameraFactory};
+//! // One `DesktopCamera` per client instance, built from its init config.
+//! runtime.register_host(CameraHost::new(DesktopCameraFactory));
 //! ```
 
 #![cfg(all(

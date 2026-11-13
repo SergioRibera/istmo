@@ -28,8 +28,7 @@
 //! - [`early_events`] — buffers for values published before their first
 //!   subscriber attaches.
 //! - [`main_thread`] — abstraction over "run this on the platform's
-//!   main thread" (Android `Handler`, iOS main queue, or an inline
-//!   executor on desktop).
+//!   main thread", with an inline default and a test mock.
 //! - [`typed_stream`] — typed wrapper around a raw byte-stream receiver.
 //! - [`codec`] — wire encoding and bounded decoding.
 //! - [`error`] — [`IstmoError`] and [`CodecError`].

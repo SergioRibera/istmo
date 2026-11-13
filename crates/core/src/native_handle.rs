@@ -10,7 +10,7 @@ use crate::runtime::Runtime;
 /// a [`NativeHandleId`].
 ///
 /// `T` is a phantom marker for the platform type the id refers to (for
-/// example `SignInCredential`). Dropping the handle emits a
+/// example `istmo_google_sign_in::Credential`). Dropping the handle emits a
 /// [`Frame::ReleaseNativeHandle`](crate::protocol::Frame::ReleaseNativeHandle)
 /// to the peer so the underlying platform object can be freed.
 ///

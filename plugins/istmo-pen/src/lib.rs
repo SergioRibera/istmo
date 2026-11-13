@@ -7,11 +7,12 @@
 //! via [`PenConfig::window_id`]; multi-window apps register N clients
 //! sharing the same runtime.
 //!
-//! Native backends live under `native/{android,ios,macos}/` for
-//! platforms that need bridge code in a foreign language; the Windows
-//! and Linux backends are Rust-native and gated on `cfg(target_os = …)`
-//! in the [`publisher`] module (feature-free — cross-compilation picks
-//! the right impl automatically).
+//! The Android and iOS backends live under `native/{android,ios}/`; the
+//! Windows, macOS and Linux backends are Rust-native and gated on
+//! `cfg(target_os = …)` in the `publisher` module (feature-free —
+//! cross-compilation picks the right impl automatically). Linux also has
+//! an opt-in seat-wide `libinput` source behind the `libinput_fallback`
+//! feature.
 
 #![doc(html_root_url = "https://docs.rs/istmo-pen")]
 
@@ -260,9 +261,12 @@ pub struct PenCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PenError {
     /// No native window has been registered for the [`PenConfig::window_id`]
-    /// this client was created with. Register the window via the
-    /// per-platform publisher (desktop) or `PenBackendImpl(context,
-    /// view, config)` (mobile) before creating the client.
+    /// this client was created with, for backends that refuse such
+    /// clients. The bundled backends do not return it: the desktop
+    /// backend hands an unregistered id streams that end immediately,
+    /// and `PenFactoryImpl(view)` (mobile) serves every id from its one
+    /// view. Register the window with the desktop `PenPublisher` before
+    /// creating the client.
     NotAttached,
     /// Native backend refused the request. Carries the platform's raw
     /// error message.

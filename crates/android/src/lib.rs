@@ -7,8 +7,8 @@
 //! `istmo::android` on `target_os = "android"`.
 //!
 //! The crate is deliberately narrow: it owns the JNI pump thread, the
-//! main-thread bridge, and the byte-oriented wire between the Rust
-//! runtime and Kotlin. Everything else is regular istmo runtime code.
+//! byte-oriented wire between the Rust runtime and Kotlin, and the
+//! JNI hooks that install the app's assets and directories. Everything else is regular istmo runtime code.
 
 #![doc(html_root_url = "https://docs.rs/istmo-android")]
 

@@ -156,7 +156,7 @@ enum Origin {
     /// (the platform transport), through [`Runtime::dispatch_inbound`].
     Peer,
     /// A [`Frame::Call`] / [`Frame::CreateInstance`] from a runtime in
-    /// another process, through [`Runtime::inject_remote_envelope`].
+    /// another process, through [`Runtime::inject_wire_envelope`].
     Remote,
 }
 

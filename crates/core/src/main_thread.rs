@@ -2,9 +2,10 @@
 //!
 //! Every platform surface (Android UI, iOS main queue, desktop event
 //! loops) needs a way to hand a small closure back to the UI thread.
-//! [`MainThread`] is that seam; implementations live in the transport
-//! crates. Desktop / test code typically wires an [`InlineMainThread`]
-//! that runs work on the caller.
+//! [`MainThread`] is that seam. [`RuntimeConfig`](crate::RuntimeConfig)
+//! defaults to [`InlineMainThread`], which runs work on the caller;
+//! [`MockMainThread`] buffers it for tests. Apps whose UI framework
+//! needs a real hop supply their own implementation.
 
 use std::fmt;
 
