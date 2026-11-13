@@ -10,6 +10,7 @@
 //!
 //! [File System Basics]: https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/FileSystemOverview/FileSystemOverview.html
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
