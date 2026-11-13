@@ -78,7 +78,7 @@ jobs:
             resolved="${TAG_REF##*/v}"
           fi
           if ! echo "$resolved" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
-            echo "::error::resolved version is not SemVer (got: '$resolved'). Provide a valid `inputs.version` or push a `v<SemVer>` tag."
+            echo "::error::resolved version is not SemVer (got: '$resolved'). Provide a valid 'inputs.version' or push a 'v<SemVer>' tag."
             exit 1
           fi
           echo "resolved=$resolved" >> "$GITHUB_OUTPUT"
