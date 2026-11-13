@@ -63,9 +63,17 @@ from_version = "1.5.0"
   varies per app (an API key, a view the app owns) and the app author
   must register the dispatcher manually. See
   [Auto-registration](/istmo/build-scripts/auto-register/).
+- **`android_package`** *(optional, string)* — Kotlin package the app
+  generates this plugin's dispatcher, `<T>Backend` interface, types and
+  codecs into. Set it to the package your `native/android/` sources
+  declare: they then name the generated types without imports and
+  compile whatever `[app] android_package` the consuming app uses.
+  Default: the app's codegen package (fine for plugins whose backend
+  the app writes).
 - **`android_backend`** *(optional, string)* — fully-qualified Kotlin
   class the registry hands to the dispatcher. Default: `<T>BackendImpl`
-  / `<T>FactoryImpl` in the app's codegen package.
+  / `<T>FactoryImpl` in `android_package`, else in the app's codegen
+  package.
 - **`android_backend_arg`** *(optional, default `"context"`)* — what
   that class's constructor receives: `"context"`, `"activity"`
   (`androidx.activity.ComponentActivity`) or a fully-qualified
@@ -184,6 +192,15 @@ foreground = "assets/fg.xml"     # required: vector drawable .xml or .png
 background = "#EFE6D4"           # required: #RRGGBB / #AARRGGBB, .xml or .png
 monochrome = "assets/mono.xml"   # themed icon, Android 13+ (default: none)
 ```
+
+`android_package` only holds the contracts whose plugin declares no
+`[plugin] android_package` (the app's own plugins and the built-in
+contracts). Official plugins generate into `dev.istmo.plugins.<name>`
+next to their Kotlin sources, so hand-written app code that names one of
+their generated types (a dispatcher registered by hand, a codec) imports
+it from there, e.g. `import dev.istmo.plugins.share.ShareDispatcher`.
+Pinning `android_package = "dev.istmo.runtime"` is no longer needed for
+plugin sources to compile; apps that keep the pin still build.
 
 `id` must be a reverse-DNS identifier (`com.example.app`: two or more
 dot-separated segments of ASCII letters, digits and `_`, each starting

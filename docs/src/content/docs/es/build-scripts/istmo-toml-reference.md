@@ -63,10 +63,17 @@ from_version = "1.5.0"
   por app (una API key, una view de la app) y el autor de la app debe
   registrar el dispatcher manualmente. Ver
   [Auto-registración](/istmo/es/build-scripts/auto-register/).
+- **`android_package`** *(opcional, string)* — package Kotlin donde la
+  app genera el dispatcher, la interfaz `<T>Backend`, los tipos y los
+  codecs de este plugin. Ponle el package que declaran tus fuentes
+  `native/android/`: así nombran los tipos generados sin imports y
+  compilan con cualquier `[app] android_package` que use la app.
+  Default: el package de codegen de la app (válido para plugins cuyo
+  backend escribe la app).
 - **`android_backend`** *(opcional, string)* — clase Kotlin
   completamente calificada que el registry le pasa al dispatcher.
-  Default: `<T>BackendImpl` / `<T>FactoryImpl` en el package de codegen
-  de la app.
+  Default: `<T>BackendImpl` / `<T>FactoryImpl` en `android_package`, o
+  si no en el package de codegen de la app.
 - **`android_backend_arg`** *(opcional, default `"context"`)* — qué
   recibe el constructor de esa clase: `"context"`, `"activity"`
   (`androidx.activity.ComponentActivity`) o una subclase de `Activity`
@@ -186,6 +193,16 @@ foreground = "assets/fg.xml"     # obligatoria: vector drawable .xml o .png
 background = "#EFE6D4"           # obligatoria: #RRGGBB / #AARRGGBB, .xml o .png
 monochrome = "assets/mono.xml"   # ícono temático, Android 13+ (default: ninguno)
 ```
+
+`android_package` solo recibe los contratos cuyo plugin no declara
+`[plugin] android_package` (los plugins propios de la app y los
+contratos built-in). Los plugins oficiales se generan en
+`dev.istmo.plugins.<nombre>`, junto a sus fuentes Kotlin, así que el
+código escrito a mano en la app que nombra uno de sus tipos generados
+(un dispatcher registrado a mano, un codec) lo importa desde ahí, p. ej.
+`import dev.istmo.plugins.share.ShareDispatcher`. Ya no hace falta fijar
+`android_package = "dev.istmo.runtime"` para que compilen las fuentes de
+los plugins; las apps que lo mantienen siguen compilando.
 
 `id` tiene que ser un identificador reverse-DNS (`com.example.app`: dos
 o más segmentos separados por puntos, de letras ASCII, dígitos y `_`,

@@ -127,6 +127,49 @@ final class ShareSheetBackendImpl: ShareSheetBackend {
 }
 ```
 
+## Distribuye el backend con el plugin
+
+El backend de arriba vive en la app. Para distribuirlo con el crate del
+plugin, pon las fuentes en `native/android/` y `native/ios/` junto a
+`istmo.toml`: el plugin de Gradle agrega `native/android/` al source set
+de la app, e `istmo-plugins.yml` agrega `native/ios/` al target de Xcode.
+
+En Android, declara además el package que usan esas fuentes:
+
+```toml
+[plugin]
+id              = "acme.share_sheet"
+client_type     = "::share_sheet::ShareSheetClient"
+android_package = "com.acme.sharesheet"
+```
+
+La app genera entonces `ShareSheetDispatcher.kt`, `ShareSheetTypes.kt`
+y `ShareSheetCodecsImpl.kt` en `com.acme.sharesheet` en vez de en su
+propio package, así que `native/android/ShareSheetBackendImpl.kt`
+declara `package com.acme.sharesheet`, nombra los tipos generados sin
+imports y compila en cualquier app, sea cual sea su
+`[app] android_package`. Los tipos del runtime (`BackendException`,
+`NativeHandleId`, `IstmoRuntime`, `IstmoActivityBound`, …) siguen
+viniendo de `dev.istmo.runtime`. El registry construye
+`com.acme.sharesheet.ShareSheetBackendImpl` salvo que `android_backend`
+nombre otra clase.
+
+Swift no tiene packages: el Swift generado y `native/ios/` compilan en el
+mismo módulo de la app, así que mantén nombres de tipo únicos entre
+plugins (con el nombre del plugin como prefijo, como hacen los archivos
+generados `<T>Dispatcher`, `<T>Types` y `<T>CodecsImpl`). `seed_backends`
+nunca siembra un `<T>BackendImpl` para un plugin que trae fuentes
+nativas.
+
+:::note[Migrar un plugin]
+Los plugins anteriores a `android_package` importaban los tipos
+generados desde `dev.istmo.runtime` y solo compilaban en apps que fijaban
+`[app] android_package = "dev.istmo.runtime"`. Agrega `android_package`
+a `[plugin]`, borra las líneas `import dev.istmo.runtime.<TipoGenerado>`
+(y cualquier prefijo `dev.istmo.runtime.` en tipos generados) y conserva
+los imports del runtime.
+:::
+
 ## Registra el backend
 
 Por default `istmo-build` genera un `IstmoPluginRegistry` que cablea

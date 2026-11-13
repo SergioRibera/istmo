@@ -156,7 +156,8 @@ ios_backend         = "ShareBackendImpl"
 ```
 
 - **`android_backend`**: clase Kotlin completamente calificada. Default:
-  `<T>BackendImpl` / `<T>FactoryImpl` en el package de codegen de la app.
+  `<T>BackendImpl` / `<T>FactoryImpl` en el `android_package` del plugin,
+  o si no en el package de codegen de la app.
 - **`android_backend_arg`**: `"context"` (default), `"activity"`
   (`androidx.activity.ComponentActivity`) o una subclase de `Activity`
   completamente calificada, como `"androidx.fragment.app.FragmentActivity"`.

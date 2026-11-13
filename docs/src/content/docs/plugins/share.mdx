@@ -141,21 +141,13 @@ Android hands it the host `ComponentActivity` (`IstmoGameActivity` is
 one), iOS presents from the key window. Desktop apps register it
 themselves (below).
 
-:::caution[Android package]
-The plugin's Kotlin sources import the generated types from
-`dev.istmo.runtime` (`ShareBackend`, `ShareRequest`, `ShareCodecsImpl`,
-…), like every other official plugin. `istmo-build` generates them into
-`<namespace>.gen` by default, so the app must pin the package in its
-`istmo.toml` or the plugin sources do not compile:
-
-```toml
-[app]
-android_package = "dev.istmo.runtime"
-```
-
-On iOS nothing is needed: the generated Swift and the plugin's
-`native/ios/` sources both land in the app target through
-`istmo-plugins.yml`.
+:::note[Android package]
+The plugin declares `android_package = "dev.istmo.plugins.share"`, so
+`istmo-build` generates `ShareBackend`, `ShareRequest`,
+`ShareCodecsImpl`, … into that package, next to the plugin's Kotlin
+sources, whatever `[app] android_package` your app uses. On iOS the
+generated Swift and the plugin's `native/ios/` sources both land in
+the app target through `istmo-plugins.yml`.
 :::
 
 **Android** — use `IstmoGameActivity` (or call `IstmoHost.onCreate(this)`

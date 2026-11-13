@@ -126,6 +126,48 @@ final class ShareSheetBackendImpl: ShareSheetBackend {
 }
 ```
 
+## Ship the backend with the plugin
+
+The backend above lives in the app. To ship it with the plugin crate
+instead, put the sources in `native/android/` and `native/ios/` next to
+`istmo.toml`: the Gradle plugin adds `native/android/` to the app's
+source set, and `istmo-plugins.yml` adds `native/ios/` to the Xcode
+target.
+
+On Android, also declare the package those sources use:
+
+```toml
+[plugin]
+id              = "acme.share_sheet"
+client_type     = "::share_sheet::ShareSheetClient"
+android_package = "com.acme.sharesheet"
+```
+
+The app then generates `ShareSheetDispatcher.kt`, `ShareSheetTypes.kt`
+and `ShareSheetCodecsImpl.kt` into `com.acme.sharesheet` rather than its
+own package, so `native/android/ShareSheetBackendImpl.kt` declares
+`package com.acme.sharesheet`, names the generated types without
+imports and compiles in every app, whatever its `[app] android_package`.
+Runtime types (`BackendException`, `NativeHandleId`, `IstmoRuntime`,
+`IstmoActivityBound`, …) still come from `dev.istmo.runtime`. The
+registry builds `com.acme.sharesheet.ShareSheetBackendImpl` unless
+`android_backend` names another class.
+
+Swift has no packages: the generated Swift and `native/ios/` compile
+into the same app module, so keep type names unique across plugins
+(prefix them with the plugin name, as the generated `<T>Dispatcher`,
+`<T>Types` and `<T>CodecsImpl` files do). `seed_backends` never seeds a
+`<T>BackendImpl` for a plugin that ships native sources.
+
+:::note[Migrating a plugin]
+Plugins written before `android_package` imported the generated types
+from `dev.istmo.runtime` and only compiled in apps that pinned
+`[app] android_package = "dev.istmo.runtime"`. Add `android_package`
+to `[plugin]`, drop the `import dev.istmo.runtime.<GeneratedType>`
+lines (and any `dev.istmo.runtime.` qualifier on generated types), and
+keep the runtime imports.
+:::
+
 ## Register the backend
 
 By default `istmo-build` generates an `IstmoPluginRegistry` that wires

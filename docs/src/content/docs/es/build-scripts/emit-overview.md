@@ -97,6 +97,13 @@ fn main() {
 Override cualquiera via `[app] android_package = "…"` o
 `[app] ios_app_dir = "…"` en el `istmo.toml` de la app.
 
+Un plugin que trae su propio backend Kotlin declara
+`[plugin] android_package` en su `istmo.toml`; su dispatcher, sus tipos
+y sus codecs se generan en ese package en vez del de la app, así que las
+fuentes `native/android/` del plugin compilan con cualquier package de
+app. Solo los contratos sin él (los plugins propios de la app, los
+contratos built-in) siguen `[app] android_package`.
+
 ## Imports runtime
 
 Los dispatchers Kotlin dependen de clases del package
