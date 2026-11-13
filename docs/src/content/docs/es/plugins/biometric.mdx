@@ -285,6 +285,11 @@ runtime.register_host(BiometricHost::new(
 - `with_fprintd_user("alice")` hace que Linux verifique las huellas de
   otro usuario (la política polkit de fprintd sólo lo permite a llamadores
   privilegiados). Se ignora en el resto.
+- `with_app_id(id)` nombra el vault de Windows (guardado en
+  `%LOCALAPPDATA%\istmo\biometric\<app>\`) según `id` — p. ej.
+  `option_env!("ISTMO_APP_BUNDLE_ID")` — en lugar del nombre del
+  ejecutable, así renombrar el binario conserva sus secretos. Se
+  ignora en el resto.
 
 En Linux no hay prompt del sistema: indicale al usuario que toque el
 lector mientras `authenticate` está pendiente.

@@ -277,6 +277,10 @@ runtime.register_host(BiometricHost::new(
 - `with_fprintd_user("alice")` makes Linux verify another user's
   fingerprints (fprintd's polkit policy only allows that to privileged
   callers). Ignored elsewhere.
+- `with_app_id(id)` names the Windows vault (stored under
+  `%LOCALAPPDATA%\istmo\biometric\<app>\`) after `id` — e.g.
+  `option_env!("ISTMO_APP_BUNDLE_ID")` — instead of the executable
+  name, so renaming the binary keeps its secrets. Ignored elsewhere.
 
 On Linux there is no system prompt: tell the user to touch the reader
 while `authenticate` is pending.
