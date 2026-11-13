@@ -99,7 +99,7 @@ pub struct SignInAccount {
     pub display_name: Option<String>,
     /// Profile photo URL, if available.
     pub photo_url: Option<String>,
-    /// Signed OpenID Connect id token — forward to your backend to
+    /// Signed `OpenID` Connect id token — forward to your backend to
     /// verify the user's identity server-side.
     #[redact]
     pub id_token: String,

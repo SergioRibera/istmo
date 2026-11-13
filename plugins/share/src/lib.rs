@@ -285,7 +285,7 @@ impl ShareRequest {
 
     /// `true` when there is nothing to share.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.text.is_none() && self.url.is_none() && self.files.is_empty()
     }
 
