@@ -12,7 +12,7 @@ cada plataforma detrás de un solo trait Rust.
 
 - **Android** usa `androidx.credentials` (Credential Manager) más el
   provider `googleid`.
-- **iOS** usa el paquete SwiftPM oficial `GoogleSignIn` (7.0+).
+- **iOS** usa el paquete SwiftPM oficial `GoogleSignIn` (7.1+, por el parámetro `nonce:`).
 
 Ambos flows retornan un `NativeHandle<Credential>` que puedes
 refresquear y liberar determinísticamente.

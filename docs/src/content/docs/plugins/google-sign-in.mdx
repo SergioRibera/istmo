@@ -12,7 +12,7 @@ flows behind a single Rust trait.
 
 - **Android** uses `androidx.credentials` (Credential Manager) plus
   the `googleid` provider.
-- **iOS** uses the official `GoogleSignIn` SwiftPM package (7.0+).
+- **iOS** uses the official `GoogleSignIn` SwiftPM package (7.1+, for the `nonce:` parameter).
 
 Both flows return a `NativeHandle<Credential>` you can refresh and
 release deterministically.
