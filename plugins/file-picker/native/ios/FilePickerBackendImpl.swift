@@ -229,9 +229,12 @@ public final class FilePickerBackendImpl: FilePickerBackend, HandleReleaser {
     }
 
     private static func topViewController() -> UIViewController? {
+        // `UIWindowScene.keyWindow` is iOS 15+; `isKeyWindow` keeps iOS 13.
         var top: UIViewController? = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController }
-            .first
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .rootViewController
         while let presented = top?.presentedViewController {
             top = presented
         }
