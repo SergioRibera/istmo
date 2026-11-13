@@ -298,7 +298,7 @@ fn hex(bytes: &[u8]) -> String {
 
 fn decode_hex(input: &str) -> Result<Vec<u8>, String> {
     let clean: String = input.chars().filter(|c| !c.is_whitespace()).collect();
-    if clean.len() % 2 != 0 {
+    if !clean.len().is_multiple_of(2) {
         return Err("hex string has odd length".into());
     }
     (0..clean.len())
