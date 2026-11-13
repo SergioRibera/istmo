@@ -7,8 +7,9 @@ Cross-platform camera plugin for the
   flags (facing, lens kind, zoom range, OIS/EIS, flash, HDR, depth,
   RAW, resolutions).
 - Stream raw frames in real time through a typed
-  `TypedStream<CameraFrame>`. A native-side ring buffer absorbs
-  consumer backpressure and reports dropped frames per delivery.
+  `TypedStream<CameraFrame>`. Each subscriber gets every frame through
+  its own ring buffer, which absorbs backpressure and reports dropped
+  frames per delivery.
 - Drive zoom, torch, exposure compensation, focus and white balance
   on a running session, and capture JPEG stills.
 - Open multiple sessions concurrently on supported devices (iOS
@@ -177,11 +178,11 @@ pixel format matched to your consumer:
   (`capture_still`, hardware-encoded); opening a stream with it returns
   `CameraError::FormatUnsupported`.
 
-The native backend keeps a ring buffer sized by
-`CameraInitConfig::frame_pool_depth` (default `3`). When a consumer
-falls behind, the oldest frame is dropped. Each delivered frame
-reports `dropped_before` so Rust-side code can log, downsample, or
-back off.
+Every backend keeps one ring buffer per `frames()` subscriber, sized
+by `CameraInitConfig::frame_pool_depth` (default `3`). When a
+subscriber falls behind, its oldest frame is dropped; other subscribers
+are unaffected. Each delivered frame reports `dropped_before` so
+Rust-side code can log, downsample, or back off.
 
 For high-resolution preview-only pipelines, open the session with
 `SessionConfig::preview_only()` — the stream stays silent and no

@@ -189,8 +189,8 @@ stream with an unsupported format fails with
 
 ### Backpressure
 
-The backend never blocks on a slow consumer. Each session buffers up
-to `frame_pool_depth` frames and drops the oldest when the buffer is
+The backend never blocks on a slow consumer. Each subscriber buffers
+up to `frame_pool_depth` frames and drops the oldest when its buffer is
 full; the next delivered frame reports how many were lost in
 `dropped_before`. React by lowering the resolution, frame rate or
 pixel-format cost.

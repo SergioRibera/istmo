@@ -20,9 +20,9 @@
 //! # Real-time frames
 //!
 //! [`SessionHandle::frames`] returns a [`TypedStream<CameraFrame>`](TypedStream)
-//! fed by the native sample-buffer callback. The native side keeps a
-//! bounded ring buffer sized by [`CameraInitConfig::frame_pool_depth`]
-//! and drops the oldest frame when the consumer falls behind — each
+//! fed by the backend's capture callback. The backend keeps one bounded
+//! ring buffer per subscriber, sized by [`CameraInitConfig::frame_pool_depth`],
+//! and drops that subscriber's oldest frame when it falls behind — each
 //! delivered frame reports how many predecessors were dropped via
 //! [`CameraFrame::dropped_before`]. Pick [`PixelFormat::Nv21`] /
 //! [`PixelFormat::Yuv420`] for cheap pass-through; [`PixelFormat::Jpeg`]

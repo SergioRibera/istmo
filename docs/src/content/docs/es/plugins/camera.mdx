@@ -193,9 +193,9 @@ un stream con un formato no soportado falla con
 
 ### Contrapresión
 
-El backend nunca se bloquea por un consumidor lento. Cada sesión guarda
-hasta `frame_pool_depth` frames y descarta el más viejo cuando el
-buffer se llena; el siguiente frame entregado indica cuántos se
+El backend nunca se bloquea por un consumidor lento. Cada suscriptor
+guarda hasta `frame_pool_depth` frames y descarta el más viejo cuando
+su buffer se llena; el siguiente frame entregado indica cuántos se
 perdieron en `dropped_before`. Reacciona bajando la resolución, el
 frame rate o el costo del formato de píxel.
 
