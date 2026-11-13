@@ -543,9 +543,7 @@ mod tests {
 
     #[test]
     fn no_swift_packages_leaves_the_fragment_without_packages() {
-        let (packages, dependencies) = swift_package_yaml(&[]);
-        assert!(packages.is_empty());
-        assert!(dependencies.is_empty());
+        assert_eq!(swift_package_yaml(&[]), (String::new(), String::new()));
     }
 
     #[test]
