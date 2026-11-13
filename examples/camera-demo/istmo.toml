@@ -9,4 +9,4 @@ name = "istmo-camera demo"
 # CameraX ships CameraController features we rely on from API 24; the
 # camera plugin itself bumps `targetSdk` to 34 through Gradle.
 android = 26
-ios = "13.0"
+ios = "14.0"
