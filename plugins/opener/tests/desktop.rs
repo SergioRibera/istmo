@@ -43,6 +43,24 @@ fn policy_rejects_malformed_urls() {
 }
 
 #[test]
+fn policy_rejects_invisible_format_characters() {
+    let policy = SchemePolicy::default();
+    for url in [
+        "https://exa\u{200B}mple.com",
+        "https://example.com/\u{200F}",
+        "https://\u{202E}moc.elpmaxe",
+        "https://example.com/\u{2066}x\u{2069}",
+        "\u{FEFF}https://example.com",
+        "https://example.com/\u{00AD}",
+        "https://example.com/\u{E0041}",
+    ] {
+        assert_eq!(policy.check(url), Err(OpenError::Invalid), "{url:?}");
+    }
+    // Visible non-ASCII text stays allowed.
+    assert_eq!(policy.check("https://例え.jp/ñ"), Ok(()));
+}
+
+#[test]
 fn policy_can_be_widened_and_narrowed() {
     let widened = SchemePolicy::default().allow("FILE");
     assert_eq!(widened.check("file:///tmp"), Ok(()));

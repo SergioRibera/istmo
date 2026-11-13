@@ -22,6 +22,10 @@ public final class OpenerBackendImpl: OpenerBackend {
     }
 
     public func open(url: String) async throws {
+        // `controlCharacters` is general categories Cc *and* Cf, so this
+        // also refuses invisible format characters (zero-width spaces,
+        // bidi overrides and isolates, BOM) that make a URL read
+        // differently from where it goes.
         let hasControl = url.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
         guard !url.isEmpty, !url.hasPrefix("-"), !hasControl,
               let target = URL(string: url), let scheme = target.scheme?.lowercased()

@@ -28,7 +28,7 @@ class OpenerBackendImpl(
     private val allowedSchemes: Set<String> = allowedSchemes.map { it.lowercase() }.toSet()
 
     override suspend fun open(url: String) {
-        if (url.isEmpty() || url.startsWith("-") || url.any { it.isISOControl() }) {
+        if (url.isEmpty() || url.startsWith("-") || hasControlOrFormat(url)) {
             throw BackendException(OpenError.Invalid)
         }
         // Intent filters match schemes case-sensitively and declare them
@@ -65,5 +65,22 @@ class OpenerBackendImpl(
         /** Same list as the Rust `DEFAULT_ALLOWED_SCHEMES`. */
         val DEFAULT_ALLOWED_SCHEMES: Set<String> =
             setOf("http", "https", "mailto", "tel", "sms", "geo")
+
+        /**
+         * Control characters (Cc) or invisible format characters (Cf:
+         * zero-width spaces, bidi overrides and isolates, BOM, tags),
+         * which make a URL read differently from where it goes. Walks
+         * code points so supplementary-plane Cf characters are seen.
+         */
+        private fun hasControlOrFormat(url: String): Boolean {
+            var i = 0
+            while (i < url.length) {
+                val cp = url.codePointAt(i)
+                val type = Character.getType(cp)
+                if (type == Character.CONTROL.toInt() || type == Character.FORMAT.toInt()) return true
+                i += Character.charCount(cp)
+            }
+            return false
+        }
     }
 }

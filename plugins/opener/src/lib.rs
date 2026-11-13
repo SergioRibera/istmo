@@ -131,11 +131,16 @@ impl SchemePolicy {
     ///
     /// Rejects as [`OpenError::Invalid`] a URL that is empty, starts
     /// with `-` (it would read as an option to a desktop opener),
-    /// contains control characters or has no RFC 3986 scheme; rejects
-    /// as [`OpenError::SchemeNotAllowed`] a well-formed URL whose scheme
-    /// is not allowed.
+    /// contains control characters or invisible format characters
+    /// (Unicode `Cf`: zero-width spaces, bidi overrides and isolates,
+    /// BOM, ...) or has no RFC 3986 scheme; rejects as
+    /// [`OpenError::SchemeNotAllowed`] a well-formed URL whose scheme is
+    /// not allowed.
     pub fn check(&self, url: &str) -> Result<(), OpenError> {
-        if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_control) {
+        if url.is_empty()
+            || url.starts_with('-')
+            || url.chars().any(|c| c.is_control() || is_format_char(c))
+        {
             return Err(OpenError::Invalid);
         }
         let scheme = parse_scheme(url).ok_or(OpenError::Invalid)?;
@@ -146,6 +151,39 @@ impl SchemePolicy {
             Err(OpenError::SchemeNotAllowed(scheme))
         }
     }
+}
+
+/// Unicode general category `Cf` (format), as of Unicode 15.1.
+///
+/// Invisible in rendered text, so a URL carrying one reads differently
+/// from where it goes: a bidi override can flip `moc.elpmaxe` into
+/// view, a zero-width space can split a familiar host name. No URL
+/// needs them raw; percent-encoded they stay harmless.
+const fn is_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 /// `scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`, terminated by `:`.
