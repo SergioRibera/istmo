@@ -30,9 +30,16 @@ impl Rng {
 }
 
 enum Pending {
-    Show { rect: BannerRect },
-    Update { id: NativeHandleId, rect: BannerRect },
-    Hide { id: NativeHandleId },
+    Show {
+        rect: BannerRect,
+    },
+    Update {
+        id: NativeHandleId,
+        rect: BannerRect,
+    },
+    Hide {
+        id: NativeHandleId,
+    },
 }
 
 /// The native side as the slot drives it.

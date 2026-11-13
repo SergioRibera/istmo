@@ -416,7 +416,10 @@ mod tests {
     fn glob_walk_starts_at_the_literal_prefix() {
         let root = Path::new("/crate");
         assert_eq!(glob_base(root, "assets/**/*.wav"), root.join("assets"));
-        assert_eq!(glob_base(root, "assets/img/logo*.png"), root.join("assets/img"));
+        assert_eq!(
+            glob_base(root, "assets/img/logo*.png"),
+            root.join("assets/img")
+        );
         assert_eq!(glob_base(root, "./a/{b,c}/*.png"), root.join("a"));
         assert_eq!(glob_base(root, "**/*.png"), root);
         assert_eq!(glob_base(root, "*.png"), root);

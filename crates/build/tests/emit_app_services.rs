@@ -481,7 +481,10 @@ fn emit_app_generates_into_the_plugin_android_package() {
         "the plugin ships its own backend"
     );
     assert!(!stale.exists(), "stale app-package copy must be removed");
-    assert!(!legacy.exists(), "stale dev.istmo.runtime copy must be removed");
+    assert!(
+        !legacy.exists(),
+        "stale dev.istmo.runtime copy must be removed"
+    );
     assert!(mine.exists(), "hand-written files stay");
 
     let registry =

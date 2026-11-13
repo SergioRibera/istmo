@@ -740,8 +740,14 @@ mod tests {
             // 2-byte characters: the cut backs off to a char boundary.
             ("é".repeat(200) + ".pdf", "é".repeat(125) + ".pdf"),
             // An extension longer than 16 bytes is not kept.
-            ("a".repeat(250) + "." + &"b".repeat(20), "a".repeat(250) + "." + &"b".repeat(4)),
-            ("CON".to_owned() + &"x".repeat(300), "CON".to_owned() + &"x".repeat(252)),
+            (
+                "a".repeat(250) + "." + &"b".repeat(20),
+                "a".repeat(250) + "." + &"b".repeat(4),
+            ),
+            (
+                "CON".to_owned() + &"x".repeat(300),
+                "CON".to_owned() + &"x".repeat(252),
+            ),
             ("\u{1F600}".repeat(70), "\u{1F600}".repeat(63)),
         ]
     }

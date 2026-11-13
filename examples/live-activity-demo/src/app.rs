@@ -170,7 +170,11 @@ impl DemoApp {
         });
         let shared = Arc::clone(&self.shared);
         thread::spawn(move || {
-            match pollster::block_on(shared.activities.update_by_id(handle_id, state, alert_config)) {
+            match pollster::block_on(
+                shared
+                    .activities
+                    .update_by_id(handle_id, state, alert_config),
+            ) {
                 Ok(()) => shared.push_log("update", format!("elapsed={elapsed}s")),
                 Err(err) => shared.push_log("update", format!("error: {err}")),
             }
@@ -189,11 +193,11 @@ impl DemoApp {
         };
         let shared = Arc::clone(&self.shared);
         thread::spawn(move || {
-            match pollster::block_on(
-                shared
-                    .activities
-                    .end_by_id(handle_id, Some(final_state), dismissal),
-            ) {
+            match pollster::block_on(shared.activities.end_by_id(
+                handle_id,
+                Some(final_state),
+                dismissal,
+            )) {
                 Ok(()) => {
                     shared.push_log("end", "ok");
                     shared.set_handle(None);
