@@ -499,10 +499,12 @@ pub struct CameraControls {
     pub flash: Option<FlashMode>,
 }
 
-/// Effective state after the backend applied a [`CameraControls`]
-/// request. Each field reflects the actual value on the running
-/// session, which may differ from the request when the hardware
-/// clamps.
+/// State after the backend applied a [`CameraControls`] request.
+///
+/// The Android and iOS backends report the actual value on the running
+/// session, which may differ from the request when the hardware clamps.
+/// The desktop and web hosts apply controls best-effort and echo the
+/// request, with defaults for the fields it left `None`.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppliedControls {
@@ -674,7 +676,8 @@ pub trait Camera {
     fn frames(&self, session: NativeHandleId) -> CameraFrame;
 
     /// Apply (or clear) one or more capture controls. Returns the
-    /// effective state after the backend coerced out-of-range values.
+    /// resulting state; see [`AppliedControls`] for how faithful it is
+    /// on each backend.
     async fn apply_controls(
         &self,
         session: NativeHandleId,

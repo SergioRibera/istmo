@@ -11,6 +11,16 @@ use crate::handover::{
 };
 use crate::manifest::{Deployment, IstmoToml, Manifest};
 
+/// Plugin-side handover for the `istmo.toml` at `path`: native
+/// dependencies, the parsed manifest, `PLUGIN_IDS`, declared assets and
+/// the crate's `native/{android,ios,macos}/` directories, each printed as
+/// `cargo:` metadata for dependent build scripts. Contracts are not
+/// included; see [`emit_from`].
+///
+/// # Panics
+///
+/// When the manifest cannot be read or parsed, or a declared asset does
+/// not resolve — panicking is how a build script fails the build.
 pub fn emit_manifest_metadata(path: impl AsRef<Path>) -> Manifest {
     let path = path.as_ref();
     let manifest = Manifest::from_path(path)
@@ -83,6 +93,19 @@ pub fn emit_manifest_metadata_with_contracts(
     manifest
 }
 
+/// The one-line build script for plugin and app crates alike:
+/// [`emit_with`] with [`AppOpts::default`](crate::AppOpts).
+///
+/// When `istmo.toml` holds `[plugin]` entries it hands their metadata
+/// and the contracts extracted from `src/lib.rs` over to dependents; it
+/// then checks every dependency's `[min_versions]` and runs the app
+/// side (auto-wiring env for `istmo::runtime!`, Kotlin / Swift codegen
+/// for the `android/` and `ios/` projects that exist, desktop icon and
+/// assets).
+///
+/// # Panics
+///
+/// As [`emit_with`].
 pub fn emit() {
     emit_with(crate::emit_app::AppOpts::default());
 }
@@ -119,6 +142,14 @@ pub fn emit_with(app: crate::emit_app::AppOpts) {
     crate::emit_app::emit_app_from(&app, &root, &toml);
 }
 
+/// Plugin-side handover only: [`emit_manifest_metadata`] for
+/// `manifest_path`, plus the contract of every `[plugin]` entry with a
+/// `client_type`, extracted from the trait in `source_path`. Runs no
+/// app-side step.
+///
+/// # Panics
+///
+/// When the manifest is malformed or a contract cannot be extracted.
 pub fn emit_from(manifest_path: impl AsRef<Path>, source_path: impl AsRef<Path>) {
     let manifest = emit_manifest_metadata(manifest_path);
     emit_plugin_contracts(&manifest, source_path.as_ref());

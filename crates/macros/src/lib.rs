@@ -2,7 +2,8 @@
 //!
 //! Most users pull these in through the top-level facade — the
 //! attributes are re-exported as `istmo::plugin`, `istmo::message`,
-//! `istmo::stream`, `istmo::owned`, `istmo::handle`, `istmo::service`,
+//! `istmo::stream`, `istmo::owned`, `istmo::handle`, `istmo::redact`,
+//! `istmo::service`,
 //! `istmo::worker`, `istmo::mobile_app`, and the function-like macros
 //! `istmo::runtime!` and `istmo::app_icon!`.
 //!

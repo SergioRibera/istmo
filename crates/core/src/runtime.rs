@@ -699,8 +699,11 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// Returns [`IstmoError::ChannelClosed`] if the outbound channel is
-    /// no longer draining (usually a shutting-down runtime).
+    /// - [`IstmoError::RuntimeShutDown`] if [`shutdown`](Self::shutdown)
+    ///   runs while waiting for room on a full outbound channel.
+    /// - [`IstmoError::ChannelClosed`] if the outbound channel is gone.
+    /// - [`IstmoError::Codec`] if the remote sink could not encode the
+    ///   envelope.
     pub fn destroy_instance(self: &Arc<Self>, instance_id: InstanceId) -> Result<(), IstmoError> {
         let plugin_id = self.routing.instance(instance_id);
         let hosted = plugin_id
