@@ -161,15 +161,6 @@ generados `<T>Dispatcher`, `<T>Types` y `<T>CodecsImpl`). `seed_backends`
 nunca siembra un `<T>BackendImpl` para un plugin que trae fuentes
 nativas.
 
-:::note[Migrar un plugin]
-Los plugins anteriores a `android_package` importaban los tipos
-generados desde `dev.istmo.runtime` y solo compilaban en apps que fijaban
-`[app] android_package = "dev.istmo.runtime"`. Agrega `android_package`
-a `[plugin]`, borra las líneas `import dev.istmo.runtime.<TipoGenerado>`
-(y cualquier prefijo `dev.istmo.runtime.` en tipos generados) y conserva
-los imports del runtime.
-:::
-
 ## Registra el backend
 
 Por default `istmo-build` genera un `IstmoPluginRegistry` que cablea

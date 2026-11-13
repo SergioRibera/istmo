@@ -159,15 +159,6 @@ into the same app module, so keep type names unique across plugins
 `<T>Types` and `<T>CodecsImpl` files do). `seed_backends` never seeds a
 `<T>BackendImpl` for a plugin that ships native sources.
 
-:::note[Migrating a plugin]
-Plugins written before `android_package` imported the generated types
-from `dev.istmo.runtime` and only compiled in apps that pinned
-`[app] android_package = "dev.istmo.runtime"`. Add `android_package`
-to `[plugin]`, drop the `import dev.istmo.runtime.<GeneratedType>`
-lines (and any `dev.istmo.runtime.` qualifier on generated types), and
-keep the runtime imports.
-:::
-
 ## Register the backend
 
 By default `istmo-build` generates an `IstmoPluginRegistry` that wires
