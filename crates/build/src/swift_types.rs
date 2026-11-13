@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use crate::codegen::{NamedAccess, SwiftWire, local, swift_ident, write_header};
+use crate::codegen::{NamedAccess, SwiftWire, local, swift_ident, swift_label, write_header};
 use crate::contract::{Contract, EnumDef, StructDef, TypeDef, TypeRef};
 
 /// Codecs implementations call their own `read<T>` / `write<T>`.
@@ -151,9 +151,16 @@ fn write_struct_codec(out: &mut String, s: &StructDef) {
     );
     let mut init_args = Vec::with_capacity(s.fields.len());
     for f in &s.fields {
+        let label = swift_label(&f.name);
+        // A `()` field occupies no wire bytes; binding it to a local
+        // draws swiftc's "inferred to have type '()'" warning.
+        if f.ty.is_unit() {
+            init_args.push(format!("{label}: ()"));
+            continue;
+        }
         let name = local(&f.name, READER_LOCALS, swift_ident);
         let _ = writeln!(out, "        let {name} = {}", WIRE.read(&f.ty, "c"));
-        init_args.push(format!("{}: {name}", swift_ident(&f.name)));
+        init_args.push(format!("{label}: {name}"));
     }
     let _ = writeln!(out, "        return {}({})", s.name, init_args.join(", "));
     let _ = writeln!(out, "    }}");

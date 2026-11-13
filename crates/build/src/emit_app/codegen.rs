@@ -255,7 +255,7 @@ fn seed_kotlin_backend_impl(gen_dir: &Path, package: &str, contract: &Contract) 
 fn seed_swift_backend_impl(gen_dir: &Path, contract: &Contract) {
     let ty = &contract.type_name;
     let mut body = String::from(
-        "import Foundation\n\n\
+        "import Foundation\nimport IstmoRuntime\n\n\
          // Seeded by istmo-build. Fill in each `fatalError` with your\n\
          // logic; regenerate is a no-op once this file exists.\n\n",
     );

@@ -115,6 +115,17 @@ public final class CoverageClient {
         let payload = Data()
         _ = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "default", payload: payload)
     }
+
+    public func pulse(gap: Void, hz: UInt32) -> AsyncThrowingStream<Void, Error> {
+        var payload = Data()
+        // () — nothing to encode
+        Bincode.writeVarintU32(&payload, hz)
+        var events = IstmoRuntime.shared.stream(pluginId: Self.PLUGIN_ID, method: "pulse", payload: payload).makeAsyncIterator()
+        return AsyncThrowingStream(unfolding: {
+            guard try await events.next() != nil else { return nil }
+            return ()
+        })
+    }
 }
 
 /// Swift-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.

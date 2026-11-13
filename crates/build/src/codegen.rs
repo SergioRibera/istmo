@@ -6,14 +6,15 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use crate::contract::{Contract, MethodKind, TypeDef, TypeRef};
+use crate::contract::{Contract, Method, MethodKind, TypeDef, TypeRef};
 
 mod ident;
 mod kotlin_wire;
 mod swift_wire;
 
 pub(crate) use ident::{
-    comment_text, fresh, kt_ident, kt_string, local, rust_ident, swift_ident, swift_string,
+    comment_text, fresh, kt_ident, kt_string, local, rust_ident, swift_ident, swift_label,
+    swift_string,
 };
 pub(crate) use kotlin_wire::{KotlinWire, ReadSource};
 pub(crate) use swift_wire::SwiftWire;
@@ -132,6 +133,21 @@ impl TypeRef {
     }
 }
 
+impl Method {
+    /// Whether an argument, the return or the error names a declared type,
+    /// so encoding the call goes through `<T>Codecs`.
+    pub(crate) fn signature_uses_named(&self) -> bool {
+        let mut found = false;
+        self.args
+            .iter()
+            .map(|a| &a.ty)
+            .chain(std::iter::once(&self.returns))
+            .chain(self.error.as_ref())
+            .for_each(|ty| ty.for_each_named(&mut |_| found = true));
+        found
+    }
+}
+
 impl Contract {
     /// Every type reference in the method signatures and `init`.
     fn signature_types(&self) -> impl Iterator<Item = &TypeRef> {
@@ -197,16 +213,7 @@ impl Contract {
 
     /// Whether a client must be handed a `<T>Codecs` instance.
     pub(crate) fn signatures_use_named(&self) -> bool {
-        self.methods.iter().any(|m| {
-            let mut found = false;
-            m.args
-                .iter()
-                .map(|a| &a.ty)
-                .chain(std::iter::once(&m.returns))
-                .chain(m.error.as_ref())
-                .for_each(|ty| ty.for_each_named(&mut |_| found = true));
-            found
-        })
+        self.methods.iter().any(Method::signature_uses_named)
     }
 
     /// Distinct domain error types, in order of first use.

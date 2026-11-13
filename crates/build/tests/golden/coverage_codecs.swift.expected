@@ -8,7 +8,6 @@ public final class CoverageCodecsImpl: CoverageCodecs {
     public init() {}
 
     public func readEverything(_ c: inout Bincode.Cursor) throws -> Everything {
-        let unit = ()
         let flag = try Bincode.readBool(&c)
         let byte = try Bincode.readU8(&c)
         let signedByte = try Bincode.readI8(&c)
@@ -32,7 +31,7 @@ public final class CoverageCodecsImpl: CoverageCodecs {
         let `where` = try Bincode.readOption(&c) { c1 in try Bincode.readVarintI64(&c1) }
         let cursor = try Bincode.readU8(&c)
         let c_ = try Bincode.readU8(&c)
-        return Everything(unit: unit, flag: flag, byte: byte, signedByte: signedByte, short: short, signedShort: signedShort, word: word, signedWord: signedWord, long: long, signedLong: signedLong, single: single, double: double, text: text, blob: blob, nested: nested, maybeBlob: maybeBlob, grid: grid, shapes: shapes, handle: handle, object: object, `default`: `default`, `where`: `where`, cursor: cursor, c: c_)
+        return Everything(unit: (), flag: flag, byte: byte, signedByte: signedByte, short: short, signedShort: signedShort, word: word, signedWord: signedWord, long: long, signedLong: signedLong, single: single, double: double, text: text, blob: blob, nested: nested, maybeBlob: maybeBlob, grid: grid, shapes: shapes, handle: handle, object: object, default: `default`, where: `where`, cursor: cursor, c: c_)
     }
 
     public func writeEverything(_ out: inout Data, _ value: Everything) {

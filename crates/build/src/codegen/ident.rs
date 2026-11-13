@@ -120,6 +120,16 @@ pub(crate) fn swift_ident(name: &str) -> String {
     }
 }
 
+/// `name` as a call-site argument label. Swift accepts every keyword there
+/// except `inout` unescaped, and warns on a needless backtick.
+pub(crate) fn swift_label(name: &str) -> String {
+    if name == "inout" {
+        format!("`{name}`")
+    } else {
+        name.to_owned()
+    }
+}
+
 /// Rust strict and reserved keywords that a raw identifier can spell.
 const RUST_KEYWORDS: &[&str] = &[
     "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do", "dyn",
@@ -216,6 +226,8 @@ mod tests {
         assert_eq!(kt_ident("value"), "value");
         assert_eq!(swift_ident("default"), "`default`");
         assert_eq!(swift_ident("value"), "value");
+        assert_eq!(swift_label("default"), "default");
+        assert_eq!(swift_label("inout"), "`inout`");
     }
 
     #[test]

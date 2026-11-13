@@ -1553,6 +1553,13 @@ fn coverage_methods() -> Vec<Method> {
             returns: TypeRef::Unit,
             error: None,
         },
+        Method {
+            name: "pulse".to_owned(),
+            kind: MethodKind::Stream,
+            args: vec![arg("gap", TypeRef::Unit), arg("hz", TypeRef::U32)],
+            returns: TypeRef::Unit,
+            error: None,
+        },
     ]
 }
 

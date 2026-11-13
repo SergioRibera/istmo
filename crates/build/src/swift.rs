@@ -61,7 +61,7 @@ pub fn generate_swift_client(contract: &Contract) -> String {
         let _ = writeln!(out);
         match method.kind {
             MethodKind::Unary => write_unary(&mut out, contract, method),
-            MethodKind::Stream => write_stream(&mut out, contract, method, uses_codecs),
+            MethodKind::Stream => write_stream(&mut out, contract, method),
         }
     }
     let _ = writeln!(out, "}}");
@@ -164,7 +164,7 @@ fn arg_names(method: &Method) -> Vec<&str> {
     method.args.iter().map(|a| a.name.as_str()).collect()
 }
 
-fn write_stream(out: &mut String, contract: &Contract, method: &Method, uses_codecs: bool) {
+fn write_stream(out: &mut String, contract: &Contract, method: &Method) {
     let args = format_args(method);
     let item = method.returns.to_swift();
     let _ = writeln!(
@@ -172,7 +172,7 @@ fn write_stream(out: &mut String, contract: &Contract, method: &Method, uses_cod
         "    public func {}({args}) -> AsyncThrowingStream<{item}, Error> {{",
         swift_ident(&method.name),
     );
-    if uses_codecs {
+    if method.signature_uses_named() {
         // The unfolding closure escapes; capture the codecs, not `self`.
         // Bound first: the payload writers below already use the name.
         let _ = writeln!(out, "        let codecs = self.codecs");

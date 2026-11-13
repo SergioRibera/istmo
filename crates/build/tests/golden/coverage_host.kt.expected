@@ -24,6 +24,8 @@ interface CoverageBackend {
     fun follow(next: UInt): kotlinx.coroutines.flow.Flow<Shape>
 
     suspend fun default()
+
+    fun pulse(gap: Unit, hz: UInt): kotlinx.coroutines.flow.Flow<Unit>
 }
 
 /// Reader / writer per `Named` type referenced by the `Coverage` contract.
@@ -147,6 +149,16 @@ class CoverageDispatcher(
             "default" -> {
                 backend.default()
                 PluginResult.Unary(ByteArray(0))
+            }
+            "pulse" -> {
+                val gap = Unit
+                val hz = Bincode.readU32(payload, 0).value
+                val __istmo_flow = backend.pulse(gap, hz)
+                PluginResult.Stream(
+                    __istmo_flow.map {
+                        ByteArray(0)
+                    }
+                )
             }
             else -> error("unknown Coverage method: $method")
         }

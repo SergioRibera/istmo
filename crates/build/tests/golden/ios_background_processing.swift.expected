@@ -3,6 +3,7 @@
 
 import BackgroundTasks
 import Foundation
+import IstmoRuntime
 
 /// Generated `BGTaskScheduler` shim for istmo background plugin
 /// `myapp.reindex`.

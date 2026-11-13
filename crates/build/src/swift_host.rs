@@ -1,6 +1,8 @@
 use std::fmt::Write as _;
 
-use crate::codegen::{NamedAccess, SwiftWire, local, swift_ident, swift_string, write_header};
+use crate::codegen::{
+    NamedAccess, SwiftWire, local, swift_ident, swift_label, swift_string, write_header,
+};
 use crate::contract::{Contract, Method, MethodKind, TypeRef};
 
 const WIRE: SwiftWire = SwiftWire::new(NamedAccess::Codecs);
@@ -322,14 +324,21 @@ fn write_method_arm(out: &mut String, contract: &Contract, method: &Method) {
     } else {
         "            "
     };
-    if !method.args.is_empty() {
+    if method.args.iter().any(|arg| !arg.ty.is_unit()) {
         let _ = writeln!(out, "{indent}var c = Bincode.Cursor(payload)");
     }
     let mut call_args = Vec::with_capacity(method.args.len());
     for arg in &method.args {
+        let label = swift_label(&arg.name);
+        // A `()` argument occupies no wire bytes; binding it to a local
+        // draws swiftc's "inferred to have type '()'" warning.
+        if arg.ty.is_unit() {
+            call_args.push(format!("{label}: ()"));
+            continue;
+        }
         let name = local(&arg.name, DISPATCH_LOCALS, swift_ident);
         let _ = writeln!(out, "{indent}let {name} = {}", WIRE.read(&arg.ty, "c"));
-        call_args.push(format!("{}: {name}", swift_ident(&arg.name)));
+        call_args.push(format!("{label}: {name}"));
     }
     let call = format!(
         "backend.{}({})",

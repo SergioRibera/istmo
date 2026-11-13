@@ -73,6 +73,7 @@ fn render_swift(contract: &IosBackgroundContract) -> String {
     let _ = writeln!(out);
     let _ = writeln!(out, "import BackgroundTasks");
     let _ = writeln!(out, "import Foundation");
+    let _ = writeln!(out, "import IstmoRuntime");
     let _ = writeln!(out);
     match &contract.kind {
         BackgroundKind::Refresh { .. } | BackgroundKind::Processing { .. } => {

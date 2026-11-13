@@ -183,9 +183,11 @@ impl KotlinWire {
         out: &mut String,
         indent: &str,
         bytes: &str,
-        reads: impl ExactSizeIterator<Item = (&'a TypeRef, &'a str)>,
+        reads: impl Iterator<Item = (&'a TypeRef, &'a str)>,
     ) {
-        let count = reads.len();
+        let reads: Vec<_> = reads.collect();
+        // `()` occupies no wire bytes, so it neither reads nor moves the cursor.
+        let count = reads.iter().filter(|(ty, _)| !ty.is_unit()).count();
         if count > 1 {
             let _ = writeln!(out, "{indent}var cursor = 0");
         }
@@ -194,8 +196,14 @@ impl KotlinWire {
         } else {
             ReadSource { bytes, cursor: "0" }
         };
-        for (i, (ty, local)) in reads.enumerate() {
-            if i + 1 == count {
+        let mut read = 0;
+        for (ty, local) in reads {
+            if ty.is_unit() {
+                let _ = writeln!(out, "{indent}val {local} = Unit");
+                continue;
+            }
+            read += 1;
+            if read == count {
                 self.read_last(out, indent, ty, local, src);
             } else {
                 self.read_into(out, indent, ty, local, src);

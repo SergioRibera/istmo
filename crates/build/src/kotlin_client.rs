@@ -190,11 +190,20 @@ fn write_stream_map_body(out: &mut String, ret: &TypeRef, locals: &Locals, inden
     let _ = writeln!(out, "{indent}{decode}.value");
 }
 
+/// `name: Type` parameters. A `Unit` argument encodes to no bytes, so the
+/// body never reads it; it is kept for parity with the Rust signature.
 fn format_args(method: &Method) -> String {
     method
         .args
         .iter()
-        .map(|a| format!("{}: {}", kt_ident(&a.name), a.ty.to_kotlin()))
+        .map(|a| {
+            let unused = if a.ty.is_unit() {
+                "@Suppress(\"UNUSED_PARAMETER\") "
+            } else {
+                ""
+            };
+            format!("{unused}{}: {}", kt_ident(&a.name), a.ty.to_kotlin())
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }

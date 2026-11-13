@@ -17,6 +17,7 @@ public protocol CoverageBackend: AnyObject {
     func watch(mode: Mode) -> AsyncThrowingStream<Data?, Error>
     func follow(next: UInt32) -> AsyncThrowingStream<Shape, Error>
     func `default`() async throws -> Void
+    func pulse(gap: Void, hz: UInt32) -> AsyncThrowingStream<Void, Error>
 }
 
 /// Reader / writer per `Named` type referenced by the `Coverage` contract.
@@ -61,7 +62,7 @@ public final class CoverageDispatcher: PluginHandler, HandleReleaser {
                 var c = Bincode.Cursor(payload)
                 let `in` = try Bincode.readU8(&c)
                 let val = try Bincode.readI8(&c)
-                let result = try await backend.object(`in`: `in`, val: val)
+                let result = try await backend.object(in: `in`, val: val)
                 var out = Data()
                 codecs.writeEverything(&out, result)
                 return out
@@ -104,6 +105,8 @@ public final class CoverageDispatcher: PluginHandler, HandleReleaser {
         case "default":
             try await backend.`default`()
             return Data()
+        case "pulse":
+            throw PluginRuntimeError.unknownMethod(plugin: "Coverage", method: method)
         default:
             throw PluginRuntimeError.unknownMethod(plugin: "Coverage", method: method)
         }

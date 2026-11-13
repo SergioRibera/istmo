@@ -344,16 +344,22 @@ fn write_method_arm(out: &mut String, method: &Method) {
     if is_stream {
         let _ = writeln!(out, "{indent}val __istmo_flow = {call}");
         let _ = writeln!(out, "{indent}PluginResult.Stream(");
-        let _ = writeln!(out, "{indent}    __istmo_flow.map {{ __istmo_item ->");
-        let _ = writeln!(out, "{indent}        val out = ByteArrayOutputStream()");
-        WIRE.write_stmt(
-            out,
-            &format!("{indent}        "),
-            &method.returns,
-            "out",
-            "__istmo_item",
-        );
-        let _ = writeln!(out, "{indent}        out.toByteArray()");
+        if method.returns.is_unit() {
+            // `()` items encode to no bytes.
+            let _ = writeln!(out, "{indent}    __istmo_flow.map {{");
+            let _ = writeln!(out, "{indent}        ByteArray(0)");
+        } else {
+            let _ = writeln!(out, "{indent}    __istmo_flow.map {{ __istmo_item ->");
+            let _ = writeln!(out, "{indent}        val out = ByteArrayOutputStream()");
+            WIRE.write_stmt(
+                out,
+                &format!("{indent}        "),
+                &method.returns,
+                "out",
+                "__istmo_item",
+            );
+            let _ = writeln!(out, "{indent}        out.toByteArray()");
+        }
         if let Some(err) = &method.error {
             // The runtime ends the stream with `StreamEnd::Error` carrying
             // a `PluginException`'s payload.

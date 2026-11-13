@@ -83,6 +83,16 @@ class CoverageClient(
         val payload = ByteArray(0)
         IstmoRuntime.call(PLUGIN_ID, "default", payload)
     }
+
+    fun pulse(@Suppress("UNUSED_PARAMETER") gap: Unit, hz: UInt): kotlinx.coroutines.flow.Flow<Unit> {
+        val payloadBuf = ByteArrayOutputStream()
+        // () — nothing to encode
+        Bincode.writeU32(payloadBuf, hz)
+        val payload = payloadBuf.toByteArray()
+        return IstmoRuntime.stream(PLUGIN_ID, "pulse", payload).map { _ ->
+            Unit
+        }
+    }
 }
 
 /// Kotlin-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.

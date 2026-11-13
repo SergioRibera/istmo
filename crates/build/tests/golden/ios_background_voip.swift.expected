@@ -3,6 +3,7 @@
 
 import BackgroundTasks
 import Foundation
+import IstmoRuntime
 
 /// Generated always-on background shim for istmo background plugin
 /// `myapp.voip` (mode: voip).
