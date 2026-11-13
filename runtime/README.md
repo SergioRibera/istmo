@@ -72,7 +72,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("io.github.sergioribera:istmo-runtime:0.1.0")
+    implementation("io.github.sergioribera:istmo-runtime:0.1.1-alpha.5")
 }
 ```
 
@@ -92,7 +92,7 @@ includeBuild("../../runtime/android") {
 ```
 
 The rest of the app's `build.gradle.kts` still writes
-`implementation("io.github.sergioribera:istmo-runtime:0.1.0")`; the
+`implementation("io.github.sergioribera:istmo-runtime:0.1.1-alpha.5")`; the
 substitution swaps the resolved artefact for the local project.
 
 ### Gradle plugin
@@ -107,7 +107,7 @@ repositories above, Gradle resolves it from Maven Central:
 // app/build.gradle.kts
 plugins {
     id("com.android.application")
-    id("io.github.sergioribera.istmo") version "0.1.0"
+    id("io.github.sergioribera.istmo") version "0.1.1-alpha.5"
 }
 ```
 
@@ -131,7 +131,7 @@ Downstream apps reference it via a git URL + SemVer:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/SergioRibera/istmo.git", from: "0.1.0"),
+    .package(url: "https://github.com/SergioRibera/istmo.git", from: "0.1.1-alpha.5"),
 ],
 targets: [
     .target(

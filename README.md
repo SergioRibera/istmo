@@ -65,11 +65,11 @@ dependencyResolutionManagement {
 // app/build.gradle.kts
 plugins {
     id("com.android.application")
-    id("io.github.sergioribera.istmo") version "0.1.0"
+    id("io.github.sergioribera.istmo") version "0.1.1-alpha.5"
 }
 
 dependencies {
-    implementation("io.github.sergioribera:istmo-runtime:0.1.0")
+    implementation("io.github.sergioribera:istmo-runtime:0.1.1-alpha.5")
 }
 ```
 
@@ -77,7 +77,7 @@ dependencies {
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/SergioRibera/istmo.git", from: "0.1.0"),
+    .package(url: "https://github.com/SergioRibera/istmo.git", from: "0.1.1-alpha.5"),
 ],
 targets: [
     .target(
