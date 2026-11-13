@@ -156,5 +156,5 @@ Domain-level errors returned by [`Pen`] methods.
 
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
-| `NotAttached` | — | No native window has been registered for the [`PenConfig::window_id`] this client was created with. Register the window via the per-platform publisher (desktop) or `PenBackendImpl(context, view, config)` (mobile) before creating the client. |
+| `NotAttached` | — | No native window has been registered for the [`PenConfig::window_id`] this client was created with, for backends that refuse such clients. The bundled backends do not return it: the desktop backend hands an unregistered id streams that end immediately, and `PenFactoryImpl(view)` (mobile) serves every id from its one view. Register the window with the desktop `PenPublisher` before creating the client. |
 | `Backend` | `String` | Native backend refused the request. Carries the platform's raw error message. |

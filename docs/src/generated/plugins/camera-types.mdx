@@ -137,9 +137,9 @@ Platform-advertised concurrent-camera limits.
 Wire pixel format for streamed frames and still captures.
 
 Prefer the native YUV formats for cheap pass-through; the backend
-avoids a colour-conversion pass. Pick [`PixelFormat::Jpeg`] when
-the consumer wants compressed bytes (e.g. shipping over a network
-socket) — the backend asks the hardware encoder when available.
+avoids a colour-conversion pass. [`PixelFormat::Jpeg`] is for
+[`Camera::capture_still`] on Android and iOS, which use the hardware
+encoder.
 
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |

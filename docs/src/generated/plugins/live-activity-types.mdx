@@ -103,8 +103,8 @@ decodes them into concrete attributes and state types.
 | ----- | ---- | ---- | ----------- |
 | `handle` | `handle` | `istmo_core::NativeHandleId` | Handle owning the underlying platform activity — release it (via `NativeHandle::drop` or `end()`) when done. |
 | `activity_type` | `activityType` | `String` | Activity-type discriminator matching the `activity_type` supplied at `start()`. |
-| `attributes` | `attributes` | `Vec<u8>` | Bincode-encoded attributes as originally passed to `start()`. |
-| `state` | `state` | `Vec<u8>` | Bincode-encoded latest state observed for the activity. |
+| `attributes` | `attributes` | `Vec<u8>` | Wire-encoded attributes as originally passed to `start()`. |
+| `state` | `state` | `Vec<u8>` | Wire-encoded latest state observed for the activity. |
 
 ### `ActivityError`
 
@@ -117,5 +117,5 @@ Domain-level errors returned by every [`LiveActivity`] method.
 | `ExceededMaximum` | — | Platform-imposed cap on concurrent activities reached — end one before starting another. |
 | `HandleNotFound` | — | Referenced handle no longer maps to a live activity — usually because the platform ended it out from under us. |
 | `UnknownActivityType` | `String` | No backend registered for the requested `activity_type`. Add the handler in the native `LiveActivityBackendImpl`. |
-| `Decode` | `String` | Bincode failed to encode / decode an attributes or state payload. |
+| `Decode` | `String` | The wire codec failed to encode / decode an attributes or state payload. |
 | `Backend` | `String` | Any other backend failure. Message is the raw platform error. |
