@@ -1,14 +1,15 @@
 //! Reachability + link classification stream.
 //!
-//! Published by native sides on connectivity change notifications:
-//! - Android: `ConnectivityManager.NetworkCallback`
-//!   (requires `android.permission.ACCESS_NETWORK_STATE` in the
-//!   consuming app's manifest).
-//! - Apple: `NWPathMonitor` on a serial queue.
-//! - Linux: `NetworkManager` D-Bus `org.freedesktop.NetworkManager`
-//!   `StateChanged` signal.
-//! - Windows: `INetworkListManager::NetworkConnectivityChanged`.
-//! - Web: `online` / `offline` window events + `navigator.connection`.
+//! Published on connectivity changes by:
+//! - Android: `IstmoNetworkStateObserver` —
+//!   `ConnectivityManager.NetworkCallback` (requires
+//!   `android.permission.ACCESS_NETWORK_STATE` in the consuming app's
+//!   manifest).
+//! - Apple (Swift runtime): `IstmoNetworkStateObserver` —
+//!   `NWPathMonitor`.
+//! - Desktop: `NetworkStatePublisher` —
+//!   `/proc/net/route` + `/sys/class/net` on Linux,
+//!   `GetAdaptersAddresses` on Windows; nothing on macOS.
 
 use istmo_macros::message;
 

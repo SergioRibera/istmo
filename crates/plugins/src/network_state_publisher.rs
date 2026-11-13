@@ -6,9 +6,9 @@
 //! - Windows walks `GetAdaptersAddresses`: an adapter that is up, has a
 //!   gateway and is neither loopback nor a tunnel pseudo-interface makes
 //!   the host online, and the best-ranked such adapter names the link.
-//! - macOS and BSDs are not covered — plug the native observer
-//!   (`NWPathMonitor` Swift bridge) or publish bytes directly via
-//!   `Runtime::publish_early_latest`.
+//! - macOS has no sampler: `tick` publishes nothing there. Publish the
+//!   snapshot yourself through `Runtime::publish_early_latest` if you
+//!   need it.
 
 #[cfg(any(target_os = "linux", target_os = "windows", test))]
 use super::network_state::LinkKind;

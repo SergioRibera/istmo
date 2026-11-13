@@ -3,9 +3,9 @@
 //!
 //! - Linux reads `/sys/class/power_supply/BAT*/` sysfs attributes.
 //! - Windows calls `GetSystemPowerStatus` via `windows-sys`.
-//! - macOS (`IOPowerSources`) and BSDs are stubs — plug the native
-//!   bridge via `IstmoBatteryStateObserver` (iOS/macOS Swift) or
-//!   publish bytes directly through `Runtime::publish_early_latest`.
+//! - macOS has no sampler: `tick` publishes nothing there. Publish the
+//!   snapshot yourself through `Runtime::publish_early_latest` if you
+//!   need it.
 //!
 //! Call [`BatteryStatePublisher::tick`] on an interval (every ~15s) or
 //! on power events the surrounding app observes — the sampler publishes

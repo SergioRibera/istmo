@@ -1,12 +1,9 @@
 //! Pure-Rust desktop sampler for
 //! [`CapabilitiesClient`](super::capabilities::CapabilitiesClient).
 //!
-//! Capability probing on desktop is uneven: Linux inspects `/sys` +
-//! `/dev` entries, Windows probes services via Registry/APIs, macOS
-//! would need `IOKit` (heavier dep). This sampler ships what the
-//! stdlib + minimal FFI can resolve; everything else stays `false`
-//! and the per-app observer / native bridge covers higher-fidelity
-//! probes.
+//! Only Linux is probed: `/sys` + `/dev` entries resolve the fingerprint
+//! reader, camera, Bluetooth and microphone flags. Every other flag, and
+//! every flag on macOS and Windows, stays `false`.
 
 use super::capabilities::Capabilities;
 use crate::early::LatestPublisher;

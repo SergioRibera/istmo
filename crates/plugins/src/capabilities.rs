@@ -1,11 +1,19 @@
 //! Static device capability flags: biometric, NFC, haptics, camera,
-//! GPS, bluetooth.
+//! GPS, bluetooth, microphone, telephony.
 //!
-//! Published once at startup. Values are detected from
-//! `PackageManager.hasSystemFeature` on Android, `LAContext` /
-//! `NFCNDEFReaderSession` / sensor availability APIs on Apple, and
-//! equivalent probes on desktop. The Rust fallback marks every flag as
-//! `false` until the platform reports.
+//! Published once at startup by:
+//! - Android: `IstmoCapabilitiesObserver` —
+//!   `PackageManager.hasSystemFeature` plus `Vibrator.hasVibrator`.
+//! - Apple (Swift runtime): `IstmoCapabilitiesObserver` — `LAContext`,
+//!   `NFCNDEFReaderSession`, `CHHapticEngine`, `AVCaptureDevice` and
+//!   `CTTelephonyNetworkInfo`; GPS (iOS / watchOS) and Bluetooth are
+//!   reported present from the platform, since probing them needs a
+//!   permission prompt.
+//! - Desktop: `CapabilitiesPublisher` —
+//!   `/sys` + `/dev` probes on Linux (fingerprint, camera, Bluetooth,
+//!   microphone); every flag `false` on macOS and Windows.
+//!
+//! Every flag reads `false` until the platform publishes.
 
 use istmo_macros::message;
 

@@ -1,15 +1,17 @@
 //! Battery level, charging and thermal state stream.
 //!
-//! Published by native observers:
-//! - Android: `Intent.ACTION_BATTERY_CHANGED` sticky receiver +
-//!   `PowerManager.isPowerSaveMode` + `getCurrentThermalStatus`.
-//! - Apple: `UIDevice.batteryLevel` / `batteryState` with
-//!   `batteryMonitoringEnabled = true` (iOS); `IOPowerSources` on
-//!   macOS; `ProcessInfo.isLowPowerModeEnabled` +
-//!   `ProcessInfo.thermalState`.
-//! - Linux: `UPower` D-Bus `org.freedesktop.UPower.Device`.
-//! - Windows: `GetSystemPowerStatus`.
-//! - Web: `navigator.getBattery()` (deprecated, best-effort).
+//! Published by:
+//! - Android: `IstmoBatteryStateObserver` — sticky
+//!   `Intent.ACTION_BATTERY_CHANGED` receiver +
+//!   `PowerManager.ACTION_POWER_SAVE_MODE_CHANGED`,
+//!   `PowerManager.isPowerSaveMode` and `currentThermalStatus` (API 29+).
+//! - Apple (Swift runtime): `IstmoBatteryStateObserver` —
+//!   `UIDevice.batteryLevel` / `batteryState` on iOS (it enables
+//!   `isBatteryMonitoringEnabled`), `ProcessInfo.isLowPowerModeEnabled`
+//!   and `ProcessInfo.thermalState`.
+//! - Desktop: `BatteryStatePublisher` —
+//!   `/sys/class/power_supply` on Linux, `GetSystemPowerStatus` on
+//!   Windows; nothing on macOS.
 //!
 //! No special permissions are required on any platform.
 

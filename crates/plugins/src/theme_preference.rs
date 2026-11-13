@@ -1,11 +1,21 @@
 //! User-facing theme and accessibility preferences published by the
 //! host platform.
 //!
-//! Native observers (`UITraitCollection` / `UIAccessibility` on Apple,
-//! `AccessibilityManager` + `UIMode` on Android, `prefers-*` on Web,
-//! `gsettings` on Linux, `SPI_GET*` on Windows) feed a single
-//! [`ThemePreference`] snapshot through a latest-value slot so late
-//! subscribers get the current state immediately.
+//! The observers feed a single [`ThemePreference`] snapshot through a
+//! latest-value slot so late subscribers get the current state
+//! immediately:
+//!
+//! - Android: `IstmoThemePreferenceObserver` — `Configuration.uiMode`
+//!   and `fontScale`, `AccessibilityManager` spoken-feedback services and
+//!   the animator-scale, bold-text, inversion and high-contrast settings.
+//! - Apple (Swift runtime): `IstmoThemePreferenceObserver` — the key
+//!   window scene's `UITraitCollection.userInterfaceStyle` and the
+//!   `UIAccessibility` flags; `font_scale` stays `1.0`.
+//! - Desktop: `ThemePreferencePublisher` — only `color_scheme`, from
+//!   `gsettings` on Linux, `defaults read` on macOS and the
+//!   `AppsUseLightTheme` registry value on Windows.
+//!
+//! No bundled publisher reports an accent colour yet.
 
 use istmo_macros::message;
 
@@ -23,16 +33,15 @@ pub const THEME_PREFERENCE_CHANNEL: &str = "istmo.theme_preference";
 pub struct ThemePreference {
     pub color_scheme: ColorScheme,
 
-    /// Platform accent (`UIColor.tintColor` / Android 12 Material You /
-    /// Windows accent / macOS appearance accent). `None` when the
-    /// platform reports no override.
+    /// Platform accent colour. Reserved: no bundled publisher reports it
+    /// yet, so it is always `None`.
     pub accent_color: Option<Color>,
 
     pub high_contrast: bool,
 
-    /// User text-size scaling. `1.0` is the system default; `0.85`,
-    /// `1.3`, `2.0`, etc. are legitimate values on both iOS and
-    /// Android (clamped to a sane floor at render time by callers).
+    /// User text-size scaling. `1.0` is the system default; Android
+    /// reports `Configuration.fontScale` (`0.85`, `1.3`, `2.0`, …), the
+    /// iOS and desktop publishers always `1.0`.
     pub font_scale: f32,
 
     pub reduce_motion: bool,
