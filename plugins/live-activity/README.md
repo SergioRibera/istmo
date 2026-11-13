@@ -5,7 +5,7 @@ Live Activities from Rust, for the
 
 | Platform | Backend |
 | --- | --- |
-| iOS 16.1+ | ActivityKit / Dynamic Island (`native/ios`) |
+| iOS 16.2+ | ActivityKit / Dynamic Island (`native/ios`) |
 | Android | Ongoing notifications in three tiers: custom `RemoteViews`, `ProgressStyle` (API 35), Live Updates (API 36) (`native/android`) |
 
 ## Usage

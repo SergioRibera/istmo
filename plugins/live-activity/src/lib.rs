@@ -127,7 +127,7 @@ pub enum PlatformCapabilities {
 )]
 pub struct IosCapabilities {
     /// Whether the `ActivityKit` framework itself is available (iOS
-    /// 16.1+).
+    /// 16.2+).
     pub activity_kit_available: bool,
     /// Whether the user has activities enabled in system settings.
     pub activities_enabled: bool,

@@ -3,7 +3,7 @@ import IstmoRuntime
 #if canImport(ActivityKit)
 import ActivityKit
 
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveActivityHandler {
 
     public let activityType: String

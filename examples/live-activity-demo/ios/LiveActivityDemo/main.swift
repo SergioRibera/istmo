@@ -8,7 +8,7 @@ func istmo_run_ios() -> Int32
 IstmoApp.run(
     registerPlugins: {
         let backend = LiveActivityBackendImpl()
-        if #available(iOS 16.1, *) {
+        if #available(iOS 16.2, *) {
             backend.register(handler: TimerLiveActivityHandler())
         }
         IstmoRuntime.shared.registerHandler(

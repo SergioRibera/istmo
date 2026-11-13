@@ -27,7 +27,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         ISTMO_DISPLAY_NAME: "live-activity-demo"
         PRODUCT_BUNDLE_IDENTIFIER: "dev.istmo.liveactivitydemo"
-        IPHONEOS_DEPLOYMENT_TARGET: "16.1"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.2"
     preBuildScripts:
       - name: istmo cargo build
         basedOnDependencyAnalysis: false

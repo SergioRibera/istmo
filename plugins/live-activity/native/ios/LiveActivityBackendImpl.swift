@@ -71,7 +71,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
 
     public func are_activities_enabled() async throws -> Bool {
         #if canImport(ActivityKit)
-        if #available(iOS 16.1, *) {
+        if #available(iOS 16.2, *) {
             return ActivityAuthorizationInfo().areActivitiesEnabled
         }
         return false
@@ -82,7 +82,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
 
     public func capabilities() async throws -> PlatformCapabilities {
         #if canImport(ActivityKit)
-        if #available(iOS 16.1, *) {
+        if #available(iOS 16.2, *) {
             let info = ActivityAuthorizationInfo()
             return .ios(
                 IosCapabilities(

@@ -13,4 +13,4 @@ auto_register = false
 
 [min_versions]
 android = 26
-ios = "16.1"
+ios = "16.2"

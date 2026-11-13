@@ -56,4 +56,4 @@ targets:
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         # ActivityKit is a system framework; nothing to import at build
         # time. The `NSSupportsLiveActivities` key in Info.plist opts the
-        # app in on iOS 16.1+.
+        # app in on iOS 16.2+.
