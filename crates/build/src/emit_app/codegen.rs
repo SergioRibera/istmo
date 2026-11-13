@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-use super::write_if_changed;
+use super::{remove_generated, write_if_changed};
 use crate::app_config::Role;
 use crate::codegen::{kt_string, swift_string};
 use crate::contract::Contract;
@@ -54,6 +54,10 @@ pub(super) fn emit_kotlin(
                 &gen_dir.join(format!("{ty}Dispatcher.kt")),
                 &kotlin_with_package(&full_package, &generate_kotlin_host(contract)),
             );
+            // Left over from the client role.
+            for stale in ["Codecs", "Client"] {
+                remove_generated(&gen_dir.join(format!("{ty}{stale}.kt")));
+            }
             if seed_backends {
                 seed_kotlin_backend_impl(&gen_dir, &full_package, contract);
             }
@@ -67,6 +71,8 @@ pub(super) fn emit_kotlin(
                 &gen_dir.join(format!("{ty}Client.kt")),
                 &kotlin_with_package(&full_package, &generate_kotlin_client(contract)),
             );
+            // Left over from the host role.
+            remove_generated(&gen_dir.join(format!("{ty}Dispatcher.kt")));
         }
     }
     write_if_changed(
@@ -99,6 +105,7 @@ pub(super) fn emit_swift(
                 &generated.join(format!("{ty}Dispatcher.swift")),
                 &generate_swift_host(contract),
             );
+            remove_generated(&generated.join(format!("{ty}Client.swift")));
             if seed_backends {
                 seed_swift_backend_impl(&generated, contract);
             }
@@ -108,6 +115,7 @@ pub(super) fn emit_swift(
                 &generated.join(format!("{ty}Client.swift")),
                 &generate_swift_client(contract),
             );
+            remove_generated(&generated.join(format!("{ty}Dispatcher.swift")));
         }
     }
     write_if_changed(

@@ -739,3 +739,52 @@ fn app_swift_packages_land_in_the_xcodegen_fragment() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn switching_role_removes_the_other_roles_generated_files() {
+    let (root, android_root, ios_root) = registry_roots("role-switch");
+    let java = android_root.join("app/src/main/java/com/example/app/gen");
+    let swift = ios_root.join("MyApp/Plugins/Dummy/Generated");
+    let emit = |role: istmo_build::Role| {
+        emit_app_with(AppOpts {
+            root: Some(root.clone()),
+            android_root: Some(android_root.clone()),
+            ios_root: Some(ios_root.clone()),
+            ios_app_dir: Some("MyApp".to_owned()),
+            extra_contracts: vec![dummy_contract()],
+            per_plugin: std::collections::HashMap::from([(
+                "myapp.dummy".to_owned(),
+                istmo_build::AppPluginOpts {
+                    role: Some(role),
+                    ..istmo_build::AppPluginOpts::default()
+                },
+            )]),
+            ..AppOpts::default()
+        });
+    };
+    let host_files = [java.join("DummyDispatcher.kt"), swift.join("DummyDispatcher.swift")];
+    let client_files = [
+        java.join("DummyClient.kt"),
+        java.join("DummyCodecs.kt"),
+        swift.join("DummyClient.swift"),
+    ];
+
+    emit(istmo_build::Role::Client);
+    assert!(client_files.iter().all(|f| f.is_file()));
+    emit(istmo_build::Role::Host);
+    assert!(host_files.iter().all(|f| f.is_file()));
+    assert!(
+        client_files.iter().all(|f| !f.exists()),
+        "client files survived the switch to host"
+    );
+
+    emit(istmo_build::Role::Client);
+    assert!(client_files.iter().all(|f| f.is_file()));
+    assert!(host_files.iter().all(|f| !f.exists()));
+
+    // A hand-written file of the same name is never touched.
+    fs::write(&client_files[0], "package com.example.app.gen\n").unwrap();
+    emit(istmo_build::Role::Host);
+    assert!(client_files[0].is_file());
+    let _ = fs::remove_dir_all(&root);
+}
