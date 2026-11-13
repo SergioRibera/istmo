@@ -131,7 +131,7 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
         notificationManager.cancel(entry.notificationId)
     }
 
-    private fun pickTier(hint: AndroidTierHint?): Tier? {
+    private fun pickTier(hint: AndroidTierHint?): Tier<A, C>? {
         val sdk = Build.VERSION.SDK_INT
         return when (val strat = renderStrategy()) {
             is RenderStrategy.CustomOnly -> Tier.Custom(strat.custom)
@@ -152,7 +152,7 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
     }
 
     private fun buildNotification(
-        tier: Tier,
+        tier: Tier<A, C>,
         attributes: A,
         state: C,
         alert: AlertConfig?,
@@ -280,19 +280,19 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
         val notificationId: Int,
         val attributes: A,
         val state: C,
-        val tier: Tier,
+        val tier: Tier<A, C>,
     )
 
-    private sealed interface Tier {
-        class Custom<A : Any, C : Any>(val renderer: CustomRenderer<A, C>) : Tier
+    private sealed interface Tier<A : Any, C : Any> {
+        class Custom<A : Any, C : Any>(val renderer: CustomRenderer<A, C>) : Tier<A, C>
 
-        class Progress<A : Any, C : Any>(val renderer: ProgressRenderer<A, C>) : Tier
+        class Progress<A : Any, C : Any>(val renderer: ProgressRenderer<A, C>) : Tier<A, C>
 
         class LiveUpdate<A : Any, C : Any>(
             val liveUpdate: LiveUpdateRenderer<A, C>,
             val progress: ProgressRenderer<A, C>?,
             val custom: CustomRenderer<A, C>,
-        ) : Tier
+        ) : Tier<A, C>
     }
 
     companion object {
