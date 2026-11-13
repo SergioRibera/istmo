@@ -1,0 +1,133 @@
+---
+title: Opener
+description: Abre URLs con el sistema — navegador, correo, teléfono, mapas — tras una lista de esquemas permitidos, en Android, iOS, macOS, Windows y Linux.
+sidebar:
+  order: 9
+---
+
+import PluginTypes from '../../../../generated/plugins/opener-types.mdx';
+
+`istmo-opener` entrega una URL a lo que la plataforma use para ella:
+el navegador para `https:`, la app de correo para `mailto:`, el
+marcador para `tel:`, los mapas para `geo:`.
+
+| Plataforma | Backend | Mínimo |
+| ---------- | ------- | ------ |
+| Android | intent `ACTION_VIEW` en `CATEGORY_BROWSABLE` | API 21 |
+| iOS | `UIApplication.shared.open` | 13.0 |
+| macOS | `DesktopOpener` — `open <url>` | — |
+| Windows | `DesktopOpener` — `rundll32 url.dll,FileProtocolHandler <url>` | — |
+| Linux / otros | `DesktopOpener` — `xdg-open <url>` | — |
+
+Los mínimos están declarados en el `[min_versions]` del plugin y se
+comprueban al compilar (ver la [referencia de istmo.toml](/istmo/es/build-scripts/istmo-toml-reference/#min_versions)).
+
+## Instalación
+
+```toml
+[dependencies]
+istmo-opener = "0.1.1-alpha.5"
+```
+
+## Abrir una URL
+
+```rust
+use istmo_opener::{OpenError, OpenerClient, SchemePolicy};
+
+let opener = OpenerClient::from_runtime(&runtime)?;
+
+// Se comprueba antes en el proceso: una URL no permitida nunca llega al backend.
+opener
+    .open_checked("https://example.com".into(), &SchemePolicy::default())
+    .await?;
+
+// O directo al backend, que aplica su propia lista.
+opener
+    .open("mailto:hola@example.com".into())
+    .await
+    .map_err(OpenError::from)?;
+```
+
+`open_checked` ya devuelve `OpenError`; para `open`, `OpenError::from`
+decodifica el error propio del plugin a partir del `IstmoError` del
+cliente:
+
+| Error | Cuándo |
+| ----- | ------ |
+| `NoHandler` | nada en el dispositivo maneja ese tipo de URL |
+| `Invalid` | la URL no se puede interpretar (ver abajo) |
+| `SchemeNotAllowed(esquema)` | el esquema, en minúsculas, no está en la lista |
+| `Backend(mensaje)` | cualquier otro fallo de la plataforma |
+
+## Lista de esquemas permitidos
+
+Las URLs suelen venir de contenido que la app no controla, y un
+opener puede lanzar apps arbitrarias. Por eso cada backend solo abre
+esquemas de una lista — por defecto `DEFAULT_ALLOWED_SCHEMES`: `http`,
+`https`, `mailto`, `tel`, `sms` y `geo` — y rechaza el resto con
+`OpenError::SchemeNotAllowed`. Los esquemas se comparan sin distinguir
+mayúsculas.
+
+`SchemePolicy::check` (lo usan `open_checked` y `DesktopOpener`)
+también rechaza como `Invalid` una URL vacía, que empiece por `-`, que
+contenga caracteres de control o caracteres de formato invisibles
+(espacios de ancho cero, overrides bidi, BOM, …) o que no tenga un
+esquema RFC 3986. Los backends nativos aplican las mismas
+comprobaciones.
+
+Amplía o reduce la lista allí donde corre cada comprobación:
+
+| Dónde | Cómo |
+| ----- | ---- |
+| Código Rust | `SchemePolicy::default().allow("file")` o `SchemePolicy::only(["https"])` con `open_checked` |
+| Backend de escritorio | `DesktopOpener::with_policy(policy)` |
+| Backend Android | `OpenerBackendImpl(context, allowedSchemes = setOf(...))` |
+| Backend iOS | `OpenerBackendImpl(allowedSchemes: [...])` |
+
+El registry generado construye los backends móviles con la lista por
+defecto. Para pasar la tuya, saca el plugin del auto-registro con
+`[[app.plugin]] id = "istmo.opener"` + `auto_register = false` y
+registra el backend tú mismo (ver
+[Auto-registro](/istmo/es/build-scripts/auto-register/#opt-out)).
+
+## Conectar el backend
+
+En móvil el `IstmoPluginRegistry` generado registra el backend. Las
+apps de escritorio registran `DesktopOpener` por su cuenta (abajo).
+
+:::note[Paquete Android]
+El plugin declara `android_package = "dev.istmo.plugins.opener"`, así
+que `istmo-build` genera `OpenerBackend`, `OpenError`,
+`OpenerCodecsImpl`, … en ese paquete, junto a las fuentes Kotlin del
+plugin, sin importar el `[app] android_package` de tu app.
+:::
+
+**Android** — no hay nada que conectar. `OpenerBackendImpl` recibe un
+`Context` (`android_backend_arg = "context"`), así que el registry lo
+construye una vez por proceso con el contexto de la aplicación. El
+intent lleva `FLAG_ACTIVITY_NEW_TASK` y `CATEGORY_BROWSABLE`, por lo
+que solo llega a activities que declararon ser seguras de abrir desde
+un enlace. Una URL `file://` (solo posible si `file` está permitido)
+falla con `NoHandler` en API 24+.
+
+**iOS** — no hay nada que conectar: `IstmoApp.run()` (o
+`IstmoPluginRegistry.registerAll()`) registra `OpenerBackendImpl()`.
+`open` falla con `NoHandler` cuando `UIApplication.open` informa que
+no abrió la URL.
+
+**Escritorio** — `DesktopOpener` ejecuta el opener del sistema con la
+URL como un único argumento y sin shell, así que `&`, `|` o comillas
+en la URL no tienen efecto. Espera hasta 5 segundos el código de
+salida del opener (distinto de cero → `NoHandler`, opener inexistente
+→ `NoHandler`); si el opener sigue corriendo pasado ese tiempo se
+asume que lanzó el manejador y la llamada resuelve `Ok(())`.
+
+```rust
+use istmo_opener::{DesktopOpener, OpenerHost};
+
+runtime.register_host(OpenerHost::new(DesktopOpener::default()));
+```
+
+## Tipos de wire
+
+<PluginTypes />

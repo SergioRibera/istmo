@@ -1,0 +1,132 @@
+---
+title: Barcode Scanner
+description: Scan QR codes and barcodes with the platform's camera scanner from one async Rust call — Google code scanner on Android, AVFoundation on iOS.
+sidebar:
+  order: 8
+---
+
+import PluginTypes from '../../../generated/plugins/barcode-scanner-types.mdx';
+
+`istmo-barcode-scanner` opens the platform's full-screen camera
+scanner and resolves with the first code it reads, or `Ok(None)` when
+the user backs out.
+
+| Platform | Backend | Minimum |
+| -------- | ------- | ------- |
+| Android | Google code scanner (`play-services-code-scanner`) | API 21 |
+| iOS | `AVCaptureSession` + `AVCaptureMetadataOutput` | 13.0 |
+| Desktop | `DesktopBarcodeScanner` — always `ScanError::Unavailable` | — |
+
+The minimums are declared in the plugin's `[min_versions]` and checked
+at build time (see [istmo.toml reference](/istmo/build-scripts/istmo-toml-reference/#min_versions)).
+
+## Install
+
+```toml
+[dependencies]
+istmo-barcode-scanner = "0.1.1-alpha.5"
+```
+
+## Scan
+
+```rust
+use istmo_barcode_scanner::{BarcodeScannerClient, ScanConfig, ScanError};
+
+let scanner = BarcodeScannerClient::from_runtime(&runtime)?;
+
+let scanned = scanner
+    .scan(ScanConfig::qr("Scan the pairing code"))
+    .await
+    .map_err(ScanError::from)?;
+if let Some(code) = scanned {
+    tracing::info!("{:?}: {}", code.format, code.text);
+} // `None`: the user closed the scanner
+```
+
+`ScanError::from` decodes the plugin's own error from the client's
+`IstmoError`:
+
+| Error | When |
+| ----- | ---- |
+| `Unavailable` | no camera, no Google Play services (Android), or desktop |
+| `PermissionDenied` | the user refused camera access |
+| `Backend(message)` | any other platform failure |
+
+### Formats
+
+`ScanConfig::formats` lists the symbologies to accept; an empty list
+accepts every one the platform supports. `ScanConfig::qr(prompt)` is a
+shortcut for QR codes only. `prompt` is shown over the camera on iOS;
+the Google code scanner has no place for it, so Android ignores it.
+
+```rust
+use istmo_barcode_scanner::{BarcodeFormat, ScanConfig};
+
+let config = ScanConfig {
+    prompt: Some("Scan the product".into()),
+    formats: vec![BarcodeFormat::Ean13, BarcodeFormat::UpcA],
+};
+```
+
+Not every platform reads every format: iOS has no separate UPC-A (it
+reports those as `Ean13` with a leading `0`) and reads Codabar only
+from iOS 15.4. A requested format the platform cannot read is ignored.
+`BarcodeFormat` is `#[non_exhaustive]`; codes whose symbology has no
+variant arrive as `BarcodeFormat::Other`, which never matches anything
+when requested. On Android, a `formats` list made only of `Other`
+fails with `Backend` instead of widening the scan to every format.
+
+### Payload
+
+`ScannedCode::text` is the decoded UTF-8 text. For payloads that are
+not text (binary QR codes) it is empty:
+
+- **Android** still returns the code and always fills
+  `ScannedCode::raw` with the payload bytes.
+- **iOS** cannot expose raw bytes, so it skips such codes and keeps
+  scanning; `raw` is always `None`.
+
+## Wire the backend
+
+On mobile the generated `IstmoPluginRegistry` registers the backend.
+Desktop apps register `DesktopBarcodeScanner` themselves (below).
+
+:::note[Android package]
+The plugin declares `android_package = "dev.istmo.plugins.barcodescanner"`,
+so `istmo-build` generates `BarcodeScannerBackend`, `ScanConfig`,
+`BarcodeScannerCodecsImpl`, … into that package, next to the plugin's
+Kotlin sources, whatever `[app] android_package` your app uses.
+:::
+
+**Android** — `BarcodeScannerBackendImpl` takes the host
+`ComponentActivity` (`android_backend_arg = "activity"`), so use
+`IstmoGameActivity` or call `IstmoHost.onCreate(this)` from your own
+`ComponentActivity`. The plugin adds
+`com.google.android.gms:play-services-code-scanner:16.1.0`. Play
+services draws the camera UI and decodes, so the app declares no
+`CAMERA` permission; devices without Play services report
+`ScanError::Unavailable`. Only one scanner is on screen at a time —
+concurrent `scan` calls wait for the previous one.
+
+**iOS** — nothing to wire: `IstmoApp.run()` (or
+`IstmoPluginRegistry.registerAll()`) registers
+`BarcodeScannerBackendImpl()`. It asks for camera access on first use
+and presents over the top view controller. `istmo-build` adds
+`NSCameraUsageDescription` to the app's `Info.plist`; reword it with
+[`[app.info_plist]`](/istmo/build-scripts/istmo-toml-reference/#appinfo_plist)
+in the app's `istmo.toml`.
+
+**Desktop** — there is no camera scanner; `DesktopBarcodeScanner`
+answers every scan with `ScanError::Unavailable`, so offer a paste
+field instead. Register it so calls resolve instead of waiting for a
+native side:
+
+```rust
+use istmo_barcode_scanner::{BarcodeScannerHost, DesktopBarcodeScanner};
+
+runtime.register_host(BarcodeScannerHost::new(DesktopBarcodeScanner));
+```
+
+## Wire types
+
+<PluginTypes />
