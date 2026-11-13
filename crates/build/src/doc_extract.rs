@@ -5,6 +5,7 @@
 //! Markdown/MDX partial the Starlight docs site can `import` — so the
 //! type tables in the plugin pages stay in lockstep with the code.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -68,7 +69,7 @@ pub fn extract_from_file(file: &File) -> Result<Vec<PluginTypeDoc>, ExtractError
     Ok(out)
 }
 
-fn is_public(vis: &Visibility) -> bool {
+const fn is_public(vis: &Visibility) -> bool {
     matches!(vis, Visibility::Public(_))
 }
 
@@ -88,7 +89,7 @@ pub fn render_types_mdx(types: &[PluginTypeDoc]) -> String {
         if idx > 0 {
             out.push('\n');
         }
-        out.push_str(&format!("### `{}`\n\n", ty.name));
+        let _ = write!(out, "### `{}`\n\n", ty.name);
         if !ty.docs.trim().is_empty() {
             out.push_str(ty.docs.trim());
             out.push_str("\n\n");
@@ -109,13 +110,14 @@ fn render_struct_fields(out: &mut String, fields: &[FieldDoc]) {
     out.push_str("| Field | Wire | Type | Description |\n");
     out.push_str("| ----- | ---- | ---- | ----------- |\n");
     for f in fields {
-        out.push_str(&format!(
-            "| `{}` | `{}` | `{}` | {} |\n",
+        let _ = writeln!(
+            out,
+            "| `{}` | `{}` | `{}` | {} |",
             f.name,
             f.wire_name,
             escape_pipes(&f.ty),
             oneline(&f.docs),
-        ));
+        );
     }
 }
 
@@ -136,12 +138,7 @@ fn render_enum_variants(out: &mut String, variants: &[VariantDoc]) {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        out.push_str(&format!(
-            "| `{}` | {} | {} |\n",
-            v.name,
-            payload,
-            oneline(&v.docs),
-        ));
+        let _ = writeln!(out, "| `{}` | {} | {} |", v.name, payload, oneline(&v.docs),);
     }
 }
 
@@ -206,7 +203,7 @@ fn lower_enum(e: &ItemEnum) -> Result<PluginTypeDoc, ExtractError> {
 }
 
 fn has_message_attr(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| is_message_attr(a))
+    attrs.iter().any(is_message_attr)
 }
 
 fn is_message_attr(attr: &Attribute) -> bool {
@@ -342,10 +339,10 @@ pub fn write_types_mdx(dest: &Path, contents: &str) -> io::Result<()> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
-    if let Ok(existing) = fs::read_to_string(dest) {
-        if existing == contents {
-            return Ok(());
-        }
+    if let Ok(existing) = fs::read_to_string(dest)
+        && existing == contents
+    {
+        return Ok(());
     }
     fs::write(dest, contents)
 }
@@ -356,7 +353,7 @@ mod tests {
 
     #[test]
     fn extracts_struct_field_docs() {
-        let src = r#"
+        let src = r"
 /// OAuth config.
 #[istmo::message]
 pub struct SignInConfig {
@@ -366,7 +363,7 @@ pub struct SignInConfig {
     pub scopes: Vec<String>,
     pub auto_select: bool,
 }
-"#;
+";
         let file: File = syn::parse_file(src).unwrap();
         let types = extract_from_file(&file).unwrap();
         assert_eq!(types.len(), 1);
@@ -387,7 +384,7 @@ pub struct SignInConfig {
 
     #[test]
     fn extracts_enum_variant_docs() {
-        let src = r#"
+        let src = r"
 /// Sign-in error surface.
 #[istmo::message]
 pub enum SignInError {
@@ -398,7 +395,7 @@ pub enum SignInError {
     /// Config invalid.
     InvalidConfiguration(String),
 }
-"#;
+";
         let file: File = syn::parse_file(src).unwrap();
         let types = extract_from_file(&file).unwrap();
         let PluginTypeDocKind::Enum { variants } = &types[0].kind else {
@@ -428,7 +425,7 @@ pub enum SignInError {
                         name: "scopes".to_owned(),
                         wire_name: "scopes".to_owned(),
                         ty: "Vec<String>".to_owned(),
-                        docs: "".to_owned(),
+                        docs: String::new(),
                     },
                 ],
             },
@@ -446,7 +443,7 @@ pub enum SignInError {
     fn renders_mdx_table_for_enum() {
         let ty = PluginTypeDoc {
             name: "SignInMode".to_owned(),
-            docs: "".to_owned(),
+            docs: String::new(),
             kind: PluginTypeDocKind::Enum {
                 variants: vec![
                     VariantDoc {
@@ -486,13 +483,13 @@ pub enum SignInError {
 
     #[test]
     fn ignores_non_message_structs() {
-        let src = r#"
+        let src = r"
 #[derive(Debug)]
 pub struct NotAMessage { pub x: u32 }
 
 #[istmo::message]
 pub struct WireType { pub y: u32 }
-"#;
+";
         let file: File = syn::parse_file(src).unwrap();
         let types = extract_from_file(&file).unwrap();
         assert_eq!(types.len(), 1);
@@ -501,7 +498,7 @@ pub struct WireType { pub y: u32 }
 
     #[test]
     fn skips_non_pub_message_types() {
-        let src = r#"
+        let src = r"
 #[istmo::message]
 pub(crate) struct CrateVisible { pub x: u32 }
 
@@ -510,7 +507,7 @@ struct Private { pub y: u32 }
 
 #[istmo::message]
 pub struct WireType { pub z: u32 }
-"#;
+";
         let file: File = syn::parse_file(src).unwrap();
         let types = extract_from_file(&file).unwrap();
         assert_eq!(types.len(), 1);
@@ -519,7 +516,7 @@ pub struct WireType { pub z: u32 }
 
     #[test]
     fn skips_non_pub_fields_in_pub_struct() {
-        let src = r#"
+        let src = r"
 #[istmo::message]
 pub struct Mixed {
     /// Public field.
@@ -527,7 +524,7 @@ pub struct Mixed {
     b: u32,
     pub(crate) c: u32,
 }
-"#;
+";
         let file: File = syn::parse_file(src).unwrap();
         let types = extract_from_file(&file).unwrap();
         let PluginTypeDocKind::Struct { fields } = &types[0].kind else {
@@ -539,13 +536,13 @@ pub struct Mixed {
 
     #[test]
     fn dedents_multiline_struct_docs() {
-        let src = r#"
+        let src = r"
 /// First line.
 ///
 /// Second paragraph explaining details.
 #[istmo::message]
 pub struct Foo { pub x: u32 }
-"#;
+";
         let file: File = syn::parse_file(src).unwrap();
         let types = extract_from_file(&file).unwrap();
         assert_eq!(

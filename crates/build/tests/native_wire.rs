@@ -82,7 +82,7 @@ fn extremes() -> Everything {
 
 /// Small values, absent options, and signed 64-bit values whose zigzag
 /// form sets the top bit (a sign-extending decode gets them wrong).
-fn small() -> Everything {
+const fn small() -> Everything {
     Everything {
         unit: (),
         flag: false,

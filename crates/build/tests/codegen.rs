@@ -1004,6 +1004,7 @@ fn xdg_desktop_entry_matches_golden() {
     );
 }
 
+#[allow(clippy::too_many_lines)]
 fn live_activity() -> Contract {
     Contract {
         plugin_id: "istmo.live_activity".to_owned(),

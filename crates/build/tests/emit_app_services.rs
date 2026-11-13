@@ -467,7 +467,7 @@ fn emit_app_generates_into_the_plugin_android_package() {
 
     emit_app_with(AppOpts {
         root: Some(root.clone()),
-        android_root: Some(android_root.clone()),
+        android_root: Some(android_root),
         ios: Some(false),
         seed_backends: true,
         extra_manifests: vec![plugin],
