@@ -53,7 +53,7 @@ android {
 }
 
 dependencies {
-    implementation("io.github.sergioribera:istmo-runtime:0.1.0")
+    implementation("io.github.sergioribera:istmo-runtime:0.1.1-alpha.5")
     // Plugin dependencies (`androidx.core` for istmo-share's FileProvider
     // and direct share) come from the plugins' istmo.toml via io.github.sergioribera.istmo.
     implementation("androidx.appcompat:appcompat:1.7.0")

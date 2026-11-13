@@ -151,5 +151,8 @@ pre-release-replacements = [
     { file = "examples/pen-demo/android/app/build.gradle.kts", search = 'io\.github\.sergioribera:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "io.github.sergioribera:istmo-runtime:{{version}}" },
     { file = "examples/biometric-demo/android/app/build.gradle.kts", search = 'io\.github\.sergioribera:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "io.github.sergioribera:istmo-runtime:{{version}}" },
     { file = "examples/share-demo/android/app/build.gradle.kts", search = 'io\.github\.sergioribera:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "io.github.sergioribera:istmo-runtime:{{version}}" },
+    { file = "examples/camera-demo/android/app/build.gradle.kts", search = 'io\.github\.sergioribera:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "io.github.sergioribera:istmo-runtime:{{version}}" },
+    { file = "examples/android-demo/android/app/build.gradle.kts", search = 'io\.github\.sergioribera:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "io.github.sergioribera:istmo-runtime:{{version}}" },
+    { file = "examples/android-multi/android/app/build.gradle.kts", search = 'io\.github\.sergioribera:istmo-runtime:[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?', replace = "io.github.sergioribera:istmo-runtime:{{version}}" },
 ]
 

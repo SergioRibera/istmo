@@ -53,7 +53,7 @@ android {
 }
 
 dependencies {
-    implementation("io.github.sergioribera:istmo-runtime:0.1.0")
+    implementation("io.github.sergioribera:istmo-runtime:0.1.1-alpha.5")
     // `androidx.biometric` comes from istmo-biometric's istmo.toml via
     // io.github.sergioribera.istmo.
     implementation("androidx.core:core-ktx:1.13.1")
