@@ -194,10 +194,9 @@ buffer se llena; el siguiente frame entregado indica cuántos se
 perdieron en `dropped_before`. Reacciona bajando la resolución, el
 frame rate o el costo del formato de píxel.
 
-En Android e iOS cada llamada a `frames()` tiene su propio buffer, así
-que dos suscriptores ven cada uno todos los frames. Los backends de
-escritorio y navegador entregan el mismo receiver a todos los
-suscriptores, que se reparten los frames.
+Cada llamada a `frames()` tiene su propio buffer en todos los backends,
+así que dos suscriptores ven cada uno todos los frames, y un suscriptor
+lento solo pierde sus propios frames.
 
 ## Controles
 

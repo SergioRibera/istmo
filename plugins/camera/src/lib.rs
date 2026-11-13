@@ -44,6 +44,20 @@
 pub mod desktop;
 pub mod web;
 
+#[cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos", target_os = "windows"),
+        feature = "desktop"
+    ),
+    all(target_arch = "wasm32", feature = "web"),
+    test
+))]
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "`pub(crate)` marks crate-internal items; plain `pub` in private modules trips `unreachable_pub`"
+)]
+mod fanout;
+
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "desktop"
@@ -731,9 +745,10 @@ impl SessionHandle {
 
     /// Subscribe to the capture stream.
     ///
-    /// Calling this twice on the same session yields two receivers. The
-    /// Android and iOS backends fan every frame out to each of them; the
-    /// desktop host shares one queue, so each frame reaches only one.
+    /// Calling this twice on the same session yields two receivers, and
+    /// every backend delivers each frame to both. Each receiver has its
+    /// own queue of [`CameraInitConfig::frame_pool_depth`] frames, so a
+    /// slow subscriber only loses its own frames.
     ///
     /// # Errors
     /// [`CameraError::SessionClosed`] when the native session has

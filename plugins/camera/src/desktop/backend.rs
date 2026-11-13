@@ -1,11 +1,9 @@
 //! `nokhwa`-backed pure-Rust desktop host.
 //!
 //! One [`CallbackCamera`] per session; the capture thread lives inside
-//! `nokhwa` and drops frames into a bounded `flume` channel sized by
-//! [`CameraInitConfig::frame_pool_depth`]. The channel is a single
-//! shared queue — multiple `.frames()` clones share it (one frame per
-//! consumer, not fan-out). For multi-consumer fan-out, wrap the
-//! stream in a `broadcast` on the app side.
+//! `nokhwa` and publishes every frame to each `.frames()` subscriber,
+//! each with its own queue of [`CameraInitConfig::frame_pool_depth`]
+//! frames (oldest dropped when a subscriber falls behind).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,6 +20,7 @@ use nokhwa::utils::{
     RequestedFormatType,
 };
 
+use crate::fanout::FrameFanout;
 use crate::{
     AccessStatus, AppliedControls, Camera, CameraCapabilities, CameraControls, CameraDevice,
     CameraError, CameraFacing, CameraFrame, CameraInitConfig, CameraSession, ConcurrentSupport,
@@ -33,8 +32,8 @@ use crate::{
 /// the macro-emitted `CameraHost::new(DesktopCameraFactory)` wrapper.
 ///
 /// Each open session owns its own `nokhwa` capture thread and feeds
-/// frames into a shared [`flume::Receiver<CameraFrame>`] handed to
-/// subscribers via [`Camera::frames`].
+/// frames to every subscriber of [`Camera::frames`], each through its
+/// own bounded queue.
 ///
 /// Session ids come from [`Runtime::alloc_native_handle_id`], so they
 /// never collide with ids a Kotlin / Swift backend or another Rust host
@@ -53,7 +52,7 @@ pub struct DesktopCamera {
 /// capture.
 struct SessionEntry {
     camera: CallbackCamera,
-    rx: flume::Receiver<CameraFrame>,
+    fanout: Arc<FrameFanout>,
     pixel_format: PixelFormat,
     negotiated: NegotiatedFormat,
 }
@@ -64,6 +63,14 @@ impl std::fmt::Debug for SessionEntry {
             .field("pixel_format", &self.pixel_format)
             .field("negotiated", &self.negotiated)
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for SessionEntry {
+    fn drop(&mut self) {
+        // The capture callback may outlive the entry briefly; end the
+        // subscriber streams now rather than when nokhwa drops it.
+        self.fanout.close();
     }
 }
 
@@ -199,9 +206,8 @@ impl Camera for DesktopCamera {
             return Err(CameraError::FormatUnsupported);
         }
 
-        let (tx, rx) = flume::bounded::<CameraFrame>(self.pool_depth());
-        let dropped = Arc::new(AtomicU64::new(0));
-        let seq = Arc::new(AtomicU64::new(0));
+        let fanout = Arc::new(FrameFanout::new(self.pool_depth()));
+        let seq = AtomicU64::new(0);
         let pixel_format = config.pixel_format;
 
         // Resolve the id allocator before touching the device so a missing
@@ -210,22 +216,16 @@ impl Camera for DesktopCamera {
         let index = resolve_index(&config.device_id);
         let requested = requested_format(&config);
 
-        let fmt_cb = pixel_format;
-
-        let mut camera =
-            CallbackCamera::new(index, requested, move |buffer| {
-                match buffer_to_frame(&buffer, fmt_cb, &seq, &dropped) {
-                    Ok(frame) => {
-                        if tx.try_send(frame).is_err() {
-                            dropped.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(target: "istmo.camera.desktop", %err, "frame decode failed");
-                    }
+        let publisher = Arc::clone(&fanout);
+        let mut camera = CallbackCamera::new(index, requested, move |buffer| {
+            match buffer_to_frame(&buffer, pixel_format, seq.fetch_add(1, Ordering::Relaxed)) {
+                Ok(frame) => publisher.publish(frame),
+                Err(err) => {
+                    tracing::warn!(target: "istmo.camera.desktop", %err, "frame decode failed");
                 }
-            })
-            .map_err(|err| CameraError::Backend(err.to_string()))?;
+            }
+        })
+        .map_err(|err| CameraError::Backend(err.to_string()))?;
 
         if let Some(fps) = config.target_fps {
             // Best-effort — nokhwa silently clamps when the camera
@@ -256,7 +256,7 @@ impl Camera for DesktopCamera {
             id,
             SessionEntry {
                 camera,
-                rx,
+                fanout,
                 pixel_format,
                 negotiated: negotiated.clone(),
             },
@@ -278,11 +278,8 @@ impl Camera for DesktopCamera {
 
     fn frames(&self, session: NativeHandleId) -> flume::Receiver<CameraFrame> {
         lock(&self.sessions).get(&session).map_or_else(
-            || {
-                let (_tx, rx) = flume::bounded::<CameraFrame>(0);
-                rx
-            },
-            |entry| entry.rx.clone(),
+            || flume::bounded::<CameraFrame>(0).1,
+            |entry| entry.fanout.subscribe(),
         )
     }
 
@@ -315,10 +312,7 @@ impl Camera for DesktopCamera {
             .get_mut(&session)
             .ok_or(CameraError::SessionClosed)?
             .last_frame()?;
-        let dropped = Arc::new(AtomicU64::new(0));
-        let seq = Arc::new(AtomicU64::new(0));
-        let frame =
-            buffer_to_frame(&buffer, pixel_format, &seq, &dropped).map_err(CameraError::Backend)?;
+        let frame = buffer_to_frame(&buffer, pixel_format, 0).map_err(CameraError::Backend)?;
         Ok(StillPhoto {
             resolution: frame.resolution,
             rotation_degrees: 0,
@@ -393,11 +387,12 @@ fn requested_format(config: &SessionConfig) -> RequestedFormat<'static> {
 // Buffer → CameraFrame conversion
 // -------------------------------------------------------------------
 
+/// Decode `buffer` into a frame numbered `seq`. `dropped_before` is
+/// left at zero; the fan-out fills it per subscriber.
 fn buffer_to_frame(
     buffer: &nokhwa::Buffer,
     pixel_format: PixelFormat,
-    seq: &std::sync::Arc<AtomicU64>,
-    dropped: &std::sync::Arc<AtomicU64>,
+    seq: u64,
 ) -> Result<CameraFrame, String> {
     let res = buffer.resolution();
     let width = res.width_x;
@@ -424,14 +419,14 @@ fn buffer_to_frame(
         .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
 
     Ok(CameraFrame {
-        seq: seq.fetch_add(1, Ordering::Relaxed),
+        seq,
         timestamp_ns,
         resolution: Resolution { width, height },
         rotation_degrees: 0,
         pixel_format,
         planes: vec![plane],
         bytes,
-        dropped_before: u32::try_from(dropped.swap(0, Ordering::Relaxed)).unwrap_or(u32::MAX),
+        dropped_before: 0,
     })
 }
 

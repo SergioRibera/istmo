@@ -190,9 +190,9 @@ full; the next delivered frame reports how many were lost in
 `dropped_before`. React by lowering the resolution, frame rate or
 pixel-format cost.
 
-On Android and iOS every `frames()` call gets its own buffer, so two
-subscribers each see every frame. The desktop and browser backends
-hand all subscribers the same receiver, so they share the frames.
+Every `frames()` call gets its own buffer on every backend, so two
+subscribers each see every frame, and a slow subscriber only loses its
+own frames.
 
 ## Controls
 

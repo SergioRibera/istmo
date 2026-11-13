@@ -13,8 +13,9 @@
 //! - [`Camera::open`] opens the real `MediaStream`, attaches it to an
 //!   invisible `<video>` element, and starts a `setInterval`-driven
 //!   frame pump that `drawImage`s the video into a hidden `<canvas>`
-//!   and ships the resulting `Uint8ClampedArray` RGBA bytes through a
-//!   bounded `flume::Receiver<CameraFrame>`.
+//!   and publishes the resulting `Uint8ClampedArray` RGBA bytes to every
+//!   [`Camera::frames`] subscriber, each through its own bounded
+//!   `flume::Receiver<CameraFrame>`.
 //! - [`Camera::close`] stops every track on the stream, clears the
 //!   interval, and drops the DOM elements.
 //!
@@ -42,7 +43,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use istmo_core::NativeHandleId;
@@ -58,6 +59,7 @@ use web_sys::{
     PermissionStatus, Window,
 };
 
+use crate::fanout::FrameFanout;
 use crate::{
     AccessStatus, AppliedControls, Camera, CameraCapabilities, CameraControls, CameraDevice,
     CameraError, CameraFacing, CameraFrame, CameraInitConfig, CameraSession, ConcurrentSupport,
@@ -125,7 +127,7 @@ struct WebSessionEntry {
     interval_handle: i32,
     #[allow(dead_code)] // Must out-live the setInterval callback.
     pump: Closure<dyn FnMut()>,
-    rx: flume::Receiver<CameraFrame>,
+    fanout: Arc<FrameFanout>,
     pixel_format: PixelFormat,
     width: u32,
     height: u32,
@@ -137,6 +139,7 @@ impl Drop for WebSessionEntry {
             window.clear_interval_with_handle(self.interval_handle);
         }
         stop_tracks(&self.stream);
+        self.fanout.close();
         let _ = self.video.remove();
         let _ = self.canvas.remove();
     }
@@ -184,11 +187,8 @@ impl Camera for WebCamera {
 
     fn frames(&self, session: NativeHandleId) -> flume::Receiver<CameraFrame> {
         self.sessions.borrow().get(&session).map_or_else(
-            || {
-                let (_tx, rx) = flume::bounded::<CameraFrame>(0);
-                rx
-            },
-            |entry| entry.rx.clone(),
+            || flume::bounded::<CameraFrame>(0).1,
+            |entry| entry.fanout.subscribe(),
         )
     }
 
@@ -447,9 +447,7 @@ async fn open_impl(
     let fps = config.target_fps.unwrap_or(30).max(1);
     let interval_ms = ((1000.0 / f64::from(fps)).round() as i32).max(1);
 
-    let (tx, rx) = flume::bounded::<CameraFrame>(pool_depth);
-    let dropped = Rc::new(AtomicU64::new(0));
-    let seq = Rc::new(AtomicU64::new(0));
+    let fanout = Arc::new(FrameFanout::new(pool_depth));
     let pixel_format = config.pixel_format;
 
     let pump = make_pump(
@@ -458,9 +456,7 @@ async fn open_impl(
         width,
         height,
         pixel_format,
-        tx,
-        Rc::clone(&dropped),
-        Rc::clone(&seq),
+        Arc::clone(&fanout),
     );
 
     let interval_handle = window
@@ -489,7 +485,7 @@ async fn open_impl(
             ctx,
             interval_handle,
             pump,
-            rx,
+            fanout,
             pixel_format,
             width,
             height,
@@ -699,10 +695,9 @@ fn make_pump(
     width: u32,
     height: u32,
     pixel_format: PixelFormat,
-    tx: flume::Sender<CameraFrame>,
-    dropped: Rc<AtomicU64>,
-    seq: Rc<AtomicU64>,
+    fanout: Arc<FrameFanout>,
 ) -> Closure<dyn FnMut()> {
+    let seq = AtomicU64::new(0);
     Closure::wrap(Box::new(move || {
         if video.ready_state() < 2 {
             return;
@@ -715,7 +710,7 @@ fn make_pump(
                 bytes
             }
             Err(_) => {
-                dropped.fetch_add(1, Ordering::Relaxed);
+                fanout.record_drop();
                 return;
             }
         };
@@ -735,12 +730,9 @@ fn make_pump(
             pixel_format,
             planes: vec![plane],
             bytes,
-            dropped_before: dropped.swap(0, Ordering::Relaxed) as u32,
+            dropped_before: 0,
         };
-
-        if tx.try_send(frame).is_err() {
-            dropped.fetch_add(1, Ordering::Relaxed);
-        }
+        fanout.publish(frame);
     }) as Box<dyn FnMut()>)
 }
 
