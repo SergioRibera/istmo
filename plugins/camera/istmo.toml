@@ -38,6 +38,7 @@ version = "1.3.4"
 [min_versions]
 # CameraX requires 21; concurrent-camera needs 30+ but degrades gracefully.
 android = 21
-# `AVCaptureMultiCamSession` and the multi-lens device types; LiDAR
-# (15.4) and external (17) cameras are behind `#available`.
-ios = "13.0"
+# The istmo iOS runtime's floor (`AVCaptureMultiCamSession` and the
+# multi-lens device types need 13); LiDAR (15.4) and external (17)
+# cameras are behind `#available`.
+ios = "14.0"

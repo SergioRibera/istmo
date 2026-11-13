@@ -21,6 +21,12 @@ fn declares_android_camera_permission() {
 }
 
 #[test]
+fn ios_floor_matches_the_runtime() {
+    let ios = manifest().min_versions.ios.expect("ios minimum declared");
+    assert_eq!(ios.to_string(), "14.0");
+}
+
+#[test]
 fn info_plist_only_asks_for_the_camera() {
     let manifest = manifest();
     let keys: Vec<&str> = manifest.plugins[0]

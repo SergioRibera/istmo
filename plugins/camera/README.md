@@ -19,7 +19,7 @@ Cross-platform camera plugin for the
 | Platform | Backend | Minimum |
 | --- | --- | --- |
 | Android | CameraX (`native/android`) | API 21 |
-| iOS | `AVFoundation` (`native/ios`) | 13.0 |
+| iOS | `AVFoundation` (`native/ios`) | 14.0 |
 | Linux / macOS / Windows | `DesktopCamera` over `nokhwa` (`desktop` feature) | — |
 | Web (wasm32) | `getUserMedia` + canvas (`web` feature) | — |
 
