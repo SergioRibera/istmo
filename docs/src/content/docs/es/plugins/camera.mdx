@@ -220,10 +220,13 @@ ajuste como está. En Android e iOS el `AppliedControls` devuelto tiene
 los valores efectivos después de que el hardware los ajustó a su rango.
 El backend de escritorio envía zoom, exposición y enfoque manual al
 driver, el de navegador zoom, linterna, exposición y balance de blancos
-como constraints del track; ambos en la medida de lo posible, y ambos
-devuelven lo pedido (con valores por defecto para lo no indicado) en
-lugar de leer el resultado. `SessionConfig::with_initial_controls`
-aplica controles al abrir la sesión.
+como constraints del track; ambos en la medida de lo posible. El backend
+de navegador lee esos cuatro de vuelta con
+`MediaStreamTrack.getSettings()`, el de escritorio lee zoom, exposición
+y enfoque manual del driver (en los pasos enteros del driver). Lo que no
+pueden leer devuelve lo pedido, con valores por defecto para lo no
+indicado. `SessionConfig::with_initial_controls` aplica controles al
+abrir la sesión.
 
 ## Fotos
 

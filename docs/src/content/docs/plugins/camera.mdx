@@ -216,9 +216,13 @@ setting alone. On Android and iOS the returned `AppliedControls` holds
 the effective values after the hardware clamped them. The desktop
 backend pushes zoom, exposure and manual focus to the driver, the
 browser backend zoom, torch, exposure and white balance as track
-constraints; both on a best-effort basis, and both echo the request
-(with defaults for unset fields) instead of reading the result back. `SessionConfig::with_initial_controls` applies controls when
-the session opens.
+constraints; both on a best-effort basis. The browser backend reads
+those four back from `MediaStreamTrack.getSettings()`, the desktop
+backend reads zoom, exposure and manual focus back from the driver (in
+the driver's integer steps). Fields they cannot read back echo the
+request, with defaults for unset fields.
+`SessionConfig::with_initial_controls` applies controls when the
+session opens.
 
 ## Stills
 

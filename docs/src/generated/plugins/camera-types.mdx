@@ -281,10 +281,16 @@ state as [`AppliedControls`].
 
 ### `AppliedControls`
 
-Effective state after the backend applied a [`CameraControls`]
-request. Each field reflects the actual value on the running
-session, which may differ from the request when the hardware
-clamps.
+State after the backend applied a [`CameraControls`] request.
+
+The Android and iOS backends report the actual value on the running
+session, which may differ from the request when the hardware clamps.
+The web host reads back what the browser reports in
+`MediaStreamTrack.getSettings()` (zoom, torch, exposure compensation,
+white-balance mode). The desktop host reads back zoom, exposure and
+manual focus from the driver, in the driver's own integer steps.
+Every other field echoes the request on those two hosts, with
+defaults for the fields it left `None`.
 
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |

@@ -84,9 +84,12 @@ impl SessionEntry {
         Ok((buffer, self.pixel_format))
     }
 
-    /// Best-effort push of `controls` to the device; unsupported knobs
-    /// are ignored by the driver.
-    fn apply_controls(&mut self, controls: &CameraControls) {
+    /// Best-effort push of `controls` to the device, then the state the
+    /// driver reports back. Zoom, exposure and manual focus are read
+    /// back from the driver (in the integer steps they were written in);
+    /// knobs the driver cannot read back, and those nokhwa does not
+    /// drive, echo the request.
+    fn apply_controls(&mut self, controls: &CameraControls) -> AppliedControls {
         if let Some(zoom) = controls.zoom {
             // Convert to nokhwa integer zoom. Many V4L2 drivers expose
             // digital zoom as an integer step; UVC devices expose a
@@ -116,6 +119,36 @@ impl SessionEntry {
         }
         // Torch / flash / white-balance / autofocus coverage varies
         // per camera; leave untouched here.
+
+        let zoom = controls.zoom.map(|requested| {
+            self.read_control(KnownCameraControl::Zoom)
+                .map_or(requested, step_value)
+        });
+        let exposure = controls.exposure_compensation_ev.map(|requested| {
+            self.read_control(KnownCameraControl::Exposure)
+                .map_or(requested, step_value)
+        });
+        let focus = controls.focus.map(|requested| match requested {
+            FocusMode::Manual(distance) => FocusMode::Manual(
+                self.read_control(KnownCameraControl::Focus)
+                    .map_or(distance, |step| (step_value(step) / 1000.0).clamp(0.0, 1.0)),
+            ),
+            other => other,
+        });
+        AppliedControls {
+            zoom: zoom.unwrap_or(1.0),
+            torch: controls.torch.unwrap_or(false),
+            focus: focus.unwrap_or(FocusMode::ContinuousVideo),
+            exposure_compensation_ev: exposure.unwrap_or(0.0),
+            white_balance: controls.white_balance.unwrap_or(WhiteBalanceMode::Auto),
+            flash: controls.flash.unwrap_or(FlashMode::Off),
+        }
+    }
+
+    /// Current integer value of `control`, when the driver exposes it.
+    fn read_control(&self, control: KnownCameraControl) -> Option<i64> {
+        let value = self.camera.camera_control(control).ok()?.value();
+        value.as_integer().copied()
     }
 }
 
@@ -288,19 +321,10 @@ impl Camera for DesktopCamera {
         session: NativeHandleId,
         controls: CameraControls,
     ) -> Result<AppliedControls, CameraError> {
-        lock(&self.sessions)
+        Ok(lock(&self.sessions)
             .get_mut(&session)
             .ok_or(CameraError::SessionClosed)?
-            .apply_controls(&controls);
-
-        Ok(AppliedControls {
-            zoom: controls.zoom.unwrap_or(1.0),
-            torch: controls.torch.unwrap_or(false),
-            focus: controls.focus.unwrap_or(FocusMode::ContinuousVideo),
-            exposure_compensation_ev: controls.exposure_compensation_ev.unwrap_or(0.0),
-            white_balance: controls.white_balance.unwrap_or(WhiteBalanceMode::Auto),
-            flash: controls.flash.unwrap_or(FlashMode::Off),
-        })
+            .apply_controls(&controls))
     }
 
     async fn capture_still(
@@ -446,6 +470,15 @@ fn swap_rb_in_place(bytes: &mut [u8]) {
 )]
 const fn control_step(value: f32) -> i64 {
     value as i64
+}
+
+/// Inverse of [`control_step`].
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "driver control steps are small integers, exact in f32"
+)]
+const fn step_value(step: i64) -> f32 {
+    step as f32
 }
 
 fn apply_initial_controls(camera: &mut CallbackCamera, controls: &CameraControls) {

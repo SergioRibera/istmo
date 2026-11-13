@@ -537,14 +537,44 @@ async fn apply_controls_impl(
         }
     }
 
-    Ok(AppliedControls {
-        zoom: controls.zoom.unwrap_or(1.0),
-        torch: controls.torch.unwrap_or(false),
+    Ok(applied_from_settings(&track, &controls))
+}
+
+/// Effective state from `track.getSettings()`. Browsers only report the
+/// image-capture keys (`zoom`, `torch`, `exposureCompensation`,
+/// `whiteBalanceMode`) the camera supports; a missing key falls back to
+/// the request, then to the default. Focus and flash are not driven
+/// through constraints and echo the request.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "camera zoom / EV values fit f32"
+)]
+fn applied_from_settings(track: &MediaStreamTrack, controls: &CameraControls) -> AppliedControls {
+    let settings = track.get_settings();
+    let setting = |key: &str| Reflect::get(settings.as_ref(), &JsValue::from_str(key)).ok();
+    let number = |key: &str| setting(key).and_then(|value| value.as_f64());
+
+    let white_balance = match setting("whiteBalanceMode").and_then(|value| value.as_string()) {
+        Some(mode) if mode == "continuous" => WhiteBalanceMode::Auto,
+        _ => controls.white_balance.unwrap_or(WhiteBalanceMode::Auto),
+    };
+    AppliedControls {
+        zoom: number("zoom")
+            .map(|zoom| zoom as f32)
+            .or(controls.zoom)
+            .unwrap_or(1.0),
+        torch: setting("torch")
+            .and_then(|value| value.as_bool())
+            .or(controls.torch)
+            .unwrap_or(false),
         focus: controls.focus.unwrap_or(FocusMode::ContinuousVideo),
-        exposure_compensation_ev: controls.exposure_compensation_ev.unwrap_or(0.0),
-        white_balance: controls.white_balance.unwrap_or(WhiteBalanceMode::Auto),
+        exposure_compensation_ev: number("exposureCompensation")
+            .map(|ev| ev as f32)
+            .or(controls.exposure_compensation_ev)
+            .unwrap_or(0.0),
+        white_balance,
         flash: controls.flash.unwrap_or(FlashMode::Off),
-    })
+    }
 }
 
 // -------------------------------------------------------------------

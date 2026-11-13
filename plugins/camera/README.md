@@ -157,8 +157,11 @@ let applied = session
 
 On Android and iOS, `AppliedControls` reports the effective state —
 the backend clamps values that fall outside what the hardware supports.
-The desktop and web hosts apply controls best-effort and echo the
-request back (fields left `None` report their defaults).
+The web host reads the result back from `MediaStreamTrack.getSettings()`
+(zoom, torch, exposure compensation, white-balance mode); the desktop
+host reads zoom, exposure and manual focus back from the driver, in the
+driver's integer steps. Fields neither host can read back echo the
+request (fields left `None` report their defaults).
 
 ## Pixel formats and backpressure
 

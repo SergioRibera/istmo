@@ -516,8 +516,12 @@ pub struct CameraControls {
 ///
 /// The Android and iOS backends report the actual value on the running
 /// session, which may differ from the request when the hardware clamps.
-/// The desktop and web hosts apply controls best-effort and echo the
-/// request, with defaults for the fields it left `None`.
+/// The web host reads back what the browser reports in
+/// `MediaStreamTrack.getSettings()` (zoom, torch, exposure compensation,
+/// white-balance mode). The desktop host reads back zoom, exposure and
+/// manual focus from the driver, in the driver's own integer steps.
+/// Every other field echoes the request on those two hosts, with
+/// defaults for the fields it left `None`.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppliedControls {
