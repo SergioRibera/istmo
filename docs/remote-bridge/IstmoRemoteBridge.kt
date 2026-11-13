@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import dev.istmo.runtime.IstmoRuntime
 import java.util.concurrent.atomic.AtomicReference
 
 class IstmoRemoteBridgeService : Service() {

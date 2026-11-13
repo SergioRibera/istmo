@@ -29,10 +29,15 @@ flume channels that stand in for AIDL.
    the app side. Both point to `IstmoRemoteBridgeService`.
 2. On startup, each side creates an `IstmoRemoteBridgeClient` targeted
    at the OTHER process's Service class name and calls `bind()`.
-3. Rust-side (both processes): call
-   `runtime.declare_remote_plugin(pluginId)` for every trait that lives
-   in the peer process. The classifier now steers matching outbound
-   frames to the sink instead of the typed pump.
+3. Rust-side (both processes): list every trait that lives in the peer
+   process in the `remote:` section of `istmo::runtime!`
+   (`istmo::runtime!(remote: [Echo])`, or the `EchoClient` path). A
+   plugin crate whose `istmo.toml` sets `default_deployment = "remote"`,
+   or that the app flips with `[[remote_override]]`, is added to that
+   section automatically. Each entry calls
+   `Runtime::declare_remote_plugin(id)`, which steers matching outbound
+   frames to the sink instead of the typed pump; call it directly for a
+   runtime built without the macro.
 4. Kotlin-side: assign the bridge to
    `IstmoRuntime.remoteEnvelopeSink = { bytes -> bridge.submit(bytes) }`
    (or call `installRemoteBridge(bridge)`).
@@ -40,9 +45,6 @@ flume channels that stand in for AIDL.
    `nativeInjectEnvelope`; local hosts fire; responses hop back via the
    reverse bridge.
 
-## Still missing (follow-ups)
+## Still missing
 
-- `istmo::runtime!` macro `remote: [...]` section that populates the
-  Rust-side declared set + emits a Kotlin-side helper listing the ids
-  (today the plugin author calls `runtime.declare_remote_plugin(id)`
-  manually — the macro sugar is the last piece).
+- A runnable two-process example app wiring these files end to end.
