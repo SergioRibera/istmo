@@ -10,7 +10,7 @@ allá de `cargo` depende de qué plataformas planeas soportar.
 
 ## Prerrequisitos
 
-- **Rust 1.80 o mayor.** Instálalo con [rustup](https://rustup.rs).
+- **Rust 1.89 o mayor** (el codec del wire, wincode, lo necesita). Instálalo con [rustup](https://rustup.rs).
   Agrega los targets de Android o iOS que vayas a usar:
   ```bash
   rustup target add aarch64-linux-android armv7-linux-androideabi \
@@ -34,21 +34,30 @@ necesites se re-exportan desde él.
 
 ```toml
 [dependencies]
-istmo = "0.1"
+istmo = { version = "0.1.1-alpha.5", default-features = false, features = ["game-activity"] }
 ```
+
+Istmo se publica como pre-release, así que nombra la versión exacta:
+un requisito `"0.1"` a secas no matchea `0.1.1-alpha.5`. La feature
+`game-activity` compila el lado Android para `IstmoGameActivity` (una
+`ComponentActivity`, que necesitan plugins como sign-in, share o
+biometric); la default `native-activity` apunta a `IstmoNativeActivity`.
 
 Si usas plugins oficiales, agrégalos al lado:
 
 ```toml
 [dependencies]
-istmo                = "0.1"
-istmo-data-store     = "0.1"     # storage key/value
-istmo-google-sign-in = "0.1"     # OAuth
-istmo-live-activity  = "0.1"     # Live Activities iOS + notif. persistente Android
+istmo-data-store     = "0.1.1-alpha.5"   # storage key/value
+istmo-google-sign-in = "0.1.1-alpha.5"   # OAuth
+istmo-live-activity  = "0.1.1-alpha.5"   # Live Activities iOS + notif. persistente Android
 ```
 
 Todos los crates del ecosistema Istmo comparten una única versión de
-workspace; nunca mezclas releases incompatibles en el mismo árbol.
+workspace — igual que el artefacto Maven
+`io.github.sergioribera:istmo-runtime`, el plugin de Gradle
+`io.github.sergioribera.istmo` y el tag del paquete Swift
+`IstmoRuntime` — así nunca mezclas releases incompatibles en el mismo
+árbol.
 
 ## Wire-up del build script
 
@@ -64,7 +73,7 @@ Añade `istmo-build` a tus `[build-dependencies]`:
 
 ```toml
 [build-dependencies]
-istmo-build = "0.1"
+istmo-build = "0.1.1-alpha.5"
 ```
 
 `emit()` decide si estás construyendo un plugin, una app, o ambos. Ver

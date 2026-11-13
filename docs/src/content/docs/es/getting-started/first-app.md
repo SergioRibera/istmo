@@ -17,15 +17,17 @@ entre sí.
 cargo install cargo-generate
 ```
 
+El template necesita `cargo-generate` 0.21 o mayor.
+
 ## Genera un proyecto
 
 ```bash
-cargo generate --git https://github.com/sergioribera/istmo-template --name my-app
+cargo generate --git https://github.com/SergioRibera/istmo-template --name my-app
 ```
 
 Responde los prompts (arquetipo `app` o `plugin`, bundle id,
 plataformas target, plugins iniciales, licencia, CI provider, framework
-de UI) y `cd` al nuevo directorio.
+de UI, versión de istmo) y `cd` al nuevo directorio.
 
 ## Qué acaba de pasar
 
@@ -38,15 +40,18 @@ un layout plano:
 my-app/
 ├── Cargo.toml               # el crate de la app
 ├── build.rs                 # one-liner: istmo_build::emit()
-├── istmo.toml               # config app-side del codegen
+├── istmo.toml               # id, nombre, versión, ícono y overrides de la app
+├── justfile                 # recetas build / run / lint
 ├── flake.nix                # devshell opcional Nix (targets desktop)
 ├── src/
-│   ├── lib.rs               # entry point #[istmo::mobile_app]
-│   ├── app.rs               # código de UI compartido
-│   └── main.rs              # entry point desktop
+│   ├── lib.rs               # istmo::runtime!() + entry point #[istmo::mobile_app]
+│   ├── app.rs               # estado y UI compartidos de la app
+│   ├── main.rs              # entry point desktop
+│   └── desktop.rs           # runtime desktop (hosts Rust + emulador)
 ├── android/                 # proyecto Gradle (invoca cargo)
-│   └── app/src/main/kotlin/<pkg>/<Name>Activity.kt
-└── ios/                     # proyecto Xcode (invoca cargo)
+│   └── app/src/main/AndroidManifest.xml
+└── ios/                     # proyecto xcodegen (invoca cargo)
+    ├── project.yml
     └── <Name>App/main.swift
 ```
 
@@ -55,26 +60,37 @@ la raíz del proyecto. Si elegiste el arquetipo `plugin`, el tree es
 similar pero con `native/{android,ios}/` como backends de referencia
 en lugar de las carpetas de proyecto de plataforma.
 
-- `src/lib.rs` es tu entry point. En Android lo invoca `NativeActivity`;
-  en iOS un `App` struct de Swift.
+- `src/lib.rs` es tu entry point. En Android la activity launcher,
+  `dev.istmo.runtime.IstmoGameActivity`, carga la librería y lo corre;
+  en iOS `main.swift` le pasa el control con `IstmoApp.run()`.
 - `build.rs` corre en cada compilación. Como tenés `android/` e `ios/`
   al lado de `Cargo.toml`, `istmo_build::emit()` además genera los
   shims Kotlin/Swift para cada plugin del que la app depende **y** un
   `IstmoPluginRegistry` para registración nativa one-shot.
-- `istmo.toml` declara cualquier override app-level — ver la
+- `istmo.toml` declara la identidad de la app y cualquier override
+  app-level — ver la
   [referencia `[app]`](/istmo/es/build-scripts/istmo-toml-reference/#app).
 
 ## Auto-registración por default
 
-La activity de Android y el `main.swift` de iOS son de una línea: los
-entry points del runtime arrancan `IstmoRuntime` y registran cada plugin
-mediante el `IstmoPluginRegistry` generado antes de que corra tu entry
-point de Rust:
+El template no trae ninguna activity Kotlin y su `main.swift` es de una
+línea: los entry points del runtime arrancan `IstmoRuntime` y registran
+cada plugin mediante el `IstmoPluginRegistry` generado antes de que
+corra tu entry point de Rust. En Android el manifest nombra
+directamente la activity del runtime:
 
-```kotlin
-// android/app/src/main/kotlin/<pkg>/<Name>Activity.kt
-class MainActivity : IstmoGameActivity()
+```xml
+<!-- android/app/src/main/AndroidManifest.xml -->
+<activity
+    android:name="dev.istmo.runtime.IstmoGameActivity"
+    android:exported="true">
+    <meta-data android:name="android.app.lib_name" android:value="my_app" />
+    <!-- intent filter MAIN / LAUNCHER -->
+</activity>
 ```
+
+Hacé una subclase de `IstmoGameActivity` y apuntá el manifest a tu
+clase solo cuando necesites código Kotlin propio.
 
 ```swift
 // ios/<Name>App/main.swift
@@ -103,25 +119,47 @@ el toolchain. Ver
 
 ### Android
 
+El template no trae el Gradle wrapper; crealo una vez y después
+compilá e instalá:
+
 ```bash
 cd android
+gradle wrapper
 ./gradlew installDebug
 ```
 
-Gradle invoca a cargo (via un build task) para producir un `.so` por
-ABI, lo copia dentro del APK, y lo instala al dispositivo o emulador
-conectado.
+El plugin de Gradle `io.github.sergioribera.istmo` invoca a cargo para
+producir un `.so` por ABI y lo empaqueta en el APK; Gradle lo instala
+en el dispositivo o emulador conectado. `just build-android` compila
+el APK debug.
 
 ### iOS
 
+Corré primero un `cargo build` (o `cargo check`): escribe
+`ios/<Name>App/istmo-plugins.yml` (fuentes de los plugins, identidad de
+la app, settings de link, la fase pre-build de cargo), que
+`project.yml` incluye, e `ios/.istmo/`.
+
 ```bash
+cargo check
 cd ios
-xcodegen
+xcodegen generate
 open <Name>App.xcodeproj
 ```
 
-La build phase de Xcode invoca cargo para producir un `libmy_app.a`,
-que se linkea dentro de la app Swift.
+La fase pre-build de Xcode invoca cargo para producir un
+`libmy_app.a`, que se linkea dentro de la app Swift. `just build-ios`
+hace lo mismo para el simulador.
+
+### Desktop
+
+```bash
+just run    # cargo run
+```
+
+`src/desktop.rs` arranca un runtime in-process: los plugins con backend
+desktop corren como hosts Rust, las llamadas al resto fallan con una
+línea de log hasta que las emules.
 
 ## Adónde ir después
 

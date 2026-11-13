@@ -11,7 +11,7 @@ target.
 
 ## Prerequisites
 
-- **Rust 1.80 or newer.** Install via [rustup](https://rustup.rs). Add
+- **Rust 1.89 or newer** (the wire codec, wincode, needs it). Install via [rustup](https://rustup.rs). Add
   the Android or iOS targets you plan to use:
   ```bash
   rustup target add aarch64-linux-android armv7-linux-androideabi \
@@ -35,21 +35,29 @@ re-exports from it.
 
 ```toml
 [dependencies]
-istmo = "0.1"
+istmo = { version = "0.1.1-alpha.5", default-features = false, features = ["game-activity"] }
 ```
+
+Istmo is published as pre-releases, so name the exact version: a plain
+`"0.1"` requirement does not match `0.1.1-alpha.5`. The `game-activity`
+feature builds the Android side for `IstmoGameActivity` (a
+`ComponentActivity`, which plugins such as sign-in, share or biometric
+need); the default `native-activity` targets `IstmoNativeActivity`.
 
 If you use official plugins, add them alongside:
 
 ```toml
 [dependencies]
-istmo               = "0.1"
-istmo-data-store    = "0.1"     # key/value storage
-istmo-google-sign-in = "0.1"    # OAuth sign-in
-istmo-live-activity = "0.1"    # iOS Live Activities + Android ongoing notif.
+istmo-data-store     = "0.1.1-alpha.5"   # key/value storage
+istmo-google-sign-in = "0.1.1-alpha.5"   # OAuth sign-in
+istmo-live-activity  = "0.1.1-alpha.5"   # iOS Live Activities + Android ongoing notif.
 ```
 
-Every crate in the Istmo ecosystem shares one workspace version; you
-never mix incompatible releases in the same tree.
+Every crate in the Istmo ecosystem shares one workspace version — as
+do the `io.github.sergioribera:istmo-runtime` Maven artifact, the
+`io.github.sergioribera.istmo` Gradle plugin and the `IstmoRuntime`
+Swift package tag — so you never mix incompatible releases in the same
+tree.
 
 ## Build script wire-up
 
@@ -65,7 +73,7 @@ Add `istmo-build` to your `[build-dependencies]`:
 
 ```toml
 [build-dependencies]
-istmo-build = "0.1"
+istmo-build = "0.1.1-alpha.5"
 ```
 
 `emit()` figures out whether you're building a plugin, an app, or both.

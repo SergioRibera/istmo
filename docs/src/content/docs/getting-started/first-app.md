@@ -17,15 +17,17 @@ other.
 cargo install cargo-generate
 ```
 
+The template needs `cargo-generate` 0.21 or newer.
+
 ## Generate a project
 
 ```bash
-cargo generate --git https://github.com/sergioribera/istmo-template --name my-app
+cargo generate --git https://github.com/SergioRibera/istmo-template --name my-app
 ```
 
 Answer the prompts (project archetype `app` or `plugin`, bundle id,
-target platforms, initial plugins, license, CI provider, UI framework)
-and `cd` into the new directory.
+target platforms, initial plugins, license, CI provider, UI framework,
+istmo version) and `cd` into the new directory.
 
 ## What just happened
 
@@ -38,15 +40,18 @@ project layout:
 my-app/
 ├── Cargo.toml               # the app crate
 ├── build.rs                 # one-liner: istmo_build::emit()
-├── istmo.toml               # app-side codegen config
+├── istmo.toml               # app id, name, version, icon, overrides
+├── justfile                 # build / run / lint recipes
 ├── flake.nix                # optional Nix devshell (desktop targets)
 ├── src/
-│   ├── lib.rs               # #[istmo::mobile_app] entry point
-│   ├── app.rs               # shared UI code
-│   └── main.rs              # desktop entry point
+│   ├── lib.rs               # istmo::runtime!() + #[istmo::mobile_app] entry point
+│   ├── app.rs               # shared app state and UI
+│   ├── main.rs              # desktop entry point
+│   └── desktop.rs           # desktop runtime (Rust hosts + emulator)
 ├── android/                 # Gradle project (drives cargo)
-│   └── app/src/main/kotlin/<pkg>/<Name>Activity.kt
-└── ios/                     # Xcode project (drives cargo)
+│   └── app/src/main/AndroidManifest.xml
+└── ios/                     # xcodegen project (drives cargo)
+    ├── project.yml
     └── <Name>App/main.swift
 ```
 
@@ -55,27 +60,36 @@ project root. If you picked the `plugin` archetype instead, the tree is
 similar but with `native/{android,ios}/` reference backends in place of
 the platform project folders.
 
-- `src/lib.rs` is your entry point. On Android it is invoked from
-  `NativeActivity`; on iOS from a Swift `App` struct.
+- `src/lib.rs` is your entry point. On Android the launcher activity,
+  `dev.istmo.runtime.IstmoGameActivity`, loads the library and runs it;
+  on iOS `main.swift` hands control to it through `IstmoApp.run()`.
 - `build.rs` runs on every compile. Because you have both `android/`
   and `ios/` next to `Cargo.toml`, `istmo_build::emit()` additionally
   generates Kotlin/Swift dispatcher shims for each plugin your app
   depends on **and** an `IstmoPluginRegistry` for one-shot native
   registration.
-- `istmo.toml` declares any app-level overrides — see the
-  [`[app]` reference](/istmo/build-scripts/istmo-toml-reference/#app).
+- `istmo.toml` declares the app identity and any app-level overrides —
+  see the [`[app]` reference](/istmo/build-scripts/istmo-toml-reference/#app).
 
 ## Auto-registration is on by default
 
-The Android activity and the iOS `main.swift` are one-liners: the
+The template ships no Kotlin activity and a one-line `main.swift`: the
 runtime's entry points start `IstmoRuntime` and register every plugin
 through the generated `IstmoPluginRegistry` before your Rust entry point
-runs:
+runs. On Android the manifest names the runtime's activity directly:
 
-```kotlin
-// android/app/src/main/kotlin/<pkg>/<Name>Activity.kt
-class MainActivity : IstmoGameActivity()
+```xml
+<!-- android/app/src/main/AndroidManifest.xml -->
+<activity
+    android:name="dev.istmo.runtime.IstmoGameActivity"
+    android:exported="true">
+    <meta-data android:name="android.app.lib_name" android:value="my_app" />
+    <!-- MAIN / LAUNCHER intent filter -->
+</activity>
 ```
+
+Subclass `IstmoGameActivity` and point the manifest at your class only
+when you need Kotlin code of your own.
 
 ```swift
 // ios/<Name>App/main.swift
@@ -104,25 +118,47 @@ checks the toolchain. See
 
 ### Android
 
+The template ships no Gradle wrapper; create it once, then build and
+install:
+
 ```bash
 cd android
+gradle wrapper
 ./gradlew installDebug
 ```
 
-Gradle invokes cargo (via a build task) to produce a `.so` per ABI,
-copies it into the APK, and installs to the connected device or
-emulator.
+The `io.github.sergioribera.istmo` Gradle plugin invokes cargo to
+produce a `.so` per ABI and packages it into the APK; Gradle installs
+it on the connected device or emulator. `just build-android` builds the
+debug APK.
 
 ### iOS
 
+Run one `cargo build` (or `cargo check`) first: it writes
+`ios/<Name>App/istmo-plugins.yml` (plugin sources, app identity, link
+settings, the cargo pre-build phase), which `project.yml` includes,
+and `ios/.istmo/`.
+
 ```bash
+cargo check
 cd ios
-xcodegen
+xcodegen generate
 open <Name>App.xcodeproj
 ```
 
-Xcode's build phase invokes cargo to produce a `libmy_app.a`, which is
-linked into the Swift app.
+Xcode's pre-build phase invokes cargo to produce a `libmy_app.a`, which
+is linked into the Swift app. `just build-ios` does the same for the
+simulator.
+
+### Desktop
+
+```bash
+just run    # cargo run
+```
+
+`src/desktop.rs` starts an in-process runtime: plugins with a desktop
+backend run as Rust hosts, calls to the others fail with a log line
+until you emulate them.
 
 ## Where to go next
 
