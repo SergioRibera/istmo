@@ -25,8 +25,8 @@ pub const DATA_STORE_PLUGIN_ID: &str = "istmo.data_store";
 /// to segregate values. Two instances with different namespaces cannot
 /// see each other's keys:
 ///
-/// * Android — the `SharedPreferences` file name, used verbatim (so it
-///   must not contain `/`).
+/// * Android — the `SharedPreferences` file `<package name>.istmo.<namespace>`
+///   (so the namespace must be non-empty and must not contain `/`).
 /// * iOS — the `UserDefaults` suite `<bundle id>.istmo.<namespace>`.
 /// * Desktop — a percent-encoded file name under the app's preference
 ///   directory (see the `desktop` module).
