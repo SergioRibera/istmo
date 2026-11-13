@@ -305,6 +305,9 @@ pub struct Runtime {
     next_id: AtomicU64,
     next_native_handle: AtomicU64,
     shutting_down: AtomicBool,
+    /// Cancelled by [`shutdown`](Self::shutdown): frees senders waiting
+    /// on a full outbound channel the transport stopped draining.
+    stopped: CancelToken,
 
     declared_plugins: Mutex<HashSet<&'static str>>,
 
@@ -516,7 +519,8 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// - [`IstmoError::RuntimeShutDown`] after [`shutdown`](Self::shutdown).
+    /// - [`IstmoError::RuntimeShutDown`] after [`shutdown`](Self::shutdown),
+    ///   including while waiting for room on a full outbound channel.
     /// - [`IstmoError::ChannelClosed`] if the outbound channel is gone.
     /// - [`IstmoError::Codec`] if the remote sink could not encode the
     ///   envelope.
@@ -762,7 +766,8 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// - [`IstmoError::RuntimeShutDown`] after [`shutdown`](Self::shutdown).
+    /// - [`IstmoError::RuntimeShutDown`] after [`shutdown`](Self::shutdown),
+    ///   including while waiting for room on a full outbound channel.
     /// - [`IstmoError::ChannelClosed`] when the outbound pump is gone.
     pub fn notify(
         self: &Arc<Self>,
@@ -1051,11 +1056,17 @@ impl Runtime {
     /// gave up because the call was cancelled first.
     fn push_outbound(&self, envelope: Envelope, wait: Wait<'_>) -> Result<bool, IstmoError> {
         match wait {
-            Wait::Block => self
-                .outbound
-                .send(envelope)
-                .map(|()| true)
-                .map_err(|_| IstmoError::ChannelClosed),
+            Wait::Block => match self.outbound.try_send(envelope) {
+                Ok(()) => Ok(true),
+                Err(TrySendError::Disconnected(_)) => Err(IstmoError::ChannelClosed),
+                Err(TrySendError::Full(envelope)) => {
+                    match send_unless_cancelled(&self.outbound, envelope, &self.stopped) {
+                        Delivery::Sent => Ok(true),
+                        Delivery::Cancelled => Err(IstmoError::RuntimeShutDown),
+                        Delivery::Disconnected => Err(IstmoError::ChannelClosed),
+                    }
+                }
+            },
             Wait::UnlessCancelled(cancel) => {
                 match send_unless_cancelled(&self.outbound, envelope, cancel) {
                     Delivery::Sent => Ok(true),
@@ -1615,6 +1626,7 @@ impl Runtime {
     /// draining.
     pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
+        self.stopped.cancel();
         let count = self.routing.clear();
         lock(&self.hosted).cancel_all();
         *lock(&self.remote_calls) = RemoteCalls::default();
@@ -1628,7 +1640,7 @@ impl Runtime {
 /// How long a send for a hosted call may wait on a full channel.
 #[derive(Debug, Clone, Copy)]
 enum Wait<'a> {
-    /// Until there is room.
+    /// Until there is room, or until the runtime shuts down.
     Block,
     /// Until there is room, or until the call is cancelled.
     UnlessCancelled(&'a CancelToken),
@@ -1721,6 +1733,7 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         next_id: AtomicU64::new(1),
         next_native_handle: AtomicU64::new(NativeHandleId::RUST_ALLOCATED_BASE),
         shutting_down: AtomicBool::new(false),
+        stopped: CancelToken::new(),
         declared_plugins: Mutex::new(HashSet::new()),
         enforce_declarations: AtomicBool::new(false),
         hosts: Mutex::new(HashMap::new()),
