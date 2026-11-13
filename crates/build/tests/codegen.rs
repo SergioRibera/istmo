@@ -1717,3 +1717,52 @@ fn coverage_clients_raise_one_exception_per_error_type() {
     assert!(swift.contains("public struct CoverageFirstErrorException: Error"));
     assert!(swift.contains("try? codecs.readSecondError(&errCursor)"));
 }
+
+/// The files `emit_app` writes for a host-role app whose package is not
+/// `dev.istmo.runtime`: `live_activity` declares its own
+/// `[plugin] android_package`, `coverage` lands in the app's package.
+/// Kept whole (package line and runtime imports included) so CI compiles
+/// them exactly as an app receives them.
+#[test]
+fn packaged_kotlin_matches_golden() {
+    let root = std::env::temp_dir().join(format!("istmo-packaged-kt-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let android_root = root.join("android");
+    fs::create_dir_all(android_root.join("app/src/main/java")).unwrap();
+    let plugin = istmo_build::Manifest::parse(
+        "[plugin]\nid = \"istmo.live_activity\"\n\
+         android_package = \"dev.istmo.plugins.liveactivity\"\n",
+    )
+    .unwrap();
+    istmo_build::emit_app_with(istmo_build::AppOpts {
+        root: Some(root.clone()),
+        android_root: Some(android_root.clone()),
+        android_package: Some("com.example.gen".to_owned()),
+        ios: Some(false),
+        auto_register: Some(false),
+        extra_manifests: vec![plugin],
+        extra_contracts: vec![live_activity(), coverage()],
+        ..istmo_build::AppOpts::default()
+    });
+    let java = android_root.join("app/src/main/java");
+    for (dir, ty, prefix) in [
+        (
+            "dev/istmo/plugins/liveactivity",
+            "LiveActivity",
+            "packaged_live_activity",
+        ),
+        ("com/example/gen", "Coverage", "packaged_coverage"),
+    ] {
+        for (file, part) in [
+            ("Types", "types"),
+            ("CodecsImpl", "codecs"),
+            ("Dispatcher", "host"),
+        ] {
+            let path = java.join(dir).join(format!("{ty}{file}.kt"));
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            assert_matches(&format!("{prefix}_{part}"), "kt", &source);
+        }
+    }
+    let _ = fs::remove_dir_all(&root);
+}

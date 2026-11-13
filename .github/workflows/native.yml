@@ -12,7 +12,9 @@ name: native
 #   errors (`runtime/ios/ci/typecheck-goldens.sh`).
 # * `kotlin-goldens` — compiles the generated Kotlin goldens with `-Werror`
 #   on a plain JVM (`runtime/android/ci/compile-goldens.sh`), so a
-#   generator change cannot ship warnings into every app.
+#   generator change cannot ship warnings into every app. The `packaged_*`
+#   goldens are whole files as an app outside `dev.istmo.runtime` gets
+#   them (package line and runtime imports included).
 # * `ios` — builds the `IstmoRuntime` package for the iOS Simulator and
 #   type-checks each example's generated Swift plus its plugins'
 #   `native/ios` sources against the real SDK
@@ -21,7 +23,10 @@ name: native
 #   included build, generated dispatchers / codecs / registry, plugin
 #   `native/android` sources) in the same rust-android image the
 #   justfile uses. `compileDebugKotlin` stops short of the cargo
-#   cross-build and APK signing.
+#   cross-build and APK signing. `data-store-demo` pins the legacy
+#   `android_package = "dev.istmo.runtime"`; the others generate into the
+#   default `<namespace>.gen`, so plugin `native/android` sources are
+#   compiled against an app package of their own.
 
 on:
   push:

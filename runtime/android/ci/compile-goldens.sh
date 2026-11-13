@@ -53,6 +53,15 @@ for contract in coverage live_activity permissions; do
     compile "$contract-client" "$client"/*.kt
 done
 
+# What an app outside `dev.istmo.runtime` receives: package line and
+# runtime imports included, one contract in its plugin's own package.
+mkdir "$work/packaged"
+for name in "$golden"/packaged_*.kt.expected; do
+    base=$(basename "$name" .kt.expected)
+    cp "$name" "$work/packaged/$base.kt"
+done
+compile packaged "$work/packaged"/*.kt
+
 # Services and workers declare their own package.
 mkdir "$work/background"
 for name in service_foreground worker_backup; do
