@@ -10,7 +10,9 @@
 //!   (`NWPathMonitor` Swift bridge) or publish bytes directly via
 //!   `Runtime::publish_early_latest`.
 
-use super::network_state::{LinkKind, NetworkState};
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+use super::network_state::LinkKind;
+use super::network_state::NetworkState;
 use crate::early::LatestPublisher;
 
 /// Publishes the host's connectivity snapshot.
