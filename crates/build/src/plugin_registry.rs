@@ -9,7 +9,12 @@
 //!
 //! Emitted only for plugins that have `auto_register = true` in their
 //! `istmo.toml` (default) and are not overridden `auto_register = false`
-//! at the app level. A plugin whose Android backend needs the host
+//! at the app level, and only on a platform where a native backend
+//! class exists: the plugin crate ships `native/<platform>/` sources,
+//! declares `android_backend` / `ios_backend`, or the app seeds the
+//! backend (`seed_backends`) or opts in with `[[app.plugin]]
+//! auto_register = true`. A plugin hosted in Rust has none and stays
+//! out. A plugin whose Android backend needs the host
 //! activity declares `android_backend_arg = "activity"` (or the
 //! concrete `Activity` subclass) instead of opting out.
 

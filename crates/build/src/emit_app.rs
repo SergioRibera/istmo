@@ -281,14 +281,13 @@ impl<'a> AppPass<'a> {
         dirs
     }
 
-    /// Ids of the plugins whose crate ships `native/ios/` sources.
-    fn plugins_with_native_ios(&self) -> HashSet<&str> {
-        let native = self.native_ios_dirs();
-        self.dep_manifests_by_links
-            .iter()
-            .filter(|(links, _)| native.iter().any(|(name, _)| name == links))
-            .flat_map(|(_, manifest)| manifest.plugins.iter().map(|p| p.id.as_str()))
-            .collect()
+    /// Ids of the plugins whose crate ships `native/<platform>/` sources.
+    fn plugins_with_native(&self, platform: Platform) -> HashSet<&str> {
+        let native = match platform {
+            Platform::Android => collect_dep_native_dirs(NativePlatform::Android),
+            Platform::Ios => self.native_ios_dirs(),
+        };
+        plugins_shipping(&native, &self.dep_manifests_by_links)
     }
 
     /// Icon sources and the native project files the pass reads.
@@ -354,7 +353,8 @@ impl<'a> AppPass<'a> {
             .or(self.config.auto_register)
             .unwrap_or(true);
         let contracts = with_extra_contracts(collect_dep_contracts(), &self.opts.extra_contracts);
-        let ships_swift = self.plugins_with_native_ios();
+        let ships_kotlin = self.plugins_with_native(Platform::Android);
+        let ships_swift = self.plugins_with_native(Platform::Ios);
 
         let mut registries = Registries::default();
         for contract in &contracts {
@@ -371,29 +371,45 @@ impl<'a> AppPass<'a> {
                     Some(plugin) => entry.with_plugin(plugin),
                     None => entry,
                 });
+            let app_plugin_auto_register = overrides.and_then(|o| o.auto_register);
             let auto_register = app_auto_register
                 && plugin_entry.is_none_or(|p| p.auto_register)
-                && overrides.and_then(|o| o.auto_register).unwrap_or(true)
+                && app_plugin_auto_register.unwrap_or(true)
                 && role == Role::Host;
 
             let plugin_package = plugin_entry.and_then(|p| p.android_package.as_deref());
-            for platform in &platforms {
-                let emitted = match platform {
-                    Platform::Android => self.emit_kotlin_sources(
-                        KotlinTarget {
-                            app: android_package,
-                            plugin: plugin_package,
-                        },
-                        contract,
-                        role,
-                    ),
-                    Platform::Ios => self.emit_swift_sources(
-                        contract,
-                        role,
-                        ships_swift.contains(contract.plugin_id.as_str()),
-                    ),
+            let id = contract.plugin_id.as_str();
+            for &platform in &platforms {
+                let (emitted, native_backend) = match platform {
+                    Platform::Android => {
+                        let emitted = self.emit_kotlin_sources(
+                            KotlinTarget {
+                                app: android_package,
+                                plugin: plugin_package,
+                            },
+                            contract,
+                            role,
+                        );
+                        let seeded = self.opts.seed_backends && plugin_package.is_none();
+                        let declared = plugin_entry.is_some_and(|p| p.android_backend.is_some());
+                        (emitted, declared || seeded || ships_kotlin.contains(id))
+                    }
+                    Platform::Ios => {
+                        let ships = ships_swift.contains(id);
+                        let emitted = self.emit_swift_sources(contract, role, ships);
+                        let declared = plugin_entry.is_some_and(|p| p.ios_backend.is_some());
+                        (emitted, declared || self.opts.seed_backends || ships)
+                    }
                 };
-                if let Some(entry) = registry_entry.as_ref().filter(|_| emitted && auto_register) {
+                // A plugin hosted in Rust has no `<T>BackendImpl` to build:
+                // only a backend shipped, declared or seeded for this
+                // platform is registered, unless the app opts in with
+                // `[[app.plugin]] auto_register = true` because it writes
+                // the class itself.
+                let registers = auto_register
+                    && emitted
+                    && (native_backend || app_plugin_auto_register == Some(true));
+                if let Some(entry) = registry_entry.as_ref().filter(|_| registers) {
                     match platform {
                         Platform::Android => registries.kotlin.push(entry.clone()),
                         Platform::Ios => registries.swift.push(entry.clone()),
@@ -856,6 +872,19 @@ fn emit_runtime_env(
     }
 }
 
+/// Ids of the plugins declared by the crates in `manifests_by_links`
+/// that advertise one of the `native` `(links, dir)` directories.
+fn plugins_shipping<'a>(
+    native: &[(String, PathBuf)],
+    manifests_by_links: &'a [(String, Manifest)],
+) -> HashSet<&'a str> {
+    manifests_by_links
+        .iter()
+        .filter(|(links, _)| native.iter().any(|(name, _)| name == links))
+        .flat_map(|(_, manifest)| manifest.plugins.iter().map(|p| p.id.as_str()))
+        .collect()
+}
+
 /// `handed_over` plus `extra`, where an extra contract replaces any
 /// earlier one with its plugin id, so each id generates one set of
 /// sources.
@@ -902,6 +931,25 @@ mod tests {
             .map(|c| (c.plugin_id.as_str(), c.type_name.as_str()))
             .collect();
         assert_eq!(names, [("a", "A"), ("b", "Override"), ("c", "C")]);
+    }
+
+    #[test]
+    fn only_crates_advertising_a_native_dir_ship_their_plugins() {
+        let manifests = vec![
+            (
+                "ISTMO_HOSTED".to_owned(),
+                Manifest::parse("[plugin]\nid = \"a.hosted\"\n").unwrap(),
+            ),
+            (
+                "ISTMO_NATIVE".to_owned(),
+                Manifest::parse("[[plugin]]\nid = \"a.one\"\n\n[[plugin]]\nid = \"a.two\"\n")
+                    .unwrap(),
+            ),
+        ];
+        let native = [("ISTMO_NATIVE".to_owned(), PathBuf::from("/x/native/android"))];
+        let mut ids: Vec<&str> = plugins_shipping(&native, &manifests).into_iter().collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["a.one", "a.two"]);
     }
 
     fn write(path: &Path, contents: &str) {

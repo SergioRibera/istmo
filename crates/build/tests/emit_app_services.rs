@@ -467,6 +467,8 @@ fn emit_app_generates_into_the_plugin_android_package() {
         seed_backends: true,
         extra_manifests: vec![plugin],
         extra_contracts: vec![dummy_contract()],
+        // An inline manifest advertises no `native/android/` dir.
+        per_plugin: opt_in("myapp.dummy"),
         ..AppOpts::default()
     });
 
@@ -572,4 +574,130 @@ fn emit_app_fails_on_unknown_app_key() {
         root: Some(root),
         ..AppOpts::default()
     });
+}
+
+fn opt_in(plugin_id: &str) -> std::collections::HashMap<String, istmo_build::AppPluginOpts> {
+    std::collections::HashMap::from([(
+        plugin_id.to_owned(),
+        istmo_build::AppPluginOpts {
+            auto_register: Some(true),
+            ..istmo_build::AppPluginOpts::default()
+        },
+    )])
+}
+
+/// Android + iOS app roots for registry tests.
+fn registry_roots(subdir: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let root = scratch_root(subdir);
+    let android_root = root.join("android");
+    fs::create_dir_all(android_root.join("app")).unwrap();
+    fs::write(
+        android_root.join("app/build.gradle.kts"),
+        "android {\n    namespace = \"com.example.app\"\n}\n",
+    )
+    .unwrap();
+    let ios_root = root.join("ios");
+    fs::create_dir_all(ios_root.join("MyApp")).unwrap();
+    (root, android_root, ios_root)
+}
+
+/// The Kotlin and Swift registries emitted for `manifest` + the dummy
+/// contract.
+fn registries(subdir: &str, manifest: Option<&str>, opts: AppOpts) -> (String, String) {
+    let (root, android_root, ios_root) = registry_roots(subdir);
+    emit_app_with(AppOpts {
+        root: Some(root.clone()),
+        android_root: Some(android_root.clone()),
+        ios_root: Some(ios_root.clone()),
+        ios_app_dir: Some("MyApp".to_owned()),
+        extra_manifests: manifest.map(|m| Manifest::parse(m).unwrap()).into_iter().collect(),
+        extra_contracts: vec![dummy_contract()],
+        ..opts
+    });
+    let kotlin = fs::read_to_string(
+        android_root.join("app/src/main/java/dev/istmo/generated/IstmoPluginRegistry.kt"),
+    )
+    .unwrap();
+    let swift =
+        fs::read_to_string(ios_root.join("MyApp/Plugins/IstmoPluginRegistry.swift")).unwrap();
+    let _ = fs::remove_dir_all(&root);
+    (kotlin, swift)
+}
+
+#[test]
+fn rust_hosted_plugin_stays_out_of_both_registries() {
+    let (kotlin, swift) = registries(
+        "registry-rust-hosted",
+        Some("[plugin]\nid = \"myapp.dummy\"\nclient_type = \"::dummy::DummyClient\"\n"),
+        AppOpts::default(),
+    );
+    assert!(!kotlin.contains("Dummy"), "{kotlin}");
+    assert!(!swift.contains("Dummy"), "{swift}");
+}
+
+#[test]
+fn app_local_contract_without_backend_stays_out_of_both_registries() {
+    let (kotlin, swift) = registries("registry-app-local", None, AppOpts::default());
+    assert!(!kotlin.contains("Dummy"), "{kotlin}");
+    assert!(!swift.contains("Dummy"), "{swift}");
+}
+
+#[test]
+fn declared_backend_registers_only_on_its_platform() {
+    let (kotlin, swift) = registries(
+        "registry-android-only",
+        Some("[plugin]\nid = \"myapp.dummy\"\nandroid_backend = \"dev.acme.DummyImpl\"\n"),
+        AppOpts::default(),
+    );
+    assert!(kotlin.contains("dev.acme.DummyImpl(appContext)"), "{kotlin}");
+    assert!(!swift.contains("Dummy"), "{swift}");
+
+    let (kotlin, swift) = registries(
+        "registry-ios-only",
+        Some("[plugin]\nid = \"myapp.dummy\"\nios_backend = \"AcmeDummy\"\n"),
+        AppOpts::default(),
+    );
+    assert!(!kotlin.contains("Dummy"), "{kotlin}");
+    assert!(swift.contains("DummyDispatcher(backend: AcmeDummy()"), "{swift}");
+}
+
+#[test]
+fn seeded_or_opted_in_app_local_backend_registers_on_both_platforms() {
+    for (subdir, opts) in [
+        (
+            "registry-seeded",
+            AppOpts {
+                seed_backends: true,
+                ..AppOpts::default()
+            },
+        ),
+        (
+            "registry-opt-in",
+            AppOpts {
+                per_plugin: opt_in("myapp.dummy"),
+                ..AppOpts::default()
+            },
+        ),
+    ] {
+        let (kotlin, swift) = registries(subdir, None, opts);
+        assert!(
+            kotlin.contains("com.example.app.gen.DummyBackendImpl(appContext)"),
+            "{kotlin}"
+        );
+        assert!(swift.contains("DummyDispatcher(backend: DummyBackendImpl()"), "{swift}");
+    }
+}
+
+#[test]
+fn auto_register_false_still_wins_over_a_declared_backend() {
+    let (kotlin, swift) = registries(
+        "registry-opt-out",
+        Some(
+            "[plugin]\nid = \"myapp.dummy\"\nauto_register = false\n\
+             android_backend = \"dev.acme.DummyImpl\"\nios_backend = \"AcmeDummy\"\n",
+        ),
+        AppOpts::default(),
+    );
+    assert!(!kotlin.contains("Dummy"), "{kotlin}");
+    assert!(!swift.contains("Dummy"), "{swift}");
 }

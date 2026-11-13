@@ -91,6 +91,9 @@ impl Role {
 pub struct AppPluginOpts {
     pub role: Option<Role>,
     pub platforms: Option<Vec<Platform>>,
+    /// `false` keeps the plugin out of `IstmoPluginRegistry`. `true` also
+    /// registers it where istmo knows of no native backend (an app-local
+    /// contract whose `<T>BackendImpl` the app writes itself).
     pub auto_register: Option<bool>,
 }
 
