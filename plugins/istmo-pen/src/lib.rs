@@ -260,13 +260,13 @@ pub struct PenCapabilities {
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PenError {
-    /// No native window has been registered for the [`PenConfig::window_id`]
-    /// this client was created with, for backends that refuse such
-    /// clients. The bundled backends do not return it: the desktop
-    /// backend hands an unregistered id streams that end immediately,
-    /// and `PenFactoryImpl(view)` (mobile) serves every id from its one
-    /// view. Register the window with the desktop `PenPublisher` before
-    /// creating the client.
+    /// No native window is registered for the [`PenConfig::window_id`]
+    /// this client was created with. The desktop backend returns it from
+    /// [`Pen::capabilities`] and [`Pen::set_prediction_enabled`] while
+    /// the id is unknown to its `PenPublisher` (streams opened then end
+    /// immediately); register the window before creating the client.
+    /// The mobile `PenFactoryImpl(view)` serves every id from its one
+    /// view and never returns it.
     NotAttached,
     /// Native backend refused the request. Carries the platform's raw
     /// error message.

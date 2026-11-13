@@ -44,8 +44,9 @@ pub struct PenBackend {
 }
 
 impl PenBackend {
-    /// Backend for `window_id` on `publisher`. An id the publisher does
-    /// not know yields streams that are already closed.
+    /// Backend for `window_id` on `publisher`. While the publisher does
+    /// not know the id, streams opened on it are already closed and the
+    /// unary methods fail with [`PenError::NotAttached`].
     #[must_use]
     pub const fn new(window_id: u64, publisher: Arc<PenPublisher>) -> Self {
         Self {
@@ -58,6 +59,14 @@ impl PenBackend {
     #[must_use]
     pub const fn window_id(&self) -> u64 {
         self.window_id
+    }
+
+    fn ensure_attached(&self) -> Result<(), PenError> {
+        if self.publisher.has_window(self.window_id) {
+            Ok(())
+        } else {
+            Err(PenError::NotAttached)
+        }
     }
 }
 
@@ -75,6 +84,7 @@ impl Pen for PenBackend {
     }
 
     async fn capabilities(&self) -> Result<PenCapabilities, PenError> {
+        self.ensure_attached()?;
         Ok(platform_capabilities())
     }
 
@@ -83,6 +93,7 @@ impl Pen for PenBackend {
         _cancel: CancelToken,
         _enabled: bool,
     ) -> Result<(), PenError> {
+        self.ensure_attached()?;
         // Windows / macOS / Linux do not currently expose a native
         // sample predictor — the `predicted` slot on `PenEvent::Move`
         // stays empty regardless of this setting.

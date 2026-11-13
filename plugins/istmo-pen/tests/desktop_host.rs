@@ -1,9 +1,11 @@
 #![cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 
 use istmo_core::Runtime;
+use std::sync::Arc;
+
 use istmo_pen::{
-    PEN_PLUGIN_ID, PenClient, PenConfig, PenEvent, PenHost, PenHoverEvent, PenSample, PenToolKind,
-    backend::PenPublisherFactory, publisher::PenPublisher,
+    PEN_PLUGIN_ID, PenClient, PenConfig, PenError, PenEvent, PenHost, PenHoverEvent, PenSample,
+    PenToolKind, backend::PenPublisherFactory, publisher::PenPublisher,
 };
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -190,6 +192,35 @@ fn set_prediction_enabled_returns_ok_on_desktop() {
     let client = pollster::block_on(PenClient::from_runtime_with(&rt, PenConfig::new(9)))
         .expect("from_runtime_with");
     pollster::block_on(client.set_prediction_enabled(true)).expect("set_prediction_enabled");
+}
+
+#[test]
+fn unregistered_window_reports_not_attached() {
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    rt.declare_plugin(PEN_PLUGIN_ID);
+
+    let publisher = PenPublisher::install(&rt);
+    rt.register_host(PenHost::new(PenPublisherFactory::new(Arc::clone(
+        &publisher,
+    ))));
+
+    let client = pollster::block_on(PenClient::from_runtime_with(&rt, PenConfig::new(11)))
+        .expect("from_runtime_with");
+    let not_attached = |err: istmo_core::IstmoError| PenError::try_from(err).ok();
+    assert_eq!(
+        pollster::block_on(client.capabilities()).map_err(not_attached),
+        Err(Some(PenError::NotAttached))
+    );
+    assert_eq!(
+        pollster::block_on(client.set_prediction_enabled(true)).map_err(not_attached),
+        Err(Some(PenError::NotAttached))
+    );
+
+    publisher
+        .register_window(11, MockHandle)
+        .expect("register_window");
+    assert!(pollster::block_on(client.capabilities()).is_ok());
 }
 
 #[test]

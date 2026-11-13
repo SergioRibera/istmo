@@ -384,6 +384,12 @@ impl PenPublisher {
         &self.runtime
     }
 
+    /// Whether a window is registered under `id`.
+    #[must_use]
+    pub fn has_window(&self, id: u64) -> bool {
+        lock(&self.windows).contains_key(&id)
+    }
+
     /// Snapshot of the currently registered window ids. Useful for
     /// backends that need to broadcast an event to every listener
     /// (e.g. `libinput` on Linux where samples are seat-scoped rather

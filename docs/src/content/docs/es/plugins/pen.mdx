@@ -234,7 +234,10 @@ plataforma: un subclass de `WM_POINTER*` en Windows (llámalo en el hilo
 que creó la ventana), un monitor de `NSEvent` en macOS, un hilo que
 bombea Wayland tablet-v2 o `XInput2` en Linux. Registrar de nuevo un id
 reemplaza su enganche y conserva a los suscriptores existentes;
-`unregister_window` lo quita y termina sus streams.
+`unregister_window` lo quita y termina sus streams. Mientras el
+`window_id` de un client no está registrado, sus streams terminan de
+inmediato y `capabilities` / `set_prediction_enabled` fallan con
+`PenError::NotAttached`.
 
 Otras formas de unir ventanas:
 

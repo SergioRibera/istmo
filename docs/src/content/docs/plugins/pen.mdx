@@ -232,7 +232,9 @@ subclass on Windows (call it on the thread that created the window),
 an `NSEvent` monitor on macOS, a Wayland tablet-v2 or `XInput2` pump
 thread on Linux. Registering an id again replaces its hook and keeps
 existing subscribers; `unregister_window` removes it and ends its
-streams.
+streams. While a client's `window_id` is not registered, its streams
+end immediately and `capabilities` / `set_prediction_enabled` fail with
+`PenError::NotAttached`.
 
 Other ways to attach windows:
 
