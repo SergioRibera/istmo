@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn battery_state_has_no_android_permissions() {
         let entry = find("istmo.battery_state").expect("registered");
-        assert!(entry.android_permissions.is_empty());
+        assert_eq!(entry.android_permissions, []);
     }
 
     #[test]

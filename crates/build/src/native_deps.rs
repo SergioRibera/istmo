@@ -319,7 +319,7 @@ mod tests {
             GradleCoord::new("g", "art-b", "0.1.0"),
         ));
         assert_eq!(a.gradle_entries().count(), 2);
-        assert!(a.conflicts().is_empty());
+        assert_eq!(a.conflicts(), []);
     }
 
     #[test]

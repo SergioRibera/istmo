@@ -143,7 +143,7 @@ default_deployment = "remote"
     assert_eq!(plugin.plugins[0].default_deployment, Deployment::Remote);
 
     let wiring = resolve_wiring(&[plugin], None);
-    assert!(wiring.local_clients.is_empty());
+    assert_eq!(wiring.local_clients, Vec::<String>::new());
     assert_eq!(
         wiring.remote_clients,
         vec!["::istmo_heavy_ml::HeavyMlClient"]
@@ -171,7 +171,7 @@ deployment = "remote"
     assert_eq!(app.remote_overrides.len(), 1);
 
     let wiring = resolve_wiring(&[plugin], Some(&app));
-    assert!(wiring.local_clients.is_empty());
+    assert_eq!(wiring.local_clients, Vec::<String>::new());
     assert_eq!(
         wiring.remote_clients,
         vec!["::istmo_compute::ComputeClient"]
@@ -199,7 +199,7 @@ deployment = "local"
         wiring.local_clients,
         vec!["::istmo_heavy_ml::HeavyMlClient"]
     );
-    assert!(wiring.remote_clients.is_empty());
+    assert_eq!(wiring.remote_clients, Vec::<String>::new());
 }
 
 #[test]
@@ -215,8 +215,8 @@ version = "1.13.0"
 "#;
     let plugin = Manifest::parse(plugin_src).expect("parse");
     let wiring = resolve_wiring(&[plugin], None);
-    assert!(wiring.local_clients.is_empty());
-    assert!(wiring.remote_clients.is_empty());
+    assert_eq!(wiring.local_clients, Vec::<String>::new());
+    assert_eq!(wiring.remote_clients, Vec::<String>::new());
 }
 
 #[test]

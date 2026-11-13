@@ -272,7 +272,7 @@ mod tests {
             "<application android:label=\"${istmoLabel}\" android:icon=\"${istmoIcon}\"/>",
         );
         let app = app(&["cdylib"], true);
-        assert!(Doctor::new(&app, Some(&root), None).examine().is_empty());
+        assert_eq!(Doctor::new(&app, Some(&root), None).examine(), []);
     }
 
     #[test]

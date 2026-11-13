@@ -470,19 +470,19 @@ mod tests {
     #[test]
     fn no_runtime_macro_yields_empty() {
         let s = "fn main() { println!(\"hi\"); }";
-        assert!(extract(s).is_empty());
+        assert_eq!(extract(s), Vec::<String>::new());
     }
 
     #[test]
     fn plugins_section_absent_yields_empty() {
         let s = "istmo::runtime!(expects: [X]);";
-        assert!(extract(s).is_empty());
+        assert_eq!(extract(s), Vec::<String>::new());
     }
 
     #[test]
     fn non_istmo_runtime_macro_ignored() {
         let s = "tokio::runtime!(plugins: [NotMine]);";
-        assert!(extract(s).is_empty());
+        assert_eq!(extract(s), Vec::<String>::new());
     }
 
     #[test]
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn resolve_empty_wired_list_yields_empty() {
         let selected = resolve_wired_entries(&[], &[]);
-        assert!(selected.is_empty());
+        assert_eq!(selected, []);
     }
 
     #[test]

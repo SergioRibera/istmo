@@ -566,15 +566,15 @@ version = "1.13.0"
     fn manifest_with_only_shared_gradle_is_valid() {
         let m = Manifest::parse("[[gradle]]\ngroup=\"g\"\nartifact=\"a\"\nversion=\"1\"\n")
             .expect("parse");
-        assert!(m.plugins.is_empty());
+        assert_eq!(m.plugins, []);
         assert_eq!(m.native_deps.gradle_entries().count(), 1);
     }
 
     #[test]
     fn manifest_with_only_app_section_is_valid() {
         let m = Manifest::parse("[app]\nandroid = false\n").expect("parse");
-        assert!(m.plugins.is_empty());
-        assert!(m.remote_overrides.is_empty());
+        assert_eq!(m.plugins, []);
+        assert_eq!(m.remote_overrides, []);
     }
 
     #[test]

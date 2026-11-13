@@ -602,7 +602,7 @@ exported = true
     #[test]
     fn empty_set_renders_nothing() {
         let types = DocumentTypes::default();
-        assert!(types.render_android_intent_filters().is_empty());
-        assert!(types.render_info_plist().is_empty());
+        assert_eq!(types.render_android_intent_filters(), "");
+        assert_eq!(types.render_info_plist(), "");
     }
 }

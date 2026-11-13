@@ -415,7 +415,7 @@ fn rewarded_reports_not_granted_when_user_dismisses_early() {
     let outcome = pollster::block_on(client.show_rewarded_owned(ad)).unwrap();
     assert!(!outcome.granted, "user dismissed → no reward");
     assert_eq!(outcome.reward_amount, 0);
-    assert!(outcome.reward_type.is_empty());
+    assert_eq!(outcome.reward_type, "");
     backend.join().unwrap();
 }
 

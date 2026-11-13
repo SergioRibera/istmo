@@ -69,7 +69,7 @@ fn updates_stream_delivers() {
 #[test]
 fn rust_fallback_populates_known_fields() {
     let info = rust_fallback();
-    assert!(!info.os_name.is_empty());
-    assert!(!info.arch.is_empty());
+    assert!(!info.os_name.is_empty(), "os_name is empty");
+    assert!(!info.arch.is_empty(), "arch is empty");
     assert!(info.cpu_cores >= 1);
 }

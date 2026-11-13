@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(registry.ids(), [WindowId(1)]);
         // The lock was released: later operations go through.
         registry.unregister(WindowId(1));
-        assert!(registry.ids().is_empty());
+        assert_eq!(registry.ids(), []);
     }
 
     #[test]

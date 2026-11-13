@@ -35,7 +35,7 @@ fn availability_answers_without_ui() {
         let availability =
             pollster::block_on(client.availability(policy)).expect("availability never fails");
         if availability.status == BiometricStatus::Unsupported {
-            assert!(availability.kinds.is_empty());
+            assert_eq!(availability.kinds, []);
         }
     }
 }

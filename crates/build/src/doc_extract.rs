@@ -403,7 +403,7 @@ pub enum SignInError {
         };
         assert_eq!(variants.len(), 3);
         assert_eq!(variants[0].name, "UserCancelled");
-        assert!(variants[0].payload.is_empty());
+        assert_eq!(variants[0].payload, Vec::<String>::new());
         assert_eq!(variants[0].docs, "User cancelled.");
         assert_eq!(variants[1].payload, vec!["String".to_owned()]);
     }

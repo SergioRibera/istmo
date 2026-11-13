@@ -81,6 +81,6 @@ mod tests {
     #[test]
     fn missing_paths_are_not_tracked() {
         let ((), lines) = capture(|| rerun_if_exists(Path::new("/definitely/not/here")));
-        assert!(lines.is_empty());
+        assert_eq!(lines, Vec::<String>::new());
     }
 }

@@ -315,7 +315,7 @@ mod tests {
             .as_array()
             .expect("array");
         assert_eq!(schemes.len(), 2);
-        assert!(frags.warnings().is_empty());
+        assert_eq!(frags.warnings(), []);
     }
 
     #[test]
