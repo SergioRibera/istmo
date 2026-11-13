@@ -319,7 +319,13 @@ fn dummy_contract() -> istmo_build::Contract {
     istmo_build::Contract {
         plugin_id: "myapp.dummy".to_owned(),
         type_name: "Dummy".to_owned(),
-        methods: vec![],
+        methods: vec![istmo_build::Method {
+            name: "ping".to_owned(),
+            kind: istmo_build::MethodKind::Unary,
+            args: vec![],
+            returns: istmo_build::TypeRef::Unit,
+            error: None,
+        }],
         init: None,
         types: vec![],
     }

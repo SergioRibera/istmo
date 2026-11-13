@@ -364,10 +364,11 @@ impl<'a> AppPass<'a> {
                 .and_then(|o| o.platforms.clone())
                 .unwrap_or_else(|| self.active_platforms());
             let plugin_entry = plugin_entries.get(contract.plugin_id.as_str()).copied();
-            let mut registry_entry = RegistryEntry::from_contract(contract);
-            if let Some(plugin) = plugin_entry {
-                registry_entry = registry_entry.with_plugin(plugin);
-            }
+            let registry_entry =
+                RegistryEntry::from_contract(contract).map(|entry| match plugin_entry {
+                    Some(plugin) => entry.with_plugin(plugin),
+                    None => entry,
+                });
             let auto_register = app_auto_register
                 && plugin_entry.is_none_or(|p| p.auto_register)
                 && overrides.and_then(|o| o.auto_register).unwrap_or(true)
@@ -390,10 +391,10 @@ impl<'a> AppPass<'a> {
                         ships_swift.contains(contract.plugin_id.as_str()),
                     ),
                 };
-                if emitted && auto_register {
+                if let Some(entry) = registry_entry.as_ref().filter(|_| emitted && auto_register) {
                     match platform {
-                        Platform::Android => registries.kotlin.push(registry_entry.clone()),
-                        Platform::Ios => registries.swift.push(registry_entry.clone()),
+                        Platform::Android => registries.kotlin.push(entry.clone()),
+                        Platform::Ios => registries.swift.push(entry.clone()),
                     }
                 }
             }

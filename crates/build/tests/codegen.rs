@@ -4,12 +4,13 @@ use std::path::PathBuf;
 use istmo_build::{
     Arg, BackgroundKind, ContinuousMode, Contract, DesktopAppContract, DesktopServiceContract,
     EnumDef, EnumVariant, Field, GradleCoord, GradleDep, GradleScope, IosBackgroundContract,
-    IosEntitlements, Method, MethodKind, NativeDeps, RestartPolicy, ServiceContract, ServiceScope,
-    StartType, StructDef, SwiftPackageDep, TypeDef, TypeRef, WorkerContract,
+    IosEntitlements, Method, MethodKind, NativeDeps, RegistryEntry, RestartPolicy, ServiceContract,
+    ServiceScope, StartType, StructDef, SwiftPackageDep, TypeDef, TypeRef, WorkerContract,
     generate_android_service, generate_android_worker, generate_desktop_entry,
     generate_ios_background, generate_kotlin, generate_kotlin_client, generate_kotlin_codecs,
-    generate_kotlin_host, generate_kotlin_types, generate_launchd_plist, generate_rust_types,
-    generate_swift, generate_swift_client, generate_swift_codecs, generate_swift_host,
+    generate_kotlin_host, generate_kotlin_plugin_registry, generate_kotlin_types,
+    generate_launchd_plist, generate_rust_types, generate_swift, generate_swift_client,
+    generate_swift_codecs, generate_swift_host, generate_swift_plugin_registry,
     generate_swift_types, generate_systemd_unit, generate_windows_service, required_entitlements,
 };
 
@@ -1765,4 +1766,29 @@ fn packaged_kotlin_matches_golden() {
         }
     }
     let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn types_only_contract_stays_out_of_plugin_registries() {
+    let types_only = Contract {
+        plugin_id: "demo.shared".to_owned(),
+        type_name: "Shared".to_owned(),
+        methods: vec![],
+        init: None,
+        types: vec![TypeDef::Struct(StructDef {
+            name: "Payload".to_owned(),
+            fields: vec![Field {
+                name: "value".to_owned(),
+                ty: TypeRef::U32,
+            }],
+        })],
+    };
+    let entries: Vec<RegistryEntry> = RegistryEntry::from_contract(&types_only)
+        .into_iter()
+        .collect();
+    assert!(entries.is_empty());
+    let kotlin = generate_kotlin_plugin_registry("com.example.gen", &entries);
+    assert!(!kotlin.contains("SharedBackendImpl"), "{kotlin}");
+    let swift = generate_swift_plugin_registry(&entries);
+    assert!(!swift.contains("SharedBackendImpl"), "{swift}");
 }

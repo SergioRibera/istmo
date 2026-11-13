@@ -48,9 +48,15 @@ pub struct RegistryEntry {
 }
 
 impl RegistryEntry {
+    /// Registry entry for a host contract, or `None` for a types-only
+    /// contract (no methods, no `init`): it has nothing to dispatch, so no
+    /// backend class exists to register.
     #[must_use]
-    pub fn from_contract(contract: &Contract) -> Self {
-        Self {
+    pub fn from_contract(contract: &Contract) -> Option<Self> {
+        if contract.methods.is_empty() && contract.init.is_none() {
+            return None;
+        }
+        Some(Self {
             plugin_id: contract.plugin_id.clone(),
             type_name: contract.type_name.clone(),
             stateful: contract.init.is_some(),
@@ -58,7 +64,7 @@ impl RegistryEntry {
             android_class: None,
             android_arg: AndroidBackendArg::Context,
             ios_class: None,
-        }
+        })
     }
 
     /// Apply the backend overrides the plugin declares in its
@@ -321,13 +327,19 @@ pub fn generate_swift_app_entry() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{Contract, TypeDef};
+    use crate::contract::{Contract, Method, MethodKind, TypeDef, TypeRef};
 
     fn stateless(plugin_id: &str, type_name: &str) -> Contract {
         Contract {
             plugin_id: plugin_id.to_owned(),
             type_name: type_name.to_owned(),
-            methods: vec![],
+            methods: vec![Method {
+                name: "ping".to_owned(),
+                kind: MethodKind::Unary,
+                args: vec![],
+                returns: TypeRef::Unit,
+                error: None,
+            }],
             init: None,
             types: vec![] as Vec<TypeDef>,
         }
@@ -348,7 +360,7 @@ mod tests {
     #[test]
     fn stateless_contract_becomes_entry() {
         let c = stateless("acme.foo", "Foo");
-        let entry = RegistryEntry::from_contract(&c);
+        let entry = RegistryEntry::from_contract(&c).unwrap();
         assert_eq!(entry.plugin_id, "acme.foo");
         assert_eq!(entry.type_name, "Foo");
         assert!(!entry.stateful);
@@ -356,10 +368,25 @@ mod tests {
     }
 
     #[test]
+    fn types_only_contract_is_not_registered() {
+        let mut c = stateless("acme.shared", "Shared");
+        c.methods.clear();
+        assert!(RegistryEntry::from_contract(&c).is_none());
+    }
+
+    #[test]
+    fn stateful_contract_without_methods_is_registered() {
+        let mut c = stateless("acme.cfg", "Cfg");
+        c.methods.clear();
+        c.init = Some(TypeRef::U32);
+        assert!(RegistryEntry::from_contract(&c).is_some_and(|e| e.stateful));
+    }
+
+    #[test]
     fn stateful_contract_records_stateful_flag() {
         let mut c = stateless("acme.bar", "Bar");
-        c.init = Some(crate::contract::TypeRef::U32);
-        let entry = RegistryEntry::from_contract(&c);
+        c.init = Some(TypeRef::U32);
+        let entry = RegistryEntry::from_contract(&c).unwrap();
         assert!(entry.stateful);
     }
 
