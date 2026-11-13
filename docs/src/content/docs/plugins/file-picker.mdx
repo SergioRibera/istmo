@@ -197,9 +197,17 @@ before the activity reaches `STARTED`. Use `IstmoGameActivity`, or call
   had already persisted itself are left alone.
 
 **iOS** — nothing to wire: `IstmoApp.run()` (or
-`IstmoPluginRegistry.registerAll()`) registers
-`FilePickerBackendImpl()`, which presents from the top view controller.
-No `Info.plist` key is needed.
+`IstmoPluginRegistry.registerAll()`) registers a `FilePickerDispatcher`
+around `FilePickerBackendImpl()`, which presents from the top view
+controller. No `Info.plist` key is needed. Registering by hand takes the
+dispatcher, not the backend:
+
+```swift
+IstmoRuntime.shared.registerHandler(
+    FilePickerDispatcher.PLUGIN_ID,
+    FilePickerDispatcher(backend: FilePickerBackendImpl(), codecs: FilePickerCodecsImpl())
+)
+```
 
 **Desktop** — register `DesktopFilePicker` and attach it to the
 runtime before the first pick; until then picks fail with

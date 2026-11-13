@@ -204,9 +204,17 @@ llama a `IstmoHost.onCreate(this)` desde tu propia `ComponentActivity`.
   se tocan.
 
 **iOS** — no hay nada que conectar: `IstmoApp.run()` (o
-`IstmoPluginRegistry.registerAll()`) registra `FilePickerBackendImpl()`,
-que presenta desde el view controller superior. No hace falta ninguna
-clave en `Info.plist`.
+`IstmoPluginRegistry.registerAll()`) registra un `FilePickerDispatcher`
+alrededor de `FilePickerBackendImpl()`, que presenta desde el view
+controller superior. No hace falta ninguna clave en `Info.plist`. Para
+registrarlo a mano se pasa el dispatcher, no el backend:
+
+```swift
+IstmoRuntime.shared.registerHandler(
+    FilePickerDispatcher.PLUGIN_ID,
+    FilePickerDispatcher(backend: FilePickerBackendImpl(), codecs: FilePickerCodecsImpl())
+)
+```
 
 **Desktop** — registra `DesktopFilePicker` y únelo al runtime antes de
 la primera selección; hasta entonces las selecciones fallan con

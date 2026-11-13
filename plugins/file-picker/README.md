@@ -42,6 +42,16 @@ the app process (`default_deployment = "local"`).
 Desktop apps register `FilePickerHost::new(picker.clone())` and then
 call `picker.install_release_hook(&runtime)` before the first pick.
 
+On iOS `IstmoPluginRegistry.registerAll()` registers the backend. To
+register it by hand, wrap it in the generated dispatcher:
+
+```swift
+IstmoRuntime.shared.registerHandler(
+    FilePickerDispatcher.PLUGIN_ID,
+    FilePickerDispatcher(backend: FilePickerBackendImpl(), codecs: FilePickerCodecsImpl())
+)
+```
+
 On Android the backend needs the host `ComponentActivity` and is built
 in `onCreate` by the generated `IstmoPluginRegistry`. A picker still
 open when that activity is destroyed fails with

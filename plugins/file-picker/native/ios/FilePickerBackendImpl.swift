@@ -8,12 +8,14 @@ import UniformTypeIdentifiers
 /// Reference `UIDocumentPickerViewController` backend for
 /// `istmo.file_picker`.
 ///
-/// Construct after your app finishes launching and register with the
-/// plugin registry:
+/// The generated `IstmoPluginRegistry.registerAll()` registers it.
+/// Registering by hand wraps it in the generated dispatcher:
 ///
 /// ```swift
-/// let picker = FilePickerBackendImpl()
-/// IstmoRuntime.shared.registerHandler("istmo.file_picker", picker)
+/// IstmoRuntime.shared.registerHandler(
+///     FilePickerDispatcher.PLUGIN_ID,
+///     FilePickerDispatcher(backend: FilePickerBackendImpl(), codecs: FilePickerCodecsImpl())
+/// )
 /// ```
 ///
 /// The backend serialises picker launches — `UIDocumentPickerViewController`
