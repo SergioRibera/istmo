@@ -34,9 +34,9 @@ unsafe extern "C" fn on_call(
     }
 }
 
-unsafe extern "C" fn on_id(_ctx: *mut c_void, _id: u64) {}
+const unsafe extern "C" fn on_id(_ctx: *mut c_void, _id: u64) {}
 
-unsafe extern "C" fn on_create_instance(
+const unsafe extern "C" fn on_create_instance(
     _ctx: *mut c_void,
     _call_id: u64,
     _plugin_id_utf8: *const u8,
@@ -46,7 +46,7 @@ unsafe extern "C" fn on_create_instance(
 ) {
 }
 
-unsafe extern "C" fn on_respond(
+const unsafe extern "C" fn on_respond(
     _ctx: *mut c_void,
     _call_id: u64,
     _ok: bool,
@@ -55,7 +55,7 @@ unsafe extern "C" fn on_respond(
 ) {
 }
 
-unsafe extern "C" fn on_event(
+const unsafe extern "C" fn on_event(
     _ctx: *mut c_void,
     _stream_id: u64,
     _payload: *const u8,
@@ -63,7 +63,7 @@ unsafe extern "C" fn on_event(
 ) {
 }
 
-unsafe extern "C" fn on_stream_end(
+const unsafe extern "C" fn on_stream_end(
     _ctx: *mut c_void,
     _stream_id: u64,
     _reason: u32,
@@ -73,7 +73,7 @@ unsafe extern "C" fn on_stream_end(
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe extern "C" fn on_notify(
+const unsafe extern "C" fn on_notify(
     _ctx: *mut c_void,
     _plugin_id_utf8: *const u8,
     _plugin_id_len: usize,

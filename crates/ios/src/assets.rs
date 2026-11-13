@@ -35,7 +35,7 @@ pub struct IosAssetBackend {
 
 impl IosAssetBackend {
     #[must_use]
-    pub fn main_bundle() -> Self {
+    pub const fn main_bundle() -> Self {
         Self {
             root: OnceLock::new(),
             override_root: None,
@@ -43,7 +43,7 @@ impl IosAssetBackend {
     }
 
     #[must_use]
-    pub fn for_root(root: PathBuf) -> Self {
+    pub const fn for_root(root: PathBuf) -> Self {
         Self {
             root: OnceLock::new(),
             override_root: Some(root),
@@ -85,7 +85,7 @@ impl AssetBackend for IosAssetBackend {
             .iter()
             .find(|path| path.is_file())
             .unwrap_or(&candidates[0]);
-        let file = File::open(path).map_err(|err| annotate(err, path))?;
+        let file = File::open(path).map_err(|err| annotate(&err, path))?;
         Ok(AssetReader::new(file))
     }
 }
@@ -97,7 +97,7 @@ pub fn install() {
     install_backend(Arc::new(IosAssetBackend::main_bundle()));
 }
 
-fn annotate(err: io::Error, path: &Path) -> io::Error {
+fn annotate(err: &io::Error, path: &Path) -> io::Error {
     if err.kind() == io::ErrorKind::NotFound {
         io::Error::new(
             io::ErrorKind::NotFound,
