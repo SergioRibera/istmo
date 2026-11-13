@@ -25,6 +25,9 @@ reference](/istmo/build-scripts/istmo-toml-reference/#min_versions)).
 `capabilities()` reports no Dynamic Island flag on iOS: there is no public
 API for it. The system shows your widget extension's Dynamic Island
 layouts on devices that have one and the Lock Screen banner everywhere.
+`IosCapabilities.push_updates` is always `false` with the bundled Swift
+backend: it requests activities without a push type, so there are no
+APNs updates.
 
 ## Install
 

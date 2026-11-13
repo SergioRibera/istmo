@@ -131,6 +131,10 @@ pub struct IosCapabilities {
     pub activities_enabled: bool,
     /// Whether the app is configured to receive APNs push-token
     /// updates for its activities.
+    ///
+    /// Always `false` from the bundled Swift backend, which requests
+    /// activities without a push type; only a custom iOS backend that
+    /// supports push updates reports `true`.
     pub push_updates: bool,
 }
 

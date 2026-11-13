@@ -82,7 +82,7 @@ it, the Lock Screen banner everywhere.
 | ----- | ---- | ---- | ----------- |
 | `activity_kit_available` | `activityKitAvailable` | `bool` | Whether the `ActivityKit` framework itself is available (iOS 16.2+). |
 | `activities_enabled` | `activitiesEnabled` | `bool` | Whether the user has activities enabled in system settings. |
-| `push_updates` | `pushUpdates` | `bool` | Whether the app is configured to receive APNs push-token updates for its activities. |
+| `push_updates` | `pushUpdates` | `bool` | Whether the app is configured to receive APNs push-token updates for its activities. Always `false` from the bundled Swift backend, which requests activities without a push type; only a custom iOS backend that supports push updates reports `true`. |
 
 ### `AndroidCapabilities`
 
