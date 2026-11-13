@@ -205,6 +205,9 @@ run name:
         biometric-demo) component="dev.istmo.biometricdemo/dev.istmo.biometricdemo.BiometricDemoActivity" ;;
         share-demo) component="dev.istmo.sharedemo/dev.istmo.sharedemo.ShareDemoActivity" ;;
         camera-demo) component="dev.istmo.camerademo/dev.istmo.camerademo.CameraDemoActivity" ;;
+        pen-demo) component="dev.istmo.pendemo/dev.istmo.pendemo.PenDemoActivity" ;;
+        data-store-demo) component="dev.istmo.datastoredemo/dev.istmo.datastoredemo.DataStoreDemoActivity" ;;
+        live-activity-demo) component="dev.istmo.liveactivitydemo/dev.istmo.liveactivitydemo.LiveActivityDemoActivity" ;;
         *) echo "just run: no launcher configured for '{{name}}'"; exit 1 ;;
     esac
     adb shell am start -n "$component"
