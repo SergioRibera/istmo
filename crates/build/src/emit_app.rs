@@ -958,7 +958,10 @@ mod tests {
                     .unwrap(),
             ),
         ];
-        let native = [("ISTMO_NATIVE".to_owned(), PathBuf::from("/x/native/android"))];
+        let native = [(
+            "ISTMO_NATIVE".to_owned(),
+            PathBuf::from("/x/native/android"),
+        )];
         let mut ids: Vec<&str> = plugins_shipping(&native, &manifests).into_iter().collect();
         ids.sort_unstable();
         assert_eq!(ids, ["a.one", "a.two"]);

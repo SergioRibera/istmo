@@ -610,7 +610,10 @@ fn registries(subdir: &str, manifest: Option<&str>, opts: AppOpts) -> (String, S
         android_root: Some(android_root.clone()),
         ios_root: Some(ios_root.clone()),
         ios_app_dir: Some("MyApp".to_owned()),
-        extra_manifests: manifest.map(|m| Manifest::parse(m).unwrap()).into_iter().collect(),
+        extra_manifests: manifest
+            .map(|m| Manifest::parse(m).unwrap())
+            .into_iter()
+            .collect(),
         extra_contracts: vec![dummy_contract()],
         ..opts
     });
@@ -649,7 +652,10 @@ fn declared_backend_registers_only_on_its_platform() {
         Some("[plugin]\nid = \"myapp.dummy\"\nandroid_backend = \"dev.acme.DummyImpl\"\n"),
         AppOpts::default(),
     );
-    assert!(kotlin.contains("dev.acme.DummyImpl(appContext)"), "{kotlin}");
+    assert!(
+        kotlin.contains("dev.acme.DummyImpl(appContext)"),
+        "{kotlin}"
+    );
     assert!(!swift.contains("Dummy"), "{swift}");
 
     let (kotlin, swift) = registries(
@@ -658,7 +664,10 @@ fn declared_backend_registers_only_on_its_platform() {
         AppOpts::default(),
     );
     assert!(!kotlin.contains("Dummy"), "{kotlin}");
-    assert!(swift.contains("DummyDispatcher(backend: AcmeDummy()"), "{swift}");
+    assert!(
+        swift.contains("DummyDispatcher(backend: AcmeDummy()"),
+        "{swift}"
+    );
 }
 
 #[test]
@@ -684,7 +693,10 @@ fn seeded_or_opted_in_app_local_backend_registers_on_both_platforms() {
             kotlin.contains("com.example.app.gen.DummyBackendImpl(appContext)"),
             "{kotlin}"
         );
-        assert!(swift.contains("DummyDispatcher(backend: DummyBackendImpl()"), "{swift}");
+        assert!(
+            swift.contains("DummyDispatcher(backend: DummyBackendImpl()"),
+            "{swift}"
+        );
     }
 }
 
@@ -734,7 +746,9 @@ fn app_swift_packages_land_in_the_xcodegen_fragment() {
         "{yaml}"
     );
     assert!(
-        yaml.contains("      - package: \"GoogleSignIn-iOS\"\n        product: \"GoogleSignInSwift\"\n"),
+        yaml.contains(
+            "      - package: \"GoogleSignIn-iOS\"\n        product: \"GoogleSignInSwift\"\n"
+        ),
         "{yaml}"
     );
     let _ = fs::remove_dir_all(&root);
@@ -762,7 +776,10 @@ fn switching_role_removes_the_other_roles_generated_files() {
             ..AppOpts::default()
         });
     };
-    let host_files = [java.join("DummyDispatcher.kt"), swift.join("DummyDispatcher.swift")];
+    let host_files = [
+        java.join("DummyDispatcher.kt"),
+        swift.join("DummyDispatcher.swift"),
+    ];
     let client_files = [
         java.join("DummyClient.kt"),
         java.join("DummyCodecs.kt"),
