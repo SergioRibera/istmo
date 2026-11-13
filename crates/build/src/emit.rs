@@ -11,11 +11,12 @@ use crate::handover::{
 };
 use crate::manifest::{Deployment, IstmoToml, Manifest};
 
-/// Plugin-side handover for the `istmo.toml` at `path`: native
-/// dependencies, the parsed manifest, `PLUGIN_IDS`, declared assets and
-/// the crate's `native/{android,ios,macos}/` directories, each printed as
-/// `cargo:` metadata for dependent build scripts. Contracts are not
-/// included; see [`emit_from`].
+/// Plugin-side handover for the `istmo.toml` at `path`.
+///
+/// Prints native dependencies, the parsed manifest, `PLUGIN_IDS`,
+/// declared assets and the crate's `native/{android,ios,macos}/`
+/// directories as `cargo:` metadata for dependent build scripts.
+/// Contracts are not included; see [`emit_from`].
 ///
 /// # Panics
 ///
@@ -142,10 +143,11 @@ pub fn emit_with(app: crate::emit_app::AppOpts) {
     crate::emit_app::emit_app_from(&app, &root, &toml);
 }
 
-/// Plugin-side handover only: [`emit_manifest_metadata`] for
-/// `manifest_path`, plus the contract of every `[plugin]` entry with a
-/// `client_type`, extracted from the trait in `source_path`. Runs no
-/// app-side step.
+/// Plugin-side handover only; runs no app-side step.
+///
+/// [`emit_manifest_metadata`] for `manifest_path`, plus the contract of
+/// every `[plugin]` entry with a `client_type`, extracted from the trait
+/// in `source_path`.
 ///
 /// # Panics
 ///
