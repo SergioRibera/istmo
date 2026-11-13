@@ -32,15 +32,15 @@ fn emit_client_bundle(gen_dir: &Path, package: &str, contract: &Contract) {
     let name = contract.type_name.as_str();
     emit(
         &gen_dir.join(format!("{name}Types.kt")),
-        &with_package(package, &generate_kotlin_types(contract)),
+        &with_package_and_imports(package, &generate_kotlin_types(contract)),
     );
     emit(
         &gen_dir.join(format!("{name}Codecs.kt")),
-        &with_package(package, &generate_kotlin_codecs_interface(contract)),
+        &with_package_and_imports(package, &generate_kotlin_codecs_interface(contract)),
     );
     emit(
         &gen_dir.join(format!("{name}CodecsImpl.kt")),
-        &with_package(package, &generate_kotlin_codecs(contract)),
+        &with_package_and_imports(package, &generate_kotlin_codecs(contract)),
     );
     emit(
         &gen_dir.join(format!("{name}Client.kt")),
@@ -52,7 +52,7 @@ fn emit_host_bundle(gen_dir: &Path, package: &str, contract: &Contract) {
     let name = contract.type_name.as_str();
     emit(
         &gen_dir.join(format!("{name}Types.kt")),
-        &with_package(package, &generate_kotlin_types(contract)),
+        &with_package_and_imports(package, &generate_kotlin_types(contract)),
     );
     emit(
         &gen_dir.join(format!("{name}Host.kt")),
@@ -60,7 +60,7 @@ fn emit_host_bundle(gen_dir: &Path, package: &str, contract: &Contract) {
     );
     emit(
         &gen_dir.join(format!("{name}CodecsImpl.kt")),
-        &with_package(package, &generate_kotlin_codecs(contract)),
+        &with_package_and_imports(package, &generate_kotlin_codecs(contract)),
     );
 }
 
@@ -86,10 +86,6 @@ fn app_control_contract() -> Contract {
     }
 }
 
-fn with_package(package: &str, body: &str) -> String {
-    format!("package {package}\n\n{body}")
-}
-
 fn with_package_and_imports(package: &str, body: &str) -> String {
     let imports = "\
 import dev.istmo.runtime.BackendException\n\
@@ -97,7 +93,8 @@ import dev.istmo.runtime.Bincode\n\
 import dev.istmo.runtime.HandleReleaser\n\
 import dev.istmo.runtime.IstmoRuntime\n\
 import dev.istmo.runtime.PluginException\n\
-import dev.istmo.runtime.PluginHandler\n";
+import dev.istmo.runtime.PluginHandler\n\
+import dev.istmo.runtime.PluginResult\n";
     format!("package {package}\n\n{imports}\n{body}")
 }
 

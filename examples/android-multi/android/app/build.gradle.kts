@@ -124,6 +124,7 @@ istmoCargoLib("istmo-android-multi-app")
 istmoCargoLib("istmo-android-multi-widget")
 
 dependencies {
+    implementation("io.github.sergioribera:istmo-runtime:0.1.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.lifecycle:lifecycle-service:2.8.4")

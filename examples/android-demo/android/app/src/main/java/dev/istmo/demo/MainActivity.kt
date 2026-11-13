@@ -22,6 +22,10 @@ import java.io.ByteArrayOutputStream
 
 class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
 
+    private companion object {
+        const val LIBRARY_NAME: String = "istmo_android_demo"
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val permissionsImpl = PermissionsImpl()
     private val activityResultsImpl = ActivityResultsImpl()
@@ -54,7 +58,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
             IstmoRuntime.registerHandler("istmo.permissions", permissionsImpl)
             IstmoRuntime.registerHandler("istmo.activity_results", activityResultsImpl)
             IstmoRuntime.registerHandler(NotifierDispatcher.PLUGIN_ID, notifierDispatcher)
-            IstmoRuntime.start()
+            IstmoRuntime.start(LIBRARY_NAME)
             initialized = true
         }
         permissionsImpl.attach(this)
@@ -118,13 +122,13 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         checkBtn.setOnClickListener {
             val perm = input.text.toString()
             scope.launch {
-                output.text = runCatchingEcho { echoClient.checkPermission(perm) }
+                output.text = runCatchingEcho { echoClient.check_permission(perm) }
             }
         }
         requestBtn.setOnClickListener {
             val perm = input.text.toString()
             scope.launch {
-                output.text = runCatchingEcho { echoClient.requestPermission(perm) }
+                output.text = runCatchingEcho { echoClient.request_permission(perm) }
             }
         }
     }
@@ -136,7 +140,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         launch.setOnClickListener {
             val url = input.text.toString().ifBlank { "https://example.com" }
             scope.launch {
-                output.text = runCatchingEcho { echoClient.openUrl(url) }
+                output.text = runCatchingEcho { echoClient.open_url(url) }
             }
         }
     }
@@ -146,7 +150,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         val refresh = findViewById<Button>(R.id.lifecycleRefresh)
         refresh.setOnClickListener {
             scope.launch {
-                label.text = runCatchingEcho { echoClient.lifecycleSnapshot() }
+                label.text = runCatchingEcho { echoClient.lifecycle_snapshot() }
             }
         }
     }
@@ -157,7 +161,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
         refresh.setOnClickListener {
             scope.launch {
                 try {
-                    val links = echoClient.drainDeeplinks()
+                    val links = echoClient.drain_deeplinks()
                     output.text = if (links.isEmpty()) "(none drained)" else links.joinToString("\n")
                 } catch (e: EchoException) {
                     output.text = "error: ${e.decoded?.reason ?: "unknown"}"
@@ -171,7 +175,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
     private fun handleIntent(intent: Intent?) {
         val data = intent?.data?.toString() ?: return
         if (intent.action == Intent.ACTION_VIEW) {
-            IstmoRuntime.submitEarlyQueue(
+            IstmoRuntime.publishEarlyQueue(
                 channel = "istmo.deeplinks",
                 capacity = 16,
                 payload = encodeDeepLink(uri = data, source = "intent"),
@@ -215,7 +219,7 @@ class MainActivity : AppCompatActivity(), PermissionsHost, ActivityResultsHost {
             log.text = ""
             scope.launch {
                 output.text = try {
-                    val fired = echoClient.spamNotify(count)
+                    val fired = echoClient.spam_notify(count)
                     "fired $fired notifications (Rust → Mobile)"
                 } catch (e: EchoException) {
                     "error: ${e.decoded?.reason ?: "unknown"}"

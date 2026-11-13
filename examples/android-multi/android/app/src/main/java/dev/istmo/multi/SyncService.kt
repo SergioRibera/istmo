@@ -11,16 +11,12 @@ class SyncService : LifecycleService() {
 
     companion object {
         const val PLUGIN_ID: String = "dev.istmo.multi.sync"
-        private const val LIBRARY_NAME: String = "istmo_android_multi_app"
-
-        init {
-            System.loadLibrary(LIBRARY_NAME)
-        }
+        const val LIBRARY_NAME: String = "istmo_android_multi_app"
     }
 
     override fun onCreate() {
         super.onCreate()
-        IstmoRuntime.start()
+        IstmoRuntime.start(LIBRARY_NAME)
         IstmoRuntime.registerService(PLUGIN_ID, this)
     }
 

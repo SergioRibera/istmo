@@ -6,6 +6,7 @@ import android.net.Uri
 import dev.istmo.runtime.Bincode
 import dev.istmo.runtime.PluginException
 import dev.istmo.runtime.PluginHandler
+import dev.istmo.runtime.PluginResult
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -21,13 +22,15 @@ class ActivityResultsImpl : PluginHandler {
         instanceId: Long,
         method: String,
         payload: ByteArray,
-    ): ByteArray = when (method) {
-        "launch" -> {
-            val (request, _) = IntentRequestCodec.read(payload, 0)
-            withContext(Dispatchers.Main) { launch(request) }
-        }
-        else -> error("unknown ActivityResults method: $method")
-    }
+    ): PluginResult = PluginResult.Unary(
+        when (method) {
+            "launch" -> {
+                val (request, _) = IntentRequestCodec.read(payload, 0)
+                withContext(Dispatchers.Main) { launch(request) }
+            }
+            else -> error("unknown ActivityResults method: $method")
+        },
+    )
 
     private fun launch(request: IntentRequestValue): ByteArray {
         val host = this.host

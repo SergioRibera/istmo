@@ -42,7 +42,7 @@ class MainActivity : AppCompatActivity() {
                 ServiceControlCodecsImpl(),
             )
             IstmoRuntime.registerHandler(ServiceControlDispatcher.PLUGIN_ID, dispatcher)
-            IstmoRuntime.start()
+            IstmoRuntime.start(SyncService.LIBRARY_NAME)
             initialized = true
         }
 

@@ -21,7 +21,7 @@ enum class LifecycleState {
     }
 
     fun publish() {
-        IstmoRuntime.submitEarlyLatest(LIFECYCLE_CHANNEL, encode())
+        IstmoRuntime.publishEarlyLatest(LIFECYCLE_CHANNEL, encode())
     }
 
     companion object {

@@ -17,3 +17,11 @@ dependencyResolutionManagement {
 rootProject.name = "istmo-android-demo"
 include(":app")
 
+// Kotlin runtime from the checked-out repo instead of the published AAR.
+includeBuild("../../../runtime/android") {
+    dependencySubstitution {
+        substitute(module("io.github.sergioribera:istmo-runtime"))
+            .using(project(":"))
+    }
+}
+

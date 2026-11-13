@@ -6,6 +6,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import dev.istmo.runtime.Bincode
 import dev.istmo.runtime.PluginHandler
+import dev.istmo.runtime.PluginResult
 import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -28,28 +29,30 @@ class PermissionsImpl : PluginHandler {
         instanceId: Long,
         method: String,
         payload: ByteArray,
-    ): ByteArray = when (method) {
-        "check" -> {
-            val (permission, _) = Bincode.readString(payload)
-            encodeStatus(currentStatus(permission))
-        }
-        "request" -> {
-            val (permissions, _) = Bincode.readVec(payload, 0, Bincode::readString)
-            val outcomes = withContext(Dispatchers.Main) {
-                requestAll(permissions)
+    ): PluginResult = PluginResult.Unary(
+        when (method) {
+            "check" -> {
+                val (permission, _) = Bincode.readString(payload)
+                encodeStatus(currentStatus(permission))
             }
-            encodeOutcomes(outcomes)
-        }
-        "should_show_rationale" -> {
-            val (permission, _) = Bincode.readString(payload)
-            val host = this.host
-            val show = host?.shouldShowRationale(permission) ?: false
-            val out = ByteArrayOutputStream(1)
-            Bincode.writeBool(out, show)
-            out.toByteArray()
-        }
-        else -> error("unknown Permissions method: $method")
-    }
+            "request" -> {
+                val (permissions, _) = Bincode.readVec(payload, 0, Bincode::readString)
+                val outcomes = withContext(Dispatchers.Main) {
+                    requestAll(permissions)
+                }
+                encodeOutcomes(outcomes)
+            }
+            "should_show_rationale" -> {
+                val (permission, _) = Bincode.readString(payload)
+                val host = this.host
+                val show = host?.shouldShowRationale(permission) ?: false
+                val out = ByteArrayOutputStream(1)
+                Bincode.writeBool(out, show)
+                out.toByteArray()
+            }
+            else -> error("unknown Permissions method: $method")
+        },
+    )
 
     private fun currentStatus(permission: String): PermissionStatusValue {
         val host = this.host ?: return PermissionStatusValue.NotDetermined
