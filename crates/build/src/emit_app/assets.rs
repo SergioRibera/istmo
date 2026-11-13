@@ -304,8 +304,7 @@ fn is_current(source: &Path, target: &Path) -> bool {
         && meta.len() == source_meta.len()
         && meta
             .modified()
-            .ok()
-            .is_some_and(|mtime| source_meta.modified().ok() == Some(mtime))
+            .is_ok_and(|mtime| source_meta.modified().ok() == Some(mtime))
 }
 
 /// Whether `target` is `source` itself rather than a link or copy —
@@ -314,8 +313,7 @@ fn is_same_file(source: &Path, target: &Path) -> bool {
     let is_link = fs::symlink_metadata(target).is_ok_and(|meta| meta.file_type().is_symlink());
     !is_link
         && fs::canonicalize(source)
-            .ok()
-            .is_some_and(|source| fs::canonicalize(target).ok() == Some(source))
+            .is_ok_and(|source| fs::canonicalize(target).ok() == Some(source))
 }
 
 fn copy_with_mtime(source: &Path, target: &Path) -> std::io::Result<()> {
