@@ -23,7 +23,7 @@
 //! patches), `assets` (asset staging) and `detect` (project layout
 //! detection).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -271,6 +271,23 @@ impl<'a> AppPass<'a> {
         self.ios_app_dir.as_deref().filter(|_| self.ios_active)
     }
 
+    /// Every linked `native/ios/` directory as `(links, dir)`.
+    fn native_ios_dirs(&self) -> Vec<(String, PathBuf)> {
+        let mut dirs = collect_dep_native_dirs(NativePlatform::Ios);
+        dirs.extend(self.opts.extra_native_ios_dirs.iter().cloned());
+        dirs
+    }
+
+    /// Ids of the plugins whose crate ships `native/ios/` sources.
+    fn plugins_with_native_ios(&self) -> HashSet<&str> {
+        let native = self.native_ios_dirs();
+        self.dep_manifests_by_links
+            .iter()
+            .filter(|(links, _)| native.iter().any(|(name, _)| name == links))
+            .flat_map(|(_, manifest)| manifest.plugins.iter().map(|p| p.id.as_str()))
+            .collect()
+    }
+
     /// Icon sources and the native project files the pass reads.
     fn track_inputs(&self) {
         for source in self.app.icon.source_files() {
@@ -335,6 +352,7 @@ impl<'a> AppPass<'a> {
             .unwrap_or(true);
         let mut contracts = collect_dep_contracts();
         contracts.extend(self.opts.extra_contracts.iter().cloned());
+        let ships_swift = self.plugins_with_native_ios();
 
         let mut registries = Registries::default();
         for contract in &contracts {
@@ -366,7 +384,11 @@ impl<'a> AppPass<'a> {
                         contract,
                         role,
                     ),
-                    Platform::Ios => self.emit_swift_sources(contract, role),
+                    Platform::Ios => self.emit_swift_sources(
+                        contract,
+                        role,
+                        ships_swift.contains(contract.plugin_id.as_str()),
+                    ),
                 };
                 if emitted && auto_register {
                     match platform {
@@ -423,7 +445,9 @@ impl<'a> AppPass<'a> {
     }
 
     /// Returns whether sources were written.
-    fn emit_swift_sources(&self, contract: &Contract, role: Role) -> bool {
+    /// `ships_backend`: the plugin's `native/ios/` sources implement the
+    /// backend, so a seeded `<T>BackendImpl` would redeclare it.
+    fn emit_swift_sources(&self, contract: &Contract, role: Role, ships_backend: bool) -> bool {
         if !self.ios_active {
             return false;
         }
@@ -440,7 +464,7 @@ impl<'a> AppPass<'a> {
             &self.ios_plugins_subdir,
             contract,
             role,
-            self.opts.seed_backends,
+            self.opts.seed_backends && !ships_backend,
         );
         true
     }
@@ -498,8 +522,7 @@ impl<'a> AppPass<'a> {
         registry: &[RegistryEntry],
         dep_manifests: &[Manifest],
     ) {
-        let mut native_dirs = collect_dep_native_dirs(NativePlatform::Ios);
-        native_dirs.extend(self.opts.extra_native_ios_dirs.iter().cloned());
+        let native_dirs = self.native_ios_dirs();
         let project = IosProject::new(&self.ios_root, app_dir);
         // Pruning keeps the staging root itself; an emptied one is not shipped.
         let asset_folder = Some(project.asset_folder_path())
