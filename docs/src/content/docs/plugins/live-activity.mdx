@@ -7,9 +7,20 @@ sidebar:
 
 import PluginTypes from '../../../generated/plugins/live-activity-types.mdx';
 
-`istmo-live-activity` maps iOS 16+'s ActivityKit and Android's ongoing
+`istmo-live-activity` maps ActivityKit (iOS 16.2+) and Android ongoing
 notifications behind a Rust trait. You describe your activity's
-attributes and state in Rust; both platforms render them idiomatically.
+attributes and state in Rust; a native handler you write per activity
+type renders them.
+
+| Platform | Backend | Minimum |
+| -------- | ------- | ------- |
+| iOS | ActivityKit / Dynamic Island | 16.2 at runtime (the plugin builds for older releases, where it reports no support) |
+| Android | ongoing notification: custom `RemoteViews`, `ProgressStyle` (API 35), Live Updates (API 36) | API 26 |
+| Desktop | — (every call fails) | — |
+
+The Android minimum is declared in the plugin's `[min_versions]` and
+checked at build time (see [istmo.toml
+reference](/istmo/build-scripts/istmo-toml-reference/#min_versions)).
 
 ## Install
 
@@ -21,12 +32,10 @@ istmo-live-activity = "0.1.1-alpha.5"
 ## Model your activity
 
 Attributes are immutable per activity; state is updated over its
-lifetime.
+lifetime. Both are any `#[istmo::message]` type.
 
 ```rust
-use istmo_live_activity::{
-    ActivityStyle, DismissalPolicy, TypedLiveActivity,
-};
+use istmo_live_activity::{ActivityStyle, DismissalPolicy, TypedLiveActivity};
 
 #[istmo::message]
 pub struct TimerAttributes {
@@ -42,120 +51,167 @@ pub struct TimerState {
 ```
 
 `TypedLiveActivity<A, C>` pins the attribute and state types at compile
-time and encodes them with wincode before crossing the wire. The
-underlying `LiveActivityClient` is stateless — bind it once per
+time and encodes them before they cross the wire; the native handler
+registered for the activity type decodes them. Bind one adapter per
 activity type:
 
 ```rust
-let activities =
+let timers =
     TypedLiveActivity::<TimerAttributes, TimerState>::new(&runtime, "timer")?;
 
-let handle = activities.start(
+if !timers.are_activities_enabled().await? {
+    return Ok(()); // or inspect timers.capabilities()
+}
+
+let handle = timers.start(
     TimerAttributes { title: "Focus block".into(), target_seconds: 25 * 60 },
     TimerState { elapsed_seconds: 0, label: "0:00 / 25:00".into() },
     ActivityStyle::Standard,
 ).await?;
 ```
 
+`start_with_hint` also takes `stale_after_seconds` (iOS stale date) and
+an `AndroidTierHint` (`ForceCustom`, `PreferSystemTemplates`,
+`RequireLiveUpdate`). Methods return `ActivityError` directly.
+
 ## Update
 
 ```rust
-activities.update(
-    handle.id(),
+timers.update(
+    &handle,
     TimerState { elapsed_seconds: 60, label: "24:00 remaining".into() },
     None, // optional AlertConfig
 ).await?;
 ```
 
-`handle` is a `NativeHandle<LiveActivityToken>`. Dropping it *does
-not* end the activity — call `end()` explicitly. If you want an
-activity to survive process death, persist `handle.id()` and re-adopt
-it after restart via `activities.restore()` (returns the still-alive
-activities filtered by activity-type).
+`handle` is a `NativeHandle<LiveActivityToken>`. **Dropping it ends the
+activity** on both platforms. Keep it alive as long as the activity
+should run. `update_by_id` / `end_by_id` take the raw `NativeHandleId`
+for callers that keep the handle behind a lock.
 
 ## End
 
 ```rust
-activities.end(
-    handle.id(),
+timers.end(
+    &handle,
     Some(TimerState { elapsed_seconds: 25 * 60, label: "Done".into() }),
     DismissalPolicy::Default,
 ).await?;
 ```
 
-The final state renders briefly before the activity is removed.
-`DismissalPolicy::Immediate` skips the render; `AfterSeconds(n)` holds
-it for `n` seconds.
+`DismissalPolicy::Default` leaves the final state up for the platform's
+default time, `Immediate` removes it right away and `AfterSeconds(n)`
+holds it for `n` seconds. Dropping the handle after `end` is harmless.
+
+## Restore after a restart
+
+```rust
+for restored in timers.restore().await? {
+    // restored.handle, restored.attributes, restored.state
+}
+```
+
+`restore` returns the activities of the adapter's type that are still
+running, each under a handle the caller now owns. Handles this process
+already owns are left out, so calling it again only returns activities
+not seen before. An activity whose payload no longer decodes is skipped
+with a warning and left running. The reference iOS handler restores
+ActivityKit activities; the reference Android handler returns none.
 
 ## Wire types
 
 <PluginTypes />
 
-## iOS specifics
+## Native handlers
 
-- Live Activities need iOS 16.2+ (`ActivityKit`). The plugin builds for
-  older releases too, where `capabilities()` reports
-  `activity_kit_available: false`.
-- Your `Info.plist` needs `NSSupportsLiveActivities = YES`.
-- You **must** implement an `ActivityAttributes` matching Swift
-  struct with the same shape as your Rust `Attributes`/`State`. The
-  reference `TimerLiveActivityHandler.swift` in the plugin repo shows
-  the pattern.
-- The Widget extension (SwiftUI) renders the compact + expanded layouts.
-  The plugin does not generate the SwiftUI code — you write it once
-  and it stays put.
+`LiveActivityBackendImpl` routes each call to the
+`LiveActivityHandler` registered for its activity type; a type without
+one fails with `ActivityError::UnknownActivityType`. The plugin ships
+base classes under `plugins/live-activity/native/`:
 
-## Android specifics
+- **iOS** — `ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>`
+  (iOS 16.2+). Subclass it, call `super.init(activityType:)` and
+  override `decodeAttributes` / `decodeState` / `encodeAttributes` /
+  `encodeState` to convert between the wire bytes and your Swift
+  `ActivityAttributes`. The SwiftUI layouts (Lock Screen, Dynamic
+  Island) go in a Widget extension with an `ActivityConfiguration`;
+  the plugin does not generate them.
+- **Android** — `NotificationLiveActivityHandler<A, C>(context, channel)`.
+  Implement `renderStrategy()` (`RenderStrategy.CustomOnly`,
+  `ProgressOnly` or `Adaptive`), `decodeAttributes`, `decodeState` and
+  `smallIconRes`. `ChannelConfig.default()` creates the
+  `istmo.live_activity` channel with `IMPORTANCE_LOW`.
 
-- Requires API 26+ (`NotificationChannel`), declared in the plugin's
-  `[min_versions]`.
-- Renders as an ongoing notification with custom content view.
-- Uses `NotificationChannel` with `IMPORTANCE_LOW` by default; adjust
-  in your `NotificationLiveActivityHandler.kt` copy.
-- Notifications survive process death; adopt back with the persisted
-  id.
+To decode the payloads natively, pass your attribute and state types to
+`istmo-build` as an extra contract (`AppOpts::extra_contracts`) so it
+generates their Kotlin/Swift codecs —
+[`examples/live-activity-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/live-activity-demo)
+does this in its `build.rs`.
 
 ## Wire it up
 
-The generated `IstmoPluginRegistry` constructs `LiveActivityDispatcher`
-with the plugin's `LiveActivityBackendImpl` (compiled into the app from
-`plugins/live-activity/native/`); the runtime's entry points call it
-during startup.
+The backend needs your handlers, so turn off auto-registration for the
+plugin in the app's `istmo.toml` and register the dispatcher yourself:
+
+```toml
+[[app.plugin]]
+id = "istmo.live_activity"
+auto_register = false
+```
 
 ```kotlin
-// IstmoGameActivity, the template's launcher, already does this.
-// An app with its own activity calls IstmoHost before super.onCreate:
-override fun onCreate(savedInstanceState: Bundle?) {
-    IstmoHost.onCreate(this) // starts the runtime + IstmoPluginRegistry
-    super.onCreate(savedInstanceState)
+// Android: in your activity, after IstmoHost.onCreate(this)
+val backend = LiveActivityBackendImpl(applicationContext).apply {
+    register(TimerLiveActivityHandler(this@MainActivity))
 }
+IstmoRuntime.registerHandler(
+    LiveActivityDispatcher.PLUGIN_ID,
+    LiveActivityDispatcher(backend, LiveActivityCodecsImpl()),
+)
 ```
 
 ```swift
-// ios/<Name>App/main.swift
+// iOS: ios/<Name>App/main.swift
 import IstmoRuntime
 
-IstmoApp.run() // starts the runtime + IstmoPluginRegistry, then runs Rust
+@_silgen_name("istmo_run_ios")
+func istmo_run_ios() -> Int32
+
+IstmoApp.run(
+    registerPlugins: {
+        IstmoPluginRegistry.registerAll()
+        let backend = LiveActivityBackendImpl()
+        if #available(iOS 16.2, *) {
+            backend.register(handler: TimerLiveActivityHandler())
+        }
+        IstmoRuntime.shared.registerHandler(
+            LiveActivityDispatcher.PLUGIN_ID,
+            LiveActivityDispatcher(backend: backend, codecs: LiveActivityCodecsImpl())
+        )
+    },
+    entry: istmo_run_ios
+)
 ```
 
-See [Auto-registration](/istmo/build-scripts/auto-register/) for the full
+The plugin's Kotlin is generated into `dev.istmo.plugins.liveactivity`
+(its `android_package`), next to the reference sources, whatever
+`[app] android_package` your app uses. See
+[Auto-registration](/istmo/build-scripts/auto-register/) for the
 mechanism.
 
-## Reference handlers
+## Platform setup
 
-The plugin repo ships two rendering strategies under
-`plugins/live-activity/native/`:
-
-- **iOS `ActivityKitLiveActivityHandler`** — invokes ActivityKit.
-- **Android `NotificationLiveActivityHandler`** — renders as ongoing
-  notification with an inflated RemoteView.
-
-Both are meant to be **copied and customised** — they render
-per-app-specific layouts. The rest of the plugin (protocol, dispatch,
-codec) never changes.
+- **iOS** — add `NSSupportsLiveActivities = true` to `Info.plist`
+  (e.g. `[app.info_plist]` in the app's `istmo.toml`) and a Widget
+  extension that renders your `ActivityAttributes`.
+- **Android** — on Android 13+ the app needs the
+  `POST_NOTIFICATIONS` permission, declared in its manifest and
+  granted at runtime; without it `start` fails with
+  `ActivityError::Disabled`.
 
 ## End-to-end sample
 
-See [`examples/live-activity-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/live-activity-demo)
-in the repo. Timer + notification-style handlers rendered in-process
-via a small "native emulator" thread.
+[`examples/live-activity-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/live-activity-demo)
+runs a timer activity on iOS (ActivityKit handler) and Android
+(notification handler). Its desktop binary answers the plugin's frames
+with a small in-process emulator thread.
