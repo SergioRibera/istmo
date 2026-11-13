@@ -72,8 +72,10 @@ pub struct PluginEntry {
     pub default_deployment: Deployment,
 
     /// Whether `emit_app` should auto-register this plugin's dispatcher
-    /// in the generated `IstmoPluginRegistry`. Default `true`. Plugins
-    /// with bespoke construction (custom config, non-standard
+    /// in the generated `IstmoPluginRegistry`. Default `true`; the
+    /// registry still lists the plugin only on platforms where it has a
+    /// native backend (`native/<platform>/`, `android_backend` /
+    /// `ios_backend`, or an app opt-in). Plugins with bespoke construction (custom config, non-standard
     /// `BackendImpl` signature) set this to `false` and expect the app
     /// author to register the handler manually.
     pub auto_register: bool,

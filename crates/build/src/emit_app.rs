@@ -87,9 +87,9 @@ pub struct AppOpts {
     pub seed_backends: bool,
     /// Emit `IstmoPluginRegistry.kt` / `.swift` files that construct
     /// every plugin's dispatcher and register it with the runtime in
-    /// one call. Default `true`. When `false` `emit_app` skips the
-    /// registry entirely and the app author registers each dispatcher
-    /// by hand.
+    /// one call. Default `true`. When `false` the registries are still
+    /// written (generated host code references them) but list no
+    /// plugin, and the app author registers each dispatcher by hand.
     pub auto_register: Option<bool>,
     /// Name passed to `System.loadLibrary(...)` in generated Android
     /// service shims. Defaults to `CARGO_PKG_NAME` with hyphens folded
