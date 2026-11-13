@@ -1,0 +1,458 @@
+---
+title: Built-in plugins
+description: The plugins that ship with istmo itself — lifecycle, deep links, documents, safe area, system and device state, permissions, notifications, ads, activity results and task scheduling.
+sidebar:
+  order: 0
+---
+
+The `istmo-plugins` crate ships with the framework and is re-exported
+as `istmo::plugins`, so these plugins need no extra dependency. They
+come in two shapes:
+
+- **Streams** — the platform (or a Rust publisher on desktop) publishes
+  a value on an [early-event channel](/istmo/concepts/frame-protocol/)
+  and Rust reads it. Snapshots (battery, network, theme, …) keep the
+  latest value, so a late reader gets it immediately; deep links and
+  documents are queues that buffer what arrives before the first
+  subscriber.
+- **Calls** — an `#[istmo::plugin]` trait with a generated client. The
+  platform implements the trait; Rust calls it.
+
+| Client | Plugin id | Shape | Published / implemented by |
+| ------ | --------- | ----- | -------------------------- |
+| `AppLifecycle` | `istmo.lifecycle` | latest value | the app's native shell |
+| `DeepLinks` | `istmo.deeplinks` | queue | the app's native shell |
+| `Documents` | `istmo.documents` | queue | the app's native shell; `DocumentsPublisher` on desktop |
+| `SafeArea` | `istmo.safe_area` | latest value | Android activity; `SafeAreaPublisher` on iOS |
+| `SystemInfoClient` | `istmo.system_info` | latest values | runtime observers; `SystemInfoPublisher` on desktop |
+| `DeviceInfoClient` | `istmo.device_info` | latest value | runtime observers; `DeviceInfoPublisher` on desktop |
+| `ThemePreferenceClient` | `istmo.theme_preference` | latest value | runtime observers; `ThemePreferencePublisher` on desktop |
+| `NetworkStateClient` | `istmo.network_state` | latest value | runtime observers; `NetworkStatePublisher` on desktop |
+| `BatteryStateClient` | `istmo.battery_state` | latest value | runtime observers; `BatteryStatePublisher` on desktop |
+| `StorageInfoClient` | `istmo.storage_info` | latest value | runtime observers; `StorageInfoPublisher` on desktop |
+| `CapabilitiesClient` | `istmo.capabilities` | latest value | runtime observers; `CapabilitiesPublisher` on desktop |
+| `PermissionsClient` | `istmo.permissions` | calls | app-supplied native backend |
+| `NotificationsClient` | `istmo.notifications` | calls | app-supplied native backend |
+| `AdMobClient` | `istmo.admob` | calls (stateful) | app-supplied native backend |
+| `ActivityResultsClient` | `istmo.activity_results` | calls | app-supplied native backend |
+| `TaskSchedulerClient` | `istmo.task_scheduler` | calls | app-supplied native backend |
+| `ServiceControlClient` | `istmo.service_control` | calls | used by [`#[istmo::service]`](/istmo/writing-plugins/services-workers/) |
+
+## Declare what you use
+
+Plugin crates are wired from their manifests, built-ins are not: list
+every built-in client the app reads in `istmo::runtime!`. The runtime
+enforces declarations, so `acquire()` on an undeclared plugin fails with
+`IstmoError::PluginNotDeclared`.
+
+```rust
+use istmo::plugins::{AppLifecycle, DeepLinks, NetworkStateClient, SafeArea};
+
+istmo::runtime!(
+    plugins: [AppLifecycle, DeepLinks, NetworkStateClient, SafeArea],
+);
+```
+
+The list also drives the permissions `istmo-build` injects: declaring
+`NetworkStateClient` adds `android.permission.ACCESS_NETWORK_STATE` to
+the Android manifest. No other built-in adds a permission.
+
+## Reading a stream
+
+Every snapshot client is a `LatestClient<T>` and every stream an
+`EarlyStream<T>`:
+
+| Method | Returns |
+| ------ | ------- |
+| `Client::acquire()` | client on the process-wide runtime |
+| `Client::from_runtime(&rt)` | client on `rt` |
+| `client.current()` | `Result<Option<T>, IstmoError>` — `None` before the first publish |
+| `client.current_or_default()` | `Result<T, IstmoError>` (when `T: Default`) |
+| `client.stream()` | `EarlyStream<T>`: the retained value first, then every later publish |
+| `stream.recv()` / `stream.recv_async().await` | `Result<T, IstmoError>`, blocking / async |
+| `stream.try_recv()` | `Option<Result<T, IstmoError>>`, never blocks |
+
+```rust
+use istmo::plugins::{LinkKind, NetworkStateClient};
+
+let network = NetworkStateClient::acquire()?;
+if let Some(state) = network.current()? {
+    let on_wifi = state.online && state.link == LinkKind::Wifi;
+}
+let updates = network.stream();
+while let Ok(state) = updates.recv_async().await {
+    render(&state);
+}
+```
+
+### Who publishes
+
+- **Android** — `IstmoHost.onCreate` (called by `IstmoGameActivity` and
+  `IstmoNativeActivity`)
+  starts `IstmoBuiltinObservers`: device info, capabilities and storage
+  are published once; system info, theme, network and battery follow
+  system callbacks. Apps that start the runtime themselves call
+  `IstmoHost.registerBuiltinObservers(context)`.
+- **iOS** — `IstmoApp.run()` creates `IstmoBuiltinObservers` and calls
+  `registerAll()`, with the same split.
+- **Desktop** — nothing publishes by itself; create the
+  [desktop publishers](#desktop-publishers) you need.
+
+Lifecycle, deep links, documents and Android safe-area insets come from
+the app's own activity or app delegate, through
+`IstmoRuntime.publishEarlyLatest` / `publishEarlyQueue` (Kotlin and
+Swift) or `IstmoRuntime.publishSafeArea` (Kotlin). Payloads use the
+wire layout of the Rust type; `examples/android-demo` shows the
+lifecycle and deep-link publishers.
+
+## Lifecycle
+
+`AppLifecycle` reads `LifecycleState`: `Created`, `Started`, `Resumed`,
+`Paused`, `Stopped`, `Destroyed`, `LowMemory`, `ConfigurationChanged`
+(named after Android's activity callbacks; iOS maps its scene phases
+onto the same set). Published on `istmo.lifecycle`.
+
+```rust
+use istmo::plugins::{AppLifecycle, LifecycleState};
+
+let states = AppLifecycle::acquire()?.stream();
+while let Ok(state) = states.recv_async().await {
+    if state == LifecycleState::Paused {
+        save_draft();
+    }
+}
+```
+
+## Deep links
+
+`DeepLinks` reads a queue of `DeepLink { uri, source, received_at_ms }`
+on `istmo.deeplinks`. Links published before anything subscribes (a
+cold start from a link) are buffered — up to
+`DEFAULT_DEEPLINKS_CAPACITY` (16), oldest dropped first — and the first
+subscriber drains them. `DeepLinks::from_runtime_with_capacity(&rt, n)`
+picks another capacity.
+
+```rust
+use istmo::plugins::DeepLinks;
+
+let links = DeepLinks::acquire()?.stream();
+while let Ok(link) = links.recv_async().await {
+    route(&link.uri);
+}
+```
+
+## Documents
+
+`Documents` delivers files the OS asks the app to open, as
+`OpenedDocument { location, display_name, mime_type, origin,
+activation_token }`. `location` is `DocumentLocation::Path(String)` or,
+for an Android `content://` URI or an iOS security-scoped URL,
+`DocumentLocation::Uri(String)`; `origin` is `Launch`, `Running` or
+`Share`. `documents.stream()` yields the documents (32 buffered before
+the first subscriber); `documents.activations()` yields an
+`InstanceActivation` when a second launch forwarded no document, so the
+app can raise its window.
+
+The file types come from `[[app.document_type]]` in `istmo.toml`. On
+desktop, `DocumentsPublisher::start` publishes the command-line
+documents and, with `single_instance`, forwards a later launch's
+documents to the running instance; see the
+[istmo.toml reference](/istmo/build-scripts/istmo-toml-reference/#appdocument_type).
+
+```rust
+let key = istmo::single_instance!();
+match istmo::plugins::DocumentsPublisher::start(&rt, std::env::args_os().skip(1), key.as_ref())? {
+    istmo::plugins::Startup::Forwarded => return Ok(()), // the running instance took them
+    istmo::plugins::Startup::Primary(publisher) => run_app(publisher), // keep it alive
+}
+```
+
+On Android and iOS nothing in the runtime publishes documents: the
+app's intent handler or app delegate publishes each `OpenedDocument` to
+the `istmo.documents` queue (`publishEarlyQueue`, capacity 32).
+
+## Safe area
+
+`SafeArea` reads `SafeAreaInsets { system_bars, ime, display_cutout }`,
+each an `EdgeInsets { top, right, bottom, left }` in logical points.
+`insets.padding()` clears bars and cutouts; `insets.view_padding()` also
+clears the keyboard at the bottom.
+
+```rust
+use istmo::plugins::SafeArea;
+
+let padding = SafeArea::acquire()?.current_or_default()?.view_padding();
+```
+
+- **Android** — publish from the activity's window-insets listener with
+  `IstmoRuntime.publishSafeArea(...)` (twelve floats: system bars, IME,
+  cutout, each top/right/bottom/left).
+- **iOS** — enable the `winit-publisher` feature of `istmo-plugins` and
+  call `istmo_plugins::safe_area::SafeAreaPublisher::install(&rt)?` once,
+  then `tick()` from the UI thread every frame; it reads the key
+  window's `safeAreaInsets` and publishes only changes. On other targets
+  `tick()` does nothing.
+
+## System info
+
+`SystemInfoClient` groups four channels:
+
+| Method | Returns |
+| ------ | ------- |
+| `current_locale()` / `locale_stream()` | `Locale { bcp47, language, region, script, direction }` |
+| `current_timezone()` / `timezone_stream()` | `TimeZone { id, offset_seconds, is_dst, abbreviation }` |
+| `current_formats()` / `formats_stream()` | `Formats { uses_24h, first_day_of_week, measurement, temperature_unit, currency_code, decimal_separator, group_separator, calendar }` |
+| `uptime_millis()` | `Result<Option<u64>, IstmoError>` — milliseconds since boot as of the last publish |
+| `now_utc_millis()` | `i64`, read from the system clock in Rust |
+
+Android and iOS observers publish locale, time zone and formats;
+uptime is only published on desktop (`SystemInfoPublisher`) unless the
+app calls `IstmoRuntime.publishUptimeMillis`.
+
+## Device info
+
+`DeviceInfoClient` reads `DeviceInfo { model, manufacturer, os_name,
+os_version, arch, form_factor, cpu_cores, ram_total_bytes, screen,
+vendor_id }`. `current_or_fallback()` returns the published snapshot or
+`device_info_rust_fallback()` — OS name, architecture, form factor and
+core count from the standard library, everything else `None`.
+
+## Theme preference
+
+`ThemePreferenceClient` reads `ThemePreference { color_scheme,
+accent_color, high_contrast, font_scale, reduce_motion,
+reduce_transparency, bold_text, invert_colors, screen_reader_active }`.
+`color_scheme` is `Light`, `Dark` or `Auto`.
+
+## Network, battery, storage, capabilities
+
+| Client | Value |
+| ------ | ----- |
+| `NetworkStateClient` | `NetworkState { online, link, metered, expensive, constrained }`; `link` is a `LinkKind` (`None`, `Wifi`, `Cellular`, `Ethernet`, `Vpn`, `Bluetooth`, `Other`) |
+| `BatteryStateClient` | `BatteryState { level, charging, power_source, power_saver, thermal_state }`; `level` is `0.0..=1.0` or `None` without a battery |
+| `StorageInfoClient` | `StorageInfo { primary_free_bytes, primary_total_bytes, external }` |
+| `CapabilitiesClient` | `Capabilities` flags: `has_biometric`, `has_face_id`, `has_fingerprint`, `has_nfc`, `has_haptics`, `has_camera_front`, `has_camera_back`, `has_gps`, `has_bluetooth`, `has_microphone`, `has_telephony` |
+
+On Android and iOS, storage and capabilities are sampled once at
+startup.
+
+## Desktop publishers
+
+On Linux, macOS and Windows the module exports pure-Rust publishers.
+Each is created with `install(&rt)` (which fails if the plugin is not
+declared) and publishes only when the value changed.
+
+```rust
+use istmo::plugins::{
+    BatteryStatePublisher, CapabilitiesPublisher, DeviceInfoPublisher, NetworkStatePublisher,
+    StorageInfoPublisher, SystemInfoPublisher, ThemePreferencePublisher,
+};
+
+DeviceInfoPublisher::install(&rt)?.publish();
+CapabilitiesPublisher::install(&rt)?.publish();
+
+let mut system = SystemInfoPublisher::install(&rt)?;
+let mut theme = ThemePreferencePublisher::install(&rt)?;
+let mut network = NetworkStatePublisher::install(&rt)?;
+let mut battery = BatteryStatePublisher::install(&rt)?;
+let mut storage = StorageInfoPublisher::install(&rt)?;
+
+// From the event loop or a timer:
+system.tick();
+theme.tick();
+network.tick();
+battery.tick();
+storage.tick();
+```
+
+| Publisher | Call | Linux | macOS | Windows |
+| --------- | ---- | ----- | ----- | ------- |
+| `SystemInfoPublisher` | `tick()`, every frame is fine (uptime at most once a second) | environment + `/etc/localtime` | Foundation | Win32 locale / time-zone APIs |
+| `DeviceInfoPublisher` | `publish()` once | RAM, kernel release | OS version | RAM, OS version |
+| `ThemePreferencePublisher` | `tick()`, samples at most every 2 s | `gsettings` | `defaults read` | registry `AppsUseLightTheme` |
+| `NetworkStatePublisher` | `tick()` | `/proc/net/route` + `/sys/class/net` | — | `GetAdaptersAddresses` |
+| `BatteryStatePublisher` | `tick()` | `/sys/class/power_supply` | — | `GetSystemPowerStatus` |
+| `StorageInfoPublisher` | `tick()` | `statvfs` | `statvfs` | `GetDiskFreeSpaceExW` |
+| `CapabilitiesPublisher` | `publish()` once | `/sys` + `/dev` probes | all `false` | all `false` |
+
+The theme publisher only fills `color_scheme`; the other fields keep
+their defaults. The time-zone sample reports the zone id with
+`offset_seconds = 0` and `is_dst = false` on Linux. Storage reads the
+volume holding the working directory and leaves `external` as `None`.
+Where a cell says "—" the publisher publishes nothing.
+
+## Calls
+
+Permissions, notifications, AdMob, task scheduling and service control
+have no native implementation in the istmo runtime: the app provides
+the backend. Their contracts live in `istmo-plugins-schema`; pass them
+to `istmo-build` to generate the Kotlin / Swift dispatchers and the
+`<T>Backend` interface, then implement `<T>BackendImpl` (`AdMob` is
+stateful: `AdMobFactoryImpl`). See
+[emit overview](/istmo/build-scripts/emit-overview/) and
+[native-hosted plugins](/istmo/writing-plugins/native-hosted/).
+
+```rust
+// build.rs — with istmo-build and istmo-plugins-schema in [build-dependencies]
+fn main() {
+    istmo_build::emit_with(istmo_build::AppOpts {
+        extra_contracts: vec![
+            istmo_plugins_schema::permissions(),
+            istmo_plugins_schema::notifications(),
+        ],
+        ..istmo_build::AppOpts::default()
+    });
+}
+```
+
+Client methods return `Result<T, IstmoError>`; a domain error from the
+backend arrives as `IstmoError::PluginError { bytes }`.
+
+### Permissions
+
+`PermissionsClient`:
+
+- `check(permission: String) -> PermissionStatus`
+- `request(permissions: Vec<String>) -> Vec<PermissionOutcome>`
+- `should_show_rationale(permission: String) -> bool`
+
+`PermissionStatus` is `Granted`, `Denied`, `PermanentlyDenied`,
+`NotDetermined` or `NotSupported`; `PermissionOutcome` is
+`{ permission, status }`. Permission names are the platform's own
+strings.
+
+```rust
+use istmo::plugins::{PermissionStatus, PermissionsClient};
+
+let permissions = PermissionsClient::acquire()?;
+if permissions.check("android.permission.CAMERA".into()).await? != PermissionStatus::Granted {
+    permissions.request(vec!["android.permission.CAMERA".into()]).await?;
+}
+```
+
+### Notifications
+
+`NotificationsClient`:
+
+- `is_authorized() -> bool`
+- `request_authorization() -> bool`
+- `schedule(request: NotificationRequest) -> NotificationHandle`
+- `cancel(id: u32)`
+
+`NotificationRequest { title, body, channel_id, importance,
+delay_seconds, tag }`, with `importance` one of `Min`, `Low`, `Default`,
+`High`. `NotificationHandle { id }`. Errors: `NotificationError`
+(`PermissionDenied`, `InvalidChannel(String)`, `Scheduler(String)`).
+
+```rust
+use istmo::plugins::{NotificationImportance, NotificationRequest, NotificationsClient};
+
+let notifications = NotificationsClient::acquire()?;
+if notifications.request_authorization().await? {
+    let handle = notifications
+        .schedule(NotificationRequest {
+            title: "Backup finished".into(),
+            body: "42 files uploaded".into(),
+            channel_id: "backups".into(),
+            importance: NotificationImportance::Default,
+            delay_seconds: None,
+            tag: None,
+        })
+        .await?;
+}
+```
+
+### AdMob
+
+`AdMobClient` is stateful: create it with
+`AdMobClient::acquire_with(AdMobConfig { app_id, test_device_ids,
+child_directed_treatment }).await?` (or `from_runtime_with(&rt, config)`).
+Ads are [native handles](/istmo/writing-plugins/native-handles/):
+
+| Method | Returns |
+| ------ | ------- |
+| `load_interstitial_owned(ad_unit_id)` | `NativeHandle<Interstitial>` |
+| `show_interstitial_owned(ad)` | `InterstitialOutcome` (`Dismissed`, `FailedToShow`) |
+| `load_rewarded_owned(ad_unit_id)` | `NativeHandle<Rewarded>` |
+| `show_rewarded_owned(ad)` | `RewardedOutcome { granted, reward_type, reward_amount }` |
+| `show_banner_owned(BannerRequest { ad_unit_id, rect })` | `NativeHandle<Banner>` |
+| `update_banner_owned(&banner, rect)` | `()` |
+| `hide_banner_owned(banner)` | `()` |
+
+The raw methods (`load_interstitial`, `show_banner`, …) take and return
+`NativeHandleId`. `BannerRect` is in physical pixels;
+`banner_rect_from_logical(x, y, w, h, scale)` converts. `AdError` is
+`NotInitialized`, `NoFill`, `Network(String)`, `InvalidRequest(String)`,
+`UnknownAd` or `Internal(String)`.
+
+`BannerSlot` drives one banner from UI code: call
+`sync(SlotTarget::Show(rect))` or `sync(SlotTarget::Hide)` every frame
+and it issues the show / update / hide calls one at a time, coalescing
+rect changes. `status()`, `is_shown()` and `last_error()` report its
+state; `with_spawn` runs its calls on your executor instead of a thread
+per call.
+
+```rust
+use std::sync::Arc;
+use istmo::plugins::{BannerSlot, SlotTarget, banner_rect_from_logical};
+
+let banner = BannerSlot::new("ca-app-pub-3940256099942544/9214589741", Arc::new(ads));
+banner.sync(SlotTarget::Show(banner_rect_from_logical(0.0, 0.0, 320.0, 50.0, scale)));
+```
+
+### Activity results
+
+`ActivityResultsClient::launch(IntentRequest) -> ActivityResult` starts
+an Android activity and waits for its result. `IntentRequest { action,
+uri, component, mime_type, categories, extras }`; `ActivityResult
+{ outcome, data_uri, extras }` with `outcome` `Ok`, `Cancelled` or
+`Custom(i32)`; extras are `(String, ExtraValue)` pairs (`Text`, `Int`,
+`Bool`, `Bytes`). Errors: `ActivityLaunchError` (`NoActivityFound`,
+`NotAuthorized`, `Platform(String)`). This contract is not in
+`istmo-plugins-schema`, so the native host is written by hand
+(`examples/android-demo` has one).
+
+### Task scheduler
+
+`TaskSchedulerClient` enqueues work for a
+[`#[istmo::worker]`](/istmo/writing-plugins/services-workers/):
+
+- `enqueue(request: TaskRequest) -> TaskHandle`
+- `cancel(handle: TaskHandle)`
+- `cancel_by_tag(tag: String)`
+- `cancel_by_unique_name(name: String)`
+
+```rust
+use istmo::plugins::{
+    Constraints, ExistingWorkPolicy, NetworkKind, TaskRequest, TaskSchedulerClient,
+};
+
+let handle = TaskSchedulerClient::acquire()?
+    .enqueue(TaskRequest {
+        task_id: "myapp.sync".into(),
+        unique_name: "nightly-sync".into(),
+        input: Vec::new(),
+        constraints: Constraints {
+            required_network: NetworkKind::Unmetered,
+            requires_charging: true,
+            ..Constraints::default()
+        },
+        initial_delay_seconds: Some(3600),
+        tags: vec!["sync".into()],
+        existing_work_policy: ExistingWorkPolicy::Keep,
+    })
+    .await?;
+```
+
+`ExistingWorkPolicy` is `Replace` (default), `Keep`, `Append` or
+`AppendOrReplace`. Errors: `TaskSchedulerError` (`UnknownTask`,
+`InvalidConstraints`, `Conflict`, `Platform`, each with a `String`).
+
+### Service control
+
+`ServiceControlClient` (`start_foreground`, `update_notification`,
+`stop_foreground`, `acquire_wakelock`, `release_wakelock`, `stop_self`)
+is what `ServiceContext` calls under `#[istmo::service]`; use
+`ctx.set_foreground(spec)`, `ctx.acquire_wakelock(tag)` and friends
+rather than the client. See
+[Services and workers](/istmo/writing-plugins/services-workers/).
