@@ -79,21 +79,12 @@ impl<'a> Doctor<'a> {
             return;
         };
         if !gradle.contains("io.github.sergioribera.istmo") {
-            let message = if gradle.contains("dev.istmo.plugin-loader") {
-                "android/app applies `dev.istmo.plugin-loader`, which was removed; replace it \
-                 with `id(\"io.github.sergioribera.istmo\")` and drop the hand-written cargo \
-                 tasks, which the new plugin replaces"
-            } else if gradle.contains("dev.istmo.app") {
-                "android/app applies `dev.istmo.app`, which was renamed to \
-                 `io.github.sergioribera.istmo` when the runtime moved to Maven Central; \
-                 update the `plugins {}` block"
-            } else {
-                "android/app does not apply the istmo Gradle plugin; add \
-                 `id(\"io.github.sergioribera.istmo\")` to its `plugins {}` block so the Rust \
-                 library, plugin sources, manifests and dependencies are wired in"
-            };
             findings.push(Finding {
-                message: message.to_owned(),
+                message: "android/app does not apply the istmo Gradle plugin; add \
+                          `id(\"io.github.sergioribera.istmo\")` to its `plugins {}` block so \
+                          the Rust library, plugin sources, manifests and dependencies are \
+                          wired in"
+                    .to_owned(),
             });
             // The `${istmo*}` manifest placeholders only exist with the istmo plugin.
             return;
@@ -226,19 +217,6 @@ mod tests {
         assert_eq!(findings.len(), 2, "{text:#?}");
         assert!(text[0].contains("cdylib"));
         assert!(text[1].contains("id(\"io.github.sergioribera.istmo\")"));
-    }
-
-    #[test]
-    fn flags_removed_plugin_loader() {
-        let root = temp_dir("android-loader");
-        write(
-            &root.join("app/build.gradle.kts"),
-            "plugins { id(\"dev.istmo.plugin-loader\") }",
-        );
-        let app = app(&["cdylib"], false);
-        let findings = Doctor::new(&app, Some(&root), None).examine();
-        assert_eq!(findings.len(), 1);
-        assert!(findings[0].message.contains("was removed"));
     }
 
     #[test]
