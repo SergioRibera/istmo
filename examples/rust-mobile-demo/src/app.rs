@@ -708,7 +708,7 @@ async fn run_sign_in_flow(
 
     if SERVER_CLIENT_ID.starts_with("REPLACE_") {
         return Err(
-            "SERVER_CLIENT_ID is still the placeholder — edit src/android.rs, \
+            "SERVER_CLIENT_ID is still the placeholder — edit src/app.rs, \
              plug in the OAuth client id issued to your backend in Google Cloud Console, \
              then rebuild."
                 .to_owned(),
