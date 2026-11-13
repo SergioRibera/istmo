@@ -300,17 +300,10 @@ instancias de cámara sobreviven a la recreación de la activity. CameraX
 1.3.4) llega por las entradas `[[gradle]]` del plugin — no hay nada que
 agregar a `build.gradle.kts`.
 
-El plugin no declara el permiso `CAMERA`. Agrégalo desde el
-`istmo.toml` de la app:
-
-```toml
-[app]
-android_permissions = ["android.permission.CAMERA"]
-```
-
-o con un `<uses-permission android:name="android.permission.CAMERA" />`
-en el `AndroidManifest.xml` de la app. Sin él, `request_access`
-siempre resuelve `Denied`.
+El plugin declara `android.permission.CAMERA` en su `istmo.toml`;
+`istmo-build` agrega la entrada `<uses-permission>` al
+`AndroidManifest.xml` de la app, así que la app no tiene nada que
+declarar.
 
 **iOS** — no hay nada que conectar: `IstmoApp.run()` (o
 `IstmoPluginRegistry.registerAll()`) registra `CameraFactoryImpl()`.

@@ -46,9 +46,8 @@ auto-wired from its `istmo.toml`, so listing it is optional.
 
 ## Permissions
 
-- Android: CameraX does not add `android.permission.CAMERA`; declare it
-  in the app, e.g. `[app] android_permissions = ["android.permission.CAMERA"]`
-  in the app's `istmo.toml`.
+- Android: the plugin's `istmo.toml` declares `android.permission.CAMERA`;
+  `istmo-build` adds it to the app's `AndroidManifest.xml`.
 - iOS: `NSCameraUsageDescription` (and `NSMicrophoneUsageDescription`)
   in `Info.plist`. The plugin ships default strings; override them from
   your app's `[app.info_plist]` table.

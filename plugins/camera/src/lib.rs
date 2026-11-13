@@ -35,10 +35,9 @@
 //! and gate the flow on the returned [`AccessStatus`]. Apps still
 //! need `NSCameraUsageDescription` in `Info.plist`; the plugin's
 //! `istmo.toml` ships a default string that apps are expected to
-//! reword via `[app.info_plist]`. Android apps declare
-//! `android.permission.CAMERA` themselves (for example through
-//! `[app] android_permissions` in their `istmo.toml`); `CameraX` does not
-//! add it.
+//! reword via `[app.info_plist]`. The same manifest declares
+//! `android.permission.CAMERA`, which `istmo-build` adds to the app's
+//! `AndroidManifest.xml` whenever the plugin is wired.
 
 #![doc(html_root_url = "https://docs.rs/istmo-camera")]
 

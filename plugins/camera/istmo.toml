@@ -6,6 +6,9 @@ default_deployment = "local"
 # CameraX binds to a `LifecycleOwner`; we need the host Activity.
 android_backend = "dev.istmo.plugins.camera.CameraFactoryImpl"
 android_backend_arg = "activity"
+# CameraX does not declare it; without it `request_access` always resolves
+# `Denied`.
+android_permissions = ["android.permission.CAMERA"]
 
 [plugin.info_plist]
 NSCameraUsageDescription = "Access the camera to capture images and video frames in real time."

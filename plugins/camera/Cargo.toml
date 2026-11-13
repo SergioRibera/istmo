@@ -87,6 +87,7 @@ web-sys = { version = "0.3", optional = true, features = [
 istmo-build = { workspace = true }
 
 [dev-dependencies]
+istmo-build = { workspace = true }
 pollster = { workspace = true }
 
 [lints]
