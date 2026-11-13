@@ -13,19 +13,21 @@ Sign in with Google, HealthKit, Live Activities.
 ## El loop completo
 
 1. Escribes el trait Rust con `#[istmo::plugin]`.
-2. `istmo_build::emit()` publica el contract.
-3. El `build.rs` app-side genera dispatchers Kotlin/Swift dentro de
+2. `istmo_build::emit()` en el `build.rs` del plugin pasa el contrato y
+   el `istmo.toml` a cada app que depende del crate.
+3. El `build.rs` de la app genera dispatchers Kotlin/Swift dentro de
    `android/` e `ios/`.
 4. Implementas cada interface de backend generada en Kotlin/Swift con
    el código real de plataforma.
-5. Registras el backend en el runtime al startup.
+5. El `IstmoPluginRegistry` generado registra el backend al arrancar la
+   app.
 6. Tu código Rust llama `<T>Client::method(...)` como cualquier otra
    función async.
 
 ## Skeleton — un share sheet del sistema
 
 ```rust
-// plugins/share-sheet/src/lib.rs
+// share-sheet/src/lib.rs
 use istmo::plugin;
 
 #[plugin(name = "acme.share_sheet")]
@@ -35,6 +37,7 @@ pub trait ShareSheet {
 }
 
 #[istmo::message]
+#[derive(Debug)]
 pub struct ShareError {
     pub reason: String,
 }
@@ -43,6 +46,10 @@ impl core::fmt::Display for ShareError { /* ... */ }
 impl std::error::Error for ShareError {}
 ```
 
+(Un crate de plugin independiente usa `istmo-core` + `istmo-macros` y
+`crate = "::istmo_core"`, como en
+[Tu primer plugin](/istmo/es/getting-started/first-plugin/).)
+
 `istmo.toml`:
 
 ```toml
@@ -50,10 +57,10 @@ impl std::error::Error for ShareError {}
 id          = "acme.share_sheet"
 client_type = "::share_sheet::ShareSheetClient"
 
-# El plugin no necesita nada nativo en compile-time; las APIs del
-# sistema Android/iOS están disponibles out-of-the-box. Algunos
-# plugins añaden entradas Gradle o SwiftPM aquí (ver el plugin
-# google-sign-in para un ejemplo).
+# El plugin no necesita nada nativo en compile time; las APIs de
+# sistema de Android/iOS están disponibles de fábrica. Algunos plugins
+# agregan entradas de Gradle o SwiftPM aquí (ver el plugin
+# google-sign-in como ejemplo).
 ```
 
 `build.rs`:
@@ -64,25 +71,33 @@ fn main() { istmo_build::emit(); }
 
 ## Qué se genera en la app
 
-Luego de que tu app reconstruye, ves dos archivos nuevos por
-plataforma dentro de tu tree de app:
+Después de que tu app recompila, aparecen tres archivos por plataforma
+en el árbol de la app:
 
 ```
 android/app/src/main/java/com/myapp/gen/
 ├── ShareSheetTypes.kt
 ├── ShareSheetCodecsImpl.kt
-└── ShareSheetDispatcher.kt           # expone interface ShareSheetBackend
+└── ShareSheetDispatcher.kt           # interface ShareSheetBackend + dispatcher
 ```
 
 ```
 ios/MyApp/Plugins/ShareSheet/Generated/
 ├── ShareSheetTypes.swift
 ├── ShareSheetCodecsImpl.swift
-└── ShareSheetDispatcher.swift        # expone protocol ShareSheetBackend
+└── ShareSheetDispatcher.swift        # protocolo ShareSheetBackend + dispatcher
 ```
 
-Los archivos `Dispatcher` se regeneran en cada build — no los edites.
-El único archivo que escribes a mano es el `BackendImpl`.
+`com.myapp.gen` es el paquete Kotlin por defecto de la app (su
+`namespace` de Gradle + `.gen`, o `[app] android_package`). Estos
+archivos se regeneran en cada build — no los edites. El único archivo
+que escribes a mano es el `BackendImpl`.
+
+Los métodos del backend conservan el nombre de Rust, así que
+`share_text` sigue siendo `share_text`. Los tipos Rust se mapean a
+Kotlin / Swift como `String` → `String`, `Option<T>` → `T?`, `Vec<u8>`
+→ `ByteArray` / `Data`, `u32` → `UInt` / `UInt32`, etc.; un retorno
+`Result<T, E>` se vuelve un método que lanza y retorna `T`.
 
 ## Implementa el backend
 
@@ -97,16 +112,21 @@ import android.content.Intent
 class ShareSheetBackendImpl(
     private val ctx: Context,
 ) : ShareSheetBackend {
-    override suspend fun shareText(text: String, subject: String?): Unit {
+    override suspend fun share_text(text: String, subject: String?) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, text)
             subject?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
         }
-        ctx.startActivity(Intent.createChooser(intent, null))
+        val chooser = Intent.createChooser(intent, null)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        ctx.startActivity(chooser)
     }
 }
 ```
+
+Lanza `BackendException(ShareError(...))` (de `dev.istmo.runtime`) para
+retornar el error de dominio.
 
 ### iOS
 
@@ -114,25 +134,29 @@ class ShareSheetBackendImpl(
 import UIKit
 
 final class ShareSheetBackendImpl: ShareSheetBackend {
-    func shareText(text: String, subject: String?) async throws {
+    func share_text(text: String, subject: String?) async throws {
         await MainActor.run {
             let vc = UIActivityViewController(
                 activityItems: [text],
                 applicationActivities: nil
             )
             if let subject { vc.setValue(subject, forKey: "subject") }
-            UIApplication.shared.topViewController?.present(vc, animated: true)
+            // presenta `vc` desde el root view controller de la key window
         }
     }
 }
 ```
+
+Lanza un `ShareError` (el struct generado conforma `Error`) para
+retornar el error de dominio.
 
 ## Distribuye el backend con el plugin
 
 El backend de arriba vive en la app. Para distribuirlo con el crate del
 plugin, pon las fuentes en `native/android/` y `native/ios/` junto a
 `istmo.toml`: el plugin de Gradle agrega `native/android/` al source set
-de la app, e `istmo-plugins.yml` agrega `native/ios/` al target de Xcode.
+de la app, y el `istmo-plugins.yml` generado agrega `native/ios/` al
+target de Xcode.
 
 En Android, declara además el package que usan esas fuentes:
 
@@ -163,16 +187,21 @@ nativas.
 
 ## Registra el backend
 
-Por default `istmo-build` genera un `IstmoPluginRegistry` que cablea
-cada dispatcher de plugin elegible por vos, y los entry points del
+Por defecto `istmo-build` genera un `IstmoPluginRegistry` que cablea
+cada dispatcher de plugin elegible por ti, y los entry points del
 runtime lo llaman antes de que corra el entry point de Rust:
 
 ```kotlin
 // IstmoGameActivity, la launcher del template, ya hace esto.
-// Una app con su propia activity llama a IstmoHost antes de super.onCreate:
+// Una app con su propia activity llama a IstmoHost ella misma:
 override fun onCreate(savedInstanceState: Bundle?) {
     IstmoHost.onCreate(this) // arranca el runtime + IstmoPluginRegistry
     super.onCreate(savedInstanceState)
+}
+
+override fun onDestroy() {
+    IstmoHost.onDestroy(this)
+    super.onDestroy()
 }
 ```
 
@@ -183,11 +212,14 @@ import IstmoRuntime
 IstmoApp.run() // arranca el runtime + IstmoPluginRegistry, luego corre Rust
 ```
 
-El registry construye el backend Android con un `Context` (o la
-activity host, con `android_backend_arg`) y el de iOS sin argumentos. Plugins que necesitan
-un constructor distinto setean `auto_register = false` en su
-`istmo.toml` y esperan que la app registre manualmente. Ver
-[Auto-registración](/istmo/es/build-scripts/auto-register/).
+El registry construye el backend Android con el `Context` de la
+aplicación por defecto; `android_backend_arg = "activity"` (o una
+subclase de `Activity` con nombre completo) le pasa la activity host.
+El backend iOS se construye sin argumentos. Los plugins que necesitan
+otro constructor ponen `auto_register = false` en su `istmo.toml` y
+esperan que la app registre a mano con
+`IstmoRuntime.registerHandler(ShareSheetDispatcher.PLUGIN_ID, ShareSheetDispatcher(backend, ShareSheetCodecsImpl()))`.
+Ver [Auto-registración](/istmo/es/build-scripts/auto-register/).
 
 ## Llama desde Rust
 
@@ -198,10 +230,10 @@ let sheet = ShareSheetClient::from_runtime(&runtime)?;
 sheet.share_text("Hello world".into(), None).await?;
 ```
 
-## Sembra los archivos de backend
+## Siembra los archivos de backend
 
-¿Iterando sobre un plugin grande? Habilita generación one-time de
-skeleton con `AppOpts::seed_backends`:
+¿Iterando sobre un plugin grande? Habilita la generación única de
+esqueletos con `AppOpts::seed_backends`:
 
 ```rust
 // build.rs (en la raíz del crate app)
@@ -215,20 +247,20 @@ fn main() {
 
 El primer build crea `ShareSheetBackendImpl.kt` y
 `ShareSheetBackendImpl.swift` con cuerpos `TODO()` / `fatalError`. El
-seed usa `write_if_absent`, así que tus ediciones posteriores nunca se
-sobrescriben.
+seed solo se escribe cuando el archivo no existe, así que tus
+ediciones posteriores nunca se sobrescriben.
 
 ## Threading
 
 Tanto `suspend fun` de Kotlin como protocolos `async` de Swift son
-honorados por el dispatcher generado. Usa el patrón de coroutine o
-task que sea idiomático; Istmo no impone un executor. Si tu trabajo
-debe aterrizar en el main thread (APIs de UIKit, trabajo de ciclo de
-vida de vista), gatéalo con `MainActor.run` / `withContext(Dispatchers.Main)`
-como siempre.
+honrados por el dispatcher generado. Usa el patrón de coroutine o task
+que sea idiomático; Istmo no impone un executor. Si tu trabajo debe
+aterrizar en el main thread (APIs de UIKit, trabajo de ciclo de vida
+de vista), protégelo con `MainActor.run` /
+`withContext(Dispatchers.Main)` como siempre.
 
 ## Siguiente
 
 - Streaming de eventos: [Streams](/istmo/es/writing-plugins/streams/).
-- Pasar recursos nativos: [Native handles](/istmo/es/writing-plugins/native-handles/).
-- Trabajo de larga duración: [Services y workers](/istmo/es/writing-plugins/services-workers/).
+- Pasar recursos nativos de ida y vuelta: [Native handles](/istmo/es/writing-plugins/native-handles/).
+- Trabajo de larga duración: [Servicios y workers](/istmo/es/writing-plugins/services-workers/).
