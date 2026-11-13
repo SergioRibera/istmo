@@ -17,9 +17,8 @@ pub mod generated {
 }
 
 /// Marker for the platform object behind [`Account::credential`].
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum Credential {}
+#[derive(Debug, Clone, Copy)]
+pub struct Credential(std::convert::Infallible);
 
 /// Configuration a [`Gadget`] instance is created with.
 #[message]
@@ -126,8 +125,8 @@ pub trait Plain {
 pub struct Loopback;
 
 impl Plain for Loopback {
-    async fn echo(&self, text: String) -> String {
-        text
+    fn echo(&self, text: String) -> impl Future<Output = String> + Send {
+        std::future::ready(text)
     }
 
     fn events(&self) -> flume::Receiver<String> {
@@ -189,8 +188,8 @@ pub trait Backup {
 pub struct Nightly;
 
 impl Backup for Nightly {
-    async fn run(&self, _ctx: WorkerContext) -> TaskOutcome {
-        TaskOutcome::Success
+    fn run(&self, _ctx: WorkerContext) -> impl Future<Output = TaskOutcome> + Send {
+        std::future::ready(TaskOutcome::Success)
     }
 }
 

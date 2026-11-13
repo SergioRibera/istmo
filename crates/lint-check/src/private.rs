@@ -21,8 +21,8 @@ pub(crate) trait Mirror {
 pub(crate) struct MirrorImpl;
 
 impl Mirror for MirrorImpl {
-    async fn echo(&self, text: String) -> String {
-        text
+    fn echo(&self, text: String) -> impl Future<Output = String> + Send {
+        std::future::ready(text)
     }
 
     async fn wait(&self, cancel: CancelToken) -> u32 {
@@ -64,7 +64,7 @@ impl Quiet for QuietImpl {
 pub(crate) struct ChoreImpl;
 
 impl Chore for ChoreImpl {
-    async fn run(&self, _ctx: WorkerContext) -> TaskOutcome {
-        TaskOutcome::Success
+    fn run(&self, _ctx: WorkerContext) -> impl Future<Output = TaskOutcome> + Send {
+        std::future::ready(TaskOutcome::Success)
     }
 }
