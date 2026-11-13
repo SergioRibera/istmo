@@ -99,17 +99,20 @@ lo adopta después.
 
 ## Refresca
 
-`refresh` recibe el id de la credencial actual. Entrega el handle
-viejo con `into_id()` para que no se libere al dropearse:
+`refresh` recibe el id de la credencial actual y retorna la cuenta con
+un id de credencial nuevo. El id viejo queda consumido: su handle queda
+obsoleto (dropearlo es un no-op) y el handle nuevo se libera de forma
+independiente:
 
 ```rust
-let account = sign_in.refresh_owned(account.credential.into_id()).await?;
+let refreshed = sign_in.refresh_owned(account.credential.id()).await?;
+drop(account);
 ```
 
-En iOS el SDK refresca los tokens de la misma credencial; en Android
+En iOS el SDK refresca los tokens del usuario autenticado; en Android
 Credential Manager no tiene refresh, así que se vuelve a correr el
-flow silencioso y se retorna una credencial nueva (falla con
-`SignInError::Reauthenticate` si no hay ninguna).
+flow silencioso (falla con `SignInError::Reauthenticate` si no hay
+credencial).
 
 ## Cierra sesión y revoca
 

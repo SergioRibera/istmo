@@ -52,10 +52,14 @@ public final class GoogleSignInBackendImpl: SignInBackend, HandleReleaser {
 
     public func refresh(credential: NativeHandleId) async throws -> SignInAccount {
         #if canImport(GoogleSignIn)
-        let user = locked { credentials[credential] as? GIDGoogleUser }
+        // The refreshed credential gets a fresh id so the caller's old
+        // handle and the new one release independently. The old id is
+        // consumed here, as on Android; its later release is a no-op.
+        let user = locked { credentials.removeValue(forKey: credential) as? GIDGoogleUser }
         guard let user else {
             throw SignInError.reauthenticate
         }
+        IstmoRuntime.shared.forgetHandle(credential)
         return try await withCheckedThrowingContinuation { cont in
             user.refreshTokensIfNeeded { refreshed, error in
                 if let error {
@@ -66,8 +70,7 @@ public final class GoogleSignInBackendImpl: SignInBackend, HandleReleaser {
                     cont.resume(throwing: SignInError.reauthenticate)
                     return
                 }
-                self.locked { self.credentials[credential] = refreshed }
-                cont.resume(returning: self.account(from: refreshed, credentialId: credential))
+                cont.resume(returning: self.adopt(refreshed))
             }
         }
         #else

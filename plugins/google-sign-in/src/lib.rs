@@ -214,6 +214,13 @@ pub trait SignIn {
     #[owned]
     async fn silent_sign_in(&self) -> Result<Option<SignInAccount>, SignInError>;
 
+    /// Refreshes the tokens of `credential` and returns them under a
+    /// new credential id.
+    ///
+    /// The backend consumes `credential`: the old handle becomes stale
+    /// (its release is a no-op) and the returned credential is released
+    /// independently of it, so pass the id with `NativeHandle::id` and
+    /// drop the old owned account whenever convenient.
     #[owned]
     async fn refresh(&self, credential: NativeHandleId) -> Result<SignInAccount, SignInError>;
 

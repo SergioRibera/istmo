@@ -98,17 +98,19 @@ bare id; `SignInAccount::into_owned(&runtime)` adopts it later.
 
 ## Refresh
 
-`refresh` takes the current credential id. Hand the old handle over
-with `into_id()` so it is not released on drop:
+`refresh` takes the current credential id and returns the account under
+a new credential id. The old id is consumed: its handle becomes stale
+(dropping it is a no-op) and the new handle is released independently:
 
 ```rust
-let account = sign_in.refresh_owned(account.credential.into_id()).await?;
+let refreshed = sign_in.refresh_owned(account.credential.id()).await?;
+drop(account);
 ```
 
-On iOS the SDK refreshes the tokens of the same credential; on Android
-Credential Manager has no refresh, so the silent flow runs again and
-returns a new credential (failing with `SignInError::Reauthenticate`
-when there is none).
+On iOS the SDK refreshes the tokens of the signed-in user; on Android
+Credential Manager has no refresh, so the silent flow runs again
+(failing with `SignInError::Reauthenticate` when there is no
+credential).
 
 ## Sign out and revoke
 
