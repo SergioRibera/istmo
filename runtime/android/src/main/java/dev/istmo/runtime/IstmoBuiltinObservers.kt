@@ -284,6 +284,9 @@ class IstmoThemePreferenceObserver(private val context: Context) {
         // listener.
         val cb = object : android.content.ComponentCallbacks {
             override fun onConfigurationChanged(newConfig: Configuration) = publish()
+            // Deprecated since API 34 but still abstract on
+            // `ComponentCallbacks`, so every implementation must define it.
+            @Suppress("OVERRIDE_DEPRECATION")
             override fun onLowMemory() {}
         }
         context.registerComponentCallbacks(cb)
