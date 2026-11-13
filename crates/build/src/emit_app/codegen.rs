@@ -1,12 +1,13 @@
 //! Kotlin / Swift sources per plugin contract, the plugin registries
 //! and the optional seeded backend skeletons.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
 use super::{remove_generated, write_if_changed};
 use crate::app_config::Role;
-use crate::codegen::{kt_ident, swift_ident};
+use crate::codegen::{kt_string, swift_string};
 use crate::contract::Contract;
 use crate::kotlin_client::generate_kotlin_client;
 use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
@@ -147,20 +148,49 @@ pub(super) fn mark_codegen_dir(dir: &Path) {
     }
 }
 
+/// Runtime types generated Kotlin may name unqualified.
+const KOTLIN_RUNTIME_SYMBOLS: [&str; 8] = [
+    "BackendException",
+    "Bincode",
+    "HandleReleaser",
+    "IstmoRuntime",
+    "NativeHandleId",
+    "PluginException",
+    "PluginHandler",
+    "PluginResult",
+];
+
+/// `body` under `package`, importing exactly the runtime types it names
+/// (an unused import is a warning in every Kotlin toolchain).
 fn kotlin_with_package(package: &str, body: &str) -> String {
     const RUNTIME_PACKAGE: &str = "dev.istmo.runtime";
     if package == RUNTIME_PACKAGE {
         return format!("package {package}\n\n{body}");
     }
-    let imports = "\
-import dev.istmo.runtime.BackendException\n\
-import dev.istmo.runtime.Bincode\n\
-import dev.istmo.runtime.HandleReleaser\n\
-import dev.istmo.runtime.IstmoRuntime\n\
-import dev.istmo.runtime.PluginException\n\
-import dev.istmo.runtime.PluginHandler\n\
-import dev.istmo.runtime.PluginResult\n";
+    let mut imports = String::new();
+    for symbol in KOTLIN_RUNTIME_SYMBOLS {
+        if kotlin_code_names(body, symbol) {
+            let _ = writeln!(imports, "import {RUNTIME_PACKAGE}.{symbol}");
+        }
+    }
+    if imports.is_empty() {
+        return format!("package {package}\n\n{body}");
+    }
     format!("package {package}\n\n{imports}\n{body}")
+}
+
+/// Whether a non-comment line of `body` uses `ident` as a whole word.
+fn kotlin_code_names(body: &str, ident: &str) -> bool {
+    let is_ident_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    body.lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .any(|line| {
+            line.match_indices(ident).any(|(at, _)| {
+                let before = line[..at].chars().next_back();
+                let after = line[at + ident.len()..].chars().next();
+                !before.is_some_and(is_ident_char) && !after.is_some_and(is_ident_char)
+            })
+        })
 }
 
 fn write_if_absent(dest: &Path, contents: &str) {
@@ -175,74 +205,90 @@ fn write_if_absent(dest: &Path, contents: &str) {
     }
 }
 
+/// Seeds `<T>BackendImpl.kt` (plus `<T>FactoryImpl` for a stateful
+/// plugin) with the constructor the generated plugin registry calls and
+/// one `TODO()` override per backend method.
 fn seed_kotlin_backend_impl(gen_dir: &Path, package: &str, contract: &Contract) {
-    use std::fmt::Write as _;
     let ty = &contract.type_name;
-    let mut body = format!(
-        "package {package}\n\n\
-         // Seeded by istmo-build. Fill in each `TODO()` with your logic;\n\
+    let mut body = String::from(
+        "// Seeded by istmo-build. Fill in each `TODO()` with your logic;\n\
          // regenerate is a no-op once this file exists.\n\n\
-         class {ty}BackendImpl : {ty}Backend {{\n"
+         import android.content.Context\n\n",
     );
-    for method in &contract.methods {
-        let args = method
-            .args
-            .iter()
-            .map(|a| format!("{}: Any", kt_ident(&kotlin_method_name(&a.name))))
-            .collect::<Vec<_>>()
-            .join(", ");
+    if let Some(init) = &contract.init {
+        let config = init.to_kotlin();
         let _ = write!(
             body,
-            "    override suspend fun {}({args}): Any {{\n        TODO(\"implement {}\")\n    }}\n",
-            kt_ident(&kotlin_method_name(&method.name)),
-            method.name,
+            "class {ty}FactoryImpl(\n    private val context: Context,\n) : {ty}Factory {{\n\
+             \x20   override suspend fun create(config: {config}): {ty}Backend =\n\
+             \x20       {ty}BackendImpl(context, config)\n}}\n\n\
+             class {ty}BackendImpl(\n    private val context: Context,\n\
+             \x20   private val config: {config},\n) : {ty}Backend {{\n"
+        );
+    } else {
+        let _ = write!(
+            body,
+            "class {ty}BackendImpl(\n    private val context: Context,\n) : {ty}Backend {{\n"
+        );
+    }
+    for (i, method) in contract.methods.iter().enumerate() {
+        if i > 0 {
+            body.push('\n');
+        }
+        let _ = write!(
+            body,
+            "    override {} {{\n        TODO({})\n    }}\n",
+            crate::kotlin_host::backend_method_decl(method),
+            kt_string(&format!("implement {}", method.name)),
         );
     }
     body.push_str("}\n");
-    write_if_absent(&gen_dir.join(format!("{ty}BackendImpl.kt")), &body);
+    write_if_absent(
+        &gen_dir.join(format!("{ty}BackendImpl.kt")),
+        &kotlin_with_package(package, &body),
+    );
 }
 
+/// Seeds `<T>BackendImpl.swift` (plus `<T>FactoryImpl` for a stateful
+/// plugin) with the initializer the generated plugin registry calls and
+/// one `fatalError` body per backend requirement.
 fn seed_swift_backend_impl(gen_dir: &Path, contract: &Contract) {
-    use std::fmt::Write as _;
     let ty = &contract.type_name;
-    let mut body = format!(
+    let mut body = String::from(
         "import Foundation\n\n\
          // Seeded by istmo-build. Fill in each `fatalError` with your\n\
-         // logic; regenerate is a no-op once this file exists.\n\n\
-         final class {ty}BackendImpl: {ty}Backend {{\n"
+         // logic; regenerate is a no-op once this file exists.\n\n",
     );
-    for method in &contract.methods {
-        let args = method
-            .args
-            .iter()
-            .map(|a| format!("{}: Any", swift_ident(&a.name)))
-            .collect::<Vec<_>>()
-            .join(", ");
+    if let Some(init) = &contract.init {
+        let config = init.to_swift();
         let _ = write!(
             body,
-            "    func {}({args}) async throws -> Any {{\n        fatalError(\"implement {}\")\n    }}\n",
-            swift_ident(&method.name),
-            method.name,
+            "final class {ty}FactoryImpl: {ty}Factory {{\n\
+             \x20   func create(config: {config}) async throws -> {ty}Backend {{\n\
+             \x20       {ty}BackendImpl(config: config)\n    }}\n}}\n\n\
+             final class {ty}BackendImpl: {ty}Backend {{\n\
+             \x20   private let config: {config}\n\n\
+             \x20   init(config: {config}) {{\n        self.config = config\n    }}\n"
+        );
+        if !contract.methods.is_empty() {
+            body.push('\n');
+        }
+    } else {
+        let _ = writeln!(body, "final class {ty}BackendImpl: {ty}Backend {{");
+    }
+    for (i, method) in contract.methods.iter().enumerate() {
+        if i > 0 {
+            body.push('\n');
+        }
+        let _ = write!(
+            body,
+            "    {} {{\n        fatalError({})\n    }}\n",
+            crate::swift_host::backend_method_decl(method),
+            swift_string(&format!("implement {}", method.name)),
         );
     }
     body.push_str("}\n");
     write_if_absent(&gen_dir.join(format!("{ty}BackendImpl.swift")), &body);
-}
-
-fn kotlin_method_name(rust_snake: &str) -> String {
-    let mut out = String::new();
-    let mut upper = false;
-    for ch in rust_snake.chars() {
-        if ch == '_' {
-            upper = true;
-        } else if upper {
-            out.extend(ch.to_uppercase());
-            upper = false;
-        } else {
-            out.push(ch);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -273,9 +319,32 @@ mod tests {
         seed_kotlin_backend_impl(&dir, "com.example", &contract);
         seed_swift_backend_impl(&dir, &contract);
         let kotlin = fs::read_to_string(dir.join("KBackendImpl.kt")).unwrap();
-        assert!(kotlin.contains("fun `in`(`is`: Any): Any"), "{kotlin}");
+        assert!(
+            kotlin.contains("override suspend fun `in`(`is`: Boolean) {"),
+            "{kotlin}"
+        );
         let swift = fs::read_to_string(dir.join("KBackendImpl.swift")).unwrap();
-        assert!(swift.contains("func `in`(`is`: Any)"), "{swift}");
+        assert!(
+            swift.contains("func `in`(`is`: Bool) async throws -> Void {"),
+            "{swift}"
+        );
+    }
+
+    #[test]
+    fn kotlin_imports_only_the_runtime_types_the_code_names() {
+        let body = "// Returns a PluginResult.\n\
+                    fun readNativeHandleId(b: ByteArray): Bincode.Decoded<Long> = TODO()\n";
+        let src = kotlin_with_package("com.example.gen", body);
+        assert!(src.contains("import dev.istmo.runtime.Bincode\n"), "{src}");
+        assert!(!src.contains("PluginResult\n"), "{src}");
+        assert!(
+            !src.contains("import dev.istmo.runtime.NativeHandleId"),
+            "{src}"
+        );
+        let bare = kotlin_with_package("com.example.gen", "class A\n");
+        assert_eq!(bare, "package com.example.gen\n\nclass A\n");
+        let runtime = kotlin_with_package("dev.istmo.runtime", body);
+        assert!(!runtime.contains("import"), "{runtime}");
     }
 
     #[test]
@@ -288,12 +357,5 @@ mod tests {
         fs::write(dir.join("KBackendImpl.swift"), "// mine\n").unwrap();
         mark_codegen_dir(&dir);
         assert!(!dir.join(".gitignore").exists());
-    }
-
-    #[test]
-    fn kotlin_method_name_snake_to_camel() {
-        assert_eq!(kotlin_method_name("sign_in"), "signIn");
-        assert_eq!(kotlin_method_name("open_url"), "openUrl");
-        assert_eq!(kotlin_method_name("echo"), "echo");
     }
 }

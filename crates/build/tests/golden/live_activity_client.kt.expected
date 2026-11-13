@@ -28,10 +28,7 @@ class LiveActivityClient(
             val decoded = runCatching { codecs.readActivityError(e.payload, 0).value }.getOrNull()
             throw LiveActivityException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = codecs.readNativeHandleId(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return codecs.readNativeHandleId(bytes, 0).value
     }
 
     suspend fun update(handle: NativeHandleId, state: ByteArray, alert: AlertConfig?) {
@@ -70,10 +67,7 @@ class LiveActivityClient(
             val decoded = runCatching { codecs.readActivityError(e.payload, 0).value }.getOrNull()
             throw LiveActivityException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = Bincode.readBool(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return Bincode.readBool(bytes, 0).value
     }
 
     suspend fun capabilities(): PlatformCapabilities {
@@ -84,10 +78,7 @@ class LiveActivityClient(
             val decoded = runCatching { codecs.readActivityError(e.payload, 0).value }.getOrNull()
             throw LiveActivityException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = codecs.readPlatformCapabilities(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return codecs.readPlatformCapabilities(bytes, 0).value
     }
 
     suspend fun restore_active(): List<RestoredActivity> {
@@ -98,10 +89,7 @@ class LiveActivityClient(
             val decoded = runCatching { codecs.readActivityError(e.payload, 0).value }.getOrNull()
             throw LiveActivityException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = Bincode.readVec(bytes, cursor) { b1, c1 -> codecs.readRestoredActivity(b1, c1) }; cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return Bincode.readVec(bytes, 0) { b1, c1 -> codecs.readRestoredActivity(b1, c1) }.value
     }
 }
 

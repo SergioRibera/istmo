@@ -66,26 +66,25 @@ fn write_backend_protocol(out: &mut String, contract: &Contract) {
 }
 
 fn write_backend_method(out: &mut String, method: &Method) {
+    if let (MethodKind::Unary, Some(err)) = (method.kind, &method.error) {
+        let _ = writeln!(
+            out,
+            "    /// Throw `{}` to surface a typed domain error.",
+            err.to_swift()
+        );
+    }
+    let _ = writeln!(out, "    {}", backend_method_decl(method));
+}
+
+/// Requirement of `method` on the `<T>Backend` protocol, shared with the
+/// seeded implementation so the two cannot drift apart.
+pub(crate) fn backend_method_decl(method: &Method) -> String {
     let args = format_args(method);
     let ret = method.returns.to_swift();
     let name = swift_ident(&method.name);
     match method.kind {
-        MethodKind::Unary => {
-            if let Some(err) = &method.error {
-                let _ = writeln!(
-                    out,
-                    "    /// Throw `{}` to surface a typed domain error.",
-                    err.to_swift()
-                );
-            }
-            let _ = writeln!(out, "    func {name}({args}) async throws -> {ret}");
-        }
-        MethodKind::Stream => {
-            let _ = writeln!(
-                out,
-                "    func {name}({args}) -> AsyncThrowingStream<{ret}, Error>"
-            );
-        }
+        MethodKind::Unary => format!("func {name}({args}) async throws -> {ret}"),
+        MethodKind::Stream => format!("func {name}({args}) -> AsyncThrowingStream<{ret}, Error>"),
     }
 }
 

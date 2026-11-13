@@ -1,8 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::codegen::{
-    KotlinWire, NamedAccess, ReadSource, fresh, kt_ident, kt_string, write_header,
-};
+use crate::codegen::{KotlinWire, NamedAccess, fresh, kt_ident, kt_string, write_header};
 use crate::contract::{Contract, Method, MethodKind, TypeRef};
 
 const WIRE: KotlinWire = KotlinWire::new(NamedAccess::Codecs);
@@ -61,14 +59,12 @@ pub fn generate_kotlin_client(contract: &Contract) -> String {
 }
 
 /// Locals a client method declares. Each avoids the method's parameter
-/// names so a contract argument called `payload` or `cursor` is never
+/// names so a contract argument called `payload` or `bytes` is never
 /// shadowed or misread.
 struct Locals {
     payload_buf: String,
     payload: String,
     bytes: String,
-    cursor: String,
-    result: String,
 }
 
 impl Locals {
@@ -78,15 +74,6 @@ impl Locals {
             payload_buf: fresh("payloadBuf", &names),
             payload: fresh("payload", &names),
             bytes: fresh("bytes", &names),
-            cursor: fresh("cursor", &names),
-            result: fresh("result", &names),
-        }
-    }
-
-    fn source(&self) -> ReadSource<'_> {
-        ReadSource {
-            bytes: &self.bytes,
-            cursor: &self.cursor,
         }
     }
 }
@@ -97,13 +84,7 @@ fn write_client_method(out: &mut String, contract: &Contract, method: &Method) {
     let fn_name = kt_ident(&method.name);
     let wire_name = kt_string(&method.name);
     let locals = Locals::for_method(method);
-    let Locals {
-        payload,
-        bytes,
-        cursor,
-        result,
-        ..
-    } = &locals;
+    let Locals { payload, bytes, .. } = &locals;
     match method.kind {
         MethodKind::Unary => {
             let returns_unit = method.returns.is_unit();
@@ -139,9 +120,8 @@ fn write_client_method(out: &mut String, contract: &Contract, method: &Method) {
                 let _ = writeln!(out, "        {assign}{call}");
             }
             if !returns_unit {
-                let _ = writeln!(out, "        var {cursor} = 0");
-                WIRE.read_into(out, "        ", &method.returns, result, locals.source());
-                let _ = writeln!(out, "        return {result}");
+                let decode = WIRE.read(&method.returns, bytes, "0");
+                let _ = writeln!(out, "        return {decode}.value");
             }
             let _ = writeln!(out, "    }}");
         }
@@ -151,9 +131,14 @@ fn write_client_method(out: &mut String, contract: &Contract, method: &Method) {
                 "    fun {fn_name}({arg_sig}): kotlinx.coroutines.flow.Flow<{ret_kt}> {{",
             );
             write_payload_build(out, method, &locals, "        ");
+            let item = if method.returns.is_unit() {
+                "_"
+            } else {
+                bytes.as_str()
+            };
             let _ = writeln!(
                 out,
-                "        return IstmoRuntime.stream(PLUGIN_ID, {wire_name}, {payload}).map {{ {bytes} ->",
+                "        return IstmoRuntime.stream(PLUGIN_ID, {wire_name}, {payload}).map {{ {item} ->",
             );
             write_stream_map_body(out, &method.returns, &locals, "            ");
             if let Some(err) = &method.error {
@@ -201,9 +186,8 @@ fn write_stream_map_body(out: &mut String, ret: &TypeRef, locals: &Locals, inden
         let _ = writeln!(out, "{indent}Unit");
         return;
     }
-    let _ = writeln!(out, "{indent}var {} = 0", locals.cursor);
-    WIRE.read_into(out, indent, ret, &locals.result, locals.source());
-    let _ = writeln!(out, "{indent}{}", locals.result);
+    let decode = WIRE.read(ret, &locals.bytes, "0");
+    let _ = writeln!(out, "{indent}{decode}.value");
 }
 
 fn format_args(method: &Method) -> String {

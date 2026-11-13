@@ -158,6 +158,50 @@ impl KotlinWire {
         let _ = writeln!(out, "{indent}val {tmp} = {expr}; {cursor} = {tmp}.consumed");
         let _ = writeln!(out, "{indent}val {local} = {tmp}.value");
     }
+
+    /// Emits `val <local>` holding `ty` decoded from `src`, for the last
+    /// read of a buffer: the cursor is not advanced, since nothing reads
+    /// it again (kotlinc warns on a dead assignment).
+    pub(crate) fn read_last(
+        self,
+        out: &mut String,
+        indent: &str,
+        ty: &TypeRef,
+        local: &str,
+        src: ReadSource<'_>,
+    ) {
+        let ReadSource { bytes, cursor } = src;
+        let expr = self.read(ty, bytes, cursor);
+        let _ = writeln!(out, "{indent}val {local} = {expr}.value");
+    }
+
+    /// Emits a `val` per `(type, local)` pair decoded in order from
+    /// `bytes`, starting at offset 0. A cursor variable is declared only
+    /// when a later read needs it.
+    pub(crate) fn read_sequence<'a>(
+        self,
+        out: &mut String,
+        indent: &str,
+        bytes: &str,
+        reads: impl ExactSizeIterator<Item = (&'a TypeRef, &'a str)>,
+    ) {
+        let count = reads.len();
+        if count > 1 {
+            let _ = writeln!(out, "{indent}var cursor = 0");
+        }
+        let src = if count > 1 {
+            ReadSource::at_cursor(bytes)
+        } else {
+            ReadSource { bytes, cursor: "0" }
+        };
+        for (i, (ty, local)) in reads.enumerate() {
+            if i + 1 == count {
+                self.read_last(out, indent, ty, local, src);
+            } else {
+                self.read_into(out, indent, ty, local, src);
+            }
+        }
+    }
 }
 
 /// The buffer and the mutable cursor variable a Kotlin reader consumes.

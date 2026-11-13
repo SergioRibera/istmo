@@ -26,10 +26,7 @@ class CoverageClient(
             val decoded = runCatching { codecs.readFirstError(e.payload, 0).value }.getOrNull()
             throw CoverageFirstErrorException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = codecs.readEverything(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return codecs.readEverything(bytes, 0).value
     }
 
     suspend fun round_trip(value: Everything, shape: Shape): List<List<String>?> {
@@ -43,10 +40,7 @@ class CoverageClient(
             val decoded = runCatching { codecs.readSecondError(e.payload, 0).value }.getOrNull()
             throw CoverageSecondErrorException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = Bincode.readVec(bytes, cursor) { b1, c1 -> Bincode.readOption(b1, c1) { b2, c2 -> Bincode.readVec(b2, c2) { b3, c3 -> Bincode.readString(b3, c3) } } }; cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return Bincode.readVec(bytes, 0) { b1, c1 -> Bincode.readOption(b1, c1) { b2, c2 -> Bincode.readVec(b2, c2) { b3, c3 -> Bincode.readString(b3, c3) } } }.value
     }
 
     suspend fun send(payload: ByteArray, cursor: UShort, c: Short) {
@@ -68,10 +62,7 @@ class CoverageClient(
         codecs.writeMode(payloadBuf, mode)
         val payload = payloadBuf.toByteArray()
         return IstmoRuntime.stream(PLUGIN_ID, "watch", payload).map { bytes ->
-            var cursor = 0
-            val d_result = Bincode.readOption(bytes, cursor) { b1, c1 -> Bincode.readBytes(b1, c1) }; cursor = d_result.consumed
-            val result = d_result.value
-            result
+            Bincode.readOption(bytes, 0) { b1, c1 -> Bincode.readBytes(b1, c1) }.value
         }
     }
 
@@ -80,10 +71,7 @@ class CoverageClient(
         Bincode.writeU32(payloadBuf, next)
         val payload = payloadBuf.toByteArray()
         return IstmoRuntime.stream(PLUGIN_ID, "follow", payload).map { bytes ->
-            var cursor = 0
-            val d_result = codecs.readShape(bytes, cursor); cursor = d_result.consumed
-            val result = d_result.value
-            result
+            codecs.readShape(bytes, 0).value
         }.catch { e ->
             if (e !is PluginException) throw e
             val decoded = runCatching { codecs.readSecondError(e.payload, 0).value }.getOrNull()

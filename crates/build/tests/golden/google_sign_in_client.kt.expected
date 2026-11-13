@@ -23,10 +23,7 @@ class SignInClient(
             val decoded = runCatching { codecs.readSignInError(e.payload, 0).value }.getOrNull()
             throw SignInException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = codecs.readSignInAccount(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return codecs.readSignInAccount(bytes, 0).value
     }
 
     suspend fun silent_sign_in(): SignInAccount? {
@@ -37,10 +34,7 @@ class SignInClient(
             val decoded = runCatching { codecs.readSignInError(e.payload, 0).value }.getOrNull()
             throw SignInException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = Bincode.readOption(bytes, cursor) { b1, c1 -> codecs.readSignInAccount(b1, c1) }; cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return Bincode.readOption(bytes, 0) { b1, c1 -> codecs.readSignInAccount(b1, c1) }.value
     }
 
     suspend fun refresh(credential: NativeHandleId): SignInAccount {
@@ -53,10 +47,7 @@ class SignInClient(
             val decoded = runCatching { codecs.readSignInError(e.payload, 0).value }.getOrNull()
             throw SignInException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = codecs.readSignInAccount(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return codecs.readSignInAccount(bytes, 0).value
     }
 
     suspend fun sign_out() {

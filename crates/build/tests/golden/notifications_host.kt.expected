@@ -15,7 +15,7 @@ interface NotificationsBackend {
     suspend fun schedule(request: NotificationRequest): NotificationHandle
 
     // Throw BackendException(NotificationError) for domain errors.
-    suspend fun cancel(id: UInt): Unit
+    suspend fun cancel(id: UInt)
 }
 
 /// Reader / writer per `Named` type referenced by the `Notifications` contract.
@@ -59,9 +59,7 @@ class NotificationsDispatcher(
             }
             "schedule" -> {
                 try {
-                    var cursor = 0
-                    val d_request = codecs.readNotificationRequest(payload, cursor); cursor = d_request.consumed
-                    val request = d_request.value
+                    val request = codecs.readNotificationRequest(payload, 0).value
                     val result = backend.schedule(request)
                     val out = ByteArrayOutputStream()
                     codecs.writeNotificationHandle(out, result)
@@ -75,9 +73,7 @@ class NotificationsDispatcher(
             }
             "cancel" -> {
                 try {
-                    var cursor = 0
-                    val d_id_ = Bincode.readU32(payload, cursor); cursor = d_id_.consumed
-                    val id_ = d_id_.value
+                    val id_ = Bincode.readU32(payload, 0).value
                     backend.cancel(id_)
                     PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {

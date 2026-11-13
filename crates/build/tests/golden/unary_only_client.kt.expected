@@ -23,10 +23,7 @@ class EchoClient(
             val decoded = runCatching { codecs.readEchoError(e.payload, 0).value }.getOrNull()
             throw EchoException(e.payload, decoded)
         }
-        var cursor = 0
-        val d_result = Bincode.readString(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return Bincode.readString(bytes, 0).value
     }
 
     suspend fun add(a: Int, b: Int): Int {
@@ -35,10 +32,7 @@ class EchoClient(
         Bincode.writeI32(payloadBuf, b)
         val payload = payloadBuf.toByteArray()
         val bytes = IstmoRuntime.call(PLUGIN_ID, "add", payload)
-        var cursor = 0
-        val d_result = Bincode.readI32(bytes, cursor); cursor = d_result.consumed
-        val result = d_result.value
-        return result
+        return Bincode.readI32(bytes, 0).value
     }
 }
 

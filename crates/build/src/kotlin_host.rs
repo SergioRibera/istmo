@@ -86,33 +86,32 @@ fn write_backend_interface(out: &mut String, contract: &Contract) {
 }
 
 fn write_backend_method(out: &mut String, method: &Method) {
+    if let Some(err) = &method.error {
+        let how = match method.kind {
+            MethodKind::Unary => "for domain errors",
+            MethodKind::Stream => "from the flow to end it with a domain error",
+        };
+        let _ = writeln!(
+            out,
+            "    // Throw BackendException({}) {how}.",
+            err.to_kotlin()
+        );
+    }
+    let _ = writeln!(out, "    {}", backend_method_decl(method));
+}
+
+/// Declaration of `method` on the `<T>Backend` interface, shared with
+/// the seeded implementation so the two cannot drift apart.
+pub(crate) fn backend_method_decl(method: &Method) -> String {
     let args = format_args(method);
-    let ret = method.returns.to_kotlin();
     let name = kt_ident(&method.name);
     match method.kind {
-        MethodKind::Unary => {
-            if let Some(err) = &method.error {
-                let _ = writeln!(
-                    out,
-                    "    // Throw BackendException({}) for domain errors.",
-                    err.to_kotlin()
-                );
-            }
-            let _ = writeln!(out, "    suspend fun {name}({args}): {ret}");
-        }
-        MethodKind::Stream => {
-            if let Some(err) = &method.error {
-                let _ = writeln!(
-                    out,
-                    "    // Throw BackendException({}) from the flow to end it with a domain error.",
-                    err.to_kotlin()
-                );
-            }
-            let _ = writeln!(
-                out,
-                "    fun {name}({args}): kotlinx.coroutines.flow.Flow<{ret}>",
-            );
-        }
+        MethodKind::Unary if method.returns.is_unit() => format!("suspend fun {name}({args})"),
+        MethodKind::Unary => format!("suspend fun {name}({args}): {}", method.returns.to_kotlin()),
+        MethodKind::Stream => format!(
+            "fun {name}({args}): kotlinx.coroutines.flow.Flow<{}>",
+            method.returns.to_kotlin()
+        ),
     }
 }
 
@@ -267,13 +266,15 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
         out,
         "    override suspend fun handleCreateInstance(payload: ByteArray): ByteArray {{",
     );
-    let _ = writeln!(out, "        var cursor = 0");
-    WIRE.read_into(
+    WIRE.read_last(
         out,
         "        ",
         init,
         "config",
-        ReadSource::at_cursor("payload"),
+        ReadSource {
+            bytes: "payload",
+            cursor: "0",
+        },
     );
     let _ = writeln!(out, "        val backend = factory.create(config)");
     let _ = writeln!(out, "        val id = nextInstanceId.getAndIncrement()");
@@ -324,21 +325,21 @@ fn write_method_arm(out: &mut String, method: &Method) {
     } else {
         "                "
     };
-    if !method.args.is_empty() {
-        let _ = writeln!(out, "{indent}var cursor = 0");
-    }
-    let mut locals = Vec::with_capacity(method.args.len());
-    for arg in &method.args {
-        let name = local(&arg.name, DISPATCH_LOCALS, kt_ident);
-        WIRE.read_into(
-            out,
-            indent,
-            &arg.ty,
-            &name,
-            ReadSource::at_cursor("payload"),
-        );
-        locals.push(name);
-    }
+    let locals: Vec<String> = method
+        .args
+        .iter()
+        .map(|arg| local(&arg.name, DISPATCH_LOCALS, kt_ident))
+        .collect();
+    WIRE.read_sequence(
+        out,
+        indent,
+        "payload",
+        method
+            .args
+            .iter()
+            .zip(&locals)
+            .map(|(arg, name)| (&arg.ty, name.as_str())),
+    );
     let call = format!("backend.{}({})", kt_ident(&method.name), locals.join(", "));
     if is_stream {
         let _ = writeln!(out, "{indent}val __istmo_flow = {call}");

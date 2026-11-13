@@ -23,10 +23,10 @@ interface AdMobBackend {
     suspend fun show_banner(request: BannerRequest): NativeHandleId
 
     // Throw BackendException(AdError) for domain errors.
-    suspend fun update_banner(banner: NativeHandleId, rect: BannerRect): Unit
+    suspend fun update_banner(banner: NativeHandleId, rect: BannerRect)
 
     // Throw BackendException(AdError) for domain errors.
-    suspend fun hide_banner(banner: NativeHandleId): Unit
+    suspend fun hide_banner(banner: NativeHandleId)
 }
 
 /// Reader / writer per `Named` type referenced by the `AdMob` contract.
@@ -80,9 +80,7 @@ class AdMobDispatcher(
     }
 
     override suspend fun handleCreateInstance(payload: ByteArray): ByteArray {
-        var cursor = 0
-        val d_config = codecs.readAdMobConfig(payload, cursor); cursor = d_config.consumed
-        val config = d_config.value
+        val config = codecs.readAdMobConfig(payload, 0).value
         val backend = factory.create(config)
         val id = nextInstanceId.getAndIncrement()
         instances[id] = backend
@@ -97,9 +95,7 @@ class AdMobDispatcher(
         return when (method) {
             "load_interstitial" -> {
                 try {
-                    var cursor = 0
-                    val d_ad_unit_id = Bincode.readString(payload, cursor); cursor = d_ad_unit_id.consumed
-                    val ad_unit_id = d_ad_unit_id.value
+                    val ad_unit_id = Bincode.readString(payload, 0).value
                     val result = backend.load_interstitial(ad_unit_id)
                     val out = ByteArrayOutputStream()
                     codecs.writeNativeHandleId(out, result)
@@ -113,9 +109,7 @@ class AdMobDispatcher(
             }
             "show_interstitial" -> {
                 try {
-                    var cursor = 0
-                    val d_ad = codecs.readNativeHandleId(payload, cursor); cursor = d_ad.consumed
-                    val ad = d_ad.value
+                    val ad = codecs.readNativeHandleId(payload, 0).value
                     val result = backend.show_interstitial(ad)
                     val out = ByteArrayOutputStream()
                     codecs.writeInterstitialOutcome(out, result)
@@ -129,9 +123,7 @@ class AdMobDispatcher(
             }
             "load_rewarded" -> {
                 try {
-                    var cursor = 0
-                    val d_ad_unit_id = Bincode.readString(payload, cursor); cursor = d_ad_unit_id.consumed
-                    val ad_unit_id = d_ad_unit_id.value
+                    val ad_unit_id = Bincode.readString(payload, 0).value
                     val result = backend.load_rewarded(ad_unit_id)
                     val out = ByteArrayOutputStream()
                     codecs.writeNativeHandleId(out, result)
@@ -145,9 +137,7 @@ class AdMobDispatcher(
             }
             "show_rewarded" -> {
                 try {
-                    var cursor = 0
-                    val d_ad = codecs.readNativeHandleId(payload, cursor); cursor = d_ad.consumed
-                    val ad = d_ad.value
+                    val ad = codecs.readNativeHandleId(payload, 0).value
                     val result = backend.show_rewarded(ad)
                     val out = ByteArrayOutputStream()
                     codecs.writeRewardedOutcome(out, result)
@@ -161,9 +151,7 @@ class AdMobDispatcher(
             }
             "show_banner" -> {
                 try {
-                    var cursor = 0
-                    val d_request = codecs.readBannerRequest(payload, cursor); cursor = d_request.consumed
-                    val request = d_request.value
+                    val request = codecs.readBannerRequest(payload, 0).value
                     val result = backend.show_banner(request)
                     val out = ByteArrayOutputStream()
                     codecs.writeNativeHandleId(out, result)
@@ -180,8 +168,7 @@ class AdMobDispatcher(
                     var cursor = 0
                     val d_banner = codecs.readNativeHandleId(payload, cursor); cursor = d_banner.consumed
                     val banner = d_banner.value
-                    val d_rect = codecs.readBannerRect(payload, cursor); cursor = d_rect.consumed
-                    val rect = d_rect.value
+                    val rect = codecs.readBannerRect(payload, cursor).value
                     backend.update_banner(banner, rect)
                     PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
@@ -193,9 +180,7 @@ class AdMobDispatcher(
             }
             "hide_banner" -> {
                 try {
-                    var cursor = 0
-                    val d_banner = codecs.readNativeHandleId(payload, cursor); cursor = d_banner.consumed
-                    val banner = d_banner.value
+                    val banner = codecs.readNativeHandleId(payload, 0).value
                     backend.hide_banner(banner)
                     PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {

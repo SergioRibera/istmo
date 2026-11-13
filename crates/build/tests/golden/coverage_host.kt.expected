@@ -16,14 +16,14 @@ interface CoverageBackend {
     suspend fun round_trip(value: Everything, shape: Shape): List<List<String>?>
 
     // Throw BackendException(FirstError) for domain errors.
-    suspend fun send(payload: ByteArray, cursor: UShort, c: Short): Unit
+    suspend fun send(payload: ByteArray, cursor: UShort, c: Short)
 
     fun watch(mode: Mode): kotlinx.coroutines.flow.Flow<ByteArray?>
 
     // Throw BackendException(SecondError) from the flow to end it with a domain error.
     fun follow(next: UInt): kotlinx.coroutines.flow.Flow<Shape>
 
-    suspend fun default(): Unit
+    suspend fun default()
 }
 
 /// Reader / writer per `Named` type referenced by the `Coverage` contract.
@@ -71,8 +71,7 @@ class CoverageDispatcher(
                     var cursor = 0
                     val d_in = Bincode.readU8(payload, cursor); cursor = d_in.consumed
                     val `in` = d_in.value
-                    val d_val = Bincode.readI8(payload, cursor); cursor = d_val.consumed
-                    val `val` = d_val.value
+                    val `val` = Bincode.readI8(payload, cursor).value
                     val result = backend.`object`(`in`, `val`)
                     val out = ByteArrayOutputStream()
                     codecs.writeEverything(out, result)
@@ -89,8 +88,7 @@ class CoverageDispatcher(
                     var cursor = 0
                     val d_value = codecs.readEverything(payload, cursor); cursor = d_value.consumed
                     val value = d_value.value
-                    val d_shape = codecs.readShape(payload, cursor); cursor = d_shape.consumed
-                    val shape = d_shape.value
+                    val shape = codecs.readShape(payload, cursor).value
                     val result = backend.round_trip(value, shape)
                     val out = ByteArrayOutputStream()
                     Bincode.writeVec(out, result) { s1, v1 -> Bincode.writeOption(s1, v1) { s2, v2 -> Bincode.writeVec(s2, v2) { s3, v3 -> Bincode.writeString(s3, v3) } } }
@@ -109,8 +107,7 @@ class CoverageDispatcher(
                     val payload_ = d_payload_.value
                     val d_cursor_ = Bincode.readU16(payload, cursor); cursor = d_cursor_.consumed
                     val cursor_ = d_cursor_.value
-                    val d_c = Bincode.readI16(payload, cursor); cursor = d_c.consumed
-                    val c = d_c.value
+                    val c = Bincode.readI16(payload, cursor).value
                     backend.send(payload_, cursor_, c)
                     PluginResult.Unary(ByteArray(0))
                 } catch (e: BackendException) {
@@ -121,9 +118,7 @@ class CoverageDispatcher(
                 }
             }
             "watch" -> {
-                var cursor = 0
-                val d_mode = codecs.readMode(payload, cursor); cursor = d_mode.consumed
-                val mode = d_mode.value
+                val mode = codecs.readMode(payload, 0).value
                 val __istmo_flow = backend.watch(mode)
                 PluginResult.Stream(
                     __istmo_flow.map { __istmo_item ->
@@ -134,9 +129,7 @@ class CoverageDispatcher(
                 )
             }
             "follow" -> {
-                var cursor = 0
-                val d_next = Bincode.readU32(payload, cursor); cursor = d_next.consumed
-                val next = d_next.value
+                val next = Bincode.readU32(payload, 0).value
                 val __istmo_flow = backend.follow(next)
                 PluginResult.Stream(
                     __istmo_flow.map { __istmo_item ->
