@@ -24,8 +24,8 @@ You care about contracts if:
 - Your app has an `android/` or `ios/` directory next to `Cargo.toml`
   (then `istmo_build::emit()` walks upstream contracts and regenerates
   Kotlin/Swift dispatchers).
-- You publish a plugin crate (then your `build.rs` emits your contract
-  via `DEP_<links>_ISTMO_CONTRACT`).
+- You publish a plugin crate (then your `build.rs` emits your contracts
+  via `DEP_<links>_ISTMO_CONTRACTS`).
 
 ## How they get emitted
 
@@ -38,13 +38,16 @@ hood, `emit()`:
 3. Parses `src/lib.rs` with `syn`, finds `trait Foo`, and builds a
    `Contract` from its methods and any sibling `#[istmo::message]`
    items.
-4. Emits the contract as a hex-encoded, wincode-serialised payload
-   via `cargo:CONTRACT=<hex>`.
+4. Repeats this for every `[[plugin]]` entry with a `client_type` and
+   emits all the contracts as one hex-encoded, wincode-serialised list
+   via `cargo:ISTMO_CONTRACTS=<hex>` (Cargo keeps one value per key, so
+   a crate with several plugins hands them over together).
 
 Cargo forwards that to every downstream crate as
-`DEP_<links>_ISTMO_CONTRACT`. Your app's `build.rs` walks all those env
+`DEP_<links>_ISTMO_CONTRACTS`. Your app's `build.rs` walks all those env
 vars via `collect_dep_contracts()` and feeds each contract to the
-generators.
+generators. It also reads the single-contract `DEP_<links>_ISTMO_CONTRACT`
+key that plugins built with an older `istmo-build` emit.
 
 Zero duplication. The `Contract` is not something you author; it is a
 by-product of the trait itself.

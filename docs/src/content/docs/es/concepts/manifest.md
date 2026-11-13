@@ -42,7 +42,7 @@ from_version = "1.5.0"
 ```
 
 `istmo_build::emit()` lee esto, verifica que el trait existe, y emite
-un contrato wire-encoded a `DEP_<crate>_ISTMO_CONTRACT`, más las deps
+los contratos wire-encoded a `DEP_<crate>_ISTMO_CONTRACTS`, más las deps
 nativas a `DEP_<crate>_ISTMO_NATIVE_DEPS`.
 
 ### Crate plugin multi-plugin
@@ -66,8 +66,9 @@ artifact = "core-ktx"
 version  = "1.13.0"
 ```
 
-`istmo_build::emit()` itera cada entrada `[[plugin]]` y extrae un
-contrato por trait.
+`istmo_build::emit()` itera cada entrada `[[plugin]]`, extrae un
+contrato por trait y los entrega todos en un solo payload, así que la
+app no necesita `extra_contracts` para ellos.
 
 ### Manifest app-side
 

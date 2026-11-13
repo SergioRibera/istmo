@@ -100,10 +100,10 @@ Contratos y deps nativas viajan por el mecanismo de env vars
 `DEP_<links>_*` de Cargo:
 
 1. `build.rs` del plugin invoca `istmo_build::emit()`.
-2. Eso emite `DEP_<plugin>_ISTMO_CONTRACT` y
+2. Eso emite `DEP_<plugin>_ISTMO_CONTRACTS` y
    `DEP_<plugin>_ISTMO_NATIVE_DEPS` (coordenadas Gradle + SwiftPM).
 3. `build.rs` de la app invoca `istmo_build::emit()`.
-4. Eso camina cada `DEP_*_ISTMO_CONTRACT`, genera dispatchers Kotlin y
+4. Eso camina cada `DEP_*_ISTMO_CONTRACTS`, genera dispatchers Kotlin y
    Swift para cada uno, y los escribe en `android/` e `ios/`.
 
 Todo es determinístico y repetible — regenerar produce los mismos

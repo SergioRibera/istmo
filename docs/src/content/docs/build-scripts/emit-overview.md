@@ -51,9 +51,11 @@ that also declares its own plugin is valid.
 
 Use `emit_with(AppOpts)` to pass:
 
-- `extra_contracts: Vec<Contract>` — for schema crates that carry
-  multiple contracts, or testbeds with inline contracts that never
-  ship a plugin crate.
+- `extra_contracts: Vec<Contract>` — for contracts no dependency hands
+  over: ones built by a build-time schema crate or inline in `build.rs`.
+  A plugin crate with several `[[plugin]]` entries already hands over
+  all of them. An extra contract with the plugin id of a handed-over
+  one replaces it.
 - `per_plugin: HashMap<String, AppPluginOpts>` — override the role
   (`host` vs. `client`) or platforms per plugin without touching
   `istmo.toml`.

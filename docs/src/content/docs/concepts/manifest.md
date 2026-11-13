@@ -41,7 +41,7 @@ from_version = "1.5.0"
 ```
 
 `istmo_build::emit()` reads this, verifies the trait exists, and emits
-a wire-encoded contract to `DEP_<crate>_ISTMO_CONTRACT`, plus the native
+the wire-encoded contracts to `DEP_<crate>_ISTMO_CONTRACTS`, plus the native
 deps to `DEP_<crate>_ISTMO_NATIVE_DEPS`.
 
 ### Multi-plugin plugin crate
@@ -65,8 +65,9 @@ artifact = "core-ktx"
 version  = "1.13.0"
 ```
 
-`istmo_build::emit()` iterates every `[[plugin]]` entry and extracts one
-contract per trait.
+`istmo_build::emit()` iterates every `[[plugin]]` entry, extracts one
+contract per trait and hands all of them over in one payload, so the app
+needs no `extra_contracts` for them.
 
 ### App-side manifest
 

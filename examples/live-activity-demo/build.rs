@@ -1,7 +1,7 @@
 use istmo_build::{AppOpts, Contract, EnumDef, EnumVariant, Field, StructDef, TypeDef, TypeRef};
 
 fn main() {
-    // `LiveActivity` ships via the standard `DEP_*_ISTMO_CONTRACT` handover;
+    // `LiveActivity` ships via the standard `DEP_*_ISTMO_CONTRACTS` handover;
     // the inline `Demo` bundle carries the shared `TimerAttributes` /
     // `TimerState` types that both the Rust and Swift/Kotlin sides encode.
     istmo_build::emit_with(AppOpts {

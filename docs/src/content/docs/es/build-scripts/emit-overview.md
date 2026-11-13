@@ -52,9 +52,11 @@ crate app que también declara su propio plugin es válido.
 
 Usa `emit_with(AppOpts)` para pasar:
 
-- `extra_contracts: Vec<Contract>` — para crates schema que cargan
-  varios contratos, o testbeds con contratos inline que nunca
-  publican un crate plugin.
+- `extra_contracts: Vec<Contract>` — para contratos que ninguna
+  dependencia entrega: los que arma un crate schema de build-time o
+  inline en `build.rs`. Un crate plugin con varias entradas `[[plugin]]`
+  ya entrega todos. Un contrato extra con el plugin id de uno entregado
+  lo reemplaza.
 - `per_plugin: HashMap<String, AppPluginOpts>` — override del role
   (`host` vs. `client`) o plataformas por plugin sin tocar
   `istmo.toml`.
