@@ -1,5 +1,6 @@
 package dev.istmo.plugins.biometric
 
+import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.SharedPreferences
@@ -26,6 +27,7 @@ import dev.istmo.runtime.BiometricBackend
 import dev.istmo.runtime.BiometricError
 import dev.istmo.runtime.BiometricKind
 import dev.istmo.runtime.BiometricStatus
+import dev.istmo.runtime.IstmoActivityBound
 import java.lang.ref.WeakReference
 import java.security.GeneralSecurityException
 import java.security.KeyStore
@@ -78,15 +80,22 @@ import kotlinx.coroutines.withContext
 class BiometricBackendImpl(
     activity: FragmentActivity,
     private val credentialValiditySeconds: Int = DEFAULT_AUTH_VALIDITY_SECONDS,
-) : BiometricBackend {
+) : BiometricBackend, IstmoActivityBound {
 
     init {
         require(credentialValiditySeconds > 0) { "credentialValiditySeconds must be positive" }
     }
 
-    // Weak: the registry builds a fresh backend on every activity `onCreate`,
-    // and a backend outliving its activity must not keep it alive.
-    private val activityRef = WeakReference(activity)
+    // Weak, so a destroyed activity is never kept alive; the registry builds
+    // the backend once and hands it each new activity ([attachActivity]),
+    // keeping the vault lock and prompt state across recreation.
+    @Volatile
+    private var activityRef = WeakReference(activity)
+
+    override fun attachActivity(activity: Activity) {
+        // The registry only hands over activities of the declared class.
+        activityRef = WeakReference(activity as FragmentActivity)
+    }
     private val appContext: Context = activity.applicationContext
     private val manager: BiometricManager = BiometricManager.from(appContext)
     private val vault: SharedPreferences =

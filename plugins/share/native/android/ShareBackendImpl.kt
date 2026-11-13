@@ -1,5 +1,6 @@
 package dev.istmo.plugins.share
 
+import android.app.Activity
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ClipData
@@ -18,6 +19,7 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import dev.istmo.runtime.BackendException
+import dev.istmo.runtime.IstmoActivityBound
 import dev.istmo.runtime.ShareBackend
 import dev.istmo.runtime.ShareCapabilities
 import dev.istmo.runtime.ShareError
@@ -27,6 +29,7 @@ import dev.istmo.runtime.ShareOutcome
 import dev.istmo.runtime.ShareRequest
 import dev.istmo.runtime.ShareTarget
 import java.io.File
+import java.lang.ref.WeakReference
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellableContinuation
@@ -61,8 +64,9 @@ import kotlinx.coroutines.withContext
  * targets skip that category: they are plain launcher shortcuts and
  * need no alias. Tapping any of them in the launcher opens its `uri`.
  *
- * Construct inside `Activity.onCreate` (the result launcher must be
- * registered before `STARTED`) and register the dispatcher:
+ * The backend outlives its activity ([IstmoActivityBound]): the generated
+ * registry builds it once and hands it each new activity, so an open
+ * share sheet survives a recreation. Registering it by hand:
  *
  * ```kotlin
  * val backend = ShareBackendImpl(this)
@@ -73,7 +77,7 @@ class ShareBackendImpl(
     // Only used to register the chooser launcher; not kept, so a backend
     // outliving its activity does not hold on to it.
     activity: ComponentActivity,
-) : ShareBackend {
+) : ShareBackend, IstmoActivityBound {
 
     private val context: Context = activity.applicationContext
     private val authority = "${context.packageName}$AUTHORITY_SUFFIX"
@@ -83,12 +87,44 @@ class ShareBackendImpl(
     private val sheetMutex = Mutex()
     private var pendingResult: CancellableContinuation<Unit>? = null
 
-    private val chooserLauncher: ActivityResultLauncher<Intent> =
-        activity.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            val cont = pendingResult ?: return@registerForActivityResult
+    /** Activity whose registry holds [chooserLauncher]; weak, never kept alive. */
+    @Volatile
+    private var hostRef = WeakReference<ComponentActivity>(null)
+
+    // Declared after [hostRef], which [registerChooser] sets.
+    @Volatile
+    private var chooserLauncher: ActivityResultLauncher<Intent> = registerChooser(activity)
+
+    /**
+     * Move the chooser launcher to [activity]. Registered under a fixed key
+     * rather than through the lifecycle-bound `registerForActivityResult`:
+     * this may run after [activity] started, and a chooser still open
+     * across a recreation reports its result to the same key on the new
+     * activity's registry.
+     */
+    override fun attachActivity(activity: Activity) {
+        // The registry only hands over activities of the declared class.
+        val host = activity as ComponentActivity
+        // Registering the key again on the same registry replaces it, and
+        // unregistering the old launcher would then drop the new one.
+        if (host === hostRef.get()) return
+        val next = registerChooser(host)
+        val previous = chooserLauncher
+        chooserLauncher = next
+        previous.unregister()
+    }
+
+    private fun registerChooser(activity: ComponentActivity): ActivityResultLauncher<Intent> {
+        hostRef = WeakReference(activity)
+        return activity.activityResultRegistry.register(
+            CHOOSER_RESULT_KEY,
+            ActivityResultContracts.StartActivityForResult(),
+        ) {
+            val cont = pendingResult ?: return@register
             pendingResult = null
             cont.resume(Unit)
         }
+    }
 
     override suspend fun share(request: ShareRequest): ShareOutcome {
         validate(request)
@@ -314,6 +350,7 @@ class ShareBackendImpl(
 
         private const val CHOSEN_REQUEST_CODE = 0x15_70_5E
         private const val CHOSEN_GRACE_MS = 500L
+        private const val CHOOSER_RESULT_KEY = "dev.istmo.share.chooser"
         private const val OUTGOING_TTL_MS = 24L * 60 * 60 * 1000
 
         internal fun guessMime(name: String): String {

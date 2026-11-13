@@ -56,16 +56,22 @@ import kotlinx.coroutines.withContext
  * fans analyzer frames out to every [frames] subscriber through a
  * per-subscriber channel sized by [CameraInitConfig.framePoolDepth].
  *
- * The host activity is held weakly: the registry builds a fresh
- * backend on every activity `onCreate`, and a backend outliving its
- * activity must not keep the destroyed activity alive.
+ * The host activity is held weakly, so a backend outliving its activity
+ * does not keep it alive; [CameraFactoryImpl] hands it each new one
+ * through [attachActivity].
  */
 class CameraBackendImpl(
     activity: ComponentActivity,
     private val config: CameraInitConfig,
 ) : CameraBackend, HandleReleaser {
 
-    private val activityRef = WeakReference(activity)
+    @Volatile
+    private var activityRef = WeakReference(activity)
+
+    /** [activity] now hosts the backend; later sessions bind to it. */
+    fun attachActivity(activity: ComponentActivity) {
+        activityRef = WeakReference(activity)
+    }
     private val appContext: Context = activity.applicationContext
     private val sessions = ConcurrentHashMap<Long, SessionState>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
