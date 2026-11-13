@@ -1,37 +1,68 @@
 ---
 title: Cancelación
-description: Cancela cooperativamente calls en vuelo y streams de larga duración.
+description: Cancela cooperativamente llamadas en vuelo y streams de larga duración.
 sidebar:
   order: 5
 ---
 
 Istmo usa un modelo de cancelación **cooperativo**. Un caller señala
-"por favor pará", y el callee revisa esa señal en sus puntos naturales
-de suspensión. No existe terminación forzada.
+"por favor detente", y el callee chequea esa señal en sus propios
+puntos de suspensión naturales. No hay terminación forzada.
+
+## Cancelar desde el caller
+
+No hay un método de cancelación que llamar: un caller Rust cancela
+soltando (drop).
+
+- **Llamadas unarias.** Un método del cliente es una `async fn`;
+  soltar su future antes de que llegue la respuesta cancela la
+  llamada. Envuélvela en el timeout o `select` que ofrezca tu executor,
+  o suelta la tarea que la espera.
+- **Streams.** Soltar el `TypedStream` lo cancela (ver
+  [Streams](/istmo/es/writing-plugins/streams/#cancelación)).
+
+Cuando un host en el mismo runtime sirve la llamada, el drop dispara
+el `CancelToken` de esa llamada; si no, envía
+`Frame::Cancel { call_id }` al peer (Kotlin, Swift o un proceso
+remoto). Una llamada o stream que ya terminó no cancela nada.
+
+```rust
+let task = LongTaskClient::from_runtime(&rt)?;
+let call = task.process(data);
+// Soltar `call` (aquí: cuando gana el timeout) cancela el trabajo.
+match with_timeout(Duration::from_secs(10), call).await {
+    Some(result) => tracing::info!("listo: {:?}", result?),
+    None => tracing::info!("me rendí"),
+}
+```
+
+`with_timeout` representa el combinador de timeout de tu executor;
+Istmo no trae uno.
 
 ## `CancelToken`
 
-El tipo es `istmo::CancelToken` (`istmo-core::CancelToken`), un wrapper
-delgado sobre un `AtomicBool` compartido y un receiver `flume`.
+El lado del callee es `istmo::CancelToken` (re-exportado de
+`istmo-core`): un flag compartido más un canal `flume` cuyo sender se
+suelta al cancelar.
 
-- `is_cancelled()` — poll sync, barato.
-- `cancelled()` — wait async, resuelve cuando se llama `cancel()` en
-  el lado opuesto del token.
+- `is_cancelled()` — poll síncrono, barato.
+- `cancelled().await` — espera async, resuelve una vez cancelado el
+  token.
+- `cancel()` — lo dispara; los tokens son `Clone` y cada clon lo ve.
 
-Cada call hospedado recibe un `CancelToken` — el runtime lo inyecta en
+El runtime crea un token por llamada hosteada y lo pasa a
 `Dispatch::dispatch`. Los adapters (`#[istmo::service]`,
-`#[istmo::worker]`) lo pliegan en su contexto; la DSL de la macro de
-plugin te deja opt-in por método.
+`#[istmo::worker]`) lo integran en su contexto; los traits de plugin
+lo activan por método.
 
-## Opt-in desde un trait
+## Activarlo desde un trait
 
-Añade un argumento cuyo *nombre de tipo* sea `CancelToken`. La macro lo
-pela del wire tuple y del signature del cliente generado, luego lo
-llena desde el token runtime-provisto:
+Agrega un argumento cuyo último segmento de path de tipo sea
+`CancelToken`. La macro lo quita de la tupla del wire y de la firma
+del cliente generado, y lo llena con el token que provee el runtime:
 
 ```rust
-use istmo::CancelToken;
-use istmo::plugin;
+use istmo::{CancelToken, plugin};
 
 #[plugin(name = "acme.long_task")]
 pub trait LongTask {
@@ -40,23 +71,11 @@ pub trait LongTask {
 }
 ```
 
-El `LongTaskClient::process` generado toma sólo `data` — los callers
-Rust no construyen el token; llaman `cancel_handle()` en el
-`CallHandle` retornado:
-
-```rust
-let call = LongTaskClient::from_runtime(&rt)?.process_handle(data);
-let handle = call.cancel_handle();
-
-tokio::time::sleep(Duration::from_secs(10)).await;
-handle.cancel();
-
-match call.await {
-    Ok(out) => tracing::info!("done: {out:?}"),
-    Err(err) if err.is_cancelled() => tracing::info!("cancelled"),
-    Err(err) => tracing::error!("{err}"),
-}
-```
+El `LongTaskClient::process` generado solo recibe `data`. La detección
+es por nombre: `&CancelToken`, `Option<CancelToken>` o un alias con
+otro nombre se tratan como argumentos del wire y no compilan, porque el
+token no es un tipo del wire. El mismo argumento funciona en métodos
+`#[stream]`.
 
 ## Chequear el token desde un impl
 
@@ -78,47 +97,31 @@ impl LongTask for LongTaskImpl {
 }
 ```
 
-O espera cancel en paralelo con tu trabajo:
+O espera la cancelación en paralelo con tu trabajo, con cualquier
+`select` (aquí `futures::select_biased!`):
 
 ```rust
-tokio::select! {
-    biased;
-    _ = cancel.cancelled() => Err(TaskError { reason: "cancelled".into() }),
-    result = do_the_thing() => result,
+use futures::FutureExt as _;
+
+futures::select_biased! {
+    () = cancel.cancelled().fuse() => Err(TaskError { reason: "cancelled".into() }),
+    result = do_the_thing().fuse() => result,
 }
 ```
 
-## Cancelar streams
-
-Dropear un `TypedStream<T>` del lado Rust emite `Frame::Cancel` para
-su `stream_id`. El productor nativo ve la cancelación via su mecanismo
-nativo de plataforma:
-
-```kotlin
-override fun updates(): Flow<Fix> = callbackFlow {
-    // ...
-    awaitClose { /* corre en cancel */ }
-}
-```
-
-```swift
-AsyncStream { continuation in
-    continuation.onTermination = { _ in /* cleanup */ }
-}
-```
+Una llamada cancelada no envía respuesta, así que lo que retorne el
+impl después de una cancelación se descarta.
 
 ## Cancelar llamadas native-hosted
 
-Soltar el future de una llamada unaria atendida por Kotlin o Swift
-envía `Frame::Cancel` al runtime nativo, que cancela la corrutina
-(`Job.cancel()`) o la `Task` (`Task.cancel()`) de la llamada.
-Reaccioná con el mecanismo propio de la plataforma; la llamada termina
-sin respuesta:
+Ante un `Frame::Cancel` el runtime nativo cancela la coroutine de la
+llamada (`Job.cancel()`) en Android o su `Task` (`Task.cancel()`) en
+iOS. Reacciona con el mecanismo propio de la plataforma:
 
 ```kotlin
 override suspend fun authenticate(prompt: AuthPrompt): AuthMethod =
     suspendCancellableCoroutine { cont ->
-        cont.invokeOnCancellation { /* cerrar el diálogo */ }
+        cont.invokeOnCancellation { /* cierra el diálogo */ }
         // ...
     }
 ```
@@ -127,34 +130,47 @@ override suspend fun authenticate(prompt: AuthPrompt): AuthMethod =
 func authenticate(prompt: AuthPrompt) async throws -> AuthMethod {
     try await withTaskCancellationHandler {
         // ...
-    } onCancel: { /* cerrar el diálogo */ }
+    } onCancel: { /* cierra el diálogo */ }
 }
 ```
 
-## Services y workers
+Un productor de stream Kotlin ve su `Flow` cancelado, así que corre el
+`awaitClose` de `callbackFlow`:
 
-Los adapters `#[istmo::service]` y `#[istmo::worker]` bridge el token
+```kotlin
+override fun updates(): Flow<Fix> = callbackFlow {
+    // ...
+    awaitClose { /* corre al cancelar */ }
+}
+```
+
+## Servicios y workers
+
+Los adapters `#[istmo::service]` y `#[istmo::worker]` conectan el token
 automáticamente:
 
-- `ServiceContext::stopped().await` resuelve cuando o el método `stop`
-  se llama, *o* `Frame::Cancel` llega.
-- `WorkerContext::cancel_token()` da acceso directo.
+- `ServiceContext::stopped().await` resuelve cuando se pide detener el
+  servicio — por la vía `stop` o por `Frame::Cancel` — y
+  `ServiceContext::is_stopped()` consulta lo mismo; `cancel_token()` da
+  el token.
+- `WorkerContext::is_cancelled()` consulta; `cancel_token()` da el
+  token.
 
-El service adapter también retiene el token para que un `on_start`
-subsecuente cancele la instancia previa limpiamente.
+El adapter de servicio también guarda el token, así que un segundo
+`on_start` cancela y espera (join) la ejecución anterior primero.
 
-## Por qué cooperativo, no preemptivo?
+## ¿Por qué cooperativo y no preventivo?
 
-- **Safety.** Arrancar una task async de una sección crítica corrompe
-  estado; el cancel cooperativo deja al callee correr cleanup antes
-  de retornar.
-- **Honestidad cross-language.** Los runtimes de JVM y Objective-C
-  ambos usan cancel cooperativo. Rust preemptivo silenciosamente
-  rompería el modelo mental del lado nativo.
-- **Primitivas baratas.** `AtomicBool` + un channel es suficiente. Sin
-  dependencia de async runtime.
+- **Seguridad.** Arrancar una tarea async a la mitad de una sección
+  crítica corrompe el estado; la cancelación cooperativa deja al
+  callee correr su limpieza antes de retornar.
+- **Honestidad entre lenguajes.** Las coroutines de Kotlin y las tasks
+  de Swift cancelan cooperativamente. Un Rust preventivo rompería en
+  silencio el modelo mental del lado nativo.
+- **Primitivas baratas.** Un `AtomicBool` + un canal alcanzan. Sin
+  dependencia de un runtime async.
 
 ## Siguiente
 
-- Cancel real en vuelo: [Services y workers](/istmo/es/writing-plugins/services-workers/).
-- Referencia de variante del frame: [Frame protocol → `Cancel`](/istmo/es/concepts/frame-protocol/).
+- Cancelación real en vuelo: [Servicios y workers](/istmo/es/writing-plugins/services-workers/).
+- Referencia del frame: [Protocolo de frames → `Cancel`](/istmo/es/concepts/frame-protocol/).
