@@ -96,7 +96,24 @@ icons, so point `desktop` at an already shaped image:
 
 ## Android
 
-Apply the plugin to the app module:
+The plugin is published to Maven Central; declare its version once in
+`android/settings.gradle.kts`, next to the repositories it resolves
+from:
+
+```kotlin
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    plugins {
+        id("io.github.sergioribera.istmo") version "<istmo version>"
+    }
+}
+```
+
+Then apply it to the app module:
 
 ```kotlin
 // android/app/build.gradle.kts
@@ -144,10 +161,12 @@ and reference the placeholders from the manifest:
   `minSdk`, `${istmoLabel}`, `${istmoIcon}`. A value set in Gradle that
   disagrees is replaced, with a warning.
 
-If `istmo.json` is missing or older than `Cargo.toml`, `Cargo.lock` or
-`istmo.toml`, the plugin refreshes it with `cargo check` before
+If `istmo.json` is missing, older than `Cargo.toml`, `Cargo.lock` or
+`istmo.toml`, or names paths that do not exist in this checkout, the
+plugin refreshes it with `cargo check --lib --target <first ABI>` before
 configuring. When cargo changes the plugin set during a build, the build
-stops and asks you to run it again.
+stops and asks you to run it again. AGP 8.3+ merges plugin manifests per
+variant; older AGPs get one combined overlay manifest per build type.
 
 Optional configuration:
 
@@ -156,7 +175,7 @@ istmo {
     profiles.put("debug", "release")   // cargo profile per build type
     cargoArgs.addAll("--features", "extra")
     defaultAbis.set(listOf("arm64-v8a"))
-    cargo.set("/opt/rust/bin/cargo")    // default: PATH, then ~/.cargo/bin
+    cargo.set("/opt/rust/bin/cargo")    // default: PATH, then $CARGO_HOME/bin, then ~/.cargo/bin
     crateDir.set(file("../rust"))       // default: the Gradle root's parent
 }
 ```
@@ -200,6 +219,10 @@ hand-made Xcode project, base the target on `Istmo.xcconfig` and add
 `"${PROJECT_DIR}/.istmo/build-rust.sh"` as a Run Script phase; if the
 app has assets, add `.istmo/Assets` to the target as a folder reference
 (not a group).
+
+The fragment does not declare SwiftPM packages: add the
+`[[swift_package]]` entries of your plugins to the `packages:` section
+of `project.yml` (or through Xcode) yourself.
 
 In `Info.plist`, reference the generated values:
 
@@ -245,16 +268,28 @@ spelled out:
 
 ## What to commit
 
-Everything `build.rs` generates is rebuilt on each build and can be
-ignored:
+Everything `build.rs` generates is rebuilt on each build. Fully
+generated directories get their own `.gitignore` (containing `*`), so
+git skips them without configuration:
 
 ```text
 android/.istmo/
 ios/.istmo/
 android/app/src/main/java/dev/istmo/generated/
+android/app/src/main/java/<namespace>/gen/      # default codegen package
+android/app/src/main/java/<plugin android_package>/
+ios/<App>/Plugins/<T>/Generated/
+```
+
+The loose generated files are not covered and are worth ignoring:
+
+```text
 ios/*/Plugins/IstmoMain.swift
 ios/*/Plugins/IstmoPluginRegistry.swift
 ```
+
+A directory you share with hand-written code (an explicit
+`android_package`, a seeded `<T>BackendImpl`) is never marked.
 
 Commit `istmo-plugins.yml` if your `project.yml` includes it and you
 want `xcodegen generate` to work before the first cargo build.
