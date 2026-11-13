@@ -66,14 +66,12 @@ pub enum AssetScope<'a> {
     Plugin(&'a str),
 }
 
-/// Directory names, relative to an asset root, that may hold plugin
-/// `id`'s assets, in lookup order: `plugin-<id>` as staged by
-/// istmo-build, then the `plugin:<id>` form older releases staged
-/// (`:` is not a valid file-name character on NTFS).
+/// Directory name, relative to an asset root, holding plugin `id`'s
+/// assets as staged by istmo-build.
 #[doc(hidden)]
 #[must_use]
-pub fn plugin_asset_dirs(id: &str) -> [String; 2] {
-    [format!("plugin-{id}"), format!("plugin:{id}")]
+pub fn plugin_asset_dir(id: &str) -> String {
+    format!("plugin-{id}")
 }
 
 /// Streaming reader returned by [`open`].
@@ -340,7 +338,7 @@ mod tests {
         fn open(&self, scope: AssetScope<'_>, key: &str) -> io::Result<AssetReader> {
             let scope_str = match scope {
                 AssetScope::App => "app".to_string(),
-                AssetScope::Plugin(id) => format!("plugin:{id}"),
+                AssetScope::Plugin(id) => format!("plugin-{id}"),
             };
             let bytes = self
                 .entries
@@ -384,7 +382,7 @@ mod tests {
             entries: Mutex::new(vec![
                 ("app".into(), "hello.txt".into(), b"hi".to_vec()),
                 (
-                    "plugin:istmo.demo".into(),
+                    "plugin-istmo.demo".into(),
                     "icon.svg".into(),
                     b"<svg/>".to_vec(),
                 ),
@@ -418,22 +416,5 @@ mod tests {
         let mut buf2 = Vec::new();
         plugin_reader.read_to_end(&mut buf2).unwrap();
         assert_eq!(buf2, b"deep");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn desktop_backend_still_reads_the_legacy_plugin_dir() {
-        let tmp = std::env::temp_dir().join("istmo-assets-desktop-legacy");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(tmp.join("plugin:istmo.old")).unwrap();
-        fs::write(tmp.join("plugin:istmo.old/data.txt"), b"old").unwrap();
-        let backend = desktop::DesktopAssetBackend::for_root(tmp);
-        let mut buf = Vec::new();
-        backend
-            .open(AssetScope::Plugin("istmo.old"), "data.txt")
-            .unwrap()
-            .read_to_end(&mut buf)
-            .unwrap();
-        assert_eq!(buf, b"old");
     }
 }

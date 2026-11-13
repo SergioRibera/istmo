@@ -65,11 +65,8 @@ impl AssetBackend for IosAssetBackend {
         let bases: Vec<PathBuf> = match scope {
             AssetScope::App => roots.to_vec(),
             AssetScope::Plugin(id) => {
-                let dirs = istmo_core::assets::plugin_asset_dirs(id);
-                roots
-                    .iter()
-                    .flat_map(|root| dirs.iter().map(|dir| root.join(dir)))
-                    .collect()
+                let dir = istmo_core::assets::plugin_asset_dir(id);
+                roots.iter().map(|root| root.join(&dir)).collect()
             }
         };
         let candidates: Vec<PathBuf> = bases

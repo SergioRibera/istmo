@@ -134,13 +134,8 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
         &pass.root,
         pass.app_manifest,
         pass.android_active.then_some(pass.android_root.as_path()),
-        pass.active_ios_app_dir().map(|dir| {
-            (
-                pass.ios_root.as_path(),
-                dir,
-                pass.ios_plugins_subdir.as_str(),
-            )
-        }),
+        pass.active_ios_app_dir()
+            .map(|dir| (pass.ios_root.as_path(), dir)),
     );
     emit_runtime_env(
         &pass.app,
