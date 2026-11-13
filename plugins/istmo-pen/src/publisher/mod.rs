@@ -1,4 +1,4 @@
-//! Desktop-side publisher that adapts a native window to the [`Pen`]
+//! Desktop-side publisher that adapts a native window to the [`Pen`](crate::Pen)
 //! plugin.
 //!
 //! Multi-window apps hold one [`PenPublisher`] per process and
@@ -332,7 +332,7 @@ impl PenPublisher {
     /// [`Self::push_event`] / [`Self::push_hover`] (Wayland tablet-v2,
     /// `XInput2`, egui pointer fallback, unit tests) and for the
     /// `install_libinput` broadcast path — the id must still be present
-    /// so [`Self::state_for`] can resolve it, but no `WM_POINTER*` /
+    /// so the window-state lookup can resolve it, but no `WM_POINTER*` /
     /// `NSEvent` local monitor gets installed. On Windows and macOS the
     /// [`Self::register_window`] variant with a real window handle stays
     /// the recommended path since it wires the OS-level pointer stream

@@ -8,8 +8,8 @@
 //! # Design
 //!
 //! Camera access is **session-oriented**. Each call to
-//! [`CameraClient::open_session`] returns a [`SessionHandle`] whose
-//! lifetime owns a native [`NativeHandle`](istmo_core::NativeHandle);
+//! [`CameraClientExt::open_session`] returns a [`SessionHandle`] whose
+//! lifetime owns a native [`NativeHandle`];
 //! dropping the handle releases the native session deterministically.
 //! Opening more than one session concurrently is the same code path
 //! — multi-camera support is a runtime property reported by
@@ -31,7 +31,7 @@
 //! # Permissions
 //!
 //! The plugin owns the platform access prompt — call
-//! [`CameraClient::request_access`] before [`CameraClient::open_session`]
+//! [`CameraClient::request_access`] before [`CameraClientExt::open_session`]
 //! and gate the flow on the returned [`AccessStatus`]. Apps still
 //! need `NSCameraUsageDescription` in `Info.plist`; the plugin's
 //! `istmo.toml` ships a default string that apps are expected to
@@ -384,7 +384,7 @@ pub struct NegotiatedFormat {
 }
 
 /// Wire response from [`Camera::open`]. Prefer
-/// [`CameraClient::open_session`] on the client, which wraps this in
+/// [`CameraClientExt::open_session`] on the client, which wraps this in
 /// a [`SessionHandle`].
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

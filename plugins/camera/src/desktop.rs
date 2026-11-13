@@ -11,11 +11,12 @@
 //! outside Android / iOS.
 //!
 //! The host owns one Tokio-free dispatch map keyed by
-//! [`NativeHandleId`]; each session carries a background capture
-//! thread (`nokhwa::CallbackCamera`) feeding frames through a
-//! bounded `flume` channel. Backpressure matches the mobile backend:
-//! the oldest frame is dropped when the consumer falls behind and
-//! the delivered `CameraFrame` carries a non-zero `dropped_before`.
+//! [`NativeHandleId`](istmo_core::NativeHandleId); each session
+//! carries a background capture thread (`nokhwa::CallbackCamera`)
+//! feeding frames through a bounded `flume` channel. Backpressure
+//! matches the mobile backend: the oldest frame is dropped when the
+//! consumer falls behind and the delivered `CameraFrame` carries a
+//! non-zero `dropped_before`.
 //!
 //! ```ignore
 //! use std::sync::Arc;
