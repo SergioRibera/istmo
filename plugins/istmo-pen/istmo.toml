@@ -1,6 +1,7 @@
 [plugin]
 id = "istmo.pen"
 client_type = "::istmo_pen::PenClient"
+android_package = "dev.istmo.plugins.pen"
 default_deployment = "local"
 auto_register = false
 

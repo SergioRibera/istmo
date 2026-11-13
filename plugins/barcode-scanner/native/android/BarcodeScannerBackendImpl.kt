@@ -8,11 +8,6 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import dev.istmo.runtime.BackendException
-import dev.istmo.runtime.BarcodeFormat
-import dev.istmo.runtime.BarcodeScannerBackend
-import dev.istmo.runtime.ScanConfig
-import dev.istmo.runtime.ScanError
-import dev.istmo.runtime.ScannedCode
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine

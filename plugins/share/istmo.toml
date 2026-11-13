@@ -1,6 +1,7 @@
 [plugin]
 id = "istmo.share"
 client_type = "::istmo_share::ShareClient"
+android_package = "dev.istmo.plugins.share"
 default_deployment = "local"
 # The backend registers an ActivityResultLauncher, so it takes the host
 # `ComponentActivity` from the generated registry.

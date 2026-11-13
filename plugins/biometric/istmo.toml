@@ -1,6 +1,7 @@
 [plugin]
 id = "istmo.biometric"
 client_type = "::istmo_biometric::BiometricClient"
+android_package = "dev.istmo.plugins.biometric"
 # Prompts are system UI owned by the foreground app process; a remote
 # (`:remote`) process has no window to anchor them to.
 default_deployment = "local"

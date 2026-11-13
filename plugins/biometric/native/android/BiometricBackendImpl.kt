@@ -18,15 +18,7 @@ import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import dev.istmo.runtime.AuthMethod
-import dev.istmo.runtime.AuthPolicy
-import dev.istmo.runtime.AuthPrompt
-import dev.istmo.runtime.Availability
 import dev.istmo.runtime.BackendException
-import dev.istmo.runtime.BiometricBackend
-import dev.istmo.runtime.BiometricError
-import dev.istmo.runtime.BiometricKind
-import dev.istmo.runtime.BiometricStatus
 import dev.istmo.runtime.IstmoActivityBound
 import java.lang.ref.WeakReference
 import java.security.GeneralSecurityException

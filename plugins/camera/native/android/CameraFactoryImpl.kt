@@ -3,10 +3,6 @@ package dev.istmo.plugins.camera
 import android.app.Activity
 import androidx.activity.ComponentActivity
 import dev.istmo.runtime.BackendException
-import dev.istmo.runtime.CameraBackend
-import dev.istmo.runtime.CameraError
-import dev.istmo.runtime.CameraFactory
-import dev.istmo.runtime.CameraInitConfig
 import dev.istmo.runtime.IstmoActivityBound
 import java.lang.ref.WeakReference
 

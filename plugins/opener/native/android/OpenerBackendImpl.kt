@@ -7,8 +7,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.FileUriExposedException
 import dev.istmo.runtime.BackendException
-import dev.istmo.runtime.OpenError
-import dev.istmo.runtime.OpenerBackend
 
 /**
  * Reference backend for `istmo.opener`: an `ACTION_VIEW` intent.

@@ -1,6 +1,7 @@
 [plugin]
 id = "istmo.barcode_scanner"
 client_type = "::istmo_barcode_scanner::BarcodeScannerClient"
+android_package = "dev.istmo.plugins.barcodescanner"
 default_deployment = "local"
 # The Google code scanner presents its own activity from the host
 # `ComponentActivity`.

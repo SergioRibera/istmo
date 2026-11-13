@@ -1,9 +1,6 @@
 package dev.istmo.plugins.googlesignin
 
 import android.app.Activity
-import dev.istmo.runtime.SignInBackend
-import dev.istmo.runtime.SignInConfig
-import dev.istmo.runtime.SignInFactory
 
 /**
  * One [GoogleSignInBackendImpl] per `SignInClient` instance. Credential

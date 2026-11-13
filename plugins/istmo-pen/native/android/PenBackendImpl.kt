@@ -1,9 +1,5 @@
 package dev.istmo.plugins.pen
 
-import dev.istmo.runtime.PenBackend
-import dev.istmo.runtime.PenCapabilities
-import dev.istmo.runtime.PenEvent
-import dev.istmo.runtime.PenHoverEvent
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -14,7 +10,7 @@ import kotlinx.coroutines.flow.Flow
  * view's [kotlinx.coroutines.flow.Flow]s to the plugin interface and
  * fills the capability descriptor.
  *
- * The `windowId` is echoed back from [dev.istmo.runtime.PenConfig] so
+ * The `windowId` is echoed back from [PenConfig] so
  * callers can log or route by it; it is not used to select the view —
  * factories map that.
  */

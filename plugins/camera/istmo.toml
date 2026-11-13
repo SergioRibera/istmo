@@ -1,6 +1,7 @@
 [plugin]
 id = "istmo.camera"
 client_type = "::istmo_camera::CameraClient"
+android_package = "dev.istmo.plugins.camera"
 default_deployment = "local"
 # CameraX binds to a `LifecycleOwner`; we need the host Activity.
 android_backend = "dev.istmo.plugins.camera.CameraFactoryImpl"

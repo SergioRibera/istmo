@@ -7,16 +7,9 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import dev.istmo.runtime.ActivityError
-import dev.istmo.runtime.ActivityStyle
-import dev.istmo.runtime.AlertConfig
-import dev.istmo.runtime.AlertSound
-import dev.istmo.runtime.AndroidTierHint
 import dev.istmo.runtime.BackendException
-import dev.istmo.runtime.DismissalPolicy
 import dev.istmo.runtime.IstmoRuntime
 import dev.istmo.runtime.NativeHandleId
-import dev.istmo.runtime.RestoredActivity
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.ConcurrentHashMap
 

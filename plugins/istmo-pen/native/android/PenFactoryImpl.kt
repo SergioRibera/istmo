@@ -1,8 +1,5 @@
 package dev.istmo.plugins.pen
 
-import dev.istmo.runtime.PenBackend
-import dev.istmo.runtime.PenConfig
-import dev.istmo.runtime.PenFactory
 
 /**
  * Reference [PenFactory] for single-window apps.

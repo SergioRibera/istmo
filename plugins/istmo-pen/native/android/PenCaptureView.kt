@@ -4,15 +4,6 @@ import android.content.Context
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
-import dev.istmo.runtime.PenButtonChange
-import dev.istmo.runtime.PenGesture
-import dev.istmo.runtime.PenGestureKind
-import dev.istmo.runtime.PenCapabilities
-import dev.istmo.runtime.PenEvent
-import dev.istmo.runtime.PenHoverEvent
-import dev.istmo.runtime.PenMove
-import dev.istmo.runtime.PenSample
-import dev.istmo.runtime.PenToolKind
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow

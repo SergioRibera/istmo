@@ -11,10 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Patterns
-import dev.istmo.runtime.IncomingFile
-import dev.istmo.runtime.IncomingShare
 import dev.istmo.runtime.IstmoRuntime
-import dev.istmo.runtime.ShareCodecsImpl
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream

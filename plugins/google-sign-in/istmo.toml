@@ -1,6 +1,7 @@
 [plugin]
 id = "istmo.google_sign_in"
 client_type = "::istmo_google_sign_in::SignInClient"
+android_package = "dev.istmo.plugins.googlesignin"
 # Reference factories shipped in `native/`. Credential Manager presents
 # over an Activity, so the Android factory takes the host activity.
 android_backend = "dev.istmo.plugins.googlesignin.GoogleSignInFactoryImpl"

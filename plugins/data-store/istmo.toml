@@ -1,6 +1,7 @@
 [plugin]
 id = "istmo.data_store"
 client_type = "::istmo_data_store::DataStoreClient"
+android_package = "dev.istmo.plugins.datastore"
 # Reference factory shipped in `native/android/`.
 android_backend = "dev.istmo.plugins.datastore.DataStoreFactoryImpl"
 

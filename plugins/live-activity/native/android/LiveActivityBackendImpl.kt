@@ -3,20 +3,10 @@ package dev.istmo.plugins.liveactivity
 import android.content.Context
 import android.os.Build
 import androidx.core.app.NotificationManagerCompat
-import dev.istmo.runtime.ActivityError
-import dev.istmo.runtime.ActivityStyle
-import dev.istmo.runtime.AlertConfig
-import dev.istmo.runtime.AndroidCapabilities
-import dev.istmo.runtime.AndroidTierHint
 import dev.istmo.runtime.BackendException
-import dev.istmo.runtime.DismissalPolicy
 import dev.istmo.runtime.HandleReleaser
 import dev.istmo.runtime.IstmoRuntime
-import dev.istmo.runtime.LiveActivityBackend
-import dev.istmo.runtime.LiveActivityDispatcher
 import dev.istmo.runtime.NativeHandleId
-import dev.istmo.runtime.PlatformCapabilities
-import dev.istmo.runtime.RestoredActivity
 import java.util.concurrent.ConcurrentHashMap
 
 class LiveActivityBackendImpl(

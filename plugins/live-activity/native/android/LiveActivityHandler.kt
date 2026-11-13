@@ -3,7 +3,6 @@ package dev.istmo.plugins.liveactivity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
-import dev.istmo.runtime.ActivityError
 import dev.istmo.runtime.NativeHandleId
 
 interface LiveActivityHandler {
@@ -16,21 +15,21 @@ interface LiveActivityHandler {
         handle: NativeHandleId,
         attributes: ByteArray,
         initialState: ByteArray,
-        style: dev.istmo.runtime.ActivityStyle,
+        style: ActivityStyle,
         staleAfterSeconds: UInt?,
-        androidTierHint: dev.istmo.runtime.AndroidTierHint?,
+        androidTierHint: AndroidTierHint?,
     )
 
     suspend fun update(
         handle: NativeHandleId,
         state: ByteArray,
-        alert: dev.istmo.runtime.AlertConfig?,
+        alert: AlertConfig?,
     )
 
     suspend fun end(
         handle: NativeHandleId,
         finalState: ByteArray?,
-        dismissal: dev.istmo.runtime.DismissalPolicy,
+        dismissal: DismissalPolicy,
     )
 
     /**
@@ -40,7 +39,7 @@ interface LiveActivityHandler {
      * activity, so two handles would let the first drop end it while the
      * other is still in use.
      */
-    suspend fun restoreActive(): List<dev.istmo.runtime.RestoredActivity> = emptyList()
+    suspend fun restoreActive(): List<RestoredActivity> = emptyList()
 
     /** The Rust owner dropped [handle]: end its activity and forget it. */
     fun releaseHandle(handle: NativeHandleId)
