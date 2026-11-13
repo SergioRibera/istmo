@@ -30,8 +30,9 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
     through a lowest-common-denominator abstraction.
   </Card>
   <Card title="One binary protocol" icon="setting">
-    A single wincode-framed envelope crosses JNI and FFI. No per-plugin
-    trampolines, no code generation you can't read.
+    One versioned frame protocol carries every call; JNI and FFI only
+    see wincode-encoded payload bytes. No per-plugin trampolines, and
+    the Kotlin / Swift glue is generated source you can read.
   </Card>
   <Card title="Bring your own UI" icon="pencil">
     Istmo has no opinion on rendering. Ship `eframe`, `winit`, `slint`,
