@@ -76,7 +76,9 @@ public extension String {
 
 public final class NSLock {
     public init() {}
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     public func lock() {}
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     public func unlock() {}
     public func withLock<R>(_ body: () throws -> R) rethrows -> R { try body() }
 }
