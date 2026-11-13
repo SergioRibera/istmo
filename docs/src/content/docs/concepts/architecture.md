@@ -17,57 +17,76 @@ An Istmo app has three actors:
    execution.
 
 Everything crosses between (1) + (2) and (3) through **one binary
-protocol** — a length-prefixed wincode-encoded `Envelope` carrying a
-`Frame` variant. No per-plugin trampolines, no JSON, no reflection.
+protocol** — a wincode-encoded `Envelope` carrying a `Frame` variant.
+No per-plugin trampolines, no JSON, no reflection.
 
 ## The Runtime
 
-You instantiate the runtime once with the `istmo::runtime!` macro:
+You declare the runtime once, at module level in the app crate, with
+the `istmo::runtime!` macro:
 
 ```rust
 istmo::runtime!(
     plugins: [SignInClient, BatteryClient],
-    services: [SyncService],
-    remote: [PushNotificationsClient],
+    remote: [PushNotifications],
+    hosts: [ImageHasher => ImageHasherImpl],
+    services: [SyncService => Syncer],
+    workers: [Backup => NightlyBackup],
 );
 ```
 
-The macro reads three optional sections:
+Every section is optional:
 
-- `plugins:` — clients you'll call directly from Rust.
-- `services:` — long-running services the runtime should own.
+- `plugins:` — clients you'll call from Rust (paths to `<Trait>Client`
+  types).
 - `remote:` — plugins whose backend lives in a **separate OS process**
-  (Android `:remote` service pattern).
+  (Android `:remote` pattern). Each entry is the plugin trait or its
+  `<Trait>Client`.
+- `hosts:` — Rust implementations of plugin traits, written
+  `Trait => expr` and registered as `<Trait>Host::new(expr)`.
+- `services:` / `workers:` — `#[istmo::service]` / `#[istmo::worker]`
+  implementations, registered as `<Trait>Adapter::new(expr)` /
+  `<Trait>WorkerAdapter::new(expr)`.
 
-At compile time it produces the hook that configures the runtime when
-the platform starts it (`Runtime::init` on desktop). From there, every
-plugin client acquires the runtime with
-`SignInClient::from_runtime(&runtime)`, or `SignInClient::acquire()`
-from the process-global one.
+The macro expands to `__istmo_configure_runtime(init: RuntimeInit) ->
+RuntimeInit`, which the Android and iOS transports call when the
+platform starts the runtime. Plugins that `istmo_build::emit()` finds in
+your dependencies are added on top
+([Auto-wiring](/istmo/advanced/auto-wiring/)). A desktop binary builds
+its runtime itself with `Runtime::init(RuntimeConfig::inline())` and
+registers its hosts on the returned runtime.
+
+From there, a plugin client binds to a runtime with
+`SignInClient::from_runtime(&runtime)`, or to the process-global one with
+`SignInClient::acquire()`.
 
 ## The Frame protocol
 
 A `Frame` is the unit of everything: calls, responses, events, cancels,
 handle releases. It is defined in `istmo-core` and serialized with
-wincode in bincode 2's `standard()` layout. The current protocol version is **4** (see [Frame
-protocol](/istmo/concepts/frame-protocol/) for the history).
+wincode in bincode 2's `standard()` layout. The current protocol
+version is **4** (see [Frame protocol](/istmo/concepts/frame-protocol/)
+for the history).
 
-Variants you'll encounter:
+| Variant               | Sent by           | Meaning                                       |
+| --------------------- | ----------------- | --------------------------------------------- |
+| `Call`                | caller            | Invoke a plugin method                        |
+| `Respond`             | host              | Result of a `Call`                            |
+| `Event`               | host              | One stream item                               |
+| `StreamEnd`           | host              | Terminator for a stream                       |
+| `Cancel`              | caller            | Cooperative cancel of a call or stream        |
+| `CreateInstance`      | caller            | Build a stateful plugin instance              |
+| `DestroyInstance`     | caller            | Release a stateful plugin instance            |
+| `EarlyEvent`          | native side       | State published before Rust asked for it      |
+| `ReleaseNativeHandle` | Rust              | A native-owned object should be freed         |
+| `Notify`              | caller            | Fire-and-forget one-way call                  |
 
-| Variant                | Direction        | Meaning                                   |
-| ---------------------- | ---------------- | ----------------------------------------- |
-| `Call`                 | Rust → native    | Invoke a plugin method                    |
-| `Respond`              | native → Rust    | Result of a Call                          |
-| `Event`                | native → Rust    | One stream item                           |
-| `StreamEnd`            | native → Rust    | Terminator for a stream                   |
-| `Cancel`               | Rust → native    | Cooperative cancel of a Call or stream    |
-| `EarlyEvent`           | native → Rust    | State published before Rust asked for it  |
-| `ReleaseNativeHandle`  | Rust → native    | Native-owned object should be freed       |
-| `Notify`               | Rust → native    | Fire-and-forget one-way call              |
+Caller and host can sit on either side: Rust calls Kotlin/Swift for a
+native-hosted plugin, Kotlin/Swift call Rust for a Rust-hosted one.
 
-Rust never encodes an `Envelope` by hand and neither does Kotlin/Swift.
-Typed FFI wrappers on each side build the frame Rust-side, so the JNI
-and FFI boundaries only ever carry the inner payload bytes.
+Neither Kotlin nor Swift encodes an `Envelope`. Typed FFI wrappers on
+each side build the frame Rust-side, so the JNI and FFI boundaries only
+ever carry the inner payload bytes.
 
 ## Where plugins live
 
@@ -76,8 +95,11 @@ Every plugin is a **Rust crate** that:
 - Declares the trait shape with `#[istmo::plugin]`.
 - Publishes a `Contract` describing that shape at build time (via
   `istmo_build::emit()`).
-- Optionally ships Kotlin/Swift dispatcher templates that the app
-  regenerates on every compile.
+- Optionally ships native backends under `native/android/` and
+  `native/ios/`, which the app compiles in.
+
+The app's build regenerates the Kotlin/Swift dispatchers, types and
+codecs for every contract on each compile.
 
 Two hosting models exist:
 
@@ -98,14 +120,16 @@ versa. Contracts and native dependencies travel through Cargo's build
 script `DEP_<links>_*` env var mechanism:
 
 1. Plugin `build.rs` calls `istmo_build::emit()`.
-2. That emits `DEP_<plugin>_ISTMO_CONTRACTS` and
-   `DEP_<plugin>_ISTMO_NATIVE_DEPS` (Gradle + SwiftPM coordinates).
+2. That emits `DEP_<links>_ISTMO_CONTRACTS`, `DEP_<links>_ISTMO_MANIFEST`
+   and, when declared, `DEP_<links>_ISTMO_NATIVE_DEPS` (Gradle + SwiftPM
+   coordinates), `DEP_<links>_ISTMO_ASSETS` and
+   `DEP_<links>_ISTMO_NATIVE_{ANDROID,IOS,MACOS}`.
 3. App `build.rs` calls `istmo_build::emit()`.
 4. That walks every `DEP_*_ISTMO_CONTRACTS`, generates Kotlin and Swift
    dispatchers for each, and writes them into `android/` and `ios/`.
 
-Everything is deterministic and repeatable — regenerating produces the
-same bytes.
+Generated files are only rewritten when their contents change, so a
+rebuild with the same inputs leaves them untouched.
 
 ## Threading & executors
 
@@ -114,11 +138,12 @@ Istmo is **executor-agnostic**. It uses `flume` channels and
 
 - Your app can pair it with `tokio`, `smol`, `async-std`, `pollster`, or
   a hand-rolled loop. Nothing in `istmo-core` locks you in.
-- Each `<T>Client` method returns `impl Future`. Streams return
-  `impl Stream + Unpin` you can drive from anywhere.
-- The native side gets its own dedicated OS thread per platform — a JNI
-  daemon on Android, a `Thread` on iOS — that pumps outbound frames
-  onto the platform runloop.
+- Each unary `<T>Client` method is an `async fn`. Stream methods return a
+  `TypedStream`, which you drive with `recv()` (blocking),
+  `recv_async()` or `try_recv()` from any thread or executor.
+- Each mobile transport runs one dedicated OS thread — a JNI-attached
+  daemon on Android (`istmo-android-pump`), `istmo-ios-pump` on iOS —
+  that delivers outbound frames to the Kotlin/Swift callbacks.
 
 ## Next
 

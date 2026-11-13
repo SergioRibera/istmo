@@ -35,19 +35,21 @@ hood, `emit()`:
 1. Reads `istmo.toml` and finds `client_type = "::mycrate::FooClient"`.
 2. Derives the trait name (`Foo`) by stripping the `Client` suffix off
    the last path segment.
-3. Parses `src/lib.rs` with `syn`, finds `trait Foo`, and builds a
-   `Contract` from its methods and any sibling `#[istmo::message]`
-   items.
+3. Parses `src/lib.rs` (and the modules it declares) with `syn`, finds
+   `trait Foo`, and builds a `Contract` from its methods and the
+   `#[istmo::message]` types they use.
 4. Repeats this for every `[[plugin]]` entry with a `client_type` and
    emits all the contracts as one hex-encoded, wincode-serialised list
    via `cargo:ISTMO_CONTRACTS=<hex>` (Cargo keeps one value per key, so
    a crate with several plugins hands them over together).
 
 Cargo forwards that to every downstream crate as
-`DEP_<links>_ISTMO_CONTRACTS`. Your app's `build.rs` walks all those env
+`DEP_<links>_ISTMO_CONTRACTS` — which is why every plugin crate sets
+`links = "…"` in its `[package]`. Your app's `build.rs` walks those env
 vars via `collect_dep_contracts()` and feeds each contract to the
-generators. A plugin id handed over by two crates keeps the contract
-of the crate first by `links` name, with a `cargo::warning`.
+generators. A plugin id handed over by two crates keeps the contract of
+the crate first by `links` name, with a `cargo::warning`; a payload that
+fails to decode is skipped with a warning.
 
 Zero duplication. The `Contract` is not something you author; it is a
 by-product of the trait itself.
@@ -56,34 +58,41 @@ by-product of the trait itself.
 
 ```rust
 pub struct Contract {
-    pub plugin_id: String,          // matches istmo.toml `[plugin] id`
-    pub type_name: String,          // trait name, e.g. "Battery"
-    pub methods: Vec<Method>,       // each entry: name, args, return, stream?
-    pub init: Option<TypeRef>,      // stateful plugins declare their config here
-    pub types: Vec<TypeDef>,        // named structs / enums referenced by args or returns
+    pub plugin_id: String,     // the trait's `#[istmo::plugin(name = "…")]`
+    pub type_name: String,     // trait name, e.g. "Battery"
+    pub methods: Vec<Method>,  // name, kind (Unary | Stream), args, returns, error
+    pub init: Option<TypeRef>, // config type of a stateful plugin (`init = Config`)
+    pub types: Vec<TypeDef>,   // named structs / enums the methods reference
 }
 ```
 
-Method signatures preserve the arg names (converted to `camelCase` on
-the Kotlin/Swift side to match idiomatic naming), whether the return is
-`unary` or `stream`, and any typed error.
+The extractor folds argument and field names to `camelCase` for the
+Kotlin/Swift side (the wire is order-based, so the rename is cosmetic),
+records whether each method is unary or a `#[istmo::stream]`, and keeps
+the `E` of a `Result<T, E>` return as the typed error. `CancelToken`
+arguments are dropped — they never travel on the wire — and `Vec<u8>`
+becomes `Bytes` (`ByteArray` in Kotlin, `Data` in Swift).
+
+`extract_contract` validates the result, and the build fails naming the
+offending method or type when:
+
+- a named type is neither a supported primitive nor an
+  `#[istmo::message]` type of the crate;
+- a domain error `E` is not an `#[istmo::message]` type;
+- a type nests `Option<Option<_>>` (Kotlin and Swift cannot tell the two
+  `None`s apart) or puts `()` inside a `Vec` / `Option`;
+- two message types, or two fields of one struct, share a name.
 
 ## Sharing types across contracts
 
-Sometimes two contracts in the same package need to share a named type
-(e.g. an `Event` enum that both `Timer` and `Notifier` return). Istmo
-resolves this at the code-gen layer:
-
-- One contract emits the `<T>Types.kt` / `<T>Types.swift` file.
-- The sibling contract sets `types = vec![]` in its `Contract`, so no
-  duplicate declarations are written.
-- The sibling still emits its own dispatcher and codecs; it just
-  imports the shared types from the primary contract.
-
-The [`emit_app`](/istmo/build-scripts/emit-overview/) helper handles this
-automatically when contracts come from the standard `DEP_*` handover.
-For hand-built testbed contracts, you set `Contract::types = vec![]`
-manually — see the `android-demo` example in the repo for a reference.
+Each contract carries its own named types, and `emit()` writes one
+`<T>Types` and one `<T>CodecsImpl` file per contract. When two contracts
+in the same package must share a named type (an `Event` enum that both
+`Timer` and `Notifier` return), declare the type in one contract only
+and call the generators yourself: generate the second contract with
+`types = vec![]` and let it use the first contract's codecs. `emit()`
+does not do this for you; the `android-demo` example's `build.rs` is the
+reference for the hand-rolled version.
 
 ## Inspecting a contract
 

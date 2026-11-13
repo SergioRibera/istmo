@@ -78,7 +78,15 @@ The Rust plugin crate contributes:
       }
   }
   ```
-- Registration inside `istmo::runtime! { hosts: [ImageHasherHost::new(ImageHasherImpl)] }`.
+- Registration in the app's runtime declaration, which wraps the impl
+  in the generated `ImageHasherHost`:
+  ```rust
+  istmo::runtime!(
+      hosts: [ImageHasher => ImageHasherImpl],
+  );
+  ```
+  (a desktop binary can instead call
+  `runtime.register_host(ImageHasherHost::new(ImageHasherImpl))`).
 
 The app contributes:
 
@@ -93,7 +101,7 @@ The app contributes:
 | --------------------- | ------------------------------------------ | ------------------------------------------ |
 | Real code lives in    | Kotlin / Swift                             | Rust                                       |
 | Rust ships            | Trait, contract, docs, reference impl      | Trait, contract, real impl                 |
-| Native ships          | Real impl (in your app)                    | Optional client stub                       |
+| Native ships          | Real impl (`native/` dir or your app)     | Optional client stub                       |
 | Typical use case      | Platform SDKs, permissions, sensors        | Business logic, algorithms, shared state   |
 | Codegen `role`        | `host` (default)                           | `client` (opt-in per plugin)               |
 | Threading             | Native runtime, `suspend fun`/`async`      | Rust `async` on any executor               |
