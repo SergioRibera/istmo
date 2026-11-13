@@ -27,9 +27,6 @@
 
 #![doc(html_root_url = "https://docs.rs/istmo-opener")]
 
-#[cfg(feature = "codegen")]
-pub mod codegen;
-
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 

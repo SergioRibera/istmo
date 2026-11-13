@@ -13,17 +13,12 @@ keywords = ["istmo", "live-activity", "activitykit", "notifications", "mobile"]
 categories = ["os", "api-bindings"]
 links = "istmo_live_activity"
 
-[features]
-default = []
-codegen = ["dep:istmo-build"]
-
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 wincode = { workspace = true }
 pollster = { workspace = true }
 tracing = { workspace = true }
-istmo-build = { workspace = true, optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }

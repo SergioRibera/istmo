@@ -12,14 +12,9 @@ keywords = ["istmo", "biometric", "face-id", "fingerprint", "windows-hello"]
 categories = ["authentication", "api-bindings"]
 links = "istmo_biometric"
 
-[features]
-default = []
-codegen = ["dep:istmo-build"]
-
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
-istmo-build = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 flume = { workspace = true }
@@ -65,6 +60,7 @@ futures-lite = { version = "2", default-features = false, features = ["std"] }
 istmo-build = { workspace = true }
 
 [dev-dependencies]
+istmo-build = { workspace = true }
 pollster = { workspace = true }
 flume = { workspace = true }
 

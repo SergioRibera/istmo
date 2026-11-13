@@ -15,9 +15,6 @@
 
 #![doc(html_root_url = "https://docs.rs/istmo-live-activity")]
 
-#[cfg(feature = "codegen")]
-pub mod codegen;
-
 mod typed;
 
 use istmo_macros::{message, plugin};

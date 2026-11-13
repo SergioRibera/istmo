@@ -13,20 +13,16 @@ keywords = ["istmo", "google-signin", "oauth", "authentication", "mobile"]
 categories = ["authentication", "api-bindings"]
 links = "istmo_google_sign_in"
 
-[features]
-default = []
-codegen = ["dep:istmo-build"]
-
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 pollster = { workspace = true }
-istmo-build = { workspace = true, optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }
 
 [dev-dependencies]
+istmo-build = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
 

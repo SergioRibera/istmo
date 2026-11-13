@@ -1,5 +1,3 @@
-#![cfg(feature = "codegen")]
-
 use istmo_build::{
     Arg, Contract, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef, TypeDef, TypeRef,
 };
@@ -129,13 +127,13 @@ fn expected_contract() -> Contract {
 
 #[test]
 fn extracted_contract_matches_fixture() {
-    let got = istmo_google_sign_in::codegen::contract();
+    let src = concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs");
+    let got = istmo_build::extract_contract(src, "SignIn").expect("extract SignIn contract");
     let expected = expected_contract();
-    if got != expected {
-        panic!(
-            "extracted contract drifted from the fixture in `tests/contract_snapshot.rs`.\n\
-             Update either the trait in `src/lib.rs` or the fixture — but never silently.\n\n\
-             got:\n{got:#?}\n\nexpected:\n{expected:#?}",
-        );
-    }
+    assert!(
+        got == expected,
+        "extracted contract drifted from the fixture in `tests/contract_snapshot.rs`.\n\
+         Update either the trait in `src/lib.rs` or the fixture — but never silently.\n\n\
+         got:\n{got:#?}\n\nexpected:\n{expected:#?}",
+    );
 }

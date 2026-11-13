@@ -14,7 +14,6 @@ links = "istmo_camera"
 
 [features]
 default = []
-codegen = ["dep:istmo-build"]
 # Enables the pure-Rust `nokhwa`-backed desktop host.
 # Mobile crates leave this off — Kotlin / Swift backends do the real
 # capture there.
@@ -36,7 +35,6 @@ istmo-macros = { workspace = true }
 flume = { workspace = true }
 oneshot = { workspace = true }
 tracing = { workspace = true }
-istmo-build = { workspace = true, optional = true }
 
 # Desktop capture backend — V4L2 on Linux, AVFoundation on macOS,
 # Media Foundation on Windows. Opt-in via the `desktop` feature so

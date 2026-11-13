@@ -16,16 +16,8 @@
 //! `Debug` output of [`SignInAccount`], [`OwnedSignInAccount`] and
 //! [`SignInConfig`] redacts the id token and the nonce (`#[redact]`), so
 //! logging them does not leak credentials.
-//!
-//! The `codegen` feature exposes the plugin's `Contract`
-//! (see [`istmo-build`](https://docs.rs/istmo-build)) so downstream
-//! apps that don't consume the build-script handover can still
-//! generate matching Kotlin / Swift bindings.
 
 #![doc(html_root_url = "https://docs.rs/istmo-google-sign-in")]
-
-#[cfg(feature = "codegen")]
-pub mod codegen;
 
 use istmo_core::NativeHandleId;
 use istmo_macros::{message, owned, plugin};

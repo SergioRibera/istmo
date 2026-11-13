@@ -13,14 +13,9 @@ keywords = ["istmo", "qr", "barcode", "scanner", "mobile"]
 categories = ["multimedia::images", "api-bindings"]
 links = "istmo_barcode_scanner"
 
-[features]
-default = []
-codegen = ["dep:istmo-build"]
-
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
-istmo-build = { workspace = true, optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }

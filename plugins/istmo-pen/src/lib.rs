@@ -12,15 +12,8 @@
 //! and Linux backends are Rust-native and gated on `cfg(target_os = …)`
 //! in the [`publisher`] module (feature-free — cross-compilation picks
 //! the right impl automatically).
-//!
-//! Enable the `codegen` feature to expose the plugin's `Contract`
-//! (see [`istmo-build`](https://docs.rs/istmo-build)) without going
-//! through the build-script handover.
 
 #![doc(html_root_url = "https://docs.rs/istmo-pen")]
-
-#[cfg(feature = "codegen")]
-pub mod codegen;
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod backend;

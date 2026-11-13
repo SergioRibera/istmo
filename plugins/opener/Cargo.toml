@@ -13,15 +13,10 @@ keywords = ["istmo", "url", "open", "browser", "mobile"]
 categories = ["os", "api-bindings"]
 links = "istmo_opener"
 
-[features]
-default = []
-codegen = ["dep:istmo-build"]
-
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 flume = { workspace = true }
-istmo-build = { workspace = true, optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }

@@ -13,17 +13,12 @@ keywords = ["istmo", "storage", "shared-preferences", "userdefaults", "mobile"]
 categories = ["database", "api-bindings"]
 links = "istmo_data_store"
 
-[features]
-default = []
-codegen = ["dep:istmo-build"]
-
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 wincode = { workspace = true }
 tracing = { workspace = true }
 pollster = { workspace = true }
-istmo-build = { workspace = true, optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }

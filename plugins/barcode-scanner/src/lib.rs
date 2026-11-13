@@ -25,9 +25,6 @@
 
 #![doc(html_root_url = "https://docs.rs/istmo-barcode-scanner")]
 
-#[cfg(feature = "codegen")]
-pub mod codegen;
-
 use istmo_macros::{message, plugin};
 
 /// Wire identifier for the barcode scanner plugin.

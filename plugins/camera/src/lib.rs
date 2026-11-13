@@ -36,15 +36,8 @@
 //! need `NSCameraUsageDescription` in `Info.plist`; the plugin's
 //! `istmo.toml` ships a default string that apps are expected to
 //! reword via `[app.info_plist]`.
-//!
-//! Enable the `codegen` feature to expose the plugin's `Contract`
-//! (see [`istmo-build`](https://docs.rs/istmo-build)) without going
-//! through the build-script handover.
 
 #![doc(html_root_url = "https://docs.rs/istmo-camera")]
-
-#[cfg(feature = "codegen")]
-pub mod codegen;
 
 pub mod desktop;
 pub mod web;

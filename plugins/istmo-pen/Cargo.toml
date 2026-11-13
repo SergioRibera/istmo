@@ -14,7 +14,6 @@ links = "istmo_pen"
 
 [features]
 default = []
-codegen = ["dep:istmo-build"]
 # Linux-only: expose the process-wide libinput seat pump
 # (`PenPublisher::install_libinput`). Off by default — standard Wayland
 # / X11 apps get stylus events via the compositor-protocol backends
@@ -28,7 +27,6 @@ istmo-macros = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
 tracing = { workspace = true }
-istmo-build = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 raw-window-handle = { version = "0.6", default-features = false }

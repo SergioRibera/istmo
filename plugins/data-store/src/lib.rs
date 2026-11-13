@@ -5,15 +5,8 @@
 //! backs it with `SharedPreferences` on Android and `UserDefaults` on
 //! Apple platforms. Reference native implementations ship alongside
 //! this crate.
-//!
-//! Enable the `codegen` feature to expose the plugin's `Contract`
-//! (see [`istmo-build`](https://docs.rs/istmo-build)) for downstream
-//! code generation without going through the build-script handover.
 
 #![doc(html_root_url = "https://docs.rs/istmo-data-store")]
-
-#[cfg(feature = "codegen")]
-pub mod codegen;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod desktop;

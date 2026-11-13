@@ -13,14 +13,9 @@ keywords = ["istmo", "file-picker", "saf", "document-picker", "mobile"]
 categories = ["filesystem", "api-bindings"]
 links = "istmo_file_picker"
 
-[features]
-default = []
-codegen = ["dep:istmo-build"]
-
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
-istmo-build = { workspace = true, optional = true }
 
 # Reference desktop backend (Rust-hosted): rfd wraps the native pickers.
 # Windows/macOS use native APIs synchronously; Linux uses the XDG
