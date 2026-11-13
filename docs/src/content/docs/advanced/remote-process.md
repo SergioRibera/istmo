@@ -5,23 +5,23 @@ sidebar:
   order: 1
 ---
 
-The Android runtime supports the classic `:remote` process pattern —
+The runtime supports the classic Android `:remote` process pattern —
 where a plugin's backend runs in a **different OS process** from the
 UI. Useful when:
 
-- The plugin's SDK crashes are frequent and you want them to not take
-  down the UI process.
+- The plugin's SDK crashes often and you do not want it to take down
+  the UI process.
 - The plugin holds a large resident memory footprint (an ML model, a
-  media pipeline) that survives your UI going through Trim states.
+  media pipeline) you want to keep apart from the UI process.
 - You want independent process death for OOM protection.
 
 ## Wire shape
 
 Each process runs its own `Runtime`. A **bridge** — an AIDL Binder
-interface — shuttles `Envelope` bytes back and forth. Every outbound
-frame from the UI process whose plugin id is declared "remote" is
-serialized, sent over Binder, and injected into the `:remote` process's
-runtime via `Runtime::inject_wire_envelope(bytes)`.
+interface — shuttles wire-encoded `Envelope` bytes back and forth. Every
+outbound frame of a plugin declared remote is encoded, handed to the
+runtime's `RemoteEnvelopeSink`, sent over Binder, and injected into the
+other process's runtime with `Runtime::inject_wire_envelope(bytes)`.
 
 The Rust side does the classification; Kotlin only forwards bytes.
 
@@ -30,9 +30,9 @@ The Rust side does the classification; Kotlin only forwards bytes.
    ┌──────────────┐  Envelope     ┌──────────────┐
    │  Runtime     │──── bytes ───►│  Runtime     │
    │              │◄── bytes ─────│              │
-   │  send_out    │               │  inject_wire │
-   │  → matches   │               │  → dispatch  │
-   │   remote id? │               │              │
+   │  outbound    │               │  inject_wire │
+   │  → remote    │               │  _envelope   │
+   │   plugin?    │               │  → dispatch  │
    └──────────────┘               └──────────────┘
         │  yes → RemoteEnvelopeSink
         ▼
@@ -41,7 +41,7 @@ The Rust side does the classification; Kotlin only forwards bytes.
 
 ## Declare which plugins are remote
 
-Two levers:
+Two levers feed auto-wiring:
 
 1. **Plugin default** — the plugin's own `istmo.toml`:
    ```toml
@@ -49,93 +49,113 @@ Two levers:
    default_deployment = "remote"
    ```
 2. **App override** — even if the plugin defaults to `local`, the app
-   can force it remote:
+   can force it remote (or back to local):
    ```toml
    # istmo.toml (at the app crate root)
    [[remote_override]]
-   plugin     = "acme.large_ml_model"
+   plugin     = "acme.large_model"
    deployment = "remote"
    ```
 
-`emit_wiring_env()` (invoked by `istmo_build::emit()`) reads these and
-emits `ISTMO_AUTO_REMOTE` env vars the `istmo::runtime!` macro
-consumes.
+`istmo_build::emit()` turns these into the `ISTMO_AUTO_REMOTE` list the
+`istmo::runtime!` macro consumes.
 
 ## Rust-side wiring
 
+You can also list remote plugins by hand:
+
 ```rust
 istmo::runtime!(
-    plugins:  [SignInClient, DataStoreClient],
-    remote:   [LargeModelClient],
+    plugins: [SignInClient, DataStoreClient],
+    remote:  [LargeModel],   // the trait, or `LargeModelClient`
 );
 ```
 
-The macro:
+For each `remote:` entry the generated configuration calls
+`RuntimeInit::remotes::<LargeModelClient>()`, i.e.
+`Runtime::declare_remote_plugin("acme.large_model")`. From then on the
+runtime steers that plugin's frames to the installed
+`RemoteEnvelopeSink` (`Arc<dyn Fn(Vec<u8>) + Send + Sync>`) instead of
+the regular transport.
 
-- Registers the local plugins as usual.
-- Marks `LargeModelClient`'s plugin id as remote via
-  `Runtime::declare_remote_plugin`.
-- Installs a `RemoteEnvelopeSink` closure (`Arc<dyn Fn(Vec<u8>)>`) —
-  the app must supply this at runtime with `install_remote_envelope_sink`,
-  passing the Kotlin bridge as the destination.
-
-You typically supply the sink like:
+On Android you do not install the sink yourself: `nativeStart` installs
+one that hands the bytes to `IstmoRuntime.onRemoteEnvelope` on the pump
+thread. Elsewhere (desktop, tests) install it with
+`Runtime::install_remote_envelope_sink`:
 
 ```rust
-istmo_runtime.install_remote_envelope_sink(Arc::new(|bytes| {
-    // Kotlin-side implementation forwards to Binder
-    unsafe { native_forward_to_bridge(bytes.as_ptr(), bytes.len()) }
+use std::sync::Arc;
+
+runtime.install_remote_envelope_sink(Arc::new(move |bytes: Vec<u8>| {
+    // Hand `bytes` to your IPC channel; return quickly.
+    let _ = to_peer.send(bytes);
 }));
 ```
 
+Without a sink, frames of remote plugins fall back to the outbound
+channel.
+
 ## Kotlin-side bridge
 
-Both processes' `IstmoRuntime` expose:
+`dev.istmo.runtime.IstmoRuntime` exposes:
 
-- **`onRemoteEnvelope(bytes: ByteArray)`** — called by JNI when Rust
-  emits outbound bytes for the remote process.
-- **`nativeInjectEnvelope(bytes: ByteArray)`** — called on the receive
-  side to hand inbound bytes to the runtime.
+- **`remoteEnvelopeSink: ((ByteArray) -> Unit)?`** — set it to the
+  Binder proxy; `onRemoteEnvelope(bytes)` forwards every outbound remote
+  envelope to it (and drops it while unset).
+- **`nativeInjectEnvelope(bytes: ByteArray)`** — call it on the
+  receiving side to hand inbound envelope bytes to the runtime.
 
 Together with a two-way AIDL interface, they form the shuttle:
 
 ```aidl
 // IIstmoBridge.aidl
+package dev.istmo.remote;
+
 interface IIstmoBridge {
-    void submitEnvelope(in byte[] bytes);
+    oneway void submitEnvelope(in byte[] envelope);
 }
 ```
 
-Wire the `IBinder` in both processes, connect
-`onRemoteEnvelope` → `remote.submitEnvelope`, and
-`submitEnvelope` on receipt → `nativeInjectEnvelope`. The Rust side of
-each runtime handles the rest.
+Both processes bind the other's service, set
+`IstmoRuntime.remoteEnvelopeSink` to forward to
+`remote.submitEnvelope`, and call `IstmoRuntime.nativeInjectEnvelope`
+from their own `submitEnvelope`. Reference sources to copy — the AIDL
+file and an `IstmoRemoteBridgeService` / `IstmoRemoteBridgeClient` pair
+— live in the repository under `docs/remote-bridge/`. Each process must
+also declare the plugins that live in the *other* process as remote.
 
 ## What crosses the bridge
 
-Every frame variant is safe to cross:
+The classifier routes every frame that belongs to a remote plugin:
 
-- `Call` / `CreateInstance` / `Notify` — routed by plugin id + call id.
-- `Respond` / `Cancel` — routed by call id (recorded via
-  `mark_call_remote` on inbound Call).
-- `Event` / `StreamEnd` — routed by stream id.
-- `DestroyInstance` — routed by instance id.
-- `EarlyEvent` / `ReleaseNativeHandle` — receive side short-circuits
-  into the appropriate handler.
+- `Call` / `CreateInstance` / `Notify` — by plugin id.
+- `Cancel` — by the call id of an outgoing remote call.
+- `DestroyInstance` — by instance id (instances created through a remote
+  `CreateInstance` are recorded automatically).
+- On the hosting side, calls that arrive through
+  `inject_wire_envelope` are tracked under their own origin, so their
+  `Respond`, `Event` and `StreamEnd` frames go back through the sink —
+  their ids may coincide with ids the local transport uses without
+  clashing.
 
-No per-frame-variant special-casing in Kotlin — it just forwards bytes.
+`EarlyEvent` and `ReleaseNativeHandle` are never routed to the sink;
+they belong to the process's own native side. No per-frame-variant
+special-casing in Kotlin — it just forwards bytes.
 
 ## Testing
 
-The Rust primitives are covered by unit tests without an emulator:
+The Rust primitives are covered by unit tests without an emulator, in
+`crates/core/tests/remote_bridge.rs`:
 
-- `remote_bridge.rs` — spins up two `Runtime`s, wires an in-memory
-  sink, verifies frames route correctly.
-- `mark_call_remote_routes_hosted_respond_through_sink` — verifies
-  responses go back the way they came.
+- `app_to_remote_call_and_response_flow_over_bridge_bytes` — two
+  `Runtime`s shuttling bytes through in-memory channels.
+- `declare_remote_plugin_routes_matching_outbound_through_sink` —
+  outbound frames of a remote plugin reach the sink.
+- `mark_call_remote_routes_hosted_respond_through_sink` — responses go
+  back the way they came.
 
-Full end-to-end (an actual Android `:remote` service) lands with the
-first shipping consumer; the primitives are stable.
+There is no end-to-end example app with an actual Android `:remote`
+service yet.
 
 ## When not to reach for it
 

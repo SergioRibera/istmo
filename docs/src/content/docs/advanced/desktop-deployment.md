@@ -14,34 +14,63 @@ canonical unit types:
 
 - **systemd** (`.service`) — Linux system + user units.
 - **launchd** (`.plist`) — macOS agents and daemons.
-- **Windows Service** (`sc.exe`) — install scripts for the SCM.
+- **Windows Service** — PowerShell install / uninstall scripts around
+  `sc.exe`.
 - **XDG `.desktop`** — Linux application entries.
+
+They are plain functions: call them from a `build.rs`, a packaging
+`xtask`, or a test, and write the returned string wherever your
+packaging expects it. `emit()` does not call them.
+
+## The service contract
+
+systemd, launchd and Windows share one description,
+`DesktopServiceContract`. `DesktopServiceContract::new(name,
+description, exec_path)` fills the defaults; set the rest as fields:
+
+| Field | Default | Used for |
+| --- | --- | --- |
+| `name` | — | systemd header comment |
+| `label` | `name` | launchd `Label`, Windows service name |
+| `description` | — | systemd `Description`, Windows description / display name |
+| `exec_path`, `args` | — / `[]` | the command line |
+| `working_directory` | `None` | systemd, launchd |
+| `env` | `[]` | systemd `Environment`, launchd `EnvironmentVariables`, Windows registry |
+| `restart` | `RestartPolicy::OnFailure` | `Never` / `OnFailure` / `Always` |
+| `start_type` | `StartType::Manual` | `Auto` installs / loads at boot or login |
+| `scope` | `ServiceScope::User` | `User` or `System` |
+| `user`, `group` | `None` | system services only |
+| `after` | `[]` | systemd `After=` |
+| `windows_display_name`, `windows_dependencies` | `None` / `[]` | `sc.exe` `DisplayName=` / `depend=` |
+| `launchd_keep_alive` | `None` (from `restart`) | launchd `KeepAlive` |
+| `stop_timeout_seconds` | `30` | systemd `TimeoutStopSec`, launchd `ExitTimeOut` |
 
 ## systemd unit
 
 ```rust
 use istmo_build::{
-    DesktopServiceContract, RestartPolicy, ServiceScope, StartType,
-    generate_systemd_unit,
+    DesktopServiceContract, RestartPolicy, ServiceScope, StartType, generate_systemd_unit,
 };
 
 fn main() {
-    let unit = generate_systemd_unit(&DesktopServiceContract {
-        name: "acme-sync".into(),
-        description: "Acme background sync".into(),
-        exec_start: "/usr/local/bin/acme-sync".into(),
-        scope: ServiceScope::System,
-        start_type: StartType::OnBoot,
-        restart_policy: RestartPolicy::OnFailure,
-        environment: vec![
-            ("RUST_LOG".into(), "info".into()),
-        ],
-    });
+    let mut contract = DesktopServiceContract::new(
+        "acme-sync",
+        "Acme background sync",
+        "/usr/local/bin/acme-sync",
+    );
+    contract.scope = ServiceScope::System;
+    contract.start_type = StartType::Auto;
+    contract.restart = RestartPolicy::OnFailure;
+    contract.env = vec![("RUST_LOG".into(), "info".into())];
+
+    let unit = generate_systemd_unit(&contract);
     std::fs::write("packaging/acme-sync.service", unit).unwrap();
 }
 ```
 
-Ship the generated unit inside your distribution package — `.deb`,
+With `StartType::Auto` the unit gets an `[Install]` section
+(`WantedBy=multi-user.target` for system units, `default.target` for
+user units). Ship the file inside your distribution package — `.deb`,
 `.rpm`, or `install.sh` — and it wires into `systemctl` normally.
 
 ## launchd plist
@@ -49,33 +78,38 @@ Ship the generated unit inside your distribution package — `.deb`,
 ```rust
 use istmo_build::{DesktopServiceContract, generate_launchd_plist};
 
-let plist = generate_launchd_plist(&DesktopServiceContract {
-    name: "com.acme.sync".into(),
-    // ...
-});
+let mut contract = DesktopServiceContract::new(
+    "acme-sync",
+    "Acme background sync",
+    "/usr/local/bin/acme-sync",
+);
+contract.label = "com.acme.sync".into();
+let plist = generate_launchd_plist(&contract);
 std::fs::write("packaging/com.acme.sync.plist", plist).unwrap();
 ```
 
-User agent → `~/Library/LaunchAgents/`; system daemon →
-`/Library/LaunchDaemons/`. `launchctl load` picks it up.
+`StartType::Auto` sets `RunAtLoad`. User agent →
+`~/Library/LaunchAgents/`; system daemon → `/Library/LaunchDaemons/`.
+`launchctl load` picks it up.
 
 ## Windows service
 
-Returns install + uninstall scripts:
+Returns install + uninstall PowerShell scripts:
 
 ```rust
 use istmo_build::generate_windows_service;
 
 let artifacts = generate_windows_service(&contract);
-std::fs::write("packaging/install.ps1", artifacts.install).unwrap();
-std::fs::write("packaging/uninstall.ps1", artifacts.uninstall).unwrap();
+std::fs::write("packaging/install.ps1", artifacts.install_script).unwrap();
+std::fs::write("packaging/uninstall.ps1", artifacts.uninstall_script).unwrap();
 ```
 
-The scripts call `sc.exe create` / `delete` — the runtime binary must
-implement the SCM handshake (`SetServiceStatus`). A future
-`istmo-desktop` crate will wrap this so your Rust binary can register
-handlers with a decorator; today, wire it manually with the `winapi`
-crate.
+The install script runs `sc.exe create` (plus `sc.exe description`,
+`sc.exe failure` restart actions, and registry entries for `env`, which
+`sc.exe` cannot set); the uninstall script stops and deletes the
+service. Both need an elevated PowerShell. The binary itself must speak
+the Service Control Manager protocol (`SetServiceStatus`); wire that
+with a crate such as `windows-service`.
 
 ## XDG desktop entry
 
@@ -84,40 +118,51 @@ For foreground desktop apps:
 ```rust
 use istmo_build::{DesktopAppContract, generate_desktop_entry};
 
-let entry = generate_desktop_entry(&DesktopAppContract {
-    name: "Acme".into(),
-    exec: "/usr/local/bin/acme".into(),
-    icon: "/usr/share/icons/hicolor/512x512/apps/acme.png".into(),
-    categories: vec!["Utility".into(), "Productivity".into()],
-});
+let mut app = DesktopAppContract::new("Acme", "/usr/local/bin/acme %F");
+app.icon = Some("acme".into());
+app.categories = vec!["Utility".into(), "Office".into()];
+app.mime_types = vec!["application/pdf".into()];
+
+let entry = generate_desktop_entry(&app);
 std::fs::write("packaging/acme.desktop", entry).unwrap();
 ```
 
-Drop into `~/.local/share/applications/` or your distribution package's
+The other fields are `comment`, `keywords`, `visible` (default `true`;
+`false` writes `NoDisplay=true`), `terminal` (default `false`) and
+`startup_notify` (default `true`). Drop the file into
+`~/.local/share/applications/` or your distribution package's
 `usr/share/applications/`.
 
-## Where these fit
+## What the build already does for desktop
 
-`istmo-build`'s desktop generators are **pure output** — they take a
-contract, they return a string. Nothing runs the target binary or
-registers it. That's on your packaging pipeline.
+The generators above are opt-in, but `istmo_build::emit()` covers a few
+desktop concerns on every build of an app crate with a binary target:
 
-For a full "Rust binary → systemd + launchd + Windows Service"
-one-command install, see the (roadmap) `istmo-desktop` crate.
+- the window icon behind `istmo::app_icon!()` and, on Windows, the
+  `.exe` icon and application manifest (see
+  [Native projects](/istmo/build-scripts/native-projects/#desktop));
+- `[[assets]]` staged for `istmo::assets` (see the
+  [`[[assets]]` reference](/istmo/build-scripts/istmo-toml-reference/#assets));
+- `ISTMO_SINGLE_INSTANCE` for document-opening apps (see
+  [`[[app.document_type]]`](/istmo/build-scripts/istmo-toml-reference/#appdocument_type)).
 
 ## iOS background
 
 Even though this section is about desktop, iOS's background execution
 plumbing lives in a sibling module worth mentioning here:
 
-- `IosBackgroundContract` + `generate_ios_background` produce the
-  `Info.plist` snippet + `AppDelegate` handler code for
-  `BGTaskScheduler` (`BGAppRefreshTask`, `BGProcessingTask`).
-- `required_entitlements` returns the `.entitlements` fragment your
-  Xcode project needs.
+- `IosBackgroundContract` + `generate_ios_background` produce a Swift
+  shim and the `Info.plist` fragment. For `refresh` / `processing`
+  kinds the shim is an enum with `register()` (call it from
+  `application(_:didFinishLaunchingWithOptions:)`) and `schedule()`; it
+  runs the plugin's `on_start` through the runtime and, when iOS expires
+  the task, cancels it with `IstmoRuntime.shared.cancel(pluginId:)`.
+- `required_entitlements` returns the entitlements the background mode
+  needs (the VoIP PushKit entitlement for `continuous_mode = "voip"`).
 
-Wire alongside a plugin marked `#[istmo::service]`; the runtime injects
-the cancellation token into your `on_start` when iOS expires the task.
+Plugins normally declare this in `[plugin.ios_background]` instead, and
+the app build generates the shim — see
+[Services and workers](/istmo/writing-plugins/services-workers/).
 
 ## Next
 

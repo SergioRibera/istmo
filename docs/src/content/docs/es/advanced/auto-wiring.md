@@ -1,19 +1,20 @@
 ---
 title: Auto-wiring
-description: Cómo la macro runtime! recoge plugins de tus deps de Cargo sin una lista manual.
+description: Cómo la macro runtime! toma los plugins de tus dependencias de Cargo sin una lista manual.
 sidebar:
   order: 3
 ---
 
-`istmo::runtime!` soporta **auto-wiring transparente** estilo Flutter.
-Añades un plugin a tu `Cargo.toml`, y aparece en el runtime — sin
-lista manual `plugins:`, sin línea `use`.
+`istmo::runtime!` soporta **auto-wiring transparente** al estilo
+Flutter. Agregas un plugin a tu `Cargo.toml` y aparece en el runtime —
+sin lista manual en `plugins:`, sin línea `use`.
 
-El truco usa el mecanismo `DEP_*` env var de Cargo, `emit_wiring_env`
-en `build.rs`, y pickup de env vars al expandir la macro. Esta página
-explica el mecanismo para que puedas debuggear o extenderlo.
+El truco usa el mecanismo de env vars `DEP_*` de Cargo,
+`istmo_build::emit()` en `build.rs`, y la lectura de env vars en el
+momento de expandir la macro. Esta página explica el mecanismo para que
+puedas depurarlo o extenderlo.
 
-## El mecanismo, end-to-end
+## El mecanismo, de punta a punta
 
 ### 1. `build.rs` del plugin
 
@@ -21,9 +22,10 @@ explica el mecanismo para que puedas debuggear o extenderlo.
 fn main() { istmo_build::emit(); }
 ```
 
-`emit()` lee `istmo.toml`, emite el manifest a
-`cargo:ISTMO_MANIFEST=<hex>`, que Cargo re-exporta a cada dependent
-como `DEP_<links>_ISTMO_MANIFEST`.
+`emit()` lee `istmo.toml` e imprime el manifest parseado como
+`cargo:ISTMO_MANIFEST=<hex>`. Como el crate del plugin declara
+`links = "…"` en su `[package]`, Cargo lo reexporta a cada crate que
+depende de él directamente como `DEP_<links>_ISTMO_MANIFEST`.
 
 ### 2. `build.rs` de la app
 
@@ -31,123 +33,139 @@ como `DEP_<links>_ISTMO_MANIFEST`.
 fn main() { istmo_build::emit(); }
 ```
 
-El `emit()` app-side — via `emit_wiring_env` — camina cada env var
-`DEP_*_ISTMO_MANIFEST`, decoda el manifest, aplica cualquier
-`[[remote_override]]` del `istmo.toml` propio de la app, y escribe:
+El `emit()` del lado de la app recorre cada env var
+`DEP_*_ISTMO_MANIFEST`, decodifica el manifest, aplica cualquier
+`[[remote_override]]` del `istmo.toml` propio de la app y escribe los
+tipos client que encontró:
 
-- `cargo::rustc-env=ISTMO_AUTO_PLUGINS=Foo,Bar,Baz`
-- `cargo::rustc-env=ISTMO_AUTO_REMOTE=Qux`
+- `cargo::rustc-env=ISTMO_AUTO_PLUGINS=::istmo_google_sign_in::SignInClient,::istmo_data_store::DataStoreClient`
+- `cargo::rustc-env=ISTMO_AUTO_REMOTE=::acme_model::LargeModelClient`
 
-Cargo hace estas env vars disponibles al compile time (scope
-`rustc-env`).
+Las dos se definen siempre, vacías cuando no aplica nada. `rustc-env`
+las hace visibles para las macros mientras compila el crate de la app.
 
-### 3. Macro `runtime!`
+### 3. La macro `runtime!`
 
-Al expandir, `istmo::runtime!` lee `ISTMO_AUTO_PLUGINS` y
-`ISTMO_AUTO_REMOTE` via `std::env::var_os`, parsea cada entry como
-`syn::Path`, y la agrega a lo que el usuario escribió:
+Al expandirse, `istmo::runtime!` lee `ISTMO_AUTO_PLUGINS` e
+`ISTMO_AUTO_REMOTE`, parsea cada entrada como un path de Rust y la
+agrega a lo que escribiste:
 
 ```rust
-// Tu source:
+// Tu código:
 istmo::runtime!(
     plugins: [MyOwnClient],
 );
 
-// Post-expansión (conceptualmente):
+// Después de expandir (conceptualmente):
 pub fn __istmo_configure_runtime(init: RuntimeInit) -> RuntimeInit {
     init.expects::<MyOwnClient>()
         .expects::<::istmo_google_sign_in::SignInClient>()
         .expects::<::istmo_data_store::DataStoreClient>()
+        .remotes::<::acme_model::LargeModelClient>()
         .finish()
 }
 ```
 
-Los duplicados (un plugin listado tanto manualmente como
-auto-wireado) se colapsan via HashSet — safe escribir ambos.
+Un plugin listado a mano y también auto-conectado se declara una sola
+vez — el runtime guarda sus declaraciones en un set, así que escribir
+ambos es seguro. La expansión además nombra las dos variables con
+`option_env!`, así que una lista que cambia recompila el crate.
 
-## Qué se auto-wirea
+## Qué se auto-conecta
 
-Sólo plugins que:
+Sólo los plugins que:
 
-- Tienen `client_type` seteado en su `istmo.toml`.
-- Vienen de una dep de Cargo que envía `istmo.toml`.
-- No están opt-out (ver abajo).
+- Vienen de una dependencia de Cargo **directa** cuyo crate ejecuta
+  `istmo_build::emit()` y declara `links = "…"`.
+- Tienen `client_type` en su `istmo.toml`.
 
-Plugins que sólo cargan tipos compartidos (sin `client_type`) se
-saltean — no necesitan registración en runtime.
+Los plugins sin `client_type` (sólo tipos compartidos, o un shim de
+servicio / background) se omiten — no hay client que declarar.
 
-## Target de deployment
+## Destino del deployment
 
 Cada plugin tiene un `default_deployment` — `local` o `remote`. El
 auto-wiring lo respeta:
 
-- `local` → el cliente va a `plugins`.
-- `remote` → el cliente va a `remote`.
+- `local` → el client va a `ISTMO_AUTO_PLUGINS` (`expects`).
+- `remote` → el client va a `ISTMO_AUTO_REMOTE` (`remotes`).
 
-`[[remote_override]]` app-side flippea la ubicación de un plugin sin
+`[[remote_override]]` del lado de la app cambia dónde va un plugin sin
 tocar el crate del plugin.
 
-## Opt-out por plugin
+## Desactivarlo
 
-No hay un flag built-in "saltea este plugin" hoy — cada plugin en tu
-grafo de dependencias auto-wirea. Si querés registrar
-condicionalmente, dropea auto-wiring y lista cada plugin manualmente:
+No hay un flag para "saltar" un plugin — se declara cada plugin con
+`client_type` entre tus dependencias directas. Declarar un plugin sólo
+permite que el runtime lo llame; no se construye nada hasta que
+obtienes su client.
+
+Para quitar el auto-wiring por completo, llama a la pasada de la app sin
+el paso de wiring y lista cada plugin tú mismo:
 
 ```rust
-// build.rs (en la raíz del crate app) — skipea emit_wiring_env entero
+// build.rs (en la raíz del crate de la app)
 fn main() {
-    istmo_build::emit_manifest_metadata_with_contracts("istmo.toml", &contracts);
-    // sin emit_wiring_env → ISTMO_AUTO_* nunca seteado → runtime! sólo ve lista manual
+    // Sólo codegen + sincronización de proyectos nativos: ISTMO_AUTO_*
+    // quedan sin definir y se omite la comprobación de [min_versions].
+    istmo_build::emit_app();
 }
 ```
 
-O:
-
 ```rust
-// src/lib.rs (en la raíz del crate app)
+// src/lib.rs (en la raíz del crate de la app)
 istmo::runtime!(
-    plugins: [SignInClient, DataStoreClient],   // sólo estos dos — omitir los demás
+    plugins: [SignInClient, DataStoreClient],   // sólo estos dos
 );
 ```
 
-## Debugging
+## Depuración
 
-Los fallos de auto-wiring usualmente son alguno de:
+Los fallos de auto-wiring suelen ser uno de estos:
 
-- **El plugin no tiene `client_type`** — chequeá el `istmo.toml` del
+- **El plugin no tiene `client_type`** — revisa el `istmo.toml` del
   plugin.
-- **La dep del plugin no tiene `links = "…"`** — Cargo dropea
-  emisiones de metadata cuando falta `links`. Cada crate plugin debe
-  cargar `links` en `[package]`.
-- **`istmo::runtime!` se expande en un crate que no corre
-  `emit_wiring_env`** — las env vars están seteadas sólo para el
-  crate cuyo `build.rs` la llama.
+- **El crate del plugin no tiene `links = "…"`** — Cargo sólo reenvía
+  metadatos de build scripts de crates que declaran `links`.
+- **El plugin es una dependencia transitiva** — las variables `DEP_*`
+  sólo llegan a los dependientes directos; agrega el plugin a tu propio
+  `Cargo.toml`.
+- **`istmo::runtime!` se expande en un crate cuyo `build.rs` no llama a
+  `emit()`** — las env vars sólo se definen para el crate cuyo build
+  script las imprime.
 
-Imprime el wiring efectivo durante build:
+Imprime el wiring efectivo durante el build:
 
 ```rust
-let resolved = istmo_build::emit_wiring_env(Some(&std::path::Path::new("istmo.toml")));
-println!("cargo::warning=local: {:?}", resolved.local_clients);
-println!("cargo::warning=remote: {:?}", resolved.remote_clients);
+// build.rs
+fn main() {
+    istmo_build::emit();
+
+    let app = istmo_build::Manifest::from_path("istmo.toml").ok();
+    let wiring = istmo_build::resolve_wiring(
+        &istmo_build::collect_dep_manifests(),
+        app.as_ref(),
+    );
+    println!("cargo::warning=local: {:?}", wiring.local_clients);
+    println!("cargo::warning=remote: {:?}", wiring.remote_clients);
+}
 ```
 
-## Por qué env vars y no `inventory`?
+## ¿Por qué env vars y no `inventory`?
 
-`inventory` / `linkme` hacen collection en link-time — cada crate se
-registra en una tabla global via una linker section. Funciona, pero:
+`inventory` / `linkme` recolectan en tiempo de link — cada crate se
+registra en una tabla global vía una sección del linker. Funciona, pero:
 
-- Builds debug pegan a quirks LLD/gold alrededor de merging de
-  sections.
-- Targets static-library (iOS) a veces dropean sections sin una
-  referencia.
-- `runtime!` con env vars es completamente determinístico al tiempo
-  de `cargo build` — sin involvement de linker.
+- Las librerías estáticas (el `staticlib` de iOS) pueden perder un
+  registro al que el linker no ve ninguna referencia.
+- El manejo de secciones cambia según linker y plataforma.
+- `runtime!` guiado por env vars se resuelve por completo en
+  `cargo build` — sin intervención del linker.
 
-El trade-off es que auto-wiring sólo ve plugins de deps de Cargo
-**directas**. Plugins transitivos no se auto-wirean — necesitas
-depender de ellos vos mismo si los quieres registrados.
+La contrapartida es que el auto-wiring sólo ve plugins de dependencias
+de Cargo **directas**.
 
 ## Siguiente
 
-- Forma de setup de runtime: [Conceptos → Arquitectura](/istmo/es/concepts/architecture/).
-- Deployment a `:remote`: [Avanzado → Proceso remoto](/istmo/es/advanced/remote-process/).
+- Forma del setup del runtime: [Conceptos → Arquitectura](/istmo/es/concepts/architecture/).
+- Desplegar en `:remote`: [Avanzado → Proceso remoto](/istmo/es/advanced/remote-process/).
