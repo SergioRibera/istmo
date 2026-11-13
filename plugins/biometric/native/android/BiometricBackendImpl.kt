@@ -329,11 +329,7 @@ class BiometricBackendImpl(
         }
     }
 
-    /**
-     * `v2:<mode>:<key alias>:<iv>:<ciphertext>` with Base64 binary fields.
-     * `v1:<mode>:<iv>:<ciphertext>` entries (written before keys were
-     * rotated per store) use the alias' fixed key, [legacyKeyAlias].
-     */
+    /** `v2:<mode>:<key alias>:<iv>:<ciphertext>` with Base64 binary fields. */
     private class StoredSecret(
         val mode: KeyMode,
         val keyAlias: String,
@@ -349,24 +345,18 @@ class BiometricBackendImpl(
         ).joinToString(":")
 
         companion object {
-            fun decode(legacyKeyAlias: String, raw: String): StoredSecret {
+            fun decode(raw: String): StoredSecret {
                 val parts = raw.split(":")
                 return try {
-                    when {
-                        parts.size == 5 && parts[0] == FORMAT_VERSION -> StoredSecret(
-                            KeyMode.valueOf(parts[1]),
-                            parts[2],
-                            Base64.decode(parts[3], Base64.NO_WRAP),
-                            Base64.decode(parts[4], Base64.NO_WRAP),
-                        )
-                        parts.size == 4 && parts[0] == LEGACY_FORMAT_VERSION -> StoredSecret(
-                            KeyMode.valueOf(parts[1]),
-                            legacyKeyAlias,
-                            Base64.decode(parts[2], Base64.NO_WRAP),
-                            Base64.decode(parts[3], Base64.NO_WRAP),
-                        )
-                        else -> throw BackendException(BiometricError.Backend("unrecognised vault entry"))
+                    if (parts.size != 5 || parts[0] != FORMAT_VERSION) {
+                        throw BackendException(BiometricError.Backend("unrecognised vault entry"))
                     }
+                    StoredSecret(
+                        KeyMode.valueOf(parts[1]),
+                        parts[2],
+                        Base64.decode(parts[3], Base64.NO_WRAP),
+                        Base64.decode(parts[4], Base64.NO_WRAP),
+                    )
                 } catch (e: IllegalArgumentException) {
                     // Unknown key mode or malformed Base64.
                     throw BackendException(BiometricError.Backend("corrupt vault entry: ${e.message}"))
@@ -376,7 +366,7 @@ class BiometricBackendImpl(
     }
 
     private fun storedSecret(alias: String): StoredSecret? =
-        vault.getString(alias, null)?.let { StoredSecret.decode(keyAlias(alias), it) }
+        vault.getString(alias, null)?.let(StoredSecret::decode)
 
     /** A key alias no previous store of [alias] used. */
     private fun freshKeyAlias(alias: String): String {
@@ -504,7 +494,6 @@ class BiometricBackendImpl(
         val stored = runCatching { storedSecret(alias) }.getOrNull()
         vault.edit().remove(alias).apply()
         stored?.keyAlias?.let(::deleteKey)
-        deleteKey(keyAlias(alias))
     }
 
     private fun deleteKey(keyAlias: String) {
@@ -579,7 +568,6 @@ class BiometricBackendImpl(
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val GCM_TAG_BITS = 128
         private const val FORMAT_VERSION = "v2"
-        private const val LEGACY_FORMAT_VERSION = "v1"
         private const val KEY_ALIAS_SUFFIX_BYTES = 8
         private const val ENROLLMENT_PREFERENCES = "dev.istmo.biometric.enrollment"
         private const val ENROLLMENT_GENERATION = "generation"

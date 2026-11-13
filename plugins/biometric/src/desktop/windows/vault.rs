@@ -34,87 +34,18 @@ pub(super) struct Vault {
     /// Keeps apps sharing the per-user Hello key store and
     /// `%LOCALAPPDATA%` apart: the app id, or the executable's file stem.
     app: String,
-    /// Namespace secrets were kept under before the app set an id (the
-    /// executable's file stem). Still read so they survive the switch.
-    legacy_app: Option<String>,
 }
 
 impl Vault {
     pub(super) fn new(app_id: Option<&str>) -> Self {
-        let exe = app_namespace();
-        match app_id.map(namespace_of) {
-            Some(app) if !app.is_empty() && app != exe => Self {
-                app,
-                legacy_app: Some(exe),
-            },
-            _ => Self {
-                app: exe,
-                legacy_app: None,
-            },
-        }
+        let app = app_id
+            .map(namespace_of)
+            .filter(|app| !app.is_empty())
+            .unwrap_or_else(app_namespace);
+        Self { app }
     }
 
-    fn legacy(&self) -> Option<Self> {
-        self.legacy_app.clone().map(|app| Self {
-            app,
-            legacy_app: None,
-        })
-    }
-
-    /// Seal `secret` under the current namespace, then drop any copy left
-    /// under the legacy one.
     pub(super) async fn store(
-        &self,
-        alias: &SecretAlias,
-        secret: &[u8],
-        parent_window: Option<isize>,
-        cancel: &CancelToken,
-    ) -> Result<(), BiometricError> {
-        self.store_here(alias, secret, parent_window, cancel)
-            .await?;
-        if let Some(legacy) = self.legacy() {
-            // Best effort: a stale legacy copy is shadowed by the new one.
-            let _ = legacy.delete_here(alias).await;
-        }
-        Ok(())
-    }
-
-    pub(super) async fn read(
-        &self,
-        alias: &SecretAlias,
-        parent_window: Option<isize>,
-        cancel: &CancelToken,
-    ) -> Result<Vec<u8>, BiometricError> {
-        match (
-            self.read_here(alias, parent_window, cancel).await,
-            self.legacy(),
-        ) {
-            (Err(BiometricError::SecretNotFound), Some(legacy)) => {
-                legacy.read_here(alias, parent_window, cancel).await
-            }
-            (outcome, _) => outcome,
-        }
-    }
-
-    pub(super) async fn delete(&self, alias: &SecretAlias) -> Result<(), BiometricError> {
-        self.delete_here(alias).await?;
-        match self.legacy() {
-            Some(legacy) => legacy.delete_here(alias).await,
-            None => Ok(()),
-        }
-    }
-
-    pub(super) async fn contains(&self, alias: &SecretAlias) -> Result<bool, BiometricError> {
-        if self.contains_here(alias).await? {
-            return Ok(true);
-        }
-        match self.legacy() {
-            Some(legacy) => legacy.contains_here(alias).await,
-            None => Ok(false),
-        }
-    }
-
-    async fn store_here(
         &self,
         alias: &SecretAlias,
         secret: &[u8],
@@ -150,7 +81,7 @@ impl Vault {
         std::fs::rename(&staging, &path).map_err(io_error)
     }
 
-    async fn read_here(
+    pub(super) async fn read(
         &self,
         alias: &SecretAlias,
         parent_window: Option<isize>,
@@ -203,7 +134,7 @@ impl Vault {
             .map_err(|_| BiometricError::KeyInvalidated)
     }
 
-    async fn delete_here(&self, alias: &SecretAlias) -> Result<(), BiometricError> {
+    pub(super) async fn delete(&self, alias: &SecretAlias) -> Result<(), BiometricError> {
         self.discard(alias)?;
         // Deleting a missing credential fails; nothing is left either way.
         if let Ok(action) = KeyCredentialManager::DeleteAsync(&self.credential_name(alias)) {
@@ -212,7 +143,7 @@ impl Vault {
         Ok(())
     }
 
-    async fn contains_here(&self, alias: &SecretAlias) -> Result<bool, BiometricError> {
+    pub(super) async fn contains(&self, alias: &SecretAlias) -> Result<bool, BiometricError> {
         if !self.path(alias)?.is_file() {
             return Ok(false);
         }

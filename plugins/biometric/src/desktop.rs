@@ -124,9 +124,8 @@ impl DesktopBiometric {
     /// Windows: namespace the vault by `id` (the app's bundle id, e.g.
     /// `option_env!("ISTMO_APP_BUNDLE_ID")` in the app crate) instead of
     /// the executable name, so renaming the binary keeps its secrets.
-    /// Secrets stored under the executable name are still read, and
-    /// move to the new namespace the next time they are stored. Ignored
-    /// elsewhere.
+    /// Secrets stored before the id was set are not carried over.
+    /// Ignored elsewhere.
     #[must_use]
     pub fn with_app_id(mut self, id: impl Into<String>) -> Self {
         self.options.app_id = Some(id.into());
