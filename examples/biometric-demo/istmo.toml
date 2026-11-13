@@ -4,7 +4,6 @@
 # Cargo.toml.
 id = "dev.istmo.biometricdemo"
 name = "istmo biometric demo"
-android_package = "dev.istmo.runtime"
 
 # Overrides the plugin's default Face ID usage description.
 [app.info_plist]

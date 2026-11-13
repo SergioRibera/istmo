@@ -7,6 +7,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import dev.istmo.plugins.googlesignin.SignInCodecsImpl
+import dev.istmo.plugins.googlesignin.SignInDispatcher
 import dev.istmo.runtime.AdMobCodecsImpl
 import dev.istmo.runtime.AdMobDispatcher
 import dev.istmo.runtime.AdMobFactoryImpl
@@ -18,8 +20,6 @@ import dev.istmo.runtime.NotificationsDispatcher
 import dev.istmo.runtime.PermissionsBackendImpl
 import dev.istmo.runtime.PermissionsCodecsImpl
 import dev.istmo.runtime.PermissionsDispatcher
-import dev.istmo.runtime.SignInCodecsImpl
-import dev.istmo.runtime.SignInDispatcher
 import dev.istmo.runtime.SignInFactoryImpl
 
 class RustMobileActivity : NativeActivity() {

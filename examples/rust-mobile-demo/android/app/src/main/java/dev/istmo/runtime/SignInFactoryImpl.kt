@@ -1,6 +1,9 @@
 package dev.istmo.runtime
 
 import android.app.Activity
+import dev.istmo.plugins.googlesignin.SignInBackend
+import dev.istmo.plugins.googlesignin.SignInConfig
+import dev.istmo.plugins.googlesignin.SignInFactory
 
 class SignInFactoryImpl(private val activity: Activity) : SignInFactory {
 

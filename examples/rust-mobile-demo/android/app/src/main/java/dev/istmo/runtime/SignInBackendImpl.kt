@@ -12,6 +12,12 @@ import com.google.android.gms.common.Scopes
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Scope
+import dev.istmo.plugins.googlesignin.SignInAccount
+import dev.istmo.plugins.googlesignin.SignInBackend
+import dev.istmo.plugins.googlesignin.SignInConfig
+import dev.istmo.plugins.googlesignin.SignInDispatcher
+import dev.istmo.plugins.googlesignin.SignInError
+import dev.istmo.plugins.googlesignin.SignInMode
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.Continuation

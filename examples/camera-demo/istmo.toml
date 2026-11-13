@@ -4,10 +4,6 @@
 # comes from Cargo.toml.
 id = "dev.istmo.camerademo"
 name = "istmo-camera demo"
-# Generated Kotlin lands next to the hand-written backend
-# implementations shipped by the camera plugin under
-# `dev.istmo.plugins.camera`.
-android_package = "dev.istmo.runtime"
 
 [min_versions]
 # CameraX ships CameraController features we rely on from API 24; the

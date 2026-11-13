@@ -3,10 +3,10 @@ package dev.istmo.liveactivitydemo
 import android.app.NativeActivity
 import android.os.Bundle
 import dev.istmo.plugins.liveactivity.LiveActivityBackendImpl
+import dev.istmo.plugins.liveactivity.LiveActivityCodecsImpl
+import dev.istmo.plugins.liveactivity.LiveActivityDispatcher
 import dev.istmo.runtime.IstmoHost
 import dev.istmo.runtime.IstmoRuntime
-import dev.istmo.runtime.LiveActivityCodecsImpl
-import dev.istmo.runtime.LiveActivityDispatcher
 
 class LiveActivityDemoActivity : NativeActivity() {
 

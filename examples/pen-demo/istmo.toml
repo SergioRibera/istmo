@@ -4,7 +4,6 @@
 # Cargo.toml.
 id = "dev.istmo.pendemo"
 name = "istmo-pen demo"
-android_package = "dev.istmo.runtime"
 
 [min_versions]
 android = 26
