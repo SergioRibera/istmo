@@ -80,8 +80,13 @@ match camera.request_access().await.map_err(CameraError::from)? {
 
 `access_status()` reads the current state without prompting;
 `request_access()` prompts when the user has not been asked yet. On
-Android `access_status()` reports `NotDetermined` until the permission
-is granted — it cannot tell a refusal from a first launch.
+Android `access_status()` reports `Denied` only once the system stops
+showing the prompt (the user refused it twice, or picked "Don't ask
+again" before Android 11). Android has no API for that state, so the
+backend infers it: the permission was requested before (a flag the
+backend persists) and the system no longer asks for a rationale. Never
+asked, or refused once with the prompt still available, reads
+`NotDetermined`, and `request_access()` shows the dialog again.
 
 | Platform | `request_access` |
 | -------- | ---------------- |

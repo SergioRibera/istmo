@@ -81,9 +81,14 @@ match camera.request_access().await.map_err(CameraError::from)? {
 
 `access_status()` lee el estado actual sin preguntar;
 `request_access()` muestra el diálogo si al usuario todavía no se le
-preguntó. En Android `access_status()` devuelve `NotDetermined` hasta
-que el permiso se concede — no distingue un rechazo de un primer
-arranque.
+preguntó. En Android `access_status()` devuelve `Denied` solo cuando
+el sistema deja de mostrar el diálogo (el usuario lo rechazó dos veces,
+o eligió "No volver a preguntar" antes de Android 11). Android no tiene
+API para ese estado, así que el backend lo deduce: el permiso ya se
+pidió antes (un indicador que el backend guarda) y el sistema ya no
+pide una justificación. Si nunca se preguntó, o se rechazó una vez y el
+diálogo sigue disponible, devuelve `NotDetermined` y `request_access()`
+vuelve a mostrar el diálogo.
 
 | Plataforma | `request_access` |
 | ---------- | ---------------- |

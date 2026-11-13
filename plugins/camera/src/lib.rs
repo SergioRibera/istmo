@@ -666,6 +666,12 @@ pub trait Camera {
     async fn concurrent_support(&self) -> Result<ConcurrentSupport, CameraError>;
 
     /// Current authorisation state. Non-blocking; does not prompt.
+    ///
+    /// [`AccessStatus::Denied`] means a prompt will not appear again. On
+    /// Android that is inferred: the permission was requested before and
+    /// the system no longer asks for a rationale. A permission refused
+    /// once that the system would still prompt for reads
+    /// [`AccessStatus::NotDetermined`].
     async fn access_status(&self) -> Result<AccessStatus, CameraError>;
 
     /// Prompt the user for access when the current status is

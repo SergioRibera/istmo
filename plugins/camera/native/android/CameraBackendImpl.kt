@@ -27,6 +27,7 @@ import androidx.camera.core.TorchState
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import dev.istmo.runtime.*
 import java.io.ByteArrayOutputStream
@@ -114,12 +115,41 @@ class CameraBackendImpl(
 
     // ---- Permissions ----------------------------------------------
 
-    override suspend fun access_status(): AccessStatus = when (
-        ContextCompat.checkSelfPermission(appContext, Manifest.permission.CAMERA)
-    ) {
-        PackageManager.PERMISSION_GRANTED -> AccessStatus.Granted
-        else -> AccessStatus.NotDetermined
+    /**
+     * Android has no API for "denied for good", so this uses the standard
+     * heuristic: a permission the app has requested before, that is not
+     * granted and for which the system no longer wants a rationale, will
+     * not be prompted for again — the user picked "Don't allow" twice (or
+     * "Don't ask again" before Android 11), or policy blocks it. That is
+     * [AccessStatus.Denied]. Never requested, or denied once with the
+     * prompt still available, is [AccessStatus.NotDetermined]:
+     * [request_access] will show the dialog. The "requested before" bit is
+     * persisted because the rationale flag alone cannot tell "never asked"
+     * from "denied for good" (both read `false`).
+     */
+    override suspend fun access_status(): AccessStatus {
+        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            return AccessStatus.Granted
+        }
+        if (!permissionRequested()) return AccessStatus.NotDetermined
+        // Without an activity the rationale flag is unreadable; report the
+        // conservative answer.
+        val activity = activityRef.get() ?: return AccessStatus.Denied
+        return if (ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)) {
+            AccessStatus.NotDetermined
+        } else {
+            AccessStatus.Denied
+        }
     }
+
+    private val permissionPrefs by lazy {
+        appContext.getSharedPreferences("${appContext.packageName}.istmo.camera", Context.MODE_PRIVATE)
+    }
+
+    private fun permissionRequested(): Boolean =
+        permissionPrefs.getBoolean(PERMISSION_REQUESTED_KEY, false)
 
     override suspend fun request_access(): AccessStatus = withContext(Dispatchers.Main) {
         val activity = activity()
@@ -132,6 +162,7 @@ class CameraBackendImpl(
                 ActivityResultContracts.RequestPermission(),
             ) { granted ->
                 launcher.unregister()
+                permissionPrefs.edit().putBoolean(PERMISSION_REQUESTED_KEY, true).apply()
                 if (cont.isActive) {
                     cont.resume(if (granted) AccessStatus.Granted else AccessStatus.Denied)
                 }
@@ -654,5 +685,8 @@ class CameraBackendImpl(
     private companion object {
         /** Quality the ImageCapture use case encodes at; other requests re-encode. */
         const val CAPTURE_JPEG_QUALITY = 95
+
+        /** Set once the CAMERA prompt has been launched and answered. */
+        const val PERMISSION_REQUESTED_KEY = "camera_permission_requested"
     }
 }
