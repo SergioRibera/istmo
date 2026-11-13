@@ -331,8 +331,7 @@ pub fn redact(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```
 /// use istmo::{NativeHandleId, message, plugin};
 ///
-/// #[non_exhaustive]
-/// pub enum Credential {}
+/// pub struct Credential(std::convert::Infallible);
 ///
 /// #[message]
 /// pub struct Account {

@@ -76,9 +76,8 @@ pub const FILE_PICKER_PLUGIN_ID: &str = "istmo.file_picker";
 /// Distinct from other handle markers so the type system rejects passing
 /// a `NativeHandle<Credential>` where a `NativeHandle<FileRef>` is
 /// expected.
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum FileRef {}
+#[derive(Debug, Clone, Copy)]
+pub struct FileRef(std::convert::Infallible);
 
 /// Filter describing what kinds of files the picker should offer.
 ///

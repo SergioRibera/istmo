@@ -33,9 +33,8 @@ use istmo_macros::{message, owned, plugin};
 /// Wire identifier for the Google Sign-In plugin.
 pub const GOOGLE_SIGN_IN_PLUGIN_ID: &str = "istmo.google_sign_in";
 
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum Credential {}
+#[derive(Debug, Clone, Copy)]
+pub struct Credential(std::convert::Infallible);
 
 /// How the platform should behave when no cached credential is
 /// available.

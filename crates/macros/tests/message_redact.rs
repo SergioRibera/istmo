@@ -3,8 +3,8 @@
 
 use istmo::{NativeHandleId, Runtime};
 
-#[derive(Debug)]
-pub enum Token {}
+#[derive(Debug, Clone, Copy)]
+pub struct Token(std::convert::Infallible);
 
 #[istmo::message]
 #[derive(Clone, PartialEq, Eq)]

@@ -326,9 +326,8 @@ fn generated_client_reads_stream_events() {
     backend.join().unwrap();
 }
 
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum Credential {}
+#[derive(Debug, Clone, Copy)]
+pub struct Credential(std::convert::Infallible);
 
 #[istmo::message]
 #[derive(Debug)]

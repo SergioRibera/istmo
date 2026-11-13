@@ -14,19 +14,16 @@ use istmo_macros::plugin;
 pub const ADMOB_PLUGIN_ID: &str = "istmo.admob";
 
 /// Marker for a loaded interstitial ad's [`NativeHandle`].
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum Interstitial {}
+#[derive(Debug, Clone, Copy)]
+pub struct Interstitial(std::convert::Infallible);
 
 /// Marker for a loaded rewarded ad's [`NativeHandle`].
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum Rewarded {}
+#[derive(Debug, Clone, Copy)]
+pub struct Rewarded(std::convert::Infallible);
 
 /// Marker for an on-screen banner's [`NativeHandle`].
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum Banner {}
+#[derive(Debug, Clone, Copy)]
+pub struct Banner(std::convert::Infallible);
 
 include!(concat!(env!("OUT_DIR"), "/admob_types.rs"));
 

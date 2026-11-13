@@ -27,9 +27,8 @@ pub use typed::{Restored, TypedLiveActivity};
 /// Wire identifier for the live-activity plugin.
 pub const LIVE_ACTIVITY_PLUGIN_ID: &str = "istmo.live_activity";
 
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum LiveActivityToken {}
+#[derive(Debug, Clone, Copy)]
+pub struct LiveActivityToken(std::convert::Infallible);
 
 /// How prominently the platform should render the live activity.
 #[message(crate = "::istmo_core")]

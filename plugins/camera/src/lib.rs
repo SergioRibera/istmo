@@ -67,9 +67,8 @@ use istmo_macros::{message, owned, plugin, stream};
 pub const CAMERA_PLUGIN_ID: &str = "istmo.camera";
 
 /// Phantom tag for the opaque native camera session handle.
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum CameraSessionTag {}
+#[derive(Debug, Clone, Copy)]
+pub struct CameraSessionTag(std::convert::Infallible);
 
 // -------------------------------------------------------------------
 // Init / runtime config
