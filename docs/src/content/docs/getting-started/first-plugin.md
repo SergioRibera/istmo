@@ -199,7 +199,8 @@ battery-plugin = { path = "../plugins/battery" }
 That is all. The app's `build.rs` reads the plugin's manifest, so
 `istmo::runtime!()` in the app's `src/lib.rs` wires `BatteryClient`
 without listing it (see [auto-wiring](/istmo/advanced/auto-wiring/)),
-and the generated `IstmoPluginRegistry` constructs
+and, because the crate ships `native/android/` and `native/ios/`, the
+generated `IstmoPluginRegistry` constructs
 `com.myapp.battery.BatteryBackendImpl(context)` (with the application
 context) on Android and `BatteryBackendImpl()` on iOS. Name another
 class with `android_backend` / `ios_backend` in `istmo.toml`; a

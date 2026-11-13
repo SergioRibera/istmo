@@ -98,9 +98,12 @@ import IstmoRuntime
 IstmoApp.run()
 ```
 
-Every plugin whose `istmo.toml` declares `auto_register = true` (the
-default) is registered, including plugins whose Android backend needs
-the host activity. See
+Every plugin with a native backend on that platform (shipped under
+`native/<platform>/` or named with `android_backend` / `ios_backend`)
+is registered unless its `istmo.toml` sets `auto_register = false`,
+including plugins whose Android backend needs the host activity.
+Plugins hosted in Rust have nothing native to register and stay out.
+See
 [Auto-registration](/istmo/build-scripts/auto-register/) for the
 mechanism.
 

@@ -74,11 +74,13 @@ comprueba.
 [plugin]
 id          = "acme.image_hasher"
 client_type = "::image_hasher::ImageHasherClient"
-# Nada nativo implementa este plugin: lo deja fuera del
-# IstmoPluginRegistry generado de las apps, que si no construiría un
-# `ImageHasherBackendImpl` en Android e iOS.
-auto_register = false
 ```
+
+No hace falta `auto_register = false`: el `IstmoPluginRegistry`
+generado sólo registra plugins con un backend nativo (un directorio
+`native/<plataforma>/`, `android_backend` / `ios_backend`, o un opt-in
+de la app), y este crate no trae ninguno. Ver
+[Auto-registro](/istmo/es/build-scripts/auto-register/#qué-significa-elegible).
 
 `build.rs`:
 

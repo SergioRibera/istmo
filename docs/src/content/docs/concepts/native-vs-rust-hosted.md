@@ -41,7 +41,10 @@ The app contributes:
   platform, when the plugin ships none for that platform.
 - Nothing for registration: the generated `IstmoPluginRegistry`, called
   by `IstmoGameActivity` / `IstmoHost.onCreate` and `IstmoApp.run()`,
-  hooks every backend into `IstmoRuntime`.
+  hooks every backend the plugin ships or declares into `IstmoRuntime`.
+  A backend the app writes itself for a plugin without one is
+  registered once the app opts in with `[[app.plugin]] auto_register =
+  true` (see [Auto-registration](/istmo/build-scripts/auto-register/#what-eligible-means)).
 
 Reference plugins: [`google-sign-in`](/istmo/plugins/google-sign-in/),
 [`data-store`](/istmo/plugins/data-store/),

@@ -42,7 +42,10 @@ La app contribuye:
   plataforma, cuando el plugin no trae uno para esa plataforma.
 - Nada para el registro: el `IstmoPluginRegistry` generado, que llaman
   `IstmoGameActivity` / `IstmoHost.onCreate` e `IstmoApp.run()`,
-  engancha cada backend en `IstmoRuntime`.
+  engancha en `IstmoRuntime` cada backend que el plugin trae o declara.
+  Un backend que la app escribe para un plugin que no trae ninguno se
+  registra cuando la app lo pide con `[[app.plugin]] auto_register =
+  true` (ver [Auto-registro](/istmo/es/build-scripts/auto-register/#qué-significa-elegible)).
 
 Plugins de referencia: [`google-sign-in`](/istmo/es/plugins/google-sign-in/),
 [`data-store`](/istmo/es/plugins/data-store/),

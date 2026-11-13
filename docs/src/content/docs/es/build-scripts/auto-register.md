@@ -144,6 +144,24 @@ Un plugin aparece en el registry cuando se cumple **todo** esto:
 - `[app] auto_register` no es `false`.
 - El contrato tiene algo que despachar: un contrato que sólo lleva
   tipos (sin métodos ni `init`) no tiene backend y queda fuera.
+- Existe una clase de backend nativa **en esa plataforma** (se evalúa
+  por plataforma, así que un plugin puede registrarse en Android y no
+  en iOS). Alguna de estas:
+  - el crate del plugin trae fuentes `native/android/` (Android) o
+    `native/ios/` (iOS);
+  - el `istmo.toml` del plugin declara `android_backend` /
+    `ios_backend`;
+  - la app genera el backend con `AppOpts::seed_backends` (en Android
+    sólo para contratos sin `android_package` de plugin);
+  - la app lo pide explícitamente con `[[app.plugin]] auto_register =
+    true`: así se registra un contrato local de la app cuyo
+    `<T>BackendImpl` escribe la propia app.
+
+  Un plugin alojado en Rust no cumple ninguna, así que queda fuera del
+  registry sin necesidad de `auto_register = false`.
+
+`auto_register = false` (en el plugin, en `[[app.plugin]]` o en `[app]`)
+siempre gana sobre la última regla.
 
 ## Construcción
 
@@ -228,6 +246,10 @@ Si al registry le falta un plugin que esperabas:
 - Confirma que no tengas un override `[[app.plugin]]` que matchee en tu
   app.
 - Confirma que no estés usando `role = "client"` para ese plugin.
+- Confirma que exista un backend para esa plataforma: el crate del
+  plugin trae `native/<plataforma>/` o declara `android_backend` /
+  `ios_backend`. Para un contrato local de la app, agrega
+  `[[app.plugin]] id = "…"` con `auto_register = true`.
 
 ## Siguiente
 

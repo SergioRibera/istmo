@@ -69,11 +69,13 @@ The error type of a `Result` return must implement
 [plugin]
 id          = "acme.image_hasher"
 client_type = "::image_hasher::ImageHasherClient"
-# Nothing native implements this plugin: keep it out of the apps'
-# generated IstmoPluginRegistry, which would otherwise construct an
-# `ImageHasherBackendImpl` on Android and iOS.
-auto_register = false
 ```
+
+No `auto_register = false` is needed: the generated
+`IstmoPluginRegistry` only registers plugins with a native backend (a
+`native/<platform>/` directory, `android_backend` / `ios_backend`, or an
+app opt-in), and this crate ships none. See
+[Auto-registration](/istmo/build-scripts/auto-register/#what-eligible-means).
 
 `build.rs`:
 

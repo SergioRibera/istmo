@@ -186,7 +186,21 @@ into the same app module, so keep type names unique across plugins
 
 By default `istmo-build` generates an `IstmoPluginRegistry` that wires
 every eligible plugin dispatcher for you, and the runtime's entry points
-call it before the Rust entry point runs:
+call it before the Rust entry point runs. A plugin is registered on a
+platform only when istmo knows of a backend class there: the crate
+ships `native/<platform>/` sources (as above) or its `istmo.toml`
+declares `android_backend` / `ios_backend`. When the backend lives in
+the app, as in [Implement the backend](#implement-the-backend), the app
+opts in for that plugin:
+
+```toml
+# the app's istmo.toml
+[[app.plugin]]
+id            = "acme.share_sheet"
+auto_register = true
+```
+
+The runtime's entry points then register it with the rest:
 
 ```kotlin
 // IstmoGameActivity, the template's launcher, already does this.

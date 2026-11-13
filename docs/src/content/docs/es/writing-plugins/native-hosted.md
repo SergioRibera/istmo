@@ -189,7 +189,22 @@ nativas.
 
 Por defecto `istmo-build` genera un `IstmoPluginRegistry` que cablea
 cada dispatcher de plugin elegible por ti, y los entry points del
-runtime lo llaman antes de que corra el entry point de Rust:
+runtime lo llaman antes de que corra el entry point de Rust. Un plugin
+se registra en una plataforma sólo cuando istmo conoce una clase de
+backend ahí: el crate trae fuentes `native/<plataforma>/` (como arriba)
+o su `istmo.toml` declara `android_backend` / `ios_backend`. Cuando el
+backend vive en la app, como en
+[Implementa el backend](#implementa-el-backend), la app lo pide para
+ese plugin:
+
+```toml
+# el istmo.toml de la app
+[[app.plugin]]
+id            = "acme.share_sheet"
+auto_register = true
+```
+
+Luego los entry points del runtime lo registran junto con el resto:
 
 ```kotlin
 // IstmoGameActivity, la launcher del template, ya hace esto.
