@@ -1,0 +1,42 @@
+name: generated-rust
+
+# Builds `crates/lint-check` under clippy: it expands every istmo macro
+# shape and includes Rust that `istmo-build` generates, with a strict
+# downstream lint set and `#![deny(warnings)]`. Macro output is linted as
+# the user crate's own code, so a change that makes apps warn fails here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "crates/macros/**"
+      - "crates/core/**"
+      - "crates/build/**"
+      - "crates/plugins/**"
+      - "crates/lint-check/**"
+      - "src/**"
+      - "Cargo.toml"
+      - ".github/workflows/generated-rust.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: generated-rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy over the generated code
+        run: cargo clippy -p istmo-lint-check --all-targets
+      - name: Rustdoc over the generated docs
+        run: cargo doc --no-deps -p istmo-lint-check
+        env:
+          RUSTDOCFLAGS: -D warnings
