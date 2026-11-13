@@ -2,7 +2,7 @@
 title: Share
 description: Send text, links and files through the OS share sheet, and receive what other apps share into yours — Android, iOS, macOS, Windows.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 import PluginTypes from '../../../generated/plugins/share-types.mdx';
@@ -314,6 +314,12 @@ share
 | macOS, Windows, Linux | — | `ShareError::Unsupported` |
 
 `capabilities().direct_share` reports whether the setup is in place.
+
+Android also lists the targets in the launcher's long-press menu.
+`ShareTarget::with_uri` sets the deep link that shortcut opens (just
+the app without one), and `ShareTarget::launcher_only()` publishes only
+that launcher shortcut: it stays out of the share sheet and needs no
+receive alias.
 
 ## Wire types
 

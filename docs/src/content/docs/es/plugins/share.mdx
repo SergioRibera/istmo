@@ -2,7 +2,7 @@
 title: Share
 description: Envía texto, enlaces y archivos con el menú de compartir del sistema y recibe lo que otras apps comparten con la tuya — Android, iOS, macOS, Windows.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 import PluginTypes from '../../../../generated/plugins/share-types.mdx';
@@ -318,6 +318,12 @@ share
 | macOS, Windows, Linux | — | `ShareError::Unsupported` |
 
 `capabilities().direct_share` indica si la configuración está hecha.
+
+Android además lista los targets en el menú de pulsación larga del
+launcher. `ShareTarget::with_uri` define el deep link que abre ese
+shortcut (sin él, solo abre la app), y `ShareTarget::launcher_only()`
+publica únicamente ese shortcut del launcher: queda fuera del share
+sheet y no necesita el alias de recepción.
 
 ## Tipos de wire
 
