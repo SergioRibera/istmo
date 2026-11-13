@@ -208,17 +208,32 @@ fn base_client_capabilities_round_trips() {
     backend.join().unwrap();
 }
 
+fn restored(
+    handle: u64,
+    activity_type: &str,
+    elapsed: u64,
+) -> istmo_live_activity::RestoredActivity {
+    istmo_live_activity::RestoredActivity {
+        handle: NativeHandleId(handle),
+        activity_type: activity_type.into(),
+        attributes: codec::encode(&TimerAttributes { title: "a".into() }).unwrap(),
+        state: codec::encode(&TimerState { elapsed }).unwrap(),
+    }
+}
+
+/// No `ReleaseNativeHandle` was emitted: a skipped activity keeps running.
+fn assert_nothing_released(outbound: &flume::Receiver<Envelope>) {
+    if let Ok(env) = outbound.try_recv() {
+        panic!("unexpected frame {:?}", env.frame);
+    }
+}
+
 #[test]
-fn restore_skips_undecodable_payload_and_releases_its_handle() {
+fn restore_skips_undecodable_payload_without_releasing_it() {
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let outbound = init.outbound;
-    let good = istmo_live_activity::RestoredActivity {
-        handle: NativeHandleId(1),
-        activity_type: "timer".into(),
-        attributes: codec::encode(&TimerAttributes { title: "a".into() }).unwrap(),
-        state: codec::encode(&TimerState { elapsed: 5 }).unwrap(),
-    };
+    let good = restored(1, "timer", 5);
     let bad = istmo_live_activity::RestoredActivity {
         handle: NativeHandleId(2),
         activity_type: "timer".into(),
@@ -244,30 +259,19 @@ fn restore_skips_undecodable_payload_and_releases_its_handle() {
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].handle.id(), NativeHandleId(1));
     assert_eq!(restored[0].state, TimerState { elapsed: 5 });
-
-    let released = outbound.recv().expect("release frame");
-    match released.frame {
-        Frame::ReleaseNativeHandle { handle_id } => assert_eq!(handle_id, NativeHandleId(2)),
-        other => panic!("expected ReleaseNativeHandle, got {other:?}"),
-    }
+    assert_nothing_released(&outbound);
 }
 
 #[test]
-fn restore_releases_activities_reported_under_another_type() {
+fn restore_skips_activities_reported_under_another_type() {
     let init = Runtime::mock();
     let rt = init.runtime.clone();
     let outbound = init.outbound;
-    let foreign = istmo_live_activity::RestoredActivity {
-        handle: NativeHandleId(3),
-        activity_type: "delivery".into(),
-        attributes: codec::encode(&TimerAttributes { title: "b".into() }).unwrap(),
-        state: codec::encode(&TimerState { elapsed: 1 }).unwrap(),
-    };
     let backend = spawn_backend(
         rt.clone(),
         outbound.clone(),
         "restore_active",
-        Ok(codec::encode(&vec![foreign]).unwrap()),
+        Ok(codec::encode(&vec![restored(3, "delivery", 1)]).unwrap()),
     );
 
     let activities =
@@ -276,8 +280,59 @@ fn restore_releases_activities_reported_under_another_type() {
     backend.join().unwrap();
 
     assert!(restored.is_empty());
-    match outbound.recv().expect("release frame").frame {
-        Frame::ReleaseNativeHandle { handle_id } => assert_eq!(handle_id, NativeHandleId(3)),
-        other => panic!("expected ReleaseNativeHandle, got {other:?}"),
-    }
+    assert_nothing_released(&outbound);
+}
+
+#[test]
+fn restore_twice_does_not_hand_out_an_owned_handle_again() {
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let outbound = init.outbound;
+    let activities =
+        TypedLiveActivity::<TimerAttributes, TimerState>::new(&rt, "timer").expect("bind");
+
+    // An activity started by this process...
+    let backend = spawn_backend(
+        rt.clone(),
+        outbound.clone(),
+        "start",
+        Ok(codec::encode(&NativeHandleId(10)).unwrap()),
+    );
+    let started = pollster::block_on(activities.start(
+        TimerAttributes { title: "a".into() },
+        TimerState { elapsed: 0 },
+        ActivityStyle::Standard,
+    ))
+    .expect("start ok");
+    backend.join().unwrap();
+
+    // ...and one left by a previous process; the backend reports both,
+    // under the handles they already have.
+    let reported =
+        || Ok(codec::encode(&vec![restored(10, "timer", 0), restored(11, "timer", 7)]).unwrap());
+    let backend = spawn_backend(rt.clone(), outbound.clone(), "restore_active", reported());
+    let first = pollster::block_on(activities.restore()).expect("restore ok");
+    backend.join().unwrap();
+    assert_eq!(
+        first.iter().map(|r| r.handle.id()).collect::<Vec<_>>(),
+        vec![NativeHandleId(11)]
+    );
+
+    let backend = spawn_backend(rt, outbound.clone(), "restore_active", reported());
+    let second = pollster::block_on(activities.restore()).expect("restore ok");
+    backend.join().unwrap();
+    assert!(second.is_empty());
+    assert_nothing_released(&outbound);
+
+    // The original owners still release their activities.
+    drop(started);
+    drop(first);
+    let mut released: Vec<_> = (0..2)
+        .map(|_| match outbound.recv().expect("release frame").frame {
+            Frame::ReleaseNativeHandle { handle_id } => handle_id,
+            other => panic!("expected ReleaseNativeHandle, got {other:?}"),
+        })
+        .collect();
+    released.sort_by_key(|id| id.0);
+    assert_eq!(released, vec![NativeHandleId(10), NativeHandleId(11)]);
 }

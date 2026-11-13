@@ -1,6 +1,8 @@
+use std::collections::HashSet;
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use istmo_core::sync::lock;
 use istmo_core::{IstmoError, Message, NativeHandle, NativeHandleId, Runtime, codec};
 
 use crate::{
@@ -79,6 +81,8 @@ where
                 android_tier_hint,
             )
             .await?;
+        // A later `restore` may report this activity under the same id.
+        claim(self.runtime(), id);
         Ok(NativeHandle::adopt(self.runtime(), id))
     }
 
@@ -141,33 +145,35 @@ where
     /// Recover the activities of this adapter's `activity_type` that
     /// outlived a previous process.
     ///
-    /// The backend only hands out handles for this `activity_type`.
-    /// Every handle is adopted before any payload is decoded, so an
-    /// activity whose payload no longer decodes (e.g. after a schema
-    /// change), or that a misbehaving backend reports under another
-    /// type, is skipped with a warning and its handle released instead
-    /// of leaking or failing the whole batch.
+    /// The backend only hands out handles for this `activity_type`, and
+    /// hands out the same handle again for an activity it already
+    /// reported. A handle this process already owns — from an earlier
+    /// `restore` or from [`Self::start`] — is left out, so calling it
+    /// again never yields a second owner whose drop would end an
+    /// activity the first one still uses.
     ///
-    /// Call it once per process: each call allocates new handles for
-    /// the same activities.
+    /// An activity whose payload no longer decodes (e.g. after a schema
+    /// change), or that a misbehaving backend reports under another
+    /// type, is skipped with a warning and *not* adopted: dropping an
+    /// owning handle ends the activity, and a skipped one is left
+    /// running instead (the platform dismisses it eventually).
     pub async fn restore(&self) -> Result<Vec<Restored<A, C>>, ActivityError> {
         let all: Vec<RestoredActivity> =
             translate(self.client.restore_active(self.activity_type.clone()).await)?;
-        let adopted: Vec<_> = all
-            .into_iter()
-            .map(|r| {
-                let handle = NativeHandle::<LiveActivityToken>::adopt(self.runtime(), r.handle);
-                (handle, r.activity_type, r.attributes, r.state)
-            })
-            .collect();
 
-        let mut out = Vec::with_capacity(adopted.len());
-        for (handle, activity_type, attributes, state) in adopted {
+        let mut out = Vec::with_capacity(all.len());
+        for RestoredActivity {
+            handle,
+            activity_type,
+            attributes,
+            state,
+        } in all
+        {
             if activity_type != self.activity_type {
                 tracing::warn!(
                     expected = %self.activity_type,
                     got = %activity_type,
-                    handle = handle.id().0,
+                    handle = handle.0,
                     "skipping restored live activity of another type",
                 );
                 continue;
@@ -176,14 +182,19 @@ where
                 codec::decode::<C>(&state).map(|(s, _)| (attributes, s))
             });
             match decoded {
-                Ok((attributes, state)) => out.push(Restored {
-                    handle,
-                    attributes,
-                    state,
-                }),
+                Ok((attributes, state)) => {
+                    if !claim(self.runtime(), handle) {
+                        continue;
+                    }
+                    out.push(Restored {
+                        handle: NativeHandle::adopt(self.runtime(), handle),
+                        attributes,
+                        state,
+                    });
+                }
                 Err(err) => tracing::warn!(
                     activity_type = %self.activity_type,
-                    handle = handle.id().0,
+                    handle = handle.0,
                     %err,
                     "skipping restored live activity with undecodable payload",
                 ),
@@ -241,7 +252,7 @@ where
     A: Message,
     C: Message,
 {
-    /// Owning handle; dropping it releases the platform activity.
+    /// Owning handle; dropping it ends the platform activity.
     pub handle: NativeHandle<LiveActivityToken>,
     /// Attributes as passed to `start()`.
     pub attributes: A,
@@ -261,6 +272,29 @@ where
             .field("state", &self.state)
             .finish()
     }
+}
+
+/// Record that this process owns `id` on `runtime`; `false` when it
+/// already did.
+///
+/// Handle ids are never reused by a runtime, so ids whose owner has
+/// since been dropped or ended can stay recorded: the backend no longer
+/// reports them. Kept per runtime, since ids are allocated per runtime;
+/// entries of dropped runtimes are discarded first, so a new runtime at a
+/// reused address starts clean.
+fn claim(runtime: &Arc<Runtime>, id: NativeHandleId) -> bool {
+    type Claimed = Vec<(Weak<Runtime>, HashSet<u64>)>;
+    static CLAIMED: OnceLock<Mutex<Claimed>> = OnceLock::new();
+    let mut claimed = lock(CLAIMED.get_or_init(Mutex::default));
+    claimed.retain(|(rt, _)| rt.strong_count() > 0);
+    let found = claimed
+        .iter()
+        .position(|(rt, _)| std::ptr::eq(rt.as_ptr(), Arc::as_ptr(runtime)));
+    let at = found.unwrap_or_else(|| {
+        claimed.push((Arc::downgrade(runtime), HashSet::new()));
+        claimed.len() - 1
+    });
+    claimed[at].1.insert(id.0)
 }
 
 fn translate<T>(result: Result<T, IstmoError>) -> Result<T, ActivityError> {

@@ -146,9 +146,17 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
             } catch {
                 throw ActivityError.decode(String(describing: error))
             }
-            let id = IstmoRuntime.shared.allocHandleId(pluginId: LiveActivityDispatcher.PLUGIN_ID)
-            queue.sync {
+            // An activity that already has a handle (started by this
+            // process, or reported by an earlier restore) keeps it:
+            // releasing a handle ends its activity, so a second handle
+            // would let either owner's drop end it under the other.
+            let id: NativeHandleId = queue.sync {
+                if let existing = self.activities.first(where: { $0.value.id == activity.id })?.key {
+                    return existing
+                }
+                let id = IstmoRuntime.shared.allocHandleId(pluginId: LiveActivityDispatcher.PLUGIN_ID)
                 self.activities[id] = activity
+                return id
             }
             out.append(
                 RestoredActivity(
@@ -162,6 +170,10 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
         return out
     }
 
+    /// The Rust owner dropped the handle: it no longer drives the
+    /// activity, so the activity ends, like on Android. Restored
+    /// activities whose payload the Rust side cannot decode are never
+    /// adopted, so they never reach here and keep running.
     public func releaseHandle(_ handle: NativeHandleId) {
         let activity = queue.sync { activities.removeValue(forKey: handle) }
         guard let activity else { return }

@@ -247,10 +247,17 @@ pub trait LiveActivity {
     async fn capabilities(&self) -> Result<PlatformCapabilities, ActivityError>;
 
     /// The activities of `activity_type` that outlived a previous
-    /// process, each under a freshly allocated handle the caller now
-    /// owns. Backends only allocate handles for that type: activities of
-    /// other types stay untouched until their own adapter restores them,
-    /// so nothing is handed out that no one will release.
+    /// process (or were started by this one), each under a handle the
+    /// caller owns. Backends only allocate handles for that type:
+    /// activities of other types stay untouched until their own adapter
+    /// restores them, so nothing is handed out that no one will release.
+    ///
+    /// An activity that already has a handle in this process is reported
+    /// under that same handle, never a second one: releasing a handle
+    /// ends its activity, so two handles for one activity would let the
+    /// first drop end it under the other's feet.
+    /// [`TypedLiveActivity::restore`] leaves out handles the process
+    /// already owns.
     async fn restore_active(
         &self,
         activity_type: String,

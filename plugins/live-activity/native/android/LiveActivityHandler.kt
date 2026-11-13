@@ -33,8 +33,16 @@ interface LiveActivityHandler {
         dismissal: dev.istmo.runtime.DismissalPolicy,
     )
 
+    /**
+     * Activities of this type still showing. One that already has a
+     * handle (from [start] or an earlier call) must be reported under
+     * that handle, never a newly allocated one: [releaseHandle] ends the
+     * activity, so two handles would let the first drop end it while the
+     * other is still in use.
+     */
     suspend fun restoreActive(): List<dev.istmo.runtime.RestoredActivity> = emptyList()
 
+    /** The Rust owner dropped [handle]: end its activity and forget it. */
     fun releaseHandle(handle: NativeHandleId)
 }
 
