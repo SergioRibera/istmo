@@ -21,5 +21,7 @@ artifact = "play-services-code-scanner"
 version = "16.1.0"
 
 [min_versions]
+# `play-services-code-scanner` minSdk.
 android = 21
+# `UIWindowScene` lookup of the presenting controller.
 ios = "13.0"
