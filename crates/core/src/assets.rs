@@ -5,13 +5,14 @@
 //!
 //! - **Android** — assets read from the APK's `assets/` directory via
 //!   `AAssetManager`.
-//! - **iOS / bundled macOS** — assets read from the app's `NSBundle`
-//!   Resources directory.
-//! - **Desktop** — assets read from the filesystem, resolved via
-//!   (1) the runtime `ISTMO_ASSETS_DIR` env var, (2) the build-time
-//!   `ISTMO_APP_ASSETS_DIR` baked into the binary by `emit_app`,
-//!   (3) `<exe_dir>/assets/`, and finally (4) `<CARGO_MANIFEST_DIR>/assets/`
-//!   in dev builds.
+//! - **iOS** — assets read from the `Assets/` folder reference inside
+//!   the app bundle's Resources.
+//! - **Desktop (macOS included)** — assets read from the filesystem,
+//!   resolved via (1) the runtime `ISTMO_ASSETS_DIR` env var, (2) the
+//!   build-time `ISTMO_APP_ASSETS_DIR` baked into the binary by
+//!   `emit_app` when it exists, (3) `<exe_dir>/assets/` (plus
+//!   `Contents/Resources/assets/` inside a macOS `.app`), and finally
+//!   (4) `<CARGO_MANIFEST_DIR>/assets/` in dev builds.
 //!
 //! The public surface mirrors [`std::fs::read`] / [`std::fs::File`]
 //! semantics: paths are [`Path`]s, results are [`io::Result`], and the

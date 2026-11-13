@@ -10,9 +10,11 @@
 //!    …
 //! 2. `env!("ISTMO_APP_ASSETS_DIR")` — build-time value baked into the
 //!    binary by `emit_app` when `[app] assets_dir = "…"` is set in the
-//!    consuming app's `istmo.toml`.
-//! 3. `<exe_dir>/assets/` — release-install convention, matches what
-//!    `emit_app` copies into `target/<mode>/`.
+//!    consuming app's `istmo.toml` (or the `OUT_DIR` staging tree
+//!    otherwise). Skipped when the directory does not exist, as on a
+//!    machine other than the one that built the binary.
+//! 3. `<exe_dir>/assets/` — release-install convention; inside a macOS
+//!    `.app` also `Contents/Resources/assets/`.
 //! 4. `env!("CARGO_MANIFEST_DIR")/assets/` — the crate root, only
 //!    populated in `cargo run` dev builds.
 //!
@@ -166,20 +168,38 @@ fn resolve_root() -> PathBuf {
     {
         return PathBuf::from(raw);
     }
+    // The baked directory is a build-machine path (often `OUT_DIR`), so
+    // a shipped binary that cannot see it falls through to the
+    // install-relative candidates.
     if let Some(baked) = build_time
         && !baked.is_empty()
+        && Path::new(baked).is_dir()
     {
         return PathBuf::from(baked);
     }
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
+        && let Some(candidate) = exe_relative_roots(parent).find(|dir| dir.is_dir())
     {
-        let candidate = parent.join("assets");
-        if candidate.is_dir() {
-            return candidate;
-        }
+        return candidate;
     }
     PathBuf::from(manifest).join("assets")
+}
+
+/// Install-relative asset roots next to the executable in `exe_dir`:
+/// `<exe_dir>/assets`, then — inside a macOS `.app`, where the binary
+/// sits in `Contents/MacOS` — `Contents/Resources/assets`.
+fn exe_relative_roots(exe_dir: &Path) -> impl Iterator<Item = PathBuf> {
+    let bundle_resources = exe_dir
+        .file_name()
+        .is_some_and(|name| cfg!(target_os = "macos") && name == "MacOS")
+        .then(|| {
+            exe_dir
+                .parent()
+                .map(|contents| contents.join("Resources/assets"))
+        })
+        .flatten();
+    std::iter::once(exe_dir.join("assets")).chain(bundle_resources)
 }
 
 #[cfg(test)]
@@ -187,6 +207,18 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Read;
+
+    #[test]
+    fn exe_relative_roots_cover_the_macos_bundle_layout() {
+        let roots: Vec<_> = exe_relative_roots(Path::new("/x/App.app/Contents/MacOS")).collect();
+        let mut expected = vec![PathBuf::from("/x/App.app/Contents/MacOS/assets")];
+        if cfg!(target_os = "macos") {
+            expected.push(PathBuf::from("/x/App.app/Contents/Resources/assets"));
+        }
+        assert_eq!(roots, expected);
+        let plain: Vec<_> = exe_relative_roots(Path::new("/opt/app")).collect();
+        assert_eq!(plain, [PathBuf::from("/opt/app/assets")]);
+    }
 
     #[test]
     fn env_override_wins() {
