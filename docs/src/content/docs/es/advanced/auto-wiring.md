@@ -79,6 +79,9 @@ Sólo los plugins que:
   `istmo_build::emit()` y declara `links = "…"`.
 - Tienen `client_type` en su `istmo.toml`.
 
+Los manifests que la app pasa en `AppOpts::extra_manifests` cuentan como
+entregados por una dependencia, así que también se auto-conectan.
+
 Los plugins sin `client_type` (sólo tipos compartidos, o un shim de
 servicio / background) se omiten — no hay client que declarar.
 
@@ -96,28 +99,25 @@ tocar el crate del plugin.
 ## Desactivarlo
 
 No hay un flag para "saltar" un plugin — se declara cada plugin con
-`client_type` entre tus dependencias directas. Declarar un plugin sólo
-permite que el runtime lo llame; no se construye nada hasta que
-obtienes su client.
+`client_type` entre tus dependencias directas. Cada entry point del lado
+de la app (`emit`, `emit_with`, `emit_app`, `emit_app_with`) graba
+`ISTMO_AUTO_PLUGINS` / `ISTMO_AUTO_REMOTE`, así que el auto-wiring no se
+puede apagar desde `build.rs`. Declarar un plugin sólo permite que el
+runtime lo llame; no se construye nada hasta que obtienes su client.
+Para dejar fuera un plugin, quita la dependencia.
 
-Para quitar el auto-wiring por completo, llama a la pasada de la app sin
-el paso de wiring y lista cada plugin tú mismo:
+## Permisos, entradas de plist y shims
 
-```rust
-// build.rs (en la raíz del crate de la app)
-fn main() {
-    // Sólo codegen + sincronización de proyectos nativos: ISTMO_AUTO_*
-    // quedan sin definir y se omite la comprobación de [min_versions].
-    istmo_build::emit_app();
-}
-```
-
-```rust
-// src/lib.rs (en la raíz del crate de la app)
-istmo::runtime!(
-    plugins: [SignInClient, DataStoreClient],   // sólo estos dos
-);
-```
+La pasada de la app resuelve el mismo conjunto conectado dentro del
+proceso, así que un plugin auto-conectado aporta lo mismo que uno
+listado: sus `android_permissions` a
+`android/.istmo/istmo-permissions.xml`, sus entradas
+`[plugin.info_plist]` al fragmento de `Info.plist` combinado, y sus
+shims de servicio / background. El conjunto conectado son los clients
+auto-conectados más cada client que nombran las secciones `plugins:` y
+`remote:` de `istmo::runtime!` en `src/lib.rs` o `src/main.rs` (un
+trait en `remote:` cuenta como su `<Trait>Client`). Listar además en
+`runtime!` un plugin auto-conectado no cambia nada.
 
 ## Depuración
 

@@ -24,13 +24,20 @@ fn main() {
    configuration).
 2. If the file declares `[plugin]` / `[[plugin]]` entries, hands the
    plugin metadata over to dependent crates.
-3. Bakes the auto-wired plugin list into `ISTMO_AUTO_PLUGINS` /
-   `ISTMO_AUTO_REMOTE` for `istmo::runtime!`.
-4. Checks every plugin's `[min_versions]` against the app's floor for
+3. Checks every plugin's `[min_versions]` against the app's floor for
    the target being compiled.
-5. Runs the app-side pass when the crate is an app: Kotlin/Swift codegen
-   and native project sync when `android/` or `ios/` sit next to
-   `Cargo.toml`, desktop extras when the crate builds a binary.
+4. Runs the app-side pass. It always starts by baking the auto-wired
+   plugin list into `ISTMO_AUTO_PLUGINS` / `ISTMO_AUTO_REMOTE` for
+   `istmo::runtime!` (plugin crates included, and also when a build
+   script calls `emit_app_with` directly).
+5. When the crate is an app, the same pass continues: Kotlin/Swift
+   codegen and native project sync when `android/` or `ios/` sit next
+   to `Cargo.toml`, desktop extras when the crate builds a binary.
+   Permissions, `Info.plist` entries and service shims come from the
+   **wired** plugins: the auto-wired clients plus every client the
+   `plugins:` / `remote:` sections of `istmo::runtime!` in `src/lib.rs`
+   or `src/main.rs` name (a trait in `remote:` counts as its
+   `<Trait>Client`).
 
 ## Decision flow
 
@@ -43,8 +50,8 @@ emit()
  │                                     cargo:ISTMO_ASSETS      (when [[assets]])
  │                                     cargo:ISTMO_NATIVE_<OS> (per native/<os>/ dir)
  │
- ├─ always ─► ISTMO_AUTO_PLUGINS / ISTMO_AUTO_REMOTE (rustc-env)
- │            [min_versions] check for the target OS
+ ├─ always ─► [min_versions] check for the target OS
+ │            ISTMO_AUTO_PLUGINS / ISTMO_AUTO_REMOTE (rustc-env)
  │
  ├─ android/, ios/ or a binary target? ── no ─► done (plain plugin crate)
  │
@@ -57,6 +64,7 @@ emit()
                                        write IstmoPluginRegistry (+ IstmoMain.swift)
                                        sync ios/.istmo/, and android/.istmo/ on Android targets
                                        permissions, services, plist entries
+                                         (auto-wired + runtime! plugins: / remote:)
                                        doctor warnings
 ```
 
@@ -74,7 +82,8 @@ Use `emit_with(AppOpts)` to pass:
   one replaces it (with a warning).
 - `extra_manifests` / `extra_native_ios_dirs` — plugin manifests and
   `native/ios/` directories to treat as if a dependency had handed them
-  over.
+  over. Plugins in `extra_manifests` are auto-wired like handed-over
+  ones, so their `client_type` must resolve in the app.
 - `per_plugin: HashMap<String, AppPluginOpts>` — override the role
   (`host` vs. `client`), platforms or `auto_register` per plugin id or
   type name, on top of `[[app.plugin]]`.
@@ -82,7 +91,8 @@ Use `emit_with(AppOpts)` to pass:
   scaffolds with `TODO()` / `fatalError` bodies (written only when
   absent, never overwritten). Skipped for plugins that ship their own
   backend.
-- `auto_register: Some(false)` — skip the plugin registries' entries.
+- `auto_register: Some(false)` — skip the plugin registries' entries
+  (the registries are still written, empty).
 - `lib_name` — the native library name used by generated service shims
   (default: the crate's lib name).
 - `root`, `android`, `android_root`, `android_package`, `ios`,

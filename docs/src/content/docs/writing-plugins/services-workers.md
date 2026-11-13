@@ -116,8 +116,10 @@ process = ":sync"                             # optional
 
 Leave `client_type` out: the service macro emits no client. A plugin
 entry without `client_type` always contributes its shims; one with a
-`client_type` contributes them only when the app lists that client in
-`istmo::runtime!`.
+`client_type` contributes them only when the app wires that client:
+auto-wiring it (a direct dependency, see
+[Auto-wiring](/istmo/advanced/auto-wiring/)) is enough, and so is
+naming it in the `plugins:` / `remote:` sections of `istmo::runtime!`.
 
 The app's `build.rs` (`istmo_build::emit()`) picks the spec up through
 the manifest handover and writes:

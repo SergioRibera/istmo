@@ -77,6 +77,9 @@ Only plugins that:
   `istmo_build::emit()` and carries `links = "…"`.
 - Have a `client_type` set in their `istmo.toml`.
 
+Manifests the app passes in `AppOpts::extra_manifests` count as handed
+over by a dependency, so they are auto-wired too.
+
 Plugins without a `client_type` (shared types only, or a service /
 background shim) are skipped — there is no client to declare.
 
@@ -93,29 +96,25 @@ touching the plugin crate.
 
 ## Opting out
 
-There is no per-plugin "skip" flag — every plugin with a `client_type`
-among your direct dependencies is declared. Declaring a plugin only
-lets the runtime call it; nothing is constructed until you acquire its
-client.
+There is no "skip" flag — every plugin with a `client_type` among your
+direct dependencies is declared. Every app-side entry point (`emit`,
+`emit_with`, `emit_app`, `emit_app_with`) bakes `ISTMO_AUTO_PLUGINS` /
+`ISTMO_AUTO_REMOTE`, so auto-wiring cannot be turned off from
+`build.rs`. Declaring a plugin only lets the runtime call it; nothing is
+constructed until you acquire its client. To keep a plugin out, drop
+the dependency.
 
-To drop auto-wiring entirely, call the app-side pass without the wiring
-step and list every plugin yourself:
+## Permissions, plist entries and shims
 
-```rust
-// build.rs (at the app crate root)
-fn main() {
-    // Codegen + native project sync only: ISTMO_AUTO_* stay unset and
-    // the [min_versions] check is skipped.
-    istmo_build::emit_app();
-}
-```
-
-```rust
-// src/lib.rs (at the app crate root)
-istmo::runtime!(
-    plugins: [SignInClient, DataStoreClient],   // only these two
-);
-```
+The app-side pass resolves the same wired set in-process, so an
+auto-wired plugin contributes everything a listed one does: its
+`android_permissions` to `android/.istmo/istmo-permissions.xml`, its
+`[plugin.info_plist]` entries to the merged `Info.plist` fragment, and
+its service / background shims. The wired set is the auto-wired clients
+plus every client the `plugins:` and `remote:` sections of
+`istmo::runtime!` name in `src/lib.rs` or `src/main.rs` (a trait in
+`remote:` counts as its `<Trait>Client`). Listing an auto-wired plugin
+in `runtime!` as well changes nothing.
 
 ## Debugging
 
