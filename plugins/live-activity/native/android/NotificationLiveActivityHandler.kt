@@ -240,14 +240,9 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
         if (alert == null) return
         builder.setContentTitle(alert.title)
         builder.setContentText(alert.body)
-        when (val sound = alert.sound) {
-            AlertSound.Default -> builder.setDefaults(Notification.DEFAULT_SOUND)
-            AlertSound.None -> Unit
-            is AlertSound.Named -> {
-                val uri = android.net.Uri.parse("android.resource://${context.packageName}/raw/${sound.value}")
-                builder.setSound(uri)
-            }
-        }
+        // From API 26 the channel owns the sound: `Notification.Builder`
+        // ignores `setSound` / `setDefaults`, so `alert.sound` has no
+        // per-notification effect on this path.
     }
 
     private fun ensureChannel() {
