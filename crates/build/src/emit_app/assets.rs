@@ -1,12 +1,13 @@
 //! Asset staging: every app and plugin `[[assets]]` entry linked (or
 //! copied) into the Android, iOS and desktop asset roots.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::assets::{AssetsPayload, ResolvedAsset, resolve_assets};
 use crate::handover::collect_dep_assets;
+use crate::ios_project::IosProject;
 use crate::manifest::Manifest;
 
 /// Stage every dependency + app-declared asset into the platform trees
@@ -17,10 +18,11 @@ use crate::manifest::Manifest;
 ///   assets, and directly under `<android_root>/app/src/main/assets/`
 ///   for the app's own entries. Gradle's asset merger picks them up on
 ///   the next build.
-/// - iOS: files are placed under
-///   `<ios_root>/<app_dir>/<plugins_subdir>/Assets/plugin-<id>/…` and
-///   `<ios_root>/<app_dir>/Assets/`, both referenced by the generated
-///   xcodegen fragment.
+/// - iOS: one tree, `<ios_root>/.istmo/Assets/`, app entries at its
+///   root and plugin entries under `plugin-<id>/`, shipped as a single
+///   folder reference by the generated xcodegen fragment. Files staged
+///   by older releases under `<app_dir>/Assets/` and
+///   `<app_dir>/<plugins_subdir>/Assets/` are removed.
 /// - Desktop: see [`stage_desktop_assets`].
 ///
 /// Each tree remembers what it installed (in `OUT_DIR`) so assets that
@@ -52,17 +54,14 @@ pub(super) fn sync_assets(
     }
 
     if let Some((ios_root, app_dir, plugins_subdir)) = ios {
-        let mut app_tree =
-            AssetTree::new(ios_root.join(app_dir).join("Assets"), state_dir, "ios-app");
-        app_tree.install_app(&app_assets);
-        app_tree.finish();
-        let mut plugin_tree = AssetTree::new(
-            ios_root.join(app_dir).join(plugins_subdir).join("Assets"),
-            state_dir,
-            "ios-plugins",
-        );
-        plugin_tree.install_plugins(&dep_assets);
-        plugin_tree.finish();
+        let project = IosProject::new(ios_root, app_dir);
+        let mut tree = AssetTree::new(project.asset_folder_path(), state_dir, "ios");
+        tree.install_app(&app_assets);
+        tree.install_plugins(&dep_assets);
+        let app_path = project.app_path();
+        tree.retire_legacy_root(&app_path.join("Assets"), "ios-app");
+        tree.retire_legacy_root(&app_path.join(plugins_subdir).join("Assets"), "ios-plugins");
+        tree.finish();
     }
 
     for (_links, payload) in &dep_assets {
@@ -115,8 +114,10 @@ fn plugin_asset_dir(id: &str) -> String {
 
 /// Pre-`plugin-<id>` staging directory, removed when found.
 fn legacy_plugin_asset_dir(id: &str) -> String {
-    format!("plugin:{id}")
+    format!("{LEGACY_PLUGIN_DIR_PREFIX}{id}")
 }
+
+const LEGACY_PLUGIN_DIR_PREFIX: &str = "plugin:";
 
 /// One asset root istmo-build stages files into, plus the record of
 /// what the previous run installed there.
@@ -125,16 +126,21 @@ struct AssetTree {
     root: PathBuf,
     /// `None` outside a build script (no `OUT_DIR`): nothing is pruned.
     state_file: Option<PathBuf>,
-    /// Paths installed by this run, relative to `root`.
-    installed: BTreeSet<String>,
+    /// Paths installed by this run, relative to `root`, with their source.
+    installed: BTreeMap<String, PathBuf>,
+}
+
+/// State file recording what the tree `name` installed.
+fn state_file_name(name: &str) -> String {
+    format!("istmo-assets-{name}.list")
 }
 
 impl AssetTree {
     fn new(root: PathBuf, state_dir: Option<&Path>, name: &str) -> Self {
         Self {
             root,
-            state_file: state_dir.map(|dir| dir.join(format!("istmo-assets-{name}.list"))),
-            installed: BTreeSet::new(),
+            state_file: state_dir.map(|dir| dir.join(state_file_name(name))),
+            installed: BTreeMap::new(),
         }
     }
 
@@ -166,7 +172,7 @@ impl AssetTree {
     /// not churn.
     fn install(&mut self, source: &Path, rel: String) {
         let target = self.root.join(&rel);
-        self.installed.insert(rel);
+        self.installed.insert(rel, source.to_path_buf());
         if is_current(source, &target) {
             return;
         }
@@ -200,35 +206,85 @@ impl AssetTree {
         if let Ok(previous) = fs::read_to_string(state_file) {
             for rel in previous
                 .lines()
-                .filter(|rel| !self.installed.contains(*rel))
+                .filter(|rel| !self.installed.contains_key(*rel))
             {
-                self.remove_stale(rel);
+                remove_staged(&self.root, rel);
             }
         }
         let mut listing = String::new();
-        for rel in &self.installed {
+        for rel in self.installed.keys() {
             listing.push_str(rel);
             listing.push('\n');
         }
         crate::fsx::write_generated(state_file, &listing);
     }
 
-    fn remove_stale(&self, rel: &str) {
-        let path = self.root.join(rel);
-        if fs::symlink_metadata(&path).is_ok_and(|meta| !meta.is_dir()) {
-            let _ = fs::remove_file(&path);
-        }
-        // Drop directories the removal emptied, never the root itself.
-        let mut dir = path.parent();
-        while let Some(current) = dir {
-            if current == self.root || !current.starts_with(&self.root) {
-                break;
+    /// Empty `root`, an asset root older releases staged into, of what
+    /// istmo-build put there: every path its state file (`name`) lists,
+    /// every `plugin:<id>` directory, and every path still serving one
+    /// of this run's sources — a fresh `OUT_DIR` has no state file.
+    /// Anything else is the user's and stays. `root` itself goes once
+    /// empty.
+    fn retire_legacy_root(&self, root: &Path, name: &str) {
+        let legacy_state = self
+            .state_file
+            .as_deref()
+            .and_then(Path::parent)
+            .map(|dir| dir.join(state_file_name(name)));
+        if root.is_dir() {
+            let listed = legacy_state
+                .as_deref()
+                .and_then(|file| fs::read_to_string(file).ok())
+                .unwrap_or_default();
+            for rel in listed.lines() {
+                let target = root.join(rel);
+                let is_source = self
+                    .installed
+                    .get(rel)
+                    .is_some_and(|source| is_same_file(source, &target));
+                if !is_source {
+                    remove_staged(root, rel);
+                }
             }
-            if fs::remove_dir(current).is_err() {
-                break;
+            for (rel, source) in &self.installed {
+                let target = root.join(rel);
+                if is_current(source, &target) && !is_same_file(source, &target) {
+                    remove_staged(root, rel);
+                }
             }
-            dir = current.parent();
+            for entry in fs::read_dir(root).into_iter().flatten().flatten() {
+                let legacy_plugin_dir = entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(LEGACY_PLUGIN_DIR_PREFIX));
+                if legacy_plugin_dir && entry.path().is_dir() {
+                    let _ = fs::remove_dir_all(entry.path());
+                }
+            }
+            let _ = fs::remove_dir(root);
         }
+        if let Some(file) = legacy_state {
+            let _ = fs::remove_file(file);
+        }
+    }
+}
+
+/// Remove the staged file at `root/rel`, then the directories the
+/// removal emptied — never `root` itself.
+fn remove_staged(root: &Path, rel: &str) {
+    let path = root.join(rel);
+    if fs::symlink_metadata(&path).is_ok_and(|meta| !meta.is_dir()) {
+        let _ = fs::remove_file(&path);
+    }
+    let mut dir = path.parent();
+    while let Some(current) = dir {
+        if current == root || !current.starts_with(root) {
+            break;
+        }
+        if fs::remove_dir(current).is_err() {
+            break;
+        }
+        dir = current.parent();
     }
 }
 
@@ -250,6 +306,16 @@ fn is_current(source: &Path, target: &Path) -> bool {
             .modified()
             .ok()
             .is_some_and(|mtime| source_meta.modified().ok() == Some(mtime))
+}
+
+/// Whether `target` is `source` itself rather than a link or copy —
+/// an app may declare a file that sits inside a legacy asset root.
+fn is_same_file(source: &Path, target: &Path) -> bool {
+    let is_link = fs::symlink_metadata(target).is_ok_and(|meta| meta.file_type().is_symlink());
+    !is_link
+        && fs::canonicalize(source)
+            .ok()
+            .is_some_and(|source| fs::canonicalize(target).ok() == Some(source))
 }
 
 fn copy_with_mtime(source: &Path, target: &Path) -> std::io::Result<()> {
@@ -338,5 +404,70 @@ mod tests {
         tree.finish();
         assert!(dir.join("out/plugin-istmo.demo/a.txt").exists());
         assert!(!legacy.exists());
+    }
+
+    fn demo_plugin(assets: Vec<ResolvedAsset>) -> Vec<(String, AssetsPayload)> {
+        vec![(
+            "DEMO".to_owned(),
+            AssetsPayload {
+                plugin_ids: vec!["istmo.demo".to_owned()],
+                resolved: assets,
+            },
+        )]
+    }
+
+    #[test]
+    fn ios_assets_share_one_tree_and_retire_the_legacy_roots() {
+        let (dir, assets) = asset_fixture("ios-retire");
+        let app_root = dir.join("App/Assets");
+        let plugin_root = dir.join("App/Plugins/Assets");
+        // What an older release left behind: the app tree recorded in its
+        // state file, the plugin tree without one (fresh `OUT_DIR`).
+        let mut old_app = AssetTree::new(app_root.clone(), Some(&dir), "ios-app");
+        old_app.install_app(&assets);
+        old_app.finish();
+        let mut old_plugins = AssetTree::new(plugin_root.clone(), None, "ios-plugins");
+        old_plugins.install_plugins(&demo_plugin(assets.clone()));
+        old_plugins.finish();
+        write(&app_root.join("mine.txt"), "user file");
+        write(&plugin_root.join("plugin:istmo.gone/x.txt"), "legacy");
+
+        let mut tree = AssetTree::new(dir.join(".istmo/Assets"), Some(&dir), "ios");
+        tree.install_app(&assets[..1]);
+        tree.install_plugins(&demo_plugin(assets.clone()));
+        tree.retire_legacy_root(&app_root, "ios-app");
+        tree.retire_legacy_root(&plugin_root, "ios-plugins");
+        tree.finish();
+
+        assert!(dir.join(".istmo/Assets/a.txt").exists());
+        assert!(
+            dir.join(".istmo/Assets/plugin-istmo.demo/sub/b.txt")
+                .exists()
+        );
+        // `sub/b.txt` is no longer an app asset but the state file named it.
+        assert!(!app_root.join("sub").exists());
+        assert!(!app_root.join("a.txt").exists());
+        assert!(app_root.join("mine.txt").exists(), "user files stay");
+        assert!(!plugin_root.exists(), "emptied legacy root goes");
+        assert!(!dir.join(state_file_name("ios-app")).exists());
+    }
+
+    #[test]
+    fn retiring_a_legacy_root_spares_declared_sources_inside_it() {
+        let dir = std::env::temp_dir().join(format!("istmo-asset-own-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let legacy = dir.join("App/Assets");
+        let source = legacy.join("logo.txt");
+        write(&source, "logo");
+        let asset = ResolvedAsset {
+            bundle_path: "logo.txt".to_owned(),
+            source_abs: source.display().to_string(),
+        };
+        write(&dir.join(state_file_name("ios-app")), "logo.txt\n");
+        let mut tree = AssetTree::new(dir.join(".istmo/Assets"), Some(&dir), "ios");
+        tree.install_app(&[asset]);
+        tree.retire_legacy_root(&legacy, "ios-app");
+        tree.finish();
+        assert_eq!(fs::read_to_string(&source).unwrap(), "logo");
     }
 }

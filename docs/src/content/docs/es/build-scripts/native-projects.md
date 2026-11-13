@@ -175,10 +175,14 @@ y dentro de `ios/.istmo/`:
 - `build-rust.sh`: la fase pre-build; corre cargo para cada
   arquitectura que compila Xcode y deja `lib<crate>.a` en su lugar;
 - `Assets.xcassets/IstmoAppIcon.appiconset` cuando `[app.icon] image` está
-  seteado.
+  seteado;
+- `Assets/`: todas las entradas `[[assets]]` de la app y de los plugins
+  (las de plugins bajo `Assets/plugin-<id>/`), empaquetadas como una
+  sola folder reference, así quedan en `<bundle>/Assets/…`, donde las lee
+  `istmo::assets`.
 
 Con xcodegen, incluí el fragmento: trae las fuentes de los plugins, los
-mismos build settings y la fase pre-build:
+mismos build settings, la fase pre-build y la carpeta de assets:
 
 ```yaml
 # ios/project.yml
@@ -198,7 +202,9 @@ targets:
 Los settings de `project.yml` le ganan a los del fragmento, así que
 sacá de ahí `PRODUCT_BUNDLE_IDENTIFIER`, `OTHER_LDFLAGS` y compañía. En
 un proyecto Xcode hecho a mano, basá el target en `Istmo.xcconfig` y
-agregá `"${PROJECT_DIR}/.istmo/build-rust.sh"` como fase Run Script.
+agregá `"${PROJECT_DIR}/.istmo/build-rust.sh"` como fase Run Script; si
+la app tiene assets, agregá `.istmo/Assets` al target como folder
+reference (no como grupo).
 
 En `Info.plist`, referenciá los valores generados:
 

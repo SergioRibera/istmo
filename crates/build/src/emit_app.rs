@@ -478,16 +478,9 @@ impl<'a> AppPass<'a> {
         let mut native_dirs = collect_dep_native_dirs(NativePlatform::Ios);
         native_dirs.extend(self.opts.extra_native_ios_dirs.iter().cloned());
         let project = IosProject::new(&self.ios_root, app_dir);
-        let asset_dirs: Vec<PathBuf> = [
-            project.app_path().join("Assets"),
-            project
-                .app_path()
-                .join(&self.ios_plugins_subdir)
-                .join("Assets"),
-        ]
-        .into_iter()
-        .filter(|p| p.is_dir())
-        .collect();
+        // Pruning keeps the staging root itself; an emptied one is not shipped.
+        let asset_folder = Some(project.asset_folder_path())
+            .filter(|dir| fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some()));
         sync_ios_project(
             &project,
             &IosSync {
@@ -498,7 +491,7 @@ impl<'a> AppPass<'a> {
                 registry,
                 native_dirs: &native_dirs,
                 dep_manifests,
-                asset_dirs: &asset_dirs,
+                asset_folder: asset_folder.as_deref(),
             },
         );
     }
@@ -646,7 +639,7 @@ struct IosSync<'a> {
     registry: &'a [RegistryEntry],
     native_dirs: &'a [(String, PathBuf)],
     dep_manifests: &'a [Manifest],
-    asset_dirs: &'a [PathBuf],
+    asset_folder: Option<&'a Path>,
 }
 
 /// Write the iOS side: plugin registry, `IstmoApp.run()` entry,
@@ -677,7 +670,7 @@ fn sync_ios_project(project: &IosProject, sync: &IosSync<'_>) {
         sync.app,
         sync.native_dirs,
         plugin_min_ios.as_ref(),
-        sync.asset_dirs,
+        sync.asset_folder,
     );
     emit_ios_plist_fragments(project.root(), project.app_dir(), sync.native_dirs);
 }

@@ -10,7 +10,8 @@
 //!   architecture Xcode builds and stages `lib<crate>.a`.
 //! - `istmo-plugins.yml` (next to the app sources) wires all of the above
 //!   into xcodegen projects: plugin sources, the same build settings, the
-//!   pre-build phase and the generated icon catalog.
+//!   pre-build phase, the generated icon catalog and the staged asset
+//!   folder.
 //!
 //! Hand-made Xcode projects base their target configuration on
 //! `Istmo.xcconfig` and add `build-rust.sh` as a Run Script phase.
@@ -29,6 +30,10 @@ pub const IOS_GENERATED_DIR: &str = ".istmo";
 const XCCONFIG_FILE: &str = "Istmo.xcconfig";
 const BUILD_SCRIPT_FILE: &str = "build-rust.sh";
 const ASSET_CATALOG_DIR: &str = "Assets.xcassets";
+/// Staged app + plugin assets. Shipped as a folder reference, so the
+/// directory name is kept and the files land at `<bundle>/Assets/…`,
+/// where `istmo_ios::assets` reads them.
+const ASSET_FOLDER_DIR: &str = "Assets";
 const FRAGMENT_FILE: &str = "istmo-plugins.yml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +79,15 @@ impl IosProject {
         self.root.join(IOS_GENERATED_DIR)
     }
 
+    /// `<root>/.istmo/Assets`, the staged asset tree. It sits outside
+    /// the app source directory: projects routinely list that directory
+    /// as a source group, which would also copy every staged file flat
+    /// into the bundle root next to the folder reference.
+    #[must_use]
+    pub fn asset_folder_path(&self) -> PathBuf {
+        self.generated_dir().join(ASSET_FOLDER_DIR)
+    }
+
     /// Write `Istmo.xcconfig` and `build-rust.sh`.
     pub fn write_generated(&self, app: &AppMetadata) {
         let dir = self.generated_dir();
@@ -101,7 +115,7 @@ impl IosProject {
         app: &AppMetadata,
         plugin_dirs: &[(String, PathBuf)],
         plugin_min_ios: Option<&(OsVersion, String)>,
-        asset_dirs: &[PathBuf],
+        asset_folder: Option<&Path>,
     ) {
         let fragment_dir = self.app_path();
         let relative = |target: &Path| {
@@ -124,7 +138,7 @@ impl IosProject {
             .as_ref()
             .map(|_| relative(&self.generated_dir().join(ASSET_CATALOG_DIR)));
         let has_sources =
-            !plugin_dirs.is_empty() || icon_catalog.is_some() || !asset_dirs.is_empty();
+            !plugin_dirs.is_empty() || icon_catalog.is_some() || asset_folder.is_some();
         if has_sources {
             yaml.push_str("    sources:\n");
         }
@@ -141,11 +155,11 @@ impl IosProject {
         if let Some(catalog) = icon_catalog {
             writeln!(yaml, "      - path: {}", yaml_string(&catalog)).ok();
         }
-        // Asset folders — `type: folder` means "blue folder reference".
-        // Xcode auto-includes them in the Resources build phase and
-        // preserves the on-disk hierarchy inside the bundle so
-        // `Bundle.main.bundlePath + "/<key>"` resolves at runtime.
-        for dir in asset_dirs {
+        // `type: folder` is a "blue folder reference": Xcode copies the
+        // directory itself into Resources, hierarchy intact, so files
+        // resolve at `<bundle>/Assets/<key>`. One reference only — two
+        // folders of the same name would both produce `<bundle>/Assets`.
+        if let Some(dir) = asset_folder {
             writeln!(yaml, "      - path: {}", yaml_string(&relative(dir))).ok();
             yaml.push_str("        type: folder\n");
             yaml.push_str("        buildPhase: resources\n");
