@@ -1,4 +1,5 @@
 import Foundation
+import IstmoRuntime
 #if canImport(ActivityKit)
 import ActivityKit
 
