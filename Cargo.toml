@@ -43,6 +43,8 @@ repository = "https://github.com/SergioRibera/istmo"
 readme = "README.md"
 
 [workspace.lints.rust]
+# Toolchains older than clippy 1.100 do not know `unused_async_trait_impl`.
+unknown_lints = { level = "allow", priority = -2 }
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
@@ -53,6 +55,9 @@ nursery = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+# Plugin traits are async; sync backends implement them with `async fn`
+# rather than hand-built `std::future::ready` futures.
+unused_async_trait_impl = "allow"
 
 [workspace.dependencies]
 # Minor pinned: wincode is 0.x and its bytes are only checked against

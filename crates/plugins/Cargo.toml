@@ -60,6 +60,8 @@ istmo-build = { workspace = true }
 istmo-plugins-schema = { workspace = true }
 
 [lints.rust]
+# Toolchains older than clippy 1.100 do not know `unused_async_trait_impl`.
+unknown_lints = { level = "allow", priority = -2 }
 unsafe_code = "allow"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
@@ -72,4 +74,7 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 missing_safety_doc = "allow"
 redundant_pub_crate = "allow"
+# Plugin traits are async; sync backends implement them with `async fn`
+# rather than hand-built `std::future::ready` futures.
+unused_async_trait_impl = "allow"
 

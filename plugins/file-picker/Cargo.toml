@@ -49,6 +49,8 @@ pollster = { workspace = true }
 # addition, `undocumented_unsafe_blocks`, holds those blocks to a
 # SAFETY comment. Keep the rest in sync with the workspace table.
 [lints.rust]
+# Toolchains older than clippy 1.100 do not know `unused_async_trait_impl`.
+unknown_lints = { level = "allow", priority = -2 }
 unsafe_code = "deny"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
@@ -60,3 +62,6 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 undocumented_unsafe_blocks = "warn"
+# Plugin traits are async; sync backends implement them with `async fn`
+# rather than hand-built `std::future::ready` futures.
+unused_async_trait_impl = "allow"
