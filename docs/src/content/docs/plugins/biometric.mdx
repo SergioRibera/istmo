@@ -231,6 +231,8 @@ calling `IstmoHost.onCreate(this)`, not `NativeActivity`:
 
 `io.github.sergioribera.istmo` adds `androidx.biometric:biometric` from the plugin's
 `istmo.toml`; its manifest brings the `USE_BIOMETRIC` permission.
+The plugin needs API 23+ (the Android Keystore `KeyGenParameterSpec`),
+declared in its `[min_versions]`.
 
 Before API 30 the Keystore cannot bind a per-use key to the device
 credential, so `BiometricOrDeviceCredential` secrets use a key that

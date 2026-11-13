@@ -237,6 +237,8 @@ La Activity tiene que ser una `FragmentActivity` — `IstmoGameActivity`
 
 `io.github.sergioribera.istmo` agrega `androidx.biometric:biometric` desde el
 `istmo.toml` del plugin; su manifest aporta el permiso `USE_BIOMETRIC`.
+El plugin necesita API 23+ (el `KeyGenParameterSpec` del Keystore de
+Android), declarado en su `[min_versions]`.
 
 Antes de la API 30 el Keystore no puede atar una clave de uso único a la
 credencial del dispositivo, así que los secretos

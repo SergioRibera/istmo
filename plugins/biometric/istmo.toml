@@ -22,3 +22,7 @@ version = "1.1.0"
 # localise it through `[app.info_plist]`.
 [plugin.info_plist]
 NSFaceIDUsageDescription = "Authenticate with Face ID to continue."
+
+[min_versions]
+# Android Keystore `KeyGenParameterSpec` + `KeyguardManager.isDeviceSecure`.
+android = 23
