@@ -180,3 +180,57 @@ fn empty_wired_set_emits_empty_manifest() {
         "no plugins wired → zero uses-permission; got:\n{body}"
     );
 }
+
+#[test]
+fn auto_wired_dep_plugin_contributes_permission_without_runtime_listing() {
+    let root = scratch_root("dep-auto-wired");
+    let android_root = seed_android_project(&root);
+    // Auto-wiring adds the plugin to `runtime!`; the app never names it.
+    write_runtime_src(&root, "istmo::runtime!(plugins: []);\n");
+
+    let dep = Manifest::parse(
+        r#"
+[plugin]
+id = "ext.auto"
+client_type = "::ext_auto::AutoClient"
+android_permissions = ["android.permission.CAMERA"]
+"#,
+    )
+    .unwrap();
+
+    emit_app_with(AppOpts {
+        root: Some(root),
+        android_root: Some(android_root.clone()),
+        ios: Some(false),
+        lib_name: Some("app".into()),
+        extra_manifests: vec![dep],
+        ..AppOpts::default()
+    });
+
+    let body = fs::read_to_string(android_root.join(".istmo/istmo-permissions.xml")).unwrap();
+    assert!(
+        body.contains("android.permission.CAMERA"),
+        "auto-wired plugin should contribute its permission; got:\n{body}"
+    );
+}
+
+#[test]
+fn remote_section_entry_contributes_permission() {
+    let root = scratch_root("remote-listed");
+    let android_root = seed_android_project(&root);
+    write_runtime_src(&root, "istmo::runtime!(remote: [NetworkState]);\n");
+
+    emit_app_with(AppOpts {
+        root: Some(root),
+        android_root: Some(android_root.clone()),
+        ios: Some(false),
+        lib_name: Some("app".into()),
+        ..AppOpts::default()
+    });
+
+    let body = fs::read_to_string(android_root.join(".istmo/istmo-permissions.xml")).unwrap();
+    assert!(
+        body.contains("android.permission.ACCESS_NETWORK_STATE"),
+        "a `remote:` plugin runs in the same app and needs its permission; got:\n{body}"
+    );
+}

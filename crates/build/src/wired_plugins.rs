@@ -1,5 +1,5 @@
 //! Extract the plugin types an app actually wires through
-//! `istmo::runtime!(plugins: [...])`.
+//! `istmo::runtime!(plugins: [...], remote: [...])`.
 //!
 //! The permission pipeline uses the extracted list to drop permission
 //! and `Info.plist` entries from plugins the app does not reference —
@@ -149,13 +149,16 @@ fn is_runtime_macro(mac: &Macro) -> bool {
     }
 }
 
-/// Walk the macro's token stream, find the `plugins :` section, and
-/// return every path inside the `[...]` group.
+/// Walk the macro's token stream and return every client path of its
+/// `plugins :` and `remote :` sections. A `remote:` entry may name the
+/// trait; like the macro, it then resolves to `<Trait>Client`.
 fn paths_from_runtime_tokens(tokens: proc_macro2::TokenStream) -> Vec<String> {
+    let mut out = Vec::new();
     let mut iter = tokens.into_iter().peekable();
     while let Some(tt) = iter.next() {
         let TokenTree::Ident(id) = &tt else { continue };
-        if id != "plugins" {
+        let is_remote = id == "remote";
+        if id != "plugins" && !is_remote {
             continue;
         }
         let Some(TokenTree::Punct(colon)) = iter.peek() else {
@@ -166,14 +169,27 @@ fn paths_from_runtime_tokens(tokens: proc_macro2::TokenStream) -> Vec<String> {
         }
         iter.next();
         let Some(TokenTree::Group(group)) = iter.next() else {
-            return Vec::new();
+            continue;
         };
         if group.delimiter() != Delimiter::Bracket {
-            return Vec::new();
+            continue;
         }
-        return parse_path_list(group.stream());
+        let paths = parse_path_list(group.stream());
+        if is_remote {
+            out.extend(paths.into_iter().map(remote_client_path));
+        } else {
+            out.extend(paths);
+        }
     }
-    Vec::new()
+    out
+}
+
+fn remote_client_path(path: String) -> String {
+    if last_segment(&path).ends_with("Client") {
+        path
+    } else {
+        format!("{path}Client")
+    }
 }
 
 fn parse_path_list(tokens: proc_macro2::TokenStream) -> Vec<String> {
@@ -214,11 +230,13 @@ fn dedup_preserve_order(items: Vec<String>) -> Vec<String> {
 
 /// Cross-reference the `wired_paths` with every known plugin set.
 ///
-/// The known set is builtins + every standalone plugin reachable
-/// through `DEP_*_ISTMO_MANIFEST`. An entry is kept only if it
-/// appears in the app's `istmo::runtime!` invocation OR the
-/// auto-wiring env vars (`ISTMO_AUTO_PLUGINS`, `ISTMO_AUTO_REMOTE`)
-/// that [`crate::manifest::emit_wiring_env`] populates.
+/// The known set is builtins + every plugin in `dep_manifests`. An
+/// entry is kept only if `wired_paths` names its client type. Callers
+/// pass every path the app's `istmo::runtime!` wires: the ones written
+/// in its sections plus the auto-wired clients of
+/// [`crate::manifest::resolve_wiring`]. Those reach the macro as
+/// `cargo::rustc-env` variables, which the build script cannot read
+/// back, so they must be passed here rather than looked up.
 ///
 /// Facade re-exports (`use istmo::plugins::NetworkStateClient` vs.
 /// `use istmo_plugins::NetworkStateClient` vs. the fully-qualified
@@ -230,12 +248,6 @@ fn dedup_preserve_order(items: Vec<String>) -> Vec<String> {
 /// Plugins whose `client_type` is `None` ship unconditionally:
 /// they expose no client surface the app can list in `runtime!`,
 /// so their presence in a dep manifest is itself the opt-in signal.
-///
-/// The env-var union is critical: a transitive dep's `build.rs` may
-/// register a plugin that the app itself never names in `runtime!`.
-/// Trusting only the syn-extracted idents would under-report the
-/// wired set and strip a permission the auto-wired plugin needs at
-/// runtime.
 ///
 /// Matching is by the client-type's last `::`-separated segment —
 /// `FooClient` written in the app's source matches
@@ -250,10 +262,7 @@ pub fn resolve_wired_entries(
     dep_manifests: &[Manifest],
     wired_paths: &[String],
 ) -> Vec<PluginEntry> {
-    let mut all_paths: Vec<String> = wired_paths.to_vec();
-    all_paths.extend(paths_from_auto_env("ISTMO_AUTO_PLUGINS"));
-    all_paths.extend(paths_from_auto_env("ISTMO_AUTO_REMOTE"));
-    let wanted: Vec<&str> = all_paths.iter().map(|p| last_segment(p)).collect();
+    let wanted: Vec<&str> = wired_paths.iter().map(|p| last_segment(p)).collect();
 
     let mut all: Vec<PluginEntry> = builtins::entries();
     for m in dep_manifests {
@@ -285,17 +294,6 @@ pub fn resolve_wired_entries(
 
 fn last_segment(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path).trim()
-}
-
-fn paths_from_auto_env(key: &str) -> Vec<String> {
-    std::env::var(key)
-        .map(|v| {
-            v.split(',')
-                .map(|s| s.trim().to_owned())
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Serialize the `<uses-permission>` entries from the resolved
@@ -402,11 +400,11 @@ mod tests {
         let s = r"
             istmo::runtime!(
                 plugins: [FooClient],
-                remote: [BazClient],
-                expects: [some::Trait],
+                remote: [BazClient, api::Qux],
+                hosts: [some::Trait => Impl],
             );
         ";
-        assert_eq!(extract(s), vec!["FooClient"]);
+        assert_eq!(extract(s), vec!["FooClient", "BazClient", "api::QuxClient"]);
     }
 
     #[test]

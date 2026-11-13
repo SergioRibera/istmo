@@ -113,8 +113,9 @@ pub fn emit_with(app: crate::emit_app::AppOpts) {
         emit_plugin_contracts(&manifest, &root.join("src/lib.rs"));
     }
     let dep_manifests = crate::handover::collect_dep_manifests();
-    let _ = emit_wiring_for(&dep_manifests, toml.manifest.as_ref());
     crate::min_versions::enforce_min_versions(&dep_manifests, toml.manifest.as_ref(), &root);
+    // Also emits the auto-wiring env, so `runtime!` and the app-side
+    // surfaces read one resolved set.
     crate::emit_app::emit_app_from(&app, &root, &toml);
 }
 
@@ -241,7 +242,14 @@ pub fn emit_wiring_env(app_manifest_path: Option<&Path>) -> ResolvedWiring {
     )
 }
 
-fn emit_wiring_for(dep_manifests: &[Manifest], app_manifest: Option<&Manifest>) -> ResolvedWiring {
+/// Bake [`resolve_wiring`] into the `cargo::rustc-env` lines `runtime!`
+/// reads and return it: `rustc-env` reaches the compiler only, never
+/// the build script's own environment, so the build script must keep
+/// using this value rather than reading the variables back.
+pub(crate) fn emit_wiring_for(
+    dep_manifests: &[Manifest],
+    app_manifest: Option<&Manifest>,
+) -> ResolvedWiring {
     let resolved = resolve_wiring(dep_manifests, app_manifest);
     println!(
         "cargo::rustc-env=ISTMO_AUTO_PLUGINS={}",

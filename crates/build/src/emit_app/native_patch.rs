@@ -12,6 +12,7 @@ use crate::apple_plist::{
     PlistFragments, app_keys_outside_block,
 };
 use crate::document_types::DocumentTypes;
+use crate::emit::ResolvedWiring;
 use crate::ios::{BackgroundKind, ContinuousMode, IosBackgroundContract, generate_ios_background};
 use crate::manifest::{
     AndroidServiceSpec, InfoPlistEntry, IosBackgroundKindSpec, IosBackgroundSpec,
@@ -232,13 +233,21 @@ const IOS_MARK_END: &str = "<!-- istmo:background:end -->";
 const ANDROID_DOCUMENTS_MARK_START: &str = "<!-- istmo:documents:start -->";
 const ANDROID_DOCUMENTS_MARK_END: &str = "<!-- istmo:documents:end -->";
 
-/// Build the filtered plugin set the app's `istmo::runtime!` macro
-/// actually wires (plus env-var auto-wiring). Only these plugins
-/// contribute permissions, `Info.plist` entries, Android service
-/// shims and iOS background shims to the generated app surfaces.
+/// Build the plugin set the app's `istmo::runtime!` macro wires. Only
+/// these plugins contribute permissions, `Info.plist` entries, Android
+/// service shims and iOS background shims to the generated app
+/// surfaces.
+///
+/// The macro wires the union of two lists, and so does this function:
+///
+/// - the paths written in its `plugins:` and `remote:` sections, read
+///   here by parsing `src/lib.rs` / `src/main.rs`;
+/// - the auto-wired clients in `wiring`, the value this build script
+///   bakes into `ISTMO_AUTO_PLUGINS` / `ISTMO_AUTO_REMOTE`.
 pub(super) fn resolve_wired_plugin_entries(
     root: &Path,
     dep_manifests: &[Manifest],
+    wiring: &ResolvedWiring,
 ) -> Vec<PluginEntry> {
     let candidates = ["src/lib.rs", "src/main.rs"];
     let mut wired_paths: Vec<String> = Vec::new();
@@ -257,6 +266,8 @@ pub(super) fn resolve_wired_plugin_entries(
             }
         }
     }
+    wired_paths.extend(wiring.local_clients.iter().cloned());
+    wired_paths.extend(wiring.remote_clients.iter().cloned());
     crate::wired_plugins::resolve_wired_entries(dep_manifests, &wired_paths)
 }
 

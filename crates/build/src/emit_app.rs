@@ -32,6 +32,7 @@ use crate::app_config::{AppConfig, AppMetadata, AppPluginOpts, CrateInfo, Platfo
 use crate::app_icon::{AppIcon, IconError};
 use crate::contract::Contract;
 use crate::doctor::Doctor;
+use crate::emit::ResolvedWiring;
 use crate::handover::{
     NativePlatform, collect_dep_contracts, collect_dep_manifests_by_links, collect_dep_native_deps,
     collect_dep_native_dirs,
@@ -74,7 +75,8 @@ pub struct AppOpts {
     /// Additional [`Manifest`] values to merge alongside those found via
     /// the `DEP_*_ISTMO_MANIFEST` env-var handover. Useful for tests
     /// and for apps that ship plugin scaffolding inline instead of
-    /// through a dedicated plugin crate.
+    /// through a dedicated plugin crate. Their plugins are auto-wired
+    /// like handed-over ones, so a `client_type` must resolve in the app.
     pub extra_manifests: Vec<Manifest>,
     /// Additional `(name, native/ios dir)` pairs merged with those found
     /// via the `DEP_*_ISTMO_NATIVE_IOS` handover. Same purpose as
@@ -121,6 +123,15 @@ pub fn emit_app_with(opts: AppOpts) {
 pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
     let pass = AppPass::resolve(opts, root, toml);
     track_crate_inputs(&pass.root);
+    let mut dep_manifests: Vec<Manifest> = pass
+        .dep_manifests_by_links
+        .iter()
+        .map(|(_, manifest)| manifest.clone())
+        .collect();
+    dep_manifests.extend(opts.extra_manifests.iter().cloned());
+    // Every crate gets the env, plugin crates included: a crate that
+    // calls `runtime!` without the env would wire nothing automatically.
+    let wiring = crate::emit::emit_wiring_for(&dep_manifests, pass.app_manifest);
     // Plugin crates run `emit()` too: only apps (a native project or a
     // binary to ship) get the desktop icon, runtime env and assets.
     if !pass.android_active && !pass.ios_active && !pass.app.krate.has_binaries() {
@@ -148,12 +159,6 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
     }
 
     let android_package = pass.android_package();
-    let mut dep_manifests: Vec<Manifest> = pass
-        .dep_manifests_by_links
-        .iter()
-        .map(|(_, manifest)| manifest.clone())
-        .collect();
-    dep_manifests.extend(opts.extra_manifests.iter().cloned());
     let rust_entry = pass.config.rust_entry.unwrap_or_else(|| {
         // The scan reads every file under `src/`.
         crate::directive::rerun_if_exists(&pass.root.join("src"));
@@ -178,7 +183,7 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
             &dep_manifests,
         );
     }
-    pass.emit_wired_surfaces(android_package.as_deref(), &dep_manifests);
+    pass.emit_wired_surfaces(android_package.as_deref(), &dep_manifests, &wiring);
 
     Doctor::new(
         &pass.app,
@@ -539,8 +544,13 @@ impl<'a> AppPass<'a> {
 
     /// Permissions, services, background shims and `Info.plist` entries
     /// of the plugins the app actually wires.
-    fn emit_wired_surfaces(&self, android_package: Option<&str>, dep_manifests: &[Manifest]) {
-        let mut wired_entries = resolve_wired_plugin_entries(&self.root, dep_manifests);
+    fn emit_wired_surfaces(
+        &self,
+        android_package: Option<&str>,
+        dep_manifests: &[Manifest],
+        wiring: &ResolvedWiring,
+    ) {
+        let mut wired_entries = resolve_wired_plugin_entries(&self.root, dep_manifests, wiring);
         if !self.config.android_permissions.is_empty() {
             wired_entries.push(PluginEntry {
                 id: "app.android_permissions".to_owned(),
