@@ -5,7 +5,7 @@ Persistent, namespaced key-value storage from Rust, for the
 
 | Platform | Backend |
 | --- | --- |
-| Android | `SharedPreferences`, one file per namespace (`native/android`) |
+| Android | `SharedPreferences` file `<package name>.istmo.<namespace>` (`native/android`) |
 | iOS | `UserDefaults` suite `<bundle id>.istmo.<namespace>` (`native/ios`) |
 | Desktop | `DesktopDataStore`: one file per namespace under the app's preference directory |
 
@@ -21,8 +21,15 @@ let theme = store.get_string("theme".into()).await?;
 
 A namespace is a short name for one group of values inside the app
 (`"settings"`, `"session"`); platforms already keep apps apart, so it
-does not need the app id. On Android it is used as a file name and must
+does not need the app id. On Android it is part of a file name and must
 not contain `/`.
+
+Older Android builds stored a namespace in a file named after the bare
+namespace. The first open after upgrading copies that file into the
+prefixed one and deletes it — except when the namespace equals the
+app's default preferences name (`<package name>_preferences`), which is
+left untouched. Do not give a namespace the name of a preferences file
+the app writes itself.
 
 Reading a key as a different type than it was written with fails with
 `DataStoreError::Corrupted` on every platform (Android cannot tell an
