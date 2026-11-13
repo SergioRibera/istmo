@@ -99,12 +99,13 @@ jobs:
         with:
           key: ios-${{ matrix.example }}
       - name: Build IstmoRuntime for the iOS Simulator
-        # Xcode names the scheme of a multi-target package `<name>-Package`
-        # and only adds per-product schemes for some layouts.
+        # Depending on the Xcode version the package scheme is the product
+        # name, `<name>-Package` or the bare package name;
+        # pick whichever exists.
         run: |
           schemes=$(xcodebuild -list -json | jq -r '(.workspace // .project).schemes[]')
           echo "$schemes"
-          scheme=$(printf '%s\n' "$schemes" | grep -xm1 -e IstmoRuntime -e istmo-Package || true)
+          scheme=$(printf '%s\n' "$schemes" | grep -xm1 -e IstmoRuntime -e istmo-Package -e istmo || true)
           test -n "$scheme"
           xcodebuild build \
             -scheme "$scheme" \
