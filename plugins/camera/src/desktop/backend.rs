@@ -251,7 +251,8 @@ impl Camera for DesktopCamera {
 
         let publisher = Arc::clone(&fanout);
         let mut camera = CallbackCamera::new(index, requested, move |buffer| {
-            match buffer_to_frame(&buffer, pixel_format, seq.fetch_add(1, Ordering::Relaxed)) {
+            let seq = seq.fetch_add(1, Ordering::Relaxed);
+            match buffer_to_frame(&buffer, pixel_format, seq) {
                 Ok(frame) => publisher.publish(frame),
                 Err(err) => {
                     tracing::warn!(target: "istmo.camera.desktop", %err, "frame decode failed");
