@@ -11,7 +11,7 @@ for `geo:`.
 | iOS | `UIApplication.shared.open` (`native/ios/OpenerBackendImpl.swift`) |
 | Desktop | `DesktopOpener`: `xdg-open`, `open` or `rundll32 url.dll,FileProtocolHandler`, no shell |
 
-Android API 21 and iOS 13.0 are the plugin's `[min_versions]`, checked by
+Android API 21 and iOS 14.0 are the plugin's `[min_versions]`, checked by
 the app's `build.rs`; neither needs anything newer than the runtime.
 
 ## Install

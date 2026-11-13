@@ -23,5 +23,6 @@ version = "16.1.0"
 [min_versions]
 # `play-services-code-scanner` minSdk.
 android = 21
-# `UIWindowScene` lookup of the presenting controller.
-ios = "13.0"
+# `UIWindowScene` lookup of the presenting controller needs iOS 13; the
+# Swift runtime package itself requires iOS 14.
+ios = "14.0"

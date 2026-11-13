@@ -9,7 +9,7 @@ receive what other apps share into yours as a stream of
 | Platform | Send | Receive (opt-in) | Minimum |
 | --- | --- | --- | --- |
 | Android | `ACTION_SEND(_MULTIPLE)` chooser + `FileProvider` (`native/android`) | `ACTION_SEND` intent filters on an app-declared alias | API 22 |
-| iOS | `UIActivityViewController` (`native/ios`) | Share Extension + App Group | 13.0 |
+| iOS | `UIActivityViewController` (`native/ios`) | Share Extension + App Group | 14.0 |
 | macOS | `DesktopShare`: `NSSharingServicePicker` | Share Extension + App Group | 10.15 |
 | Windows | `DesktopShare`: `DataTransferManager` | Share Target (package identity, 10.0.19041+) | 10.0.16299 |
 | Linux | not available (`ShareError::Unsupported`) | app-driven (`ShareInbox::publish`) | — |

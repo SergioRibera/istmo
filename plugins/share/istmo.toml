@@ -24,8 +24,9 @@ version = "1.13.1"
 [min_versions]
 # ACTION_SEND chooser with IntentSender callback (target reporting).
 android = 22
-# UIActivityViewController + LinkPresentation (rich previews).
-ios = "13.0"
+# UIActivityViewController + LinkPresentation (rich previews, iOS 13);
+# the Swift runtime package itself requires iOS 14.
+ios = "14.0"
 # NSSharingServicePicker delegate + LPLinkMetadata.
 macos = "10.15"
 # DataTransferManager interop for Win32 windows + ShareCompleted.

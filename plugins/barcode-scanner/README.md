@@ -8,7 +8,7 @@ the first code read, or `Ok(None)` when the user backs out.
 | Platform | Backend | Minimum |
 | --- | --- | --- |
 | Android | Google code scanner (`play-services-code-scanner`); no `CAMERA` permission needed | API 21 |
-| iOS | `AVCaptureSession` + `AVCaptureMetadataOutput`; needs `NSCameraUsageDescription` | 13.0 |
+| iOS | `AVCaptureSession` + `AVCaptureMetadataOutput`; needs `NSCameraUsageDescription` | 14.0 |
 | Desktop | `DesktopBarcodeScanner`, always `ScanError::Unavailable` | — |
 
 The minimums come from the plugin's `[min_versions]` and are checked by
