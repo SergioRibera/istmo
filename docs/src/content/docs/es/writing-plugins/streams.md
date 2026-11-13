@@ -7,11 +7,11 @@ sidebar:
 
 Algunos métodos de plugin producen un stream de valores en vez de un
 único resultado — actualizaciones de ubicación, muestras de sensor,
-tail de log, eventos de deep-link. Istmo los modela como `async fn`s
-normales marcados con `#[istmo::stream]`. El autor del trait escribe
-lo que parece un método normal; la macro lo reescribe para retornar un
-receiver del lado Rust y un `Flow<T>` / `AsyncStream<T>` en
-Kotlin / Swift.
+tail de log, eventos de deep-link. Istmo los modela como métodos del
+trait marcados con `#[istmo::stream]`. Son `fn` planas (no `async`)
+cuyo tipo de retorno declarado es el **item** del stream; la macro lo
+convierte en un receiver del lado Rust y en un `Flow<T>` /
+`AsyncThrowingStream<T, Error>` en Kotlin / Swift.
 
 ## Declarar un stream
 
@@ -20,13 +20,15 @@ use istmo::plugin;
 
 #[plugin(name = "acme.location_tracker")]
 pub trait LocationTracker {
+    /// Actualizaciones de posición hasta que el suscriptor suelta el stream.
     #[istmo::stream]
-    async fn updates(&self) -> LocationFix;
+    fn updates(&self) -> LocationFix;
 
     async fn last_known(&self) -> Result<LocationFix, TrackerError>;
 }
 
 #[istmo::message]
+#[derive(Debug, Clone)]
 pub struct LocationFix {
     pub latitude:  f64,
     pub longitude: f64,
@@ -34,107 +36,147 @@ pub struct LocationFix {
 }
 ```
 
-La macro reescribe `updates` para retornar `flume::Receiver<LocationFix>`
-del lado Rust. Cada item que envías va por el wire como
-`Frame::Event`; dropear el sender emite `Frame::StreamEnd`.
+La macro reescribe `updates` en el trait para que retorne
+`flume::Receiver<LocationFix>`. Cada item que envías viaja por el wire
+como un `Frame::Event`; soltar el sender termina el stream con
+`Frame::StreamEnd { Complete }`.
 
-Los streams viven en cualquier thread — Istmo no requiere que estén
-atados al executor actual.
+Marcar una `async fn` con `#[istmo::stream]` es un error de compilación
+("`#[istmo::stream]` methods are not `async`"), y `#[istmo::owned]` no
+se admite en métodos stream.
+
+## Streams falibles
+
+Un item escrito `Result<T, E>` hace que el stream sea falible:
+
+```rust
+#[istmo::stream]
+fn checked_updates(&self) -> Result<LocationFix, TrackerError>;
+```
+
+Los items `Ok(t)` viajan como eventos; el primer `Err(e)` termina el
+stream con `StreamEnd::Error` llevando `e`, y nada de lo enviado
+después se lee. Igual que en los métodos unarios, `E` debe implementar
+`std::error::Error` (salvo que sea `()`).
 
 ## Producir items — Rust-hosted
 
-Si el plugin es Rust-hosted, retorna un `Receiver` y empuja items
-desde una task o thread spawneado:
+Si el plugin es Rust-hosted, retorna un `flume::Receiver` (agrega
+`flume = "0.11"` al crate del plugin) y empuja items desde cualquier
+thread:
 
 ```rust
 impl LocationTracker for LocationTrackerImpl {
     fn updates(&self) -> flume::Receiver<LocationFix> {
         let (tx, rx) = flume::bounded(32);
-        self.spawn_polling_loop(tx);
+        let source = self.source.clone();
+        std::thread::spawn(move || {
+            while let Some(fix) = source.next_fix() {
+                // `send` falla cuando el suscriptor ya no está: deja de producir.
+                if tx.send(fix).is_err() {
+                    break;
+                }
+            }
+        });
         rx
+    }
+
+    fn checked_updates(&self) -> flume::Receiver<Result<LocationFix, TrackerError>> {
+        // misma forma; envía `Err(..)` para terminar el stream con ese error
+        /* ... */
     }
 
     async fn last_known(&self) -> Result<LocationFix, TrackerError> { /* ... */ }
 }
 ```
 
-El comportamiento de overflow se controla por el bound del channel que
-elijas. Prefiere channels bounded — un stream unbounded que produce
-más rápido que el consumer lee crece para siempre.
+Un método stream también puede recibir un argumento `CancelToken` (ver
+[Cancelación](/istmo/es/writing-plugins/cancellation/)); el runtime lo
+dispara cuando el suscriptor cancela, lo que despierta a un productor
+que está esperando en vez de enviando.
 
-## Producir items — Native-hosted
+El comportamiento ante overflow lo controla el límite del canal que
+elijas. Prefiere canales bounded — un stream unbounded que produce más
+rápido de lo que el consumidor lee crecerá para siempre.
 
-El dispatcher Kotlin generado expone un `Flow`, y Swift expone un
-`AsyncStream`. Emites items con la maquinaria de coroutine o task que
-prefieras:
+## Producir items — native-hosted
+
+En Android la interfaz `<T>Backend` generada declara el stream como un
+`Flow`; emite con la maquinaria de coroutines que prefieras:
 
 ```kotlin
 override fun updates(): Flow<LocationFix> = callbackFlow {
     val listener = LocationListener { loc ->
         trySend(LocationFix(loc.latitude, loc.longitude, loc.accuracy))
     }
-    locationManager.requestLocationUpdates(...)
+    locationManager.requestLocationUpdates(/* ... */)
     awaitClose { locationManager.removeUpdates(listener) }
 }
 ```
 
-```swift
-func updates() -> AsyncStream<LocationFix> {
-    AsyncStream { continuation in
-        let manager = CLLocationManager()
-        // cablea delegate → continuation.yield(fix)
-        continuation.onTermination = { _ in manager.stopUpdatingLocation() }
+Para un stream falible, lanza `BackendException(TrackerError.…)` desde
+el flow: el dispatcher termina el stream con ese error de dominio.
+
+En iOS el protocolo `<T>Backend` declara
+`func updates() -> AsyncThrowingStream<LocationFix, Error>`, pero el
+dispatcher Swift generado todavía no sirve métodos stream: una llamada
+se responde con un error de método desconocido. Hostea en Rust los
+streams que iOS deba servir.
+
+## Consumir un stream desde Rust
+
+El método del cliente abre el stream y retorna un
+`TypedStream<Item>` (`TypedStream<Item, E>` para un stream falible):
+
+```rust
+use istmo::StreamItem;
+use location_tracker::LocationTrackerClient;
+
+let tracker = LocationTrackerClient::from_runtime(&runtime)?;
+let updates = tracker.updates()?;
+loop {
+    match updates.recv_async().await? {
+        StreamItem::Event(fix) => tracing::info!("{fix:?}"),
+        StreamItem::Completed | StreamItem::Cancelled => break,
+        StreamItem::Failed(()) => unreachable!("stream infalible"),
     }
 }
 ```
 
-## Consumir un stream desde Rust
+`TypedStream` ofrece `recv` (bloqueante), `recv_async` y `try_recv`
+(consulta no bloqueante), cada uno entregando un `StreamItem`:
 
-```rust
-use futures_util::StreamExt;
-use location_tracker::LocationTrackerClient;
+| Variante | Significado |
+|---|---|
+| `Event(T)` | Un item decodificado. |
+| `Completed` | El productor terminó el stream. |
+| `Cancelled` | El stream fue cancelado. |
+| `Failed(E)` | Un stream falible terminó con su error de dominio, decodificado. |
 
-let tracker = LocationTrackerClient::from_runtime(&runtime)?;
-let mut updates = tracker.updates();
-while let Some(fix) = updates.recv_async().await.ok() {
-    tracing::info!("{:?}", fix);
-}
-```
-
-`updates` aquí es un `TypedStream<LocationFix>` envolviendo un
-decoder wire. Implementa `Stream<Item = LocationFix>`, así que
-cualquier executor que hable `futures::Stream` puede driveelo.
-
-Dropear el receiver del lado Rust emite `Frame::Cancel` upstream — el
-productor nativo sabe que debe parar.
+`recv*` retornan `Err(IstmoError::ChannelClosed)` cuando el canal ya no
+existe, y `Err(IstmoError::Codec(..))` si un item no decodifica.
 
 ## Cancelación
 
-Cancel explícito es una sola llamada:
+Suelta el `TypedStream` para cancelarlo. Antes de que el stream
+termine, el drop dispara el `CancelToken` del productor hosteado cuando
+lo sirve un host en el mismo runtime, o envía `Frame::Cancel` al peer
+en caso contrario. Un productor Kotlin ve su flow
+cancelado (corre el `awaitClose` de `callbackFlow`). Soltar un stream que ya terminó
+no cancela nada.
 
-```rust
-let handle = tracker.updates_handle()?;
-tokio::time::sleep(Duration::from_secs(30)).await;
-handle.cancel();
-```
+Ver [Cancelación](/istmo/es/writing-plugins/cancellation/) para el
+modelo cooperativo en detalle.
 
-Bajo el capó esto emite `Frame::Cancel { call_id }`. Kotlin/Swift
-observan la cancelación via el mecanismo estándar de cancelación que
-su API de stream soporte (`awaitClose` de `callbackFlow`,
-`onTermination` de `AsyncStream`).
-
-Ver [Cancelación](/istmo/es/writing-plugins/cancellation/) para el modelo
-cooperativo en detalle.
-
-## Tipos nombrados en items del stream
+## Tipos con nombre en items del stream
 
 Si el item del stream es un struct `#[istmo::message]` — como
 `LocationFix` arriba — participa en la misma interfaz `<T>Codecs` que
-otros métodos del plugin usan. No escribes lógica extra de codec.
+usan los otros métodos del plugin. No escribes lógica de codec extra.
 
 ## Siguiente
 
 - Suscriptores de larga vida: [Cancelación](/istmo/es/writing-plugins/cancellation/).
-- Streaming de sensores nativos: [Native handles](/istmo/es/writing-plugins/native-handles/).
-- Ejemplo completo: el [plugin `live-activity`](/istmo/es/plugins/live-activity/)
-  streamea actualizaciones de estado de activity.
+- Pasar objetos nativos a Rust: [Native handles](/istmo/es/writing-plugins/native-handles/).
+- Ejemplo completo: el [plugin `pen`](/istmo/es/plugins/pen/) hace
+  stream de las muestras del stylus.
