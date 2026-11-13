@@ -80,8 +80,7 @@ you can. An empty filter means "any file".
 | Platform | Field used |
 | -------- | ---------- |
 | Android | `mime_types` (`*/*` when empty) |
-| iOS 14+ | `uti_types`, plus `mime_types` and `extensions` converted to `UTType`s |
-| iOS 13 | none: the picker offers any item |
+| iOS | `uti_types`, plus `mime_types` and `extensions` converted to `UTType`s |
 | macOS, Windows, Linux | `extensions`, plus `mime_types` mapped to extensions |
 
 The desktop dialogs filter by extension only, so the desktop backend
