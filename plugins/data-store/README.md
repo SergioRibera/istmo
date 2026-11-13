@@ -40,9 +40,11 @@ not contain `/`. Because the file is named
 with the app's own preferences.
 
 Reading a key as a different type than it was written with fails with
-`DataStoreError::Corrupted` on every platform (Android cannot tell an
-`f64` read as `i64`, or bytes read as a string, apart from the real
-type, because `SharedPreferences` stores them as `Long` / `String`).
+`DataStoreError::Corrupted` on every platform, with one Android
+exception: `SharedPreferences` stores `f64` as a `Long` and bytes as a
+Base64 `String`, so mixing `i64` / `f64`, or string / bytes, on one key
+reinterprets the stored value instead of failing (a string that is not
+valid Base64 still fails `get_bytes` with `Corrupted`).
 
 ## App setup
 

@@ -67,8 +67,10 @@ are added or removed.
 * **Desktop**: register the Rust backend yourself:
   `runtime.register_host(BiometricHost::new(DesktopBiometric::default()))`.
   On macOS the secret vault needs an app signed with a Team ID and the
-  `keychain-access-groups` entitlement; elsewhere vault calls fail with
-  `BiometricError::UnsupportedOperation`. Linux has no vault unless the
-  app opts into `DesktopBiometric::with_ui_gated_vault`.
+  `keychain-access-groups` entitlement; without it vault calls fail with
+  `BiometricError::UnsupportedOperation`. Windows seals secrets with a
+  key derived from a Windows Hello signature. Linux has no vault (calls
+  fail with `UnsupportedOperation`) unless the app opts into
+  `DesktopBiometric::with_ui_gated_vault`.
 
 Full guide: <https://sergioribera.rs/istmo/plugins/biometric/>

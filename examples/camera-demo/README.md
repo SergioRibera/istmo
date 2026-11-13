@@ -50,9 +50,10 @@ and `rustup target add aarch64-linux-android`. The istmo gradle
 plugin invokes cargo for every ABI listed in
 `android/app/build.gradle.kts` → `abiFilters` (default `arm64-v8a`).
 
-The permission prompt fires the first time the app opens a session
+The permission prompt fires when you press **request**
 (`request_access` on the Rust side → `ActivityResultContracts.RequestPermission`
-on the Kotlin side).
+on the Kotlin side). Opening a session before access is granted fails
+with `CameraError::PermissionDenied`.
 
 ## Run in the browser
 

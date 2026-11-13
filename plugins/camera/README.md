@@ -157,8 +157,10 @@ let applied = session
     .await?;
 ```
 
-`AppliedControls` reports the effective state — the backend clamps
-values that fall outside what the hardware supports.
+On Android and iOS, `AppliedControls` reports the effective state —
+the backend clamps values that fall outside what the hardware supports.
+The desktop and web hosts apply controls best-effort and echo the
+request back (fields left `None` report their defaults).
 
 ## Pixel formats and backpressure
 
