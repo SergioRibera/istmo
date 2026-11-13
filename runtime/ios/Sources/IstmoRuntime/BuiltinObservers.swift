@@ -38,9 +38,9 @@ public enum IstmoDeviceInfoObserver {
     public static func publishOnce(runtime: IstmoRuntime) {
         let proc = ProcessInfo.processInfo
         var model: String? = nil
-        var manufacturer: String? = "Apple"
+        let manufacturer: String? = "Apple"
         var osName = "macos"
-        var osVersion: String? = proc.operatingSystemVersionString
+        let osVersion: String? = proc.operatingSystemVersionString
         let arch = currentArch()
         var formFactor: FormFactor = .desktop
         var vendorId: String? = nil
@@ -208,10 +208,17 @@ public enum IstmoCapabilitiesObserver {
         #endif
 
         #if canImport(CoreTelephony) && os(iOS)
-        // Actual cellular probe: query carrier info. Returns an empty
-        // dictionary on Wi-Fi-only iPads.
         let telephony = CTTelephonyNetworkInfo()
-        hasTelephony = !(telephony.serviceSubscriberCellularProviders?.isEmpty ?? true)
+        if #available(iOS 16, *) {
+            // Carrier info is deprecated without replacement on iOS 16
+            // and only returns placeholder values there; a cellular
+            // service reporting a radio technology is the remaining
+            // probe. Nil on Wi-Fi-only iPads.
+            hasTelephony = !(telephony.serviceCurrentRadioAccessTechnology?.isEmpty ?? true)
+        } else {
+            // Empty dictionary on Wi-Fi-only iPads.
+            hasTelephony = !(telephony.serviceSubscriberCellularProviders?.isEmpty ?? true)
+        }
         #endif
 
         runtime.publishCapabilities(
@@ -267,9 +274,22 @@ public final class IstmoSystemInfoObserver {
     private func publishAll() {
         guard let runtime = runtime else { return }
         let locale = Locale.current
-        let language = locale.languageCode?.lowercased() ?? "en"
-        let region = locale.regionCode?.uppercased()
-        let script = locale.scriptCode
+        let languageCode: String?
+        let region: String?
+        let script: String?
+        let currencyCode: String?
+        if #available(iOS 16, macOS 13, tvOS 16, watchOS 9, *) {
+            languageCode = locale.language.languageCode?.identifier
+            region = locale.region?.identifier.uppercased()
+            script = locale.language.script?.identifier
+            currencyCode = locale.currency?.identifier
+        } else {
+            languageCode = locale.languageCode
+            region = locale.regionCode?.uppercased()
+            script = locale.scriptCode
+            currencyCode = locale.currencyCode
+        }
+        let language = languageCode?.lowercased() ?? "en"
         let bcp47 = locale.identifier.replacingOccurrences(of: "_", with: "-")
         // Modern Hausa (`ha`) defaults to Latin/LTR; CLDR's
         // `likelySubtags` resolves bare `ha` to `Latn`. Matches Rust
@@ -325,7 +345,7 @@ public final class IstmoSystemInfoObserver {
             firstDayOfWeek: isoFirstDay,
             measurement: measurement,
             temperatureUnit: tempUnit,
-            currencyCode: locale.currencyCode,
+            currencyCode: currencyCode,
             decimalSeparator: formatter.decimalSeparator ?? ".",
             groupSeparator: formatter.groupingSeparator ?? ",",
             calendar: calendarFromIdentifier(cal.identifier)
@@ -352,7 +372,10 @@ public final class IstmoSystemInfoObserver {
         case .indian: return .other("indian")
         case .iso8601: return .other("iso8601")
         case .republicOfChina: return .other("roc")
-        @unknown default: return .other("unknown")
+        // Newer SDKs add identifiers (`bangla`, `dangi`, `vietnamese`,
+        // ...) that older SDKs cannot name; they are single words, so
+        // the case name already is the CLDR-style identifier.
+        default: return .other(String(describing: id))
         }
     }
 }
