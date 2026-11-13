@@ -49,7 +49,8 @@ pub struct SharedState {
 }
 
 impl SharedState {
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         activities: TypedLiveActivity<TimerAttributes, TimerState>,
         egui_ctx: egui::Context,
     ) -> Self {
@@ -64,11 +65,11 @@ impl SharedState {
     }
 
     fn push_log(&self, op: impl Into<String>, outcome: impl Into<String>) {
-        let mut lines = self.transcript.lock().expect("transcript mutex");
-        lines.push(LogLine {
+        let line = LogLine {
             op: op.into(),
             outcome: outcome.into(),
-        });
+        };
+        self.transcript.lock().expect("transcript mutex").push(line);
         self.egui_ctx.request_repaint();
     }
 
@@ -91,7 +92,7 @@ impl SharedState {
             .lock()
             .expect("handle mutex")
             .as_ref()
-            .map(|h| h.id())
+            .map(NativeHandle::id)
     }
 }
 
@@ -165,7 +166,7 @@ impl DemoApp {
         };
         let alert_config = alert.then(|| AlertConfig {
             title: "Timer".into(),
-            body: format!("{}s elapsed", elapsed),
+            body: format!("{elapsed}s elapsed"),
             sound: AlertSound::Default,
         });
         let shared = Arc::clone(&self.shared);
@@ -247,7 +248,9 @@ impl DemoApp {
             .timer_start
             .lock()
             .expect("timer mutex")
-            .map_or(0, |t| Instant::now().duration_since(t).as_secs() as u32)
+            .map_or(0, |t| {
+                u32::try_from(Instant::now().duration_since(t).as_secs()).unwrap_or(u32::MAX)
+            })
     }
 }
 
@@ -270,107 +273,127 @@ impl eframe::App for DemoApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("istmo Live Activity Demo");
-            ui.label("Timer that flows through the LiveActivity plugin — Rust core, native rendering.");
-
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.label("Title:");
-                ui.text_edit_singleline(&mut self.title_input);
-            });
-            ui.horizontal(|ui| {
-                ui.label("Target (minutes):");
-                ui.text_edit_singleline(&mut self.target_input);
-            });
-
-            ui.separator();
-
-            let has_active = self.shared.active_handle_id().is_some();
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(!has_active, egui::Button::new("Start"))
-                    .clicked()
-                {
-                    self.on_start();
-                }
-                if ui
-                    .add_enabled(has_active, egui::Button::new("Update"))
-                    .clicked()
-                {
-                    self.on_update(false);
-                }
-                if ui
-                    .add_enabled(has_active, egui::Button::new("Update + alert"))
-                    .clicked()
-                {
-                    self.on_update(true);
-                }
-                if ui
-                    .add_enabled(has_active, egui::Button::new("End"))
-                    .clicked()
-                {
-                    self.on_end(DismissalPolicy::Default);
-                }
-                if ui
-                    .add_enabled(has_active, egui::Button::new("End immediate"))
-                    .clicked()
-                {
-                    self.on_end(DismissalPolicy::Immediate);
-                }
-            });
-
-            ui.horizontal(|ui| {
-                if ui.button("are_activities_enabled?").clicked() {
-                    self.on_probe_enabled();
-                }
-                if ui.button("restore_active").clicked() {
-                    self.on_restore();
-                }
-            });
-
-            ui.separator();
-            ui.label(format!("Elapsed: {}", format_elapsed(self.current_elapsed_seconds())));
+            self.controls_ui(ui);
 
             ui.separator();
             ui.strong("Platform capabilities");
-            if let Some(caps) = self
-                .shared
-                .capabilities
-                .lock()
-                .expect("capabilities mutex")
-                .as_ref()
-            {
-                match caps {
-                    PlatformCapabilities::Ios(ios) => {
-                        ui.label(format!(
-                            "iOS — ActivityKit: {}, enabled: {}, Dynamic Island: {}, push: {}",
-                            ios.activity_kit_available,
-                            ios.activities_enabled,
-                            ios.dynamic_island,
-                            ios.push_updates,
-                        ));
-                    }
-                    PlatformCapabilities::Android(a) => {
-                        ui.label(format!(
-                            "Android — custom: {}, ProgressStyle: {}, LiveUpdate: {}, notifications enabled: {}",
-                            a.supports_custom,
-                            a.supports_progress_style,
-                            a.supports_live_update,
-                            a.notifications_enabled,
-                        ));
-                    }
-                    PlatformCapabilities::Unsupported => {
-                        ui.label("Unsupported platform (desktop / WASM).");
-                    }
-                }
-            } else {
-                ui.label("probing…");
-            }
+            self.capabilities_ui(ui);
 
             ui.separator();
             ui.strong("Transcript");
-            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+            self.transcript_ui(ui);
+        });
+    }
+}
+
+impl DemoApp {
+    fn controls_ui(&mut self, ui: &mut egui::Ui) {
+        ui.heading("istmo Live Activity Demo");
+        ui.label("Timer that flows through the LiveActivity plugin — Rust core, native rendering.");
+
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            ui.label("Title:");
+            ui.text_edit_singleline(&mut self.title_input);
+        });
+        ui.horizontal(|ui| {
+            ui.label("Target (minutes):");
+            ui.text_edit_singleline(&mut self.target_input);
+        });
+
+        ui.separator();
+
+        let has_active = self.shared.active_handle_id().is_some();
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!has_active, egui::Button::new("Start"))
+                .clicked()
+            {
+                self.on_start();
+            }
+            if ui
+                .add_enabled(has_active, egui::Button::new("Update"))
+                .clicked()
+            {
+                self.on_update(false);
+            }
+            if ui
+                .add_enabled(has_active, egui::Button::new("Update + alert"))
+                .clicked()
+            {
+                self.on_update(true);
+            }
+            if ui
+                .add_enabled(has_active, egui::Button::new("End"))
+                .clicked()
+            {
+                self.on_end(DismissalPolicy::Default);
+            }
+            if ui
+                .add_enabled(has_active, egui::Button::new("End immediate"))
+                .clicked()
+            {
+                self.on_end(DismissalPolicy::Immediate);
+            }
+        });
+
+        ui.horizontal(|ui| {
+            if ui.button("are_activities_enabled?").clicked() {
+                self.on_probe_enabled();
+            }
+            if ui.button("restore_active").clicked() {
+                self.on_restore();
+            }
+        });
+
+        ui.separator();
+        ui.label(format!(
+            "Elapsed: {}",
+            format_elapsed(self.current_elapsed_seconds())
+        ));
+    }
+
+    fn capabilities_ui(&self, ui: &mut egui::Ui) {
+        if let Some(caps) = self
+            .shared
+            .capabilities
+            .lock()
+            .expect("capabilities mutex")
+            .as_ref()
+        {
+            match caps {
+                PlatformCapabilities::Ios(ios) => {
+                    ui.label(format!(
+                        "iOS — ActivityKit: {}, enabled: {}, Dynamic Island: {}, push: {}",
+                        ios.activity_kit_available,
+                        ios.activities_enabled,
+                        ios.dynamic_island,
+                        ios.push_updates,
+                    ));
+                }
+                PlatformCapabilities::Android(a) => {
+                    ui.label(format!(
+                        "Android — custom: {}, ProgressStyle: {}, LiveUpdate: {}, notifications enabled: {}",
+                        a.supports_custom,
+                        a.supports_progress_style,
+                        a.supports_live_update,
+                        a.notifications_enabled,
+                    ));
+                }
+                PlatformCapabilities::Unsupported => {
+                    ui.label("Unsupported platform (desktop / WASM).");
+                }
+            }
+        } else {
+            ui.label("probing…");
+        }
+    }
+
+    fn transcript_ui(&self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .max_height(200.0)
+            .show(ui, |ui| {
                 let lines = self.shared.transcript.lock().expect("transcript mutex");
                 for line in lines.iter().rev() {
                     ui.horizontal(|ui| {
@@ -380,6 +403,5 @@ impl eframe::App for DemoApp {
                     });
                 }
             });
-        });
     }
 }

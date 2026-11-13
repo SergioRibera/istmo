@@ -49,7 +49,7 @@ fn handle_frame(
                 respond_err(
                     rt,
                     call_id,
-                    ActivityError::Backend("unknown plugin id".into()),
+                    &ActivityError::Backend("unknown plugin id".into()),
                 )?;
                 return Ok(());
             }
@@ -102,7 +102,7 @@ fn dispatch(
                     record.state = state;
                     codec::encode(&()).map_err(encode_backend)
                 }
-                None => Err(encode_activity_err(ActivityError::HandleNotFound)),
+                None => Err(encode_activity_err(&ActivityError::HandleNotFound)),
             }
         }
         "end" => {
@@ -114,7 +114,7 @@ fn dispatch(
                     let _ = final_state;
                     codec::encode(&()).map_err(encode_backend)
                 }
-                None => Err(encode_activity_err(ActivityError::HandleNotFound)),
+                None => Err(encode_activity_err(&ActivityError::HandleNotFound)),
             }
         }
         "are_activities_enabled" => codec::encode(&true).map_err(encode_backend),
@@ -141,7 +141,7 @@ fn dispatch(
 fn respond_err(
     rt: &Arc<Runtime>,
     call_id: CallId,
-    err: ActivityError,
+    err: &ActivityError,
 ) -> Result<(), Box<dyn std::error::Error>> {
     rt.dispatch_inbound(Envelope::new(Frame::Respond {
         call_id,
@@ -150,8 +150,8 @@ fn respond_err(
     Ok(())
 }
 
-fn encode_activity_err(err: ActivityError) -> Vec<u8> {
-    codec::encode(&err).unwrap_or_default()
+fn encode_activity_err(err: &ActivityError) -> Vec<u8> {
+    codec::encode(err).unwrap_or_default()
 }
 
 fn encode_backend<E: std::fmt::Display>(err: E) -> Vec<u8> {
