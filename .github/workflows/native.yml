@@ -31,17 +31,31 @@ name: native
 on:
   push:
     branches: [main]
+    # Native sources, the Rust that generates or links them, and the
+    # examples that build them; docs-only changes skip it.
+    paths:
+      - "runtime/**"
+      - "crates/**"
+      - "plugins/**"
+      - "examples/**"
+      - "src/**"
+      - "Package.swift"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/native.yml"
+      - "!**/*.md"
   pull_request:
     paths:
       - "runtime/**"
-      - "plugins/*/native/**"
-      - "plugins/*/istmo.toml"
-      - "crates/build/**"
-      - "crates/ios/**"
-      - "crates/android/**"
+      - "crates/**"
+      - "plugins/**"
       - "examples/**"
+      - "src/**"
       - "Package.swift"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/native.yml"
+      - "!**/*.md"
   workflow_dispatch:
 
 concurrency:

@@ -8,16 +8,22 @@ name: generated-rust
 on:
   push:
     branches: [main]
-  pull_request:
+    # Only what can change the macro output or the generated Rust.
     paths:
-      - "crates/macros/**"
-      - "crates/core/**"
-      - "crates/build/**"
-      - "crates/plugins/**"
-      - "crates/lint-check/**"
+      - "crates/**"
       - "src/**"
       - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/generated-rust.yml"
+      - "!**/*.md"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/generated-rust.yml"
+      - "!**/*.md"
   workflow_dispatch:
 
 concurrency:
