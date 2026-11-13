@@ -82,22 +82,25 @@ pub struct FileRef(std::convert::Infallible);
 /// you can and the native layer will pick whichever it supports:
 ///
 /// * Android SAF → `mime_types`
-/// * iOS / macOS `UIDocumentPickerViewController` → `uti_types`
-/// * Windows `IFileOpenDialog`, Linux XDG portal, macOS `NSOpenPanel` →
-///   `extensions`
+/// * iOS `UIDocumentPickerViewController` → `uti_types`, plus
+///   `mime_types` and `extensions` converted to UTIs
+/// * Desktop ([`DesktopFilePicker`] on Windows, macOS and Linux) →
+///   `extensions`, plus `mime_types` translated to extensions through a
+///   table of common types; `uti_types` are ignored
 ///
 /// An empty [`FileFilter`] means "any file".
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct FileFilter {
     /// MIME types such as `"image/*"` or `"application/pdf"`. Used by
-    /// Android SAF and by the Linux XDG portal.
+    /// Android SAF and iOS; the desktop backend maps the ones it knows
+    /// to extensions.
     pub mime_types: Vec<String>,
     /// Bare extensions without a leading dot, e.g. `"png"`, `"pdf"`.
-    /// Used by Windows, Linux portal fallback, and non-UTI macOS panels.
+    /// Used by the desktop backend and iOS.
     pub extensions: Vec<String>,
     /// Apple Uniform Type Identifiers such as `"public.image"`. Used by
-    /// iOS and macOS.
+    /// iOS.
     pub uti_types: Vec<String>,
 }
 
@@ -116,7 +119,8 @@ pub struct PickConfig {
     /// starting-directory hint (Android SAF ignores it entirely).
     pub start_directory_hint: Option<String>,
     /// Only honoured by [`FilePicker::pick_files`] — allows selecting
-    /// more than one file in a single invocation.
+    /// more than one file in a single invocation. Every backend
+    /// (Android, iOS, desktop) honours it.
     pub allow_multiple: bool,
 }
 
@@ -127,15 +131,20 @@ pub struct SaveConfig {
     pub dialog_title: Option<String>,
     /// Filename pre-filled in the save dialog.
     pub suggested_name: Option<String>,
-    /// MIME type used by Android SAF to create the destination. Ignored
-    /// by desktop backends, which infer the type from the extension.
+    /// MIME type of the destination. Android SAF creates the document
+    /// with it; the desktop backend adds its extensions to the dialog's
+    /// filter and appends the canonical one to an extension-less
+    /// [`SaveConfig::suggested_name`].
     pub mime_type: Option<String>,
     /// File-type filter. Empty = any file.
     pub filter: FileFilter,
     pub start_directory_hint: Option<String>,
     /// If `true`, the native dialog is asked to prompt before
-    /// overwriting an existing file. Backends may ignore this and always
-    /// prompt (Android/iOS) or never prompt.
+    /// overwriting an existing file. Every current backend confirms
+    /// overwrites on its own and cannot turn that off, so `false` is a
+    /// request no backend can honour today: SAF and the iOS document
+    /// picker never overwrite silently, and the desktop dialogs
+    /// (`IFileSaveDialog`, `NSSavePanel`, the XDG portal) always ask.
     pub overwrite_prompt: bool,
 }
 
@@ -150,8 +159,9 @@ pub struct SaveConfig {
 pub struct PickedFile {
     /// Human-visible filename as reported by the native backend.
     pub display_name: String,
-    /// MIME type when the backend can determine one. Desktop backends
-    /// may leave this `None`.
+    /// MIME type when the backend can determine one. The desktop
+    /// backend guesses it from the extension and leaves it `None` for
+    /// extensions it does not know.
     pub mime_type: Option<String>,
     /// File size in bytes when the backend can determine one without a
     /// full read. Streaming backends may leave this `None`.
@@ -234,10 +244,12 @@ pub trait FilePicker {
     #[owned]
     async fn pick_file(&self, config: PickConfig) -> Result<Option<PickedFile>, FilePickerError>;
 
-    /// Present a multi-file picker. Empty `Vec` when the user cancels.
+    /// Present a file picker that returns a list. Empty `Vec` when the
+    /// user cancels.
     ///
-    /// Backends without native multi-select semantics may fall back to
-    /// single-select and return a one-element vec.
+    /// Multi-select only when [`PickConfig::allow_multiple`] is set;
+    /// otherwise the picker is single-select and the `Vec` holds at most
+    /// one file.
     #[owned]
     async fn pick_files(&self, config: PickConfig) -> Result<Vec<PickedFile>, FilePickerError>;
 

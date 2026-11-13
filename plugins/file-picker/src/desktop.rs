@@ -25,9 +25,31 @@
 //! handed out via [`crate::FilePicker::open_read`] /
 //! [`crate::FilePicker::open_write`] are owned by the caller through
 //! their [`std::fs::File`] wrappers and are unaffected.
+//!
+//! # Platform limits
+//!
+//! - **Filters**: `rfd` filters by extension only.
+//!   [`FileFilter::extensions`] are used as given and
+//!   [`FileFilter::mime_types`] (plus [`SaveConfig::mime_type`] for save
+//!   dialogs) are translated through a built-in table of common types,
+//!   `type/*` wildcards included. [`FileFilter::uti_types`] are ignored.
+//!   A MIME type the table does not know adds nothing; when nothing at
+//!   all is left, or a `*/*` is present, the dialog offers every file.
+//! - **Multi-select**: [`FilePicker::pick_files`] honours
+//!   [`PickConfig::allow_multiple`]; without it the dialog is
+//!   single-select and returns at most one file.
+//! - **Overwrite confirmation**: every save dialog `rfd` drives
+//!   (`IFileSaveDialog`, `NSSavePanel`, the XDG portal and its zenity
+//!   fallback) confirms overwrites itself, so
+//!   [`SaveConfig::overwrite_prompt`] `= false` cannot turn the prompt
+//!   off.
+//! - **MIME of picked files**: [`PickedFile::mime_type`] is guessed from
+//!   the extension through the same table.
+
+mod mime;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use istmo_core::sync::lock;
@@ -143,15 +165,20 @@ impl DesktopFilePicker {
     }
 }
 
-fn picked_from_path(path: &std::path::Path, handle: NativeHandleId) -> PickedFile {
+fn picked_from_path(path: &Path, handle: NativeHandleId) -> PickedFile {
     let display_name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let size = std::fs::metadata(path).ok().map(|m| m.len());
+    let mime_type = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(mime::for_extension)
+        .map(str::to_owned);
     PickedFile {
         display_name,
-        mime_type: None,
+        mime_type,
         size,
         handle,
     }
@@ -181,12 +208,46 @@ fn raw_from_file(f: std::fs::File) -> i64 {
 
 // ------------------------------------------------------------------ Sync rfd (all desktop targets)
 
-fn apply_filter(mut d: rfd::FileDialog, filter: &FileFilter) -> rfd::FileDialog {
-    if !filter.extensions.is_empty() {
-        let exts: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
-        d = d.add_filter("Filtered", &exts);
+/// Extensions a dialog offers for `filter` plus `extra_mime`, or `None`
+/// for "any file". See the module docs for how MIME types map.
+fn filter_extensions(filter: &FileFilter, extra_mime: Option<&str>) -> Option<Vec<String>> {
+    let mut exts: Vec<String> = Vec::new();
+    let mut push = |ext: &str| {
+        let ext = ext.trim_start_matches('.');
+        if !ext.is_empty() && !exts.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
+            exts.push(ext.to_owned());
+        }
+    };
+    filter.extensions.iter().for_each(|ext| push(ext));
+    for mime in filter
+        .mime_types
+        .iter()
+        .map(String::as_str)
+        .chain(extra_mime)
+    {
+        match mime::MimeExtensions::of(mime) {
+            mime::MimeExtensions::Any => return None,
+            known @ mime::MimeExtensions::Known(_) => known.extensions().for_each(&mut push),
+        }
     }
-    d
+    (!exts.is_empty()).then_some(exts)
+}
+
+fn apply_filter(d: rfd::FileDialog, extensions: Option<&[String]>) -> rfd::FileDialog {
+    match extensions {
+        Some(exts) => d.add_filter("Supported files", exts),
+        None => d,
+    }
+}
+
+/// `name` with the canonical extension of `mime` appended when it has
+/// no extension yet.
+fn name_with_extension(name: &str, mime: Option<&str>) -> String {
+    if Path::new(name).extension().is_some() {
+        return name.to_owned();
+    }
+    mime.and_then(|mime| mime::MimeExtensions::of(mime).extensions().next())
+        .map_or_else(|| name.to_owned(), |ext| format!("{name}.{ext}"))
 }
 
 fn build_pick_dialog(config: &PickConfig) -> rfd::FileDialog {
@@ -197,7 +258,7 @@ fn build_pick_dialog(config: &PickConfig) -> rfd::FileDialog {
     if let Some(dir) = &config.start_directory_hint {
         d = d.set_directory(dir);
     }
-    apply_filter(d, &config.filter)
+    apply_filter(d, filter_extensions(&config.filter, None).as_deref())
 }
 
 fn build_save_dialog(config: &SaveConfig) -> rfd::FileDialog {
@@ -208,10 +269,11 @@ fn build_save_dialog(config: &SaveConfig) -> rfd::FileDialog {
     if let Some(dir) = &config.start_directory_hint {
         d = d.set_directory(dir);
     }
+    let mime = config.mime_type.as_deref();
     if let Some(name) = &config.suggested_name {
-        d = d.set_file_name(name);
+        d = d.set_file_name(name_with_extension(name, mime));
     }
-    apply_filter(d, &config.filter)
+    apply_filter(d, filter_extensions(&config.filter, mime).as_deref())
 }
 
 fn run_pick_single(config: &PickConfig) -> Option<PathBuf> {
@@ -219,7 +281,11 @@ fn run_pick_single(config: &PickConfig) -> Option<PathBuf> {
 }
 
 fn run_pick_multi(config: &PickConfig) -> Vec<PathBuf> {
-    build_pick_dialog(config).pick_files().unwrap_or_default()
+    if config.allow_multiple {
+        build_pick_dialog(config).pick_files().unwrap_or_default()
+    } else {
+        run_pick_single(config).into_iter().collect()
+    }
 }
 
 fn run_save(config: &SaveConfig) -> Option<PathBuf> {
@@ -290,5 +356,76 @@ impl FilePicker for DesktopFilePicker {
     async fn path(&self, file: NativeHandleId) -> Result<Option<String>, FilePickerError> {
         let path = self.lookup(file)?;
         Ok(Some(path.to_string_lossy().into_owned()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{filter_extensions, name_with_extension};
+    use crate::FileFilter;
+
+    fn filter(extensions: &[&str], mime_types: &[&str]) -> FileFilter {
+        FileFilter {
+            mime_types: mime_types.iter().map(|m| (*m).to_owned()).collect(),
+            extensions: extensions.iter().map(|e| (*e).to_owned()).collect(),
+            uti_types: vec!["public.image".to_owned()],
+        }
+    }
+
+    #[test]
+    fn empty_filter_offers_any_file() {
+        assert_eq!(filter_extensions(&FileFilter::default(), None), None);
+        // UTIs alone mean nothing to the desktop dialogs.
+        assert_eq!(filter_extensions(&filter(&[], &[]), None), None);
+    }
+
+    #[test]
+    fn extensions_and_mime_types_merge() {
+        let exts = filter_extensions(
+            &filter(&[".CSV", "txt"], &["application/pdf", "text/csv"]),
+            None,
+        );
+        assert_eq!(
+            exts.as_deref(),
+            Some(&["CSV", "txt", "pdf"].map(str::to_owned)[..])
+        );
+    }
+
+    #[test]
+    fn mime_wildcard_expands() {
+        let exts = filter_extensions(&filter(&[], &["image/*"]), None).unwrap_or_default();
+        assert!(exts.iter().any(|e| e == "png") && exts.iter().any(|e| e == "jpg"));
+    }
+
+    #[test]
+    fn any_mime_or_only_unknown_mimes_offer_any_file() {
+        assert_eq!(filter_extensions(&filter(&["png"], &["*/*"]), None), None);
+        assert_eq!(
+            filter_extensions(&filter(&[], &["application/x-nope"]), None),
+            None
+        );
+    }
+
+    #[test]
+    fn save_mime_type_joins_the_filter() {
+        let exts = filter_extensions(&FileFilter::default(), Some("text/csv"));
+        assert_eq!(exts.as_deref(), Some(&["csv".to_owned()][..]));
+    }
+
+    #[test]
+    fn suggested_name_gets_the_mime_extension() {
+        assert_eq!(
+            name_with_extension("export", Some("text/csv")),
+            "export.csv"
+        );
+        assert_eq!(
+            name_with_extension("export.txt", Some("text/csv")),
+            "export.txt"
+        );
+        assert_eq!(name_with_extension("export", None), "export");
+        assert_eq!(
+            name_with_extension("export", Some("application/x-nope")),
+            "export"
+        );
     }
 }

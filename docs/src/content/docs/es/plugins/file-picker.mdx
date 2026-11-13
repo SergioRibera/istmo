@@ -65,8 +65,8 @@ if let Some(file) = picker.pick_file_owned(config).await? {
 - `pick_file_owned` devuelve `Ok(None)` cuando el usuario cancela.
 - `pick_files_owned` devuelve todos los archivos elegidos (un `Vec`
   vacío al cancelar). Activa `PickConfig::allow_multiple` para la
-  selección múltiple en Android e iOS; el backend de escritorio siempre
-  la permite.
+  selección múltiple; sin él todos los backends muestran un selector de
+  un solo archivo y el `Vec` tiene como mucho uno.
 - Los métodos `_owned` devuelven `OwnedPickedFile`, cuyo `handle` es un
   `NativeHandle<FileRef>`. Al soltar la última referencia se libera el
   recurso nativo (permiso SAF, security scope de iOS, entrada de ruta
@@ -84,7 +84,15 @@ que puedas. Un filtro vacío significa "cualquier archivo".
 | Android | `mime_types` (`*/*` si está vacío) |
 | iOS 14+ | `uti_types`, más `mime_types` y `extensions` convertidos a `UTType` |
 | iOS 13 | ninguno: el selector ofrece cualquier elemento |
-| macOS, Windows, Linux | `extensions` |
+| macOS, Windows, Linux | `extensions`, más `mime_types` convertidos a extensiones |
+
+Los diálogos de escritorio solo filtran por extensión, así que el
+backend de escritorio convierte los tipos MIME (incluidos los comodines
+`tipo/*`) en extensiones con una tabla de tipos comunes; ahí se ignoran
+los `uti_types`. Un tipo MIME que la tabla no conoce no agrega nada, y
+un filtro que queda sin extensiones (o que contiene `*/*`) ofrece
+cualquier archivo. El `mime_type` de los archivos elegidos se deduce de
+la extensión de la misma forma.
 
 `dialog_title` y `start_directory_hint` solo los respeta el backend de
 escritorio.
@@ -114,7 +122,14 @@ if let Some(target) = picker.save_file_owned(config).await? {
 crea con `ACTION_CREATE_DOCUMENT` (con `mime_type`, por defecto
 `application/octet-stream`), iOS exporta un marcador vacío a la
 ubicación elegida y el escritorio crea el archivo. `open_write` lo
-trunca en todas las plataformas.
+trunca en todas las plataformas. En escritorio `mime_type` acota el
+filtro del diálogo y agrega su extensión a un `suggested_name` que no
+tiene ninguna.
+
+Todos los backends confirman antes de sobrescribir un archivo existente,
+diga lo que diga `overwrite_prompt`: los diálogos de escritorio
+(`IFileSaveDialog`, `NSSavePanel`, el portal XDG) siempre preguntan, y
+SAF y el selector de iOS nunca sobrescriben sin avisar.
 
 ## Lectores y escritores
 

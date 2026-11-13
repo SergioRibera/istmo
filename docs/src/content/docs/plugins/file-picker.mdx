@@ -63,8 +63,9 @@ if let Some(file) = picker.pick_file_owned(config).await? {
 
 - `pick_file_owned` returns `Ok(None)` when the user cancels.
 - `pick_files_owned` returns every selected file (an empty `Vec` on
-  cancel). Set `PickConfig::allow_multiple` for multi-select on Android
-  and iOS; the desktop backend always allows it.
+  cancel). Set `PickConfig::allow_multiple` for multi-select; without
+  it every backend shows a single-select picker and the `Vec` holds at
+  most one file.
 - The `_owned` methods return `OwnedPickedFile`, whose `handle` is a
   `NativeHandle<FileRef>`. Dropping the last reference releases the
   native resource (SAF grant, iOS security scope, desktop path entry).
@@ -81,7 +82,14 @@ you can. An empty filter means "any file".
 | Android | `mime_types` (`*/*` when empty) |
 | iOS 14+ | `uti_types`, plus `mime_types` and `extensions` converted to `UTType`s |
 | iOS 13 | none: the picker offers any item |
-| macOS, Windows, Linux | `extensions` |
+| macOS, Windows, Linux | `extensions`, plus `mime_types` mapped to extensions |
+
+The desktop dialogs filter by extension only, so the desktop backend
+maps MIME types (`type/*` wildcards included) to extensions through a
+table of common types; `uti_types` are ignored there. A MIME type the
+table does not know adds nothing, and a filter left without any
+extension (or one containing `*/*`) offers every file. Picked files get
+their `mime_type` guessed from the extension the same way.
 
 `dialog_title` and `start_directory_hint` are honoured by the desktop
 backend only.
@@ -111,7 +119,13 @@ if let Some(target) = picker.save_file_owned(config).await? {
 creates it through `ACTION_CREATE_DOCUMENT` (with `mime_type`, default
 `application/octet-stream`), iOS exports an empty placeholder to the
 chosen location, desktop creates the file. `open_write` truncates it
-on every platform.
+on every platform. On desktop `mime_type` narrows the dialog's filter and
+adds its extension to a `suggested_name` that has none.
+
+Every backend confirms before overwriting an existing file, whatever
+`overwrite_prompt` says: the desktop dialogs (`IFileSaveDialog`,
+`NSSavePanel`, the XDG portal) always ask, and SAF and the iOS picker
+never overwrite silently.
 
 ## Readers and writers
 

@@ -9,17 +9,19 @@ Every backend understands a different subset — provide the widest set
 you can and the native layer will pick whichever it supports:
 
 * Android SAF → `mime_types`
-* iOS / macOS `UIDocumentPickerViewController` → `uti_types`
-* Windows `IFileOpenDialog`, Linux XDG portal, macOS `NSOpenPanel` →
-  `extensions`
+* iOS `UIDocumentPickerViewController` → `uti_types`, plus
+  `mime_types` and `extensions` converted to UTIs
+* Desktop ([`DesktopFilePicker`] on Windows, macOS and Linux) →
+  `extensions`, plus `mime_types` translated to extensions through a
+  table of common types; `uti_types` are ignored
 
 An empty [`FileFilter`] means "any file".
 
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
-| `mime_types` | `mimeTypes` | `Vec<String>` | MIME types such as `"image/*"` or `"application/pdf"`. Used by Android SAF and by the Linux XDG portal. |
-| `extensions` | `extensions` | `Vec<String>` | Bare extensions without a leading dot, e.g. `"png"`, `"pdf"`. Used by Windows, Linux portal fallback, and non-UTI macOS panels. |
-| `uti_types` | `utiTypes` | `Vec<String>` | Apple Uniform Type Identifiers such as `"public.image"`. Used by iOS and macOS. |
+| `mime_types` | `mimeTypes` | `Vec<String>` | MIME types such as `"image/*"` or `"application/pdf"`. Used by Android SAF and iOS; the desktop backend maps the ones it knows to extensions. |
+| `extensions` | `extensions` | `Vec<String>` | Bare extensions without a leading dot, e.g. `"png"`, `"pdf"`. Used by the desktop backend and iOS. |
+| `uti_types` | `utiTypes` | `Vec<String>` | Apple Uniform Type Identifiers such as `"public.image"`. Used by iOS. |
 
 ### `PickConfig`
 
@@ -31,7 +33,7 @@ Configuration for [`FilePicker::pick_file`] and
 | `dialog_title` | `dialogTitle` | `Option<String>` | Optional title shown in the picker chrome. Ignored by backends whose native picker does not expose a title (Android SAF). |
 | `filter` | `filter` | `FileFilter` | File-type filter. Empty = any file. |
 | `start_directory_hint` | `startDirectoryHint` | `Option<String>` | Best-effort starting location, either a `file://` URL or an absolute path. Backends may ignore this if they do not honour a starting-directory hint (Android SAF ignores it entirely). |
-| `allow_multiple` | `allowMultiple` | `bool` | Only honoured by [`FilePicker::pick_files`] — allows selecting more than one file in a single invocation. |
+| `allow_multiple` | `allowMultiple` | `bool` | Only honoured by [`FilePicker::pick_files`] — allows selecting more than one file in a single invocation. Every backend (Android, iOS, desktop) honours it. |
 
 ### `SaveConfig`
 
@@ -41,10 +43,10 @@ Configuration for [`FilePicker::save_file`].
 | ----- | ---- | ---- | ----------- |
 | `dialog_title` | `dialogTitle` | `Option<String>` | — |
 | `suggested_name` | `suggestedName` | `Option<String>` | Filename pre-filled in the save dialog. |
-| `mime_type` | `mimeType` | `Option<String>` | MIME type used by Android SAF to create the destination. Ignored by desktop backends, which infer the type from the extension. |
+| `mime_type` | `mimeType` | `Option<String>` | MIME type of the destination. Android SAF creates the document with it; the desktop backend adds its extensions to the dialog's filter and appends the canonical one to an extension-less [`SaveConfig::suggested_name`]. |
 | `filter` | `filter` | `FileFilter` | File-type filter. Empty = any file. |
 | `start_directory_hint` | `startDirectoryHint` | `Option<String>` | — |
-| `overwrite_prompt` | `overwritePrompt` | `bool` | If `true`, the native dialog is asked to prompt before overwriting an existing file. Backends may ignore this and always prompt (Android/iOS) or never prompt. |
+| `overwrite_prompt` | `overwritePrompt` | `bool` | If `true`, the native dialog is asked to prompt before overwriting an existing file. Every current backend confirms overwrites on its own and cannot turn that off, so `false` is a request no backend can honour today: SAF and the iOS document picker never overwrite silently, and the desktop dialogs (`IFileSaveDialog`, `NSSavePanel`, the XDG portal) always ask. |
 
 ### `PickedFile`
 
@@ -58,7 +60,7 @@ deterministically.
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
 | `display_name` | `displayName` | `String` | Human-visible filename as reported by the native backend. |
-| `mime_type` | `mimeType` | `Option<String>` | MIME type when the backend can determine one. Desktop backends may leave this `None`. |
+| `mime_type` | `mimeType` | `Option<String>` | MIME type when the backend can determine one. The desktop backend guesses it from the extension and leaves it `None` for extensions it does not know. |
 | `size` | `size` | `Option<u64>` | File size in bytes when the backend can determine one without a full read. Streaming backends may leave this `None`. |
 | `handle` | `handle` | `NativeHandleId` | Opaque handle to the underlying resource. Native side releases it when `Frame::ReleaseNativeHandle` arrives. |
 
