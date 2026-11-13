@@ -186,14 +186,14 @@ mod tests {
                 .iter()
                 .all(|e| for_extension(e).is_some_and(|m| m.starts_with("image/")))
         );
-        assert!(!exts("video/*").is_empty());
+        assert_ne!(exts("video/*"), [] as [&str; 0]);
     }
 
     #[test]
     fn any_and_unknown() {
         assert_eq!(MimeExtensions::of("*/*"), MimeExtensions::Any);
-        assert!(exts("application/x-unknown").is_empty());
-        assert!(exts("chemical/*").is_empty());
+        assert_eq!(exts("application/x-unknown"), [] as [&str; 0]);
+        assert_eq!(exts("chemical/*"), [] as [&str; 0]);
     }
 
     #[test]
