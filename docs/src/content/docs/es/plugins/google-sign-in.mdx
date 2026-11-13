@@ -1,6 +1,6 @@
 ---
 title: Google Sign-In
-description: OAuth sign-in en Android (Credential Manager) e iOS (SDK GoogleSignIn).
+description: Inicio de sesión con Google en Android (Credential Manager) e iOS (SDK GoogleSignIn) desde un solo trait Rust.
 sidebar:
   order: 1
 ---
@@ -11,11 +11,16 @@ import PluginTypes from '../../../../generated/plugins/google-sign-in-types.mdx'
 cada plataforma detrás de un solo trait Rust.
 
 - **Android** usa `androidx.credentials` (Credential Manager) más el
-  provider `googleid`.
-- **iOS** usa el paquete SwiftPM oficial `GoogleSignIn` (7.1+, por el parámetro `nonce:`).
+  provider `googleid`. Mínimo API 21 (declarado en el `[min_versions]`
+  del plugin).
+- **iOS** usa el paquete SwiftPM oficial `GoogleSignIn` (7.1+, por el
+  parámetro `nonce:`).
 
-Ambos flows retornan un `NativeHandle<Credential>` que puedes
-refresquear y liberar determinísticamente.
+No hay backend desktop.
+
+Ambos flows retornan un handle opaco de credencial; el material del
+token se queda en el lado nativo y se libera cuando el handle Rust se
+dropea.
 
 ## Instala
 
@@ -24,19 +29,22 @@ refresquear y liberar determinísticamente.
 istmo-google-sign-in = "0.1.1-alpha.5"
 ```
 
-Reinicia el build de tu app; `istmo_build::emit()` recoge las entradas
-Gradle + SwiftPM del plugin automáticamente. Sin config extra de
-plataforma más allá de los OAuth client IDs.
+Recompila tu app; `istmo_build::emit()` recoge las entradas Gradle +
+SwiftPM del plugin automáticamente. El setup de plataforma se limita a
+los OAuth clients de abajo.
 
 ## Configura los OAuth clients
 
-Sigue el [walkthrough de Google Cloud Console](https://developers.google.com/identity)
-para crear:
+En la [Google Cloud Console](https://developers.google.com/identity),
+dentro de un mismo proyecto, crea:
 
-- Un OAuth client **Web** — usado como `server_client_id` en Android y
-  como la audience del ID token en iOS.
+- Un OAuth client **Web** — su id es `server_client_id`: el
+  `serverClientId` en Android y la audience del id token en iOS.
+- En Android, un OAuth client **Android** para el package name de la
+  app y el SHA-1 del certificado de firma.
+- En iOS, un OAuth client **iOS** (ver [Detalles de iOS](#detalles-de-ios)).
 
-El plugin es stateful (`init = SignInConfig`), así que pasás la config
+El plugin es stateful (`init = SignInConfig`), así que pasas la config
 al adquirir el cliente:
 
 ```rust
@@ -49,46 +57,81 @@ let cfg = SignInConfig::builder("1234-web.apps.googleusercontent.com")
     .build();
 
 let sign_in = SignInClient::from_runtime_with(&runtime, cfg).await?;
+// …o sobre el runtime global del proceso: SignInClient::acquire_with(cfg).await?
 ```
 
-Campos opcionales del builder: `.hosted_domain(...)` para tenants de
-Google Workspace y `.nonce(...)` para replay protection.
+Otros métodos del builder: `.scopes(iter)`, `.hosted_domain(...)` para
+tenants de Google Workspace y `.nonce(...)` para protección contra
+replay. La salida `Debug` de `SignInConfig`, `SignInAccount` y
+`OwnedSignInAccount` oculta el nonce y el id token.
 
-## Sign in
+## Inicia sesión
 
 ```rust
-let account = sign_in.sign_in_owned(SignInMode::Interactive).await?;
+use istmo_google_sign_in::SignInError;
 
-tracing::info!("signed in as {:?}", account.email);
+let account = sign_in
+    .sign_in_owned(SignInMode::Interactive)
+    .await
+    .map_err(SignInError::from)?;
+
+tracing::info!("sesión iniciada como {:?}", account.email);
+send_to_server(&account.id_token); // verifícalo en el servidor
 // account.credential: NativeHandle<Credential>
 ```
 
-`SignInMode::Interactive` muestra el selector de cuenta;
+`SignInMode::Interactive` muestra el selector de cuentas;
 `SignInMode::SilentOnly` falla con `SignInError::NoCredentialAvailable`
-en lugar de prompt cuando no hay credencial cacheada.
+en lugar de preguntar cuando no hay credencial cacheada.
+`silent_sign_in_owned()` retorna `Option<OwnedSignInAccount>` — `None`
+en lugar de ese error.
 
-Usá `sign_in_owned` (variante owned) a menos que específicamente
-necesites re-shippear el `NativeHandleId` crudo — la variante owned
-libera el credential automáticamente al drop.
+`SignInError::from` decodifica el error propio del plugin a partir del
+`IstmoError` del cliente. Los backends no verifican el id token; tu
+servidor debe hacerlo.
 
-## Refresh silencioso
+Usa las variantes `_owned` salvo que necesites reenviar el
+`NativeHandleId` crudo — adoptan la credencial en un
+`NativeHandle<Credential>` que la libera al dropearse. Los métodos
+crudos `sign_in` / `silent_sign_in` / `refresh` retornan
+`SignInAccount` con un id suelto; `SignInAccount::into_owned(&runtime)`
+lo adopta después.
 
-Refresh silencioso retorna un handle de credential nuevo. Dropea el
-viejo primero si querés release determinístico:
+## Refresca
+
+`refresh` recibe el id de la credencial actual. Entrega el handle
+viejo con `into_id()` para que no se libere al dropearse:
 
 ```rust
-let refreshed = sign_in.refresh_owned(account.credential.id()).await?;
+let account = sign_in.refresh_owned(account.credential.into_id()).await?;
 ```
 
-## Sign out
+En iOS el SDK refresca los tokens de la misma credencial; en Android
+Credential Manager no tiene refresh, así que se vuelve a correr el
+flow silencioso y se retorna una credencial nueva (falla con
+`SignInError::Reauthenticate` si no hay ninguna).
+
+## Cierra sesión y revoca
 
 ```rust
 sign_in.sign_out().await?;
+sign_in.revoke().await?;
 ```
 
-`sign_out` invalida el credential del lado nativo y emite
-`Frame::ReleaseNativeHandle` para cualquier credential outstanding que
-tu código Rust todavía retenga.
+Ambos descartan todas las credenciales que guarda el backend; los
+handles que tu código Rust aún posea quedan obsoletos y su liberación
+es un no-op. `revoke` además desconecta la app de la cuenta en iOS
+(`GIDSignIn.disconnect`). En Android solo limpia el estado local de
+credenciales — revoca el permiso desde tu servidor
+(`https://oauth2.googleapis.com/revoke`).
+
+## Límites en Android
+
+Credential Manager autentica; no otorga scopes OAuth. Los
+`SignInConfig::scopes` extra se ignoran y `granted_scopes` solo lista
+`openid`, `email` y `profile`. El inicio silencioso usa auto-select,
+así que con exactamente una cuenta autorizada el sistema igual muestra
+un breve banner de "iniciando sesión".
 
 ## Tipos wire
 
@@ -96,7 +139,7 @@ tu código Rust todavía retenga.
 
 ## Detalles de Android
 
-El plugin declara sus deps Gradle via `istmo.toml`:
+El plugin declara sus deps Gradle vía `istmo.toml`:
 
 ```toml
 [[gradle]]
@@ -116,13 +159,13 @@ artifact = "googleid"
 version  = "1.1.1"
 ```
 
-Nada que añadir a tu `build.gradle.kts` app-side — las entradas fluyen
-por el handover de deps nativas de `istmo-build`.
+No hay nada que agregar a tu `build.gradle.kts` — las entradas fluyen
+por el handover de native-deps de `istmo-build`.
 
-El flow Credential Manager necesita una `Activity`. El plugin declara
-`android_backend_arg = "activity"`, así que el registry generado le
-pasa a `GoogleSignInFactoryImpl` la activity host (`IstmoGameActivity`
-es una `ComponentActivity`).
+El flow de Credential Manager necesita una `Activity`. El plugin
+declara `android_backend_arg = "activity"`, así que el registry
+generado le pasa a `GoogleSignInFactoryImpl` la activity host
+(`IstmoGameActivity` lo es).
 
 ## Detalles de iOS
 
@@ -135,19 +178,29 @@ product      = "GoogleSignIn"
 from_version = "7.1.0"
 ```
 
-Tu `Info.plist` debe incluir el reversed client id bajo
-`CFBundleURLSchemes` y el client id OAuth de iOS bajo `GIDClientID`, y
-la app debe reenviar `application(_:open:options:)` a
+El backend lee el client id OAuth de iOS de `GIDClientID` en el
+`Info.plist` de la app (la convención del propio SDK; sin él el inicio
+de sesión falla con `SignInError::InvalidConfiguration`). Defínelo
+desde el `istmo.toml` de la app:
+
+```toml
+[app.info_plist]
+GIDClientID = "1234-ios.apps.googleusercontent.com"
+```
+
+El SDK además espera el client id invertido en `CFBundleURLTypes` →
+`CFBundleURLSchemes` del `Info.plist`, y que
+`application(_:open:options:)` se reenvíe a
 `GIDSignIn.sharedInstance.handle(_:)`.
 
 ## Cablealo
 
-`SignIn` es stateful (carga una configuración OAuth por instancia),
-así que el `IstmoPluginRegistry` generado lo registra con el
-`GoogleSignInFactoryImpl` del plugin (`android_backend` / `ios_backend`
-en su `istmo.toml`). El plugin de Gradle y el fragmento xcodegen
-`istmo-plugins.yml` compilan las fuentes nativas del plugin dentro de
-la app, así que no hay nada que copiar.
+`SignIn` es stateful (lleva una configuración OAuth por instancia),
+así que el `IstmoPluginRegistry` generado lo registra a través del
+`GoogleSignInFactoryImpl` del plugin (`android_backend` /
+`ios_backend` en su `istmo.toml`). El plugin de Gradle y el fragmento
+xcodegen `istmo-plugins.yml` compilan los sources nativos del plugin
+dentro de la app, así que no hay nada que copiar.
 
 ```kotlin
 // IstmoGameActivity, la launcher del template, ya hace esto.
@@ -166,23 +219,24 @@ IstmoApp.run() // arranca el runtime + IstmoPluginRegistry, luego corre Rust
 ```
 
 Ver [Auto-registración](/istmo/es/build-scripts/auto-register/) para el
-mecanismo completo y flags de opt-out.
+mecanismo completo y los flags de opt-out.
 
 ## Backends de referencia
 
-El repo del plugin envía implementaciones de referencia bajo
-`plugins/google-sign-in/native/`:
+El plugin trae sus backends bajo `plugins/google-sign-in/native/`:
 
 - `android/GoogleSignInBackendImpl.kt` + `GoogleSignInFactoryImpl.kt`
-  (paquete `dev.istmo.plugins.googlesignin`)
-- `ios/GoogleSignInBackendImpl.swift`
+  (paquete `dev.istmo.plugins.googlesignin`, donde `istmo-build`
+  también genera el Kotlin del plugin)
+- `ios/GoogleSignInBackendImpl.swift` (también define
+  `GoogleSignInFactoryImpl`)
 
-Se compilan en cada app que depende del crate. Para customizar uno,
-seteá `auto_register = false` para `istmo.google_sign_in` en el
-`[[app.plugin]]` de la app y registrá tu propio backend.
+Se compilan en cada app que depende del crate. Para personalizar uno,
+pon `auto_register = false` para `istmo.google_sign_in` en el
+`[[app.plugin]]` de la app y registra tu propio backend.
 
 ## Sample end-to-end completo
 
-Ver [`examples/rust-mobile-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/rust-mobile-demo)
+Mira [`examples/rust-mobile-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/rust-mobile-demo)
 en el repo — una app basada en egui que combina sign-in, permisos,
-notifications, y AdMob en un solo binario Rust.
+notificaciones y AdMob en un solo binario Rust.
