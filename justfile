@@ -249,7 +249,12 @@ docs-types:
         google-sign-in=plugins/google-sign-in/src/lib.rs \
         live-activity=plugins/live-activity/src/lib.rs \
         biometric=plugins/biometric/src/lib.rs \
-        share=plugins/share/src/lib.rs
+        share=plugins/share/src/lib.rs \
+        barcode-scanner=plugins/barcode-scanner/src/lib.rs \
+        camera=plugins/camera/src/lib.rs \
+        file-picker=plugins/file-picker/src/lib.rs \
+        opener=plugins/opener/src/lib.rs \
+        pen=plugins/istmo-pen/src/lib.rs
 
 # Gen default keystore default
 # keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
