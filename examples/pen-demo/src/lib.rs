@@ -22,14 +22,17 @@ use istmo_pen::PenConfig;
 /// into a `StrokePoint` that the drawing app renders. Blocking; the
 /// mobile entry spawns this off before it hands the thread to eframe.
 pub fn pump_events_stream(
-    stream: istmo_core::TypedStream<PenEvent, ()>,
-    ink: std::sync::Arc<SharedInk>,
+    stream: &istmo_core::TypedStream<PenEvent, ()>,
+    ink: &std::sync::Arc<SharedInk>,
 ) {
     loop {
         match stream.recv() {
-            Ok(istmo_core::StreamItem::Event(event)) => apply_event(event, &ink),
-            Ok(istmo_core::StreamItem::Completed | istmo_core::StreamItem::Cancelled) => break,
-            Ok(istmo_core::StreamItem::Failed(_)) => break,
+            Ok(istmo_core::StreamItem::Event(event)) => apply_event(&event, ink),
+            Ok(
+                istmo_core::StreamItem::Completed
+                | istmo_core::StreamItem::Cancelled
+                | istmo_core::StreamItem::Failed(()),
+            ) => break,
             Err(err) => {
                 log::error!("pen events recv error: {err:?}");
                 break;
@@ -39,45 +42,38 @@ pub fn pump_events_stream(
 }
 
 pub fn pump_hover_stream(
-    stream: istmo_core::TypedStream<PenHoverEvent, ()>,
+    stream: &istmo_core::TypedStream<PenHoverEvent, ()>,
     _ink: std::sync::Arc<SharedInk>,
 ) {
     // Hover samples aren't drawn in this demo, but we still drain the
     // stream so the wire buffer doesn't fill and the plugin backend
     // can log activity.
-    loop {
-        match stream.recv() {
-            Ok(istmo_core::StreamItem::Event(_)) => {}
-            Ok(istmo_core::StreamItem::Completed | istmo_core::StreamItem::Cancelled) => break,
-            Ok(istmo_core::StreamItem::Failed(_)) => break,
-            Err(_) => break,
-        }
-    }
+    while let Ok(istmo_core::StreamItem::Event(_)) = stream.recv() {}
 }
 
-fn apply_event(event: PenEvent, ink: &std::sync::Arc<SharedInk>) {
+fn apply_event(event: &PenEvent, ink: &std::sync::Arc<SharedInk>) {
     match event {
-        PenEvent::Down(ref sample) => {
+        PenEvent::Down(sample) => {
             ink.begin(point_from_sample(sample));
             publish_debug(ink, sample, "down");
         }
-        PenEvent::Move(ref m) => {
+        PenEvent::Move(m) => {
             for c in &m.coalesced {
                 ink.extend(point_from_sample(c));
             }
             ink.extend(point_from_sample(&m.sample));
             publish_debug(ink, &m.sample, "move");
         }
-        PenEvent::Up(ref sample) => {
+        PenEvent::Up(sample) => {
             ink.extend(point_from_sample(sample));
             ink.end();
             publish_debug(ink, sample, "up");
         }
-        PenEvent::Cancel(ref sample) => {
+        PenEvent::Cancel(sample) => {
             ink.end();
             publish_debug(ink, sample, "cancel");
         }
-        PenEvent::ButtonChanged(ref change) => {
+        PenEvent::ButtonChanged(change) => {
             publish_debug(ink, &change.sample, "button");
             // Toggle the color menu whenever barrel button 1 flips.
             if change.changed & 1 != 0 && change.sample.buttons & 1 != 0 {
@@ -118,7 +114,7 @@ fn point_from_sample(sample: &PenSample) -> StrokePoint {
     StrokePoint {
         pos: eframe::egui::Pos2::new(sample.x, sample.y),
         pressure: sample.pressure.clamp(0.0, 1.0),
-        tilt: (sample.tilt_x.powi(2) + sample.tilt_y.powi(2)).sqrt(),
+        tilt: sample.tilt_x.hypot(sample.tilt_y),
     }
 }
 
@@ -159,8 +155,8 @@ fn mobile_main() {
             }
         };
         let hover_ink = std::sync::Arc::clone(&ink_bg);
-        std::thread::spawn(move || pump_hover_stream(hover, hover_ink));
-        pump_events_stream(events, ink_bg);
+        std::thread::spawn(move || pump_hover_stream(&hover, hover_ink));
+        pump_events_stream(&events, &ink_bg);
     });
 
     let android_app = istmo::android::android_app()

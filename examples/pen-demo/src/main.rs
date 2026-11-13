@@ -46,9 +46,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hover = client.hover()?;
 
     let ink_events = Arc::clone(&ink);
-    std::thread::spawn(move || pen_demo::pump_events_stream(events, ink_events));
+    std::thread::spawn(move || pen_demo::pump_events_stream(&events, &ink_events));
     let ink_hover = Arc::clone(&ink);
-    std::thread::spawn(move || pen_demo::pump_hover_stream(hover, ink_hover));
+    std::thread::spawn(move || pen_demo::pump_hover_stream(&hover, ink_hover));
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_inner_size([960.0, 640.0]),

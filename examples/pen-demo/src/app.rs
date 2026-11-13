@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
-use istmo::plugins::SafeArea;
+use istmo::plugins::{SafeArea, SafeAreaInsets};
 
 #[derive(Debug, Clone, Copy)]
 pub struct StrokePoint {
@@ -69,7 +69,10 @@ pub struct SharedInk {
 impl SharedInk {
     pub fn begin(&self, first: StrokePoint) {
         let color = self.current_color();
-        let mut cur = self.current.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cur = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *cur = Some(Stroke {
             points: vec![first],
             color: Some(color),
@@ -78,7 +81,10 @@ impl SharedInk {
 
     pub fn extend(&self, point: StrokePoint) {
         let color = self.current_color();
-        let mut cur = self.current.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cur = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(stroke) = cur.as_mut() {
             stroke.points.push(point);
         } else {
@@ -90,31 +96,44 @@ impl SharedInk {
     }
 
     pub fn end(&self) {
-        let mut cur = self.current.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cur = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(stroke) = cur.take() {
-            let mut strokes = self.strokes.lock().unwrap_or_else(|p| p.into_inner());
+            let mut strokes = self
+                .strokes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             strokes.push(stroke);
         }
     }
 
     pub fn clear(&self) {
-        let mut cur = self.current.lock().unwrap_or_else(|p| p.into_inner());
-        cur.take();
-        let mut strokes = self.strokes.lock().unwrap_or_else(|p| p.into_inner());
-        strokes.clear();
+        self.current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        self.strokes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
-    pub fn update_debug(&self, next: PenDebug) {
-        let mut d = self.debug.lock().unwrap_or_else(|p| p.into_inner());
-        let touches = d.touches;
-        *d = PenDebug {
-            touches: touches.saturating_add(1),
-            ..next
-        };
+    pub fn update_debug(&self, mut next: PenDebug) {
+        let mut d = self
+            .debug
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        next.touches = d.touches.saturating_add(1);
+        *d = next;
     }
 
     pub fn current_color(&self) -> egui::Color32 {
-        let guard = self.color.lock().unwrap_or_else(|p| p.into_inner());
+        let guard = self
+            .color
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if guard.a() == 0 {
             egui::Color32::from_rgb(30, 30, 40)
         } else {
@@ -123,7 +142,10 @@ impl SharedInk {
     }
 
     pub fn set_color(&self, color: egui::Color32) {
-        let mut guard = self.color.lock().unwrap_or_else(|p| p.into_inner());
+        let mut guard = self
+            .color
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = color;
     }
 
@@ -227,7 +249,10 @@ impl DrawApp {
         let Some(sa) = self.safe_area.as_ref() else {
             return (0.0, 0.0, 0.0, 0.0);
         };
-        let insets = sa.current_or_zero();
+        let insets = sa.current_or_default().unwrap_or_else(|err| {
+            log::warn!("undecodable safe-area insets: {err}");
+            SafeAreaInsets::default()
+        });
         let top = insets.system_bars.top.max(insets.display_cutout.top);
         let right = insets.system_bars.right.max(insets.display_cutout.right);
         let bottom = insets
@@ -437,7 +462,7 @@ fn paint_stroke(painter: &egui::Painter, stroke: &Stroke, offset: egui::Vec2) {
     let base = stroke
         .color
         .unwrap_or_else(|| egui::Color32::from_rgb(30, 30, 40));
-    let width_at = |p: &StrokePoint| 1.5 + p.pressure * 22.0;
+    let width_at = |p: &StrokePoint| p.pressure.mul_add(22.0, 1.5);
 
     // Single-point stroke: just a dot.
     if raw.len() == 1 {
@@ -508,8 +533,7 @@ fn paint_stroke(painter: &egui::Painter, stroke: &Stroke, offset: egui::Vec2) {
             color: base,
         });
     }
-    for i in 0..n - 1 {
-        let l0 = (i * 2) as u32;
+    for l0 in (0u32..).step_by(2).take(n - 1) {
         let r0 = l0 + 1;
         let l1 = l0 + 2;
         let r1 = l0 + 3;
@@ -532,23 +556,17 @@ fn chaikin_smooth(pts: &[StrokePoint]) -> Vec<StrokePoint> {
     for pair in pts.windows(2) {
         let a = &pair[0];
         let b = &pair[1];
-        let q_pos = egui::Pos2::new(
-            a.pos.x * 0.75 + b.pos.x * 0.25,
-            a.pos.y * 0.75 + b.pos.y * 0.25,
-        );
-        let r_pos = egui::Pos2::new(
-            a.pos.x * 0.25 + b.pos.x * 0.75,
-            a.pos.y * 0.25 + b.pos.y * 0.75,
-        );
+        let q_pos = a.pos.lerp(b.pos, 0.25);
+        let r_pos = a.pos.lerp(b.pos, 0.75);
         out.push(StrokePoint {
             pos: q_pos,
-            pressure: a.pressure * 0.75 + b.pressure * 0.25,
-            tilt: a.tilt * 0.75 + b.tilt * 0.25,
+            pressure: egui::lerp(a.pressure..=b.pressure, 0.25),
+            tilt: egui::lerp(a.tilt..=b.tilt, 0.25),
         });
         out.push(StrokePoint {
             pos: r_pos,
-            pressure: a.pressure * 0.25 + b.pressure * 0.75,
-            tilt: a.tilt * 0.25 + b.tilt * 0.75,
+            pressure: egui::lerp(a.pressure..=b.pressure, 0.75),
+            tilt: egui::lerp(a.tilt..=b.tilt, 0.75),
         });
     }
     out.push(pts[pts.len() - 1]);
@@ -587,10 +605,10 @@ impl DrawApp {
                     self.ink.end();
                     self.tracking = false;
                 }
-            } else if self.tracking {
-                if let Some(p) = sample {
-                    self.ink.extend(p);
-                }
+            } else if self.tracking
+                && let Some(p) = sample
+            {
+                self.ink.extend(p);
             }
             return;
         };
@@ -627,23 +645,26 @@ impl DrawApp {
             // Interpolated pressure sits between the previous and current
             // frame so the ribbon width evolves smoothly across the
             // segment instead of stepping at each frame boundary.
-            let coalesced = if let Some(prev) = self.last_pointer {
+            let coalesced = self.last_pointer.map_or_else(Vec::new, |prev| {
                 let delta = local - prev;
                 let dist = delta.length();
-                let steps = (dist / 4.0).ceil().clamp(0.0, 8.0) as usize;
-                let mut out = Vec::with_capacity(steps);
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "clamped to 0..=8 right here"
+                )]
+                let steps = (dist / 4.0).ceil().clamp(0.0, 8.0) as u8;
+                let mut out = Vec::with_capacity(usize::from(steps));
                 for step in 1..steps {
-                    let t = step as f32 / steps as f32;
-                    let sub_pos = egui::Pos2::new(prev.x + delta.x * t, prev.y + delta.y * t);
+                    let t = f32::from(step) / f32::from(steps);
+                    let sub_pos = prev + delta * t;
                     // Constant pressure per stroke on desktop mouse — no
                     // per-sub-sample interpolation needed; wintab / real
                     // stylus paths already carry real pressure.
                     out.push(self.build_sample(sub_pos, pressure));
                 }
                 out
-            } else {
-                Vec::new()
-            };
+            });
             publisher.push_event(
                 crate::WINDOW_ID,
                 PenEvent::Move(PenMove {
@@ -659,7 +680,7 @@ impl DrawApp {
     fn build_sample(&self, pos: egui::Pos2, pressure: f32) -> istmo_pen::PenSample {
         use istmo_pen::{PenSample, PenToolKind};
         let seq = self.seq.fetch_add(1, Ordering::Relaxed);
-        let timestamp_us = self.attach.elapsed().as_micros() as u64;
+        let timestamp_us = u64::try_from(self.attach.elapsed().as_micros()).unwrap_or(u64::MAX);
         PenSample {
             x: pos.x,
             y: pos.y,
@@ -675,7 +696,7 @@ impl DrawApp {
             sequence: seq,
             tool_id: 1,
             tool_kind: PenToolKind::Tip,
-            buttons: if pressure > 0.0 { 1 } else { 0 },
+            buttons: u32::from(pressure > 0.0),
         }
     }
 }
