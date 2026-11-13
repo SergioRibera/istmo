@@ -136,7 +136,7 @@ base classes under `plugins/live-activity/native/`:
   `ActivityAttributes`. The SwiftUI layouts (Lock Screen, Dynamic
   Island) go in a Widget extension with an `ActivityConfiguration`;
   the plugin does not generate them.
-- **Android** — `NotificationLiveActivityHandler<A, C>(context, channel)`.
+- **Android** — `NotificationLiveActivityHandler<A, C>(activityType, channel, context)`.
   Implement `renderStrategy()` (`RenderStrategy.CustomOnly`,
   `ProgressOnly` or `Adaptive`), `decodeAttributes`, `decodeState` and
   `smallIconRes`. `ChannelConfig.default()` creates the

@@ -138,7 +138,7 @@ registrado para su tipo de activity; un tipo sin handler falla con
   `ActivityAttributes` de Swift. Los layouts SwiftUI (Lock Screen,
   Dynamic Island) van en una Widget extension con un
   `ActivityConfiguration`; el plugin no los genera.
-- **Android** — `NotificationLiveActivityHandler<A, C>(context, channel)`.
+- **Android** — `NotificationLiveActivityHandler<A, C>(activityType, channel, context)`.
   Implementa `renderStrategy()` (`RenderStrategy.CustomOnly`,
   `ProgressOnly` o `Adaptive`), `decodeAttributes`, `decodeState` y
   `smallIconRes`. `ChannelConfig.default()` crea el canal
