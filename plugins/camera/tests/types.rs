@@ -292,31 +292,31 @@ fn _assert_trait_surface<T: Camera>(t: &T) {
     use istmo_core::NativeHandleId;
 
     let id = NativeHandleId::new(0);
-    let _d: &dyn Fn() -> _ = &|| async {
+    let _: &dyn Fn() -> _ = &|| async {
         let _: Result<Vec<CameraDevice>, CameraError> = t.devices().await;
     };
-    let _c: &dyn Fn() -> _ = &|| async {
+    let _: &dyn Fn() -> _ = &|| async {
         let _: Result<ConcurrentSupport, CameraError> = t.concurrent_support().await;
     };
-    let _a: &dyn Fn() -> _ = &|| async {
+    let _: &dyn Fn() -> _ = &|| async {
         let _: Result<AccessStatus, CameraError> = t.access_status().await;
         let _: Result<AccessStatus, CameraError> = t.request_access().await;
     };
-    let _o: &dyn Fn() -> _ = &|| async {
+    let _: &dyn Fn() -> _ = &|| async {
         let _: Result<CameraSession, CameraError> = t.open(SessionConfig::new("x")).await;
     };
-    let _f: &dyn Fn() -> _ = &|| {
+    let _: &dyn Fn() -> _ = &|| {
         let _: flume::Receiver<CameraFrame> = t.frames(id);
     };
-    let _ac: &dyn Fn() -> _ = &|| async {
+    let _: &dyn Fn() -> _ = &|| async {
         let _: Result<AppliedControls, CameraError> =
             t.apply_controls(id, CameraControls::default()).await;
     };
-    let _s: &dyn Fn() -> _ = &|| async {
+    let _: &dyn Fn() -> _ = &|| async {
         let _: Result<StillPhoto, CameraError> =
             t.capture_still(id, StillCaptureRequest::default()).await;
     };
-    let _close: &dyn Fn() -> _ = &|| async {
+    let _: &dyn Fn() -> _ = &|| async {
         let _: Result<(), CameraError> = t.close(id).await;
     };
 }

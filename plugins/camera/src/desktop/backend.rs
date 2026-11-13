@@ -67,6 +67,51 @@ impl std::fmt::Debug for SessionEntry {
     }
 }
 
+impl SessionEntry {
+    /// Latest captured buffer plus the pixel format the session delivers.
+    fn last_frame(&self) -> Result<(nokhwa::Buffer, PixelFormat), CameraError> {
+        let buffer = self
+            .camera
+            .last_frame()
+            .map_err(|err| CameraError::Backend(err.to_string()))?;
+        Ok((buffer, self.pixel_format))
+    }
+
+    /// Best-effort push of `controls` to the device; unsupported knobs
+    /// are ignored by the driver.
+    fn apply_controls(&mut self, controls: &CameraControls) {
+        if let Some(zoom) = controls.zoom {
+            // Convert to nokhwa integer zoom. Many V4L2 drivers expose
+            // digital zoom as an integer step; UVC devices expose a
+            // percentage. Best-effort: scale `zoom` into the control's
+            // native range.
+            let _ = self.camera.set_camera_control(
+                KnownCameraControl::Zoom,
+                ControlValueSetter::Integer(control_step(zoom)),
+            );
+        }
+        if let Some(ev) = controls.exposure_compensation_ev {
+            let _ = self.camera.set_camera_control(
+                KnownCameraControl::Exposure,
+                ControlValueSetter::Integer(control_step(ev)),
+            );
+        }
+        if let Some(FocusMode::Manual(distance)) = controls.focus {
+            // Manual focus — drivers expose this as an integer lens
+            // position. Scale `distance` ([0.0, 1.0]) into i64 — the
+            // caller still needs to probe the valid range for best
+            // results.
+            let scaled = control_step(distance.clamp(0.0, 1.0) * 1000.0);
+            let _ = self.camera.set_camera_control(
+                KnownCameraControl::Focus,
+                ControlValueSetter::Integer(scaled),
+            );
+        }
+        // Torch / flash / white-balance / autofocus coverage varies
+        // per camera; leave untouched here.
+    }
+}
+
 impl DesktopCamera {
     #[must_use]
     pub fn new(config: CameraInitConfig) -> Self {
@@ -108,7 +153,7 @@ impl DesktopCamera {
             .ok_or_else(|| CameraError::Backend("istmo runtime is not running".to_owned()))
     }
 
-    fn pool_depth(&self) -> usize {
+    const fn pool_depth(&self) -> usize {
         let d = self.config.frame_pool_depth as usize;
         if d == 0 { 3 } else { d }
     }
@@ -124,7 +169,7 @@ impl Default for DesktopCamera {
 impl Camera for DesktopCamera {
     async fn devices(&self) -> Result<Vec<CameraDevice>, CameraError> {
         let infos = query(ApiBackend::Auto).map_err(|err| CameraError::Backend(err.to_string()))?;
-        Ok(infos.into_iter().map(describe_device).collect())
+        Ok(infos.iter().map(describe_device).collect())
     }
 
     async fn concurrent_support(&self) -> Result<ConcurrentSupport, CameraError> {
@@ -162,29 +207,24 @@ impl Camera for DesktopCamera {
         // Resolve the id allocator before touching the device so a missing
         // runtime fails without opening (and leaking) a capture stream.
         let id = self.runtime()?.alloc_native_handle_id();
-        let index = resolve_index(&config.device_id)?;
+        let index = resolve_index(&config.device_id);
         let requested = requested_format(&config);
 
-        let tx_cb = tx.clone();
-        let dropped_cb = dropped.clone();
-        let seq_cb = seq.clone();
         let fmt_cb = pixel_format;
 
         let mut camera =
-            CallbackCamera::new(
-                index.clone(),
-                requested,
-                move |buffer| match buffer_to_frame(&buffer, fmt_cb, &seq_cb, &dropped_cb) {
+            CallbackCamera::new(index, requested, move |buffer| {
+                match buffer_to_frame(&buffer, fmt_cb, &seq, &dropped) {
                     Ok(frame) => {
-                        if tx_cb.try_send(frame).is_err() {
-                            dropped_cb.fetch_add(1, Ordering::Relaxed);
+                        if tx.try_send(frame).is_err() {
+                            dropped.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     Err(err) => {
                         tracing::warn!(target: "istmo.camera.desktop", %err, "frame decode failed");
                     }
-                },
-            )
+                }
+            })
             .map_err(|err| CameraError::Backend(err.to_string()))?;
 
         if let Some(fps) = config.target_fps {
@@ -251,38 +291,10 @@ impl Camera for DesktopCamera {
         session: NativeHandleId,
         controls: CameraControls,
     ) -> Result<AppliedControls, CameraError> {
-        let mut guard = lock(&self.sessions);
-        let entry = guard.get_mut(&session).ok_or(CameraError::SessionClosed)?;
-
-        if let Some(zoom) = controls.zoom {
-            // Convert to nokhwa integer zoom. Many V4L2 drivers expose
-            // digital zoom as an integer step; UVC devices expose a
-            // percentage. Best-effort: scale `zoom` into the control's
-            // native range.
-            let _ = entry.camera.set_camera_control(
-                KnownCameraControl::Zoom,
-                ControlValueSetter::Integer(zoom as i64),
-            );
-        }
-        if let Some(ev) = controls.exposure_compensation_ev {
-            let _ = entry.camera.set_camera_control(
-                KnownCameraControl::Exposure,
-                ControlValueSetter::Integer(ev as i64),
-            );
-        }
-        if let Some(FocusMode::Manual(distance)) = controls.focus {
-            // Manual focus — drivers expose this as an integer lens
-            // position. Scale `distance` ([0.0, 1.0]) into i64 — the
-            // caller still needs to probe the valid range for best
-            // results.
-            let scaled = (distance.clamp(0.0, 1.0) * 1000.0) as i64;
-            let _ = entry.camera.set_camera_control(
-                KnownCameraControl::Focus,
-                ControlValueSetter::Integer(scaled),
-            );
-        }
-        // Torch / flash / white-balance / autofocus coverage varies
-        // per camera; leave untouched here.
+        lock(&self.sessions)
+            .get_mut(&session)
+            .ok_or(CameraError::SessionClosed)?
+            .apply_controls(&controls);
 
         Ok(AppliedControls {
             zoom: controls.zoom.unwrap_or(1.0),
@@ -299,16 +311,14 @@ impl Camera for DesktopCamera {
         session: NativeHandleId,
         _request: StillCaptureRequest,
     ) -> Result<StillPhoto, CameraError> {
-        let mut guard = lock(&self.sessions);
-        let entry = guard.get_mut(&session).ok_or(CameraError::SessionClosed)?;
-        let buffer = entry
-            .camera
-            .last_frame()
-            .map_err(|err| CameraError::Backend(err.to_string()))?;
+        let (buffer, pixel_format) = lock(&self.sessions)
+            .get_mut(&session)
+            .ok_or(CameraError::SessionClosed)?
+            .last_frame()?;
         let dropped = Arc::new(AtomicU64::new(0));
         let seq = Arc::new(AtomicU64::new(0));
-        let frame = buffer_to_frame(&buffer, entry.pixel_format, &seq, &dropped)
-            .map_err(CameraError::Backend)?;
+        let frame =
+            buffer_to_frame(&buffer, pixel_format, &seq, &dropped).map_err(CameraError::Backend)?;
         Ok(StillPhoto {
             resolution: frame.resolution,
             rotation_degrees: 0,
@@ -323,7 +333,7 @@ impl Camera for DesktopCamera {
 // Device description
 // -------------------------------------------------------------------
 
-fn describe_device(info: nokhwa::utils::CameraInfo) -> CameraDevice {
+fn describe_device(info: &nokhwa::utils::CameraInfo) -> CameraDevice {
     CameraDevice {
         id: info.index().to_string(),
         label: info.human_name(),
@@ -357,11 +367,11 @@ fn describe_device(info: nokhwa::utils::CameraInfo) -> CameraDevice {
 // Index resolution + requested format
 // -------------------------------------------------------------------
 
-fn resolve_index(device_id: &str) -> Result<CameraIndex, CameraError> {
-    if let Ok(n) = device_id.parse::<u32>() {
-        return Ok(CameraIndex::Index(n));
-    }
-    Ok(CameraIndex::String(device_id.to_owned()))
+fn resolve_index(device_id: &str) -> CameraIndex {
+    device_id.parse::<u32>().map_or_else(
+        |_| CameraIndex::String(device_id.to_owned()),
+        CameraIndex::Index,
+    )
 }
 
 fn requested_format(config: &SessionConfig) -> RequestedFormat<'static> {
@@ -411,8 +421,7 @@ fn buffer_to_frame(
 
     let timestamp_ns = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
 
     Ok(CameraFrame {
         seq: seq.fetch_add(1, Ordering::Relaxed),
@@ -422,7 +431,7 @@ fn buffer_to_frame(
         pixel_format,
         planes: vec![plane],
         bytes,
-        dropped_before: dropped.swap(0, Ordering::Relaxed) as u32,
+        dropped_before: u32::try_from(dropped.swap(0, Ordering::Relaxed)).unwrap_or(u32::MAX),
     })
 }
 
@@ -435,11 +444,20 @@ fn swap_rb_in_place(bytes: &mut [u8]) {
     }
 }
 
+/// Convert a float control value into the integer step nokhwa expects.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "controls take integer steps, so the fraction is dropped on purpose; float-to-int `as` saturates"
+)]
+const fn control_step(value: f32) -> i64 {
+    value as i64
+}
+
 fn apply_initial_controls(camera: &mut CallbackCamera, controls: &CameraControls) {
     if let Some(zoom) = controls.zoom {
         let _ = camera.set_camera_control(
             KnownCameraControl::Zoom,
-            ControlValueSetter::Integer(zoom as i64),
+            ControlValueSetter::Integer(control_step(zoom)),
         );
     }
 }

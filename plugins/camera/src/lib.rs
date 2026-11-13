@@ -2,8 +2,8 @@
 //!
 //! Enumerate cameras, stream raw frames in real time, drive focus /
 //! zoom / torch / exposure controls, and capture stills — all behind a
-//! single typed Rust surface that compiles against Android (CameraX)
-//! and iOS (AVFoundation) backends.
+//! single typed Rust surface that compiles against Android (`CameraX`)
+//! and iOS (`AVFoundation`) backends.
 //!
 //! # Design
 //!
@@ -112,7 +112,9 @@ pub enum CameraFacing {
     Unknown,
 }
 
-/// Optical characterisation of the lens. Normalised across platforms:
+/// Optical characterisation of the lens.
+///
+/// Normalised across platforms:
 /// Android's `LENS_INFO_AVAILABLE_FOCAL_LENGTHS` + `REQUEST_AVAILABLE_CAPABILITIES`
 /// map to the same discriminants iOS exposes via
 /// `AVCaptureDevice.DeviceType`.
@@ -130,9 +132,9 @@ pub enum LensKind {
     Telephoto,
     /// Macro-capable lens (dedicated or shared, depending on vendor).
     Macro,
-    /// iOS TrueDepth front camera (also surfaces `supports_depth`).
+    /// iOS `TrueDepth` front camera (also surfaces `supports_depth`).
     TrueDepth,
-    /// LiDAR scanner (iPhone Pro / iPad Pro). Companion to a
+    /// `LiDAR` scanner (iPhone Pro / iPad Pro). Companion to a
     /// photographic camera; see `physical_sensors`.
     Lidar,
     /// Logical camera that stitches multiple physical cameras (iOS
@@ -152,7 +154,9 @@ pub struct Resolution {
 }
 
 /// A `(resolution, pixel_format, fps_range)` triple the backend will
-/// accept for a session. The driver can usually produce other
+/// accept for a session.
+///
+/// The driver can usually produce other
 /// combinations by downscaling / colour-converting, but these are the
 /// *native* modes — picking one avoids a hidden conversion step.
 #[message(crate = "::istmo_core")]
@@ -169,6 +173,10 @@ pub struct SupportedFormat {
 /// shared Rust code can gate features without `cfg(target_os = …)`.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent capability flags mirroring the platform queries one-to-one"
+)]
 pub struct CameraCapabilities {
     pub min_zoom: f32,
     pub max_zoom: f32,
@@ -353,7 +361,7 @@ impl SessionConfig {
     }
 
     #[must_use]
-    pub fn with_initial_controls(mut self, controls: CameraControls) -> Self {
+    pub const fn with_initial_controls(mut self, controls: CameraControls) -> Self {
         self.initial_controls = controls;
         self
     }
@@ -391,7 +399,9 @@ pub struct CameraSession {
 // -------------------------------------------------------------------
 
 /// Row / plane layout of a single plane in a multi-planar pixel
-/// format. For planar YUV, there are three entries (Y, U, V); for
+/// format.
+///
+/// For planar YUV, there are three entries (Y, U, V); for
 /// semi-planar NV21 / NV12 there are two (Y, VU / UV); for packed
 /// RGBA / JPEG there is one.
 #[message(crate = "::istmo_core")]
@@ -477,7 +487,9 @@ pub enum FlashMode {
     Auto,
 }
 
-/// Mutable session controls. Fields are `Option` so callers can
+/// Mutable session controls.
+///
+/// Fields are `Option` so callers can
 /// change one knob without having to re-send the rest — pass `None`
 /// to leave a setting untouched. The backend returns the effective
 /// state as [`AppliedControls`].
@@ -618,9 +630,11 @@ impl From<IstmoError> for CameraError {
 // Plugin trait
 // -------------------------------------------------------------------
 
-/// Rust-facing camera surface. The native backend implements the
-/// same trait on Android (Kotlin, CameraX) and iOS (Swift,
-/// AVFoundation); see the plugin's `native/` directory for reference
+/// Rust-facing camera surface.
+///
+/// The native backend implements the
+/// same trait on Android (Kotlin, `CameraX`) and iOS (Swift,
+/// `AVFoundation`); see the plugin's `native/` directory for reference
 /// implementations.
 #[plugin(
     name = "istmo.camera",
@@ -676,7 +690,7 @@ pub trait Camera {
     /// uses the pixel format requested in [`StillCaptureRequest`].
     ///
     /// Android and iOS capture [`PixelFormat::Jpeg`] only (through
-    /// CameraX `ImageCapture` / `AVCapturePhotoOutput`) and report
+    /// `CameraX` `ImageCapture` / `AVCapturePhotoOutput`) and report
     /// [`CameraError::FormatUnsupported`] for every other format; the
     /// desktop host returns the latest preview frame in the session's
     /// stream format.
@@ -714,7 +728,7 @@ impl SessionHandle {
     /// Opaque native handle id. Useful for lower-level routing (e.g.
     /// a sibling plugin that consumes the same session).
     #[must_use]
-    pub fn id(&self) -> NativeHandleId {
+    pub const fn id(&self) -> NativeHandleId {
         self.session.id()
     }
 
@@ -779,9 +793,9 @@ impl SessionHandle {
     }
 }
 
-/// Extension trait so [`CameraClient`] gets ergonomic session
-/// helpers without needing a `Clone` impl on the macro-generated
-/// struct — callers wrap the client in `Arc` and these helpers
+/// Extension trait giving [`CameraClient`] ergonomic session helpers.
+///
+/// No `Clone` impl is needed on the macro-generated struct — callers wrap the client in `Arc` and these helpers
 /// clone the `Arc`, not the inner state.
 pub trait CameraClientExt {
     /// Open a session and wrap it in an ergonomic [`SessionHandle`].
@@ -812,7 +826,7 @@ impl CameraClientExt for Arc<CameraClient> {
     async fn open_session(&self, config: SessionConfig) -> Result<SessionHandle, CameraError> {
         let session = self.open_owned(config).await.map_err(CameraError::from)?;
         Ok(SessionHandle {
-            client: Arc::clone(self),
+            client: Self::clone(self),
             session: session.session,
             negotiated: session.negotiated,
         })

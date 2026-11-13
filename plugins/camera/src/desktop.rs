@@ -2,7 +2,7 @@
 //!
 //! Pure-Rust capture backed by [`nokhwa`]:
 //! - Linux → V4L2
-//! - macOS → AVFoundation (through `nokhwa-bindings-macos`)
+//! - macOS → `AVFoundation` (through `nokhwa-bindings-macos`)
 //! - Windows → Media Foundation
 //!
 //! Gated behind the `desktop` feature so mobile builds don't drag the
