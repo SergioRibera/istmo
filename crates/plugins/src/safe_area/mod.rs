@@ -5,9 +5,10 @@
 //!
 //! `SafeAreaPublisher` (behind the `winit-publisher` feature) lets a
 //! Rust-driven UI publish the insets itself: on iOS it reads the key
-//! window of the active scene, elsewhere it publishes nothing and the
-//! host (Android's window-insets listener, a desktop shell) is expected
-//! to publish instead.
+//! window of the active scene, elsewhere it publishes nothing. Hosts
+//! without a Rust frame loop publish through `IstmoRuntime.publishSafeArea`
+//! (Kotlin from the window-insets listener, Swift from the view
+//! controller) or `Runtime::publish_early_latest` (desktop shells).
 
 #[cfg(feature = "winit-publisher")]
 pub mod publisher;
