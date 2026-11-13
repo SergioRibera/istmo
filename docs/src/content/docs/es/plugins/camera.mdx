@@ -1,0 +1,351 @@
+---
+title: Camera
+description: Enumera cámaras, envía frames crudos a Rust, controla zoom, linterna, enfoque y exposición, y captura fotos — Android, iOS, escritorio y el navegador.
+sidebar:
+  order: 7
+---
+
+import PluginTypes from '../../../../generated/plugins/camera-types.mdx';
+
+`istmo-camera` lista todas las cámaras que expone el sistema con flags
+de capacidades normalizados, abre sesiones de captura que envían frames
+crudos a Rust, aplica controles a una sesión en marcha y captura fotos.
+El mismo `CameraClient` maneja todos los backends.
+
+| Plataforma | Backend | Mínimo |
+| ---------- | ------- | ------ |
+| Android | CameraX (`ImageAnalysis` + `ImageCapture`), interop con Camera2 para las capacidades | API 21 |
+| iOS | `AVCaptureSession` / `AVCaptureMultiCamSession` | 13.0 |
+| Linux, macOS, Windows | [`nokhwa`](https://docs.rs/nokhwa) — V4L2, AVFoundation, Media Foundation (feature `desktop`) | — |
+| Navegador (wasm32) | `getUserMedia` + bombeo con `<video>`/`<canvas>` (feature `web`) | — |
+
+Los mínimos de móvil están declarados en el `[min_versions]` del plugin
+y se comprueban al compilar (ver la [referencia de istmo.toml](/istmo/es/build-scripts/istmo-toml-reference/#min_versions)).
+
+Hay un demo ejecutable en
+[`examples/camera-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/camera-demo):
+una sola app eframe + egui que corre en escritorio, en el navegador y en
+Android (`just camera-demo` la compila, instala y abre en un
+dispositivo Android).
+
+## Instalación
+
+```toml
+[dependencies]
+istmo-camera = "0.1.1-alpha.5"
+
+# Apps de escritorio: el backend de nokhwa, alojado en Rust.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+istmo-camera = { version = "0.1.1-alpha.5", features = ["desktop"] }
+
+# Apps de navegador: el backend de web-sys.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+istmo-camera = { version = "0.1.1-alpha.5", features = ["web"] }
+```
+
+En móvil no hace falta ninguna feature: ahí capturan los backends Kotlin
+y Swift que el plugin trae en su directorio `native/`.
+
+## Obtener un client
+
+`Camera` es un plugin con estado: cada client es una instancia del
+plugin creada a partir de un `CameraInitConfig`. Los helpers de sesión
+clonan el client, así que guárdalo en un `Arc`:
+
+```rust
+use std::sync::Arc;
+use istmo_camera::{CameraClient, CameraInitConfig};
+
+let camera = Arc::new(CameraClient::acquire_with(CameraInitConfig::default()).await?);
+```
+
+`CameraInitConfig::frame_pool_depth` (por defecto `3`; `0` también
+significa `3`) fija el tamaño del buffer de frames de cada sesión — ver
+[Contrapresión](#contrapresión). Usa
+`CameraClient::from_runtime_with(&runtime, config)` para apuntar a un
+runtime distinto del global del proceso.
+
+## Permisos
+
+```rust
+use istmo_camera::{AccessStatus, CameraError};
+
+match camera.request_access().await.map_err(CameraError::from)? {
+    AccessStatus::Granted => { /* abrir sesiones */ }
+    AccessStatus::Denied | AccessStatus::Restricted => {
+        // Explica por qué, enlaza a los ajustes del sistema, …
+    }
+    AccessStatus::NotDetermined => {}
+}
+```
+
+`access_status()` lee el estado actual sin preguntar;
+`request_access()` muestra el diálogo si al usuario todavía no se le
+preguntó. En Android `access_status()` devuelve `NotDetermined` hasta
+que el permiso se concede — no distingue un rechazo de un primer
+arranque.
+
+| Plataforma | `request_access` |
+| ---------- | ---------------- |
+| Android | `ActivityResultContracts.RequestPermission` para `CAMERA` |
+| iOS | `AVCaptureDevice.requestAccess(for: .video)` |
+| Navegador | un `getUserMedia({ video: true })` de corta duración que dispara el diálogo del navegador |
+| Escritorio | siempre `Granted`; un rechazo (TCC en macOS, ajustes de privacidad en Windows) aparece como `CameraError::Backend` en `open` |
+
+Abrir una sesión sin acceso falla con `CameraError::PermissionDenied`
+en Android e iOS.
+
+## Elegir una cámara
+
+```rust
+use istmo_camera::{CameraFacing, LensKind};
+
+let devices = camera.devices().await?;
+let back = devices
+    .iter()
+    .find(|d| d.facing == CameraFacing::Back && d.lens == LensKind::Wide)
+    .ok_or("no back camera")?;
+
+if back.capabilities.supports_torch {
+    // mostrar el botón de linterna
+}
+```
+
+`CameraDevice::id` es el identificador propio de la plataforma (id de
+cámara en Android, `uniqueID` en iOS, el índice del dispositivo en
+escritorio, el `deviceId` en el navegador); pásalo sin modificar a
+`SessionConfig::new`. Decide qué funciones ofrecer según los flags de
+`CameraCapabilities`, no según el sistema operativo. Los backends de
+escritorio y navegador informan valores conservadores (zoom
+`1.0..=1.0`, sin lista de formatos soportados); el facing es `Unknown`
+en escritorio y en el navegador se deduce de la etiqueta del
+dispositivo.
+
+## Recibir frames
+
+```rust
+use istmo::StreamItem;
+use istmo_camera::{CameraClientExt, PixelFormat, Resolution, SessionConfig};
+
+let session = camera
+    .open_session(
+        SessionConfig::new(&back.id)
+            .with_pixel_format(PixelFormat::Nv21)
+            .with_resolution(Resolution { width: 1280, height: 720 })
+            .with_target_fps(30),
+    )
+    .await?;
+tracing::info!("abierta {:?}", session.negotiated());
+
+let frames = session.frames()?;
+loop {
+    match frames.recv_async().await? {
+        StreamItem::Event(frame) => {
+            if frame.dropped_before > 0 {
+                tracing::warn!("{} frames perdidos", frame.dropped_before);
+            }
+            // frame.bytes contiene todos los planos; frame.planes describe
+            // la disposición (offset, stride de fila / píxel, tamaño) de cada uno.
+        }
+        StreamItem::Completed | StreamItem::Cancelled | StreamItem::Failed(()) => break,
+    }
+}
+
+session.close().await?;
+```
+
+- `open_session` (sobre `Arc<CameraClient>`, del trait
+  `CameraClientExt`) devuelve un `SessionHandle` dueño de la sesión
+  nativa. Soltarlo libera la sesión; `close().await` hace lo mismo pero
+  devuelve el error de cierre del backend. `open_simple(device_id, pixel_format)`
+  es un atajo para el caso común.
+- `negotiated()` es lo que el backend abrió realmente: resolución,
+  formato de píxel, frame rate (`0` cuando la plataforma lo deja a la
+  autoexposición) y la rotación a aplicar.
+- `SessionConfig::preview_only()` abre una sesión que no produce frames
+  en el stream.
+- Cada `CameraFrame` trae `seq`, un `timestamp_ns` monótono,
+  `resolution`, `rotation_degrees` (en sentido horario, para mostrarlo
+  derecho) y `pixel_format`.
+
+Los métodos crudos del client (`open`, `open_owned`, `close`, `frames`,
+`apply_controls`, `capture_still`) reciben el `NativeHandleId` de la
+sesión y siguen disponibles cuando los necesites.
+
+### Formatos de píxel
+
+| Formato | Android | iOS | Escritorio, navegador |
+| ------- | ------- | --- | --------------------- |
+| `Nv21` (por defecto) | `YUV_420_888` reempaquetado a NV21 | NV12 con croma intercambiado | `FormatUnsupported` |
+| `Yuv420` | planos `YUV_420_888` | NV12 bi-planar | `FormatUnsupported` |
+| `Rgba8` | `RGBA_8888` | `32BGRA`, intercambiado por píxel | decodificado a RGBA |
+| `Bgra8` | `RGBA_8888`, intercambiado por píxel | `32BGRA` | decodificado a RGBA e intercambiado |
+| `Jpeg(quality)` | solo fotos | solo fotos | `FormatUnsupported` |
+
+YUV cuesta unos 1,5 bytes por píxel, los formatos de 32 bits 4. Abrir
+un stream con un formato no soportado falla con
+`CameraError::FormatUnsupported`.
+
+### Contrapresión
+
+El backend nunca se bloquea por un consumidor lento. Cada sesión guarda
+hasta `frame_pool_depth` frames y descarta el más viejo cuando el
+buffer se llena; el siguiente frame entregado indica cuántos se
+perdieron en `dropped_before`. Reacciona bajando la resolución, el
+frame rate o el costo del formato de píxel.
+
+En Android e iOS cada llamada a `frames()` tiene su propio buffer, así
+que dos suscriptores ven cada uno todos los frames. Los backends de
+escritorio y navegador entregan el mismo receiver a todos los
+suscriptores, que se reparten los frames.
+
+## Controles
+
+```rust
+use istmo_camera::{CameraControls, FlashMode, FocusMode, WhiteBalanceMode};
+
+let applied = session
+    .apply_controls(CameraControls {
+        zoom: Some(2.0),
+        torch: Some(true),
+        focus: Some(FocusMode::ContinuousVideo),
+        exposure_compensation_ev: Some(-0.3),
+        white_balance: Some(WhiteBalanceMode::Daylight),
+        flash: Some(FlashMode::Off),
+    })
+    .await?;
+```
+
+Todos los campos de `CameraControls` son opcionales — `None` deja ese
+ajuste como está. En Android e iOS el `AppliedControls` devuelto tiene
+los valores efectivos después de que el hardware los ajustó a su rango.
+El backend de escritorio envía zoom, exposición y enfoque manual al
+driver, el de navegador zoom, linterna, exposición y balance de blancos
+como constraints del track; ambos en la medida de lo posible, y ambos
+devuelven lo pedido (con valores por defecto para lo no indicado) en
+lugar de leer el resultado. `SessionConfig::with_initial_controls`
+aplica controles al abrir la sesión.
+
+## Fotos
+
+```rust
+use istmo_camera::{PixelFormat, StillCaptureRequest};
+
+let photo = session
+    .capture_still(StillCaptureRequest {
+        pixel_format: PixelFormat::Jpeg(90),
+        ..StillCaptureRequest::default()
+    })
+    .await?;
+std::fs::write(path, &photo.bytes)?;
+```
+
+Android (`ImageCapture`) e iOS (`AVCapturePhotoOutput`) solo capturan
+`PixelFormat::Jpeg` y responden `FormatUnsupported` a cualquier otro
+formato; el backend de Android ignora `StillCaptureRequest::resolution`.
+Los backends de escritorio y navegador devuelven el último frame de la
+vista previa en el formato del stream de la sesión.
+
+## Varias cámaras a la vez
+
+```rust
+let support = camera.concurrent_support().await?;
+if support.max_concurrent > 1 {
+    let back = camera.open_session(SessionConfig::new(back_id)).await?;
+    let front = camera.open_session(SessionConfig::new(front_id)).await?;
+    // Lee back.frames()? y front.frames()? desde tus propias tareas.
+}
+```
+
+| Plataforma | `max_concurrent` | Pares |
+| ---------- | ---------------- | ----- |
+| Android 11+ | `2` cuando el dispositivo lista ids de cámaras concurrentes, si no `1` | `approved_pairs` — solo esas combinaciones están garantizadas |
+| iOS | `4` cuando `AVCaptureMultiCamSession.isMultiCamSupported`, si no `1` | `any_combination` |
+| Escritorio, navegador | `4` | `any_combination` |
+
+## Errores
+
+Todas las llamadas devuelven `IstmoError`; `CameraError::from`
+decodifica el error propio del plugin y convierte los fallos de
+transporte en `CameraError::Backend`. Usa `CameraError::try_from_istmo`
+cuando necesites distinguirlos. Los métodos de `SessionHandle` ya
+devuelven `CameraError`.
+
+| Error | Cuándo |
+| ----- | ------ |
+| `PermissionDenied` | acceso denegado o restringido |
+| `DeviceNotFound(id)` | el id no existe, o la cámara desapareció |
+| `FormatUnsupported` | el formato de píxel / resolución / fps no se puede servir |
+| `ConcurrencyUnsupported` | más sesiones que `max_concurrent` |
+| `SessionClosed` | la sesión ya estaba cerrada o liberada |
+| `Interrupted` | el sistema interrumpió la captura; vuelve a abrir la sesión |
+| `Backend(message)` | error de la plataforma, tal cual |
+
+## Conectar el backend
+
+:::note[Paquete de Android]
+El plugin declara `android_package = "dev.istmo.plugins.camera"`, así
+que `istmo-build` genera `CameraBackend`, `CameraFactory`, los tipos de
+mensaje y los codecs en ese package, junto a las fuentes Kotlin del
+plugin, sea cual sea el `[app] android_package` de tu app. En iOS el
+Swift generado y las fuentes `native/ios/` del plugin entran al target
+de la app a través de `istmo-plugins.yml`.
+:::
+
+**Android** — el `IstmoPluginRegistry` generado construye
+`CameraFactoryImpl` con la `ComponentActivity` host (`IstmoGameActivity`
+es una) una vez por proceso y le pasa cada nueva activity, así que las
+instancias de cámara sobreviven a la recreación de la activity. CameraX
+(`camera-core`, `camera-camera2`, `camera-lifecycle`, `camera-video`
+1.3.4) llega por las entradas `[[gradle]]` del plugin — no hay nada que
+agregar a `build.gradle.kts`.
+
+El plugin no declara el permiso `CAMERA`. Agrégalo desde el
+`istmo.toml` de la app:
+
+```toml
+[app]
+android_permissions = ["android.permission.CAMERA"]
+```
+
+o con un `<uses-permission android:name="android.permission.CAMERA" />`
+en el `AndroidManifest.xml` de la app. Sin él, `request_access`
+siempre resuelve `Denied`.
+
+**iOS** — no hay nada que conectar: `IstmoApp.run()` (o
+`IstmoPluginRegistry.registerAll()`) registra `CameraFactoryImpl()`.
+`istmo-build` agrega `NSCameraUsageDescription` y
+`NSMicrophoneUsageDescription` al `Info.plist` de la app; cambia los
+textos con [`[app.info_plist]`](/istmo/es/build-scripts/istmo-toml-reference/#appinfo_plist):
+
+```toml
+[app.info_plist]
+NSCameraUsageDescription = "Escanea recibos con la cámara."
+```
+
+**Escritorio** — registra el host de Rust antes de obtener el client:
+
+```rust
+use istmo::{Runtime, RuntimeConfig};
+use istmo_camera::{CameraClient, CameraHost, DesktopCameraFactory};
+
+let init = Runtime::init(RuntimeConfig::inline())?
+    .expects::<CameraClient>()
+    .host(CameraHost::new(DesktopCameraFactory))
+    .finish();
+```
+
+`DesktopCameraFactory` construye un `DesktopCamera` por cada instancia
+de client. En Linux, `nokhwa` enlaza V4L2 con `bindgen`, así que el
+build necesita `libclang`; el shell `nix develop` del repositorio lo
+trae.
+
+**Navegador** — lo mismo con `WebCameraFactory` (`WebCamera`). Cada
+`.await` pasa por `wasm_bindgen_futures::spawn_local`, y los elementos
+ocultos `<video>` / `<canvas>` se quitan al cerrar la sesión. La página
+tiene que servirse desde un contexto seguro (`https://` o `localhost`)
+para que `getUserMedia` funcione.
+
+## Tipos de wire
+
+<PluginTypes />

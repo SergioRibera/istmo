@@ -1,0 +1,344 @@
+---
+title: Camera
+description: Enumerate cameras, stream raw frames to Rust, drive zoom, torch, focus and exposure, and capture stills — Android, iOS, desktop and the browser.
+sidebar:
+  order: 7
+---
+
+import PluginTypes from '../../../generated/plugins/camera-types.mdx';
+
+`istmo-camera` lists every camera the OS exposes with normalised
+capability flags, opens capture sessions that stream raw frames into
+Rust, applies controls to a running session and captures stills. The
+same `CameraClient` drives every backend.
+
+| Platform | Backend | Minimum |
+| -------- | ------- | ------- |
+| Android | CameraX (`ImageAnalysis` + `ImageCapture`), Camera2 interop for capabilities | API 21 |
+| iOS | `AVCaptureSession` / `AVCaptureMultiCamSession` | 13.0 |
+| Linux, macOS, Windows | [`nokhwa`](https://docs.rs/nokhwa) — V4L2, AVFoundation, Media Foundation (feature `desktop`) | — |
+| Browser (wasm32) | `getUserMedia` + `<video>`/`<canvas>` pump (feature `web`) | — |
+
+The mobile minimums are declared in the plugin's `[min_versions]` and
+checked at build time (see [istmo.toml reference](/istmo/build-scripts/istmo-toml-reference/#min_versions)).
+
+A runnable demo lives in
+[`examples/camera-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/camera-demo):
+one eframe + egui app that runs on desktop, in the browser and on
+Android (`just camera-demo` builds, installs and launches it on an
+Android device).
+
+## Install
+
+```toml
+[dependencies]
+istmo-camera = "0.1.1-alpha.5"
+
+# Desktop apps: the Rust-hosted nokhwa backend.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+istmo-camera = { version = "0.1.1-alpha.5", features = ["desktop"] }
+
+# Browser apps: the web-sys backend.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+istmo-camera = { version = "0.1.1-alpha.5", features = ["web"] }
+```
+
+Mobile builds need no feature: the Kotlin and Swift backends shipped
+in the plugin's `native/` directory do the capture there.
+
+## Get a client
+
+`Camera` is a stateful plugin: each client is a plugin instance
+created from a `CameraInitConfig`. The session helpers clone the
+client, so keep it in an `Arc`:
+
+```rust
+use std::sync::Arc;
+use istmo_camera::{CameraClient, CameraInitConfig};
+
+let camera = Arc::new(CameraClient::acquire_with(CameraInitConfig::default()).await?);
+```
+
+`CameraInitConfig::frame_pool_depth` (default `3`; `0` also means `3`)
+sizes the per-session frame buffer — see
+[Backpressure](#backpressure). Use `CameraClient::from_runtime_with(&runtime, config)`
+to target a runtime other than the process-global one.
+
+## Permissions
+
+```rust
+use istmo_camera::{AccessStatus, CameraError};
+
+match camera.request_access().await.map_err(CameraError::from)? {
+    AccessStatus::Granted => { /* open sessions */ }
+    AccessStatus::Denied | AccessStatus::Restricted => {
+        // Explain why, link to the system settings, …
+    }
+    AccessStatus::NotDetermined => {}
+}
+```
+
+`access_status()` reads the current state without prompting;
+`request_access()` prompts when the user has not been asked yet. On
+Android `access_status()` reports `NotDetermined` until the permission
+is granted — it cannot tell a refusal from a first launch.
+
+| Platform | `request_access` |
+| -------- | ---------------- |
+| Android | `ActivityResultContracts.RequestPermission` for `CAMERA` |
+| iOS | `AVCaptureDevice.requestAccess(for: .video)` |
+| Browser | a short-lived `getUserMedia({ video: true })` that drives the browser prompt |
+| Desktop | always `Granted`; a denial (macOS TCC, Windows privacy settings) surfaces as `CameraError::Backend` on `open` |
+
+Opening a session without access fails with
+`CameraError::PermissionDenied` on Android and iOS.
+
+## Pick a camera
+
+```rust
+use istmo_camera::{CameraFacing, LensKind};
+
+let devices = camera.devices().await?;
+let back = devices
+    .iter()
+    .find(|d| d.facing == CameraFacing::Back && d.lens == LensKind::Wide)
+    .ok_or("no back camera")?;
+
+if back.capabilities.supports_torch {
+    // show the torch toggle
+}
+```
+
+`CameraDevice::id` is the platform's own identifier (Android camera
+id, iOS `uniqueID`, the device index on desktop, the `deviceId` in the
+browser); pass it unmodified to `SessionConfig::new`. Gate features on
+the `CameraCapabilities` flags, not on the target OS. The desktop and
+browser backends report conservative values (zoom `1.0..=1.0`, no
+supported-format list); facing is `Unknown` on desktop and guessed
+from the device label in the browser.
+
+## Stream frames
+
+```rust
+use istmo::StreamItem;
+use istmo_camera::{CameraClientExt, PixelFormat, Resolution, SessionConfig};
+
+let session = camera
+    .open_session(
+        SessionConfig::new(&back.id)
+            .with_pixel_format(PixelFormat::Nv21)
+            .with_resolution(Resolution { width: 1280, height: 720 })
+            .with_target_fps(30),
+    )
+    .await?;
+tracing::info!("opened {:?}", session.negotiated());
+
+let frames = session.frames()?;
+loop {
+    match frames.recv_async().await? {
+        StreamItem::Event(frame) => {
+            if frame.dropped_before > 0 {
+                tracing::warn!("fell behind by {} frames", frame.dropped_before);
+            }
+            // frame.bytes holds every plane; frame.planes describes the
+            // layout (offset, row / pixel stride, size) of each one.
+        }
+        StreamItem::Completed | StreamItem::Cancelled | StreamItem::Failed(()) => break,
+    }
+}
+
+session.close().await?;
+```
+
+- `open_session` (on `Arc<CameraClient>`, from the `CameraClientExt`
+  trait) returns a `SessionHandle` that owns the native session.
+  Dropping it releases the session; `close().await` does the same but
+  reports the backend's close error. `open_simple(device_id, pixel_format)`
+  is a shortcut for the common case.
+- `negotiated()` is what the backend actually opened: resolution,
+  pixel format, frame rate (`0` when the platform leaves it to
+  auto-exposure) and the rotation to apply.
+- `SessionConfig::preview_only()` opens a session that produces no
+  frames on the stream.
+- Each `CameraFrame` carries `seq`, a monotonic `timestamp_ns`,
+  `resolution`, `rotation_degrees` (clockwise, to display upright) and
+  `pixel_format`.
+
+The raw client methods (`open`, `open_owned`, `close`, `frames`,
+`apply_controls`, `capture_still`) take the session's `NativeHandleId`
+and stay available when you need them.
+
+### Pixel formats
+
+| Format | Android | iOS | Desktop, browser |
+| ------ | ------- | --- | ---------------- |
+| `Nv21` (default) | `YUV_420_888` repacked to NV21 | NV12 with swapped chroma | `FormatUnsupported` |
+| `Yuv420` | `YUV_420_888` planes | bi-planar NV12 | `FormatUnsupported` |
+| `Rgba8` | `RGBA_8888` | `32BGRA`, swapped per pixel | decoded to RGBA |
+| `Bgra8` | `RGBA_8888`, swapped per pixel | `32BGRA` | decoded to RGBA, swapped |
+| `Jpeg(quality)` | stills only | stills only | `FormatUnsupported` |
+
+YUV costs about 1.5 bytes per pixel, the 32-bit formats 4. Opening a
+stream with an unsupported format fails with
+`CameraError::FormatUnsupported`.
+
+### Backpressure
+
+The backend never blocks on a slow consumer. Each session buffers up
+to `frame_pool_depth` frames and drops the oldest when the buffer is
+full; the next delivered frame reports how many were lost in
+`dropped_before`. React by lowering the resolution, frame rate or
+pixel-format cost.
+
+On Android and iOS every `frames()` call gets its own buffer, so two
+subscribers each see every frame. The desktop and browser backends
+hand all subscribers the same receiver, so they share the frames.
+
+## Controls
+
+```rust
+use istmo_camera::{CameraControls, FlashMode, FocusMode, WhiteBalanceMode};
+
+let applied = session
+    .apply_controls(CameraControls {
+        zoom: Some(2.0),
+        torch: Some(true),
+        focus: Some(FocusMode::ContinuousVideo),
+        exposure_compensation_ev: Some(-0.3),
+        white_balance: Some(WhiteBalanceMode::Daylight),
+        flash: Some(FlashMode::Off),
+    })
+    .await?;
+```
+
+Every field of `CameraControls` is optional — `None` leaves that
+setting alone. On Android and iOS the returned `AppliedControls` holds
+the effective values after the hardware clamped them. The desktop
+backend pushes zoom, exposure and manual focus to the driver, the
+browser backend zoom, torch, exposure and white balance as track
+constraints; both on a best-effort basis, and both echo the request
+(with defaults for unset fields) instead of reading the result back. `SessionConfig::with_initial_controls` applies controls when
+the session opens.
+
+## Stills
+
+```rust
+use istmo_camera::{PixelFormat, StillCaptureRequest};
+
+let photo = session
+    .capture_still(StillCaptureRequest {
+        pixel_format: PixelFormat::Jpeg(90),
+        ..StillCaptureRequest::default()
+    })
+    .await?;
+std::fs::write(path, &photo.bytes)?;
+```
+
+Android (`ImageCapture`) and iOS (`AVCapturePhotoOutput`) capture
+`PixelFormat::Jpeg` only and report `FormatUnsupported` for anything
+else; the Android backend ignores `StillCaptureRequest::resolution`.
+The desktop and browser backends return the latest preview frame in the
+session's stream format.
+
+## Several cameras at once
+
+```rust
+let support = camera.concurrent_support().await?;
+if support.max_concurrent > 1 {
+    let back = camera.open_session(SessionConfig::new(back_id)).await?;
+    let front = camera.open_session(SessionConfig::new(front_id)).await?;
+    // Read back.frames()? and front.frames()? from your own tasks.
+}
+```
+
+| Platform | `max_concurrent` | Pairs |
+| -------- | ---------------- | ----- |
+| Android 11+ | `2` when the device lists concurrent camera ids, else `1` | `approved_pairs` — only these combinations are guaranteed |
+| iOS | `4` when `AVCaptureMultiCamSession.isMultiCamSupported`, else `1` | `any_combination` |
+| Desktop, browser | `4` | `any_combination` |
+
+## Errors
+
+Every call returns `IstmoError`; `CameraError::from` decodes the
+plugin's own error and folds transport failures into
+`CameraError::Backend`. Use `CameraError::try_from_istmo` when you
+need to tell the two apart. The `SessionHandle` methods already return
+`CameraError`.
+
+| Error | When |
+| ----- | ---- |
+| `PermissionDenied` | access denied or restricted |
+| `DeviceNotFound(id)` | the id is unknown, or the camera went away |
+| `FormatUnsupported` | the pixel format / resolution / fps cannot be served |
+| `ConcurrencyUnsupported` | more sessions than `max_concurrent` |
+| `SessionClosed` | the session was already closed or released |
+| `Interrupted` | the OS interrupted capture; reopen the session |
+| `Backend(message)` | platform error, verbatim |
+
+## Wire the backend
+
+:::note[Android package]
+The plugin declares `android_package = "dev.istmo.plugins.camera"`, so
+`istmo-build` generates `CameraBackend`, `CameraFactory`, the message
+types and codecs into that package, next to the plugin's Kotlin
+sources, whatever `[app] android_package` your app uses. On iOS the
+generated Swift and the plugin's `native/ios/` sources both land in
+the app target through `istmo-plugins.yml`.
+:::
+
+**Android** — the generated `IstmoPluginRegistry` builds
+`CameraFactoryImpl` with the host `ComponentActivity` (`IstmoGameActivity`
+is one) once per process and hands it each new activity, so camera
+instances survive activity recreation. CameraX (`camera-core`,
+`camera-camera2`, `camera-lifecycle`, `camera-video` 1.3.4) comes in
+through the plugin's `[[gradle]]` entries — nothing to add to
+`build.gradle.kts`.
+
+The plugin does not declare the `CAMERA` permission. Add it from the
+app's `istmo.toml`:
+
+```toml
+[app]
+android_permissions = ["android.permission.CAMERA"]
+```
+
+or with a `<uses-permission android:name="android.permission.CAMERA" />`
+in the app's `AndroidManifest.xml`. Without it `request_access` always
+resolves `Denied`.
+
+**iOS** — nothing to wire: `IstmoApp.run()` (or
+`IstmoPluginRegistry.registerAll()`) registers `CameraFactoryImpl()`.
+`istmo-build` adds `NSCameraUsageDescription` and
+`NSMicrophoneUsageDescription` to the app's `Info.plist`; reword them
+with [`[app.info_plist]`](/istmo/build-scripts/istmo-toml-reference/#appinfo_plist):
+
+```toml
+[app.info_plist]
+NSCameraUsageDescription = "Scan receipts with the camera."
+```
+
+**Desktop** — register the Rust host before acquiring the client:
+
+```rust
+use istmo::{Runtime, RuntimeConfig};
+use istmo_camera::{CameraClient, CameraHost, DesktopCameraFactory};
+
+let init = Runtime::init(RuntimeConfig::inline())?
+    .expects::<CameraClient>()
+    .host(CameraHost::new(DesktopCameraFactory))
+    .finish();
+```
+
+`DesktopCameraFactory` builds a `DesktopCamera` per client instance.
+On Linux, `nokhwa` binds V4L2 through `bindgen`, so the build needs
+`libclang`; the repository's `nix develop` shell provides it.
+
+**Browser** — the same with `WebCameraFactory` (`WebCamera`). Every
+`.await` is relayed through `wasm_bindgen_futures::spawn_local`, and
+the hidden `<video>` / `<canvas>` elements are removed when the
+session closes. The page must be served from a secure context
+(`https://` or `localhost`) for `getUserMedia` to work.
+
+## Wire types
+
+<PluginTypes />
