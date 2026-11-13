@@ -18,7 +18,7 @@ mod parse;
 mod plist;
 
 pub use crate::emit::{
-    ResolvedWiring, emit, emit_from, emit_manifest_metadata, emit_manifest_metadata_with_contract,
+    ResolvedWiring, emit, emit_from, emit_manifest_metadata, emit_manifest_metadata_with_contracts,
     emit_wiring_env, emit_with, resolve_wiring,
 };
 pub(crate) use parse::{

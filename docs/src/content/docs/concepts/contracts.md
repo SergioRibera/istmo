@@ -46,8 +46,8 @@ hood, `emit()`:
 Cargo forwards that to every downstream crate as
 `DEP_<links>_ISTMO_CONTRACTS`. Your app's `build.rs` walks all those env
 vars via `collect_dep_contracts()` and feeds each contract to the
-generators. It also reads the single-contract `DEP_<links>_ISTMO_CONTRACT`
-key that plugins built with an older `istmo-build` emit.
+generators. A plugin id handed over by two crates keeps the contract
+of the crate first by `links` name, with a `cargo::warning`.
 
 Zero duplication. The `Contract` is not something you author; it is a
 by-product of the trait itself.

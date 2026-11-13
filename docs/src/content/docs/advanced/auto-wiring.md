@@ -96,7 +96,7 @@ register, drop auto-wiring and list every plugin manually:
 ```rust
 // build.rs (at the app crate root) — skips emit_wiring_env entirely
 fn main() {
-    istmo_build::emit_manifest_metadata_with_contract("istmo.toml", &contract);
+    istmo_build::emit_manifest_metadata_with_contracts("istmo.toml", &contracts);
     // no emit_wiring_env → ISTMO_AUTO_* never set → runtime! only sees manual list
 }
 ```

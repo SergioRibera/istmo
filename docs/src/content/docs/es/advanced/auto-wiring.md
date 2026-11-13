@@ -96,7 +96,7 @@ condicionalmente, dropea auto-wiring y lista cada plugin manualmente:
 ```rust
 // build.rs (en la raíz del crate app) — skipea emit_wiring_env entero
 fn main() {
-    istmo_build::emit_manifest_metadata_with_contract("istmo.toml", &contract);
+    istmo_build::emit_manifest_metadata_with_contracts("istmo.toml", &contracts);
     // sin emit_wiring_env → ISTMO_AUTO_* nunca seteado → runtime! sólo ve lista manual
 }
 ```

@@ -1,10 +1,10 @@
-//! Contract handover between plugin build scripts and the app's:
-//! the multi-contract payload, the single-contract keys older
-//! `istmo-build` releases emit, and how duplicates resolve.
+//! Contract handover between plugin build scripts and the app's: the
+//! `ISTMO_CONTRACTS` payload and how duplicates and broken payloads
+//! resolve.
 
 use istmo_build::{
-    CONTRACT_KEY, CONTRACTS_KEY, Contract, Method, MethodKind, TypeRef, collect_contracts_from,
-    deserialize_contracts, serialize_contract, serialize_contracts,
+    CONTRACTS_KEY, Contract, Method, MethodKind, TypeRef, collect_contracts_from,
+    contracts_handover_line, deserialize_contracts, serialize_contracts,
 };
 
 fn contract(plugin_id: &str, type_name: &str) -> Contract {
@@ -35,10 +35,6 @@ fn multi(links: &str, contracts: &[Contract]) -> (String, String) {
     )
 }
 
-fn single(links: &str, contract: &Contract) -> (String, String) {
-    var(links, CONTRACT_KEY, serialize_contract(contract).unwrap())
-}
-
 fn ids(contracts: &[Contract]) -> Vec<(&str, &str)> {
     contracts
         .iter()
@@ -51,10 +47,6 @@ fn multi_payload_round_trips() {
     let contracts = vec![contract("a.one", "One"), contract("a.two", "Two")];
     let hex = serialize_contracts(&contracts).unwrap();
     assert_eq!(deserialize_contracts(&hex).unwrap(), contracts);
-    assert_eq!(
-        deserialize_contracts(&serialize_contracts(&[]).unwrap()).unwrap(),
-        []
-    );
 }
 
 #[test]
@@ -66,7 +58,18 @@ fn multi_payload_refuses_trailing_bytes_and_bad_hex() {
 }
 
 #[test]
-fn every_contract_of_a_multi_payload_is_collected() {
+fn handover_line_is_one_cargo_directive_for_every_contract() {
+    let contracts = [contract("s.one", "One"), contract("s.two", "Two")];
+    let line = contracts_handover_line(&contracts).unwrap();
+    let payload = line
+        .strip_prefix("cargo:ISTMO_CONTRACTS=")
+        .expect("`cargo:ISTMO_CONTRACTS=` prefix");
+    assert!(!payload.contains(['\n', '=']));
+    assert_eq!(payload, serialize_contracts(&contracts).unwrap());
+}
+
+#[test]
+fn every_contract_of_a_payload_is_collected() {
     let got = collect_contracts_from([multi(
         "SCHEMA",
         &[contract("s.one", "One"), contract("s.two", "Two")],
@@ -75,22 +78,17 @@ fn every_contract_of_a_multi_payload_is_collected() {
 }
 
 #[test]
-fn single_contract_keys_from_older_releases_are_still_collected() {
-    let legacy = serialize_contract(&contract("l.bare", "Bare")).unwrap();
-    let got = collect_contracts_from([
-        single("OLD", &contract("o.one", "One")),
-        var("BARE", "CONTRACT", legacy),
-    ]);
-    assert_eq!(ids(&got), [("l.bare", "Bare"), ("o.one", "One")]);
-}
-
-#[test]
-fn old_and_new_dependencies_mix_in_links_order() {
+fn crates_are_collected_in_links_order_ignoring_other_variables() {
     let got = collect_contracts_from([
         multi("ZETA", &[contract("z.one", "Z1"), contract("z.two", "Z2")]),
-        single("ALPHA", &contract("a.one", "A1")),
         ("PATH".to_owned(), "/bin".to_owned()),
+        multi("ALPHA", &[contract("a.one", "A1")]),
         ("DEP_OTHER_CONTRACT".to_owned(), "not ours".to_owned()),
+        ("DEP_OTHER_ISTMO_CONTRACT".to_owned(), "not ours".to_owned()),
+        (
+            "DEP__ISTMO_CONTRACTS".to_owned(),
+            "no links name".to_owned(),
+        ),
     ]);
     assert_eq!(
         ids(&got),
@@ -99,25 +97,25 @@ fn old_and_new_dependencies_mix_in_links_order() {
 }
 
 #[test]
-fn a_crate_emitting_both_keys_keeps_the_multi_payload_first() {
+fn an_empty_payload_contributes_nothing() {
     let got = collect_contracts_from([
-        single("MIXED", &contract("m.one", "Stale")),
-        multi(
-            "MIXED",
-            &[contract("m.one", "Fresh"), contract("m.two", "Two")],
-        ),
+        multi("EMPTY", &[]),
+        multi("FULL", &[contract("f.one", "One")]),
     ]);
-    assert_eq!(ids(&got), [("m.one", "Fresh"), ("m.two", "Two")]);
+    assert_eq!(ids(&got), [("f.one", "One")]);
 }
 
 #[test]
-fn the_unprefixed_key_is_ignored_once_a_current_key_exists() {
-    let legacy = serialize_contract(&contract("x.one", "Legacy")).unwrap();
-    let got = collect_contracts_from([
-        var("X", "CONTRACT", legacy),
-        multi("X", &[contract("x.one", "Current")]),
-    ]);
-    assert_eq!(ids(&got), [("x.one", "Current")]);
+fn a_plugin_id_repeated_inside_one_crate_keeps_the_first() {
+    let got = collect_contracts_from([multi(
+        "SAME",
+        &[
+            contract("s.dup", "First"),
+            contract("s.other", "Other"),
+            contract("s.dup", "Second"),
+        ],
+    )]);
+    assert_eq!(ids(&got), [("s.dup", "First"), ("s.other", "Other")]);
 }
 
 #[test]
@@ -127,7 +125,7 @@ fn a_plugin_id_claimed_by_two_crates_keeps_the_first_by_links_name() {
             "BETA",
             &[contract("dup.id", "FromBeta"), contract("b.own", "B")],
         ),
-        single("ALPHA", &contract("dup.id", "FromAlpha")),
+        multi("ALPHA", &[contract("dup.id", "FromAlpha")]),
     ]);
     assert_eq!(ids(&got), [("dup.id", "FromAlpha"), ("b.own", "B")]);
 }
@@ -136,8 +134,8 @@ fn a_plugin_id_claimed_by_two_crates_keeps_the_first_by_links_name() {
 fn a_corrupt_payload_is_skipped_without_dropping_the_others() {
     let got = collect_contracts_from([
         var("BROKEN", CONTRACTS_KEY, "DEADBEEF".to_owned()),
-        var("ODD", CONTRACT_KEY, "ABC".to_owned()),
-        var("BARE", "CONTRACT", "not hex".to_owned()),
+        var("ODD", CONTRACTS_KEY, "ABC".to_owned()),
+        var("TEXT", CONTRACTS_KEY, "not hex".to_owned()),
         multi("GOOD", &[contract("g.one", "One")]),
     ]);
     assert_eq!(ids(&got), [("g.one", "One")]);

@@ -138,13 +138,12 @@ pub use crate::emit_app::{
 pub use crate::entitlements::{EntitlementValue, IosEntitlements};
 pub use crate::extract::{ExtractError, extract_contract};
 pub use crate::handover::{
-    ASSETS_KEY, CONTRACT_KEY, CONTRACTS_KEY, HandoverError, MANIFEST_KEY, NATIVE_DEPS_KEY,
-    NativePlatform, collect_contracts_from, collect_dep_assets, collect_dep_contracts,
-    collect_dep_manifests, collect_dep_manifests_by_links, collect_dep_native_deps,
-    collect_dep_native_dirs, deserialize_assets, deserialize_contract, deserialize_contracts,
-    deserialize_manifest, deserialize_native_deps, emit_assets, emit_contract, emit_contracts,
-    emit_manifest, emit_native_deps, serialize_assets, serialize_contract, serialize_contracts,
-    serialize_manifest, serialize_native_deps,
+    ASSETS_KEY, CONTRACTS_KEY, HandoverError, MANIFEST_KEY, NATIVE_DEPS_KEY, NativePlatform,
+    collect_contracts_from, collect_dep_assets, collect_dep_contracts, collect_dep_manifests,
+    collect_dep_manifests_by_links, collect_dep_native_deps, collect_dep_native_dirs,
+    contracts_handover_line, deserialize_assets, deserialize_contracts, deserialize_manifest,
+    deserialize_native_deps, emit_assets, emit_contracts, emit_manifest, emit_native_deps,
+    serialize_assets, serialize_contracts, serialize_manifest, serialize_native_deps,
 };
 pub use crate::ios::{
     BackgroundKind, ContinuousMode, IosBackgroundArtifacts, IosBackgroundContract,
@@ -158,7 +157,7 @@ pub use crate::manifest::{
     AndroidBackendArg, AndroidServiceSpec, AssetEntry, Deployment, InfoPlistEntry, InfoPlistValue,
     IosBackgroundKindSpec, IosBackgroundSpec, IosContinuousModeSpec, Manifest, ManifestError,
     PluginEntry, RemoteOverride, ResolvedWiring, WindowsManifestFragment, emit, emit_from,
-    emit_manifest_metadata, emit_manifest_metadata_with_contract, emit_wiring_env, emit_with,
+    emit_manifest_metadata, emit_manifest_metadata_with_contracts, emit_wiring_env, emit_with,
     resolve_wiring,
 };
 pub use crate::min_versions::{

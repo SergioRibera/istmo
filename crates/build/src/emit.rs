@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::assets::{AssetsPayload, resolve_assets};
 use crate::handover::{
-    emit_assets, emit_contract, emit_contracts, emit_manifest, emit_native_deps,
+    contracts_handover_line, emit_assets, emit_contracts, emit_manifest, emit_native_deps,
 };
 use crate::manifest::{Deployment, IstmoToml, Manifest};
 
@@ -66,12 +66,20 @@ fn emit_plugin_metadata(path: &Path, manifest: Manifest) -> Manifest {
     manifest
 }
 
-pub fn emit_manifest_metadata_with_contract(
+/// [`emit_manifest_metadata`] plus a hand-built contract list, for a
+/// plugin crate whose contracts are not extracted from its source.
+/// Pass every contract of the crate in one call.
+///
+/// # Panics
+///
+/// When `istmo.toml` is malformed or the contracts exceed the handover
+/// codec limit — panicking is how a build script fails the build.
+pub fn emit_manifest_metadata_with_contracts(
     path: impl AsRef<Path>,
-    contract: &crate::Contract,
+    contracts: &[crate::Contract],
 ) -> Manifest {
     let manifest = emit_manifest_metadata(path);
-    emit_contract(contract);
+    emit_contracts(contracts);
     manifest
 }
 
@@ -119,11 +127,22 @@ pub fn emit_from(manifest_path: impl AsRef<Path>, source_path: impl AsRef<Path>)
 /// `client_type` from the trait in `source_path`, and hand them over in
 /// one payload.
 fn emit_plugin_contracts(manifest: &Manifest, source_path: &Path) {
-    let contracts = plugin_contracts(manifest, source_path);
-    if !contracts.is_empty() {
+    if let Some(line) = plugin_contracts_line(manifest, source_path) {
         crate::directive::rerun_if_changed(source_path);
-        emit_contracts(&contracts);
+        println!("{line}");
     }
+}
+
+/// The handover line [`emit_plugin_contracts`] prints, `None` when no
+/// plugin entry declares a `client_type`.
+fn plugin_contracts_line(manifest: &Manifest, source_path: &Path) -> Option<String> {
+    let contracts = plugin_contracts(manifest, source_path);
+    if contracts.is_empty() {
+        return None;
+    }
+    let line = contracts_handover_line(&contracts)
+        .unwrap_or_else(|err| panic!("istmo-build emit(): {err}"));
+    Some(line)
 }
 
 /// Contracts of the plugin entries with a `client_type`, in manifest
@@ -238,7 +257,7 @@ fn emit_wiring_for(dep_manifests: &[Manifest], app_manifest: Option<&Manifest>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handover::{deserialize_contracts, serialize_contracts};
+    use crate::handover::collect_contracts_from;
 
     #[test]
     fn a_crate_with_two_plugins_hands_over_both_contracts() {
@@ -267,12 +286,35 @@ mod tests {
         )
         .unwrap();
 
-        let contracts = plugin_contracts(&manifest, &source);
-        let ids: Vec<&str> = contracts.iter().map(|c| c.plugin_id.as_str()).collect();
-        assert_eq!(ids, ["example.first", "example.second"]);
-
-        let payload = serialize_contracts(&contracts).unwrap();
-        assert_eq!(deserialize_contracts(&payload).unwrap(), contracts);
+        let line = plugin_contracts_line(&manifest, &source).expect("two plugins have contracts");
         let _ = fs::remove_dir_all(&root);
+
+        // Cargo keeps one value per key: both contracts travel in one line.
+        assert_eq!(line.lines().count(), 1);
+        let (key, payload) = line
+            .strip_prefix("cargo:")
+            .and_then(|rest| rest.split_once('='))
+            .expect("a `cargo:KEY=VALUE` line");
+        assert_eq!(key, "ISTMO_CONTRACTS");
+        assert!(payload.bytes().all(|b| b.is_ascii_hexdigit()));
+
+        // What the consuming build script sees as `DEP_<LINKS>_<KEY>`.
+        let got = collect_contracts_from([(format!("DEP_EXAMPLE_{key}"), payload.to_owned())]);
+        let ids: Vec<(&str, &str)> = got
+            .iter()
+            .map(|c| (c.plugin_id.as_str(), c.type_name.as_str()))
+            .collect();
+        assert_eq!(
+            ids,
+            [("example.first", "First"), ("example.second", "Second")]
+        );
+        assert_eq!(got[1].methods[0].name, "pong");
+    }
+
+    #[test]
+    fn a_crate_without_client_types_prints_no_contract_line() {
+        let manifest = Manifest::parse("[plugin]\nid = \"example.native_only\"\n").unwrap();
+        let source = std::env::temp_dir().join("istmo-emit-no-client-type-unread.rs");
+        assert_eq!(plugin_contracts_line(&manifest, &source), None);
     }
 }

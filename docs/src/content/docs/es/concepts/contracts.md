@@ -48,9 +48,9 @@ el capó, `emit()`:
 Cargo lo forwardea a cada crate downstream como
 `DEP_<links>_ISTMO_CONTRACTS`. El `build.rs` de tu app camina esos env
 vars via `collect_dep_contracts()` y alimenta cada contrato a los
-generadores. También lee la key de un solo contrato
-`DEP_<links>_ISTMO_CONTRACT` que emiten los plugins compilados con un
-`istmo-build` anterior.
+generadores. Si dos crates entregan el mismo plugin id, queda el
+contrato del crate primero por nombre de `links`, con un
+`cargo::warning`.
 
 Cero duplicación. El `Contract` no es algo que autores; es un
 subproducto del trait.
