@@ -9,6 +9,7 @@ members = [
     "crates/plugins",
     "crates/plugins-schema",
     "crates/window",
+    "crates/lint-check",
     "examples/android-demo",
     "examples/android-multi/crates/app",
     "examples/android-multi/crates/widget",

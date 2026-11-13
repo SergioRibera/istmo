@@ -1,0 +1,53 @@
+[package]
+name = "istmo-lint-check"
+version = "0.0.0"
+description = "Compiles every istmo macro shape and generated Rust under a strict downstream lint set; never published."
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+istmo = { path = "../.." }
+# `generate_rust_types` output names both directly, as in `istmo-plugins`.
+istmo-macros = { workspace = true }
+wincode = { workspace = true }
+flume = { workspace = true }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+# Stricter than the workspace on purpose: what a demanding app enables.
+# `#![deny(warnings)]` in the sources turns each into an error, under
+# `cargo build` for the rustc half and `cargo clippy` for the rest.
+[lints.rust]
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+missing_copy_implementations = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+single_use_lifetimes = "warn"
+redundant_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unit_bindings = "warn"
+let_underscore_drop = "warn"
+unused_import_braces = "warn"
+# `#[istmo::mobile_app]` exports `#[unsafe(no_mangle)]` entry points.
+unsafe_code = "allow"
+
+[lints.clippy]
+# Conflicts with `unreachable_pub`, which this crate keeps.
+redundant_pub_crate = "allow"
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+undocumented_unsafe_blocks = "warn"
