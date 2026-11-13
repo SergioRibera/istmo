@@ -13,10 +13,19 @@
 //! The `<bundle-id>` segment comes from `ISTMO_APP_BUNDLE_ID` baked by
 //! `istmo-build::emit_app`; unset apps fall back to `CARGO_PKG_NAME`.
 //!
-//! `<namespace>` is percent-encoded (every byte outside
-//! `[A-Za-z0-9._-]` becomes `%XX`), so distinct namespaces map to
-//! distinct files — except, on case-insensitive filesystems (macOS,
-//! Windows), namespaces that differ only in ASCII case.
+//! `<namespace>` is percent-encoded (every byte outside `[a-z0-9._-]`
+//! becomes `%XX`, uppercase ASCII letters included), so distinct
+//! namespaces map to distinct files even on case-insensitive
+//! filesystems (macOS, Windows).
+//!
+//! Earlier versions kept uppercase letters verbatim. A namespace whose
+//! file under the current name does not exist yet adopts the file under
+//! that legacy name, but only when a directory entry carries exactly
+//! the legacy name: on a case-insensitive filesystem the legacy file
+//! of `Settings` is also the file of `settings`, and a namespace must
+//! not pick up a sibling's values just because their names differ only
+//! in case. The legacy file is copied, and removed afterwards only when
+//! no all-lowercase sibling can resolve to it.
 //!
 //! Register the backend through the macro-emitted stateful host — the
 //! plugin's `init: DataStoreConfig` payload arrives as `CreateInstance`
@@ -115,16 +124,30 @@ impl DesktopDataStore {
         fs::create_dir_all(&dir).map_err(|err| {
             DataStoreError::Backend(format!("create data-store dir {}: {err}", dir.display()))
         })?;
-        Self::open_path(namespace_path(&dir, &config.namespace))
+        let path = namespace_path(&dir, &config.namespace);
+        let legacy = legacy_namespace_path(&dir, &config.namespace);
+        let legacy = (legacy != path).then_some(legacy);
+        Self::open_with_legacy(path, legacy)
     }
 
+    #[cfg(test)]
     fn open_path(path: PathBuf) -> Result<Self, DataStoreError> {
+        Self::open_with_legacy(path, None)
+    }
+
+    /// Open `path`, adopting the file at `legacy` first when `path` does
+    /// not exist yet. Runs under the open-files lock, so no instance of
+    /// this process writes `path` while the adoption decides.
+    fn open_with_legacy(path: PathBuf, legacy: Option<PathBuf>) -> Result<Self, DataStoreError> {
         let mut files = lock(open_files());
         if let Some(file) = files.get(&path).and_then(Weak::upgrade) {
             return Ok(Self {
                 file,
                 failure: None,
             });
+        }
+        if let Some(legacy) = legacy {
+            adopt_legacy(&path, &legacy);
         }
         let values = load(&path)?;
         let file = Arc::new(SharedFile {
@@ -413,16 +436,87 @@ fn namespace_path(dir: &Path, namespace: &str) -> PathBuf {
     dir.join(format!("{}.{FILE_EXT}", encode_namespace(namespace)))
 }
 
-/// Injective, filesystem-safe file stem for `namespace`.
+/// Path earlier versions used for `namespace`: uppercase kept verbatim.
+fn legacy_namespace_path(dir: &Path, namespace: &str) -> PathBuf {
+    dir.join(format!(
+        "{}.{FILE_EXT}",
+        encode_namespace_with(namespace, false)
+    ))
+}
+
+/// Copy the legacy file of a namespace to `path`, when `path` does not
+/// exist and a directory entry is named exactly like `legacy`.
 ///
-/// Bytes outside `[A-Za-z0-9._-]` — `%` included — become `%XX`, so two
-/// namespaces never share a file (`a/b` and `a_b` stay apart) on a
-/// case-sensitive filesystem; on a case-insensitive one (macOS, Windows)
-/// namespaces differing only in ASCII case still do. A name Windows
+/// Requiring the exact entry name keeps a namespace from adopting the
+/// file of a sibling that differs only in case on a case-insensitive
+/// filesystem (`Settings` must not adopt `settings.bin`). The legacy
+/// file is removed afterwards only when its all-lowercase spelling does
+/// not resolve to a file: on a case-insensitive filesystem it does, and
+/// the file then still belongs to the all-lowercase namespace.
+///
+/// Best effort: on any failure the namespace opens under `path` as is.
+fn adopt_legacy(path: &Path, legacy: &Path) {
+    if path.try_exists().unwrap_or(true) {
+        return;
+    }
+    let (Some(dir), Some(legacy_name)) = (legacy.parent(), legacy.file_name()) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut folded_match = false;
+    let mut exact_match = false;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == legacy_name {
+            exact_match = true;
+            break;
+        }
+        folded_match |= name.eq_ignore_ascii_case(legacy_name);
+    }
+    if !exact_match {
+        if folded_match {
+            tracing::info!(
+                path = %path.display(),
+                legacy = %legacy.display(),
+                "legacy data-store file differs in case; not adopting it",
+            );
+        }
+        return;
+    }
+    let values = match load(legacy) {
+        Ok(values) => values,
+        Err(err) => {
+            tracing::warn!(legacy = %legacy.display(), %err, "legacy data-store file unreadable; not adopting it");
+            return;
+        }
+    };
+    if let Err(err) = persist(path, &values) {
+        tracing::warn!(legacy = %legacy.display(), %err, "copying legacy data-store file failed");
+        return;
+    }
+    let lower = legacy.with_file_name(legacy_name.to_ascii_lowercase());
+    if !lower.try_exists().unwrap_or(true) {
+        let _ = fs::remove_file(legacy);
+    }
+}
+
+/// Filesystem-safe file stem for `namespace`, injective even when the
+/// filesystem ignores ASCII case.
+///
+/// Bytes outside `[a-z0-9._-]` — `%` and uppercase letters included —
+/// become `%XX` (hex digits uppercase, and `%` never stays verbatim), so
+/// two namespaces never share a file: `a/b` and `a_b` stay apart, and so
+/// do `Settings` and `settings` on macOS and Windows. A name Windows
 /// reserves for devices (`CON`, `NUL`, `COM1`, ...) gets its first byte
 /// escaped too. Windows matches those names on the part before the first
 /// dot (`nul.cache` names the device as well), so that is what is checked.
 fn encode_namespace(namespace: &str) -> String {
+    encode_namespace_with(namespace, true)
+}
+
+fn encode_namespace_with(namespace: &str, escape_upper: bool) -> String {
     const RESERVED: &[&str] = &[
         "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
         "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
@@ -435,7 +529,10 @@ fn encode_namespace(namespace: &str) -> String {
     let reserved = RESERVED.iter().any(|r| r.eq_ignore_ascii_case(base));
     let mut out = String::with_capacity(namespace.len());
     for (i, byte) in namespace.bytes().enumerate() {
-        let plain = byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-');
+        let plain = byte.is_ascii_lowercase()
+            || byte.is_ascii_digit()
+            || matches!(byte, b'.' | b'_' | b'-')
+            || (!escape_upper && byte.is_ascii_uppercase());
         if plain && !(reserved && i == 0) {
             out.push(char::from(byte));
         } else {
@@ -536,13 +633,110 @@ mod tests {
         assert_eq!(encode_namespace("com.example.app"), "com.example.app");
         assert_eq!(encode_namespace("a/b"), "a%2Fb");
         assert_eq!(encode_namespace("a_b"), "a_b");
-        assert_eq!(encode_namespace("a%2Fb"), "a%252Fb");
+        assert_eq!(encode_namespace("a%2Fb"), "a%252%46b");
         assert_eq!(encode_namespace("..\\x:y"), "..%5Cx%3Ay");
         assert_eq!(encode_namespace("nul"), "%6Eul");
         assert_eq!(encode_namespace("Com1.cache"), "%43om1.cache");
         assert_eq!(encode_namespace("aux .x"), "%61ux%20.x");
         assert_eq!(encode_namespace("console"), "console");
         assert_eq!(encode_namespace("é"), "%C3%A9");
+        assert_eq!(encode_namespace("Settings"), "%53ettings");
+        assert_eq!(encode_namespace("%53ettings"), "%2553ettings");
+        assert_eq!(encode_namespace_with("Settings", false), "Settings");
+    }
+
+    #[test]
+    fn namespace_encoding_survives_case_folding() {
+        let names = [
+            "settings",
+            "Settings",
+            "SETTINGS",
+            "sEttings",
+            "%53ettings",
+            "nul",
+            "NUL",
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            assert!(
+                seen.insert(encode_namespace(name).to_ascii_lowercase()),
+                "{name} collides after case folding"
+            );
+        }
+    }
+
+    fn write_values(path: &Path, key: &str, value: &str) {
+        let mut values = HashMap::new();
+        values.insert(key.to_owned(), StoredValue::Str(value.to_owned()));
+        persist(path, &values).unwrap();
+    }
+
+    fn open_ns(dir: &Path, namespace: &str) -> DesktopDataStore {
+        let path = namespace_path(dir, namespace);
+        let legacy = legacy_namespace_path(dir, namespace);
+        let legacy = (legacy != path).then_some(legacy);
+        DesktopDataStore::open_with_legacy(path, legacy).unwrap()
+    }
+
+    #[test]
+    fn legacy_file_with_exact_name_is_adopted() {
+        let dir = temp_dir("legacy-exact");
+        let legacy = dir.join("Settings.bin");
+        write_values(&legacy, "theme", "dark");
+
+        let store = open_ns(&dir, "Settings");
+        assert_eq!(store.path(), dir.join("%53ettings.bin"));
+        assert_eq!(
+            pollster::block_on(store.get_string("theme".to_owned())).unwrap(),
+            Some("dark".to_owned())
+        );
+        let lower_exists = dir.join("settings.bin").exists();
+        // Removed unless the filesystem folds case, where it doubles as
+        // the all-lowercase namespace's file.
+        assert_eq!(legacy.exists(), lower_exists);
+        drop(store);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_file_differing_in_case_is_not_adopted() {
+        let dir = temp_dir("legacy-folded");
+        let sibling = dir.join("settings.bin");
+        write_values(&sibling, "owner", "lowercase");
+
+        let store = open_ns(&dir, "Settings");
+        assert_eq!(
+            pollster::block_on(store.keys()).unwrap(),
+            Vec::<String>::new()
+        );
+        drop(store);
+        assert!(sibling.exists());
+
+        let lower = open_ns(&dir, "settings");
+        assert_eq!(
+            pollster::block_on(lower.get_string("owner".to_owned())).unwrap(),
+            Some("lowercase".to_owned())
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn existing_new_file_wins_over_legacy() {
+        let dir = temp_dir("legacy-shadowed");
+        write_values(&dir.join("Settings.bin"), "k", "legacy");
+        write_values(&dir.join("%53ettings.bin"), "k", "current");
+
+        let store = open_ns(&dir, "Settings");
+        assert_eq!(
+            pollster::block_on(store.get_string("k".to_owned())).unwrap(),
+            Some("current".to_owned())
+        );
+        assert!(dir.join("Settings.bin").exists());
+        drop(store);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
