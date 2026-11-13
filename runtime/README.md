@@ -13,29 +13,39 @@ runtime/
 │   ├── settings.gradle.kts
 │   ├── build.gradle.kts     # `com.android.library` + `com.vanniktech.maven.publish`
 │   ├── gradle.properties    # runtimeGroup / runtimeArtifact / runtimeVersion
+│   ├── ci/                  # JVM stubs + kotlinc check of the generated goldens
 │   └── src/main/java/dev/istmo/runtime/
 │       ├── Bincode.kt
 │       ├── IstmoActivities.kt       # IstmoGameActivity / IstmoNativeActivity
+│       ├── IstmoActivityBound.kt    # backends handed each new Activity
+│       ├── IstmoBuiltinObservers.kt # wires the built-in system publishers
 │       ├── IstmoHost.kt             # runtime start + generated registry lookup
 │       ├── IstmoPluginRegistrant.kt
 │       ├── IstmoRuntime.kt
-│       └── PluginHandler.kt
+│       ├── IstmoRuntimePublishers.kt # typed publishXxx helpers for built-in plugins
+│       └── PluginHandler.kt         # PluginHandler, HandleReleaser, BackendException
 ├── gradle-plugin/           # `io.github.sergioribera.istmo` Gradle plugin
 │   └── gradle.properties    # pluginGroup / pluginArtifact / pluginVersion
 └── ios/
-    └── Sources/IstmoRuntime/     # source set consumed by the root Package.swift
-        ├── Bincode.swift
-        ├── IstmoApp.swift        # IstmoApp.run(registerPlugins:entry:)
-        ├── IstmoRuntime.swift
-        ├── IstmoTransport.swift
-        ├── PluginException.swift
-        └── PluginHandler.swift
+    ├── ci/                       # Foundation / BackgroundTasks stubs + swiftc typecheck
+    └── Sources/                  # source sets consumed by the root Package.swift
+        ├── IstmoFFI/             # C header of the istmo-ios exports
+        └── IstmoRuntime/
+            ├── Bincode.swift
+            ├── BuiltinObservers.swift
+            ├── IstmoApp.swift    # IstmoApp.run(registerPlugins:entry:)
+            ├── IstmoRuntime.swift
+            ├── PluginException.swift
+            ├── PluginHandler.swift
+            └── Publishers.swift
 ```
 
 The Swift package manifest lives at the **repository root**
 (`../Package.swift`). SPM does not support subpath references, so the
-manifest hoists to the top of the repo and points the `IstmoRuntime`
-target at `runtime/ios/Sources/IstmoRuntime`.
+manifest hoists to the top of the repo and points its `IstmoFFI` and
+`IstmoRuntime` targets at `runtime/ios/Sources/`. The package supports
+iOS 14, tvOS 14, watchOS 7 and visionOS 1 and needs Swift tools 5.9
+(Xcode 15).
 
 ## Consuming from Android
 

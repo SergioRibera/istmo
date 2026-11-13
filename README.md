@@ -13,13 +13,15 @@ protocol is versioned and validated at runtime.
 - **One Rust codebase**, one cargo build per platform target
   (`aarch64-linux-android`, `aarch64-apple-ios`, plus desktop targets
   as a plain `cargo run`).
-- **Typed plugins.** `#[istmo::plugin] trait FooPlugin` declares an
-  async surface; the macro emits `FooClient` (used from Rust) and
-  `FooHost<Impl>` (used from Rust-hosted plugins) plus the wire codec.
-  `istmo-build` regenerates matching `FooDispatcher.{kt,swift}` +
-  `FooCodecs.{kt,swift}` in the consumer's `build.rs`.
-- **Bincode over one wire.** Frames cross JNI / Swift FFI as opaque
-  byte payloads; consumers never hand-write encode/decode.
+- **Typed plugins.** `#[istmo::plugin] trait Foo` declares an async
+  surface; the macro emits `FooClient` (called from Rust) and
+  `FooHost<Impl>` (a Rust implementation) plus the wire codec. The
+  consuming app's `build.rs` generates the matching
+  `FooDispatcher` / `FooTypes` / `FooCodecsImpl` in Kotlin and Swift,
+  and an `IstmoPluginRegistry` that registers every native backend.
+- **One wire codec.** Payloads are wincode-encoded, laid out like
+  bincode 2 `standard()`, and cross JNI / Swift FFI as opaque bytes;
+  consumers never hand-write encode/decode.
 - **Same runtime for every surface.** Desktop, Android, iOS all boot
   the same `Runtime`; only the transport module differs
   (`InlineMainThread`, `istmo-android`, `istmo-ios`).
@@ -30,20 +32,34 @@ protocol is versioned and validated at runtime.
 
 ```toml
 [dependencies]
-istmo = { version = "*" }
+istmo = { version = "0.1.1-alpha.5", default-features = false, features = ["game-activity"] }
 ```
+
+Istmo ships as pre-releases, so name the exact version (a `"0.1"` or
+`"*"` requirement does not match `0.1.1-alpha.5`). `game-activity`
+builds the Android side for `IstmoGameActivity`; the default
+`native-activity` targets `IstmoNativeActivity`.
 
 The `istmo` facade re-exports:
 
-- `istmo::core` — `Runtime`, `Envelope`, `Frame`, `NativeHandle`, wire codec.
-- `istmo::plugin` / `istmo::message` / `istmo::service` / `istmo::worker` /
-  `istmo::mobile_app` — proc-macros.
-- `istmo::runtime!` — declarative wiring of the process-global runtime.
+- everything in `istmo-core` at its root — `Runtime`, `Envelope`,
+  `Frame`, `NativeHandle`, `CancelToken`, `TypedStream`, the `codec`
+  module.
+- `istmo::plugin` / `message` / `stream` / `owned` / `handle` /
+  `redact` / `service` / `worker` / `mobile_app` — attribute macros.
+- `istmo::runtime!` — declarative wiring of the process-global
+  runtime; `istmo::app_icon!` — the app icon as PNG bytes.
+- `istmo::plugins` — first-party plugin surfaces (lifecycle, deep
+  links, safe area, system info, …).
 
 Platform-specific transports (`istmo-android`, `istmo-ios`) are pulled
-in automatically by target-cfg. Community plugins ship as separate
-crates (`istmo-google-sign-in`, `istmo-data-store`,
-`istmo-live-activity`, `istmo-biometric`, `istmo-share`).
+in automatically by target cfg. First-party plugins ship as separate
+crates (`istmo-barcode-scanner`, `istmo-biometric`, `istmo-camera`,
+`istmo-data-store`, `istmo-file-picker`, `istmo-google-sign-in`,
+`istmo-live-activity`, `istmo-opener`, `istmo-pen`, `istmo-share`)
+at the same version. New projects start from
+[`istmo-template`](https://github.com/SergioRibera/istmo-template)
+(`cargo generate --git https://github.com/SergioRibera/istmo-template`).
 
 ### Kotlin — Gradle (Android)
 
