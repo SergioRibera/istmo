@@ -435,7 +435,7 @@ impl DrawApp {
                                 ui.painter().rect_stroke(
                                     rect,
                                     6.0,
-                                    egui::Stroke::new(3.0, egui::Color32::BLACK),
+                                    egui::Stroke::new(3.0_f32, egui::Color32::BLACK),
                                 );
                             }
                             if response.clicked() {
