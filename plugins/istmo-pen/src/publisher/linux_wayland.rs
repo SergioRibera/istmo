@@ -352,7 +352,7 @@ impl Dispatch<ZwpTabletToolV2, ()> for PumpState {
             E::Type { tool_type } => {
                 tool.kind = map_tool_type(tool_type);
             }
-            E::ProximityIn { surface: _, .. } => {
+            E::ProximityIn { .. } => {
                 // Surface focus-matching is intentionally dropped: our
                 // secondary `Backend::from_foreign_display` connection
                 // keeps an independent proxy cache from the host app's
