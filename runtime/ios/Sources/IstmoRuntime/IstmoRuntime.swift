@@ -1,7 +1,9 @@
 import Foundation
 import IstmoFFI
 
-public final class IstmoRuntime {
+/// Every mutable property is read and written only on `queue` (serial),
+/// which is what makes sharing the runtime across threads sound.
+public final class IstmoRuntime: @unchecked Sendable {
 
     public static let shared = IstmoRuntime()
 
