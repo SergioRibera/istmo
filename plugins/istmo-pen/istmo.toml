@@ -5,15 +5,14 @@ android_package = "dev.istmo.plugins.pen"
 default_deployment = "local"
 auto_register = false
 
-# Windows manifest fragments are XML snippets composed by `istmo-build` into
-# the consuming app's `App.exe.manifest`. The pen plugin needs pointer input
+# Windows manifest fragments are XML snippets `istmo-build` composes into
+# the consuming app's application manifest. The pen plugin needs pointer input
 # messages (WM_POINTER*) to fire for stylus devices, which requires the app
 # process to be DPI-aware; without this fragment Windows falls back to the
 # legacy WM_TOUCH surface and stylus features (pressure/tilt/twist) are lost.
 #
-# The consumer's `build.rs` should call `istmo_build::emit_windows_manifest(...)`
-# so the final `.manifest` is either linked as a resource (via `embed-resource`
-# / `winres`) or shipped as a sidecar next to the `.exe`.
+# Nothing to call: an app whose `build.rs` runs `istmo_build::emit()` embeds
+# the composed manifest into its `.exe` when building for Windows.
 [[windows_manifest_fragment]]
 name = "dpi_aware"
 xml = """
