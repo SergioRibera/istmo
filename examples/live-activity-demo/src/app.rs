@@ -366,9 +366,7 @@ impl DemoApp {
                 PlatformCapabilities::Ios(ios) => {
                     ui.label(format!(
                         "iOS — ActivityKit: {}, enabled: {}, push: {}",
-                        ios.activity_kit_available,
-                        ios.activities_enabled,
-                        ios.push_updates,
+                        ios.activity_kit_available, ios.activities_enabled, ios.push_updates,
                     ));
                 }
                 PlatformCapabilities::Android(a) => {
