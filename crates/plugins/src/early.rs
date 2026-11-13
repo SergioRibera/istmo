@@ -113,13 +113,6 @@ impl<T: LatestValue + Decode> LatestClient<T> {
     pub fn stream(&self) -> EarlyStream<T> {
         EarlyStream::new(self.slot.subscribe())
     }
-
-    /// Former name of [`stream`](Self::stream).
-    #[deprecated(note = "use `stream()`")]
-    #[must_use]
-    pub fn updates(&self) -> EarlyStream<T> {
-        self.stream()
-    }
 }
 
 /// Decoding receiver over one early-event channel.

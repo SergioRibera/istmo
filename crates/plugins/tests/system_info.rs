@@ -2,7 +2,7 @@ use istmo_core::{Runtime, codec};
 use istmo_plugins::{
     CalendarSystem, Formats, LayoutDirection, Locale, MeasurementSystem,
     SYSTEM_INFO_FORMATS_CHANNEL, SYSTEM_INFO_LOCALE_CHANNEL, SYSTEM_INFO_TIMEZONE_CHANNEL,
-    SystemInfo, TemperatureUnit, TimeZone,
+    SystemInfoClient, TemperatureUnit, TimeZone,
 };
 
 fn sample_locale() -> Locale {
@@ -48,7 +48,7 @@ where
 #[test]
 fn current_values_are_none_before_any_publish() {
     let init = Runtime::mock();
-    let plugin = SystemInfo::from_runtime(&init.runtime).expect("declared");
+    let plugin = SystemInfoClient::from_runtime(&init.runtime).expect("declared");
     assert!(plugin.current_locale().unwrap().is_none());
     assert!(plugin.current_timezone().unwrap().is_none());
     assert!(plugin.current_formats().unwrap().is_none());
@@ -61,7 +61,7 @@ fn late_subscriber_receives_retained_locale_first() {
 
     publish(&rt, SYSTEM_INFO_LOCALE_CHANNEL, &sample_locale());
 
-    let plugin = SystemInfo::from_runtime(&rt).expect("declared");
+    let plugin = SystemInfoClient::from_runtime(&rt).expect("declared");
     assert_eq!(plugin.current_locale().unwrap(), Some(sample_locale()));
 
     let stream = plugin.locale_stream();
@@ -72,7 +72,7 @@ fn late_subscriber_receives_retained_locale_first() {
 fn timezone_stream_delivers_updates() {
     let init = Runtime::mock();
     let rt = init.runtime;
-    let plugin = SystemInfo::from_runtime(&rt).expect("declared");
+    let plugin = SystemInfoClient::from_runtime(&rt).expect("declared");
     let stream = plugin.timezone_stream();
 
     publish(&rt, SYSTEM_INFO_TIMEZONE_CHANNEL, &sample_timezone());
@@ -90,7 +90,7 @@ fn timezone_stream_delivers_updates() {
 fn formats_stream_delivers_updates() {
     let init = Runtime::mock();
     let rt = init.runtime;
-    let plugin = SystemInfo::from_runtime(&rt).expect("declared");
+    let plugin = SystemInfoClient::from_runtime(&rt).expect("declared");
     let stream = plugin.formats_stream();
 
     publish(&rt, SYSTEM_INFO_FORMATS_CHANNEL, &sample_formats());
@@ -100,7 +100,7 @@ fn formats_stream_delivers_updates() {
 #[test]
 fn now_utc_millis_is_positive_and_recent() {
     let init = Runtime::mock();
-    let plugin = SystemInfo::from_runtime(&init.runtime).expect("declared");
+    let plugin = SystemInfoClient::from_runtime(&init.runtime).expect("declared");
     let now = plugin.now_utc_millis();
     // 2024-01-01 UTC in ms as a sanity floor.
     assert!(now > 1_704_067_200_000);
@@ -109,7 +109,7 @@ fn now_utc_millis_is_positive_and_recent() {
 #[test]
 fn try_recv_returns_none_when_empty() {
     let init = Runtime::mock();
-    let plugin = SystemInfo::from_runtime(&init.runtime).expect("declared");
+    let plugin = SystemInfoClient::from_runtime(&init.runtime).expect("declared");
     assert!(plugin.locale_stream().try_recv().is_none());
     assert!(plugin.timezone_stream().try_recv().is_none());
     assert!(plugin.formats_stream().try_recv().is_none());
@@ -118,7 +118,7 @@ fn try_recv_returns_none_when_empty() {
 #[test]
 fn uptime_is_none_before_publish() {
     let init = Runtime::mock();
-    let plugin = SystemInfo::from_runtime(&init.runtime).expect("declared");
+    let plugin = SystemInfoClient::from_runtime(&init.runtime).expect("declared");
     assert!(plugin.uptime_millis().unwrap().is_none());
 }
 
@@ -128,6 +128,6 @@ fn uptime_roundtrips_via_publish() {
     let rt = init.runtime;
     let bytes = istmo_core::codec::encode(&123_456_u64).expect("encode");
     rt.publish_early_latest(istmo_plugins::SYSTEM_INFO_UPTIME_CHANNEL, bytes);
-    let plugin = SystemInfo::from_runtime(&rt).expect("declared");
+    let plugin = SystemInfoClient::from_runtime(&rt).expect("declared");
     assert_eq!(plugin.uptime_millis().unwrap(), Some(123_456));
 }

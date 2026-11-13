@@ -169,11 +169,6 @@ pub struct SystemInfoClient {
     uptime: Arc<LatestValueSlot>,
 }
 
-/// Backcompat alias — older callers used `SystemInfo`; the canonical
-/// name follows the `XxxClient` convention of every other first-party
-/// plugin.
-pub type SystemInfo = SystemInfoClient;
-
 impl Plugin for SystemInfoClient {
     const PLUGIN_ID: &'static str = SYSTEM_INFO_PLUGIN_ID;
 }
@@ -247,27 +242,6 @@ impl SystemInfoClient {
     #[must_use]
     pub fn formats_stream(&self) -> FormatsStream {
         self.formats.stream()
-    }
-
-    /// Former name of [`locale_stream`](Self::locale_stream).
-    #[deprecated(note = "use `locale_stream()`")]
-    #[must_use]
-    pub fn locale_updates(&self) -> LocaleStream {
-        self.locale_stream()
-    }
-
-    /// Former name of [`timezone_stream`](Self::timezone_stream).
-    #[deprecated(note = "use `timezone_stream()`")]
-    #[must_use]
-    pub fn timezone_updates(&self) -> TimeZoneStream {
-        self.timezone_stream()
-    }
-
-    /// Former name of [`formats_stream`](Self::formats_stream).
-    #[deprecated(note = "use `formats_stream()`")]
-    #[must_use]
-    pub fn formats_updates(&self) -> FormatsStream {
-        self.formats_stream()
     }
 
     /// Unix-epoch milliseconds. Pure Rust, no FFI.

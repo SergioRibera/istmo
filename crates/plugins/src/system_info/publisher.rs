@@ -1,4 +1,4 @@
-//! Pure-Rust desktop sampler for [`super::SystemInfo`].
+//! Pure-Rust desktop sampler for [`super::SystemInfoClient`].
 //!
 //! Call [`SystemInfoPublisher::install`] once at startup and tick from
 //! an event loop (or on OS change notifications). Linux reads env +

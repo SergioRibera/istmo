@@ -489,7 +489,10 @@ mod tests {
     fn resolve_matches_builtin_by_last_segment() {
         let selected = resolve_wired_entries(
             &[],
-            &["NetworkStateClient".to_owned(), "SystemInfo".to_owned()],
+            &[
+                "NetworkStateClient".to_owned(),
+                "SystemInfoClient".to_owned(),
+            ],
         );
         let ids: Vec<_> = selected.iter().map(|e| e.id.as_str()).collect();
         assert!(ids.contains(&"istmo.network_state"));
@@ -507,7 +510,7 @@ mod tests {
 
     #[test]
     fn resolve_excludes_unwired_builtins() {
-        let selected = resolve_wired_entries(&[], &["SystemInfo".to_owned()]);
+        let selected = resolve_wired_entries(&[], &["SystemInfoClient".to_owned()]);
         let ids: Vec<_> = selected.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["istmo.system_info"]);
     }

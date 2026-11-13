@@ -64,7 +64,7 @@ fn wired_builtin_emits_matching_permission_sidecar() {
 fn unwired_builtin_omits_permission() {
     let root = scratch_root("builtin-unwired");
     let android_root = seed_android_project(&root);
-    write_runtime_src(&root, "istmo::runtime!(plugins: [SystemInfo]);\n");
+    write_runtime_src(&root, "istmo::runtime!(plugins: [SystemInfoClient]);\n");
 
     let opts = AppOpts {
         root: Some(root),
@@ -81,7 +81,7 @@ fn unwired_builtin_omits_permission() {
     let body = fs::read_to_string(&sidecar).unwrap();
     assert!(
         !body.contains("ACCESS_NETWORK_STATE"),
-        "SystemInfo should not pull ACCESS_NETWORK_STATE; got:\n{body}"
+        "SystemInfoClient should not pull ACCESS_NETWORK_STATE; got:\n{body}"
     );
 }
 

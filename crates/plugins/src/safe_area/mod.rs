@@ -15,7 +15,6 @@ pub mod publisher;
 #[cfg(feature = "winit-publisher")]
 pub use publisher::SafeAreaPublisher;
 
-use istmo_core::IstmoError;
 use istmo_macros::message;
 
 use crate::early::{EarlyStream, LatestClient, LatestValue};
@@ -112,16 +111,3 @@ pub type SafeArea = LatestClient<SafeAreaInsets>;
 
 /// Insets as they are published.
 pub type SafeAreaStream = EarlyStream<SafeAreaInsets>;
-
-impl LatestClient<SafeAreaInsets> {
-    /// The current insets, or zero before the first publish or when the
-    /// retained payload does not decode.
-    #[deprecated(note = "use `current_or_default()`, which reports decode errors")]
-    #[must_use]
-    pub fn current_or_zero(&self) -> SafeAreaInsets {
-        self.current_or_default().unwrap_or_else(|err: IstmoError| {
-            tracing::warn!(target: "istmo.safe_area", %err, "undecodable insets");
-            SafeAreaInsets::default()
-        })
-    }
-}
