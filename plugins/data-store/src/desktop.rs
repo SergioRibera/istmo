@@ -45,7 +45,6 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::future::Future;
 use std::io::{ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -218,161 +217,96 @@ fn corrupted<T>(key: &str, value: &StoredValue, wanted: &str) -> Result<T, DataS
 }
 
 impl DataStore for DesktopDataStore {
-    fn get_string(
-        &self,
-        key: String,
-    ) -> impl Future<Output = Result<Option<String>, DataStoreError>> + Send + '_ {
-        async move {
-            match self.read(|m| m.get(&key).cloned())? {
-                None => Ok(None),
-                Some(StoredValue::Str(s)) => Ok(Some(s)),
-                Some(other) => corrupted(&key, &other, "string"),
-            }
+    async fn get_string(&self, key: String) -> Result<Option<String>, DataStoreError> {
+        match self.read(|m| m.get(&key).cloned())? {
+            None => Ok(None),
+            Some(StoredValue::Str(s)) => Ok(Some(s)),
+            Some(other) => corrupted(&key, &other, "string"),
         }
     }
 
-    fn set_string(
-        &self,
-        key: String,
-        value: String,
-    ) -> impl Future<Output = Result<(), DataStoreError>> + Send + '_ {
-        async move {
-            self.mutate(|m| {
-                m.insert(key, StoredValue::Str(value));
-            })
+    async fn set_string(&self, key: String, value: String) -> Result<(), DataStoreError> {
+        self.mutate(|m| {
+            m.insert(key, StoredValue::Str(value));
+        })
+    }
+
+    async fn get_i64(&self, key: String) -> Result<Option<i64>, DataStoreError> {
+        match self.read(|m| m.get(&key).cloned())? {
+            None => Ok(None),
+            Some(StoredValue::I64(n)) => Ok(Some(n)),
+            Some(other) => corrupted(&key, &other, "i64"),
         }
     }
 
-    fn get_i64(
-        &self,
-        key: String,
-    ) -> impl Future<Output = Result<Option<i64>, DataStoreError>> + Send + '_ {
-        async move {
-            match self.read(|m| m.get(&key).cloned())? {
-                None => Ok(None),
-                Some(StoredValue::I64(n)) => Ok(Some(n)),
-                Some(other) => corrupted(&key, &other, "i64"),
-            }
+    async fn set_i64(&self, key: String, value: i64) -> Result<(), DataStoreError> {
+        self.mutate(|m| {
+            m.insert(key, StoredValue::I64(value));
+        })
+    }
+
+    async fn get_f64(&self, key: String) -> Result<Option<f64>, DataStoreError> {
+        match self.read(|m| m.get(&key).cloned())? {
+            None => Ok(None),
+            Some(StoredValue::F64(n)) => Ok(Some(n)),
+            Some(other) => corrupted(&key, &other, "f64"),
         }
     }
 
-    fn set_i64(
-        &self,
-        key: String,
-        value: i64,
-    ) -> impl Future<Output = Result<(), DataStoreError>> + Send + '_ {
-        async move {
-            self.mutate(|m| {
-                m.insert(key, StoredValue::I64(value));
-            })
+    async fn set_f64(&self, key: String, value: f64) -> Result<(), DataStoreError> {
+        self.mutate(|m| {
+            m.insert(key, StoredValue::F64(value));
+        })
+    }
+
+    async fn get_bool(&self, key: String) -> Result<Option<bool>, DataStoreError> {
+        match self.read(|m| m.get(&key).cloned())? {
+            None => Ok(None),
+            Some(StoredValue::Bool(b)) => Ok(Some(b)),
+            Some(other) => corrupted(&key, &other, "bool"),
         }
     }
 
-    fn get_f64(
-        &self,
-        key: String,
-    ) -> impl Future<Output = Result<Option<f64>, DataStoreError>> + Send + '_ {
-        async move {
-            match self.read(|m| m.get(&key).cloned())? {
-                None => Ok(None),
-                Some(StoredValue::F64(n)) => Ok(Some(n)),
-                Some(other) => corrupted(&key, &other, "f64"),
-            }
+    async fn set_bool(&self, key: String, value: bool) -> Result<(), DataStoreError> {
+        self.mutate(|m| {
+            m.insert(key, StoredValue::Bool(value));
+        })
+    }
+
+    async fn get_bytes(&self, key: String) -> Result<Option<Vec<u8>>, DataStoreError> {
+        match self.read(|m| m.get(&key).cloned())? {
+            None => Ok(None),
+            Some(StoredValue::Bytes(b)) => Ok(Some(b)),
+            Some(other) => corrupted(&key, &other, "bytes"),
         }
     }
 
-    fn set_f64(
-        &self,
-        key: String,
-        value: f64,
-    ) -> impl Future<Output = Result<(), DataStoreError>> + Send + '_ {
-        async move {
-            self.mutate(|m| {
-                m.insert(key, StoredValue::F64(value));
-            })
-        }
+    async fn set_bytes(&self, key: String, value: Vec<u8>) -> Result<(), DataStoreError> {
+        self.mutate(|m| {
+            m.insert(key, StoredValue::Bytes(value));
+        })
     }
 
-    fn get_bool(
-        &self,
-        key: String,
-    ) -> impl Future<Output = Result<Option<bool>, DataStoreError>> + Send + '_ {
-        async move {
-            match self.read(|m| m.get(&key).cloned())? {
-                None => Ok(None),
-                Some(StoredValue::Bool(b)) => Ok(Some(b)),
-                Some(other) => corrupted(&key, &other, "bool"),
-            }
-        }
+    async fn remove(&self, key: String) -> Result<bool, DataStoreError> {
+        self.mutate(|m| m.remove(&key).is_some())
     }
 
-    fn set_bool(
-        &self,
-        key: String,
-        value: bool,
-    ) -> impl Future<Output = Result<(), DataStoreError>> + Send + '_ {
-        async move {
-            self.mutate(|m| {
-                m.insert(key, StoredValue::Bool(value));
-            })
-        }
+    async fn contains(&self, key: String) -> Result<bool, DataStoreError> {
+        self.read(|m| m.contains_key(&key))
     }
 
-    fn get_bytes(
-        &self,
-        key: String,
-    ) -> impl Future<Output = Result<Option<Vec<u8>>, DataStoreError>> + Send + '_ {
-        async move {
-            match self.read(|m| m.get(&key).cloned())? {
-                None => Ok(None),
-                Some(StoredValue::Bytes(b)) => Ok(Some(b)),
-                Some(other) => corrupted(&key, &other, "bytes"),
-            }
-        }
+    async fn keys(&self) -> Result<Vec<String>, DataStoreError> {
+        self.read(|m| {
+            let mut ks: Vec<String> = m.keys().cloned().collect();
+            ks.sort();
+            ks
+        })
     }
 
-    fn set_bytes(
-        &self,
-        key: String,
-        value: Vec<u8>,
-    ) -> impl Future<Output = Result<(), DataStoreError>> + Send + '_ {
-        async move {
-            self.mutate(|m| {
-                m.insert(key, StoredValue::Bytes(value));
-            })
-        }
-    }
-
-    fn remove(
-        &self,
-        key: String,
-    ) -> impl Future<Output = Result<bool, DataStoreError>> + Send + '_ {
-        async move { self.mutate(|m| m.remove(&key).is_some()) }
-    }
-
-    fn contains(
-        &self,
-        key: String,
-    ) -> impl Future<Output = Result<bool, DataStoreError>> + Send + '_ {
-        async move { self.read(|m| m.contains_key(&key)) }
-    }
-
-    fn keys(&self) -> impl Future<Output = Result<Vec<String>, DataStoreError>> + Send + '_ {
-        async move {
-            self.read(|m| {
-                let mut ks: Vec<String> = m.keys().cloned().collect();
-                ks.sort();
-                ks
-            })
-        }
-    }
-
-    fn clear(&self) -> impl Future<Output = Result<(), DataStoreError>> + Send + '_ {
-        async move {
-            self.mutate(|m| {
-                m.clear();
-            })
-        }
+    async fn clear(&self) -> Result<(), DataStoreError> {
+        self.mutate(|m| {
+            m.clear();
+        })
     }
 }
 
@@ -424,7 +358,9 @@ impl DataStoreFactory for DesktopDataStoreFactory {
 }
 
 /// Directory that houses every data-store namespace file for the
-/// current app. Nested under [`istmo_core::path::preference_dir`] so it
+/// current app.
+///
+/// Nested under [`istmo_core::path::preference_dir`] so it
 /// tracks the same semantics as `SharedPreferences` / `UserDefaults` on
 /// mobile.
 #[must_use]
@@ -580,7 +516,6 @@ fn persist(path: &Path, values: &HashMap<String, StoredValue>) -> Result<(), Dat
         Err(err) if err.kind() == ErrorKind::PermissionDenied && cfg!(target_os = "windows") => {
             fs::copy(&tmp, path)
                 .and_then(|_| fs::remove_file(&tmp))
-                .map(|_| ())
                 .map_err(|err| {
                     DataStoreError::Backend(format!("atomic replace {}: {err}", path.display()))
                 })
