@@ -39,6 +39,7 @@ use crate::handover::{
 };
 use crate::ios_project::IosProject;
 use crate::manifest::{IstmoToml, Manifest, PluginEntry};
+use crate::native_deps::{NativeDeps, SwiftRepository};
 use crate::plugin_registry::{
     KOTLIN_REGISTRY_PACKAGE, RegistryEntry, generate_swift_app_entry,
     generate_swift_plugin_registry,
@@ -540,6 +541,7 @@ impl<'a> AppPass<'a> {
     ) {
         let native_dirs = self.native_ios_dirs();
         let project = IosProject::new(&self.ios_root, app_dir);
+        let swift_packages = merged_native_deps(self.app_manifest).swift_repositories();
         // Pruning keeps the staging root itself; an emptied one is not shipped.
         let asset_folder = Some(project.asset_folder_path())
             .filter(|dir| fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some()));
@@ -554,6 +556,7 @@ impl<'a> AppPass<'a> {
                 native_dirs: &native_dirs,
                 dep_manifests,
                 asset_folder: asset_folder.as_deref(),
+                swift_packages: &swift_packages,
             },
         );
     }
@@ -663,10 +666,7 @@ fn sync_android_project(
         &collect_dep_native_dirs(NativePlatform::Android),
         dep_manifests_by_links,
     );
-    let mut deps = collect_dep_native_deps();
-    if let Some(manifest) = app_manifest {
-        deps.merge(manifest.native_deps.clone());
-    }
+    let deps = merged_native_deps(app_manifest);
     for conflict in deps.conflicts() {
         println!(
             "cargo::warning=istmo-build: Gradle dependency {}:{} requested at several versions; \
@@ -682,6 +682,16 @@ fn sync_android_project(
         &project.render_metadata(app, &plugins, &deps),
     );
     report_icon(project.write_icon(icon, &app.icon));
+}
+
+/// Native dependencies of every linked plugin crate plus the app's own
+/// `[[gradle]]` / `[[swift_package]]` entries, highest version winning.
+fn merged_native_deps(app_manifest: Option<&Manifest>) -> NativeDeps {
+    let mut deps = collect_dep_native_deps();
+    if let Some(manifest) = app_manifest {
+        deps.merge(manifest.native_deps.clone());
+    }
+    deps
 }
 
 /// Crate error policy for icon output: an unreadable or undecodable
@@ -707,6 +717,7 @@ struct IosSync<'a> {
     native_dirs: &'a [(String, PathBuf)],
     dep_manifests: &'a [Manifest],
     asset_folder: Option<&'a Path>,
+    swift_packages: &'a [SwiftRepository],
 }
 
 /// Write the iOS side: plugin registry, `IstmoApp.run()` entry,
@@ -738,6 +749,7 @@ fn sync_ios_project(project: &IosProject, sync: &IosSync<'_>) {
         sync.native_dirs,
         plugin_min_ios.as_ref(),
         sync.asset_folder,
+        sync.swift_packages,
     );
     emit_ios_plist_fragments(project.root(), project.app_dir(), sync.native_dirs);
 }

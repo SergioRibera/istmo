@@ -701,3 +701,41 @@ fn auto_register_false_still_wins_over_a_declared_backend() {
     assert!(!kotlin.contains("Dummy"), "{kotlin}");
     assert!(!swift.contains("Dummy"), "{swift}");
 }
+
+#[test]
+fn app_swift_packages_land_in_the_xcodegen_fragment() {
+    let root = scratch_root("ios-swift-packages");
+    fs::write(
+        root.join("istmo.toml"),
+        "[app]\nid = \"com.example.myapp\"\n\n\
+         [[swift_package]]\nurl = \"https://github.com/google/GoogleSignIn-iOS.git\"\n\
+         product = \"GoogleSignIn\"\nfrom_version = \"7.0.0\"\n\n\
+         [[swift_package]]\nurl = \"https://github.com/google/GoogleSignIn-iOS.git\"\n\
+         product = \"GoogleSignInSwift\"\nfrom_version = \"7.1.0\"\n",
+    )
+    .unwrap();
+    let ios_root = root.join("ios");
+    fs::create_dir_all(ios_root.join("MyApp")).unwrap();
+
+    emit_app_with(AppOpts {
+        root: Some(root.clone()),
+        ios_root: Some(ios_root.clone()),
+        android: Some(false),
+        lib_name: Some("my_app".to_owned()),
+        ..AppOpts::default()
+    });
+
+    let yaml = fs::read_to_string(ios_root.join("MyApp/istmo-plugins.yml")).unwrap();
+    assert!(
+        yaml.contains(
+            "packages:\n  \"GoogleSignIn-iOS\":\n    \
+             url: \"https://github.com/google/GoogleSignIn-iOS.git\"\n    from: \"7.1.0\"\n"
+        ),
+        "{yaml}"
+    );
+    assert!(
+        yaml.contains("      - package: \"GoogleSignIn-iOS\"\n        product: \"GoogleSignInSwift\"\n"),
+        "{yaml}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}

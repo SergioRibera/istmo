@@ -23,6 +23,7 @@ use crate::app_config::AppMetadata;
 use crate::app_icon::{AppIcon, IOS_APP_ICON_SET, IconError};
 use crate::emit_app::{relativise, write_if_changed};
 use crate::min_versions::OsVersion;
+use crate::native_deps::SwiftRepository;
 
 /// Generated directory, relative to the iOS project root.
 pub const IOS_GENERATED_DIR: &str = ".istmo";
@@ -109,13 +110,16 @@ impl IosProject {
     ///
     /// `plugin_dirs` are the linked plugins' `native/ios/` directories;
     /// `plugin_min_ios` the strictest plugin `[min_versions] ios` with
-    /// the plugin that requires it, checked again from Xcode.
+    /// the plugin that requires it, checked again from Xcode;
+    /// `swift_packages` the merged `[[swift_package]]` entries, declared
+    /// as packages and linked into the app target.
     pub fn write_xcodegen_fragment(
         &self,
         app: &AppMetadata,
         plugin_dirs: &[(String, PathBuf)],
         plugin_min_ios: Option<&(OsVersion, String)>,
         asset_folder: Option<&Path>,
+        swift_packages: &[SwiftRepository],
     ) {
         let fragment_dir = self.app_path();
         let relative = |target: &Path| {
@@ -129,8 +133,11 @@ impl IosProject {
         writeln!(yaml, "#     - path: {app_dir}/{FRAGMENT_FILE}").ok();
         yaml.push_str("# xcodegen merges the entries below into your app target; values set\n");
         yaml.push_str("# in project.yml take precedence over the ones here.\n");
+        let (packages, dependencies) = swift_package_yaml(swift_packages);
+        yaml.push_str(&packages);
         yaml.push_str("targets:\n");
         writeln!(yaml, "  {app_dir}:").ok();
+        yaml.push_str(&dependencies);
 
         let icon_catalog = app
             .icon
@@ -363,6 +370,44 @@ done
     )
 }
 
+/// xcodegen `packages:` entries for `repos` and the matching app target
+/// `dependencies:` lines, as `(packages, dependencies)`.
+///
+/// xcodegen merges an included file into `project.yml` key by key and
+/// appends arrays, so these declarations add to the app's own packages
+/// and dependencies; a package `project.yml` declares under the same
+/// name keeps its own `url` / version.
+fn swift_package_yaml(repos: &[SwiftRepository]) -> (String, String) {
+    let mut packages = String::new();
+    let mut dependencies = String::new();
+    if repos.is_empty() {
+        return (packages, dependencies);
+    }
+    packages.push_str("packages:\n");
+    dependencies.push_str("    dependencies:\n");
+    let mut names: Vec<String> = Vec::with_capacity(repos.len());
+    for repo in repos {
+        // Two repositories ending in the same segment still need
+        // distinct package names.
+        let mut name = repo.name().to_owned();
+        let mut n = 2;
+        while names.contains(&name) {
+            name = format!("{}-{n}", repo.name());
+            n += 1;
+        }
+        let key = yaml_string(&name);
+        writeln!(packages, "  {key}:").ok();
+        writeln!(packages, "    url: {}", yaml_string(&repo.url)).ok();
+        writeln!(packages, "    from: {}", yaml_string(&repo.from_version)).ok();
+        for product in &repo.products {
+            writeln!(dependencies, "      - package: {key}").ok();
+            writeln!(dependencies, "        product: {}", yaml_string(product)).ok();
+        }
+        names.push(name);
+    }
+    (packages, dependencies)
+}
+
 fn yaml_string(raw: &str) -> String {
     format!("\"{}\"", raw.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -452,6 +497,55 @@ mod tests {
         assert!(script.contains("LIB_NAME=\"demo_app\""));
         assert!(script.contains("MANIFEST_PATH=\"${SCRIPT_DIR}/../../Cargo.toml\""));
         assert!(script.contains("rustup target add ${triple}"));
+    }
+
+    #[test]
+    fn swift_packages_are_declared_and_linked_into_the_app_target() {
+        let root = std::env::temp_dir().join(format!("istmo-xcodegen-spm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Demo")).unwrap();
+        let repo = |url: &str, version: &str, products: &[&str]| SwiftRepository {
+            url: url.to_owned(),
+            from_version: version.to_owned(),
+            products: products.iter().map(|p| (*p).to_owned()).collect(),
+        };
+        IosProject::new(&root, "Demo").write_xcodegen_fragment(
+            &app(false),
+            &[],
+            None,
+            None,
+            &[
+                repo("https://a.example/x/Kit.git", "1.2.0", &["Kit", "KitUI"]),
+                repo("https://b.example/y/Kit", "3.0.0", &["Other"]),
+            ],
+        );
+        let yaml = std::fs::read_to_string(root.join("Demo").join(FRAGMENT_FILE)).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let expected_packages = "packages:\n\
+             \x20 \"Kit\":\n\
+             \x20   url: \"https://a.example/x/Kit.git\"\n\
+             \x20   from: \"1.2.0\"\n\
+             \x20 \"Kit-2\":\n\
+             \x20   url: \"https://b.example/y/Kit\"\n\
+             \x20   from: \"3.0.0\"\n\
+             targets:\n\
+             \x20 Demo:\n\
+             \x20   dependencies:\n\
+             \x20     - package: \"Kit\"\n\
+             \x20       product: \"Kit\"\n\
+             \x20     - package: \"Kit\"\n\
+             \x20       product: \"KitUI\"\n\
+             \x20     - package: \"Kit-2\"\n\
+             \x20       product: \"Other\"\n\
+             \x20   settings:\n";
+        assert!(yaml.contains(expected_packages), "{yaml}");
+    }
+
+    #[test]
+    fn no_swift_packages_leaves_the_fragment_without_packages() {
+        let (packages, dependencies) = swift_package_yaml(&[]);
+        assert!(packages.is_empty());
+        assert!(dependencies.is_empty());
     }
 
     #[test]
