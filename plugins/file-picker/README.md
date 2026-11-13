@@ -37,3 +37,12 @@ On Android the backend needs the host `ComponentActivity` and is built
 in `onCreate` by the generated `IstmoPluginRegistry`. A picker still
 open when that activity is destroyed fails with
 `FilePickerError::Backend`; handles picked earlier keep working.
+
+Android grants are persisted while a handle lives and released when the
+last handle of that document drops (or at the next app start, for
+handles a killed process left behind). Picking a held document again
+with write access upgrades its grant. Only access modes the backend
+added itself are released — a grant the app already persisted for that
+document is left alone. Android keeps one grant per document and app,
+so a grant the app persists for the same document *while* a handle is
+live is shared and goes away with it.

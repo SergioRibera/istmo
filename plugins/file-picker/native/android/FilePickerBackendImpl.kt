@@ -64,11 +64,16 @@ import kotlinx.coroutines.sync.withLock
  *
  * # Persisted grants
  *
- * Every URI this backend persists is recorded in its own
- * `SharedPreferences`. Handles never outlive the process, so grants
- * recorded by a previous process are orphans and are released when the
- * next backend is constructed. Grants the app persisted through other
- * code are never touched.
+ * Every access mode this backend persists is recorded in its own
+ * `SharedPreferences`, and only recorded modes are ever released.
+ * Handles never outlive the process, so grants recorded by a previous
+ * process are orphans and are released when the next backend is
+ * constructed. A mode the app already held as a persisted grant when
+ * the pick arrived is not recorded, so grants the app persisted through
+ * other code are never touched. The platform keeps one grant per URI and
+ * app, though: if the app persists a URI itself *after* this backend
+ * did, the two share that grant and it goes away when the last handle
+ * is released (or at the next start) — the app must take it again.
  */
 class FilePickerBackendImpl(
     private val activity: ComponentActivity,
@@ -234,9 +239,10 @@ class FilePickerBackendImpl(
 
     private fun registerAndDescribe(uri: Uri, flags: Int): PickedFile {
         synchronized(uriRefs) {
-            val refs = (uriRefs[uri] ?: 0) + 1
-            uriRefs[uri] = refs
-            if (refs == 1) takeGrant(uri, flags)
+            uriRefs[uri] = (uriRefs[uri] ?: 0) + 1
+            // Not only on the first handle: a later pick of a held URI
+            // may come with write access the first one lacked.
+            takeGrant(uri, flags)
         }
         val id = IstmoRuntime.allocHandleId(PLUGIN_ID)
         files[id] = uri
@@ -249,16 +255,40 @@ class FilePickerBackendImpl(
     // in between leaves at worst a logged grant that is already gone —
     // which the next process's reconciliation just forgets — never a
     // persisted grant nothing records.
+    //
+    // Only the access modes this backend adds are logged: a mode already
+    // persisted when the pick arrives (by the app's own code, or by an
+    // earlier handle of this URI) is left out, so releasing the log never
+    // drops a grant istmo did not take.
     private fun takeGrant(uri: Uri, flags: Int) {
-        grantLog.edit().putInt(uri.toString(), flags).commit()
+        val key = uri.toString()
+        val logged = grantLog.getInt(key, 0)
+        val added = flags and persistedFlags(uri).inv()
+        if (added == 0) return
+        grantLog.edit().putInt(key, logged or added).commit()
         try {
-            resolver.takePersistableUriPermission(uri, flags)
+            resolver.takePersistableUriPermission(uri, added)
         } catch (_: SecurityException) {
             // Some providers (e.g. transient in-memory ones) do not
             // support persistence; the URI still works for the current
             // process, so keep going.
-            grantLog.edit().remove(uri.toString()).commit()
+            if (logged == 0) {
+                grantLog.edit().remove(key).commit()
+            } else {
+                grantLog.edit().putInt(key, logged).commit()
+            }
         }
+    }
+
+    /** Access modes of `uri` the app currently holds as persisted grants. */
+    private fun persistedFlags(uri: Uri): Int {
+        var flags = 0
+        for (permission in resolver.persistedUriPermissions) {
+            if (permission.uri != uri) continue
+            if (permission.isReadPermission) flags = flags or Intent.FLAG_GRANT_READ_URI_PERMISSION
+            if (permission.isWritePermission) flags = flags or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        }
+        return flags
     }
 
     private fun releaseGrant(uri: Uri) {
