@@ -205,13 +205,14 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
         state: C,
         alert: AlertConfig?,
     ): Notification {
-        var builder = Notification.Builder(context, channel.id)
+        val builder = Notification.Builder(context, channel.id)
             .setSmallIcon(smallIconRes)
             .setOngoing(true)
             .setOnlyAlertOnce(alert == null)
             .setStyle(tier.progress?.render(context, attributes, state))
-
-        builder = builder.setPromotedOngoing(true)
+            // API 36 has no dedicated builder setter for the promotion
+            // request; the flag is the public surface.
+            .setFlag(Notification.FLAG_PROMOTED_ONGOING, true)
         applyAlertPlatform(builder, alert)
         return tier.liveUpdate.render(context, attributes, state, builder).build()
     }
