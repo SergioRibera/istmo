@@ -12,9 +12,6 @@ android_permissions = ["android.permission.CAMERA"]
 
 [plugin.info_plist]
 NSCameraUsageDescription = "Access the camera to capture images and video frames in real time."
-# Only required if the app also enables microphone capture through this plugin;
-# apps can still override the whole table from their own `[app.info_plist]`.
-NSMicrophoneUsageDescription = "Capture audio alongside camera frames when the app requests it."
 
 # CameraX core + lifecycle + video. Downstream apps don't need to add anything
 # to `android/app/build.gradle` on top of this.

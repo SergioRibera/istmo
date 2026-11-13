@@ -300,9 +300,8 @@ The plugin declares `android.permission.CAMERA` in its `istmo.toml`;
 
 **iOS** — nothing to wire: `IstmoApp.run()` (or
 `IstmoPluginRegistry.registerAll()`) registers `CameraFactoryImpl()`.
-`istmo-build` adds `NSCameraUsageDescription` and
-`NSMicrophoneUsageDescription` to the app's `Info.plist`; reword them
-with [`[app.info_plist]`](/istmo/build-scripts/istmo-toml-reference/#appinfo_plist):
+`istmo-build` adds `NSCameraUsageDescription` to the app's
+`Info.plist`; reword it with [`[app.info_plist]`](/istmo/build-scripts/istmo-toml-reference/#appinfo_plist):
 
 ```toml
 [app.info_plist]

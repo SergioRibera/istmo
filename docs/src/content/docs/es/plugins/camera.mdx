@@ -307,9 +307,8 @@ declarar.
 
 **iOS** — no hay nada que conectar: `IstmoApp.run()` (o
 `IstmoPluginRegistry.registerAll()`) registra `CameraFactoryImpl()`.
-`istmo-build` agrega `NSCameraUsageDescription` y
-`NSMicrophoneUsageDescription` al `Info.plist` de la app; cambia los
-textos con [`[app.info_plist]`](/istmo/es/build-scripts/istmo-toml-reference/#appinfo_plist):
+`istmo-build` agrega `NSCameraUsageDescription` al `Info.plist` de la
+app; cambia el texto con [`[app.info_plist]`](/istmo/es/build-scripts/istmo-toml-reference/#appinfo_plist):
 
 ```toml
 [app.info_plist]

@@ -19,3 +19,14 @@ fn declares_android_camera_permission() {
         "{permissions:?}"
     );
 }
+
+#[test]
+fn info_plist_only_asks_for_the_camera() {
+    let manifest = manifest();
+    let keys: Vec<&str> = manifest.plugins[0]
+        .info_plist
+        .iter()
+        .map(|entry| entry.key.as_str())
+        .collect();
+    assert_eq!(keys, ["NSCameraUsageDescription"]);
+}
