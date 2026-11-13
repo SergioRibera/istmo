@@ -61,7 +61,7 @@ rendering strategy when several are available on the device (custom
 Capabilities of the current device for live activities.
 
 Returned by `capabilities()` so apps can gate features (e.g. only
-enable Dynamic Island widgets when actually supported).
+start activities when the user has them enabled).
 
 | Variant | Payload | Description |
 | ------- | ------- | ----------- |
@@ -73,11 +73,15 @@ enable Dynamic Island widgets when actually supported).
 
 iOS-specific `ActivityKit` feature availability.
 
+There is no Dynamic Island flag: iOS has no public API that reports
+whether the device has one. The system picks the presentation — the
+Dynamic Island layouts of the widget extension on devices that have
+it, the Lock Screen banner everywhere.
+
 | Field | Wire | Type | Description |
 | ----- | ---- | ---- | ----------- |
 | `activity_kit_available` | `activityKitAvailable` | `bool` | Whether the `ActivityKit` framework itself is available (iOS 16.2+). |
 | `activities_enabled` | `activitiesEnabled` | `bool` | Whether the user has activities enabled in system settings. |
-| `dynamic_island` | `dynamicIsland` | `bool` | Whether the device physically has a Dynamic Island. |
 | `push_updates` | `pushUpdates` | `bool` | Whether the app is configured to receive APNs push-token updates for its activities. |
 
 ### `AndroidCapabilities`

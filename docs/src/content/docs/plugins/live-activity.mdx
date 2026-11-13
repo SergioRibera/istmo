@@ -22,6 +22,10 @@ The Android minimum is declared in the plugin's `[min_versions]` and
 checked at build time (see [istmo.toml
 reference](/istmo/build-scripts/istmo-toml-reference/#min_versions)).
 
+`capabilities()` reports no Dynamic Island flag on iOS: there is no public
+API for it. The system shows your widget extension's Dynamic Island
+layouts on devices that have one and the Lock Screen banner everywhere.
+
 ## Install
 
 ```toml

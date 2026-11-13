@@ -103,7 +103,7 @@ pub enum AndroidTierHint {
 /// Capabilities of the current device for live activities.
 ///
 /// Returned by `capabilities()` so apps can gate features (e.g. only
-/// enable Dynamic Island widgets when actually supported).
+/// start activities when the user has them enabled).
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlatformCapabilities {
@@ -116,20 +116,19 @@ pub enum PlatformCapabilities {
 }
 
 /// iOS-specific `ActivityKit` feature availability.
+///
+/// There is no Dynamic Island flag: iOS has no public API that reports
+/// whether the device has one. The system picks the presentation — the
+/// Dynamic Island layouts of the widget extension on devices that have
+/// it, the Lock Screen banner everywhere.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent platform feature flags reported by the native host"
-)]
 pub struct IosCapabilities {
     /// Whether the `ActivityKit` framework itself is available (iOS
     /// 16.2+).
     pub activity_kit_available: bool,
     /// Whether the user has activities enabled in system settings.
     pub activities_enabled: bool,
-    /// Whether the device physically has a Dynamic Island.
-    pub dynamic_island: bool,
     /// Whether the app is configured to receive APNs push-token
     /// updates for its activities.
     pub push_updates: bool,

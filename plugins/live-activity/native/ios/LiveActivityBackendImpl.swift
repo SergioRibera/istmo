@@ -88,8 +88,6 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
                 IosCapabilities(
                     activityKitAvailable: true,
                     activitiesEnabled: info.areActivitiesEnabled,
-
-                    dynamicIsland: true,
                     pushUpdates: false
                 )
             )
@@ -98,7 +96,6 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
             IosCapabilities(
                 activityKitAvailable: false,
                 activitiesEnabled: false,
-                dynamicIsland: false,
                 pushUpdates: false
             )
         )

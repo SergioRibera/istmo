@@ -365,10 +365,9 @@ impl DemoApp {
             match caps {
                 PlatformCapabilities::Ios(ios) => {
                     ui.label(format!(
-                        "iOS — ActivityKit: {}, enabled: {}, Dynamic Island: {}, push: {}",
+                        "iOS — ActivityKit: {}, enabled: {}, push: {}",
                         ios.activity_kit_available,
                         ios.activities_enabled,
-                        ios.dynamic_island,
                         ios.push_updates,
                     ));
                 }
