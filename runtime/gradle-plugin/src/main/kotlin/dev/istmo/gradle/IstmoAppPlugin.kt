@@ -200,14 +200,9 @@ class IstmoAppPlugin : Plugin<Project> {
      * entries of every plugin the app wires. The file is a plain
      * `<manifest>` fragment — fed into the same overlay / AGP 8.3+ variant
      * manifest merger as every plugin's own `AndroidManifest.xml` snippet.
-     * Older istmo-build releases wrote it to `app/src/main/`, which is
-     * still read when the new file is absent.
      */
     internal fun istmoPermissionsSidecar(project: Project): File? =
-        listOf(
-            File(project.rootDir, PERMISSIONS_SIDECAR),
-            project.file(LEGACY_PERMISSIONS_SIDECAR),
-        ).firstOrNull { it.isFile }
+        File(project.rootDir, PERMISSIONS_SIDECAR).takeIf { it.isFile }
 
     private fun addDependencies(project: Project, dependencies: List<GradleDependency>) {
         for (dep in dependencies) {
@@ -271,6 +266,5 @@ class IstmoAppPlugin : Plugin<Project> {
         const val DEFAULT_ICON = "@android:drawable/sym_def_app_icon"
         const val GENERATED_RES_DIR = ".istmo/res"
         const val PERMISSIONS_SIDECAR = ".istmo/istmo-permissions.xml"
-        const val LEGACY_PERMISSIONS_SIDECAR = "src/main/istmo-permissions.xml"
     }
 }

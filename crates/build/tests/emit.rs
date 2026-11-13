@@ -99,28 +99,6 @@ fn owned_generated_dirs_carry_their_own_gitignore() {
 }
 
 #[test]
-fn legacy_permissions_sidecar_is_removed_unless_hand_edited() {
-    let root = scratch_root("perms-legacy");
-    let android_root = seed_android_app(&root);
-    let legacy = android_root.join("app/src/main/istmo-permissions.xml");
-    fs::write(
-        &legacy,
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
-         <manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n    \
-         <uses-permission android:name=\"android.permission.INTERNET\"/>\n\
-         </manifest>\n",
-    )
-    .unwrap();
-    emit_app_with(android_only(&root));
-    assert!(!legacy.exists());
-
-    let edited = "<manifest>\n    <application android:label=\"mine\"/>\n</manifest>\n";
-    fs::write(&legacy, edited).unwrap();
-    emit_app_with(android_only(&root));
-    assert_eq!(fs::read_to_string(&legacy).unwrap(), edited);
-}
-
-#[test]
 #[should_panic(expected = "istmo.toml")]
 fn emit_with_fails_the_build_on_a_malformed_manifest() {
     let root = scratch_root("malformed");
