@@ -1,67 +1,76 @@
 # istmo-camera
 
-Cross-platform camera plugin for [istmo](https://docs.rs/istmo).
+Cross-platform camera plugin for the
+[istmo](https://github.com/SergioRibera/istmo) framework.
 
 - Enumerate every camera the OS exposes with normalised capability
   flags (facing, lens kind, zoom range, OIS/EIS, flash, HDR, depth,
   RAW, resolutions).
 - Stream raw frames in real time through a typed
-  `TypedStream<CameraFrame>`. Native-side ring buffer absorbs
+  `TypedStream<CameraFrame>`. A native-side ring buffer absorbs
   consumer backpressure and reports dropped frames per delivery.
 - Drive zoom, torch, exposure compensation, focus and white balance
-  on a running session.
-- Open multiple sessions concurrently on supported devices (iOS A12+
-  `AVCaptureMultiCamSession`, Android ≥ 11 CameraX concurrent camera).
+  on a running session, and capture JPEG stills.
+- Open multiple sessions concurrently on supported devices (iOS
+  `AVCaptureMultiCamSession`, Android 11+ concurrent camera ids).
 - Deterministic native cleanup via `NativeHandle<CameraSessionTag>` —
   dropping the session releases the pipeline.
+
+| Platform | Backend | Minimum |
+| --- | --- | --- |
+| Android | CameraX (`native/android`) | API 21 |
+| iOS | `AVFoundation` (`native/ios`) | 13.0 |
+| Linux / macOS / Windows | `DesktopCamera` over `nokhwa` (`desktop` feature) | — |
+| Web (wasm32) | `getUserMedia` + canvas (`web` feature) | — |
+
+The mobile minimums come from the plugin's `[min_versions]` and are
+checked by the app's `build.rs`.
 
 ## Install
 
 ```toml
 [dependencies]
-istmo = { version = "0.1", features = ["camera"] } # or:
-istmo-camera = "0.1"
+istmo-camera = "0.1.1-alpha.5"
 ```
 
 Add the plugin to your runtime:
 
-```rust
-istmo::runtime! {
-    plugins: [
-        istmo_camera::CameraClient,
-    ],
-}
+```rust,ignore
+istmo::runtime!(
+    plugins: [istmo_camera::CameraClient],
+);
 ```
 
-With `istmo-build` auto-wiring (`emit_wiring_env` in your app's
-`build.rs`), the plugin is picked up by `istmo.toml` discovery and
-you don't need to list it manually.
+An app whose `build.rs` runs `istmo_build::emit()` gets the plugin
+auto-wired from its `istmo.toml`, so listing it is optional.
 
 ## Permissions
 
-- Android: `android.permission.CAMERA` (declared via plugin).
-- iOS: `NSCameraUsageDescription` in Info.plist. The plugin ships a
-  default string; override it from your app's `[app.info_plist]`
-  table in `istmo.toml` to use your own copy.
+- Android: CameraX does not add `android.permission.CAMERA`; declare it
+  in the app, e.g. `[app] android_permissions = ["android.permission.CAMERA"]`
+  in the app's `istmo.toml`.
+- iOS: `NSCameraUsageDescription` (and `NSMicrophoneUsageDescription`)
+  in `Info.plist`. The plugin ships default strings; override them from
+  your app's `[app.info_plist]` table.
 
 Prompt the user from Rust:
 
-```rust
+```rust,ignore
 match camera.request_access().await? {
     AccessStatus::Granted => { /* open sessions */ }
     AccessStatus::Denied | AccessStatus::Restricted => {
         // deep-link to Settings, surface rationale, etc.
     }
-    AccessStatus::NotDetermined => unreachable!("prompt resolves"),
+    AccessStatus::NotDetermined => { /* the prompt did not resolve */ }
 }
 ```
 
 ## Minimal capture loop
 
-```rust
+```rust,ignore
 use std::sync::Arc;
 use istmo_camera::{
-    AccessStatus, CameraClient, CameraClientExt, CameraInitConfig, CameraFacing,
+    AccessStatus, CameraClient, CameraClientExt, CameraFacing, CameraInitConfig,
     PixelFormat, Resolution, SessionConfig,
 };
 use istmo_core::StreamItem;
@@ -95,12 +104,12 @@ async fn capture() -> Result<(), Box<dyn std::error::Error>> {
                 if frame.dropped_before > 0 {
                     log::warn!("dropped {} frames", frame.dropped_before);
                 }
-                // frame.bytes is YUV_420 planar; frame.planes describes
+                // frame.bytes holds the pixels; frame.planes describes
                 // the layout. Hand to a decoder, GPU uploader, ML
                 // inference pass, …
             }
             StreamItem::Completed | StreamItem::Cancelled => break,
-            StreamItem::Failed(err) => return Err(Box::new(err)),
+            StreamItem::Failed(()) => return Err("camera stream failed".into()),
         }
     }
 
@@ -115,7 +124,7 @@ backend's close error.
 
 ## Multiple cameras at once
 
-```rust
+```rust,ignore
 let back = cam.open_session(SessionConfig::new(back_id)).await?;
 let front = cam.open_session(SessionConfig::new(front_id)).await?;
 
@@ -123,7 +132,7 @@ let (bf, ff) = (back.frames()?, front.frames()?);
 // Interleave both streams in your own task.
 ```
 
-Check `CameraClient::concurrent_support().await?` ahead of time:
+Check `cam.concurrent_support().await?` ahead of time:
 
 - `max_concurrent == 1` → fail over to switching between sessions
   instead of opening both.
@@ -133,7 +142,7 @@ Check `CameraClient::concurrent_support().await?` ahead of time:
 
 ## Controls
 
-```rust
+```rust,ignore
 use istmo_camera::{CameraControls, FlashMode, FocusMode, WhiteBalanceMode};
 
 let applied = session
@@ -176,28 +185,34 @@ For high-resolution preview-only pipelines, open the session with
 copy fires per frame. (The native widget rendering path is the
 app's responsibility.)
 
+## Still capture
+
+`session.capture_still(StillCaptureRequest::default())` returns a
+`StillPhoto`. Android (`ImageCapture`) and iOS (`AVCapturePhotoOutput`)
+capture `PixelFormat::Jpeg` only and report
+`CameraError::FormatUnsupported` for other formats; the desktop host
+returns the latest preview frame in the session's stream format.
+
 ## Desktop (Linux, macOS, Windows)
 
 Pure-Rust host behind the `desktop` feature:
 
 ```toml
 [dependencies]
-istmo-camera = { version = "0.1", features = ["desktop"] }
+istmo-camera = { version = "0.1.1-alpha.5", features = ["desktop"] }
 ```
 
 Backed by [`nokhwa`](https://docs.rs/nokhwa) — V4L2 on Linux,
 AVFoundation on macOS, Media Foundation on Windows. Supports
 `PixelFormat::Rgba8` and `PixelFormat::Bgra8` (nokhwa decodes the
 camera's native YUYV / NV12 / RAWRGB stream into packed 32-bit).
-Other formats return `CameraError::FormatUnsupported` on `open()`.
+Other formats return `CameraError::FormatUnsupported` on `open`.
 
 Register the host with the runtime:
 
-```rust
-use istmo::Runtime;
+```rust,ignore
 use istmo_camera::{CameraHost, DesktopCameraFactory};
 
-let runtime = Runtime::init(/* ... */)?;
 runtime.register_host(CameraHost::new(DesktopCameraFactory));
 ```
 
@@ -207,39 +222,32 @@ project's `flake.nix` devshell.
 
 ## Web (wasm32)
 
-Scaffold shipped behind the `web` feature. The surface matches
-desktop + mobile; the backend is a stub until the real
-`web-sys::MediaDevices` pipeline lands. See `src/web.rs` for the
-roadmap (MediaStreamTrackProcessor vs. canvas + rAF, constraint
-API, permission mapping).
+Browser host behind the `web` feature, built on
+`navigator.mediaDevices.getUserMedia`: frames are drawn into a hidden
+canvas and shipped as `PixelFormat::Rgba8` (or `Bgra8`); other formats
+return `CameraError::FormatUnsupported`.
 
 ```toml
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-istmo-camera = { version = "0.1", features = ["web"] }
+istmo-camera = { version = "0.1.1-alpha.5", features = ["web"] }
 ```
 
 ## Native layer
 
-Reference backends live under `native/{android,ios}/`:
+Reference backends live under `native/{android,ios}/` and are
+registered by the generated `IstmoPluginRegistry`:
 
-- `CameraBackendImpl.kt` — CameraX pipeline with `ImageAnalysis`
-  (`STRATEGY_KEEP_ONLY_LATEST`) feeding a per-session
-  `MutableSharedFlow`. `Camera2CameraInfo` interop pulls full
-  capability metadata.
-- `CameraBackendImpl.swift` — `AVCaptureSession` (or
-  `AVCaptureMultiCamSession` when available) with
-  `AVCaptureVideoDataOutput`. Sample buffers extracted into
-  `AsyncStream<CameraFrame>`.
+- `CameraFactoryImpl.kt` / `CameraBackendImpl.kt` — CameraX pipeline
+  with `ImageAnalysis` (`STRATEGY_KEEP_ONLY_LATEST`) fanned out to
+  every frame subscriber; `Camera2CameraInfo` interop pulls full
+  capability metadata. The factory takes the host
+  `ComponentActivity` and follows activity recreation.
+- `CameraFactoryImpl.swift` / `CameraBackendImpl.swift` —
+  `AVCaptureSession` (or `AVCaptureMultiCamSession` when available)
+  with `AVCaptureVideoDataOutput`.
 
 Both implement `HandleReleaser` so `NativeHandle::drop` on the Rust
 side tears the session down deterministically.
-
-## Still capture
-
-`SessionConfig` and the trait include a `capture_still` entry point.
-The reference backends throw `CameraError::Backend(…)` by default —
-wire an `ImageCapture` (Android) or `AVCapturePhotoOutput` (iOS)
-use case into the session's `open()` if your app needs stills.
 
 ## Design notes
 
@@ -254,3 +262,5 @@ use case into the session's `open()` if your app needs stills.
 - **Backpressure is observable, not hidden.** `dropped_before` on
   each frame tells the Rust consumer when it's falling behind so it
   can downgrade on its own terms.
+
+Full guide: <https://sergioribera.rs/istmo/plugins/camera/>

@@ -9,6 +9,15 @@ Native file pickers from Rust, for the
 | iOS | `UIDocumentPickerViewController` (`native/ios/FilePickerBackendImpl.swift`) |
 | Desktop | `DesktopFilePicker` over `rfd`: `IFileOpenDialog`, `NSOpenPanel`, XDG portal |
 
+The plugin declares no `[min_versions]`.
+
+## Install
+
+```toml
+[dependencies]
+istmo-file-picker = "0.1.1-alpha.5"
+```
+
 ## Usage
 
 ```rust,ignore
@@ -46,3 +55,5 @@ added itself are released — a grant the app already persisted for that
 document is left alone. Android keeps one grant per document and app,
 so a grant the app persists for the same document *while* a handle is
 live is shared and goes away with it.
+
+Full guide: <https://sergioribera.rs/istmo/plugins/file-picker/>

@@ -3,10 +3,20 @@
 Sign in with Google from Rust, for the
 [istmo](https://github.com/SergioRibera/istmo) framework.
 
-| Platform | Backend | Dependency (from `istmo.toml`) |
-| --- | --- | --- |
-| Android | Credential Manager (`native/android/GoogleSignInBackendImpl.kt`) | `androidx.credentials`, `googleid` |
-| iOS | `GIDSignIn` (`native/ios/GoogleSignInBackendImpl.swift`) | `GoogleSignIn-iOS` 7.1+ |
+| Platform | Backend | Dependency (from `istmo.toml`) | Minimum |
+| --- | --- | --- | --- |
+| Android | Credential Manager (`native/android/GoogleSignInBackendImpl.kt`) | `androidx.credentials` 1.3, `googleid` 1.1 | API 21 |
+| iOS | `GIDSignIn` (`native/ios/GoogleSignInBackendImpl.swift`) | `GoogleSignIn-iOS` 7.1+ | — |
+
+The Android minimum comes from the plugin's `[min_versions]` and is
+checked by the app's `build.rs`. Desktop has no backend.
+
+## Install
+
+```toml
+[dependencies]
+istmo-google-sign-in = "0.1.1-alpha.5"
+```
 
 ## Usage
 
@@ -41,5 +51,6 @@ token refresh (`refresh` re-runs the silent flow) and no revoke call
 `grantedScopes` therefore only lists `openid`, `email` and `profile`.
 
 `Debug` output of `SignInAccount`, `OwnedSignInAccount` and
-`SignInConfig` redacts the id
-token and the nonce.
+`SignInConfig` redacts the id token and the nonce.
+
+Full guide: <https://sergioribera.rs/istmo/plugins/google-sign-in/>

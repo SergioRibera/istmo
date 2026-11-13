@@ -11,6 +11,16 @@ for `geo:`.
 | iOS | `UIApplication.shared.open` (`native/ios/OpenerBackendImpl.swift`) |
 | Desktop | `DesktopOpener`: `xdg-open`, `open` or `rundll32 url.dll,FileProtocolHandler`, no shell |
 
+Android API 21 and iOS 13.0 are the plugin's `[min_versions]`, checked by
+the app's `build.rs`; neither needs anything newer than the runtime.
+
+## Install
+
+```toml
+[dependencies]
+istmo-opener = "0.1.1-alpha.5"
+```
+
 ## Usage
 
 ```rust,ignore
@@ -37,3 +47,5 @@ Every backend only opens `http`, `https`, `mailto`, `tel`, `sms` and
 The mobile backends are registered by the generated
 `IstmoPluginRegistry`; desktop apps register
 `OpenerHost::new(DesktopOpener::default())` themselves.
+
+Full guide: <https://sergioribera.rs/istmo/plugins/opener/>
