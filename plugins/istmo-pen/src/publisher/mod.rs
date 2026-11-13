@@ -1,5 +1,7 @@
 //! Desktop-side publisher that adapts a native window to the [`Pen`]
-//! plugin. Multi-window apps hold one [`PenPublisher`] per process and
+//! plugin.
+//!
+//! Multi-window apps hold one [`PenPublisher`] per process and
 //! register each `HasWindowHandle` under an app-chosen id — the same id
 //! the app passes as [`PenConfig::window_id`](crate::PenConfig::window_id)
 //! when constructing its [`PenClient`](crate::PenClient).

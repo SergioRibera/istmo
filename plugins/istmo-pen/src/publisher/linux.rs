@@ -92,14 +92,14 @@ mod libinput_backend {
         let (ready_tx, ready_rx) = flume::bounded::<Result<(), String>>(1);
         std::thread::Builder::new()
             .name("istmo-pen-libinput".to_owned())
-            .spawn(move || run_pump(publisher, ready_tx))
+            .spawn(move || run_pump(&publisher, ready_tx))
             .map_err(|err| format!("failed to spawn libinput pump thread: {err}"))?;
         ready_rx
             .recv()
             .map_err(|_| "libinput pump thread exited before initialisation".to_owned())?
     }
 
-    fn run_pump(publisher: Weak<PenPublisher>, ready: Sender<Result<(), String>>) {
+    fn run_pump(publisher: &Weak<PenPublisher>, ready: Sender<Result<(), String>>) {
         let mut context = Libinput::new_with_udev(SeatInterface);
         if let Err(err) = context.udev_assign_seat("seat0") {
             let msg = format!("libinput: udev_assign_seat(\"seat0\") failed: {err:?}");
@@ -110,7 +110,7 @@ mod libinput_backend {
         drop(ready);
 
         let clock = Arc::new(Clock::new());
-        drain_pump(&mut context, &publisher, &clock);
+        drain_pump(&mut context, publisher, &clock);
     }
 
     fn drain_pump(context: &mut Libinput, publisher: &Weak<PenPublisher>, clock: &Arc<Clock>) {
@@ -121,7 +121,7 @@ mod libinput_backend {
                 std::thread::sleep(Duration::from_millis(8));
                 continue;
             }
-            while let Some(event) = context.next() {
+            for event in context.by_ref() {
                 let Some(publisher) = publisher.upgrade() else {
                     return;
                 };
@@ -142,7 +142,7 @@ mod libinput_backend {
                 let sample = decode_axis(&axis, clock);
                 broadcast_event(
                     publisher,
-                    PenEvent::Move(PenMove {
+                    &PenEvent::Move(PenMove {
                         sample,
                         coalesced: Vec::new(),
                         predicted: Vec::new(),
@@ -153,10 +153,10 @@ mod libinput_backend {
                 let sample = decode_axis(&prox, clock);
                 match prox.proximity_state() {
                     ProximityState::In => {
-                        broadcast_hover(publisher, PenHoverEvent::ProximityEnter(sample));
+                        broadcast_hover(publisher, &PenHoverEvent::ProximityEnter(sample));
                     }
                     ProximityState::Out => {
-                        broadcast_hover(publisher, PenHoverEvent::ProximityLeave);
+                        broadcast_hover(publisher, &PenHoverEvent::ProximityLeave);
                     }
                 }
             }
@@ -166,11 +166,11 @@ mod libinput_backend {
                     TipState::Down => PenEvent::Down(sample),
                     TipState::Up => PenEvent::Up(sample),
                 };
-                broadcast_event(publisher, ev);
+                broadcast_event(publisher, &ev);
             }
             TabletToolEvent::Button(btn) => {
                 if let Some(change) = handle_button(&btn, clock) {
-                    broadcast_event(publisher, PenEvent::ButtonChanged(change));
+                    broadcast_event(publisher, &PenEvent::ButtonChanged(change));
                 }
             }
             _ => {}
@@ -189,13 +189,14 @@ mod libinput_backend {
         let serial = tool.serial();
         let (new_bitmap, changed) = {
             let mut guard = lock(&clock.button_state);
-            let entry = guard.entry(serial).or_insert(0);
-            let old = *entry;
-            match event.button_state() {
-                ButtonState::Pressed => *entry |= bit,
-                ButtonState::Released => *entry &= !bit,
-            }
-            (*entry, old ^ *entry)
+            let old = guard.get(&serial).copied().unwrap_or(0);
+            let new = match event.button_state() {
+                ButtonState::Pressed => old | bit,
+                ButtonState::Released => old & !bit,
+            };
+            guard.insert(serial, new);
+            drop(guard);
+            (new, old ^ new)
         };
         if changed == 0 {
             return None;
@@ -241,18 +242,22 @@ mod libinput_backend {
         )
     }
 
-    fn broadcast_event(publisher: &PenPublisher, event: PenEvent) {
+    fn broadcast_event(publisher: &PenPublisher, event: &PenEvent) {
         for id in publisher.window_ids() {
             publisher.push_event(id, event.clone());
         }
     }
 
-    fn broadcast_hover(publisher: &PenPublisher, event: PenHoverEvent) {
+    fn broadcast_hover(publisher: &PenPublisher, event: &PenHoverEvent) {
         for id in publisher.window_ids() {
             publisher.push_hover(id, event.clone());
         }
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "libinput axes (mm, degrees, normalised pressure) sit well inside f32 range; PenSample carries f32"
+    )]
     fn decode_axis<T: TabletToolEventTrait>(event: &T, clock: &Arc<Clock>) -> PenSample {
         let tool = event.tool();
         let tool_kind = match tool.tool_type() {
@@ -350,7 +355,7 @@ mod libinput_backend {
             if cached != 0 {
                 return cached;
             }
-            let now = self.start.elapsed().as_micros() as u64;
+            let now = u64::try_from(self.start.elapsed().as_micros()).unwrap_or(u64::MAX);
             self.attach_us.store(now, Ordering::Relaxed);
             now
         }

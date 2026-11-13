@@ -80,7 +80,7 @@ fn capabilities_round_trip_through_hosted_dispatch() {
     assert!(!caps.predicted, "predicted stays off until iOS lands");
 }
 
-fn zero_sample() -> PenSample {
+const fn zero_sample() -> PenSample {
     PenSample {
         x: 10.0,
         y: 20.0,

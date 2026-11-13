@@ -136,8 +136,9 @@ pub struct PenSample {
     pub buttons: u32,
 }
 
-/// Extra payload for [`PenEvent::Move`]. Wrapped in a struct because
-/// the current codegen (`istmo-build::kotlin_types`) models
+/// Extra payload for [`PenEvent::Move`].
+///
+/// Wrapped in a struct because the current codegen (`istmo-build::kotlin_types`) models
 /// single-payload variants only — multi-tuple variants would truncate
 /// on the Kotlin / Swift side.
 #[message(crate = "::istmo_core")]
@@ -207,7 +208,9 @@ pub enum PenEvent {
 }
 
 /// A hover-phase event fired while the tool is proximate but not
-/// touching the surface. Only surfaces on platforms with proximity
+/// touching the surface.
+///
+/// Only surfaces on platforms with proximity
 /// sensing (iPadOS 12.9"+ with Apple Pencil, Android `AXIS_DISTANCE`,
 /// Windows `WM_POINTERENTER` / `HOVER` / `LEAVE`).
 #[message(crate = "::istmo_core")]
@@ -230,6 +233,10 @@ pub enum PenHoverEvent {
 /// legitimately reports zero pressure.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent per-signal capability flags shared with the native hosts"
+)]
 pub struct PenCapabilities {
     pub pressure: bool,
     pub tilt: bool,

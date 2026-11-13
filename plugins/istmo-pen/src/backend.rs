@@ -1,5 +1,7 @@
 //! Desktop-side factory that pairs the macro-emitted [`PenHost`] with
-//! a [`PenPublisher`]. Each `CreateInstance` frame the runtime routes
+//! a [`PenPublisher`].
+//!
+//! Each `CreateInstance` frame the runtime routes
 //! to this host produces a fresh [`PenBackend`]; every stream it opens
 //! is a new subscription to the matching window on the publisher.
 //!
@@ -154,12 +156,12 @@ pub struct PenPublisherFactory {
 
 impl PenPublisherFactory {
     #[must_use]
-    pub fn new(publisher: Arc<PenPublisher>) -> Self {
+    pub const fn new(publisher: Arc<PenPublisher>) -> Self {
         Self { publisher }
     }
 
     #[must_use]
-    pub fn publisher(&self) -> &Arc<PenPublisher> {
+    pub const fn publisher(&self) -> &Arc<PenPublisher> {
         &self.publisher
     }
 }

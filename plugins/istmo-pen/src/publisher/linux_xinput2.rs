@@ -580,32 +580,29 @@ fn apply_axes(pump: &mut PumpState, deviceid: u16, mask: &[u32], values: &[Fp323
     else {
         return;
     };
-    if let Some(axis) = dev.pressure_axis {
-        if let Some(raw) = axis_lookup.get(axis.number as usize).copied() {
-            if !raw.is_nan() {
-                let span = axis.max - axis.min;
-                let norm = if span > 0.0 {
-                    (raw - axis.min) / span
-                } else {
-                    0.0
-                };
-                tool.pressure = norm.clamp(0.0, 1.0) as f32;
-            }
-        }
+    if let Some(axis) = dev.pressure_axis
+        && let Some(raw) = axis_lookup.get(axis.number as usize).copied()
+        && !raw.is_nan()
+    {
+        let span = axis.max - axis.min;
+        let norm = if span > 0.0 {
+            (raw - axis.min) / span
+        } else {
+            0.0
+        };
+        tool.pressure = norm.clamp(0.0, 1.0) as f32;
     }
-    if let Some(axis) = dev.tilt_x_axis {
-        if let Some(raw) = axis_lookup.get(axis.number as usize).copied() {
-            if !raw.is_nan() {
-                tool.tilt_x = (raw as f32).to_radians();
-            }
-        }
+    if let Some(axis) = dev.tilt_x_axis
+        && let Some(raw) = axis_lookup.get(axis.number as usize).copied()
+        && !raw.is_nan()
+    {
+        tool.tilt_x = (raw as f32).to_radians();
     }
-    if let Some(axis) = dev.tilt_y_axis {
-        if let Some(raw) = axis_lookup.get(axis.number as usize).copied() {
-            if !raw.is_nan() {
-                tool.tilt_y = (raw as f32).to_radians();
-            }
-        }
+    if let Some(axis) = dev.tilt_y_axis
+        && let Some(raw) = axis_lookup.get(axis.number as usize).copied()
+        && !raw.is_nan()
+    {
+        tool.tilt_y = (raw as f32).to_radians();
     }
 }
 
