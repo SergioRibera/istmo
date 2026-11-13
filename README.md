@@ -47,24 +47,29 @@ crates (`istmo-google-sign-in`, `istmo-data-store`,
 
 ### Kotlin — Gradle (Android)
 
-The Kotlin runtime is published to GitHub Packages as
-`dev.istmo:istmo-runtime`. Consumer setup lives in
-[`runtime/README.md`](runtime/README.md).
+The Kotlin runtime (`io.github.sergioribera:istmo-runtime`) and the
+`io.github.sergioribera.istmo` Gradle plugin
+(`io.github.sergioribera:istmo-gradle-plugin`) are published to Maven
+Central — no extra repository or credentials needed. Consumer setup
+lives in [`runtime/README.md`](runtime/README.md).
 
 ```kotlin
 // settings.gradle.kts
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
 dependencyResolutionManagement {
-    repositories {
-        google(); mavenCentral()
-        maven {
-            url = uri("https://maven.pkg.github.com/SergioRibera/istmo")
-        }
-    }
+    repositories { google(); mavenCentral() }
 }
 
 // app/build.gradle.kts
+plugins {
+    id("com.android.application")
+    id("io.github.sergioribera.istmo") version "0.1.0"
+}
+
 dependencies {
-    implementation("dev.istmo:istmo-runtime:*")
+    implementation("io.github.sergioribera:istmo-runtime:0.1.0")
 }
 ```
 
@@ -72,7 +77,7 @@ dependencies {
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/SergioRibera/istmo.git", from: "*"),
+    .package(url: "https://github.com/SergioRibera/istmo.git", from: "0.1.0"),
 ],
 targets: [
     .target(

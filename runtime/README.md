@@ -11,7 +11,7 @@ its own tree.
 runtime/
 ├── android/                 # Gradle library project
 │   ├── settings.gradle.kts
-│   ├── build.gradle.kts     # `com.android.library` + `maven-publish`
+│   ├── build.gradle.kts     # `com.android.library` + `com.vanniktech.maven.publish`
 │   ├── gradle.properties    # runtimeGroup / runtimeArtifact / runtimeVersion
 │   └── src/main/java/dev/istmo/runtime/
 │       ├── Bincode.kt
@@ -20,7 +20,8 @@ runtime/
 │       ├── IstmoPluginRegistrant.kt
 │       ├── IstmoRuntime.kt
 │       └── PluginHandler.kt
-├── gradle-plugin/           # `dev.istmo.app` Gradle plugin
+├── gradle-plugin/           # `io.github.sergioribera.istmo` Gradle plugin
+│   └── gradle.properties    # pluginGroup / pluginArtifact / pluginVersion
 └── ios/
     └── Sources/IstmoRuntime/     # source set consumed by the root Package.swift
         ├── Bincode.swift
@@ -38,50 +39,40 @@ target at `runtime/ios/Sources/IstmoRuntime`.
 
 ## Consuming from Android
 
-Published artefact coordinates:
+Both Android artefacts are published to [Maven Central][central]:
 
-```
-groupId    = dev.istmo
-artifactId = istmo-runtime
-version    = <matches the Rust workspace SemVer>
-```
+| Artefact | Coordinates |
+|---|---|
+| Kotlin runtime (AAR + sources + Javadoc) | `io.github.sergioribera:istmo-runtime:<version>` |
+| Gradle plugin `io.github.sergioribera.istmo` | `io.github.sergioribera:istmo-gradle-plugin:<version>` |
 
-The registry is [GitHub Packages Maven][gh-packages], which requires an
-authenticated HTTPS request even for public repositories. Add the
-credentials to your app project once:
+`<version>` matches the Rust workspace SemVer. Maven Central needs no
+extra repository and no credentials:
 
 `settings.gradle.kts`
 
 ```kotlin
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
 dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven {
-            url = uri("https://maven.pkg.github.com/SergioRibera/istmo")
-            credentials {
-                username = System.getenv("GITHUB_ACTOR")
-                    ?: providers.gradleProperty("gpr.user").orNull
-                password = System.getenv("GITHUB_TOKEN")
-                    ?: providers.gradleProperty("gpr.key").orNull
-            }
-        }
     }
 }
-```
-
-Local developers stash the pair in `~/.gradle/gradle.properties`:
-
-```
-gpr.user=<github-username>
-gpr.key=<personal-access-token-with-read:packages>
 ```
 
 `app/build.gradle.kts`
 
 ```kotlin
 dependencies {
-    implementation("dev.istmo:istmo-runtime:0.1.0")
+    implementation("io.github.sergioribera:istmo-runtime:0.1.0")
 }
 ```
 
@@ -94,23 +85,34 @@ step required. In the consumer's `settings.gradle.kts`:
 ```kotlin
 includeBuild("../../runtime/android") {
     dependencySubstitution {
-        substitute(module("dev.istmo:istmo-runtime"))
+        substitute(module("io.github.sergioribera:istmo-runtime"))
             .using(project(":"))
     }
 }
 ```
 
 The rest of the app's `build.gradle.kts` still writes
-`implementation("dev.istmo:istmo-runtime:0.1.0")`; the
+`implementation("io.github.sergioribera:istmo-runtime:0.1.0")`; the
 substitution swaps the resolved artefact for the local project.
 
 ### Gradle plugin
 
-Apps apply `dev.istmo.app` next to `com.android.application`: it builds
-the Rust crate with cargo for every ABI, links every istmo plugin the
-crate depends on, applies `istmo.toml` `[app]` and registers the
-`istmoDoctor` task. From a checkout, resolve it through a composite
-build:
+Apps apply `io.github.sergioribera.istmo` next to
+`com.android.application`: it builds the Rust crate with cargo for every
+ABI, links every istmo plugin the crate depends on, applies `istmo.toml`
+`[app]` and registers the `istmoDoctor` task. With the `pluginManagement`
+repositories above, Gradle resolves it from Maven Central:
+
+```kotlin
+// app/build.gradle.kts
+plugins {
+    id("com.android.application")
+    id("io.github.sergioribera.istmo") version "0.1.0"
+}
+```
+
+From a checkout, resolve it through a composite build instead (and drop
+the `version`):
 
 ```kotlin
 // settings.gradle.kts
@@ -151,26 +153,39 @@ dependencies: [
 
 ## Publishing
 
-Releases are cut through the
-[`publish-runtime.yml`](../.github/workflows/publish-runtime.yml)
-workflow — `workflow_dispatch` on GitHub Actions:
+The [`publish-runtime.yml`](../.github/workflows/publish-runtime.yml)
+workflow publishes both Android artefacts to Maven Central through the
+Sonatype Central Portal:
 
-1. Bump the desired version through the workflow's `version` input.
-2. The action creates the matching git tag (`v<version>`) and publishes
-   the Android AAR + sources JAR to GitHub Packages under
-   `dev.istmo:istmo-runtime:<version>`.
-3. The same tag makes the Swift package resolvable via SPM's SemVer
-   selector.
+1. `cargo-release` cuts the release and pushes a `v<SemVer>` tag; the
+   tag push triggers the workflow.
+2. The workflow reads the version from the tag and writes it into
+   `runtimeVersion` (`android/gradle.properties`) and `pluginVersion`
+   (`gradle-plugin/gradle.properties`) in its own checkout only —
+   nothing is committed back, so trunk keeps its baseline versions.
+3. It assembles the AAR and the plugin JAR, then runs
+   `publishAndReleaseToMavenCentral` for each, publishing
+   `io.github.sergioribera:istmo-runtime:<version>` and
+   `io.github.sergioribera:istmo-gradle-plugin:<version>` (signed).
+4. The Swift package has no publish step: SPM resolves it straight from
+   the same git tag.
 
-Tags are created by the workflow, not by hand, so the versioning
-cadence is entirely driven by intentional releases.
+`workflow_dispatch` re-runs a release or publishes a hotfix: its
+optional `version` input overrides the tag-derived version, and
+`dry_run` assembles everything without publishing.
+
+The workflow needs the repository secrets `MAVEN_CENTRAL_USERNAME` /
+`MAVEN_CENTRAL_PASSWORD` (Central Portal user token) and
+`MAVEN_SIGNING_KEY` / `MAVEN_SIGNING_PASSWORD` (ASCII-armored GPG
+private key and its passphrase). The `io.github.sergioribera` namespace
+must be verified on the Central Portal before the first publish.
 
 ## Versioning
 
-The Kotlin artefact, the Swift package (via git tag) and the Rust
-workspace crates all share a single SemVer track. When the workflow
-publishes `0.2.0`, the same tag applies to every language surface —
-consumers pin one number and get matching wire compatibility across
-Rust ↔ Kotlin ↔ Swift.
+The Kotlin runtime, the Gradle plugin, the Swift package (via git tag)
+and the Rust workspace crates all share a single SemVer track. When the
+workflow publishes `0.2.0`, the same tag applies to every language
+surface — consumers pin one number and get matching wire compatibility
+across Rust ↔ Kotlin ↔ Swift.
 
-[gh-packages]: https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-gradle-registry
+[central]: https://central.sonatype.com/artifact/io.github.sergioribera/istmo-runtime
