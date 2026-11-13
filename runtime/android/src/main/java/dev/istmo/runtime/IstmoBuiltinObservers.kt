@@ -95,8 +95,7 @@ object IstmoCapabilitiesObserver {
                 has(PackageManager.FEATURE_FACE),
             hasFingerprint = has(PackageManager.FEATURE_FINGERPRINT),
             hasNfc = has(PackageManager.FEATURE_NFC),
-            hasHaptics = (context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator)
-                ?.hasVibrator() == true,
+            hasHaptics = hasVibrator(context),
             hasCameraFront = has(PackageManager.FEATURE_CAMERA_FRONT),
             hasCameraBack = has(PackageManager.FEATURE_CAMERA),
             hasGps = has(PackageManager.FEATURE_LOCATION_GPS),
@@ -104,6 +103,16 @@ object IstmoCapabilitiesObserver {
             hasMicrophone = has(PackageManager.FEATURE_MICROPHONE),
             hasTelephony = has(PackageManager.FEATURE_TELEPHONY),
         )
+    }
+
+    private fun hasVibrator(context: Context): Boolean {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            context.getSystemService(android.os.Vibrator::class.java)
+        } else {
+            @Suppress("DEPRECATION") // The class-keyed lookup needs API 23.
+            context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+        }
+        return vibrator?.hasVibrator() == true
     }
 }
 
