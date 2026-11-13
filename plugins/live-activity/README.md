@@ -6,7 +6,7 @@ Live Activities from Rust, for the
 | Platform | Backend | Minimum |
 | --- | --- | --- |
 | iOS | ActivityKit / Dynamic Island (`native/ios`) | 16.2 at runtime; older releases build and report no support |
-| Android | Ongoing notifications in three tiers: custom `RemoteViews`, `ProgressStyle` (API 35), Live Updates (API 36) (`native/android`) | API 26 |
+| Android | Ongoing notifications in three tiers: custom `RemoteViews`, `ProgressStyle` and Live Updates (both API 36) (`native/android`) | API 26 |
 | Desktop | none — every call fails | — |
 
 The Android minimum comes from the plugin's `[min_versions]` and is

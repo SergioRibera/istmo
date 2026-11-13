@@ -82,7 +82,7 @@ class LiveActivityBackendImpl(
         return PlatformCapabilities.Android(
             AndroidCapabilities(
                 supportsCustom = true,
-                supportsProgressStyle = sdk >= 35,
+                supportsProgressStyle = sdk >= 36,
                 supportsLiveUpdate = sdk >= 36,
                 notificationsEnabled = NotificationManagerCompat
                     .from(appContext)

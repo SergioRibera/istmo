@@ -135,7 +135,7 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
         val sdk = Build.VERSION.SDK_INT
         return when (val strat = renderStrategy()) {
             is RenderStrategy.CustomOnly -> Tier.Custom(strat.custom)
-            is RenderStrategy.ProgressOnly -> if (sdk >= 35) Tier.Progress(strat.progress) else null
+            is RenderStrategy.ProgressOnly -> if (sdk >= 36) Tier.Progress(strat.progress) else null
             is RenderStrategy.Adaptive -> when {
                 hint == AndroidTierHint.ForceCustom -> Tier.Custom(strat.custom)
                 hint == AndroidTierHint.RequireLiveUpdate ->
@@ -144,7 +144,7 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
                     else null
                 sdk >= 36 && strat.liveUpdate != null ->
                     Tier.LiveUpdate(strat.liveUpdate, strat.progress, strat.custom)
-                sdk >= 35 && strat.progress != null ->
+                sdk >= 36 && strat.progress != null ->
                     Tier.Progress(strat.progress)
                 else -> Tier.Custom(strat.custom)
             }
@@ -181,7 +181,7 @@ abstract class NotificationLiveActivityHandler<A : Any, C : Any>(
         return builder.build()
     }
 
-    @RequiresApi(35)
+    @RequiresApi(36)
     private fun buildProgress(
         renderer: ProgressRenderer<A, C>,
         attributes: A,

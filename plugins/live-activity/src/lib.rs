@@ -146,10 +146,10 @@ pub struct AndroidCapabilities {
     /// Whether the plugin can render fully custom `RemoteViews`.
     pub supports_custom: bool,
     /// Whether the platform's `Notification.ProgressStyle` is
-    /// available.
+    /// available (Android 16+, API 36).
     pub supports_progress_style: bool,
     /// Whether the modern Live Update notification API is available
-    /// (Android 15+).
+    /// (Android 16+, API 36).
     pub supports_live_update: bool,
     /// Whether the user has notifications enabled for this app.
     pub notifications_enabled: bool,

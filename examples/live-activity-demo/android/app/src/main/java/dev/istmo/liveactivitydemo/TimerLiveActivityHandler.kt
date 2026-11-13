@@ -96,7 +96,7 @@ class TimerLiveActivityHandler(context: Context) :
         views.setChronometer(R.id.timer_elapsed, base, null, true)
     }
 
-    @androidx.annotation.RequiresApi(35)
+    @androidx.annotation.RequiresApi(36)
     private fun renderProgress(
         context: Context,
         attributes: TimerAttributes,

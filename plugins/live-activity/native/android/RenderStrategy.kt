@@ -32,7 +32,7 @@ data class CustomRender(
 )
 
 fun interface ProgressRenderer<in A : Any, in C : Any> {
-    @androidx.annotation.RequiresApi(35)
+    @androidx.annotation.RequiresApi(36)
     fun render(context: Context, attributes: A, state: C): Notification.ProgressStyle
 }
 
