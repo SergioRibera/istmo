@@ -77,7 +77,7 @@ pub struct CameraSessionTag(std::convert::Infallible);
 pub struct CameraInitConfig {
     /// How many frames the native ring buffer may hold before the
     /// oldest is dropped. `0` falls back to the platform default
-    /// (`3` — tuned so a 30 Hz consumer sees <100 ms of latency when
+    /// (`3` — tuned so a 30 Hz consumer sees under 100 ms of latency when
     /// it stalls).
     pub frame_pool_depth: u32,
 }
