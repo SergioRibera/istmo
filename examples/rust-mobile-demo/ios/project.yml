@@ -35,11 +35,9 @@ packages:
   # is three directories up.
   IstmoRuntime:
     path: ../../..
-  # Google Sign-In SDK. Version pinned to match the Android side's
-  # `credentials` release cadence (crates/plugins/src/google_sign_in.rs).
-  GoogleSignIn:
-    url: https://github.com/google/GoogleSignIn-iOS
-    from: 7.1.0
+  # GoogleSignIn-iOS comes from the google-sign-in plugin's
+  # `[[swift_package]]`, declared and linked by the included
+  # `istmo-plugins.yml`.
   # Google Mobile Ads (AdMob) SDK.
   GoogleMobileAds:
     url: https://github.com/googleads/swift-package-manager-google-mobile-ads-ios
@@ -61,8 +59,6 @@ targets:
     dependencies:
       - package: IstmoRuntime
         product: IstmoRuntime
-      - package: GoogleSignIn
-        product: GoogleSignIn
       - package: GoogleMobileAds
         product: GoogleMobileAds
     settings:

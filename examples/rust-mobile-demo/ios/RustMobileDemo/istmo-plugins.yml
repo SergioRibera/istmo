@@ -4,8 +4,15 @@
 #     - path: RustMobileDemo/istmo-plugins.yml
 # xcodegen merges the entries below into your app target; values set
 # in project.yml take precedence over the ones here.
+packages:
+  "GoogleSignIn-iOS":
+    url: "https://github.com/google/GoogleSignIn-iOS.git"
+    from: "7.1.0"
 targets:
   RustMobileDemo:
+    dependencies:
+      - package: "GoogleSignIn-iOS"
+        product: "GoogleSignIn"
     sources:
       - path: "../../../../plugins/google-sign-in/native/ios"
         name: ISTMO_GOOGLE_SIGN_IN
