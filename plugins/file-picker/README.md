@@ -15,7 +15,7 @@ The plugin declares no `[min_versions]`.
 
 ```toml
 [dependencies]
-istmo-file-picker = "0.1.1-alpha.5"
+istmo-file-picker = "0.1.1-alpha.6"
 ```
 
 ## Usage

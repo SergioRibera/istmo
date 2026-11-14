@@ -16,7 +16,7 @@ checked by the app's `build.rs`.
 
 ```toml
 [dependencies]
-istmo-live-activity = "0.1.1-alpha.5"
+istmo-live-activity = "0.1.1-alpha.6"
 ```
 
 ## Usage

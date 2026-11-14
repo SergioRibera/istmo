@@ -21,9 +21,9 @@ the app's `build.rs`.
 
 ```toml
 [dependencies]
-istmo-share = "0.1.1-alpha.5"
+istmo-share = "0.1.1-alpha.6"
 # `ShareFile::from_picked` for files from istmo-file-picker:
-# istmo-share = { version = "0.1.1-alpha.5", features = ["file-picker"] }
+# istmo-share = { version = "0.1.1-alpha.6", features = ["file-picker"] }
 ```
 
 ## Usage

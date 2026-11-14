@@ -42,12 +42,12 @@ links = "battery_plugin"
 [dependencies]
 # `istmo-core` + `istmo-macros` en lugar del facade `istmo`: el facade
 # elige el sabor de activity Android, y esa es decisión de la app.
-istmo-core   = "0.1.1-alpha.5"
-istmo-macros = "0.1.1-alpha.5"
+istmo-core   = "0.1.1-alpha.6"
+istmo-macros = "0.1.1-alpha.6"
 wincode      = { version = "0.6", default-features = false, features = ["derive", "std"] }
 
 [build-dependencies]
-istmo-build = "0.1.1-alpha.5"
+istmo-build = "0.1.1-alpha.6"
 ```
 
 Añade un build script:

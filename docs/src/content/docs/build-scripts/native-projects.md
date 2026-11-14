@@ -108,7 +108,7 @@ pluginManagement {
         gradlePluginPortal()
     }
     plugins {
-        id("io.github.sergioribera.istmo") version "0.1.1-alpha.5" // same as the istmo crates
+        id("io.github.sergioribera.istmo") version "0.1.1-alpha.6" // same as the istmo crates
     }
 }
 ```

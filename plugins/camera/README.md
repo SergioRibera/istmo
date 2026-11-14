@@ -31,7 +31,7 @@ checked by the app's `build.rs`.
 
 ```toml
 [dependencies]
-istmo-camera = "0.1.1-alpha.5"
+istmo-camera = "0.1.1-alpha.6"
 ```
 
 Add the plugin to your runtime:
@@ -203,7 +203,7 @@ Pure-Rust host behind the `desktop` feature:
 
 ```toml
 [dependencies]
-istmo-camera = { version = "0.1.1-alpha.5", features = ["desktop"] }
+istmo-camera = { version = "0.1.1-alpha.6", features = ["desktop"] }
 ```
 
 Backed by [`nokhwa`](https://docs.rs/nokhwa) — V4L2 on Linux,
@@ -233,7 +233,7 @@ return `CameraError::FormatUnsupported`.
 
 ```toml
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-istmo-camera = { version = "0.1.1-alpha.5", features = ["web"] }
+istmo-camera = { version = "0.1.1-alpha.6", features = ["web"] }
 ```
 
 ## Native layer

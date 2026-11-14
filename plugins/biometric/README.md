@@ -21,7 +21,7 @@ checked by the app's `build.rs`.
 
 ```toml
 [dependencies]
-istmo-biometric = "0.1.1-alpha.5"
+istmo-biometric = "0.1.1-alpha.6"
 ```
 
 ## Usage

@@ -18,7 +18,7 @@ the app's `build.rs`.
 
 ```toml
 [dependencies]
-istmo-barcode-scanner = "0.1.1-alpha.5"
+istmo-barcode-scanner = "0.1.1-alpha.6"
 ```
 
 ## Usage
@@ -45,7 +45,7 @@ and its overlay; each `DetectedCode` carries its corners in frame
 pixels. It works wherever the camera does, mobile included.
 
 ```toml
-istmo-barcode-scanner = { version = "0.1.1-alpha.5", features = ["reader-qr"] }
+istmo-barcode-scanner = { version = "0.1.1-alpha.6", features = ["reader-qr"] }
 ```
 
 No symbology is compiled in by default; enable only the ones the app
