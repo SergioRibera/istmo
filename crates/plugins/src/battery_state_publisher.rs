@@ -22,7 +22,7 @@ pub type BatteryStatePublisher = LatestPublisher<BatteryState>;
 impl LatestPublisher<BatteryState> {
     /// Sample the host and publish if the snapshot changed.
     pub fn tick(&mut self) {
-        if let Some(sample) = sample() {
+        if let Some(sample) = host_sample() {
             self.publish_if_changed(sample);
         }
     }
@@ -35,7 +35,8 @@ impl LatestPublisher<BatteryState> {
         reason = "only the unsupported-target body is const"
     )
 )]
-fn sample() -> Option<BatteryState> {
+/// The host's battery snapshot, as `tick` publishes it.
+pub(crate) fn host_sample() -> Option<BatteryState> {
     #[cfg(target_os = "linux")]
     {
         linux::sample()
@@ -343,82 +344,32 @@ fn iops_state(
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use std::ffi::{CStr, c_void};
-
     use objc2::runtime::{AnyClass, AnyObject};
     use objc2::{msg_send, sel};
 
     use super::{BatteryState, IopsBattery, ProvidingSource, iops_state};
+    use crate::macos_power::power_sources;
 
-    #[link(name = "IOKit", kind = "framework")]
-    unsafe extern "C" {
-        fn IOPSCopyPowerSourcesInfo() -> *const c_void;
-        fn IOPSCopyPowerSourcesList(blob: *const c_void) -> *const c_void;
-        fn IOPSGetPowerSourceDescription(
-            blob: *const c_void,
-            source: *const c_void,
-        ) -> *const c_void;
-        fn IOPSGetProvidingPowerSourceType(blob: *const c_void) -> *const c_void;
-    }
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFRelease(cf: *const c_void);
-    }
-
-    /// Runs inside its own pool: the `NSString` keys below are
-    /// autoreleased, and a tick driven from a plain thread would leak
-    /// them otherwise.
     pub(super) fn sample() -> Option<BatteryState> {
-        objc2::rc::autoreleasepool(|_| sample_in_pool())
-    }
-
-    fn sample_in_pool() -> Option<BatteryState> {
-        // SAFETY: returns a +1 CFTypeRef (or NULL) released below.
-        let blob = unsafe { IOPSCopyPowerSourcesInfo() };
-        if blob.is_null() {
-            return None;
-        }
-        // SAFETY: `blob` is the live info blob; the list is a +1
-        // CFArrayRef (toll-free bridged to NSArray) released below.
-        let list = unsafe { IOPSCopyPowerSourcesList(blob) };
-        let mut batteries = Vec::new();
-        if !list.is_null() {
-            let list = list.cast::<AnyObject>().cast_mut();
-            // SAFETY: NSArray reads on a live array.
-            let count: usize = unsafe { msg_send![list, count] };
-            for index in 0..count {
-                // SAFETY: `index < count`; the element is owned by `list`.
-                let source: *mut AnyObject = unsafe { msg_send![list, objectAtIndex: index] };
-                // SAFETY: a "Get" function: the dictionary is owned by
-                // `blob`, which outlives this loop.
-                let description =
-                    unsafe { IOPSGetPowerSourceDescription(blob, source.cast_const().cast()) };
-                // SAFETY: a CFDictionaryRef or NULL, read while `blob` lives.
-                if let Some(battery) = unsafe { internal_battery(description.cast()) } {
-                    batteries.push(battery);
-                }
-            }
-            // SAFETY: balances the Copy above.
-            unsafe { CFRelease(list.cast_const().cast()) };
-        }
-        // SAFETY: "Get" function on the live blob; the string is owned by it.
-        let providing = unsafe { IOPSGetProvidingPowerSourceType(blob) };
-        // SAFETY: a CFStringRef or NULL owned by `blob`.
-        let providing = unsafe {
-            if is_string(providing.cast(), c"AC Power") {
-                ProvidingSource::Ac
-            } else if is_string(providing.cast(), c"Battery Power") {
-                ProvidingSource::Battery
-            } else if is_string(providing.cast(), c"UPS Power") {
-                ProvidingSource::Ups
-            } else {
-                ProvidingSource::Unknown
-            }
+        let snapshot = power_sources()?;
+        let batteries: Vec<IopsBattery> = snapshot
+            .sources
+            .iter()
+            .filter(|source| source.kind == "InternalBattery" && source.present)
+            .map(|source| IopsBattery {
+                current: source.current,
+                max: source.max,
+                charging: source.charging,
+                charged: source.charged,
+                on_ac: source.on_ac,
+            })
+            .collect();
+        let providing = match snapshot.providing.as_deref() {
+            Some("AC Power") => ProvidingSource::Ac,
+            Some("Battery Power") => ProvidingSource::Battery,
+            Some("UPS Power") => ProvidingSource::Ups,
+            _ => ProvidingSource::Unknown,
         };
-        // SAFETY: balances `IOPSCopyPowerSourcesInfo`; nothing read from
-        // the blob is used past this point.
-        unsafe { CFRelease(blob) };
         let (power_saver, thermal_state) = process_power_state();
         Some(iops_state(
             &batteries,
@@ -426,34 +377,6 @@ mod macos {
             power_saver,
             thermal_state,
         ))
-    }
-
-    /// The readings of an internal battery; `None` for a UPS or any
-    /// other kind of source.
-    ///
-    /// # Safety
-    ///
-    /// `description` is NULL or a live `NSDictionary`.
-    unsafe fn internal_battery(description: *const AnyObject) -> Option<IopsBattery> {
-        if description.is_null() {
-            return None;
-        }
-        // SAFETY: forwarded from the caller.
-        unsafe {
-            if !is_string(value(description, c"Type"), c"InternalBattery")
-                || number(description, c"Is Present").is_some_and(|present| present == 0)
-            {
-                return None;
-            }
-            let state = value(description, c"Power Source State");
-            Some(IopsBattery {
-                current: number(description, c"Current Capacity"),
-                max: number(description, c"Max Capacity"),
-                charging: number(description, c"Is Charging").map(|flag| flag != 0),
-                charged: number(description, c"Is Charged").map(|flag| flag != 0),
-                on_ac: (!state.is_null()).then(|| is_string(state, c"AC Power")),
-            })
-        }
     }
 
     /// `NSProcessInfo` low power mode (macOS 12+) and thermal state.
@@ -474,71 +397,6 @@ mod macos {
                 msg_send![info, respondsToSelector: sel!(isLowPowerModeEnabled)];
             let low_power: bool = has_low_power && msg_send![info, isLowPowerModeEnabled];
             (low_power, thermal)
-        }
-    }
-
-    /// `dictionary[key]`, or NULL.
-    ///
-    /// # Safety
-    ///
-    /// `dictionary` is a live `NSDictionary`; call inside an
-    /// autorelease pool.
-    unsafe fn value(dictionary: *const AnyObject, key: &CStr) -> *const AnyObject {
-        let Some(class) = AnyClass::get(c"NSString") else {
-            return std::ptr::null();
-        };
-        // SAFETY: `key` is NUL terminated UTF-8; the receiver is live.
-        unsafe {
-            let key: *mut AnyObject = msg_send![class, stringWithUTF8String: key.as_ptr()];
-            if key.is_null() {
-                return std::ptr::null();
-            }
-            let found: *mut AnyObject = msg_send![dictionary, objectForKey: key];
-            found.cast_const()
-        }
-    }
-
-    /// `dictionary[key]` as an integer, when it is an `NSNumber`
-    /// (`CFNumber` and `CFBoolean` both bridge to it).
-    ///
-    /// # Safety
-    ///
-    /// As [`value`].
-    unsafe fn number(dictionary: *const AnyObject, key: &CStr) -> Option<i64> {
-        let class = AnyClass::get(c"NSNumber")?;
-        // SAFETY: forwarded from the caller.
-        unsafe {
-            let found = value(dictionary, key);
-            if found.is_null() {
-                return None;
-            }
-            let is_number: bool = msg_send![found, isKindOfClass: class];
-            is_number.then(|| msg_send![found, longLongValue])
-        }
-    }
-
-    /// Whether `object` is an `NSString` equal to `expected`.
-    ///
-    /// # Safety
-    ///
-    /// `object` is NULL or a live object; call inside an autorelease
-    /// pool.
-    unsafe fn is_string(object: *const AnyObject, expected: &CStr) -> bool {
-        if object.is_null() {
-            return false;
-        }
-        let Some(class) = AnyClass::get(c"NSString") else {
-            return false;
-        };
-        // SAFETY: the receiver is live; the argument is NUL terminated.
-        unsafe {
-            let is_string: bool = msg_send![object, isKindOfClass: class];
-            if !is_string {
-                return false;
-            }
-            let expected: *mut AnyObject =
-                msg_send![class, stringWithUTF8String: expected.as_ptr()];
-            !expected.is_null() && msg_send![object, isEqualToString: expected]
         }
     }
 }

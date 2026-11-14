@@ -30,12 +30,19 @@ objc2 = "0.6"
 # Network.framework path monitor handlers are blocks.
 block2 = "0.6"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# UPower (every battery it tracks, Bluetooth audio included) for the
+# power devices sampler.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.60", default-features = false, features = [
     "Wdk_System_SystemServices",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_NetworkManagement_IpHelper",

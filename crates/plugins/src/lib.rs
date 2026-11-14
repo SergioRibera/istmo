@@ -67,11 +67,16 @@ pub mod early;
 pub mod lifecycle;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod local_endpoint;
+#[cfg(target_os = "macos")]
+mod macos_power;
 pub mod network_state;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod network_state_publisher;
 pub mod notifications;
 pub mod permissions;
+pub mod power_devices;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub mod power_devices_publisher;
 pub mod safe_area;
 pub mod service;
 pub mod storage_info;
@@ -149,6 +154,12 @@ pub use crate::permissions::{
     PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions, PermissionsClient,
     PermissionsHost,
 };
+pub use crate::power_devices::{
+    POWER_DEVICES_CHANNEL, POWER_DEVICES_PLUGIN_ID, PowerDevice, PowerDeviceKind, PowerDevices,
+    PowerDevicesClient, PowerDevicesStream,
+};
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::power_devices_publisher::PowerDevicesPublisher;
 #[cfg(feature = "winit-publisher")]
 pub use crate::safe_area::SafeAreaPublisher;
 pub use crate::safe_area::{
