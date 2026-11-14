@@ -16,6 +16,7 @@ private let DEVICE_INFO_CHANNEL = "istmo.device_info"
 private let THEME_PREFERENCE_CHANNEL = "istmo.theme_preference"
 private let NETWORK_STATE_CHANNEL = "istmo.network_state"
 private let BATTERY_STATE_CHANNEL = "istmo.battery_state"
+private let POWER_DEVICES_CHANNEL = "istmo.power_devices"
 private let STORAGE_INFO_CHANNEL = "istmo.storage_info"
 private let CAPABILITIES_CHANNEL = "istmo.capabilities"
 private let SAFE_AREA_CHANNEL = "istmo.safe_area"
@@ -92,6 +93,46 @@ public enum ChargingState: UInt64 {
     case discharging = 2
     case notCharging = 3
     case full = 4
+}
+
+public enum PowerDeviceKind: UInt64 {
+    case other = 0
+    case `internal` = 1
+    case ups = 2
+    case mouse = 3
+    case keyboard = 4
+    case touchpad = 5
+    case gamepad = 6
+    case stylus = 7
+    case headphones = 8
+    case speaker = 9
+    case phone = 10
+    case tablet = 11
+    case wearable = 12
+    case remote = 13
+}
+
+/// One entry of `publishPowerDevices`; mirrors `istmo_plugins::PowerDevice`.
+public struct PowerDevice {
+    public var id: String
+    public var name: String?
+    public var kind: PowerDeviceKind
+    public var level: Float?
+    public var charging: ChargingState
+
+    public init(
+        id: String,
+        name: String?,
+        kind: PowerDeviceKind,
+        level: Float?,
+        charging: ChargingState
+    ) {
+        self.id = id
+        self.name = name
+        self.kind = kind
+        self.level = level
+        self.charging = charging
+    }
 }
 
 public enum PowerSource: UInt64 {
@@ -319,6 +360,22 @@ extension IstmoRuntime {
         Bincode.writeBool(&out, powerSaver)
         Bincode.writeVarintU64(&out, thermalState.rawValue)
         publishEarlyLatest(channel: BATTERY_STATE_CHANNEL, payload: out)
+    }
+
+    /// Every battery-backed device, sorted by `id` like the desktop
+    /// samplers.
+    public func publishPowerDevices(_ devices: [PowerDevice]) {
+        var out = Data()
+        let sorted = devices.sorted { $0.id < $1.id }
+        Bincode.writeVarintU64(&out, UInt64(sorted.count))
+        for device in sorted {
+            Bincode.writeString(&out, device.id)
+            writeOptionString(&out, device.name)
+            Bincode.writeVarintU64(&out, device.kind.rawValue)
+            writeOptionF32(&out, device.level)
+            Bincode.writeVarintU64(&out, device.charging.rawValue)
+        }
+        publishEarlyLatest(channel: POWER_DEVICES_CHANNEL, payload: out)
     }
 
     public func publishStorageInfo(

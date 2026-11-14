@@ -19,6 +19,7 @@ private const val DEVICE_INFO_CHANNEL = "istmo.device_info"
 private const val THEME_PREFERENCE_CHANNEL = "istmo.theme_preference"
 private const val NETWORK_STATE_CHANNEL = "istmo.network_state"
 private const val BATTERY_STATE_CHANNEL = "istmo.battery_state"
+private const val POWER_DEVICES_CHANNEL = "istmo.power_devices"
 private const val STORAGE_INFO_CHANNEL = "istmo.storage_info"
 private const val CAPABILITIES_CHANNEL = "istmo.capabilities"
 
@@ -85,6 +86,32 @@ enum class ChargingState(val discriminant: Int) {
     NOT_CHARGING(3),
     FULL(4),
 }
+
+enum class PowerDeviceKind(val discriminant: Int) {
+    OTHER(0),
+    INTERNAL(1),
+    UPS(2),
+    MOUSE(3),
+    KEYBOARD(4),
+    TOUCHPAD(5),
+    GAMEPAD(6),
+    STYLUS(7),
+    HEADPHONES(8),
+    SPEAKER(9),
+    PHONE(10),
+    TABLET(11),
+    WEARABLE(12),
+    REMOTE(13),
+}
+
+/** One entry of [publishPowerDevices]; mirrors `istmo_plugins::PowerDevice`. */
+data class PowerDevice(
+    val id: String,
+    val name: String?,
+    val kind: PowerDeviceKind,
+    val level: Float?,
+    val charging: ChargingState,
+)
 
 enum class PowerSource(val discriminant: Int) {
     UNKNOWN(0),
@@ -297,6 +324,21 @@ fun IstmoRuntime.publishBatteryState(
     Bincode.writeBool(out, powerSaver)
     writeEnum(out, thermalState.discriminant)
     nativeSubmitEarlyLatest(BATTERY_STATE_CHANNEL, out.toByteArray())
+}
+
+/** Every battery-backed device, sorted by `id` like the desktop samplers. */
+fun IstmoRuntime.publishPowerDevices(devices: List<PowerDevice>) {
+    val out = ByteArrayOutputStream()
+    val sorted = devices.sortedBy { it.id }
+    Bincode.writeVarintU64(out, sorted.size.toLong())
+    for (device in sorted) {
+        Bincode.writeString(out, device.id)
+        writeOptionString(out, device.name)
+        writeEnum(out, device.kind.discriminant)
+        writeOptionF32(out, device.level)
+        writeEnum(out, device.charging.discriminant)
+    }
+    nativeSubmitEarlyLatest(POWER_DEVICES_CHANNEL, out.toByteArray())
 }
 
 fun IstmoRuntime.publishStorageInfo(

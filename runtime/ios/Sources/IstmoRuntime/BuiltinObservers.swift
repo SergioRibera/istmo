@@ -18,6 +18,9 @@ import CoreLocation
 #if canImport(CoreHaptics) && os(iOS)
 import CoreHaptics
 #endif
+#if canImport(GameController)
+import GameController
+#endif
 #if canImport(CoreTelephony) && os(iOS)
 import CoreTelephony
 #endif
@@ -601,6 +604,105 @@ public final class IstmoBatteryStateObserver {
     }
 }
 
+/// `publishPowerDevices` from `UIDevice` (the device battery) and
+/// `GCController` (controller batteries, iOS 14+). Other accessories
+/// (AirPods, Apple Pencil, Watch) have no public battery API.
+public final class IstmoPowerDevicesObserver {
+
+    private weak var runtime: IstmoRuntime?
+    private var tokens: [NSObjectProtocol] = []
+    private var timer: Timer?
+
+    /// Controller batteries change without a notification.
+    private static let controllerPollInterval: TimeInterval = 60
+
+    public init(runtime: IstmoRuntime) {
+        self.runtime = runtime
+    }
+
+    public func register() {
+        guard tokens.isEmpty else { return }
+        let center = NotificationCenter.default
+        var names: [Notification.Name] = []
+        #if os(iOS)
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        names += [
+            UIDevice.batteryStateDidChangeNotification,
+            UIDevice.batteryLevelDidChangeNotification,
+        ]
+        #endif
+        #if canImport(GameController)
+        names += [.GCControllerDidConnect, .GCControllerDidDisconnect]
+        #endif
+        for name in names {
+            tokens.append(center.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in self?.publish() })
+        }
+        timer = Timer.scheduledTimer(
+            withTimeInterval: Self.controllerPollInterval, repeats: true
+        ) { [weak self] _ in self?.publish() }
+        publish()
+    }
+
+    public func unregister() {
+        let center = NotificationCenter.default
+        tokens.forEach { center.removeObserver($0) }
+        tokens.removeAll()
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func publish() {
+        guard let runtime = runtime else { return }
+        var devices: [PowerDevice] = []
+        #if os(iOS)
+        let device = UIDevice.current
+        if device.batteryLevel >= 0 {
+            let charging: ChargingState
+            switch device.batteryState {
+            case .charging: charging = .charging
+            case .full: charging = .full
+            case .unplugged: charging = .discharging
+            case .unknown: charging = .unknown
+            @unknown default: charging = .unknown
+            }
+            devices.append(PowerDevice(
+                id: "system",
+                name: nil,
+                kind: .internal,
+                level: device.batteryLevel,
+                charging: charging
+            ))
+        }
+        #endif
+        #if canImport(GameController)
+        if #available(iOS 14.0, macOS 11.0, tvOS 14.0, *) {
+            for controller in GCController.controllers() {
+                let battery = controller.battery
+                let charging: ChargingState
+                switch battery?.batteryState {
+                case .some(.charging): charging = .charging
+                case .some(.discharging): charging = .discharging
+                case .some(.full): charging = .full
+                default: charging = .unknown
+                }
+                devices.append(PowerDevice(
+                    // The controller object lives as long as the
+                    // connection, so its identity names it.
+                    id: "gc:\(ObjectIdentifier(controller).hashValue)",
+                    name: controller.vendorName,
+                    kind: .gamepad,
+                    level: battery.map { max(0, min(1, $0.batteryLevel)) },
+                    charging: charging
+                ))
+            }
+        }
+        #endif
+        runtime.publishPowerDevices(devices)
+    }
+}
+
 /// One-shot `publishStorageInfo` from the user's library directory
 /// `URLResourceKey.volumeAvailableCapacityKey`. Poll on app resume.
 public enum IstmoStorageInfoObserver {
@@ -642,6 +744,7 @@ public final class IstmoBuiltinObservers {
     public let theme: IstmoThemePreferenceObserver
     public let network: IstmoNetworkStateObserver
     public let battery: IstmoBatteryStateObserver
+    public let powerDevices: IstmoPowerDevicesObserver
     private let runtime: IstmoRuntime
 
     public init(runtime: IstmoRuntime) {
@@ -650,6 +753,7 @@ public final class IstmoBuiltinObservers {
         self.theme = IstmoThemePreferenceObserver(runtime: runtime)
         self.network = IstmoNetworkStateObserver(runtime: runtime)
         self.battery = IstmoBatteryStateObserver(runtime: runtime)
+        self.powerDevices = IstmoPowerDevicesObserver(runtime: runtime)
     }
 
     public func registerAll() {
@@ -660,6 +764,7 @@ public final class IstmoBuiltinObservers {
         theme.register()
         network.register()
         battery.register()
+        powerDevices.register()
     }
 
     public func unregisterAll() {
@@ -667,5 +772,6 @@ public final class IstmoBuiltinObservers {
         theme.unregister()
         network.unregister()
         battery.unregister()
+        powerDevices.unregister()
     }
 }

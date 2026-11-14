@@ -7,17 +7,21 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.hardware.input.InputManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.os.StatFs
 import android.os.storage.StorageManager
 import android.provider.Settings
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.view.InputDevice
 import android.view.accessibility.AccessibilityManager
 import java.util.Calendar
 import java.util.Locale as JvmLocale
@@ -498,6 +502,100 @@ class IstmoBatteryStateObserver(private val context: Context) {
 }
 
 /**
+ * `publishPowerDevices` from the sticky `ACTION_BATTERY_CHANGED`
+ * broadcast (the device battery) and, on API 31+, the batteries of
+ * connected input devices (controllers, styluses, …). Republishes on
+ * battery broadcasts and when input devices come, go or change. Other
+ * Bluetooth batteries (headphones, watches) are not public API.
+ */
+class IstmoPowerDevicesObserver(private val context: Context) {
+    private var receiver: BroadcastReceiver? = null
+    private var inputListener: InputManager.InputDeviceListener? = null
+    private val inputManager = context.getSystemService(Context.INPUT_SERVICE) as InputManager
+
+    fun register() {
+        if (receiver != null) return
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(c: Context, intent: Intent) = publish(intent)
+        }
+        context.registerReceiver(r, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        receiver = r
+        val listener = object : InputManager.InputDeviceListener {
+            override fun onInputDeviceAdded(deviceId: Int) = publish(null)
+            override fun onInputDeviceRemoved(deviceId: Int) = publish(null)
+            override fun onInputDeviceChanged(deviceId: Int) = publish(null)
+        }
+        inputManager.registerInputDeviceListener(listener, Handler(Looper.getMainLooper()))
+        inputListener = listener
+        publish(null)
+    }
+
+    fun unregister() {
+        receiver?.let { context.unregisterReceiver(it) }
+        receiver = null
+        inputListener?.let { inputManager.unregisterInputDeviceListener(it) }
+        inputListener = null
+    }
+
+    /** [intent] is the battery broadcast when one triggered the publish. */
+    private fun publish(intent: Intent?) {
+        val devices = mutableListOf<PowerDevice>()
+        @Suppress("DEPRECATION")
+        val battery = intent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val present = battery?.getBooleanExtra(BatteryManager.EXTRA_PRESENT, false) ?: false
+        val levelInt = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scaleInt = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        if (present && levelInt >= 0 && scaleInt > 0) {
+            val status = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+                ?: BatteryManager.BATTERY_STATUS_UNKNOWN
+            devices += PowerDevice(
+                id = "system",
+                name = null,
+                kind = PowerDeviceKind.INTERNAL,
+                level = levelInt.toFloat() / scaleInt,
+                charging = chargingFromStatus(status),
+            )
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            for (id in InputDevice.getDeviceIds()) {
+                val device = InputDevice.getDevice(id) ?: continue
+                if (device.isVirtual) continue
+                val state = device.batteryState
+                if (!state.isPresent) continue
+                val capacity = state.capacity
+                devices += PowerDevice(
+                    id = "input:${device.descriptor}",
+                    name = device.name,
+                    kind = inputKind(device),
+                    level = if (capacity.isNaN()) null else capacity.coerceIn(0f, 1f),
+                    charging = chargingFromStatus(state.status),
+                )
+            }
+        }
+        IstmoRuntime.publishPowerDevices(devices)
+    }
+
+    /** `BatteryManager.BATTERY_STATUS_*` and `BatteryState.STATUS_*` share values. */
+    private fun chargingFromStatus(status: Int): ChargingState = when (status) {
+        BatteryManager.BATTERY_STATUS_CHARGING -> ChargingState.CHARGING
+        BatteryManager.BATTERY_STATUS_DISCHARGING -> ChargingState.DISCHARGING
+        BatteryManager.BATTERY_STATUS_NOT_CHARGING -> ChargingState.NOT_CHARGING
+        BatteryManager.BATTERY_STATUS_FULL -> ChargingState.FULL
+        else -> ChargingState.UNKNOWN
+    }
+
+    private fun inputKind(device: InputDevice): PowerDeviceKind = when {
+        device.supportsSource(InputDevice.SOURCE_GAMEPAD) ||
+            device.supportsSource(InputDevice.SOURCE_JOYSTICK) -> PowerDeviceKind.GAMEPAD
+        device.supportsSource(InputDevice.SOURCE_STYLUS) -> PowerDeviceKind.STYLUS
+        device.supportsSource(InputDevice.SOURCE_TOUCHPAD) -> PowerDeviceKind.TOUCHPAD
+        device.supportsSource(InputDevice.SOURCE_MOUSE) -> PowerDeviceKind.MOUSE
+        device.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC -> PowerDeviceKind.KEYBOARD
+        else -> PowerDeviceKind.OTHER
+    }
+}
+
+/**
  * `publishStorageInfo` sampled from the internal `filesDir` via
  * `StatFs`. Polls once at [publishOnce] — call again on low-storage
  * broadcasts or app resume.
@@ -557,6 +655,7 @@ class IstmoBuiltinObservers(private val context: Context) {
     private val theme = IstmoThemePreferenceObserver(context)
     private val network = IstmoNetworkStateObserver(context)
     private val battery = IstmoBatteryStateObserver(context)
+    private val powerDevices = IstmoPowerDevicesObserver(context)
 
     fun registerAll() {
         safely("device-info one-shot") { IstmoDeviceInfoObserver.publishOnce(context) }
@@ -570,6 +669,7 @@ class IstmoBuiltinObservers(private val context: Context) {
         // plugin is not wired.
         safely("network-state observer") { network.register() }
         safely("battery-state observer") { battery.register() }
+        safely("power-devices observer") { powerDevices.register() }
     }
 
     fun unregisterAll() {
@@ -577,6 +677,7 @@ class IstmoBuiltinObservers(private val context: Context) {
         safely("theme-preference observer") { theme.unregister() }
         safely("network-state observer") { network.unregister() }
         safely("battery-state observer") { battery.unregister() }
+        safely("power-devices observer") { powerDevices.unregister() }
     }
 
     private inline fun safely(label: String, block: () -> Unit) {
