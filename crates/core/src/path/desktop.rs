@@ -109,7 +109,7 @@ fn resolve_for_os(id: &str) -> PlatformPaths {
         config_dir: app_support.clone(),
         config_local_dir: app_support.clone(),
         cache_dir: caches,
-        state_dir: app_support.clone(),
+        state_dir: app_support,
         preference_dir: prefs,
         documents_dir: home.join("Documents"),
         runtime_dir: std::env::temp_dir(),
