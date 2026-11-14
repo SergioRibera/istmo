@@ -1,6 +1,6 @@
 [package]
 name = "istmo-lint-check"
-version = "0.0.0"
+version = "0.1.1-alpha.6"
 description = "Compiles every istmo macro shape and generated Rust under a strict downstream lint set; never published."
 publish = false
 edition.workspace = true

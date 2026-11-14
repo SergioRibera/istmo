@@ -80,28 +80,28 @@ syn = { version = "2", default-features = false, features = [
 jni = { version = "0.21", default-features = false }
 toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
-istmo-core = { path = "crates/core", version = "0.1.1-alpha.5" }
-istmo-build = { path = "crates/build", version = "0.1.1-alpha.5" }
-istmo-macros = { path = "crates/macros", version = "0.1.1-alpha.5" }
+istmo-core = { path = "crates/core", version = "0.1.1-alpha.6" }
+istmo-build = { path = "crates/build", version = "0.1.1-alpha.6" }
+istmo-macros = { path = "crates/macros", version = "0.1.1-alpha.6" }
 # Default features off: the facade forwards exactly one activity flavor.
-istmo-android = { path = "crates/android", version = "0.1.1-alpha.5", default-features = false }
-istmo-ios = { path = "crates/ios", version = "0.1.1-alpha.5" }
-istmo-plugins = { path = "crates/plugins", version = "0.1.1-alpha.5" }
-istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.1.1-alpha.5" }
-istmo-window = { path = "crates/window", version = "0.1.1-alpha.5" }
+istmo-android = { path = "crates/android", version = "0.1.1-alpha.6", default-features = false }
+istmo-ios = { path = "crates/ios", version = "0.1.1-alpha.6" }
+istmo-plugins = { path = "crates/plugins", version = "0.1.1-alpha.6" }
+istmo-plugins-schema = { path = "crates/plugins-schema", version = "0.1.1-alpha.6" }
+istmo-window = { path = "crates/window", version = "0.1.1-alpha.6" }
 
-istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.1.1-alpha.5" }
-istmo-data-store = { path = "plugins/data-store", version = "0.1.1-alpha.5" }
-istmo-live-activity = { path = "plugins/live-activity", version = "0.1.1-alpha.5" }
-istmo-pen = { path = "plugins/istmo-pen", version = "0.1.1-alpha.5" }
-istmo-file-picker = { path = "plugins/file-picker", version = "0.1.1-alpha.5" }
-istmo-share = { path = "plugins/share", version = "0.1.1-alpha.5" }
-istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.5" }
-istmo-camera = { path = "plugins/camera", version = "0.1.1-alpha.5" }
+istmo-google-sign-in = { path = "plugins/google-sign-in", version = "0.1.1-alpha.6" }
+istmo-data-store = { path = "plugins/data-store", version = "0.1.1-alpha.6" }
+istmo-live-activity = { path = "plugins/live-activity", version = "0.1.1-alpha.6" }
+istmo-pen = { path = "plugins/istmo-pen", version = "0.1.1-alpha.6" }
+istmo-file-picker = { path = "plugins/file-picker", version = "0.1.1-alpha.6" }
+istmo-share = { path = "plugins/share", version = "0.1.1-alpha.6" }
+istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.6" }
+istmo-camera = { path = "plugins/camera", version = "0.1.1-alpha.6" }
 
 [package]
 name = "istmo"
-version = "0.1.1-alpha.5"
+version = "0.1.1-alpha.6"
 description = "Rust ↔ mobile native interop framework — write shared Rust code, ship it to Android + iOS through a typed plugin contract."
 edition.workspace = true
 rust-version.workspace = true
