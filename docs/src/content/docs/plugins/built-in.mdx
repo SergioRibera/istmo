@@ -272,8 +272,8 @@ storage.tick();
 | `SystemInfoPublisher` | `tick()`, every frame is fine | environment + `/etc/localtime` | Foundation | Win32 locale / time-zone APIs |
 | `DeviceInfoPublisher` | `publish()` once | RAM, kernel release | OS version | RAM, OS version |
 | `ThemePreferencePublisher` | `tick()`, samples at most every 2 s | `gsettings` | `defaults read` | registry `AppsUseLightTheme` |
-| `NetworkStatePublisher` | `tick()` | `/proc/net/route` + `/sys/class/net` | — | `GetAdaptersAddresses` |
-| `BatteryStatePublisher` | `tick()` | `/sys/class/power_supply` | — | `GetSystemPowerStatus` |
+| `NetworkStatePublisher` | `tick()` | `/proc/net/route` + `/sys/class/net` | Network.framework `nw_path_monitor` | `GetAdaptersAddresses` |
+| `BatteryStatePublisher` | `tick()` | `/sys/class/power_supply` | IOKit `IOPSCopyPowerSourcesInfo` + `NSProcessInfo` | `GetSystemPowerStatus` |
 | `StorageInfoPublisher` | `tick()` | `statvfs` | `statvfs` | `GetDiskFreeSpaceExW` |
 | `CapabilitiesPublisher` | `publish()` once | `/sys` + `/dev` probes | all `false` | all `false` |
 
@@ -281,7 +281,6 @@ The theme publisher only fills `color_scheme`; the other fields keep
 their defaults. The time-zone sample reports the zone id with
 `offset_seconds = 0` and `is_dst = false` on Linux. Storage reads the
 volume holding the working directory and leaves `external` as `None`.
-Where a cell says "—" the publisher publishes nothing.
 
 ## Calls
 

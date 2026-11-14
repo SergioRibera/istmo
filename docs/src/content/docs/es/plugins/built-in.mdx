@@ -274,16 +274,15 @@ storage.tick();
 | `SystemInfoPublisher` | `tick()`, sirve en cada frame | entorno + `/etc/localtime` | Foundation | APIs Win32 de locale / zona horaria |
 | `DeviceInfoPublisher` | `publish()` una vez | RAM, versión del kernel | versión del SO | RAM, versión del SO |
 | `ThemePreferencePublisher` | `tick()`, muestrea como mucho cada 2 s | `gsettings` | `defaults read` | registro `AppsUseLightTheme` |
-| `NetworkStatePublisher` | `tick()` | `/proc/net/route` + `/sys/class/net` | — | `GetAdaptersAddresses` |
-| `BatteryStatePublisher` | `tick()` | `/sys/class/power_supply` | — | `GetSystemPowerStatus` |
+| `NetworkStatePublisher` | `tick()` | `/proc/net/route` + `/sys/class/net` | Network.framework `nw_path_monitor` | `GetAdaptersAddresses` |
+| `BatteryStatePublisher` | `tick()` | `/sys/class/power_supply` | IOKit `IOPSCopyPowerSourcesInfo` + `NSProcessInfo` | `GetSystemPowerStatus` |
 | `StorageInfoPublisher` | `tick()` | `statvfs` | `statvfs` | `GetDiskFreeSpaceExW` |
 | `CapabilitiesPublisher` | `publish()` una vez | sondeos de `/sys` + `/dev` | todo `false` | todo `false` |
 
 El publicador de tema solo rellena `color_scheme`; el resto de campos
 queda con su valor por defecto. En Linux la zona horaria lleva el id con
 `offset_seconds = 0` e `is_dst = false`. El almacenamiento lee el
-volumen del directorio de trabajo y deja `external` en `None`. Donde la
-celda dice "—" el publicador no publica nada.
+volumen del directorio de trabajo y deja `external` en `None`.
 
 ## Llamadas
 
