@@ -15,7 +15,7 @@ the user backs out.
 | -------- | ------- | ------- |
 | Android | Google code scanner (`play-services-code-scanner`) | API 21 |
 | iOS | `AVCaptureSession` + `AVCaptureMetadataOutput` | 14.0 |
-| Desktop | `DesktopBarcodeScanner` — always `ScanError::Unavailable` | — |
+| Desktop, web | `DesktopBarcodeScanner` — always `ScanError::Unavailable`; draw your own scanner with [`BarcodeReader`](#app-drawn-scanner) | — |
 
 The minimums are declared in the plugin's `[min_versions]` and checked
 at build time (see [istmo.toml reference](/istmo/build-scripts/istmo-toml-reference/#min_versions)).
@@ -116,9 +116,9 @@ and presents over the top view controller. `istmo-build` adds
 [`[app.info_plist]`](/istmo/build-scripts/istmo-toml-reference/#appinfo_plist)
 in the app's `istmo.toml`.
 
-**Desktop** — there is no camera scanner; `DesktopBarcodeScanner`
-answers every scan with `ScanError::Unavailable`, so offer a paste
-field instead. Register it so calls resolve instead of waiting for a
+**Desktop** — there is no platform scanner UI; `DesktopBarcodeScanner`
+answers every scan with `ScanError::Unavailable`. Draw your own scanner
+(below) or offer a paste field. Register it so calls resolve instead of waiting for a
 native side:
 
 ```rust
@@ -126,6 +126,40 @@ use istmo_barcode_scanner::{BarcodeScannerHost, DesktopBarcodeScanner};
 
 runtime.register_host(BarcodeScannerHost::new(DesktopBarcodeScanner));
 ```
+
+## App-drawn scanner
+
+The `reader` feature adds `BarcodeReader`, a pure-Rust decoder (`rxing`)
+for the frames of an [`istmo-camera`](/istmo/plugins/camera/) session. The
+app opens the camera, draws the preview and its own overlay, and passes
+each frame to the reader. It runs wherever the camera does, mobile
+included, so one scanner UI covers every platform.
+
+```toml
+istmo-barcode-scanner = { version = "0.1.1-alpha.5", features = ["reader"] }
+```
+
+```rust
+use istmo_barcode_scanner::{BarcodeFormat, BarcodeReader};
+
+let reader = BarcodeReader::default().with_formats([BarcodeFormat::Qr]);
+for detected in reader.read(&frame)? {
+    // Frame pixels, in the buffer's orientation: rotate them by
+    // `frame.rotation_degrees` like the preview.
+    draw_outline(&detected.corners);
+    println!("{}", detected.code.text);
+}
+```
+
+- `read` returns every code in the frame, or an empty list. It takes
+  NV21, YUV 4:2:0, RGBA and BGRA frames; JPEG frames fail with
+  `ReadError::UnsupportedPixelFormat`.
+- `corners` holds four corners for most 2D codes (QR codes report their
+  finder patterns and, when found, the alignment pattern) and the two
+  ends of the scan line for 1D codes.
+- A pass blocks for a few milliseconds at preview resolutions;
+  `with_try_harder(true)` finds small or skewed codes at a higher
+  cost. Run it off the UI thread and skip frames while a pass runs.
 
 ## Wire types
 

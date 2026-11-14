@@ -15,7 +15,7 @@ de la plataforma y resuelve con el primer código que lee, o con
 | ---------- | ------- | ------ |
 | Android | Google code scanner (`play-services-code-scanner`) | API 21 |
 | iOS | `AVCaptureSession` + `AVCaptureMetadataOutput` | 14.0 |
-| Escritorio | `DesktopBarcodeScanner` — siempre `ScanError::Unavailable` | — |
+| Escritorio, web | `DesktopBarcodeScanner` — siempre `ScanError::Unavailable`; dibuja tu propio escáner con [`BarcodeReader`](#escáner-dibujado-por-la-app) | — |
 
 Los mínimos están declarados en el `[min_versions]` del plugin y se
 comprueban al compilar (ver la [referencia de istmo.toml](/istmo/es/build-scripts/istmo-toml-reference/#min_versions)).
@@ -120,9 +120,10 @@ texto con
 [`[app.info_plist]`](/istmo/es/build-scripts/istmo-toml-reference/#appinfo_plist)
 en el `istmo.toml` de la app.
 
-**Escritorio** — no hay escáner de cámara; `DesktopBarcodeScanner`
-responde a cada escaneo con `ScanError::Unavailable`, así que ofrece
-un campo para pegar el código. Regístralo para que las llamadas se
+**Escritorio** — no hay interfaz de escáner del sistema;
+`DesktopBarcodeScanner` responde a cada escaneo con
+`ScanError::Unavailable`. Dibuja tu propio escáner (abajo) u ofrece un
+campo para pegar el código. Regístralo para que las llamadas se
 resuelvan en lugar de esperar a un lado nativo:
 
 ```rust
@@ -130,6 +131,42 @@ use istmo_barcode_scanner::{BarcodeScannerHost, DesktopBarcodeScanner};
 
 runtime.register_host(BarcodeScannerHost::new(DesktopBarcodeScanner));
 ```
+
+## Escáner dibujado por la app
+
+La feature `reader` agrega `BarcodeReader`, un decodificador en Rust puro
+(`rxing`) para los frames de una sesión de
+[`istmo-camera`](/istmo/es/plugins/camera/). La app abre la cámara, dibuja
+la vista previa y su propia superposición, y le pasa cada frame al
+lector. Funciona donde funcione la cámara, móvil incluido, así que una
+sola interfaz de escáner sirve para todas las plataformas.
+
+```toml
+istmo-barcode-scanner = { version = "0.1.1-alpha.5", features = ["reader"] }
+```
+
+```rust
+use istmo_barcode_scanner::{BarcodeFormat, BarcodeReader};
+
+let reader = BarcodeReader::default().with_formats([BarcodeFormat::Qr]);
+for detected in reader.read(&frame)? {
+    // Píxeles del frame, en la orientación del buffer: rótalos
+    // `frame.rotation_degrees` igual que la vista previa.
+    draw_outline(&detected.corners);
+    println!("{}", detected.code.text);
+}
+```
+
+- `read` devuelve todos los códigos del frame, o una lista vacía. Acepta
+  frames NV21, YUV 4:2:0, RGBA y BGRA; los frames JPEG fallan con
+  `ReadError::UnsupportedPixelFormat`.
+- `corners` trae cuatro esquinas en la mayoría de los códigos 2D (los QR
+  reportan sus patrones de búsqueda y, si lo encuentra, el de
+  alineación) y los dos extremos de la línea de escaneo en los 1D.
+- Una pasada bloquea unos milisegundos a resolución de vista previa;
+  `with_try_harder(true)` encuentra códigos chicos o torcidos a mayor
+  costo. Córrelo fuera del hilo de UI y salta frames mientras una
+  pasada está en curso.
 
 ## Tipos de wire
 
