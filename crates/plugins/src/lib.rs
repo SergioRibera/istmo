@@ -92,6 +92,7 @@ pub mod worker;
 pub use crate::activity_results::{
     ACTIVITY_RESULTS_PLUGIN_ID, ActivityLaunchError, ActivityOutcome, ActivityResult,
     ActivityResults, ActivityResultsClient, ActivityResultsHost, ExtraValue, IntentRequest,
+    UnavailableActivityResults,
 };
 pub use crate::admob::slot::{
     BannerSlot, BoxFuture as BannerSlotBoxFuture, SlotStatus, SlotTarget,
@@ -99,7 +100,7 @@ pub use crate::admob::slot::{
 };
 pub use crate::admob::{
     ADMOB_PLUGIN_ID, AdError, AdMob, AdMobClient, AdMobConfig, AdMobHost, Banner, BannerRect,
-    BannerRequest, Interstitial, InterstitialOutcome, Rewarded, RewardedOutcome,
+    BannerRequest, Interstitial, InterstitialOutcome, Rewarded, RewardedOutcome, UnavailableAdMob,
 };
 pub use crate::battery_state::{
     BATTERY_STATE_CHANNEL, BATTERY_STATE_PLUGIN_ID, BatteryState, BatteryStateClient,
@@ -167,8 +168,8 @@ pub use crate::safe_area::{
 };
 pub use crate::service::{
     NotificationSpec, SERVICE_CONTROL_PLUGIN_ID, ServiceContext, ServiceControl,
-    ServiceControlClient, ServiceControlError, ServiceControlHost, StopNotifier, WakeLock,
-    WakelockToken, stop_channel,
+    ServiceControlClient, ServiceControlError, ServiceControlHost, StopNotifier,
+    UnavailableServiceControl, WakeLock, WakelockToken, stop_channel,
 };
 pub use crate::storage_info::{
     ExternalMedium, ExternalStorage, STORAGE_INFO_CHANNEL, STORAGE_INFO_PLUGIN_ID, StorageInfo,
@@ -186,7 +187,7 @@ pub use crate::system_info::{
 };
 pub use crate::task_scheduler::{
     ExistingWorkPolicy, TASK_SCHEDULER_PLUGIN_ID, TaskHandle, TaskRequest, TaskScheduler,
-    TaskSchedulerClient, TaskSchedulerError, TaskSchedulerHost,
+    TaskSchedulerClient, TaskSchedulerError, TaskSchedulerHost, UnavailableTaskScheduler,
 };
 pub use crate::theme_preference::{
     Color, ColorScheme, THEME_PREFERENCE_CHANNEL, THEME_PREFERENCE_PLUGIN_ID, ThemePreference,

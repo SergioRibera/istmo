@@ -270,3 +270,60 @@ pub trait LiveActivity {
         activity_type: String,
     ) -> Result<Vec<RestoredActivity>, ActivityError>;
 }
+
+/// Host for platforms without live activities (desktop, web): no
+/// activity is ever enabled or restored, and starting, updating or
+/// ending one fails with [`ActivityError::NotSupported`].
+///
+/// ```rust,ignore
+/// runtime.register_host(LiveActivityHost::new(UnavailableLiveActivity));
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnavailableLiveActivity;
+
+impl LiveActivity for UnavailableLiveActivity {
+    async fn start(
+        &self,
+        _activity_type: String,
+        _attributes: Vec<u8>,
+        _initial_state: Vec<u8>,
+        _style: ActivityStyle,
+        _stale_after_seconds: Option<u32>,
+        _android_tier_hint: Option<AndroidTierHint>,
+    ) -> Result<istmo_core::NativeHandleId, ActivityError> {
+        Err(ActivityError::NotSupported)
+    }
+
+    async fn update(
+        &self,
+        _handle: istmo_core::NativeHandleId,
+        _state: Vec<u8>,
+        _alert: Option<AlertConfig>,
+    ) -> Result<(), ActivityError> {
+        Err(ActivityError::NotSupported)
+    }
+
+    async fn end(
+        &self,
+        _handle: istmo_core::NativeHandleId,
+        _final_state: Option<Vec<u8>>,
+        _dismissal: DismissalPolicy,
+    ) -> Result<(), ActivityError> {
+        Err(ActivityError::NotSupported)
+    }
+
+    async fn are_activities_enabled(&self) -> Result<bool, ActivityError> {
+        Ok(false)
+    }
+
+    async fn capabilities(&self) -> Result<PlatformCapabilities, ActivityError> {
+        Err(ActivityError::NotSupported)
+    }
+
+    async fn restore_active(
+        &self,
+        _activity_type: String,
+    ) -> Result<Vec<RestoredActivity>, ActivityError> {
+        Ok(Vec::new())
+    }
+}

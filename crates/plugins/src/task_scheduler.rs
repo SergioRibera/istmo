@@ -71,3 +71,39 @@ pub trait TaskScheduler {
 
     async fn cancel_by_unique_name(&self, name: String) -> Result<(), TaskSchedulerError>;
 }
+
+/// Host for platforms without a background task scheduler (desktop,
+/// web): every call fails with [`TaskSchedulerError::Platform`] naming
+/// the missing backend.
+///
+/// ```rust,ignore
+/// runtime.register_host(TaskSchedulerHost::new(UnavailableTaskScheduler));
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnavailableTaskScheduler;
+
+impl UnavailableTaskScheduler {
+    fn error() -> TaskSchedulerError {
+        TaskSchedulerError::Platform(
+            "background task scheduling is not available on this platform".to_owned(),
+        )
+    }
+}
+
+impl TaskScheduler for UnavailableTaskScheduler {
+    async fn enqueue(&self, _request: TaskRequest) -> Result<TaskHandle, TaskSchedulerError> {
+        Err(Self::error())
+    }
+
+    async fn cancel(&self, _handle: TaskHandle) -> Result<(), TaskSchedulerError> {
+        Err(Self::error())
+    }
+
+    async fn cancel_by_tag(&self, _tag: String) -> Result<(), TaskSchedulerError> {
+        Err(Self::error())
+    }
+
+    async fn cancel_by_unique_name(&self, _name: String) -> Result<(), TaskSchedulerError> {
+        Err(Self::error())
+    }
+}

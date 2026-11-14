@@ -335,3 +335,26 @@ fn restore_twice_does_not_hand_out_an_owned_handle_again() {
     released.sort_by_key(|id| id.0);
     assert_eq!(released, vec![NativeHandleId(10), NativeHandleId(11)]);
 }
+
+#[test]
+fn unavailable_host_reports_no_live_activities() {
+    use istmo_live_activity::{LiveActivityHost, UnavailableLiveActivity};
+
+    let rt = Runtime::mock()
+        .host(LiveActivityHost::new(UnavailableLiveActivity))
+        .runtime;
+    let client = LiveActivityClient::from_runtime(&rt).expect("declared");
+    assert!(!pollster::block_on(client.are_activities_enabled()).unwrap());
+    assert_eq!(
+        pollster::block_on(client.restore_active("timer".to_owned())).unwrap(),
+        Vec::new()
+    );
+    let err = pollster::block_on(client.capabilities()).unwrap_err();
+    let istmo_core::IstmoError::PluginError { bytes } = err else {
+        panic!("expected a domain error, got {err:?}");
+    };
+    assert_eq!(
+        codec::decode::<ActivityError>(&bytes).unwrap().0,
+        ActivityError::NotSupported
+    );
+}

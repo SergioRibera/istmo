@@ -69,3 +69,18 @@ impl std::error::Error for ActivityLaunchError {}
 pub trait ActivityResults {
     async fn launch(&self, request: IntentRequest) -> Result<ActivityResult, ActivityLaunchError>;
 }
+
+/// Host for platforms without Android activities (desktop, iOS, web):
+/// every launch fails with [`ActivityLaunchError::NoActivityFound`].
+///
+/// ```rust,ignore
+/// runtime.register_host(ActivityResultsHost::new(UnavailableActivityResults));
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnavailableActivityResults;
+
+impl ActivityResults for UnavailableActivityResults {
+    async fn launch(&self, _request: IntentRequest) -> Result<ActivityResult, ActivityLaunchError> {
+        Err(ActivityLaunchError::NoActivityFound)
+    }
+}

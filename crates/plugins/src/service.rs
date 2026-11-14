@@ -127,6 +127,70 @@ pub trait ServiceControl {
     async fn stop_self(&self, service_id: String) -> Result<(), ServiceControlError>;
 }
 
+/// Host for platforms without foreground services (desktop, web):
+/// every call fails with [`ServiceControlError::Platform`] naming the
+/// missing backend.
+///
+/// ```rust,ignore
+/// runtime.register_host(ServiceControlHost::new(UnavailableServiceControl));
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnavailableServiceControl;
+
+impl UnavailableServiceControl {
+    fn error() -> ServiceControlError {
+        ServiceControlError::Platform(
+            "foreground services are not available on this platform".to_owned(),
+        )
+    }
+}
+
+impl ServiceControl for UnavailableServiceControl {
+    async fn start_foreground(
+        &self,
+        _service_id: String,
+        _spec: NotificationSpec,
+    ) -> Result<(), ServiceControlError> {
+        Err(Self::error())
+    }
+
+    async fn update_notification(
+        &self,
+        _service_id: String,
+        _spec: NotificationSpec,
+    ) -> Result<(), ServiceControlError> {
+        Err(Self::error())
+    }
+
+    async fn stop_foreground(
+        &self,
+        _service_id: String,
+        _remove_notification: bool,
+    ) -> Result<(), ServiceControlError> {
+        Err(Self::error())
+    }
+
+    async fn acquire_wakelock(
+        &self,
+        _service_id: String,
+        _tag: String,
+    ) -> Result<WakelockToken, ServiceControlError> {
+        Err(Self::error())
+    }
+
+    async fn release_wakelock(
+        &self,
+        _service_id: String,
+        _token: WakelockToken,
+    ) -> Result<(), ServiceControlError> {
+        Err(Self::error())
+    }
+
+    async fn stop_self(&self, _service_id: String) -> Result<(), ServiceControlError> {
+        Err(Self::error())
+    }
+}
+
 /// Sending half of a service's stop signal.
 #[derive(Debug, Clone)]
 pub struct StopNotifier {

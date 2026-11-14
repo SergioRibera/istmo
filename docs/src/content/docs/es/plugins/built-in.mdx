@@ -337,6 +337,22 @@ fn main() {
 Los métodos de los clientes devuelven `Result<T, IstmoError>`; un error
 de dominio del backend llega como `IstmoError::PluginError { bytes }`.
 
+En plataformas sin la función, registra el host `Unavailable*`
+correspondiente para que las llamadas fallen con un error tipado en vez
+de esperar a un lado nativo que no existe:
+
+| Host | Respuesta |
+| ---- | --------- |
+| `AdMobHost::new(UnavailableAdMob)` | `AdError::Internal` |
+| `ActivityResultsHost::new(UnavailableActivityResults)` | `ActivityLaunchError::NoActivityFound` |
+| `TaskSchedulerHost::new(UnavailableTaskScheduler)` | `TaskSchedulerError::Platform` |
+| `ServiceControlHost::new(UnavailableServiceControl)` | `ServiceControlError::Platform` |
+| `LiveActivityHost::new(UnavailableLiveActivity)` (`istmo-live-activity`) | `ActivityError::NotSupported`; nunca habilitado, nada que restaurar |
+
+```rust
+runtime.register_host(TaskSchedulerHost::new(UnavailableTaskScheduler));
+```
+
 ### Permisos
 
 `PermissionsClient`:

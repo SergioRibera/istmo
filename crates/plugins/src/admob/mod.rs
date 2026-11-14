@@ -137,3 +137,61 @@ impl AdMobClient {
         self.hide_banner(id).await
     }
 }
+
+/// Host for platforms without Google Mobile Ads (desktop, web): every
+/// call fails with [`AdError::Internal`] naming the missing backend, so
+/// [`AdMobClient`] calls resolve instead of waiting for a native side.
+///
+/// ```rust,ignore
+/// runtime.register_host(AdMobHost::new(UnavailableAdMob));
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnavailableAdMob;
+
+impl UnavailableAdMob {
+    fn error() -> AdError {
+        AdError::Internal("Google Mobile Ads is not available on this platform".to_owned())
+    }
+}
+
+impl AdMobFactory for UnavailableAdMob {
+    type Instance = Self;
+
+    fn create(&self, _config: AdMobConfig) -> Self {
+        Self
+    }
+}
+
+impl AdMob for UnavailableAdMob {
+    async fn load_interstitial(&self, _ad_unit_id: String) -> Result<NativeHandleId, AdError> {
+        Err(Self::error())
+    }
+
+    async fn show_interstitial(&self, _ad: NativeHandleId) -> Result<InterstitialOutcome, AdError> {
+        Err(Self::error())
+    }
+
+    async fn load_rewarded(&self, _ad_unit_id: String) -> Result<NativeHandleId, AdError> {
+        Err(Self::error())
+    }
+
+    async fn show_rewarded(&self, _ad: NativeHandleId) -> Result<RewardedOutcome, AdError> {
+        Err(Self::error())
+    }
+
+    async fn show_banner(&self, _request: BannerRequest) -> Result<NativeHandleId, AdError> {
+        Err(Self::error())
+    }
+
+    async fn update_banner(
+        &self,
+        _banner: NativeHandleId,
+        _rect: BannerRect,
+    ) -> Result<(), AdError> {
+        Err(Self::error())
+    }
+
+    async fn hide_banner(&self, _banner: NativeHandleId) -> Result<(), AdError> {
+        Err(Self::error())
+    }
+}
