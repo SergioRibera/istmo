@@ -11,7 +11,7 @@
 //!   and `ProcessInfo.thermalState`.
 //! - Desktop: `BatteryStatePublisher` —
 //!   `/sys/class/power_supply` on Linux, `GetSystemPowerStatus` on
-//!   Windows; nothing on macOS.
+//!   Windows, `IOKit` power sources + `NSProcessInfo` on macOS.
 //!
 //! No special permissions are required on any platform.
 

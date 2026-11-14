@@ -26,6 +26,10 @@ tracing = { workspace = true }
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos", target_os = "macos"))'.dependencies]
 objc2 = "0.6"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Network.framework path monitor handlers are blocks.
+block2 = "0.6"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

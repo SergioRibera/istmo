@@ -9,7 +9,8 @@
 //!   `NWPathMonitor`.
 //! - Desktop: `NetworkStatePublisher` —
 //!   `/proc/net/route` + `/sys/class/net` on Linux,
-//!   `GetAdaptersAddresses` on Windows; nothing on macOS.
+//!   `GetAdaptersAddresses` on Windows, Network.framework
+//!   (`nw_path_monitor`) on macOS.
 
 use istmo_macros::message;
 

@@ -6,11 +6,11 @@
 //! - Windows walks `GetAdaptersAddresses`: an adapter that is up, has a
 //!   gateway and is neither loopback nor a tunnel pseudo-interface makes
 //!   the host online, and the best-ranked such adapter names the link.
-//! - macOS has no sampler: `tick` publishes nothing there. Publish the
-//!   snapshot yourself through `Runtime::publish_early_latest` if you
-//!   need it.
+//! - macOS runs a Network.framework `nw_path_monitor` (the source the
+//!   iOS observer uses too) and reads the path it last reported,
+//!   including the expensive and constrained (Low Data Mode) flags.
 
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", test))]
 use super::network_state::LinkKind;
 use super::network_state::NetworkState;
 use crate::early::LatestPublisher;
@@ -28,7 +28,7 @@ impl LatestPublisher<NetworkState> {
 }
 
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "windows")),
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
     expect(
         clippy::missing_const_for_fn,
         reason = "only the unsupported-target body is const"
@@ -43,7 +43,11 @@ fn sample() -> Option<NetworkState> {
     {
         windows::sample()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::sample()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         None
     }
@@ -245,6 +249,185 @@ mod windows {
     }
 }
 
+/// `nw_interface_type_t` of the path's preferred interface.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NwInterfaceType {
+    Other,
+    Wifi,
+    Cellular,
+    Wired,
+    Loopback,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl NwInterfaceType {
+    const fn from_raw(raw: i32) -> Self {
+        match raw {
+            1 => Self::Wifi,
+            2 => Self::Cellular,
+            3 => Self::Wired,
+            4 => Self::Loopback,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// Link kind of the path's preferred interface. Tunnels report
+/// `other`, so the BSD name tells a VPN apart.
+#[cfg(any(target_os = "macos", test))]
+fn nw_link(kind: NwInterfaceType, name: &str) -> LinkKind {
+    const TUNNELS: [&str; 5] = ["utun", "ipsec", "ppp", "tun", "tap"];
+    if TUNNELS.iter().any(|prefix| name.starts_with(prefix)) {
+        return LinkKind::Vpn;
+    }
+    match kind {
+        NwInterfaceType::Wifi => LinkKind::Wifi,
+        NwInterfaceType::Cellular => LinkKind::Cellular,
+        NwInterfaceType::Wired => LinkKind::Ethernet,
+        NwInterfaceType::Other | NwInterfaceType::Loopback => LinkKind::Other,
+    }
+}
+
+/// Network.framework path monitor, the same source as the iOS
+/// observer. The monitor runs for the rest of the process once the
+/// first `tick` starts it; `tick` reads the path it last reported.
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::ffi::{CStr, c_char, c_int, c_void};
+    use std::sync::{Condvar, Mutex, Once};
+    use std::time::Duration;
+
+    use block2::{Block, RcBlock, StackBlock};
+    use istmo_core::sync::lock;
+
+    use super::{LinkKind, NetworkState, NwInterfaceType, nw_link};
+
+    /// How long the first `tick` waits for the monitor's first report.
+    const FIRST_PATH_WAIT: Duration = Duration::from_millis(500);
+    /// `nw_path_status_satisfied`.
+    const STATUS_SATISFIED: c_int = 1;
+
+    #[link(name = "Network", kind = "framework")]
+    unsafe extern "C" {
+        fn nw_path_monitor_create() -> *mut c_void;
+        fn nw_path_monitor_set_queue(monitor: *mut c_void, queue: *mut c_void);
+        fn nw_path_monitor_set_update_handler(
+            monitor: *mut c_void,
+            handler: &Block<dyn Fn(*mut c_void)>,
+        );
+        fn nw_path_monitor_start(monitor: *mut c_void);
+        fn nw_path_get_status(path: *mut c_void) -> c_int;
+        fn nw_path_is_expensive(path: *mut c_void) -> bool;
+        fn nw_path_is_constrained(path: *mut c_void) -> bool;
+        fn nw_path_enumerate_interfaces(
+            path: *mut c_void,
+            // The block returns a C `bool`; `u8` has its ABI (objc2 encodes no
+            // Rust `bool`).
+            enumerator: &Block<dyn Fn(*mut c_void) -> u8 + '_>,
+        );
+        fn nw_interface_get_type(interface: *mut c_void) -> c_int;
+        fn nw_interface_get_name(interface: *mut c_void) -> *const c_char;
+    }
+
+    // libdispatch is part of libSystem.
+    unsafe extern "C" {
+        fn dispatch_queue_create(label: *const c_char, attr: *const c_void) -> *mut c_void;
+    }
+
+    static LATEST: Mutex<Option<NetworkState>> = Mutex::new(None);
+    static REPORTED: Condvar = Condvar::new();
+    static START: Once = Once::new();
+
+    pub(super) fn sample() -> Option<NetworkState> {
+        START.call_once(start_monitor);
+        // Only the first call waits: later ones find a report.
+        REPORTED
+            .wait_timeout_while(lock(&LATEST), FIRST_PATH_WAIT, |latest| latest.is_none())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .0
+            .clone()
+    }
+
+    fn start_monitor() {
+        let handler = RcBlock::new(|path: *mut c_void| {
+            // SAFETY: Network.framework hands the handler a live path,
+            // valid for the duration of the call.
+            let state = unsafe { read_path(path) };
+            *lock(&LATEST) = Some(state);
+            REPORTED.notify_all();
+        });
+        // SAFETY: plain Network.framework / libdispatch calls. A NULL
+        // attribute makes the queue serial, so reports arrive in order.
+        // The monitor and queue are never released: they live as long
+        // as the process, like the iOS observer.
+        unsafe {
+            let monitor = nw_path_monitor_create();
+            if monitor.is_null() {
+                tracing::warn!(target: "istmo.network_state", "nw_path_monitor_create failed");
+                return;
+            }
+            let queue = dispatch_queue_create(c"istmo.network_state".as_ptr(), std::ptr::null());
+            nw_path_monitor_set_queue(monitor, queue);
+            // The monitor copies the block.
+            nw_path_monitor_set_update_handler(monitor, &handler);
+            nw_path_monitor_start(monitor);
+        }
+    }
+
+    /// # Safety
+    ///
+    /// `path` is a live `nw_path_t`.
+    unsafe fn read_path(path: *mut c_void) -> NetworkState {
+        // SAFETY: forwarded from the caller.
+        let online = unsafe { nw_path_get_status(path) } == STATUS_SATISFIED;
+        if !online {
+            return NetworkState {
+                online,
+                link: LinkKind::None,
+                metered: false,
+                expensive: false,
+                constrained: false,
+            };
+        }
+        let preferred = std::cell::Cell::new(None);
+        // Interfaces come in order of preference: keep the first, then
+        // stop (`0` is `false`).
+        let enumerator = StackBlock::new(|interface: *mut c_void| -> u8 {
+            // SAFETY: the enumerator receives live interfaces; the name
+            // is a NUL terminated string owned by the interface.
+            let (kind, name) = unsafe {
+                let name = nw_interface_get_name(interface);
+                let name = if name.is_null() {
+                    String::new()
+                } else {
+                    CStr::from_ptr(name).to_string_lossy().into_owned()
+                };
+                (
+                    NwInterfaceType::from_raw(nw_interface_get_type(interface)),
+                    name,
+                )
+            };
+            preferred.set(Some(nw_link(kind, &name)));
+            0
+        });
+        // SAFETY: synchronous enumeration of the live path.
+        unsafe { nw_path_enumerate_interfaces(path, &enumerator) };
+        // SAFETY: forwarded from the caller.
+        let (expensive, constrained) =
+            unsafe { (nw_path_is_expensive(path), nw_path_is_constrained(path)) };
+        NetworkState {
+            online,
+            link: preferred.get().unwrap_or(LinkKind::Other),
+            // macOS has no separate "metered" flag; expensive paths
+            // (cellular, personal hotspot) are the metered ones.
+            metered: expensive,
+            expensive,
+            constrained,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,5 +505,28 @@ wlp3s0\t0001A8C0\t00000000\t0001\t0\t0\t600\t00FFFFFF\t0\t0\t0
         let state = snapshot(best_link([adapter(71, true, true)]));
         assert!(state.online);
         assert_eq!(state.link, LinkKind::Wifi);
+    }
+
+    #[test]
+    fn nw_tunnels_are_vpn_and_types_map_to_links() {
+        assert_eq!(nw_link(NwInterfaceType::Other, "utun3"), LinkKind::Vpn);
+        assert_eq!(nw_link(NwInterfaceType::Wifi, "ipsec0"), LinkKind::Vpn);
+        assert_eq!(nw_link(NwInterfaceType::from_raw(1), "en0"), LinkKind::Wifi);
+        assert_eq!(
+            nw_link(NwInterfaceType::from_raw(2), "pdp_ip0"),
+            LinkKind::Cellular
+        );
+        assert_eq!(
+            nw_link(NwInterfaceType::from_raw(3), "en5"),
+            LinkKind::Ethernet
+        );
+        assert_eq!(
+            nw_link(NwInterfaceType::from_raw(4), "lo0"),
+            LinkKind::Other
+        );
+        assert_eq!(
+            nw_link(NwInterfaceType::from_raw(99), "bridge0"),
+            LinkKind::Other
+        );
     }
 }

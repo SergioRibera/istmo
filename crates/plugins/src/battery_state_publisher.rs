@@ -3,16 +3,16 @@
 //!
 //! - Linux reads `/sys/class/power_supply/BAT*/` sysfs attributes.
 //! - Windows calls `GetSystemPowerStatus` via `windows-sys`.
-//! - macOS has no sampler: `tick` publishes nothing there. Publish the
-//!   snapshot yourself through `Runtime::publish_early_latest` if you
-//!   need it.
+//! - macOS reads the internal batteries from `IOKit`
+//!   (`IOPSCopyPowerSourcesInfo`), low power mode and thermal state from
+//!   `NSProcessInfo`.
 //!
 //! Call [`BatteryStatePublisher::tick`] on an interval (every ~15s) or
 //! on power events the surrounding app observes — the sampler publishes
 //! only when the snapshot actually changes.
 
 use super::battery_state::BatteryState;
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", test))]
 use super::battery_state::{ChargingState, PowerSource, ThermalState};
 use crate::early::LatestPublisher;
 
@@ -29,7 +29,7 @@ impl LatestPublisher<BatteryState> {
 }
 
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "windows")),
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
     expect(
         clippy::missing_const_for_fn,
         reason = "only the unsupported-target body is const"
@@ -44,7 +44,11 @@ fn sample() -> Option<BatteryState> {
     {
         windows::sample()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::sample()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         None
     }
@@ -246,6 +250,299 @@ mod windows {
     }
 }
 
+/// One `IOPSGetPowerSourceDescription` entry of an internal battery.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, Default)]
+struct IopsBattery {
+    /// `Current Capacity`, a percentage on every Mac.
+    current: Option<i64>,
+    /// `Max Capacity`, `100` on every Mac.
+    max: Option<i64>,
+    /// `Is Charging`.
+    charging: Option<bool>,
+    /// `Is Charged`, only present while full on AC.
+    charged: Option<bool>,
+    /// `Power Source State` is `AC Power`.
+    on_ac: Option<bool>,
+}
+
+/// `IOPSGetProvidingPowerSourceType`: what powers the machine now.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProvidingSource {
+    Ac,
+    Battery,
+    Ups,
+    Unknown,
+}
+
+/// Fold the `IOKit` readings into one snapshot. A machine without an
+/// internal battery (Mac mini, iMac, Mac Pro) reports no level.
+#[cfg(any(target_os = "macos", test))]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "capacities are percentages and a ratio in 0..=1 fits f32"
+)]
+fn iops_state(
+    batteries: &[IopsBattery],
+    providing: ProvidingSource,
+    power_saver: bool,
+    thermal_state: isize,
+) -> BatteryState {
+    let levels: Vec<f32> = batteries
+        .iter()
+        .filter_map(|battery| {
+            let (current, max) = (battery.current?, battery.max?);
+            (max > 0).then(|| (current.clamp(0, max) as f64 / max as f64) as f32)
+        })
+        .collect();
+    let level = (!levels.is_empty()).then(|| levels.iter().sum::<f32>() / levels.len() as f32);
+    let on_ac = match providing {
+        ProvidingSource::Ac => Some(true),
+        ProvidingSource::Battery | ProvidingSource::Ups => Some(false),
+        ProvidingSource::Unknown => batteries.iter().find_map(|battery| battery.on_ac),
+    };
+    let charging = if batteries.is_empty() {
+        ChargingState::Unknown
+    } else if batteries
+        .iter()
+        .any(|battery| battery.charging == Some(true))
+    {
+        ChargingState::Charging
+    } else if batteries
+        .iter()
+        .all(|battery| battery.charged == Some(true))
+    {
+        ChargingState::Full
+    } else {
+        match on_ac {
+            Some(true) => ChargingState::NotCharging,
+            Some(false) => ChargingState::Discharging,
+            None => ChargingState::Unknown,
+        }
+    };
+    BatteryState {
+        level,
+        charging,
+        power_source: match on_ac {
+            Some(true) => PowerSource::Ac,
+            Some(false) => PowerSource::Battery,
+            None => PowerSource::Unknown,
+        },
+        power_saver,
+        // `NSProcessInfoThermalState`.
+        thermal_state: match thermal_state {
+            ..=0 => ThermalState::Nominal,
+            1 => ThermalState::Fair,
+            2 => ThermalState::Serious,
+            _ => ThermalState::Critical,
+        },
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::ffi::{CStr, c_void};
+
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2::{msg_send, sel};
+
+    use super::{BatteryState, IopsBattery, ProvidingSource, iops_state};
+
+    #[link(name = "IOKit", kind = "framework")]
+    unsafe extern "C" {
+        fn IOPSCopyPowerSourcesInfo() -> *const c_void;
+        fn IOPSCopyPowerSourcesList(blob: *const c_void) -> *const c_void;
+        fn IOPSGetPowerSourceDescription(
+            blob: *const c_void,
+            source: *const c_void,
+        ) -> *const c_void;
+        fn IOPSGetProvidingPowerSourceType(blob: *const c_void) -> *const c_void;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(cf: *const c_void);
+    }
+
+    /// Runs inside its own pool: the `NSString` keys below are
+    /// autoreleased, and a tick driven from a plain thread would leak
+    /// them otherwise.
+    pub(super) fn sample() -> Option<BatteryState> {
+        objc2::rc::autoreleasepool(|_| sample_in_pool())
+    }
+
+    fn sample_in_pool() -> Option<BatteryState> {
+        // SAFETY: returns a +1 CFTypeRef (or NULL) released below.
+        let blob = unsafe { IOPSCopyPowerSourcesInfo() };
+        if blob.is_null() {
+            return None;
+        }
+        // SAFETY: `blob` is the live info blob; the list is a +1
+        // CFArrayRef (toll-free bridged to NSArray) released below.
+        let list = unsafe { IOPSCopyPowerSourcesList(blob) };
+        let mut batteries = Vec::new();
+        if !list.is_null() {
+            let list = list.cast::<AnyObject>().cast_mut();
+            // SAFETY: NSArray reads on a live array.
+            let count: usize = unsafe { msg_send![list, count] };
+            for index in 0..count {
+                // SAFETY: `index < count`; the element is owned by `list`.
+                let source: *mut AnyObject = unsafe { msg_send![list, objectAtIndex: index] };
+                // SAFETY: a "Get" function: the dictionary is owned by
+                // `blob`, which outlives this loop.
+                let description =
+                    unsafe { IOPSGetPowerSourceDescription(blob, source.cast_const().cast()) };
+                // SAFETY: a CFDictionaryRef or NULL, read while `blob` lives.
+                if let Some(battery) = unsafe { internal_battery(description.cast()) } {
+                    batteries.push(battery);
+                }
+            }
+            // SAFETY: balances the Copy above.
+            unsafe { CFRelease(list.cast_const().cast()) };
+        }
+        // SAFETY: "Get" function on the live blob; the string is owned by it.
+        let providing = unsafe { IOPSGetProvidingPowerSourceType(blob) };
+        // SAFETY: a CFStringRef or NULL owned by `blob`.
+        let providing = unsafe {
+            if is_string(providing.cast(), c"AC Power") {
+                ProvidingSource::Ac
+            } else if is_string(providing.cast(), c"Battery Power") {
+                ProvidingSource::Battery
+            } else if is_string(providing.cast(), c"UPS Power") {
+                ProvidingSource::Ups
+            } else {
+                ProvidingSource::Unknown
+            }
+        };
+        // SAFETY: balances `IOPSCopyPowerSourcesInfo`; nothing read from
+        // the blob is used past this point.
+        unsafe { CFRelease(blob) };
+        let (power_saver, thermal_state) = process_power_state();
+        Some(iops_state(
+            &batteries,
+            providing,
+            power_saver,
+            thermal_state,
+        ))
+    }
+
+    /// The readings of an internal battery; `None` for a UPS or any
+    /// other kind of source.
+    ///
+    /// # Safety
+    ///
+    /// `description` is NULL or a live `NSDictionary`.
+    unsafe fn internal_battery(description: *const AnyObject) -> Option<IopsBattery> {
+        if description.is_null() {
+            return None;
+        }
+        // SAFETY: forwarded from the caller.
+        unsafe {
+            if !is_string(value(description, c"Type"), c"InternalBattery")
+                || number(description, c"Is Present").is_some_and(|present| present == 0)
+            {
+                return None;
+            }
+            let state = value(description, c"Power Source State");
+            Some(IopsBattery {
+                current: number(description, c"Current Capacity"),
+                max: number(description, c"Max Capacity"),
+                charging: number(description, c"Is Charging").map(|flag| flag != 0),
+                charged: number(description, c"Is Charged").map(|flag| flag != 0),
+                on_ac: (!state.is_null()).then(|| is_string(state, c"AC Power")),
+            })
+        }
+    }
+
+    /// `NSProcessInfo` low power mode (macOS 12+) and thermal state.
+    fn process_power_state() -> (bool, isize) {
+        let Some(class) = AnyClass::get(c"NSProcessInfo") else {
+            return (false, 0);
+        };
+        // SAFETY: `+processInfo` returns the shared instance; the
+        // selectors below are NSProcessInfo API, `isLowPowerModeEnabled`
+        // only sent after `respondsToSelector:` confirms it.
+        unsafe {
+            let info: *mut AnyObject = msg_send![class, processInfo];
+            if info.is_null() {
+                return (false, 0);
+            }
+            let thermal: isize = msg_send![info, thermalState];
+            let has_low_power: bool =
+                msg_send![info, respondsToSelector: sel!(isLowPowerModeEnabled)];
+            let low_power: bool = has_low_power && msg_send![info, isLowPowerModeEnabled];
+            (low_power, thermal)
+        }
+    }
+
+    /// `dictionary[key]`, or NULL.
+    ///
+    /// # Safety
+    ///
+    /// `dictionary` is a live `NSDictionary`; call inside an
+    /// autorelease pool.
+    unsafe fn value(dictionary: *const AnyObject, key: &CStr) -> *const AnyObject {
+        let Some(class) = AnyClass::get(c"NSString") else {
+            return std::ptr::null();
+        };
+        // SAFETY: `key` is NUL terminated UTF-8; the receiver is live.
+        unsafe {
+            let key: *mut AnyObject = msg_send![class, stringWithUTF8String: key.as_ptr()];
+            if key.is_null() {
+                return std::ptr::null();
+            }
+            let found: *mut AnyObject = msg_send![dictionary, objectForKey: key];
+            found.cast_const()
+        }
+    }
+
+    /// `dictionary[key]` as an integer, when it is an `NSNumber`
+    /// (`CFNumber` and `CFBoolean` both bridge to it).
+    ///
+    /// # Safety
+    ///
+    /// As [`value`].
+    unsafe fn number(dictionary: *const AnyObject, key: &CStr) -> Option<i64> {
+        let class = AnyClass::get(c"NSNumber")?;
+        // SAFETY: forwarded from the caller.
+        unsafe {
+            let found = value(dictionary, key);
+            if found.is_null() {
+                return None;
+            }
+            let is_number: bool = msg_send![found, isKindOfClass: class];
+            is_number.then(|| msg_send![found, longLongValue])
+        }
+    }
+
+    /// Whether `object` is an `NSString` equal to `expected`.
+    ///
+    /// # Safety
+    ///
+    /// `object` is NULL or a live object; call inside an autorelease
+    /// pool.
+    unsafe fn is_string(object: *const AnyObject, expected: &CStr) -> bool {
+        if object.is_null() {
+            return false;
+        }
+        let Some(class) = AnyClass::get(c"NSString") else {
+            return false;
+        };
+        // SAFETY: the receiver is live; the argument is NUL terminated.
+        unsafe {
+            let is_string: bool = msg_send![object, isKindOfClass: class];
+            if !is_string {
+                return false;
+            }
+            let expected: *mut AnyObject =
+                msg_send![class, stringWithUTF8String: expected.as_ptr()];
+            !expected.is_null() && msg_send![object, isEqualToString: expected]
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,5 +620,76 @@ mod tests {
         }
         .to_battery_state();
         assert!(state.power_saver);
+    }
+
+    #[test]
+    fn iops_laptop_on_battery() {
+        let battery = IopsBattery {
+            current: Some(42),
+            max: Some(100),
+            charging: Some(false),
+            charged: None,
+            on_ac: Some(false),
+        };
+        let state = iops_state(&[battery], ProvidingSource::Battery, true, 2);
+        assert_eq!(state.level, Some(0.42));
+        assert_eq!(state.charging, ChargingState::Discharging);
+        assert_eq!(state.power_source, PowerSource::Battery);
+        assert!(state.power_saver);
+        assert_eq!(state.thermal_state, ThermalState::Serious);
+    }
+
+    #[test]
+    fn iops_full_and_charging_on_ac() {
+        let full = IopsBattery {
+            current: Some(100),
+            max: Some(100),
+            charging: Some(false),
+            charged: Some(true),
+            on_ac: Some(true),
+        };
+        assert_eq!(
+            iops_state(&[full], ProvidingSource::Ac, false, 0).charging,
+            ChargingState::Full
+        );
+        let charging = IopsBattery {
+            charging: Some(true),
+            charged: None,
+            ..full
+        };
+        assert_eq!(
+            iops_state(&[charging], ProvidingSource::Ac, false, 0).charging,
+            ChargingState::Charging
+        );
+        let held = IopsBattery {
+            charged: None,
+            ..full
+        };
+        assert_eq!(
+            iops_state(&[held], ProvidingSource::Ac, false, 0).charging,
+            ChargingState::NotCharging
+        );
+    }
+
+    #[test]
+    fn iops_desktop_mac_has_no_level() {
+        let state = iops_state(&[], ProvidingSource::Ac, false, 7);
+        assert_eq!(state.level, None);
+        assert_eq!(state.charging, ChargingState::Unknown);
+        assert_eq!(state.power_source, PowerSource::Ac);
+        assert_eq!(state.thermal_state, ThermalState::Critical);
+        assert_eq!(
+            iops_state(&[], ProvidingSource::Ups, false, 0).power_source,
+            PowerSource::Battery
+        );
+        let on_ac = IopsBattery {
+            on_ac: Some(true),
+            ..IopsBattery::default()
+        };
+        assert_eq!(
+            iops_state(&[on_ac], ProvidingSource::Unknown, false, 0).power_source,
+            PowerSource::Ac,
+            "falls back to the battery's own power source state"
+        );
     }
 }
