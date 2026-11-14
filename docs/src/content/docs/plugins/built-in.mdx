@@ -29,6 +29,7 @@ come in two shapes:
 | `ThemePreferenceClient` | `istmo.theme_preference` | latest value | runtime observers; `ThemePreferencePublisher` on desktop |
 | `NetworkStateClient` | `istmo.network_state` | latest value | runtime observers; `NetworkStatePublisher` on desktop |
 | `BatteryStateClient` | `istmo.battery_state` | latest value | runtime observers; `BatteryStatePublisher` on desktop |
+| `PowerDevicesClient` | `istmo.power_devices` | latest value | runtime observers; `PowerDevicesPublisher` on desktop |
 | `StorageInfoClient` | `istmo.storage_info` | latest value | runtime observers; `StorageInfoPublisher` on desktop |
 | `CapabilitiesClient` | `istmo.capabilities` | latest value | runtime observers; `CapabilitiesPublisher` on desktop |
 | `PermissionsClient` | `istmo.permissions` | calls | app-supplied native backend |
@@ -232,11 +233,33 @@ reduce_transparency, bold_text, invert_colors, screen_reader_active }`.
 | ------ | ----- |
 | `NetworkStateClient` | `NetworkState { online, link, metered, expensive, constrained }`; `link` is a `LinkKind` (`None`, `Wifi`, `Cellular`, `Ethernet`, `Vpn`, `Bluetooth`, `Other`) |
 | `BatteryStateClient` | `BatteryState { level, charging, power_source, power_saver, thermal_state }`; `level` is `0.0..=1.0` or `None` without a battery |
+| `PowerDevicesClient` | `PowerDevices { devices }`, one `PowerDevice { id, name, kind, level, charging }` per battery-backed device (see below) |
 | `StorageInfoClient` | `StorageInfo { primary_free_bytes, primary_total_bytes, external }` |
 | `CapabilitiesClient` | `Capabilities` flags: `has_biometric`, `has_face_id`, `has_fingerprint`, `has_nfc`, `has_haptics`, `has_camera_front`, `has_camera_back`, `has_gps`, `has_bluetooth`, `has_microphone`, `has_telephony` |
 
 On Android and iOS, storage and capabilities are sampled once at
 startup.
+
+### Power devices
+
+`BatteryStateClient` summarises the device itself and needs no
+permission. `PowerDevicesClient` lists every battery the platform
+reports: the device's own batteries, a UPS and connected peripherals.
+`kind` is a `PowerDeviceKind` (`Internal`, `Ups`, `Mouse`, `Keyboard`,
+`Touchpad`, `Gamepad`, `Stylus`, `Headphones`, `Speaker`, `Phone`,
+`Tablet`, `Wearable`, `Remote`, `Other`); `id` is stable while the device
+stays connected; devices are sorted by `id`.
+
+| Platform | Source | What it sees |
+| -------- | ------ | ------------ |
+| Linux | `UPower` over D-Bus; `/sys/class/power_supply` when `UPower` is not running | everything `UPower` tracks: batteries, UPS, HID peripherals, Bluetooth audio, controllers |
+| macOS | IOKit power sources, IOKit HID `BatteryPercent`, `GCController` | internal batteries, UPS, Magic Mouse / Keyboard / Trackpad, controllers |
+| Windows | `GetSystemPowerStatus` + the Bluetooth battery device property | the system battery, Bluetooth devices that report a level |
+| Android | `ACTION_BATTERY_CHANGED`, `InputDevice.getBatteryState` (API 31+) | the device battery, controllers and styluses |
+| iOS | `UIDevice`, `GCController` (iOS 14+) | the device battery, controllers |
+
+AirPods, Apple Pencil, watches and most Bluetooth headphones on mobile
+have no public battery API.
 
 ## Desktop publishers
 
@@ -247,7 +270,7 @@ declared) and publishes only when the value changed.
 ```rust
 use istmo::plugins::{
     BatteryStatePublisher, CapabilitiesPublisher, DeviceInfoPublisher, NetworkStatePublisher,
-    StorageInfoPublisher, SystemInfoPublisher, ThemePreferencePublisher,
+    PowerDevicesPublisher, StorageInfoPublisher, SystemInfoPublisher, ThemePreferencePublisher,
 };
 
 DeviceInfoPublisher::install(&rt)?.publish();
@@ -257,6 +280,7 @@ let mut system = SystemInfoPublisher::install(&rt)?;
 let mut theme = ThemePreferencePublisher::install(&rt)?;
 let mut network = NetworkStatePublisher::install(&rt)?;
 let mut battery = BatteryStatePublisher::install(&rt)?;
+let mut power_devices = PowerDevicesPublisher::install(&rt)?;
 let mut storage = StorageInfoPublisher::install(&rt)?;
 
 // From the event loop or a timer:
@@ -264,6 +288,7 @@ system.tick();
 theme.tick();
 network.tick();
 battery.tick();
+power_devices.tick();
 storage.tick();
 ```
 
@@ -274,6 +299,7 @@ storage.tick();
 | `ThemePreferencePublisher` | `tick()`, samples at most every 2 s | `gsettings` | `defaults read` | registry `AppsUseLightTheme` |
 | `NetworkStatePublisher` | `tick()` | `/proc/net/route` + `/sys/class/net` | Network.framework `nw_path_monitor` | `GetAdaptersAddresses` |
 | `BatteryStatePublisher` | `tick()` | `/sys/class/power_supply` | IOKit `IOPSCopyPowerSourcesInfo` + `NSProcessInfo` | `GetSystemPowerStatus` |
+| `PowerDevicesPublisher` | `tick()`, every ~30 s | `UPower` (D-Bus), else `/sys/class/power_supply` | IOKit power sources + HID `BatteryPercent` + `GCController` | `GetSystemPowerStatus` + Bluetooth battery property |
 | `StorageInfoPublisher` | `tick()` | `statvfs` | `statvfs` | `GetDiskFreeSpaceExW` |
 | `CapabilitiesPublisher` | `publish()` once | `/sys` + `/dev` probes | all `false` | all `false` |
 
