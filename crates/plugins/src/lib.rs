@@ -41,6 +41,12 @@
 //! - [`theme_preference`] — light/dark and accessibility preferences.
 //!
 //! [`early`] holds the shared client, stream and publisher types.
+//!
+//! Desktop IPC:
+//!
+//! - `local_endpoint` — a per-user named endpoint between processes of
+//!   one user: one owner per name, request/reply messages
+//!   (`LocalEndpoint`, desktop targets only).
 
 #![doc(html_root_url = "https://docs.rs/istmo-plugins")]
 
@@ -59,6 +65,8 @@ pub mod documents;
 pub mod documents_publisher;
 pub mod early;
 pub mod lifecycle;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub mod local_endpoint;
 pub mod network_state;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod network_state_publisher;
@@ -117,11 +125,15 @@ pub use crate::documents::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use crate::documents_publisher::{
-    DocumentsError, DocumentsPublisher, InstanceKey, Startup, instance_key_from_build,
+    DocumentsError, DocumentsPublisher, Startup, instance_key_from_build,
 };
 pub use crate::early::{EarlyStream, LatestClient, LatestPublisher, LatestValue};
 pub use crate::lifecycle::{
     AppLifecycle, LIFECYCLE_CHANNEL, LIFECYCLE_PLUGIN_ID, LifecycleState, LifecycleStream,
+};
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use crate::local_endpoint::{
+    EndpointClaim, EndpointError, EndpointName, LocalEndpoint, LocalServer, OwnedEndpoint,
 };
 pub use crate::network_state::{
     LinkKind, NETWORK_STATE_CHANNEL, NETWORK_STATE_PLUGIN_ID, NetworkState, NetworkStateClient,

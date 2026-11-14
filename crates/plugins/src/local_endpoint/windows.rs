@@ -2,7 +2,7 @@
 //!
 //! - **Ownership** is decided by `FILE_FLAG_FIRST_PIPE_INSTANCE`:
 //!   creating the first instance of a name is atomic, so two
-//!   simultaneous launches cannot both become primary.
+//!   simultaneous claims cannot both own the name.
 //! - **Name** — `\\.\pipe\istmo-<hash>-<user SID>-<session>`: the pipe
 //!   namespace is machine-wide; the SID (unlike `%USERNAME%`) is unique
 //!   and cannot be spoofed by the environment, and the session keeps the
@@ -12,7 +12,7 @@
 //!   enough to occupy the server), `PIPE_REJECT_REMOTE_CLIENTS` keeps SMB
 //!   clients out, and the server checks the connecting process runs as
 //!   the user before reading. Another user could still create a pipe
-//!   with our name first: a second launch opens it with
+//!   with our name first: a requester opens it with
 //!   `SECURITY_IDENTIFICATION` (the server cannot impersonate it) and
 //!   checks the server process runs as the same user before it sends
 //!   anything.
@@ -28,11 +28,10 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
 use std::thread;
 
-use istmo_core::Runtime;
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_PIPE_BUSY,
     ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
@@ -59,8 +58,8 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use super::{
-    ACK_WAIT, CONNECT_ATTEMPTS, CONNECT_BACKOFF, ClientSlots, DocumentsError, ForwardRequest,
-    InstanceKey, RecentNonces, endpoint_stem, handle_client, send_request,
+    CONNECT_ATTEMPTS, CONNECT_BACKOFF, ClientSlots, EndpointError, EndpointName, Handler, Limits,
+    exchange, handle_client,
 };
 
 const PIPE_BUFFER: u32 = 64 * 1024;
@@ -202,10 +201,10 @@ struct PipeName {
 }
 
 impl PipeName {
-    fn resolve(key: &InstanceKey) -> Result<Self, DocumentsError> {
-        let sid = current_user_sid().map_err(DocumentsError::io("reading the user SID"))?;
-        let session = current_session().map_err(DocumentsError::io("reading the session"))?;
-        let path = format!(r"\\.\pipe\{}-{sid}-{session}", endpoint_stem(key));
+    fn resolve(name: &EndpointName) -> Result<Self, EndpointError> {
+        let sid = current_user_sid().map_err(EndpointError::io("reading the user SID"))?;
+        let session = current_session().map_err(EndpointError::io("reading the session"))?;
+        let path = format!(r"\\.\pipe\{}-{sid}-{session}", name.stem());
         Ok(Self {
             wide: wide(&path),
             path,
@@ -313,22 +312,22 @@ pub(super) struct Endpoint {
 
 #[derive(Debug)]
 pub(super) enum Claim {
-    Primary(Endpoint),
-    Secondary,
+    Owner(Endpoint),
+    Taken,
 }
 
-pub(super) fn claim(key: &InstanceKey) -> Result<Claim, DocumentsError> {
-    let name = PipeName::resolve(key)?;
+pub(super) fn claim(name: &EndpointName) -> Result<Claim, EndpointError> {
+    let name = PipeName::resolve(name)?;
     let security =
-        PipeSecurity::for_user(&name.sid).map_err(DocumentsError::io("building the pipe DACL"))?;
+        PipeSecurity::for_user(&name.sid).map_err(EndpointError::io("building the pipe DACL"))?;
     match create_instance(&name.wide, &security, true) {
-        Ok(first) => Ok(Claim::Primary(Endpoint {
+        Ok(first) => Ok(Claim::Owner(Endpoint {
             name,
             security,
             first,
         })),
-        Err(err) if is_os_error(&err, ERROR_ACCESS_DENIED) => Ok(Claim::Secondary),
-        Err(err) => Err(DocumentsError::io("creating the pipe")(err)),
+        Err(err) if is_os_error(&err, ERROR_ACCESS_DENIED) => Ok(Claim::Taken),
+        Err(err) => Err(EndpointError::io("creating the pipe")(err)),
     }
 }
 
@@ -343,37 +342,43 @@ fn open_client(path: &str) -> io::Result<File> {
         .open(path)
 }
 
-pub(super) fn forward(key: &InstanceKey, request: &ForwardRequest) -> Result<(), DocumentsError> {
-    let name = PipeName::resolve(key)?;
-    let request = request.clone();
+pub(super) fn request(
+    name: &EndpointName,
+    limits: &Limits,
+    body: &[u8],
+) -> Result<Vec<u8>, EndpointError> {
+    let name = PipeName::resolve(name)?;
+    let limits = *limits;
+    let body = body.to_vec();
     // Synchronous pipe handles have no read timeout: run the exchange on
-    // a helper thread and stop waiting if the primary hangs.
+    // a helper thread and stop waiting if the owner hangs. A thread left
+    // behind ends once the owner answers or closes the pipe.
     let (tx, rx) = flume::bounded(1);
     thread::Builder::new()
-        .name("istmo-documents-forward".to_owned())
+        .name("istmo-endpoint-request".to_owned())
         .spawn(move || {
-            let _ = tx.send(exchange(&name, &request));
+            let _ = tx.send(connect_and_exchange(&name, &limits, &body));
         })
-        .map_err(DocumentsError::io("spawning the forward thread"))?;
-    let deadline = ACK_WAIT + CONNECT_BACKOFF * CONNECT_ATTEMPTS;
+        .map_err(EndpointError::io("spawning the request thread"))?;
+    let deadline = limits.reply_wait + CONNECT_BACKOFF * CONNECT_ATTEMPTS;
     rx.recv_timeout(deadline)
-        .unwrap_or(Err(DocumentsError::Protocol(
-            "the running instance did not answer",
-        )))
+        .unwrap_or(Err(EndpointError::NoReply))
 }
 
-fn exchange(name: &PipeName, request: &ForwardRequest) -> Result<(), DocumentsError> {
+fn connect_and_exchange(
+    name: &PipeName,
+    limits: &Limits,
+    body: &[u8],
+) -> Result<Vec<u8>, EndpointError> {
     for _ in 0..CONNECT_ATTEMPTS {
         match open_client(&name.path) {
             Ok(mut pipe) => {
                 let trusted = server_runs_as(&pipe, &name.sid)
-                    .map_err(DocumentsError::io("checking who serves the pipe"))?;
+                    .map_err(EndpointError::io("checking who serves the pipe"))?;
                 if !trusted {
-                    return Err(DocumentsError::Protocol(
-                        "the pipe is served by another user's process",
-                    ));
+                    return Err(EndpointError::ForeignOwner);
                 }
-                return send_request(&mut pipe, request);
+                return exchange(&mut pipe, body, limits);
             }
             Err(err)
                 if is_os_error(&err, ERROR_PIPE_BUSY)
@@ -382,23 +387,30 @@ fn exchange(name: &PipeName, request: &ForwardRequest) -> Result<(), DocumentsEr
                 thread::sleep(CONNECT_BACKOFF);
             }
             Err(err) => {
-                return Err(DocumentsError::io("connecting to the running instance")(
-                    err,
-                ));
+                return Err(EndpointError::io("connecting to the endpoint")(err));
             }
         }
     }
-    Err(DocumentsError::Protocol(
-        "the running instance is not listening",
-    ))
+    Err(EndpointError::NotListening)
 }
 
-#[derive(Debug)]
 struct Shared {
     stop: AtomicBool,
     alive: AtomicBool,
     slots: ClientSlots,
-    seen: RecentNonces,
+    limits: Limits,
+    handler: Handler,
+}
+
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shared")
+            .field("stop", &self.stop)
+            .field("alive", &self.alive)
+            .field("slots", &self.slots)
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -410,25 +422,27 @@ pub(super) struct Server {
 impl Server {
     pub(super) fn spawn(
         endpoint: Endpoint,
-        runtime: Weak<Runtime>,
-    ) -> Result<Self, DocumentsError> {
+        limits: Limits,
+        handler: Handler,
+    ) -> Result<Self, EndpointError> {
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(true),
-            slots: ClientSlots::default(),
-            seen: RecentNonces::default(),
+            slots: ClientSlots::new(limits.max_clients),
+            limits,
+            handler,
         });
         let path = endpoint.name.path.clone();
         thread::Builder::new()
-            .name("istmo-documents".to_owned())
+            .name("istmo-endpoint".to_owned())
             .spawn({
                 let shared = Arc::clone(&shared);
                 move || {
-                    serve(endpoint, &shared, &runtime);
+                    serve(endpoint, &shared);
                     shared.alive.store(false, Ordering::Release);
                 }
             })
-            .map_err(DocumentsError::io("spawning the documents thread"))?;
+            .map_err(EndpointError::io("spawning the endpoint thread"))?;
         Ok(Self { shared, path })
     }
 
@@ -437,7 +451,7 @@ impl Server {
     }
 }
 
-fn serve(endpoint: Endpoint, shared: &Arc<Shared>, runtime: &Weak<Runtime>) {
+fn serve(endpoint: Endpoint, shared: &Arc<Shared>) {
     let Endpoint {
         name,
         security,
@@ -450,49 +464,43 @@ fn serve(endpoint: Endpoint, shared: &Arc<Shared>, runtime: &Weak<Runtime>) {
             break;
         }
         // Keep one instance listening while this client is served, so
-        // a launch in between never sees "no such pipe" and starts a
-        // second primary. The old instance closes only after the new
-        // one exists.
+        // a requester in between never sees "no such pipe" and claims
+        // the name. The old instance closes only after the new one
+        // exists.
         let next = match create_instance(&name.wide, &security, false) {
             Ok(next) => next,
             Err(err) => {
-                tracing::warn!(target: "istmo.documents", %err, "creating a pipe instance failed");
+                tracing::warn!(target: "istmo.endpoint", %err, "creating a pipe instance failed");
                 break;
             }
         };
         let client = std::mem::replace(&mut pending, next);
         match connected {
-            Ok(()) => spawn_client(File::from(client), &name.sid, shared, runtime),
+            Ok(()) => spawn_client(File::from(client), &name.sid, shared),
             Err(err) => {
                 // e.g. `ERROR_NO_DATA`: the client left before we
                 // accepted; its instance is dropped and replaced.
-                tracing::debug!(target: "istmo.documents", %err, "waiting for a client failed");
+                tracing::debug!(target: "istmo.endpoint", %err, "waiting for a client failed");
                 thread::sleep(CONNECT_BACKOFF);
             }
-        }
-        if runtime.strong_count() == 0 {
-            break;
         }
     }
 }
 
-fn spawn_client(mut pipe: File, sid: &str, shared: &Arc<Shared>, runtime: &Weak<Runtime>) {
+fn spawn_client(mut pipe: File, sid: &str, shared: &Arc<Shared>) {
     let Some(slot) = shared.slots.take() else {
-        tracing::warn!(target: "istmo.documents", "too many forwarded launches at once; dropping one");
-        return;
-    };
-    let Some(runtime) = runtime.upgrade() else {
+        tracing::warn!(target: "istmo.endpoint", "too many requests at once; dropping one");
         return;
     };
     let sid = sid.to_owned();
-    let shared_client = Arc::clone(shared);
+    let shared = Arc::clone(shared);
     let spawned = thread::Builder::new()
-        .name("istmo-documents-client".to_owned())
+        .name("istmo-endpoint-client".to_owned())
         .spawn(move || {
             let _slot = slot;
-            // Quitting: no acknowledgement, so the launch retries and
-            // takes over once this process lets go of the name.
-            if shared_client.stop.load(Ordering::Acquire) {
+            // Stopping: no reply, so the requester can retry and reach
+            // the next owner once this process lets go of the name.
+            if shared.stop.load(Ordering::Acquire) {
                 return;
             }
             // The DACL already limits who can connect; this keeps the
@@ -500,25 +508,25 @@ fn spawn_client(mut pipe: File, sid: &str, shared: &Arc<Shared>, runtime: &Weak<
             match client_runs_as(&pipe, &sid) {
                 Ok(true) => {}
                 Ok(false) => {
-                    tracing::warn!(target: "istmo.documents", "refused a launch forwarded by another user");
+                    tracing::warn!(target: "istmo.endpoint", "refused a request from another user");
                     return;
                 }
                 Err(err) => {
-                    tracing::warn!(target: "istmo.documents", %err, "could not tell who connected");
+                    tracing::warn!(target: "istmo.endpoint", %err, "could not tell who connected");
                     return;
                 }
             }
-            match handle_client(&mut pipe, &runtime, &shared_client.seen) {
+            match handle_client(&mut pipe, &shared.handler, &shared.limits, |_| {}) {
                 // Closing a pipe discards unread data: wait until the
-                // client has read the acknowledgement.
+                // client has read the reply.
                 Ok(()) => drop(pipe.sync_all()),
                 Err(err) => {
-                    tracing::warn!(target: "istmo.documents", %err, "rejected a forwarded launch");
+                    tracing::warn!(target: "istmo.endpoint", %err, "rejected a request");
                 }
             }
         });
     if let Err(err) = spawned {
-        tracing::warn!(target: "istmo.documents", %err, "spawning a client thread");
+        tracing::warn!(target: "istmo.endpoint", %err, "spawning a client thread");
     }
 }
 
