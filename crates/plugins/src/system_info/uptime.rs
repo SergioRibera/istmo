@@ -14,7 +14,8 @@
 #[must_use]
 #[allow(
     clippy::unnecessary_wraps,
-    reason = "infallible on Windows only; the signature is shared"
+    clippy::missing_const_for_fn,
+    reason = "infallible on Windows only and const where no reader exists; the signature is shared"
 )]
 pub(super) fn uptime_millis() -> Option<u64> {
     #[cfg(any(target_os = "linux", target_os = "android"))]

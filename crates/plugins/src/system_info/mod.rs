@@ -23,6 +23,7 @@
 //! every call; every other value needs a publisher.
 
 use std::sync::Arc;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use istmo_core::{IstmoError, Plugin, Runtime};
@@ -243,9 +244,22 @@ impl SystemInfoClient {
     /// Unix-epoch milliseconds. Pure Rust, no FFI.
     #[must_use]
     pub fn now_utc_millis(&self) -> i64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        // The browser has no system clock behind `SystemTime` (it panics).
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "`Date.now()` is a whole number of milliseconds within i64"
+            )]
+            let now = js_sys::Date::now() as i64;
+            now
+        }
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        }
     }
 
     /// Milliseconds since the device booted, read from the OS clock on
