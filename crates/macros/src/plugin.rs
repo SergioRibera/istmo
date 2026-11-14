@@ -799,9 +799,10 @@ fn expand_host_arm(root: &Path, spec: &MethodSpec) -> TokenStream {
     }
 }
 
-/// Host side of a stream method: a named encoder thread turns the
-/// implementation's typed receiver into the byte receiver the runtime
-/// pumps out as `Event` frames.
+/// Host side of a stream method: a background encoder (an OS thread, or
+/// the browser event loop on `wasm32`) turns the implementation's typed
+/// receiver into the byte receiver the runtime pumps out as `Event`
+/// frames.
 ///
 /// A `Result<T, E>` item stream ends at its first `Err`: the encoded
 /// error becomes the stream's `StreamEnd::Error` and the encoder stops
@@ -841,41 +842,27 @@ fn expand_stream_arm_body(
     };
     quote! {
         let __istmo_source: #root::__private::flume::Receiver<#item_ty> = #call;
-        let (__istmo_etx, __istmo_erx) =
-            #root::__private::flume::bounded::<#root::HostedStreamItem>(#STREAM_ENCODER_CAPACITY);
-        let __istmo_spawned = ::std::thread::Builder::new()
-            .name(::std::string::String::from("istmo-stream-enc"))
-            .spawn(move || {
-                while let ::core::result::Result::Ok(item) = __istmo_source.recv() {
-                    let chunk: #root::HostedStreamItem = match #encode {
-                        ::core::result::Result::Ok(chunk) => chunk,
-                        ::core::result::Result::Err(err) => {
-                            #root::__private::tracing::error!(
-                                ?err,
-                                method = #method_name_str,
-                                "hosted stream encode failed",
-                            );
-                            let message = ::std::format!("hosted stream encode failed: {err}");
-                            ::core::result::Result::Err(
-                                #root::codec::encode(&message).unwrap_or_default(),
-                            )
-                        }
-                    };
-                    let ends = chunk.is_err();
-                    if __istmo_etx.send(chunk).is_err() || ends {
-                        break;
+        #root::__private::encode_hosted_stream(
+            #method_name_str,
+            __istmo_source,
+            #STREAM_ENCODER_CAPACITY,
+            move |item: #item_ty| -> #root::HostedStreamItem {
+                match #encode {
+                    ::core::result::Result::Ok(chunk) => chunk,
+                    ::core::result::Result::Err(err) => {
+                        #root::__private::tracing::error!(
+                            ?err,
+                            method = #method_name_str,
+                            "hosted stream encode failed",
+                        );
+                        let message = ::std::format!("hosted stream encode failed: {err}");
+                        ::core::result::Result::Err(
+                            #root::codec::encode(&message).unwrap_or_default(),
+                        )
                     }
                 }
-            });
-        if let ::core::result::Result::Err(err) = __istmo_spawned {
-            #root::__private::tracing::error!(
-                ?err,
-                method = #method_name_str,
-                "failed to spawn the hosted stream encoder thread",
-            );
-            return ::core::result::Result::Err(#root::DispatchError::Spawn(err));
-        }
-        ::core::result::Result::Ok(#root::Outcome::StreamOpened(__istmo_erx))
+            },
+        )
     }
 }
 

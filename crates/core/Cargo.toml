@@ -18,6 +18,10 @@ oneshot = { workspace = true }
 pollster = { workspace = true }
 tracing = { workspace = true }
 
+# The browser has no threads: hosted work runs on its event loop.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+wasm-bindgen-futures = "0.4"
+
 [dev-dependencies]
 
 [lints]

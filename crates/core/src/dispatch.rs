@@ -85,13 +85,6 @@ impl CancelToken {
         }
         let _ = self.inner.rx.recv_async().await;
     }
-
-    /// Receiver that disconnects once the token is cancelled, so a
-    /// blocking [`flume::Selector`] can wait on cancellation next to
-    /// other channels.
-    pub(crate) fn disconnect_signal(&self) -> &flume::Receiver<()> {
-        &self.inner.rx
-    }
 }
 
 /// Result of dispatching a single [`Frame::Call`](crate::protocol::Frame::Call).

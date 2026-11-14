@@ -85,4 +85,5 @@ pub mod __private {
     /// [`crate::path::set_app_info`].
     pub use crate::assets::set_app_assets;
     pub use crate::path::set_app_info;
+    pub use crate::runtime::encode_hosted_stream;
 }

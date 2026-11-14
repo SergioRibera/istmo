@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -18,6 +19,10 @@ use crate::protocol::{
 };
 use crate::routing::{CallResult, RoutingTables, StreamMessage};
 use crate::sync::lock;
+
+mod exec;
+
+use exec::{CatchUnwind, Delivery, Either, race, send_unless_cancelled};
 
 /// Default depth of the outbound envelope channel.
 pub const DEFAULT_OUTBOUND_CAPACITY: usize = 256;
@@ -969,14 +974,14 @@ impl Runtime {
 
     fn reject_unhosted(&self, origin: Origin, call_id: CallId, plugin_id: &str, frame: &str) {
         tracing::warn!(plugin_id = %plugin_id, frame, "inbound request for unregistered plugin");
-        self.respond(
+        exec::finish_now(self.respond(
             origin,
             call_id,
             Err(encode_dispatch_error_string(&format!(
                 "no host registered for `{plugin_id}`"
             ))),
             Wait::Block,
-        );
+        ));
     }
 
     /// Register a Rust-hosted plugin dispatcher.
@@ -1055,15 +1060,41 @@ impl Runtime {
         self.push_outbound(envelope, Wait::Never).map(drop)
     }
 
+    /// Put `envelope` on the outbound channel from a synchronous caller.
+    /// `Ok(false)` when `wait` gave up because the call was cancelled
+    /// first.
+    ///
+    /// On `wasm32` nothing drains the channel while this frame waits, so
+    /// every wait becomes [`Wait::Never`]: a full channel fails with
+    /// [`IstmoError::OutboundFull`].
+    fn push_outbound(&self, envelope: Envelope, wait: Wait<'_>) -> Result<bool, IstmoError> {
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            pollster::block_on(self.push_outbound_async(envelope, wait))
+        }
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            let _ = wait;
+            self.push_outbound_now(envelope)
+        }
+    }
+
     /// Put `envelope` on the outbound channel. `Ok(false)` when `wait`
     /// gave up because the call was cancelled first.
-    fn push_outbound(&self, envelope: Envelope, wait: Wait<'_>) -> Result<bool, IstmoError> {
+    async fn push_outbound_async(
+        &self,
+        envelope: Envelope,
+        wait: Wait<'_>,
+    ) -> Result<bool, IstmoError> {
         match wait {
+            // Room on the channel goes first, shut down or not: frames
+            // already decided (an error answer after shutdown) still
+            // reach a transport that keeps draining.
             Wait::Block => match self.outbound.try_send(envelope) {
                 Ok(()) => Ok(true),
                 Err(TrySendError::Disconnected(_)) => Err(IstmoError::ChannelClosed),
                 Err(TrySendError::Full(envelope)) => {
-                    match send_unless_cancelled(&self.outbound, envelope, &self.stopped) {
+                    match send_unless_cancelled(&self.outbound, envelope, &self.stopped).await {
                         Delivery::Sent => Ok(true),
                         Delivery::Cancelled => Err(IstmoError::RuntimeShutDown),
                         Delivery::Disconnected => Err(IstmoError::ChannelClosed),
@@ -1071,31 +1102,34 @@ impl Runtime {
                 }
             },
             Wait::UnlessCancelled(cancel) => {
-                match send_unless_cancelled(&self.outbound, envelope, cancel) {
+                match send_unless_cancelled(&self.outbound, envelope, cancel).await {
                     Delivery::Sent => Ok(true),
                     Delivery::Cancelled => Ok(false),
                     Delivery::Disconnected => Err(IstmoError::ChannelClosed),
                 }
             }
-            Wait::Never => {
-                self.outbound
-                    .try_send(envelope)
-                    .map(|()| true)
-                    .map_err(|err| match err {
-                        TrySendError::Full(envelope) => {
-                            tracing::warn!(frame = ?envelope.frame, "outbound channel full; frame dropped");
-                            IstmoError::OutboundFull
-                        }
-                        TrySendError::Disconnected(_) => IstmoError::ChannelClosed,
-                    })
-            }
+            Wait::Never => self.push_outbound_now(envelope),
         }
+    }
+
+    /// Put `envelope` on the outbound channel if there is room.
+    fn push_outbound_now(&self, envelope: Envelope) -> Result<bool, IstmoError> {
+        self.outbound
+            .try_send(envelope)
+            .map(|()| true)
+            .map_err(|err| match err {
+                TrySendError::Full(envelope) => {
+                    tracing::warn!(frame = ?envelope.frame, "outbound channel full; frame dropped");
+                    IstmoError::OutboundFull
+                }
+                TrySendError::Disconnected(_) => IstmoError::ChannelClosed,
+            })
     }
 
     /// Send a frame of a hosted call to whoever issued it, other than
     /// this runtime. `Ok(false)` when `wait` gave up because the call
     /// was cancelled first.
-    fn send_to_issuer(
+    async fn send_to_issuer(
         &self,
         origin: Origin,
         envelope: Envelope,
@@ -1107,7 +1141,7 @@ impl Runtime {
                 let Some(sink) = sink else {
                     // A bridge without a sink shuttles the outbound
                     // channel instead.
-                    return self.push_outbound(envelope, wait);
+                    return self.push_outbound_async(envelope, wait).await;
                 };
                 sink(envelope.to_wire_bytes()?);
                 return Ok(true);
@@ -1117,7 +1151,7 @@ impl Runtime {
                 None => return Ok(true),
             },
         };
-        self.push_outbound(envelope, wait)
+        self.push_outbound_async(envelope, wait).await
     }
 
     /// Hand `envelope` to the remote sink when it belongs to a remote
@@ -1244,34 +1278,46 @@ impl Runtime {
             return;
         };
         let runtime = Arc::clone(self);
-        let thread_cancel = cancel.clone();
-        let spawned = spawn_named("istmo-call", move || {
+        let task_cancel = cancel.clone();
+        let spawned = exec::spawn("istmo-call", async move {
             // The dispatcher is shared, so a panic can leave its state
             // half-updated for later calls whether or not it is caught.
             // Catching it at least answers this call instead of leaving
             // the caller waiting forever; the generated hosts recover
             // poisoned locks as `sync::lock` does.
-            let outcome = catch_unwind(AssertUnwindSafe(|| {
-                pollster::block_on(dispatcher.dispatch(
-                    instance_id,
-                    &method,
-                    &payload,
-                    thread_cancel.clone(),
-                ))
-            }));
-            runtime.finish_hosted_call(origin, call_id, &thread_cancel, outcome);
+            let outcome = CatchUnwind::new(dispatcher.dispatch(
+                instance_id,
+                &method,
+                &payload,
+                task_cancel.clone(),
+            ))
+            .await;
+            runtime
+                .finish_hosted_call(origin, call_id, &task_cancel, outcome)
+                .await;
         });
         if let Err(err) = spawned {
-            tracing::error!(?err, ?call_id, "failed to spawn a host thread");
-            let message = DispatchError::Spawn(err).to_string();
-            self.respond(
-                origin,
-                call_id,
-                Err(encode_dispatch_error_string(&message)),
-                Wait::UnlessCancelled(&cancel),
-            );
-            lock(&self.hosted).finish(origin, call_id);
+            self.refuse_spawn(origin, call_id, &cancel, err);
         }
+    }
+
+    /// Answer a hosted call whose task could not start.
+    fn refuse_spawn(
+        &self,
+        origin: Origin,
+        call_id: CallId,
+        cancel: &CancelToken,
+        err: std::io::Error,
+    ) {
+        tracing::error!(?err, ?call_id, "failed to spawn a host thread");
+        let message = DispatchError::Spawn(err).to_string();
+        exec::finish_now(self.respond(
+            origin,
+            call_id,
+            Err(encode_dispatch_error_string(&message)),
+            Wait::UnlessCancelled(cancel),
+        ));
+        lock(&self.hosted).finish(origin, call_id);
     }
 
     /// Start tracking a hosted call, or answer it with an error when the
@@ -1283,30 +1329,35 @@ impl Runtime {
             lock(&self.hosted).begin(origin, call_id)
         };
         if cancel.is_none() {
-            self.respond(
+            exec::finish_now(self.respond(
                 origin,
                 call_id,
                 Err(encode_dispatch_error_string(
                     &IstmoError::RuntimeShutDown.to_string(),
                 )),
                 Wait::Never,
-            );
+            ));
         }
         cancel
     }
 
-    fn finish_hosted_call(
-        self: &Arc<Self>,
+    async fn finish_hosted_call(
+        &self,
         origin: Origin,
         call_id: CallId,
         cancel: &CancelToken,
-        outcome: std::thread::Result<Result<Outcome, DispatchError>>,
+        outcome: Result<Result<Outcome, DispatchError>, Box<dyn Any + Send>>,
     ) {
         let result = match outcome {
             Ok(Ok(Outcome::StreamOpened(receiver))) => {
                 // The call stays active: the pump owns it until the
                 // stream ends, so a cancel still reaches the producer.
-                self.spawn_stream_pump(origin, call_id, cancel, receiver);
+                let stream_id = StreamId(call_id.get());
+                let reason = self.pump_stream(origin, stream_id, cancel, &receiver).await;
+                // Release the producer before the end goes out.
+                drop(receiver);
+                self.end_stream(origin, stream_id, reason, cancel).await;
+                lock(&self.hosted).finish(origin, call_id);
                 return;
             }
             Ok(Ok(Outcome::Ok(bytes))) => Ok(bytes),
@@ -1322,7 +1373,8 @@ impl Runtime {
         };
         // The call leaves the table only once its response is out, so a
         // cancel still frees a response waiting on a full channel.
-        self.respond_unless_cancelled(origin, call_id, result, cancel);
+        self.respond_unless_cancelled(origin, call_id, result, cancel)
+            .await;
         lock(&self.hosted).finish(origin, call_id);
     }
 
@@ -1338,16 +1390,15 @@ impl Runtime {
             return;
         };
         let runtime = Arc::clone(self);
-        let thread_cancel = cancel.clone();
-        let spawned = spawn_named("istmo-create", move || {
+        let task_cancel = cancel.clone();
+        let spawned = exec::spawn("istmo-create", async move {
             // Same unwind reasoning as `dispatch_hosted_call`.
-            let outcome = catch_unwind(AssertUnwindSafe(|| {
-                pollster::block_on(dispatcher.create_instance(&payload, thread_cancel.clone()))
-            }));
+            let outcome =
+                CatchUnwind::new(dispatcher.create_instance(&payload, task_cancel.clone())).await;
             let result = match outcome {
                 Ok(Ok(Outcome::Ok(bytes))) => {
                     match crate::codec::decode::<InstanceId>(&bytes) {
-                        Ok((instance_id, _)) if thread_cancel.is_cancelled() => {
+                        Ok((instance_id, _)) if task_cancel.is_cancelled() => {
                             // Nobody will learn the id: reap the instance.
                             let reaped = catch_unwind(AssertUnwindSafe(|| {
                                 dispatcher.destroy_instance(instance_id);
@@ -1383,19 +1434,13 @@ impl Runtime {
                     Err(encode_dispatch_error_string("host panicked"))
                 }
             };
-            runtime.respond_unless_cancelled(origin, call_id, result, &thread_cancel);
+            runtime
+                .respond_unless_cancelled(origin, call_id, result, &task_cancel)
+                .await;
             lock(&runtime.hosted).finish(origin, call_id);
         });
         if let Err(err) = spawned {
-            tracing::error!(?err, ?call_id, "failed to spawn a host thread");
-            let message = DispatchError::Spawn(err).to_string();
-            self.respond(
-                origin,
-                call_id,
-                Err(encode_dispatch_error_string(&message)),
-                Wait::UnlessCancelled(&cancel),
-            );
-            lock(&self.hosted).finish(origin, call_id);
+            self.refuse_spawn(origin, call_id, &cancel, err);
         }
     }
 
@@ -1409,68 +1454,30 @@ impl Runtime {
     }
 
     /// Forward a hosted stream's items until the producer closes or fails
-    /// it, or the consumer cancels, then end it.
-    fn spawn_stream_pump(
-        self: &Arc<Self>,
-        origin: Origin,
-        call_id: CallId,
-        cancel: &CancelToken,
-        receiver: FlumeReceiver<HostedStreamItem>,
-    ) {
-        let stream_id = StreamId(call_id.get());
-        let runtime = Arc::clone(self);
-        let pump_cancel = cancel.clone();
-        let spawned = spawn_named("istmo-stream", move || {
-            let reason = runtime.pump_stream(origin, stream_id, &pump_cancel, &receiver);
-            // Release the producer before the end goes out.
-            drop(receiver);
-            runtime.end_stream(origin, stream_id, reason, &pump_cancel);
-            lock(&runtime.hosted).finish(origin, call_id);
-        });
-        if let Err(err) = spawned {
-            tracing::error!(?err, ?stream_id, "failed to spawn a stream pump thread");
-            let message = DispatchError::Spawn(err).to_string();
-            self.end_stream(
-                origin,
-                stream_id,
-                StreamEndReason::Error(encode_dispatch_error_string(&message)),
-                cancel,
-            );
-            lock(&self.hosted).finish(origin, call_id);
-        }
-    }
-
-    fn pump_stream(
+    /// it, or the consumer cancels.
+    async fn pump_stream(
         &self,
         origin: Origin,
         stream_id: StreamId,
         cancel: &CancelToken,
         receiver: &FlumeReceiver<HostedStreamItem>,
     ) -> StreamEndReason {
-        enum Step {
-            Item(HostedStreamItem),
-            Closed,
-            Cancelled,
-        }
         loop {
-            let step = flume::Selector::new()
-                .recv(receiver, |item| item.map_or(Step::Closed, Step::Item))
-                .recv(cancel.disconnect_signal(), |_| Step::Cancelled)
-                .wait();
+            let step = race(receiver.recv_async(), cancel.cancelled()).await;
             // A producer that never stops sending keeps its receiver
             // ready, so the flag is what guarantees a cancel is seen.
             if cancel.is_cancelled() {
                 return StreamEndReason::Cancelled;
             }
             match step {
-                Step::Item(Ok(payload)) => {
-                    if !self.emit_event(origin, stream_id, payload, cancel) {
+                Either::Left(Ok(Ok(payload))) => {
+                    if !self.emit_event(origin, stream_id, payload, cancel).await {
                         return StreamEndReason::Cancelled;
                     }
                 }
-                Step::Item(Err(error)) => return StreamEndReason::Error(error),
-                Step::Closed => return StreamEndReason::Complete,
-                Step::Cancelled => return StreamEndReason::Cancelled,
+                Either::Left(Ok(Err(error))) => return StreamEndReason::Error(error),
+                Either::Left(Err(_)) => return StreamEndReason::Complete,
+                Either::Right(()) => return StreamEndReason::Cancelled,
             }
         }
     }
@@ -1478,7 +1485,7 @@ impl Runtime {
     /// Forward one hosted stream item, waiting out a full consumer or
     /// outbound channel unless the stream is cancelled meanwhile.
     /// `false` once nobody can receive further items.
-    fn emit_event(
+    async fn emit_event(
         &self,
         origin: Origin,
         stream_id: StreamId,
@@ -1486,17 +1493,21 @@ impl Runtime {
         cancel: &CancelToken,
     ) -> bool {
         let delivered = match origin {
-            Origin::Local => self.routing.stream_sender(stream_id).map(|tx| {
-                matches!(
-                    send_unless_cancelled(&tx, StreamMessage::Event(payload), cancel),
+            Origin::Local => match self.routing.stream_sender(stream_id) {
+                Ok(tx) => Ok(matches!(
+                    send_unless_cancelled(&tx, StreamMessage::Event(payload), cancel).await,
                     Delivery::Sent
+                )),
+                Err(err) => Err(err),
+            },
+            Origin::Peer | Origin::Remote => {
+                self.send_to_issuer(
+                    origin,
+                    Envelope::new(Frame::Event { stream_id, payload }),
+                    Wait::UnlessCancelled(cancel),
                 )
-            }),
-            Origin::Peer | Origin::Remote => self.send_to_issuer(
-                origin,
-                Envelope::new(Frame::Event { stream_id, payload }),
-                Wait::UnlessCancelled(cancel),
-            ),
+                .await
+            }
         };
         delivered
             .inspect_err(|err| tracing::debug!(?err, ?stream_id, "hosted stream event undelivered"))
@@ -1506,7 +1517,7 @@ impl Runtime {
     /// Send a hosted stream's end. Once the stream is cancelled the end
     /// is best effort and never blocks: its issuer left, or the runtime
     /// shut down and the transport may have stopped draining.
-    fn end_stream(
+    async fn end_stream(
         &self,
         origin: Origin,
         stream_id: StreamId,
@@ -1529,6 +1540,7 @@ impl Runtime {
                     Envelope::new(Frame::StreamEnd { stream_id, reason }),
                     wait,
                 )
+                .await
             }
         };
         if let Err(err) = delivered {
@@ -1539,7 +1551,7 @@ impl Runtime {
     /// Deliver a finished hosted call's result, unless the issuer
     /// cancelled it: a cancelled call from another runtime is answered
     /// by nobody.
-    fn respond_unless_cancelled(
+    async fn respond_unless_cancelled(
         &self,
         origin: Origin,
         call_id: CallId,
@@ -1553,11 +1565,12 @@ impl Runtime {
             self.forget_incoming_remote(origin, call_id);
             return;
         }
-        self.respond(origin, call_id, result, Wait::UnlessCancelled(cancel));
+        self.respond(origin, call_id, result, Wait::UnlessCancelled(cancel))
+            .await;
     }
 
     /// Deliver a hosted call's result to whoever issued it.
-    fn respond(&self, origin: Origin, call_id: CallId, result: CallResult, wait: Wait<'_>) {
+    async fn respond(&self, origin: Origin, call_id: CallId, result: CallResult, wait: Wait<'_>) {
         if origin == Origin::Local {
             if let Err(err) = self.routing.complete(call_id, result) {
                 tracing::debug!(?err, ?call_id, "hosted call finished after its caller left");
@@ -1565,7 +1578,7 @@ impl Runtime {
             return;
         }
         let envelope = Envelope::new(Frame::Respond { call_id, result });
-        match self.send_to_issuer(origin, envelope, wait) {
+        match self.send_to_issuer(origin, envelope, wait).await {
             Ok(true) => {}
             Ok(false) => {
                 tracing::debug!(?call_id, "hosted call cancelled while its response waited");
@@ -1651,54 +1664,22 @@ enum Wait<'a> {
     Never,
 }
 
-/// What became of a [`send_unless_cancelled`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Delivery {
-    Sent,
-    Cancelled,
-    Disconnected,
-}
-
-/// Send `message`, waiting while `tx` is full, unless `cancel` trips
-/// first.
-fn send_unless_cancelled<T>(tx: &FlumeSender<T>, message: T, cancel: &CancelToken) -> Delivery {
-    if cancel.is_cancelled() {
-        return Delivery::Cancelled;
-    }
-    let message = match tx.try_send(message) {
-        Ok(()) => return Delivery::Sent,
-        Err(TrySendError::Disconnected(_)) => return Delivery::Disconnected,
-        Err(TrySendError::Full(message)) => message,
-    };
-    flume::Selector::new()
-        .send(tx, message, |sent| {
-            if sent.is_ok() {
-                Delivery::Sent
-            } else {
-                Delivery::Disconnected
-            }
-        })
-        .recv(cancel.disconnect_signal(), |_| Delivery::Cancelled)
-        .wait()
-}
-
-/// Run a notification on its own thread; nothing is sent back.
+/// Run a notification in the background; nothing is sent back.
 fn dispatch_notify(
     dispatcher: Arc<dyn Dispatch>,
     instance_id: Option<InstanceId>,
     method: String,
     payload: Vec<u8>,
 ) {
-    let spawned = spawn_named("istmo-notify", move || {
+    let spawned = exec::spawn("istmo-notify", async move {
         // Same unwind reasoning as `Runtime::dispatch_hosted_call`.
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            pollster::block_on(dispatcher.dispatch(
-                instance_id,
-                &method,
-                &payload,
-                CancelToken::new(),
-            ))
-        }));
+        let outcome = CatchUnwind::new(dispatcher.dispatch(
+            instance_id,
+            &method,
+            &payload,
+            CancelToken::new(),
+        ))
+        .await;
         match outcome {
             Ok(Ok(_)) => {}
             Ok(Err(err)) => tracing::warn!(?err, method = %method, "notify dispatch failed"),
@@ -1713,13 +1694,42 @@ fn dispatch_notify(
     }
 }
 
-/// Spawn a named thread, surfacing the OS refusing one as an error
-/// instead of the panic [`std::thread::spawn`] raises.
-fn spawn_named(name: &str, body: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
-    std::thread::Builder::new()
-        .name(name.to_owned())
-        .spawn(body)
-        .map(drop)
+/// Host side of a `#[istmo::stream]` method: encode the
+/// implementation's typed items in the background and hand the runtime
+/// the encoded stream. Called by `#[istmo::plugin]`-generated code.
+///
+/// `encode` returns the item's bytes, or the `Err` chunk that ends the
+/// stream (a domain error, or an encode failure as a string).
+///
+/// # Errors
+///
+/// [`DispatchError::Spawn`] when the OS refused the encoder thread.
+#[doc(hidden)]
+pub fn encode_hosted_stream<T: Send + 'static>(
+    method: &'static str,
+    source: FlumeReceiver<T>,
+    capacity: usize,
+    encode: impl Fn(T) -> HostedStreamItem + Send + 'static,
+) -> Result<Outcome, DispatchError> {
+    let (tx, rx) = bounded::<HostedStreamItem>(capacity);
+    exec::spawn("istmo-stream-enc", async move {
+        while let Ok(item) = source.recv_async().await {
+            let chunk = encode(item);
+            let ends = chunk.is_err();
+            if tx.send_async(chunk).await.is_err() || ends {
+                break;
+            }
+        }
+    })
+    .map_err(|err| {
+        tracing::error!(
+            ?err,
+            method,
+            "failed to spawn the hosted stream encoder thread"
+        );
+        DispatchError::Spawn(err)
+    })?;
+    Ok(Outcome::StreamOpened(rx))
 }
 
 fn encode_dispatch_error_string(message: &str) -> Vec<u8> {
