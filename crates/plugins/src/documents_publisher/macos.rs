@@ -182,10 +182,10 @@ fn deliver(event: &AnyObject) {
         let Some(path) = file_path(&item) else {
             continue;
         };
-        if let Some(document) = OpenedDocument::from_path(path, DocumentOrigin::Running) {
-            if let Err(err) = Documents::publish(&runtime, &document) {
-                tracing::warn!(target: "istmo.documents", %err, "publishing a document from Finder");
-            }
+        if let Some(document) = OpenedDocument::from_path(path, DocumentOrigin::Running)
+            && let Err(err) = Documents::publish(&runtime, &document)
+        {
+            tracing::warn!(target: "istmo.documents", %err, "publishing a document from Finder");
         }
     }
 }

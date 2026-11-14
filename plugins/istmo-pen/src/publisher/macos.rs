@@ -6,10 +6,10 @@
 //! `NSWindow` pointer stashed at register time.
 //!
 //! The monitor is passive: the handler block always returns the event
-//! unchanged so ordinary AppKit dispatch keeps flowing.
+//! unchanged so ordinary `AppKit` dispatch keeps flowing.
 
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 
@@ -45,7 +45,6 @@ const NS_EVENT_TYPE_TABLET_PROXIMITY: u64 = 24;
 
 // NSEventSubtype for a mouse event backed by a tablet stylus.
 const NS_EVENT_SUBTYPE_TABLET_POINT: i16 = 1;
-const NS_EVENT_SUBTYPE_TABLET_PROXIMITY: i16 = 2;
 
 // NSPointingDeviceType.
 const NS_POINTING_DEVICE_TYPE_ERASER: u64 = 2;
@@ -105,7 +104,7 @@ pub(super) struct WindowAttachment {
 struct AttachClock {
     sequence: AtomicU32,
     start: Instant,
-    tool_id_alloc: AtomicU64,
+    tool_id_alloc: AtomicU32,
 }
 
 impl AttachClock {
@@ -113,7 +112,7 @@ impl AttachClock {
         Self {
             sequence: AtomicU32::new(0),
             start: Instant::now(),
-            tool_id_alloc: AtomicU64::new(1),
+            tool_id_alloc: AtomicU32::new(1),
         }
     }
 
@@ -155,7 +154,7 @@ pub(super) fn attach_view(
     // `NSWindow` (or nil if unattached). We only need the pointer as
     // an identifier — never dereference it.
     let ns_window: *mut AnyObject = unsafe {
-        let view = ns_view.as_ptr() as *mut AnyObject;
+        let view = ns_view.as_ptr().cast::<AnyObject>();
         msg_send![view, window]
     };
     if ns_window.is_null() {
@@ -181,11 +180,16 @@ pub(super) fn attach_view(
 }
 
 pub(super) fn detach_view(attachment: WindowAttachment) {
+    // Consumed: the clock goes away with the registry entry.
+    let WindowAttachment {
+        ns_window_id,
+        _clock,
+    } = attachment;
     let mut list = match registry().write() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    list.retain(|e| e.ns_window_id != attachment.ns_window_id);
+    list.retain(|e| e.ns_window_id != ns_window_id);
 }
 
 #[derive(Debug)]
@@ -269,10 +273,10 @@ fn dispatch_event(event: *mut AnyObject) {
         NS_EVENT_TYPE_LEFT_MOUSE_DOWN
         | NS_EVENT_TYPE_LEFT_MOUSE_UP
         | NS_EVENT_TYPE_LEFT_MOUSE_DRAGGED
-        | NS_EVENT_TYPE_MOUSE_MOVED => {
-            if is_tablet_backed(event) {
-                handle_mouse_from_tablet(event, ns_type, &state, &clock);
-            }
+        | NS_EVENT_TYPE_MOUSE_MOVED
+            if is_tablet_backed(event) =>
+        {
+            handle_mouse_from_tablet(event, ns_type, &state, &clock);
         }
         _ => {}
     }
@@ -362,6 +366,10 @@ fn handle_tablet_proximity(
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "AppKit reports f64 coordinates; samples carry f32"
+)]
 fn decode_sample(event: *mut AnyObject, clock: &Arc<AttachClock>) -> PenSample {
     // SAFETY: every message send below targets a live NSEvent whose
     // methods are documented in AppKit.
@@ -391,7 +399,7 @@ fn decode_sample(event: *mut AnyObject, clock: &Arc<AttachClock>) -> PenSample {
         };
 
         // Rotation reported in degrees (0..360) per NSEvent docs.
-        let twist = (rotation as f32).to_radians();
+        let twist = rotation.to_radians();
 
         // AppKit tilt already reported in normalized -1..1; convert to
         // radians of tilt-from-perpendicular assuming full-scale = PI/2.
@@ -399,7 +407,7 @@ fn decode_sample(event: *mut AnyObject, clock: &Arc<AttachClock>) -> PenSample {
         let tilt_y = (tilt.y as f32) * std::f32::consts::FRAC_PI_2;
 
         let tool_id = if device_id == 0 {
-            clock.tool_id_alloc.fetch_add(1, Ordering::Relaxed) as u32
+            clock.tool_id_alloc.fetch_add(1, Ordering::Relaxed)
         } else {
             (device_id & 0xFFFF_FFFF) as u32
         };

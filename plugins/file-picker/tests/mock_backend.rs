@@ -130,7 +130,7 @@ fn raw_from_file(f: std::fs::File) -> i64 {
 #[cfg(windows)]
 fn raw_from_file(f: std::fs::File) -> i64 {
     use std::os::windows::io::IntoRawHandle;
-    (f.into_raw_handle() as usize) as i64
+    f.into_raw_handle() as isize as i64
 }
 
 #[cfg(not(any(unix, windows)))]

@@ -418,7 +418,12 @@ fn persist(path: &Path, values: &HashMap<String, StoredValue>) -> Result<(), Dat
         })
         .map_err(|err| DataStoreError::Backend(format!("write {}: {err}", tmp.display())))?;
     match fs::rename(&tmp, path) {
+        // Windows cannot open a directory as a file, and NTFS journals
+        // the rename itself.
+        #[cfg(unix)]
         Ok(()) => sync_parent_dir(path),
+        #[cfg(not(unix))]
+        Ok(()) => Ok(()),
         // Windows refuses `rename` when the destination is opened by
         // another handle; fall back to copy + remove.
         Err(err) if err.kind() == ErrorKind::PermissionDenied && cfg!(target_os = "windows") => {
@@ -436,17 +441,14 @@ fn persist(path: &Path, values: &HashMap<String, StoredValue>) -> Result<(), Dat
     }
 }
 
-/// Make the rename itself durable. Unix only: Windows cannot open a
-/// directory as a file, and NTFS journals the rename.
+/// Make the rename itself durable.
+#[cfg(unix)]
 fn sync_parent_dir(path: &Path) -> Result<(), DataStoreError> {
-    #[cfg(unix)]
     if let Some(dir) = path.parent() {
         fs::File::open(dir)
             .and_then(|d| d.sync_all())
             .map_err(|err| DataStoreError::Backend(format!("sync {}: {err}", dir.display())))?;
     }
-    #[cfg(not(unix))]
-    let _ = path;
     Ok(())
 }
 

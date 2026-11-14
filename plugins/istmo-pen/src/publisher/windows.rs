@@ -15,7 +15,6 @@
 //! so the host app's own input handling keeps running — this publisher
 //! is a passive observer.
 
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
@@ -33,7 +32,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::WindowState;
-use crate::{PenButtonChange, PenEvent, PenHoverEvent, PenMove, PenSample, PenToolKind};
+use crate::{PenEvent, PenHoverEvent, PenMove, PenSample, PenToolKind};
 
 const SUBCLASS_ID: usize = 0x1570_0001;
 
@@ -55,7 +54,7 @@ const POINTER_FLAG_SECONDBUTTON: u32 = 0x0000_0020;
 struct AttachClock {
     sequence: AtomicU32,
     start: Instant,
-    tool_id_alloc: AtomicU64,
+    tool_id_alloc: AtomicU32,
 }
 
 impl AttachClock {
@@ -63,7 +62,7 @@ impl AttachClock {
         Self {
             sequence: AtomicU32::new(0),
             start: Instant::now(),
-            tool_id_alloc: AtomicU64::new(1),
+            tool_id_alloc: AtomicU32::new(1),
         }
     }
 
@@ -173,6 +172,10 @@ pub(super) fn attach_hwnd(
 /// The subclass itself can only be removed on the window's thread; from
 /// any other thread it stays installed as a pass-through (no registry
 /// entry) until `WM_NCDESTROY` removes it.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "taking the attachment keeps it from being detached twice"
+)]
 pub(super) fn detach_hwnd(attachment: WindowAttachment) {
     let removed = {
         let mut list = registry_write();
@@ -258,6 +261,10 @@ const fn is_pointer_message(msg: u32) -> bool {
     )
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the pointer id is the low word of `wparam`"
+)]
 const fn get_pointer_id_from_wparam(wparam: WPARAM) -> u32 {
     (wparam as u32) & 0xFFFF
 }
@@ -266,7 +273,7 @@ fn is_pen_pointer(pointer_id: u32) -> bool {
     let mut ty: i32 = 0;
     // SAFETY: GetPointerType writes a single POINTER_INPUT_TYPE (i32)
     // through the pointer.
-    let ok = unsafe { GetPointerType(pointer_id, &mut ty) };
+    let ok = unsafe { GetPointerType(pointer_id, &raw mut ty) };
     ok != 0 && ty == PT_PEN
 }
 
@@ -275,7 +282,7 @@ fn handle_pen_message(hwnd: HWND, msg: u32, pointer_id: u32, entry: &Entry) {
     // SAFETY: GetPointerPenInfo fills the entire POINTER_PEN_INFO
     // structure. Zero-init first so uninitialised padding does not
     // reach later reads.
-    let ok = unsafe { GetPointerPenInfo(pointer_id, &mut info) };
+    let ok = unsafe { GetPointerPenInfo(pointer_id, &raw mut info) };
     if ok == 0 {
         return;
     }
@@ -321,13 +328,13 @@ fn read_history(hwnd: HWND, pointer_id: u32, entry: &Entry) -> Vec<PenSample> {
     let mut count: u32 = 0;
     // SAFETY: passing a null pointer with a valid count pointer is the
     // documented way to query the required capacity.
-    let ok = unsafe { GetPointerPenInfoHistory(pointer_id, &mut count, std::ptr::null_mut()) };
+    let ok = unsafe { GetPointerPenInfoHistory(pointer_id, &raw mut count, std::ptr::null_mut()) };
     if ok == 0 || count <= 1 {
         return Vec::new();
     }
     let mut buf: Vec<POINTER_PEN_INFO> = vec![unsafe { std::mem::zeroed() }; count as usize];
     // SAFETY: buf holds `count` initialised POINTER_PEN_INFO slots.
-    let ok = unsafe { GetPointerPenInfoHistory(pointer_id, &mut count, buf.as_mut_ptr()) };
+    let ok = unsafe { GetPointerPenInfoHistory(pointer_id, &raw mut count, buf.as_mut_ptr()) };
     if ok == 0 {
         return Vec::new();
     }
@@ -339,6 +346,10 @@ fn read_history(hwnd: HWND, pointer_id: u32, entry: &Entry) -> Vec<PenSample> {
         .collect()
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "pressure, angles and pixel coordinates are far below 2^23"
+)]
 fn decode_sample(hwnd: HWND, info: &POINTER_PEN_INFO, entry: &Entry) -> PenSample {
     let (x, y) = client_coords(hwnd, info.pointerInfo.ptPixelLocation);
 
@@ -401,7 +412,7 @@ fn decode_sample(hwnd: HWND, info: &POINTER_PEN_INFO, entry: &Entry) -> PenSampl
 fn derive_tool_id(info: &POINTER_PEN_INFO, entry: &Entry) -> u32 {
     let raw = info.pointerInfo.sourceDevice as usize as u64;
     if raw == 0 {
-        entry.clock.tool_id_alloc.fetch_add(1, Ordering::Relaxed) as u32
+        entry.clock.tool_id_alloc.fetch_add(1, Ordering::Relaxed)
     } else {
         // Fold the source-device handle into a 32-bit id — collisions
         // across devices are theoretically possible but astronomically
@@ -410,11 +421,15 @@ fn derive_tool_id(info: &POINTER_PEN_INFO, entry: &Entry) -> u32 {
     }
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "pixel coordinates are far below 2^23"
+)]
 fn client_coords(hwnd: HWND, screen: POINT) -> (f32, f32) {
     let mut pt = screen;
     // SAFETY: ScreenToClient converts the point in-place from screen
     // to client coordinates for the given HWND.
-    let ok = unsafe { ScreenToClient(hwnd, &mut pt) };
+    let ok = unsafe { ScreenToClient(hwnd, &raw mut pt) };
     if ok == 0 {
         (screen.x as f32, screen.y as f32)
     } else {

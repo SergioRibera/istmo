@@ -50,7 +50,11 @@ mod unix {
 
     use super::StorageInfo;
 
-    #[allow(clippy::unnecessary_cast)]
+    #[allow(
+        clippy::unnecessary_cast,
+        clippy::cast_lossless,
+        reason = "statvfs field widths differ per target: a no-op on some, a widening on others"
+    )]
     pub(super) fn sample() -> Option<StorageInfo> {
         let cwd = std::env::current_dir().ok()?;
         let path = CString::new(cwd.into_os_string().into_vec()).ok()?;

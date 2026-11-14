@@ -221,7 +221,7 @@ mod apple {
     };
     use super::Sample;
 
-    /// Runs inside its own pool: every NSString read below is
+    /// Runs inside its own pool: every `NSString` read below is
     /// autoreleased, and a tick driven from a plain thread (no run loop
     /// draining a pool) would otherwise leak them one batch per tick.
     pub(super) fn sample() -> Option<Sample> {
@@ -261,13 +261,12 @@ mod apple {
         let is_dst: bool = unsafe { msg_send![tz_obj, isDaylightSavingTime] };
         let abbreviation = unsafe { tz_abbreviation(tz_obj) }.unwrap_or_default();
 
-        let (first_day_of_week, calendar_system) = unsafe { autoupdating_calendar() }
-            .map(|c| {
+        let (first_day_of_week, calendar_system) =
+            unsafe { autoupdating_calendar() }.map_or((1, CalendarSystem::Gregorian), |c| {
                 let fw: isize = unsafe { msg_send![c, firstWeekday] };
                 let id = unsafe { calendar_identifier(c) }.unwrap_or_else(|| "gregorian".into());
                 (apple_weekday_to_iso(fw), calendar_from_id(&id))
-            })
-            .unwrap_or((1, CalendarSystem::Gregorian));
+            });
 
         let locale = Locale {
             bcp47: canonical,

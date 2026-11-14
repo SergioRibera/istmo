@@ -191,6 +191,10 @@ fn inbox_cleanup_refuses_files_outside_the_incoming_dir() {
         mime_type: None,
         size: None,
     };
+    #[cfg_attr(
+        not(unix),
+        expect(unused_mut, reason = "only the Unix symlink case pushes")
+    )]
     let mut files = vec![
         file(victim.clone()),
         file(entry.join("../../../victim.txt")),

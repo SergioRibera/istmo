@@ -28,6 +28,13 @@ impl LatestPublisher<BatteryState> {
     }
 }
 
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows")),
+    expect(
+        clippy::missing_const_for_fn,
+        reason = "only the unsupported-target body is const"
+    )
+)]
 fn sample() -> Option<BatteryState> {
     #[cfg(target_os = "linux")]
     {
