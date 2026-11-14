@@ -16,7 +16,6 @@ crate-type = ["cdylib", "staticlib"]
 istmo = { path = "../.." }
 istmo-plugins = { workspace = true }
 istmo-google-sign-in = { workspace = true }
-log = "0.4"
 pollster = { workspace = true }
 
 [build-dependencies]
@@ -28,12 +27,14 @@ eframe = { version = "0.29", default-features = false, features = ["wgpu", "defa
 egui = { version = "0.29", default-features = false }
 winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
 android_logger = "0.14"
+log = "0.4"
 istmo-plugins = { workspace = true, features = ["winit-publisher"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))'.dependencies]
 eframe = { version = "0.29", default-features = false, features = ["wgpu", "default_fonts"] }
 egui = { version = "0.29", default-features = false }
 winit = { version = "0.30", default-features = false }
+log = "0.4"
 istmo-plugins = { workspace = true, features = ["winit-publisher"] }
 
 [lints.rust]
