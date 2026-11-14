@@ -9,7 +9,7 @@ the first code read, or `Ok(None)` when the user backs out.
 | --- | --- | --- |
 | Android | Google code scanner (`play-services-code-scanner`); no `CAMERA` permission needed | API 21 |
 | iOS | `AVCaptureSession` + `AVCaptureMetadataOutput`; needs `NSCameraUsageDescription` | 14.0 |
-| Desktop | `DesktopBarcodeScanner`, always `ScanError::Unavailable` | — |
+| Desktop, web | `DesktopBarcodeScanner`, always `ScanError::Unavailable`; draw your own scanner with `BarcodeReader` | — |
 
 The minimums come from the plugin's `[min_versions]` and are checked by
 the app's `build.rs`.
@@ -36,6 +36,31 @@ if let Some(code) = scanner.scan(ScanConfig::qr("Scan the pairing code")).await.
 then still hands over the bytes in `ScannedCode::raw`, while iOS skips
 such codes and keeps scanning. `BarcodeFormat` is `#[non_exhaustive]`
 and reports symbologies without a variant as `BarcodeFormat::Other`.
+
+## App-drawn scanner
+
+The `reader` feature adds `BarcodeReader`, a pure-Rust decoder (`rxing`)
+for the frames of an `istmo-camera` session. The app draws the preview
+and its overlay; each `DetectedCode` carries its corners in frame
+pixels. It works wherever the camera does, mobile included.
+
+```toml
+istmo-barcode-scanner = { version = "0.1.1-alpha.5", features = ["reader"] }
+```
+
+```rust,ignore
+use istmo_barcode_scanner::{BarcodeFormat, BarcodeReader};
+
+let reader = BarcodeReader::default().with_formats([BarcodeFormat::Qr]);
+for code in reader.read(&frame)? {
+    draw_outline(&code.corners, frame.rotation_degrees);
+    println!("{}", code.code.text);
+}
+```
+
+`read` takes NV21, YUV 4:2:0, RGBA or BGRA frames and blocks for one
+decode pass: call it off the UI thread and skip frames while a pass
+runs.
 
 ## App setup
 

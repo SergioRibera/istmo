@@ -11,8 +11,17 @@
 //! * iOS — an `AVCaptureSession` with `AVCaptureMetadataOutput`
 //!   presented over the top view controller. Needs
 //!   `NSCameraUsageDescription` (declared in this plugin's `istmo.toml`).
-//! * Desktop — [`DesktopBarcodeScanner`] reports
-//!   [`ScanError::Unavailable`]; desktop apps offer paste instead.
+//! * Desktop and web — [`DesktopBarcodeScanner`] reports
+//!   [`ScanError::Unavailable`]: there is no platform scanner UI. Use the
+//!   frame decoder below.
+//!
+//! # App-drawn scanner
+//!
+//! With the `reader` feature, `BarcodeReader` decodes the frames of an
+//! `istmo-camera` session in Rust, on every platform the camera runs
+//! on (mobile included). The app draws the preview and its own overlay
+//! from the corners each detected code carries; see the `reader`
+//! module.
 //!
 //! # Auto-registration
 //!
@@ -24,6 +33,11 @@
 //! ```
 
 #![doc(html_root_url = "https://docs.rs/istmo-barcode-scanner")]
+
+#[cfg(feature = "reader")]
+pub mod reader;
+#[cfg(feature = "reader")]
+pub use reader::{BarcodeReader, DetectedCode, FramePoint, ReadError};
 
 use istmo_macros::{message, plugin};
 
@@ -159,8 +173,9 @@ pub trait BarcodeScanner {
     async fn scan(&self, config: ScanConfig) -> Result<Option<ScannedCode>, ScanError>;
 }
 
-/// Desktop backend: there is no camera scanner, every scan reports
-/// [`ScanError::Unavailable`].
+/// Desktop backend: there is no platform scanner UI, every scan reports
+/// [`ScanError::Unavailable`]. Apps that draw their own scanner decode
+/// camera frames with the `reader` feature instead.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DesktopBarcodeScanner;
 

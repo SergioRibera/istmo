@@ -1,7 +1,7 @@
 [package]
 name = "istmo-barcode-scanner"
 version = "0.1.1-alpha.5"
-description = "Cross-platform barcode and QR scanner plugin for the istmo framework — Google code scanner on Android, AVFoundation on iOS."
+description = "Cross-platform barcode and QR scanner plugin for the istmo framework — Google code scanner on Android, AVFoundation on iOS, and a pure-Rust frame decoder over istmo-camera for app-drawn scanners."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,15 +13,28 @@ keywords = ["istmo", "qr", "barcode", "scanner", "mobile"]
 categories = ["multimedia::images", "api-bindings"]
 links = "istmo_barcode_scanner"
 
+[features]
+default = []
+# `BarcodeReader`: decode `istmo-camera` frames in Rust, for apps that
+# draw their own scanner.
+reader = ["dep:rxing", "dep:istmo-camera"]
+
 [dependencies]
+istmo-camera = { workspace = true, optional = true }
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
+# `reader`: decoders plus text encodings (QR codes may carry Shift JIS or
+# other ECI charsets) — the default features pull in image codecs,
+# rayon and serde.
+rxing = { version = "0.9", default-features = false, features = ["decoders", "multi_barcode_readers", "full_barcode_format_support", "encoding_rs"], optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }
 
 [dev-dependencies]
 pollster = { workspace = true }
+# Tests encode the codes they decode.
+rxing = { version = "0.9", default-features = false, features = ["decoders", "multi_barcode_readers", "full_barcode_format_support", "encoding_rs", "encoders"] }
 
 [lints]
 workspace = true
