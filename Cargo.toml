@@ -141,6 +141,10 @@ istmo-ios = { workspace = true }
 pollster = { workspace = true }
 flume = { workspace = true }
 
+# `tests/wasm_runtime.rs` runs under `wasm-bindgen-test-runner`.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
 [lints]
 workspace = true
 

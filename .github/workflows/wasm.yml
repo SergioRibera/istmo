@@ -1,0 +1,62 @@
+name: wasm
+
+# The runtime and the built-in plugins on `wasm32-unknown-unknown`: no
+# threads, hosted work runs on the JavaScript event loop. Clippy for the
+# target, then `tests/wasm_runtime.rs` under `wasm-bindgen-test-runner`
+# (Node).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "plugins/**"
+      - "src/**"
+      - "tests/wasm_runtime.rs"
+      - "Cargo.toml"
+      - ".github/workflows/wasm.yml"
+      - "!**/*.md"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "plugins/**"
+      - "src/**"
+      - "tests/wasm_runtime.rs"
+      - "Cargo.toml"
+      - ".github/workflows/wasm.yml"
+      - "!**/*.md"
+  workflow_dispatch:
+
+concurrency:
+  group: wasm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: >-
+          cargo clippy --target wasm32-unknown-unknown
+          -p istmo-core -p istmo-plugins -p istmo
+          -p istmo-barcode-scanner --features istmo-barcode-scanner/reader-qr
+          --all-targets -- -D warnings
+      - name: Camera web backend
+        run: cargo check --target wasm32-unknown-unknown -p istmo-camera --features web
+      # The runner must match the `wasm-bindgen` the build resolved.
+      - name: Install wasm-bindgen-test-runner
+        run: |
+          version=$(cargo metadata --format-version 1 --filter-platform wasm32-unknown-unknown \
+            | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version')
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Tests
+        run: cargo test --target wasm32-unknown-unknown -p istmo --test wasm_runtime
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
