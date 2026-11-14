@@ -134,7 +134,7 @@ runtime.register_host(BarcodeScannerHost::new(DesktopBarcodeScanner));
 
 ## Escáner dibujado por la app
 
-La feature `reader` agrega `BarcodeReader`, un decodificador en Rust puro
+Las features `reader-*` agregan `BarcodeReader`, un decodificador en Rust puro
 (`rxing`) para los frames de una sesión de
 [`istmo-camera`](/istmo/es/plugins/camera/). La app abre la cámara, dibuja
 la vista previa y su propia superposición, y le pasa cada frame al
@@ -142,8 +142,23 @@ lector. Funciona donde funcione la cámara, móvil incluido, así que una
 sola interfaz de escáner sirve para todas las plataformas.
 
 ```toml
-istmo-barcode-scanner = { version = "0.1.1-alpha.5", features = ["reader"] }
+istmo-barcode-scanner = { version = "0.1.1-alpha.5", features = ["reader-qr"] }
 ```
+
+No se compila ninguna simbología por defecto; activa solo las que lee
+tu app, así el binario solo lleva esos decodificadores:
+
+| Feature | Simbologías |
+| ------- | ----------- |
+| `reader-qr` | QR |
+| `reader-1d` | EAN-13, EAN-8, UPC-A, UPC-E, Code 128, Code 39, Code 93, ITF, Codabar |
+| `reader-datamatrix` | Data Matrix |
+| `reader-pdf417` | PDF417 |
+| `reader-aztec` | Aztec |
+
+`BarcodeReader::supports(format)` dice si una simbología está compilada;
+pedirle a `with_formats` una que no lo está hace fallar `read` con
+`ReadError::FormatNotCompiled`.
 
 ```rust
 use istmo_barcode_scanner::{BarcodeFormat, BarcodeReader};

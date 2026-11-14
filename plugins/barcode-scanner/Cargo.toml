@@ -16,25 +16,34 @@ links = "istmo_barcode_scanner"
 [features]
 default = []
 # `BarcodeReader`: decode `istmo-camera` frames in Rust, for apps that
-# draw their own scanner.
+# draw their own scanner. No symbology comes by default: enable the
+# `reader-*` features the app reads (each implies `reader`), so the
+# binary only carries those decoders.
 reader = ["dep:rxing", "dep:istmo-camera"]
+reader-qr = ["reader", "rxing/qrcode"]
+# EAN-13, EAN-8, UPC-A, UPC-E, Code 128, Code 39, Code 93, ITF, Codabar.
+reader-1d = ["reader", "rxing/oned"]
+reader-datamatrix = ["reader", "rxing/datamatrix"]
+reader-pdf417 = ["reader", "rxing/pdf417"]
+reader-aztec = ["reader", "rxing/aztec"]
 
 [dependencies]
 istmo-camera = { workspace = true, optional = true }
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 # `reader`: decoders plus text encodings (QR codes may carry Shift JIS or
-# other ECI charsets) — the default features pull in image codecs,
-# rayon and serde.
-rxing = { version = "0.9", default-features = false, features = ["decoders", "multi_barcode_readers", "full_barcode_format_support", "encoding_rs"], optional = true }
+# other ECI charsets); symbologies come from the `reader-*` features.
+# The default features would pull in image codecs, rayon and serde.
+rxing = { version = "0.9", default-features = false, features = ["decoders", "multi_barcode_readers", "encoding_rs"], optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }
 
 [dev-dependencies]
 pollster = { workspace = true }
-# Tests encode the codes they decode.
-rxing = { version = "0.9", default-features = false, features = ["decoders", "multi_barcode_readers", "full_barcode_format_support", "encoding_rs", "encoders"] }
+# Tests encode the codes they decode, with every symbology compiled in.
+istmo-barcode-scanner = { path = ".", features = ["reader-qr", "reader-1d", "reader-datamatrix", "reader-pdf417", "reader-aztec"] }
+rxing = { version = "0.9", default-features = false, features = ["decoders", "multi_barcode_readers", "encoding_rs", "encoders", "qrcode"] }
 
 [lints]
 workspace = true

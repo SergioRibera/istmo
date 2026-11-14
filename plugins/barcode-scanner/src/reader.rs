@@ -8,6 +8,12 @@
 //! Decoding is pure Rust (`rxing`), so the same code runs on every
 //! platform the camera does.
 //!
+//! No symbology is compiled in by default: enable the `reader-*`
+//! features the app reads (`reader-qr`, `reader-1d`,
+//! `reader-datamatrix`, `reader-pdf417`, `reader-aztec`), so the binary
+//! only carries those decoders. [`BarcodeReader::supports`] tells which
+//! ones are in.
+//!
 //! ```rust,ignore
 //! let reader = BarcodeReader::default().with_formats([BarcodeFormat::Qr]);
 //! while let Ok(frame) = frames.recv() {
@@ -30,6 +36,18 @@ use istmo_camera::{CameraFrame, FramePlane, PixelFormat};
 use rxing::{BarcodeFormat as RxFormat, DecodeHints, Exceptions};
 
 use crate::{BarcodeFormat, ScannedCode};
+
+#[cfg(not(any(
+    feature = "reader-qr",
+    feature = "reader-1d",
+    feature = "reader-datamatrix",
+    feature = "reader-pdf417",
+    feature = "reader-aztec",
+)))]
+compile_error!(
+    "istmo-barcode-scanner: `reader` decodes no symbology on its own; enable the ones the app \
+     reads: `reader-qr`, `reader-1d`, `reader-datamatrix`, `reader-pdf417`, `reader-aztec`"
+);
 
 /// A point in frame pixels: `x` to the right, `y` down, in the frame's
 /// buffer orientation (rotate it by
@@ -63,6 +81,9 @@ pub enum ReadError {
     UnsupportedPixelFormat(PixelFormat),
     /// The frame's planes do not fit its bytes, or it has no plane.
     MalformedFrame,
+    /// [`BarcodeReader::with_formats`] asked for a symbology whose
+    /// `reader-*` feature is off.
+    FormatNotCompiled(BarcodeFormat),
     /// The decoder failed for another reason.
     Decoder(String),
 }
@@ -74,6 +95,10 @@ impl fmt::Display for ReadError {
                 write!(f, "cannot decode barcodes in {format:?} frames")
             }
             Self::MalformedFrame => f.write_str("frame planes do not match its bytes"),
+            Self::FormatNotCompiled(format) => write!(
+                f,
+                "{format:?} is not compiled in; enable its `reader-*` feature"
+            ),
             Self::Decoder(msg) => write!(f, "barcode decoder: {msg}"),
         }
     }
@@ -84,15 +109,16 @@ impl std::error::Error for ReadError {}
 /// Decodes barcodes in camera frames.
 #[derive(Debug, Clone, Default)]
 pub struct BarcodeReader {
-    /// Empty reads every supported symbology.
+    /// Empty reads every compiled symbology.
     formats: Vec<BarcodeFormat>,
     try_harder: bool,
 }
 
 impl BarcodeReader {
     /// Only look for these symbologies; fewer formats decode faster.
-    /// [`BarcodeFormat::Other`] is ignored, and an empty list reads
-    /// every supported one.
+    /// [`BarcodeFormat::Other`] is ignored, and an empty list reads every
+    /// compiled one. Each must be compiled in (see [`Self::supports`]),
+    /// or [`read`](Self::read) fails.
     #[must_use]
     pub fn with_formats(mut self, formats: impl IntoIterator<Item = BarcodeFormat>) -> Self {
         self.formats = formats.into_iter().collect();
@@ -107,14 +133,43 @@ impl BarcodeReader {
         self
     }
 
+    /// Whether `format` is compiled in (its `reader-*` feature is on).
+    #[must_use]
+    pub const fn supports(format: BarcodeFormat) -> bool {
+        match format {
+            BarcodeFormat::Qr => cfg!(feature = "reader-qr"),
+            BarcodeFormat::Ean13
+            | BarcodeFormat::Ean8
+            | BarcodeFormat::UpcA
+            | BarcodeFormat::UpcE
+            | BarcodeFormat::Code128
+            | BarcodeFormat::Code39
+            | BarcodeFormat::Code93
+            | BarcodeFormat::Itf
+            | BarcodeFormat::Codabar => cfg!(feature = "reader-1d"),
+            BarcodeFormat::DataMatrix => cfg!(feature = "reader-datamatrix"),
+            BarcodeFormat::Pdf417 => cfg!(feature = "reader-pdf417"),
+            BarcodeFormat::Aztec => cfg!(feature = "reader-aztec"),
+            BarcodeFormat::Other => false,
+        }
+    }
+
     /// Every code found in `frame`, possibly none.
     ///
     /// # Errors
     ///
-    /// [`ReadError::UnsupportedPixelFormat`] for JPEG frames,
-    /// [`ReadError::MalformedFrame`] when the planes do not fit the
-    /// bytes, [`ReadError::Decoder`] for other decoder failures.
+    /// [`ReadError::FormatNotCompiled`] when a requested symbology's
+    /// feature is off, [`ReadError::UnsupportedPixelFormat`] for JPEG
+    /// frames, [`ReadError::MalformedFrame`] when the planes do not fit
+    /// the bytes, [`ReadError::Decoder`] for other decoder failures.
     pub fn read(&self, frame: &CameraFrame) -> Result<Vec<DetectedCode>, ReadError> {
+        if let Some(missing) = self
+            .formats
+            .iter()
+            .find(|format| **format != BarcodeFormat::Other && !Self::supports(**format))
+        {
+            return Err(ReadError::FormatNotCompiled(*missing));
+        }
         let luma = Luma::from_frame(frame)?;
         let mut hints = DecodeHints {
             TryHarder: Some(self.try_harder),
@@ -437,5 +492,18 @@ mod tests {
         }
         assert_eq!(to_rx(BarcodeFormat::Other), None);
         assert_eq!(from_rx(RxFormat::MAXICODE), BarcodeFormat::Other);
+    }
+
+    #[test]
+    fn compiled_symbologies_are_reported() {
+        // The tests compile every `reader-*` feature in.
+        assert!(BarcodeReader::supports(BarcodeFormat::Qr));
+        assert!(BarcodeReader::supports(BarcodeFormat::Ean13));
+        assert!(BarcodeReader::supports(BarcodeFormat::Aztec));
+        assert!(!BarcodeReader::supports(BarcodeFormat::Other));
+        assert_eq!(
+            ReadError::FormatNotCompiled(BarcodeFormat::Qr).to_string(),
+            "Qr is not compiled in; enable its `reader-*` feature"
+        );
     }
 }

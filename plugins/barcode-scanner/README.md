@@ -39,14 +39,29 @@ and reports symbologies without a variant as `BarcodeFormat::Other`.
 
 ## App-drawn scanner
 
-The `reader` feature adds `BarcodeReader`, a pure-Rust decoder (`rxing`)
+The `reader-*` features add `BarcodeReader`, a pure-Rust decoder (`rxing`)
 for the frames of an `istmo-camera` session. The app draws the preview
 and its overlay; each `DetectedCode` carries its corners in frame
 pixels. It works wherever the camera does, mobile included.
 
 ```toml
-istmo-barcode-scanner = { version = "0.1.1-alpha.5", features = ["reader"] }
+istmo-barcode-scanner = { version = "0.1.1-alpha.5", features = ["reader-qr"] }
 ```
+
+No symbology is compiled in by default; enable only the ones the app
+reads, so the binary carries only those decoders:
+
+| Feature | Symbologies |
+| ------- | ----------- |
+| `reader-qr` | QR |
+| `reader-1d` | EAN-13, EAN-8, UPC-A, UPC-E, Code 128, Code 39, Code 93, ITF, Codabar |
+| `reader-datamatrix` | Data Matrix |
+| `reader-pdf417` | PDF417 |
+| `reader-aztec` | Aztec |
+
+`BarcodeReader::supports(format)` tells whether a symbology is compiled
+in; asking `with_formats` for one that is not makes `read` fail with
+`ReadError::FormatNotCompiled`.
 
 ```rust,ignore
 use istmo_barcode_scanner::{BarcodeFormat, BarcodeReader};

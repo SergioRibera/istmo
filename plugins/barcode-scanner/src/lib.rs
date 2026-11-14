@@ -17,7 +17,9 @@
 //!
 //! # App-drawn scanner
 //!
-//! With the `reader` feature, `BarcodeReader` decodes the frames of an
+//! With a `reader-*` feature (one per symbology family: `reader-qr`,
+//! `reader-1d`, `reader-datamatrix`, `reader-pdf417`, `reader-aztec`),
+//! `BarcodeReader` decodes the frames of an
 //! `istmo-camera` session in Rust, on every platform the camera runs
 //! on (mobile included). The app draws the preview and its own overlay
 //! from the corners each detected code carries; see the `reader`
@@ -175,7 +177,7 @@ pub trait BarcodeScanner {
 
 /// Desktop backend: there is no platform scanner UI, every scan reports
 /// [`ScanError::Unavailable`]. Apps that draw their own scanner decode
-/// camera frames with the `reader` feature instead.
+/// camera frames with a `reader-*` feature instead.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DesktopBarcodeScanner;
 
