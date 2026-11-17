@@ -13,7 +13,7 @@ const plugins = [
   { id: "istmo.live-activity",    code: "LA", title: "Live Activities",   body: "iOS Lock Screen + Dynamic Island state stream.",                            platforms: ["iOS"] },
   { id: "istmo.system-info",      code: "SI", title: "System Info",       body: "Locale, timezone, formats, network, thermals, low-power.",                  platforms: ["Android","iOS","Desktop","WASM"] },
 ];
-const PL = { Android: "#A4C639", iOS: "#C7C7CC", Desktop: "#E8B9A3", WASM: "#7FA7D4" };
+const PL: Record<string, string> = { Android: "#A4C639", iOS: "#C7C7CC", Desktop: "#E8B9A3", WASM: "#7FA7D4" };
 ---
 <section class="plugins-showcase">
   <div class="inner">
