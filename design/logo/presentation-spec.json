@@ -1,0 +1,34 @@
+{
+  "brand": "istmo",
+  "tagline": "A thin bridge between Rust and every platform",
+  "brief": "Rust framework for cross-platform mobile plugins. Write one Rust trait and get typed Kotlin, Swift and Rust clients from the same source. Executor-agnostic, no serde, no tokio. Audience is Rust and mobile engineers who want cross-platform without giving up native UI.",
+  "adjectives": ["engineering-grade", "crafted", "native", "bridge", "calm"],
+  "criteria": "Success: distinct from Flutter blue arrow, RN atom, Expo hex, KMP K and Tauri T. Works at 16px as favicon. Works in one color. Does not reuse Rust-orange cliche. Does not reuse Starlight indigo default.",
+  "industry": "developer-tools",
+  "nav": ["Docs", "Plugins", "Protocol", "Changelog"],
+  "brand_color": "#BFFF00",
+  "greyscale": false,
+  "designer": "logo-design skill",
+  "round": 1,
+  "concepts": [
+    {
+      "name": "istmo port",
+      "symbol": "istmo-symbol.svg",
+      "lockup": "istmo-lockup-horizontal.svg",
+      "idea": "A ring node with two signal leads. The isthmus is the wire that reaches the node.",
+      "rationale": [
+        "Reads as a technical component (resistor, signal node) without copying any competitor",
+        "Ring geometry echoes the o in the istmo wordmark — ownership connection",
+        "Acid-lime accent on monochrome paper breaks visual tie with Rust-orange cliche and generic SaaS indigo",
+        "Scales to 16 px with a small-size cut (thicker leads, slightly thicker ring)",
+        "Single idea: node + signal leads = the isthmus is the wire reaching the node"
+      ]
+    }
+  ],
+  "recommendation": "istmo port + acid-lime accent + Geist Mono wordmark. Only concept presented after iteration (B1 baseline of ring-with-leads family, chosen by user from 6 variants).",
+  "next_steps": [
+    "Apply mark across Astro docs, GitHub, Penpot pages, README badges",
+    "Trademark clearance pass",
+    "Generate stickers + swag assets if needed"
+  ]
+}

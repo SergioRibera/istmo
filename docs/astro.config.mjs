@@ -9,11 +9,12 @@ export default defineConfig({
   trailingSlash: 'always',
   integrations: [
     starlight({
-      title: 'Istmo',
+      title: 'istmo',
       description:
         'Write your mobile app in Rust. Reach every platform without giving up native APIs, native performance, or native feel.',
       logo: {
-        src: './src/assets/logo.svg',
+        light: './src/assets/logo-light.svg',
+        dark: './src/assets/logo-dark.svg',
         replacesTitle: false,
       },
       social: {

@@ -1,0 +1,123 @@
+---
+---
+<section class="install-section">
+  <div class="inner">
+    <div class="hdr">
+      <div class="kicker"><span class="bar"></span><span>05 GET STARTED</span></div>
+      <h2>Two files. Four minutes.</h2>
+    </div>
+    <div class="steps">
+      <article>
+        <div class="row">
+          <span class="badge">1</span>
+          <h3>Write the trait</h3>
+        </div>
+        <p>Declare your plugin in a crate. #[istmo::plugin] desugars async fn into a wire-compatible trait plus Client and Host siblings.</p>
+        <div class="codebox">
+          <div class="head"><span class="lang">RUST</span><span class="file">crates/echo/ · lib.rs + istmo.toml</span></div>
+          <pre><code><span class="c">// crates/echo/src/lib.rs</span>
+<span class="a">#[istmo::plugin]</span>
+<span class="k">pub trait</span> <span class="t">Echo</span> &#123;
+    <span class="k">async fn</span> <span class="f">echo</span>(&<span class="k">self</span>, msg: <span class="t">String</span>) -&gt; <span class="t">String</span>;
+&#125;
+
+<span class="c">// build.rs</span>
+<span class="k">fn</span> <span class="f">main</span>() &#123; istmo_build::<span class="f">emit</span>(); &#125;</code></pre>
+        </div>
+      </article>
+
+      <article>
+        <div class="row">
+          <span class="badge">2</span>
+          <h3>Wire the runtime</h3>
+        </div>
+        <p>istmo::runtime! collects your plugins. istmo-build auto-generates Kotlin and Swift dispatchers for the Android and iOS projects.</p>
+        <div class="codebox">
+          <div class="head"><span class="lang">RUST</span><span class="file">myapp/src/lib.rs</span></div>
+          <pre><code><span class="c">// in your app crate</span>
+istmo::<span class="f">runtime</span>! &#123;
+    plugins: [
+        <span class="t">EchoClient</span>,
+        <span class="t">DataStoreClient</span>,
+    ],
+&#125;;
+
+<span class="c">// run it</span>
+$ cargo build <span class="s">--target aarch64-linux-android</span></code></pre>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<style>
+.install-section {
+  background: var(--sl-color-gray-6);
+  padding: 5rem 0;
+  border-top: 1px solid var(--sl-color-gray-5);
+  border-bottom: 1px solid var(--sl-color-gray-5);
+}
+.install-section .inner { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+.install-section .hdr { margin-bottom: 3rem; }
+.install-section .kicker {
+  display: flex; align-items: center; gap: 0.75rem;
+  font-family: var(--sl-font-mono); font-size: 0.75rem;
+  letter-spacing: 0.12em; color: var(--sl-color-gray-3);
+  text-transform: uppercase; margin-bottom: 1rem;
+}
+.install-section .kicker .bar { width: 1.5rem; height: 2px; background: #bfff00; }
+.install-section h2 {
+  font-size: clamp(1.75rem, 3.5vw, 2.75rem);
+  line-height: 1.1; letter-spacing: -0.02em;
+  margin: 0; color: var(--sl-color-white); font-weight: 700;
+}
+.install-section .steps {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;
+}
+@media (max-width: 65rem) {
+  .install-section .steps { grid-template-columns: 1fr; }
+}
+.install-section article {
+  background: var(--sl-color-bg);
+  border: 1px solid var(--sl-color-gray-5); border-radius: 0.75rem;
+  padding: 1.75rem;
+}
+.install-section .row { display: flex; align-items: center; gap: 0.85rem; margin-bottom: 1rem; }
+.install-section .badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.75rem; height: 1.75rem; border-radius: 50%;
+  background: var(--sl-color-white); color: var(--sl-color-bg);
+  font-family: var(--sl-font-mono); font-size: 0.8rem; font-weight: 600;
+}
+.install-section h3 {
+  margin: 0; font-size: 1.35rem; letter-spacing: -0.015em;
+  font-weight: 600; color: var(--sl-color-white);
+}
+.install-section article > p {
+  font-size: 0.95rem; line-height: 1.55; color: var(--sl-color-gray-3);
+  margin: 0 0 1.25rem;
+}
+.install-section .codebox {
+  background: #0a0a0a; border-radius: 0.5rem; padding: 1rem;
+}
+.install-section .head {
+  display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.75rem;
+}
+.install-section .lang {
+  font-family: var(--sl-font-mono); font-size: 0.6rem; font-weight: 600;
+  padding: 0.15rem 0.4rem; border-radius: 3px;
+  background: #1f1f1f; color: #8a8a85;
+}
+.install-section .file { font-family: var(--sl-font-mono); font-size: 0.7rem; color: #6b6b6b; }
+.install-section pre {
+  margin: 0; font-family: var(--sl-font-mono); font-size: 0.78rem;
+  line-height: 1.65; color: #f5f5f2; overflow-x: auto;
+}
+.install-section code { background: none; padding: 0; color: inherit; }
+.install-section .k { color: #bfff00; }
+.install-section .a { color: #bfff00; }
+.install-section .t { color: #9db4d4; }
+.install-section .f { color: #e8b9a3; }
+.install-section .s { color: #a3be8c; }
+.install-section .c { color: #6b6b6b; }
+</style>

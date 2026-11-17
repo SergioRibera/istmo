@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>istmo concept A — the strut (I-beam section)</title>
+  <g fill="#0A0A0A">
+    <rect x="40" y="48" width="176" height="28" rx="2"/>
+    <rect x="40" y="180" width="176" height="28" rx="2"/>
+    <rect x="108" y="76" width="40" height="104"/>
+  </g>
+</svg>

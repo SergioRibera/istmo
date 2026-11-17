@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>B2 square port — rounded-square ring with side leads</title>
+  <g fill="#0A0A0A" fill-rule="evenodd">
+    <path d="M62 60 h132 a8 8 0 0 1 8 8 v120 a8 8 0 0 1 -8 8 h-132 a8 8 0 0 1 -8 -8 v-120 a8 8 0 0 1 8 -8 z M94 92 h68 a4 4 0 0 1 4 4 v64 a4 4 0 0 1 -4 4 h-68 a4 4 0 0 1 -4 -4 v-64 a4 4 0 0 1 4 -4 z"/>
+    <rect x="0" y="116" width="54" height="24" rx="2"/>
+    <rect x="202" y="116" width="54" height="24" rx="2"/>
+  </g>
+</svg>

@@ -1,0 +1,172 @@
+---
+const getStarted = import.meta.env.BASE_URL + 'getting-started/install/';
+---
+<section class="istmo-hero">
+<div class="hero-inner">
+  <div class="left">
+    <div class="kicker">
+      <span class="bar"></span>
+      <span>RUST ANDROID iOS DESKTOP WASM</span>
+    </div>
+    <h1>A thin bridge between Rust and every platform.</h1>
+    <p class="sub">
+      Write one Rust trait. istmo generates idiomatic Kotlin, Swift and Rust clients
+      from the same source. Executor-agnostic. No serde. No tokio. The wire is
+      wincode, byte-for-byte bincode 2 layout.
+    </p>
+    <div class="cta">
+      <a class="primary" href={getStarted}>Read the docs</a>
+      <code class="ghost">cargo add istmo</code>
+    </div>
+    <dl class="proof">
+      <div><dt>MSRV</dt><dd>1.89</dd></div>
+      <div><dt>LICENSE</dt><dd>MIT / Apache-2.0</dd></div>
+      <div><dt>PROTOCOL</dt><dd>v4 wincode</dd></div>
+      <div><dt>PLUGINS</dt><dd>12 official</dd></div>
+    </dl>
+  </div>
+  <div class="right">
+    <div class="isthmus-label">
+      <span class="rule"></span>
+      <span>// write it once</span>
+    </div>
+    <div class="code-card">
+      <div class="card-head">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <span class="filename">crates/echo/src/lib.rs</span>
+      </div>
+      <pre><code><span class="c">// Write the trait once.</span>
+<span class="a">#[istmo::plugin]</span>
+<span class="k">pub trait</span> <span class="t">Echo</span> {'{'}
+    <span class="k">async fn</span> <span class="f">echo</span>(&<span class="k">self</span>, msg: <span class="t">String</span>) -&gt; <span class="t">String</span>;
+{'}'}
+
+<span class="a">#[istmo::message]</span>
+<span class="k">pub struct</span> <span class="t">Greeting</span> {'{'}
+    <span class="k">pub</span> text: <span class="t">String</span>,
+{'}'}</code></pre>
+    </div>
+  </div>
+</div>
+</section>
+
+<style>
+.istmo-hero {
+  padding: 3rem 2rem 4rem;
+  border-bottom: 1px solid var(--sl-color-gray-5);
+}
+.hero-inner {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  align-items: start;
+}
+@media (max-width: 55rem) {
+  .hero-inner { grid-template-columns: 1fr; gap: 2rem; }
+}
+.istmo-hero .kicker {
+  display: flex; align-items: center; gap: 0.75rem;
+  font-family: var(--sl-font-mono); font-size: 0.75rem;
+  letter-spacing: 0.12em; color: var(--sl-color-gray-3);
+  text-transform: uppercase; margin-bottom: 1.5rem;
+}
+.istmo-hero .kicker .bar {
+  width: 1.5rem; height: 2px; background: #bfff00; display: inline-block;
+}
+.istmo-hero h1 {
+  font-size: clamp(2.2rem, 4.5vw, 3.5rem);
+  line-height: 1.05; letter-spacing: -0.03em;
+  font-weight: 700; margin: 0 0 1.25rem;
+  color: var(--sl-color-white);
+}
+.istmo-hero .sub {
+  font-size: 1.125rem; line-height: 1.6;
+  color: var(--sl-color-gray-3); margin: 0 0 1.75rem;
+}
+.istmo-hero .cta {
+  display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;
+  margin-bottom: 1.75rem;
+}
+.istmo-hero .cta .primary {
+  background: #bfff00; color: #0a0a0a !important; font-weight: 600;
+  padding: 0.75rem 1.1rem; border-radius: 0.5rem; text-decoration: none;
+  font-size: 0.95rem;
+}
+.istmo-hero .cta .primary:hover { background: #d4ff33; }
+.istmo-hero .cta .ghost {
+  background: var(--sl-color-gray-6); border: 1px solid var(--sl-color-gray-5);
+  color: var(--sl-color-white); padding: 0.7rem 1rem; border-radius: 0.5rem;
+  font-size: 0.9rem; font-family: var(--sl-font-mono);
+}
+.istmo-hero .proof {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem 2rem;
+  margin: 0;
+  align-items: start;
+}
+.istmo-hero .proof > div {
+  display: grid;
+  grid-template-rows: 1rem 1.25rem;
+  row-gap: 0.25rem;
+  margin: 0;
+}
+.istmo-hero .proof dt {
+  font-family: var(--sl-font-mono); font-size: 0.65rem;
+  letter-spacing: 0.08em; color: var(--sl-color-gray-3);
+  text-transform: uppercase;
+  line-height: 1;
+  margin: 0;
+  white-space: nowrap;
+  align-self: end;
+}
+.istmo-hero .proof dd {
+  font-family: var(--sl-font-mono); font-size: 0.9rem;
+  color: var(--sl-color-white); font-weight: 500;
+  line-height: 1;
+  margin: 0;
+  white-space: nowrap;
+  align-self: start;
+}
+.istmo-hero .right { display: flex; flex-direction: column; gap: 0.75rem; }
+.istmo-hero .isthmus-label {
+  display: flex; align-items: center; gap: 0.6rem;
+  font-family: var(--sl-font-mono); font-size: 0.8rem;
+  color: var(--sl-color-gray-3);
+}
+.istmo-hero .isthmus-label .rule {
+  width: 1.5rem; height: 1px; background: var(--sl-color-gray-5);
+}
+.istmo-hero .code-card {
+  background: #0a0a0a; border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.75rem; padding: 1.25rem;
+}
+.istmo-hero .card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 1rem; min-height: 1.5rem;
+}
+.istmo-hero .card-head .dots {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  line-height: 1;
+}
+.istmo-hero .card-head .dots i {
+  width: 0.65rem; height: 0.65rem; border-radius: 50%;
+  background: var(--sl-color-gray-4); display: inline-block;
+  flex: 0 0 auto;
+}
+.istmo-hero .card-head .filename {
+  font-family: var(--sl-font-mono); font-size: 0.75rem; color: var(--sl-color-gray-3);
+}
+.istmo-hero pre {
+  margin: 0; font-family: var(--sl-font-mono); font-size: 0.85rem;
+  line-height: 1.7; color: #f5f5f2; overflow-x: auto;
+}
+.istmo-hero code { background: none; padding: 0; color: inherit; }
+.istmo-hero pre .k { color: #bfff00; }
+.istmo-hero pre .a { color: #bfff00; }
+.istmo-hero pre .t { color: #9db4d4; }
+.istmo-hero pre .f { color: #e8b9a3; }
+.istmo-hero pre .c { color: #6b6b6b; }
+</style>

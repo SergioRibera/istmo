@@ -1,0 +1,126 @@
+---
+---
+<section class="protocol-section">
+  <div class="inner">
+    <div class="hdr">
+      <div class="kicker"><span class="bar"></span><span>04 THE PROTOCOL</span></div>
+      <h2>Boring on purpose. You can read every byte that crosses.</h2>
+      <p>
+        One envelope type. One frame enum. wincode layout, bincode-2 standard. No TLVs,
+        no magic, no reflection. The Kotlin and Swift codecs are called Bincode because
+        the bytes have not changed.
+      </p>
+    </div>
+
+    <div class="pipe">
+      <div class="stage">
+        <span class="lbl">01 SOURCE</span>
+        <h4>Rust plugin</h4>
+        <code>#[istmo::plugin]<br/>async fn echo(…)</code>
+      </div>
+      <span class="arrow"></span>
+      <div class="stage sand">
+        <span class="lbl">02 ENCODE</span>
+        <h4>wincode</h4>
+        <code>payload bytes<br/>varint u32 tags</code>
+      </div>
+      <span class="arrow"></span>
+      <div class="stage">
+        <span class="lbl">03 FRAME</span>
+        <h4>Envelope</h4>
+        <code>Frame::Call &#123; … &#125;<br/>PROTOCOL_VERSION = 4</code>
+      </div>
+      <span class="arrow"></span>
+      <div class="stage sand">
+        <span class="lbl">04 BRIDGE</span>
+        <h4>FFI</h4>
+        <code>JNI typed call<br/>C ABI callbacks</code>
+      </div>
+      <span class="arrow"></span>
+      <div class="stage">
+        <span class="lbl">05 DECODE</span>
+        <h4>Native codec</h4>
+        <code>Bincode.readString<br/>Bincode.writeString</code>
+      </div>
+    </div>
+
+    <div class="details">
+      <div>
+        <h5>ENVELOPE TYPE</h5>
+        <p>Four variants: Call, Respond, Notify, Event. Routed on CallId.</p>
+      </div>
+      <div>
+        <h5>STREAMS</h5>
+        <p>Frame::Event per item, Frame::StreamEnd &#123; Complete | Error &#125; on close.</p>
+      </div>
+      <div>
+        <h5>CANCELLATION</h5>
+        <p>Cooperative CancelToken, flume bounded(1), drop-sender-on-cancel.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+.protocol-section { padding: 5rem 0; }
+.protocol-section .inner { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+.protocol-section .hdr { margin-bottom: 3rem; }
+.protocol-section .kicker {
+  display: flex; align-items: center; gap: 0.75rem;
+  font-family: var(--sl-font-mono); font-size: 0.75rem;
+  letter-spacing: 0.12em; color: var(--sl-color-gray-3);
+  text-transform: uppercase; margin-bottom: 1rem;
+}
+.protocol-section .kicker .bar { width: 1.5rem; height: 2px; background: #bfff00; }
+.protocol-section h2 {
+  font-size: clamp(1.75rem, 3.5vw, 2.75rem);
+  line-height: 1.1; letter-spacing: -0.02em;
+  margin: 0 0 1rem; color: var(--sl-color-white); font-weight: 700;
+}
+.protocol-section .hdr p {
+  font-size: 1rem; line-height: 1.6;
+  color: var(--sl-color-gray-3); max-width: 50rem; margin: 0;
+}
+.protocol-section .pipe {
+  display: flex; align-items: stretch; margin-bottom: 3rem; overflow-x: auto;
+}
+.protocol-section .stage {
+  flex: 1 1 11rem; min-width: 11rem;
+  border: 1px solid var(--sl-color-gray-5); border-radius: 0.75rem;
+  padding: 1.25rem; background: var(--sl-color-bg);
+}
+.protocol-section .stage.sand {
+  background: var(--sl-color-gray-6);
+  border-color: var(--sl-color-gray-5);
+}
+.protocol-section .stage .lbl {
+  font-family: var(--sl-font-mono); font-size: 0.65rem; font-weight: 600;
+  letter-spacing: 0.09em; color: var(--sl-color-gray-3);
+  text-transform: uppercase; margin-bottom: 0.5rem; display: block;
+}
+.protocol-section .stage h4 {
+  margin: 0 0 0.5rem; font-size: 1rem; letter-spacing: -0.01em;
+  font-weight: 600; color: var(--sl-color-white);
+}
+.protocol-section .stage code {
+  font-family: var(--sl-font-mono); font-size: 0.7rem; color: var(--sl-color-gray-3);
+  line-height: 1.55; display: block; background: none; padding: 0;
+}
+.protocol-section .arrow {
+  flex: 0 0 2rem; align-self: center; height: 1px;
+  background: var(--sl-color-gray-5);
+}
+.protocol-section .details {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem;
+}
+@media (max-width: 55rem) {
+  .protocol-section .details { grid-template-columns: 1fr; gap: 1.5rem; }
+}
+.protocol-section .details h5 {
+  font-family: var(--sl-font-mono); font-size: 0.7rem;
+  letter-spacing: 0.09em; color: #0a6b2e; margin: 0 0 0.5rem;
+  text-transform: uppercase; font-weight: 600;
+}
+:root[data-theme='dark'] .protocol-section .details h5 { color: #bfff00; }
+.protocol-section .details p { margin: 0; font-size: 0.875rem; line-height: 1.55; color: var(--sl-color-white); }
+</style>

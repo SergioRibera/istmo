@@ -1,0 +1,76 @@
+---
+---
+<section class="why-section">
+  <div class="inner">
+    <div class="hdr">
+      <div class="kicker"><span class="bar"></span><span>02 WHY istmo</span></div>
+      <h2>Three constraints the framework refuses to break.</h2>
+    </div>
+    <div class="grid">
+      <article>
+        <div class="num"><span class="d"></span><span>01 EXECUTOR-AGNOSTIC</span></div>
+        <h3>Runtime is flume + oneshot + pollster.</h3>
+        <p>Call it from tokio, from your own executor, from a blocking thread, from wasm_bindgen_futures. CallHandle is a plain Future. istmo never ships a runtime commitment you did not ask for.</p>
+        <span class="chip">zero tokio dep</span>
+      </article>
+      <article>
+        <div class="num"><span class="d"></span><span>02 GENERATED CLIENTS</span></div>
+        <h3>One trait, Rust, Kotlin, Swift.</h3>
+        <p>istmo-build parses your crate, derives a Contract, and emits typed dispatchers on both sides. Rename a Rust field; Android and iOS fail to compile next build.</p>
+        <span class="chip">build.rs emit()</span>
+      </article>
+      <article>
+        <div class="num"><span class="d"></span><span>03 ZERO MAGIC</span></div>
+        <h3>No inventory. No linkme. No auto-wire.</h3>
+        <p>Plugins are declared explicitly in istmo::runtime! &#123; plugins: [EchoClient] &#125;. You can read every frame that crosses the FFI. The wire is wincode, bincode-2 standard.</p>
+        <span class="chip">PROTOCOL_VERSION = 4</span>
+      </article>
+    </div>
+  </div>
+</section>
+
+<style>
+.why-section { padding: 5rem 0; }
+.why-section .inner { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+.why-section .hdr { margin-bottom: 3rem; }
+.why-section .kicker {
+  display: flex; align-items: center; gap: 0.75rem;
+  font-family: var(--sl-font-mono); font-size: 0.75rem;
+  letter-spacing: 0.12em; color: var(--sl-color-gray-3);
+  text-transform: uppercase; margin-bottom: 1rem;
+}
+.why-section .kicker .bar { width: 1.5rem; height: 2px; background: #bfff00; }
+.why-section h2 {
+  font-size: clamp(1.75rem, 3.5vw, 2.75rem);
+  line-height: 1.1; letter-spacing: -0.02em;
+  margin: 0; color: var(--sl-color-white); font-weight: 700;
+  max-width: 55rem;
+}
+.why-section .grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem;
+}
+@media (max-width: 65rem) {
+  .why-section .grid { grid-template-columns: 1fr; }
+}
+.why-section article {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.75rem; padding: 2rem;
+}
+.why-section .num {
+  display: flex; align-items: center; gap: 0.6rem;
+  font-family: var(--sl-font-mono); font-size: 0.7rem;
+  letter-spacing: 0.09em; color: var(--sl-color-gray-3);
+  text-transform: uppercase; margin-bottom: 1rem;
+}
+.why-section .num .d { width: 6px; height: 6px; border-radius: 50%; background: #bfff00; }
+.why-section h3 {
+  margin: 0 0 1rem; font-size: 1.35rem; line-height: 1.25;
+  letter-spacing: -0.015em; color: var(--sl-color-white); font-weight: 600;
+}
+.why-section p { margin: 0 0 1.25rem; font-size: 0.95rem; line-height: 1.6; color: var(--sl-color-gray-3); }
+.why-section .chip {
+  display: inline-block; font-family: var(--sl-font-mono); font-size: 0.75rem;
+  padding: 0.3rem 0.6rem; border-radius: 4px;
+  background: var(--sl-color-gray-6); color: var(--sl-color-white);
+}
+</style>

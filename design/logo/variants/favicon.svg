@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>istmo brand symbol</title><g transform="translate(5.12 5.12) scale(0.96)">
+  
+  <g fill="#0A0A0A" fill-rule="evenodd">
+    <path d="M128 52 a76 76 0 1 1 0 152 a76 76 0 1 1 0 -152 Z M128 92 a36 36 0 1 0 0 72 a36 36 0 1 0 -0 -72 Z"/>
+    <rect x="0" y="108" width="52" height="40" rx="2"/>
+    <rect x="204" y="108" width="52" height="40" rx="2"/>
+  </g>
+</g></svg>

@@ -1,0 +1,144 @@
+---
+---
+<section class="trait-tour">
+  <div class="inner">
+    <div class="hdr">
+      <div class="kicker">
+        <span class="bar"></span>
+        <span>01 ONE TRAIT, THREE CLIENTS</span>
+      </div>
+      <h2>The same trait, in Rust, Kotlin and Swift.</h2>
+      <p>
+        istmo-build parses your plugin crate, derives a Contract, and your downstream
+        app emits typed dispatchers and clients at compile time. No handwritten FFI,
+        no two sources of truth.
+      </p>
+    </div>
+
+    <div class="cols">
+      <article class="col">
+        <div class="head">
+          <span class="lang rust">RUST</span>
+          <span class="file">echo/src/lib.rs</span>
+        </div>
+        <pre><code><span class="c">// Source of truth.</span>
+<span class="a">#[istmo::plugin]</span>
+<span class="k">pub trait</span> <span class="t">Echo</span> &#123;
+    <span class="k">async fn</span> <span class="f">echo</span>(&<span class="k">self</span>, m: <span class="t">String</span>)
+        -&gt; <span class="t">String</span>;
+&#125;
+
+<span class="c">// In Rust:</span>
+<span class="k">let</span> echo = <span class="t">EchoClient</span>::<span class="f">from_runtime</span>(&rt)?;
+<span class="k">let</span> out = echo.<span class="f">echo</span>(<span class="s">"hi"</span>.<span class="f">into</span>()).<span class="k">await</span>?;</code></pre>
+      </article>
+
+      <article class="col">
+        <div class="head">
+          <span class="lang kotlin">KOTLIN</span>
+          <span class="file">EchoClient.kt · gen</span>
+        </div>
+        <pre><code><span class="c">// Generated.</span>
+<span class="k">class</span> <span class="t">EchoClient</span>(<span class="k">private val</span> rt: <span class="t">IstmoRuntime</span>) &#123;
+  <span class="k">suspend fun</span> <span class="f">echo</span>(msg: <span class="t">String</span>): <span class="t">String</span> &#123;
+    <span class="k">val</span> buf = <span class="t">Bincode</span>.<span class="f">writeString</span>(msg)
+    <span class="k">val</span> bytes = rt.<span class="f">call</span>(
+      <span class="s">"istmo.echo"</span>, <span class="s">"echo"</span>, buf)
+    <span class="k">return</span> <span class="t">Bincode</span>.<span class="f">readString</span>(bytes)
+  &#125;
+&#125;</code></pre>
+      </article>
+
+      <article class="col">
+        <div class="head">
+          <span class="lang swift">SWIFT</span>
+          <span class="file">EchoClient.swift · gen</span>
+        </div>
+        <pre><code><span class="c">// Generated.</span>
+<span class="k">final class</span> <span class="t">EchoClient</span> &#123;
+  <span class="k">let</span> runtime: <span class="t">IstmoRuntime</span>
+
+  <span class="k">func</span> <span class="f">echo</span>(_ msg: <span class="t">String</span>)
+       <span class="k">async throws</span> -&gt; <span class="t">String</span> &#123;
+    <span class="k">let</span> buf = <span class="t">Bincode</span>.<span class="f">writeString</span>(msg)
+    <span class="k">let</span> out = <span class="k">try await</span> runtime.<span class="f">call</span>(
+      <span class="s">"istmo.echo"</span>, <span class="s">"echo"</span>, buf)
+    <span class="k">return</span> <span class="t">Bincode</span>.<span class="f">readString</span>(out)
+  &#125;
+&#125;</code></pre>
+      </article>
+    </div>
+
+    <div class="foot">
+      <span class="dot"></span>
+      <span>Clients are regenerated on every build. Rename a field in Rust, every platform build catches it.</span>
+    </div>
+  </div>
+</section>
+
+<style>
+.trait-tour {
+  background: var(--sl-color-gray-6);
+  padding: 5rem 0;
+  border-bottom: 1px solid var(--sl-color-gray-5);
+}
+.trait-tour .inner { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+.trait-tour .hdr { margin-bottom: 3rem; }
+.trait-tour .kicker {
+  display: flex; align-items: center; gap: 0.75rem;
+  font-family: var(--sl-font-mono); font-size: 0.75rem;
+  letter-spacing: 0.12em; color: var(--sl-color-gray-3);
+  text-transform: uppercase; margin-bottom: 1rem;
+}
+.trait-tour .kicker .bar { width: 1.5rem; height: 2px; background: #bfff00; }
+.trait-tour h2 {
+  font-size: clamp(1.75rem, 3.5vw, 2.75rem);
+  line-height: 1.1; letter-spacing: -0.02em;
+  margin: 0 0 1rem; color: var(--sl-color-white); font-weight: 700;
+}
+.trait-tour .hdr p {
+  font-size: 1.05rem; line-height: 1.6;
+  color: var(--sl-color-gray-3); max-width: 50rem; margin: 0;
+}
+.trait-tour .cols {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem;
+  align-items: stretch;
+}
+@media (max-width: 70rem) {
+  .trait-tour .cols { grid-template-columns: 1fr; }
+}
+.trait-tour .col {
+  background: #0a0a0a; border-radius: 0.75rem; padding: 1.25rem;
+  border: 1px solid var(--sl-color-gray-5);
+  display: flex; flex-direction: column;
+}
+.trait-tour .head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 1rem; min-height: 1.75rem;
+}
+.trait-tour .lang {
+  font-family: var(--sl-font-mono); font-size: 0.65rem; font-weight: 600;
+  padding: 0.25rem 0.55rem; border-radius: 4px;
+  letter-spacing: 0.05em; color: #bfff00; background: #1a1409;
+  line-height: 1.2; display: inline-flex; align-items: center;
+}
+.trait-tour .lang.kotlin { color: #9db4d4; background: #0e1b28; }
+.trait-tour .lang.swift { color: #e8b9a3; background: #28150e; }
+.trait-tour .file { font-family: var(--sl-font-mono); font-size: 0.7rem; color: var(--sl-color-gray-3); }
+.trait-tour pre {
+  margin: 0; font-family: var(--sl-font-mono); font-size: 0.78rem;
+  line-height: 1.7; color: #f5f5f2; overflow-x: auto;
+}
+.trait-tour code { background: none; padding: 0; color: inherit; }
+.trait-tour .k { color: #bfff00; }
+.trait-tour .a { color: #bfff00; }
+.trait-tour .t { color: #9db4d4; }
+.trait-tour .f { color: #e8b9a3; }
+.trait-tour .s { color: #a3be8c; }
+.trait-tour .c { color: #6b6b6b; }
+.trait-tour .foot {
+  display: flex; align-items: center; gap: 0.6rem; margin-top: 2rem;
+  font-size: 0.875rem; color: var(--sl-color-gray-3);
+}
+.trait-tour .foot .dot { width: 6px; height: 6px; border-radius: 50%; background: #0a8a3e; }
+</style>

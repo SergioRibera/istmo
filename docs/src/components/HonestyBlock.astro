@@ -1,0 +1,68 @@
+---
+const items = [
+  { label: "serde replacement", body: "Wire is wincode. Your app code can use whatever it wants. istmo never touches your serde impls." },
+  { label: "tokio runtime",     body: "flume + oneshot + pollster. CallHandle is a plain Future. Bring your own executor." },
+  { label: "DI container",      body: "Plugins are declared explicitly in istmo::runtime!. No service locator, no reflection." },
+  { label: "UI framework",      body: "istmo moves bytes. Your native side renders them. AdMob, Camera and Barcode have app-drawn UIs." },
+];
+---
+<section class="honesty-section">
+  <div class="inner">
+    <div class="hdr">
+      <div class="kicker"><span class="bar"></span><span>06 WHAT istmo IS NOT</span></div>
+      <h2>Surprise is a cost after install. Here is what we refuse to be.</h2>
+    </div>
+    <div class="grid">
+      {items.map(it => (
+        <article>
+          <div class="row">
+            <span class="prefix">NOT A</span>
+            <span class="rule"></span>
+          </div>
+          <h3>{it.label}</h3>
+          <p>{it.body}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+.honesty-section { padding: 5rem 0 6rem; }
+.honesty-section .inner { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+.honesty-section .hdr { margin-bottom: 3rem; }
+.honesty-section .kicker {
+  display: flex; align-items: center; gap: 0.75rem;
+  font-family: var(--sl-font-mono); font-size: 0.75rem;
+  letter-spacing: 0.12em; color: var(--sl-color-gray-3);
+  text-transform: uppercase; margin-bottom: 1rem;
+}
+.honesty-section .kicker .bar { width: 1.5rem; height: 2px; background: #bfff00; }
+.honesty-section h2 {
+  font-size: clamp(1.75rem, 3.5vw, 2.75rem);
+  line-height: 1.1; letter-spacing: -0.02em;
+  margin: 0; color: var(--sl-color-white); font-weight: 700;
+  max-width: 50rem;
+}
+.honesty-section .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
+@media (max-width: 65rem) { .honesty-section .grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 40rem) { .honesty-section .grid { grid-template-columns: 1fr; } }
+.honesty-section article {
+  background: var(--sl-color-gray-6); border-radius: 0.75rem;
+  padding: 1.5rem;
+}
+.honesty-section .row {
+  display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.75rem;
+}
+.honesty-section .prefix {
+  font-family: var(--sl-font-mono); font-size: 0.65rem;
+  letter-spacing: 0.09em; color: var(--sl-color-gray-3);
+  text-transform: uppercase; font-weight: 600;
+}
+.honesty-section .rule { flex: 1; height: 1px; background: var(--sl-color-gray-5); }
+.honesty-section h3 {
+  margin: 0 0 0.75rem; font-size: 1.2rem; letter-spacing: -0.015em;
+  font-weight: 600; color: var(--sl-color-white);
+}
+.honesty-section article p { margin: 0; font-size: 0.875rem; line-height: 1.55; color: var(--sl-color-gray-3); }
+</style>

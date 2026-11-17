@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>istmo concept C — i.o</title>
+  <g fill="#0A0A0A" fill-rule="evenodd">
+    <rect x="24" y="48" width="32" height="32" rx="2"/>
+    <rect x="24" y="88" width="32" height="120" rx="2"/>
+    <path d="M152 48 a80 80 0 1 1 0 160 a80 80 0 1 1 0 -160 Z M152 80 a48 48 0 1 0 0 96 a48 48 0 1 0 0 -96 Z"/>
+  </g>
+</svg>
