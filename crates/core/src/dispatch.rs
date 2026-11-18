@@ -171,6 +171,41 @@ impl std::error::Error for DispatchError {
 pub type DispatchFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Outcome, DispatchError>> + Send + 'a>>;
 
+/// Hint that lets the runtime pick how it runs a host's dispatch future.
+///
+/// Dispatchers declare this through [`Dispatch::mode`]. The runtime reads
+/// the hint on the first call and keeps that scheduling shape for the
+/// lifetime of the dispatcher.
+///
+/// Trade-off summary:
+///
+/// - [`Inline`](Self::Inline): fastest, strictest. The future runs on the
+///   caller's stack. The dispatcher **must not block**, hold a lock across
+///   the boundary, re-enter the runtime recursively from the same call, or
+///   await anything that requires another executor to make progress.
+///   Breaking that stalls the caller. Suits pure computation (parsers,
+///   formatters, state machines).
+/// - [`OnCallerExecutor`](Self::OnCallerExecutor): the future runs as a
+///   child of the caller's executor. `.await` points yield normally and
+///   other work on that executor can interleave. The dispatcher must not
+///   block the thread between await points.
+/// - [`Isolated`](Self::Isolated): the future runs on a dedicated OS
+///   thread the runtime spawns for the call. The dispatcher is free to
+///   block, call synchronous platform SDKs, hold locks, or re-enter the
+///   runtime. This is the safe default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DispatchMode {
+    /// Poll the dispatch future on the caller's thread with the caller's
+    /// waker. No thread spawn, no cross-task handoff.
+    Inline,
+    /// Chain the dispatch future into the caller's executor. No thread
+    /// spawn; `.await` yields back to the caller's executor.
+    OnCallerExecutor,
+    /// Dedicate a fresh OS thread to the dispatch future. The runtime
+    /// picks this when a dispatcher may block or re-enter.
+    Isolated,
+}
+
 /// Marker every generated plugin client/host pair implements.
 ///
 /// The associated [`PLUGIN_ID`](Self::PLUGIN_ID) is the string the
@@ -192,6 +227,22 @@ pub trait Plugin {
 pub trait Dispatch: Send + Sync + 'static {
     /// Plugin id this dispatcher answers on.
     fn plugin_id(&self) -> &'static str;
+
+    /// Scheduling shape the runtime picks for this dispatcher.
+    ///
+    /// The default is [`DispatchMode::Isolated`]: every call runs on its
+    /// own OS thread, so the dispatch future is free to block, hold
+    /// locks, or re-enter the runtime recursively. Dispatchers that
+    /// never do any of those can override to [`DispatchMode::Inline`] or
+    /// [`DispatchMode::OnCallerExecutor`] to avoid the per-call thread
+    /// spawn.
+    ///
+    /// The runtime reads this on registration and keeps the answer for
+    /// the dispatcher's lifetime, so it is effectively a per-type choice
+    /// even though the method takes `&self`.
+    fn mode(&self) -> DispatchMode {
+        DispatchMode::Isolated
+    }
 
     /// Called once when the dispatcher is registered with a runtime.
     ///
