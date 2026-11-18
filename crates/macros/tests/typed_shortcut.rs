@@ -129,6 +129,40 @@ fn typed_shortcut_domain_error_surfaces_as_plugin_error() {
 }
 
 #[test]
+fn typed_shortcut_host_panic_surfaces_as_plugin_error() {
+    pollster::block_on(async {
+        struct PanicBackend;
+
+        impl Math for PanicBackend {
+            async fn add(&self, _a: i32, _b: i32) -> Result<i32, WireMathError> {
+                panic!("boom from typed host");
+            }
+
+            async fn shift(&self, p: Point, _dx: i32, _dy: i32) -> Point {
+                p
+            }
+        }
+
+        let init = Runtime::mock();
+        let rt = init.runtime;
+        drop(init.outbound);
+
+        MathHost::new(PanicBackend).register(&rt);
+
+        let client = MathClient::from_runtime(&rt).expect("client");
+        let err = client.add(1, 2).await.expect_err("panic");
+        match err {
+            IstmoError::PluginError { bytes } => {
+                let (decoded, _) =
+                    istmo::codec::decode::<String>(&bytes).expect("decode panic marker");
+                assert_eq!(decoded, "host panicked");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    });
+}
+
+#[test]
 fn wire_fallback_when_no_typed_shortcut() {
     pollster::block_on(async {
     let init = Runtime::mock();

@@ -1230,7 +1230,20 @@ fn expand_typed_fast_path(
                     <Self as #root::Plugin>::PLUGIN_ID,
                 )
         {
-            let __istmo_value = __istmo_typed.#name(#(#arg_names),*).await;
+            // Mirror the wire-path's panic catching: a typed host that
+            // panics surfaces as `IstmoError::PluginError { bytes: "host
+            // panicked" }`, same shape the dispatcher's `CatchUnwind`
+            // would produce via `respond`.
+            let __istmo_value = match #root::__private::typed_catch_unwind(
+                __istmo_typed.#name(#(#arg_names),*),
+            ).await {
+                ::core::result::Result::Ok(__istmo_v) => __istmo_v,
+                ::core::result::Result::Err(bytes) => {
+                    return ::core::result::Result::Err(
+                        #root::IstmoError::PluginError { bytes },
+                    );
+                }
+            };
             return { #err_tail };
         }
     }

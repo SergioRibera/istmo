@@ -89,4 +89,5 @@ pub mod __private {
     pub use crate::assets::set_app_assets;
     pub use crate::path::set_app_info;
     pub use crate::runtime::encode_hosted_stream;
+    pub use crate::runtime::typed_catch_unwind;
 }
