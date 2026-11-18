@@ -169,6 +169,42 @@ fn in_process_inline_call(c: &mut Criterion) {
     group.finish();
 }
 
+trait EchoTyped: Send + Sync + 'static {
+    fn echo(&self, bytes: Vec<u8>) -> Vec<u8>;
+}
+
+struct EchoTypedImpl;
+
+impl EchoTyped for EchoTypedImpl {
+    fn echo(&self, bytes: Vec<u8>) -> Vec<u8> {
+        bytes
+    }
+}
+
+fn typed_shortcut_call(c: &mut Criterion) {
+    let init = Runtime::mock();
+    let rt: Arc<Runtime> = init.runtime;
+    let _outbound = init.outbound;
+    let typed: Arc<dyn EchoTyped> = Arc::new(EchoTypedImpl);
+    rt.register_typed_host("bench.typed", typed);
+
+    let mut group = c.benchmark_group("typed_shortcut_roundtrip");
+    for &size in &SIZES {
+        let payload = mk_payload(size);
+        group.throughput(Throughput::Bytes(size as u64));
+        group.bench_function(format!("{size}B"), |b| {
+            b.iter(|| {
+                let typed = rt
+                    .typed_host::<dyn EchoTyped>("bench.typed")
+                    .expect("slot");
+                let out = typed.echo(payload.clone());
+                let _ = std::hint::black_box(out);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn dispatch_inbound_wire(c: &mut Criterion) {
     let init = Runtime::mock();
     let rt: Arc<Runtime> = init.runtime;
@@ -214,6 +250,7 @@ criterion_group!(
     thread_spawn_join_baseline,
     in_process_hosted_call,
     in_process_inline_call,
+    typed_shortcut_call,
     dispatch_inbound_wire,
 );
 criterion_main!(benches);
