@@ -11,6 +11,7 @@ members = [
     "crates/window",
     "crates/lint-check",
     "examples/android-demo",
+    "examples/bench-android",
     "examples/android-multi/crates/app",
     "examples/android-multi/crates/widget",
     "examples/ios-demo",
