@@ -79,6 +79,7 @@ fn typed_shortcut_wrong_trait_type_returns_none() {
 
     // Downcast to a different trait object should fail cleanly.
     trait OtherTyped: Send + Sync + 'static {
+        #[allow(dead_code)]
         fn x(&self) -> i64;
     }
     assert!(rt.typed_host::<dyn OtherTyped>("test.math").is_none());

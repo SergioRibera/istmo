@@ -1000,8 +1000,18 @@ impl Runtime {
     /// Called through [`RuntimeInit::host`] during startup; rarely used
     /// directly outside macro-generated code.
     pub fn register_host<D: Dispatch>(self: &Arc<Self>, dispatcher: D) {
+        self.register_host_arc(Arc::new(dispatcher));
+    }
+
+    /// Register an already-shared dispatcher.
+    ///
+    /// Same as [`register_host`](Self::register_host) but takes
+    /// `Arc<D>`, letting a caller keep its own reference to the
+    /// dispatcher (for example to also install it as a
+    /// [`typed shortcut`](Self::register_typed_host)).
+    pub fn register_host_arc<D: Dispatch>(self: &Arc<Self>, dispatcher: Arc<D>) {
         let plugin_id = dispatcher.plugin_id();
-        let dispatcher: Arc<dyn Dispatch> = Arc::new(dispatcher);
+        let dispatcher: Arc<dyn Dispatch> = dispatcher;
         dispatcher.runtime_attached(Arc::downgrade(self));
         lock(&self.hosts).insert(plugin_id, dispatcher);
     }
