@@ -47,17 +47,16 @@ pre, code { font-feature-settings: "ss01" on, "ss02" on; }
 /* Hide Starlight auto-hero on home (we use IstmoHero instead) */
 :root[data-has-hero] .hero { display: none !important; }
 
-/* Splash pages: full-width */
-:root[data-has-hero] {
-  --sl-content-width: 100% !important;
-  --sl-content-pad-x: 0 !important;
-}
+/* Splash pages: full-width (scoped, don't mutate root vars — header reads them) */
 :root[data-has-hero] .main-pane > .content-panel { padding: 0 !important; }
 :root[data-has-hero] .main-pane > .content-panel > .sl-container {
   max-width: 100% !important; padding: 0 !important; margin: 0 !important; width: 100% !important;
 }
-:root[data-has-hero] main { padding: 0 !important; }
-:root[data-has-hero] .page { padding: 0 !important; width: 100% !important; }
+:root[data-has-hero] .main-pane > .content-panel > .sl-container > .sl-markdown-content {
+  max-width: 100% !important;
+}
+:root[data-has-hero] .main-pane main { padding: 0 !important; }
+:root[data-has-hero] .main-pane .page { padding: 0 !important; width: 100% !important; }
 :root[data-has-hero] .sidebar-pane { display: none !important; }
 :root[data-has-hero] .main-pane,
 :root[data-has-hero][data-has-sidebar] .main-pane,
