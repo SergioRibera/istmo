@@ -19,18 +19,32 @@ typed shortcut registered on the inline one. The Kotlin side is a tiny
 
 ## Building
 
-Build the Rust cdylib for each target ABI and drop the shared objects
-into the Gradle project:
+### One shot through Nix
 
 ```
+nix run .#bench-android
+```
+
+Runs `cargo ndk` for `arm64-v8a` and `./gradlew :app:assembleRelease`
+inside a devshell pinned by the repo's `flake.nix`. The APK lands at
+`examples/bench-android/android/app/build/outputs/apk/release/app-release-unsigned.apk`.
+
+### Interactive via the Nix devshell
+
+```
+nix develop .#bench-android
 cd examples/bench-android
-cargo ndk -t arm64-v8a -t x86_64 -o android/app/src/main/jniLibs build -p bench-android --release
-cd android
-./gradlew :app:installRelease
+cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build -p bench-android --release
+(cd android && ./gradlew :app:installRelease)
 ```
 
-Open the app on the device and press "Run benchmark matrix". Results
-appear in a monospace table ready to paste into the blog.
+Open the app on the device, press "Run benchmark matrix", and copy the
+monospace table into the blog.
+
+### Without Nix
+
+`cargo ndk` + Android SDK 35 + NDK 26 + JDK 17 + Gradle 8.x on the
+`PATH`, then the same commands as above.
 
 ## Device matrix for the blog
 

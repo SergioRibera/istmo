@@ -13,16 +13,38 @@ Flutter's two interop paths, so the numbers can sit next to
 
 ## Setup
 
-This is a vanilla Flutter 3.35+ project. Create the platform scaffolding
-(the `android/`, `ios/`, `linux/` etc. folders this repo doesn't track
-by itself) with:
+### One shot through Nix
+
+```
+nix run .#bench-flutter
+```
+
+First invocation runs `flutter create` and then stops with a note
+asking you to merge our `AndroidManifest.xml`, `MainActivity.kt` and
+`AppDelegate.swift` on top of the generated scaffold. Re-run it and
+the wrapper does `flutter pub get`, `dart run pigeon`, and
+`flutter build apk --release`. The APK lands at
+`examples/bench-flutter/build/app/outputs/flutter-apk/app-release.apk`.
+
+### Interactive via the Nix devshell
+
+```
+nix develop .#bench-flutter
+cd examples/bench-flutter
+flutter create --org dev.istmo --project-name bench_flutter .
+# merge our AndroidManifest / MainActivity / AppDelegate on top of the
+# generated android/ and ios/ trees.
+```
+
+### Without Nix
+
+Flutter 3.35+, Android SDK 35 + NDK 26 + JDK 17 on the `PATH`:
 
 ```
 cd examples/bench-flutter
 flutter create --org dev.istmo --project-name bench_flutter .
-cp -r android android.generated
-# Then merge our AndroidManifest / MainActivity on top of the generated
-# tree, keeping Gradle's defaults intact.
+# merge AndroidManifest + MainActivity + AppDelegate on top of the
+# generated platform trees, keeping Gradle's defaults intact.
 ```
 
 Enable the Pigeon-generated bindings:
