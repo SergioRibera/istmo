@@ -23,6 +23,11 @@ tracing = { workspace = true }
 wasm-bindgen-futures = "0.4"
 
 [dev-dependencies]
+criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "call_overhead"
+harness = false
 
 [lints]
 workspace = true
