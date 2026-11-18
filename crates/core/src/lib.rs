@@ -36,6 +36,7 @@
 #![doc(html_root_url = "https://docs.rs/istmo-core")]
 
 pub mod assets;
+pub mod bytes;
 pub mod codec;
 pub mod dispatch;
 pub mod early_events;
@@ -54,6 +55,7 @@ pub mod typed_stream;
 /// need no direct dependency on it.
 pub use wincode;
 
+pub use crate::bytes::Bytes;
 pub use crate::dispatch::{
     CancelToken, Dispatch, DispatchError, DispatchFuture, DispatchMode, HostedStreamItem, Outcome,
     Plugin,

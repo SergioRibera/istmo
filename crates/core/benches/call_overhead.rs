@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use istmo_core::{
-    CallId, CancelToken, Dispatch, DispatchFuture, DispatchMode, Envelope, Frame, InstanceId,
-    Outcome, Runtime, codec,
+    Bytes, CallId, CancelToken, Dispatch, DispatchFuture, DispatchMode, Envelope, Frame,
+    InstanceId, Outcome, Runtime, codec,
 };
 
 const SIZES: [usize; 4] = [0, 64, 1 << 10, 1 << 16];
@@ -205,6 +205,28 @@ fn typed_shortcut_call(c: &mut Criterion) {
     group.finish();
 }
 
+fn bytes_vs_vec_clone(c: &mut Criterion) {
+    let mut group = c.benchmark_group("payload_clone");
+    for &size in &SIZES {
+        let payload = mk_payload(size);
+        let bytes = Bytes::from(payload.clone());
+        group.throughput(Throughput::Bytes(size as u64));
+        group.bench_function(format!("vec/{size}B"), |b| {
+            b.iter(|| {
+                let out = payload.clone();
+                let _ = std::hint::black_box(out);
+            });
+        });
+        group.bench_function(format!("bytes/{size}B"), |b| {
+            b.iter(|| {
+                let out = bytes.clone();
+                let _ = std::hint::black_box(out);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn dispatch_inbound_wire(c: &mut Criterion) {
     let init = Runtime::mock();
     let rt: Arc<Runtime> = init.runtime;
@@ -251,6 +273,7 @@ criterion_group!(
     in_process_hosted_call,
     in_process_inline_call,
     typed_shortcut_call,
+    bytes_vs_vec_clone,
     dispatch_inbound_wire,
 );
 criterion_main!(benches);
