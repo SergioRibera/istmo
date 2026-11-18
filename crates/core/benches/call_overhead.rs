@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use istmo_core::{
-    CallId, CancelToken, Dispatch, DispatchFuture, Envelope, Frame, InstanceId, Outcome, Runtime,
-    codec,
+    CallId, CancelToken, Dispatch, DispatchFuture, DispatchMode, Envelope, Frame, InstanceId,
+    Outcome, Runtime, codec,
 };
 
 const SIZES: [usize; 4] = [0, 64, 1 << 10, 1 << 16];
@@ -27,6 +27,7 @@ const SIZES: [usize; 4] = [0, 64, 1 << 10, 1 << 16];
 struct NoopDispatch {
     plugin_id: &'static str,
     count: AtomicBool,
+    mode: DispatchMode,
 }
 
 impl NoopDispatch {
@@ -34,6 +35,15 @@ impl NoopDispatch {
         Self {
             plugin_id,
             count: AtomicBool::new(false),
+            mode: DispatchMode::Isolated,
+        }
+    }
+
+    const fn inline(plugin_id: &'static str) -> Self {
+        Self {
+            plugin_id,
+            count: AtomicBool::new(false),
+            mode: DispatchMode::Inline,
         }
     }
 }
@@ -41,6 +51,10 @@ impl NoopDispatch {
 impl Dispatch for NoopDispatch {
     fn plugin_id(&self) -> &'static str {
         self.plugin_id
+    }
+
+    fn mode(&self) -> DispatchMode {
+        self.mode
     }
 
     fn dispatch<'a>(
@@ -132,6 +146,29 @@ fn in_process_hosted_call(c: &mut Criterion) {
     group.finish();
 }
 
+fn in_process_inline_call(c: &mut Criterion) {
+    let init = Runtime::mock();
+    let rt: Arc<Runtime> = init.runtime;
+    let _outbound = init.outbound;
+    rt.register_host(NoopDispatch::inline("bench.inline"));
+
+    let mut group = c.benchmark_group("inline_call_roundtrip");
+    for &size in &SIZES {
+        let payload = mk_payload(size);
+        group.throughput(Throughput::Bytes(size as u64));
+        group.bench_function(format!("{size}B"), |b| {
+            b.iter(|| {
+                let handle = rt
+                    .call("bench.inline", None, "ping", payload.clone())
+                    .expect("call");
+                let result = handle.recv_blocking().expect("recv");
+                let _ = std::hint::black_box(result);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn dispatch_inbound_wire(c: &mut Criterion) {
     let init = Runtime::mock();
     let rt: Arc<Runtime> = init.runtime;
@@ -176,6 +213,7 @@ criterion_group!(
     envelope_wire_roundtrip,
     thread_spawn_join_baseline,
     in_process_hosted_call,
+    in_process_inline_call,
     dispatch_inbound_wire,
 );
 criterion_main!(benches);

@@ -9,7 +9,9 @@ use std::task::{Context, Poll};
 
 use flume::{Receiver as FlumeReceiver, Sender as FlumeSender, TrySendError, bounded};
 
-use crate::dispatch::{CancelToken, Dispatch, DispatchError, HostedStreamItem, Outcome, Plugin};
+use crate::dispatch::{
+    CancelToken, Dispatch, DispatchError, DispatchMode, HostedStreamItem, Outcome, Plugin,
+};
 use crate::early_events::EarlyEventStore;
 use crate::error::IstmoError;
 use crate::main_thread::{InlineMainThread, MainThread};
@@ -1277,6 +1279,43 @@ impl Runtime {
         let Some(cancel) = self.begin_hosted(origin, call_id) else {
             return;
         };
+        match dispatcher.mode() {
+            DispatchMode::Inline => self.dispatch_hosted_call_inline(
+                &dispatcher,
+                origin,
+                call_id,
+                instance_id,
+                &method,
+                &payload,
+                cancel,
+            ),
+            // `OnCallerExecutor` is not yet implemented end-to-end; its
+            // handle-level plumbing lands in a follow-up. For now it
+            // falls back to the isolated path so the hint is forward
+            // compatible.
+            DispatchMode::OnCallerExecutor | DispatchMode::Isolated => self
+                .dispatch_hosted_call_spawned(
+                    dispatcher,
+                    origin,
+                    call_id,
+                    instance_id,
+                    method,
+                    payload,
+                    cancel,
+                ),
+        }
+    }
+
+    fn dispatch_hosted_call_spawned(
+        self: &Arc<Self>,
+        dispatcher: Arc<dyn Dispatch>,
+        origin: Origin,
+        call_id: CallId,
+        instance_id: Option<InstanceId>,
+        method: String,
+        payload: Vec<u8>,
+        cancel: CancelToken,
+    ) {
         let runtime = Arc::clone(self);
         let task_cancel = cancel.clone();
         let spawned = exec::spawn("istmo-call", async move {
@@ -1299,6 +1338,76 @@ impl Runtime {
         if let Err(err) = spawned {
             self.refuse_spawn(origin, call_id, &cancel, err);
         }
+    }
+
+    /// Dispatch the call directly on the current thread.
+    ///
+    /// Reserved for dispatchers declaring [`DispatchMode::Inline`]: their
+    /// future must complete in a single poll. A dispatcher that yields
+    /// `Pending` here answers the caller with a dispatch error — the
+    /// runtime cannot park the current thread without breaking the
+    /// executor-agnostic contract Inline promises.
+    fn dispatch_hosted_call_inline(
+        self: &Arc<Self>,
+        dispatcher: &Arc<dyn Dispatch>,
+        origin: Origin,
+        call_id: CallId,
+        instance_id: Option<InstanceId>,
+        method: &str,
+        payload: &[u8],
+        cancel: CancelToken,
+    ) {
+        let mut future = Box::pin(CatchUnwind::new(dispatcher.dispatch(
+            instance_id,
+            method,
+            payload,
+            cancel.clone(),
+        )));
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(&waker);
+        let outcome = match future.as_mut().poll(&mut cx) {
+            Poll::Ready(outcome) => outcome,
+            Poll::Pending => {
+                drop(future);
+                tracing::error!(
+                    plugin_id = dispatcher.plugin_id(),
+                    ?call_id,
+                    "inline-mode host yielded Pending; answering with a dispatch error",
+                );
+                exec::finish_now(self.respond(
+                    origin,
+                    call_id,
+                    Err(encode_dispatch_error_string(
+                        "inline-mode host yielded Pending",
+                    )),
+                    Wait::UnlessCancelled(&cancel),
+                ));
+                lock(&self.hosted).finish(origin, call_id);
+                return;
+            }
+        };
+        drop(future);
+        // A StreamOpened outcome still needs a background pump: parking
+        // the caller until the stream ends would defeat the Inline
+        // promise. Hand the pump to a spawned task and return.
+        if let Ok(Ok(Outcome::StreamOpened(_))) = &outcome {
+            let runtime = Arc::clone(self);
+            let task_cancel = cancel.clone();
+            let spawned = exec::spawn("istmo-inline-stream-pump", async move {
+                runtime
+                    .finish_hosted_call(origin, call_id, &task_cancel, outcome)
+                    .await;
+            });
+            if let Err(err) = spawned {
+                self.refuse_spawn(origin, call_id, &cancel, err);
+            }
+            return;
+        }
+        // Unary (success / domain error / dispatch error / panic) paths
+        // through `finish_hosted_call` never yield on a local caller and
+        // only yield on remote ones when the outbound channel is full;
+        // `finish_now` drives it on the current thread.
+        exec::finish_now(self.finish_hosted_call(origin, call_id, &cancel, outcome));
     }
 
     /// Answer a hosted call whose task could not start.
