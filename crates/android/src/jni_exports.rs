@@ -26,7 +26,7 @@ use istmo_core::{
     StreamEndReason, StreamId,
 };
 use jni::JNIEnv;
-use jni::objects::{JByteArray, JClass, JObject, JString};
+use jni::objects::{JByteArray, JByteBuffer, JClass, JObject, JString};
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong};
 
 use crate::assets;
@@ -110,6 +110,41 @@ const fn instance_from_wire(value: jlong) -> Option<InstanceId> {
     } else {
         Some(InstanceId(wire_id(value)))
     }
+}
+
+/// Copy `len` bytes from the start of a direct `java.nio.ByteBuffer`
+/// into a fresh `Vec<u8>`.
+///
+/// Returns [`AndroidRuntimeError::InvalidArgument`] when `len` is
+/// negative or exceeds the buffer's capacity, and forwards any JNI
+/// failure. No pinning, no `GetByteArrayElements` round-trip: this is
+/// the fast path paired with Kotlin's `nativeSubmitCallDirect` and
+/// kin.
+fn direct_buffer_to_vec(
+    env: &JNIEnv<'_>,
+    buffer: &JByteBuffer<'_>,
+    len: jint,
+) -> Result<Vec<u8>, AndroidRuntimeError> {
+    let len = usize::try_from(len)
+        .map_err(|_| AndroidRuntimeError::InvalidArgument(format!("negative buffer length {len}")))?;
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let capacity = env.get_direct_buffer_capacity(buffer)?;
+    if len > capacity {
+        return Err(AndroidRuntimeError::InvalidArgument(format!(
+            "payload length {len} exceeds direct buffer capacity {capacity}"
+        )));
+    }
+    let ptr = env.get_direct_buffer_address(buffer)?;
+    // SAFETY: `GetDirectBufferAddress` returns the base address of the
+    // direct buffer; it is valid for `capacity` bytes for the lifetime
+    // of the backing `java.nio.ByteBuffer`. The capacity check above
+    // keeps the read inside that region, and the slice is consumed
+    // (copied) before this function returns, well within the JVM's
+    // guarantees for the direct buffer's lifetime during this JNI call.
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    Ok(slice.to_vec())
 }
 
 fn stream_end_reason(
@@ -257,6 +292,46 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall<'loc
         let plugin_id: String = env.get_string(&plugin_id)?.into();
         let method: String = env.get_string(&method)?.into();
         let payload = env.convert_byte_array(&payload)?;
+        Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Call {
+            call_id: CallId(wire_id(call_id)),
+            plugin_id,
+            instance_id: instance_from_wire(instance_id),
+            method,
+            payload,
+        }))?;
+        Ok(())
+    });
+}
+
+/// Inbound Call via a `java.nio.ByteBuffer.allocateDirect`-backed payload.
+///
+/// Skips the `GetByteArrayElements` / `convert_byte_array` pinning the
+/// regular [`nativeSubmitCall`] entry point goes through: the payload is
+/// read straight out of the direct buffer with one `memcpy` into the
+/// frame. On Android that typically trims ~500 ns of per-call JNI
+/// machinery for small payloads, and avoids pinning the JVM heap for
+/// large ones.
+///
+/// The buffer must be an allocated direct buffer (`ByteBuffer.allocateDirect`).
+/// `len` is the number of valid bytes starting at the buffer's base
+/// (not the capacity, which may be larger if the Kotlin side reuses a
+/// pool). The function copies those bytes into a `Vec<u8>` and returns;
+/// the Kotlin side may recycle the buffer immediately.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCallDirect<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    call_id: jlong,
+    plugin_id: JString<'local>,
+    instance_id: jlong,
+    method: JString<'local>,
+    payload: JByteBuffer<'local>,
+    len: jint,
+) {
+    guarded(&mut env, "nativeSubmitCallDirect", (), |env| {
+        let plugin_id: String = env.get_string(&plugin_id)?.into();
+        let method: String = env.get_string(&method)?.into();
+        let payload = direct_buffer_to_vec(env, &payload, len)?;
         Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Call {
             call_id: CallId(wire_id(call_id)),
             plugin_id,

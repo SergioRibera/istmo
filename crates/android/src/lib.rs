@@ -36,6 +36,7 @@ pub use jni_exports::{
     Java_dev_istmo_runtime_IstmoRuntime_nativeShutdown,
     Java_dev_istmo_runtime_IstmoRuntime_nativeStart,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall,
+    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCallDirect,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCancel,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLatest,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyQueue,
