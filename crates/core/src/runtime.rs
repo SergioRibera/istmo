@@ -331,6 +331,15 @@ pub struct Runtime {
     /// wire step (encode, routing, outbound, decode).
     typed_hosts: Mutex<HashMap<&'static str, Arc<dyn Any + Send + Sync>>>,
 
+    /// Short-circuit flag for the typed-shortcut lookup.
+    ///
+    /// Set to `true` the first time a typed host is registered; the
+    /// generated client checks this atomic before taking
+    /// [`typed_hosts`](Self::typed_hosts)' mutex so a process that
+    /// installs no shortcut at all pays roughly one atomic load per
+    /// call instead of a mutex + hash-map miss.
+    has_typed_hosts: AtomicBool,
+
     hosted: Mutex<HostedCalls>,
 
     remote_plugins: Mutex<HashSet<String>>,
@@ -1037,6 +1046,7 @@ impl Runtime {
     {
         let holder: Arc<dyn Any + Send + Sync> = Arc::new(typed);
         lock(&self.typed_hosts).insert(plugin_id, holder);
+        self.has_typed_hosts.store(true, Ordering::Release);
     }
 
     /// Look up a typed shortcut by plugin id.
@@ -1057,6 +1067,9 @@ impl Runtime {
         // not). Cloning from the map keeps the inner `Arc<T>` alive even
         // if `shutdown` clears the slot before the caller gets to use
         // it.
+        if !self.has_typed_hosts.load(Ordering::Acquire) {
+            return None;
+        }
         let holder = lock(&self.typed_hosts).get(plugin_id).cloned()?;
         let outer = holder.downcast::<Arc<T>>().ok()?;
         Some(Arc::clone(&outer))
@@ -1823,6 +1836,7 @@ impl Runtime {
         let count = self.routing.clear();
         lock(&self.hosted).cancel_all();
         lock(&self.typed_hosts).clear();
+        self.has_typed_hosts.store(false, Ordering::Release);
         *lock(&self.remote_calls) = RemoteCalls::default();
         lock(&self.remote_instances).clear();
         if count > 0 {
@@ -1951,6 +1965,7 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         enforce_declarations: AtomicBool::new(false),
         hosts: Mutex::new(HashMap::new()),
         typed_hosts: Mutex::new(HashMap::new()),
+        has_typed_hosts: AtomicBool::new(false),
         hosted: Mutex::new(HostedCalls::default()),
         remote_plugins: Mutex::new(HashSet::new()),
         remote_calls: Mutex::new(RemoteCalls::default()),

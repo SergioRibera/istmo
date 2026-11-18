@@ -205,6 +205,19 @@ fn typed_shortcut_call(c: &mut Criterion) {
     group.finish();
 }
 
+fn typed_host_miss(c: &mut Criterion) {
+    let init = Runtime::mock();
+    let rt: Arc<Runtime> = init.runtime;
+    let _outbound = init.outbound;
+
+    c.bench_function("typed_host_miss_no_register", |b| {
+        b.iter(|| {
+            let got = rt.typed_host::<dyn EchoTyped>("bench.unknown");
+            let _ = std::hint::black_box(got);
+        });
+    });
+}
+
 fn bytes_vs_vec_clone(c: &mut Criterion) {
     let mut group = c.benchmark_group("payload_clone");
     for &size in &SIZES {
@@ -273,6 +286,7 @@ criterion_group!(
     in_process_hosted_call,
     in_process_inline_call,
     typed_shortcut_call,
+    typed_host_miss,
     bytes_vs_vec_clone,
     dispatch_inbound_wire,
 );
