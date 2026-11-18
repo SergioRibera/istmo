@@ -318,10 +318,22 @@ pre, code { font-feature-settings: "ss01" on, "ss02" on; }
 }
 .sl-markdown-content a:hover { text-decoration-color: currentColor !important; }
 
-/* Header */
+/* Header: outer <header> element */
 header.header {
   background: var(--sl-color-black) !important;
   border-bottom: 1px solid var(--sl-color-gray-5) !important;
+}
+/* Inner <div class="header sl-flex"> — Starlight uses source-order to beat .sl-flex
+   with its grid rule, but customCss loads last so .sl-flex re-wins in some setups.
+   Force the grid Starlight would apply, scoped to >=50rem. */
+@media (min-width: 50rem) {
+  header.header > div.header {
+    display: grid !important;
+    grid-template-columns:
+      minmax(auto, max-content) 1fr auto !important;
+    align-items: center !important;
+    gap: var(--sl-nav-gap) !important;
+  }
 }
 .site-title {
   font-weight: 600 !important;

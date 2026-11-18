@@ -66,6 +66,8 @@ const getStarted = import.meta.env.BASE_URL + 'getting-started/install/';
   gap: 4rem;
   align-items: start;
 }
+.hero-inner > .left,
+.hero-inner > .right { min-width: 0; }
 @media (max-width: 55rem) {
   .hero-inner { grid-template-columns: 1fr; gap: 2rem; }
 }
