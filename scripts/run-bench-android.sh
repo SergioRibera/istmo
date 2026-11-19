@@ -108,8 +108,11 @@ if [ "$skip_build" -eq 0 ]; then
     )
 fi
 
-apk="$bench_dir/android/app/build/outputs/apk/release/app-release-unsigned.apk"
-[ -f "$apk" ] || { echo "apk not found: $apk" >&2; exit 2; }
+apk="$bench_dir/android/app/build/outputs/apk/release/app-release.apk"
+if [ ! -f "$apk" ]; then
+    apk="$bench_dir/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+fi
+[ -f "$apk" ] || { echo "apk not found under release/" >&2; exit 2; }
 
 echo "::  installing"
 adb "${adb_flags[@]}" install -r "$apk" >/dev/null

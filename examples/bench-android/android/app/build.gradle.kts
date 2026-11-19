@@ -22,6 +22,11 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Sign release with the debug keystore. Unsafe for the
+            // Play Store; perfect for a bench app installed over ADB,
+            // where `release` only matters for ART / native perf
+            // flags, not for provenance.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
