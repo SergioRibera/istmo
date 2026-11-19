@@ -165,6 +165,35 @@ pub extern "system" fn Java_dev_istmo_bench_BenchNative_runIters<'local>(
     run_iterations(mode, iters, payload_len) as jni::sys::jlong
 }
 
+/// Baseline: pure JNI roundtrip. Kotlin loops and times this with
+/// `System.nanoTime()`; the ns/call floor it reports is the raw JNI
+/// machinery (method lookup, frame push/pop, no payload), which every
+/// istmo-over-JNI call pays before any istmo logic runs.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_bench_BenchNative_noopJni<'local>(
+    _env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+) -> jni::sys::jlong {
+    0
+}
+
+/// Baseline: JNI roundtrip + `ByteArray` decode. The gap between this
+/// and [`noopJni`] is what [`convert_byte_array`] alone costs (JVM
+/// pinning + the memcpy into a fresh `Vec<u8>`). The gap between this
+/// and the full `runIters(Isolated, …)` is what istmo itself adds on
+/// top of the JNI + payload floor.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_bench_BenchNative_noopJniBytes<'local>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    payload: jni::objects::JByteArray<'local>,
+) -> jni::sys::jlong {
+    let _ = env.convert_byte_array(&payload);
+    0
+}
+
 /// Desktop entry for a quick smoke check: runs each mode for 10 000
 /// iterations of a 64-byte payload and prints the ns totals.
 #[cfg(not(target_os = "android"))]
