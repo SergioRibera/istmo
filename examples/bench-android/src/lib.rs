@@ -11,6 +11,16 @@
 
 #![allow(non_snake_case)]
 
+// Stand-in for the symbol `istmo::runtime!` normally emits. The bench
+// bypasses the plugin registry entirely and configures its runtime
+// inline in [`boot_runtime`], so this just hands the init back as-is;
+// its presence stops dlopen from failing on the unresolved reference
+// inside `istmo-android`.
+#[unsafe(no_mangle)]
+pub fn __istmo_configure_runtime(init: istmo::RuntimeInit) -> istmo::RuntimeInit {
+    init
+}
+
 use std::sync::Arc;
 use std::sync::OnceLock;
 
