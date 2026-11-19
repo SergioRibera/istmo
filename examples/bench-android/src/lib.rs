@@ -21,6 +21,15 @@ pub fn __istmo_configure_runtime(init: istmo::RuntimeInit) -> istmo::RuntimeInit
     init
 }
 
+// `istmo-android` pulls `android_activity` (NativeActivity glue), which
+// expects the app to export `android_main`. The bench runs through a
+// regular Java `Activity` and never enters this path, but dlopen
+// refuses to load a library with an unresolved reference, so an empty
+// stub keeps the loader happy.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn android_main() {}
+
 use std::sync::Arc;
 use std::sync::OnceLock;
 
