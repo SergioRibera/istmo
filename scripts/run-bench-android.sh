@@ -84,17 +84,26 @@ if [ "$skip_build" -eq 0 ]; then
             -p bench-android --release
     )
     echo "::  assembling apk"
-    # Prefer the project's Gradle wrapper when it exists; otherwise
-    # fall back to the system `gradle` from the devshell. First-time
-    # setup drops a wrapper beside the project so repeat runs are
-    # version-pinned.
+    # Nixpkgs ships Gradle with a hard-coded path to a patched `aapt2`
+    # that is not reachable from the Gradle sandbox after a store GC.
+    # Point Gradle at the `aapt2` bundled with the active build-tools
+    # instead; it works in and out of Nix.
+    aapt2_candidate=""
+    if [ -n "${ANDROID_SDK_ROOT:-}" ]; then
+        aapt2_candidate=$(ls "$ANDROID_SDK_ROOT"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -n1 || true)
+    fi
+    gradle_aapt2_flag=()
+    if [ -n "$aapt2_candidate" ] && [ -x "$aapt2_candidate" ]; then
+        gradle_aapt2_flag=(-Pandroid.aapt2FromMavenOverride="$aapt2_candidate")
+        echo "::  aapt2:          $aapt2_candidate"
+    fi
     (
         cd "$bench_dir/android"
         if [ -x ./gradlew ]; then
-            ./gradlew :app:assembleRelease
+            ./gradlew "${gradle_aapt2_flag[@]}" :app:assembleRelease
         else
             gradle wrapper --gradle-version 8.10.2 >/dev/null
-            ./gradlew :app:assembleRelease
+            ./gradlew "${gradle_aapt2_flag[@]}" :app:assembleRelease
         fi
     )
 fi
