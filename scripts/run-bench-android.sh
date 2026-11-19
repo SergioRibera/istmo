@@ -84,9 +84,18 @@ if [ "$skip_build" -eq 0 ]; then
             -p bench-android --release
     )
     echo "::  assembling apk"
+    # Prefer the project's Gradle wrapper when it exists; otherwise
+    # fall back to the system `gradle` from the devshell. First-time
+    # setup drops a wrapper beside the project so repeat runs are
+    # version-pinned.
     (
         cd "$bench_dir/android"
-        ./gradlew :app:assembleRelease
+        if [ -x ./gradlew ]; then
+            ./gradlew :app:assembleRelease
+        else
+            gradle wrapper --gradle-version 8.10.2 >/dev/null
+            ./gradlew :app:assembleRelease
+        fi
     )
 fi
 
