@@ -26,6 +26,22 @@ the wrapper does `flutter pub get`, `dart run pigeon`, and
 `flutter build apk --release`. The APK lands at
 `examples/bench-flutter/build/app/outputs/flutter-apk/app-release.apk`.
 
+### Connect a device and run the whole matrix
+
+```
+nix run .#bench-flutter-device                  # single attached device
+nix run .#bench-flutter-device -- --serial XYZ  # or by id
+```
+
+Builds the APK (unless `--skip-build`), installs it, launches the
+activity with `--ez auto true`, tails `adb logcat` filtered to
+`istmo-flutter-bench` and stops at `BENCH_END`. Result table drops
+into `results/bench-flutter/<device>-<timestamp>.txt`, aligned with
+`results/bench-android/*` for a side-by-side comparison.
+
+Run it from the repo root so the script can resolve `examples/` and
+write under `results/`.
+
 ### Interactive via the Nix devshell
 
 ```

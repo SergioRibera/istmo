@@ -168,6 +168,33 @@
             echo "APK: $(pwd)/build/app/outputs/flutter-apk/app-release.apk"
           '';
         };
+
+        # ------ bench-flutter-device: build + install + capture --------
+        #
+        # Mirror of `bench-android-device`: wraps
+        # `scripts/run-bench-flutter.sh` with Flutter + Android SDK on
+        # PATH, builds the APK, installs it, auto-runs the matrix and
+        # scrapes the result table from logcat.
+        benchFlutterDeviceApp = pkgs.writeShellApplication {
+          name = "run-bench-flutter-device";
+          runtimeInputs = [
+            pkgs.flutter
+            androidSdk
+            pkgs.jdk17
+            pkgs.cmake
+            pkgs.ninja
+            pkgs.pkg-config
+            pkgs.android-tools
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.gawk
+            pkgs.gnugrep
+          ];
+          text = ''
+            ${androidEnv}
+            exec bash "${toString ./.}/scripts/run-bench-flutter.sh" "$@"
+          '';
+        };
       in
       {
         # ------ `nix run .#<name>` builds an APK ---------------------
@@ -184,6 +211,10 @@
             type = "app";
             program = "${benchFlutterApp}/bin/build-bench-flutter";
           };
+          bench-flutter-device = {
+            type = "app";
+            program = "${benchFlutterDeviceApp}/bin/run-bench-flutter-device";
+          };
         };
 
         # `nix build .#<name>` exposes the same scripts so users who
@@ -196,6 +227,7 @@
           bench-android = benchAndroidApp;
           bench-android-device = benchAndroidDeviceApp;
           bench-flutter = benchFlutterApp;
+          bench-flutter-device = benchFlutterDeviceApp;
         };
 
         # ------ `nix develop .#<name>` --------------------------------
@@ -253,6 +285,7 @@
               pkgs.cmake
               pkgs.ninja
               pkgs.pkg-config
+              pkgs.android-tools
             ];
             shellHook = ''
               ${androidEnv}

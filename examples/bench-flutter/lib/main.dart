@@ -1,14 +1,16 @@
-// Harness that times three Flutter interop paths:
+// Flutter-side harness. Measures four paths, mirroring the shape the
+// Android harness uses so the two tables can sit next to each other:
 //
-// 1. MethodChannel (classic) — JSON-free `StandardMethodCodec` echo.
-// 2. Pigeon-generated class with `useJni: true` on Android and
-//    `useFfi: true` on iOS. Lands after `dart run pigeon --input
-//    lib/bench_api.dart` has produced `lib/generated/bench_api.g.dart`
-//    and the native sides implement `BenchHost`. Until then the
-//    constructor call throws at runtime; the UI reports it.
+//   JniNoop         — MethodChannel with no payload at all.
+//   JniNoopBytes    — MethodChannel + ByteArray decode, no echo back.
+//   MethodChannel   — the current echo baseline.
+//   Pigeon          — Pigeon FFI/JNI host (opt-in; uncomment the import
+//                     and the `_timePigeon` call once `dart run pigeon`
+//                     has produced `lib/generated/bench_api.g.dart`).
 //
-// Results are rendered in a monospace block ready to copy into the
-// blog.
+// Every finished line is pushed through the `report` channel so the
+// Kotlin / Swift side can echo it into logcat / os_log, which the host
+// shell script scrapes between `BENCH_BEGIN` and `BENCH_END`.
 
 import 'dart:async';
 import 'dart:typed_data';
@@ -16,7 +18,6 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-// Uncomment after running `dart run pigeon --input lib/bench_api.dart`:
 // import 'generated/bench_api.g.dart';
 
 void main() {
@@ -41,7 +42,8 @@ class BenchHome extends StatefulWidget {
 }
 
 class _BenchHomeState extends State<BenchHome> {
-  static const _channel = MethodChannel('dev.istmo.bench/echo');
+  static const _echo = MethodChannel('dev.istmo.bench/echo');
+  static const _report = MethodChannel('dev.istmo.bench/report');
   static const _batchIters = 1000;
   static const _batches = 100;
   static const _payloadSizes = [0, 64, 1024, 65536];
@@ -49,44 +51,78 @@ class _BenchHomeState extends State<BenchHome> {
   String _output = '';
   bool _running = false;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final auto = (await _report.invokeMethod<bool>('shouldAutoRun')) ?? false;
+      if (auto && !_running) _run();
+    });
+  }
+
   Future<void> _run() async {
     setState(() {
       _running = true;
       _output = 'running…';
     });
+    await _report.invokeMethod('begin');
+
     final buf = StringBuffer();
-    buf.writeln(
-        'mode              payload     p50        p95        p99        min        max');
-    buf.writeln(
-        '---------------------------------------------------------------------------');
+    final header = 'mode             payload    p50       p95       p99       '
+        'min       max';
+    final sep = '-' * header.length;
+    buf.writeln(header);
+    buf.writeln(sep);
+    await _report.invokeMethod('line', header);
+    await _report.invokeMethod('line', sep);
+
+    // Baselines first.
+    final noopStats = await _timeMethodChannel('noop', Uint8List(0));
+    await _emit(buf, 'JniNoop', 0, noopStats);
 
     for (final size in _payloadSizes) {
-      final payload = Uint8List(size);
-      for (var i = 0; i < size; i++) {
-        payload[i] = i & 0xff;
-      }
-      final mc = await _timeMethodChannel(payload);
-      buf.writeln(_format('MethodChannel', size, mc));
-
-      // Enable once the generated bindings are present:
-      // final pg = await _timePigeon(payload);
-      // buf.writeln(_format('Pigeon FFI/JNI', size, pg));
+      final payload = _makePayload(size);
+      final stats = await _timeMethodChannel('noopBytes', payload);
+      await _emit(buf, 'JniNoopBytes', size, stats);
     }
 
+    for (final size in _payloadSizes) {
+      final payload = _makePayload(size);
+      final stats = await _timeMethodChannel('echo', payload);
+      await _emit(buf, 'MethodChannel', size, stats);
+    }
+
+    // Pigeon FFI/JNI path lands here after the generator runs:
+    // final host = BenchHost();
+    // for (final size in _payloadSizes) {
+    //   final payload = _makePayload(size);
+    //   final stats = await _timePigeon(host, payload);
+    //   await _emit(buf, 'Pigeon', size, stats);
+    // }
+
+    await _report.invokeMethod('end');
     setState(() {
       _running = false;
       _output = buf.toString();
     });
   }
 
-  Future<BenchStats> _timeMethodChannel(Uint8List payload) async {
-    final samples = List<int>.filled(_batches, 0);
+  Uint8List _makePayload(int size) {
+    final payload = Uint8List(size);
+    for (var i = 0; i < size; i++) {
+      payload[i] = i & 0xff;
+    }
+    return payload;
+  }
+
+  Future<BenchStats> _timeMethodChannel(String method, Uint8List payload) async {
     // Warm-up.
-    await _channel.invokeMethod<Uint8List>('echo', payload);
+    await _echo.invokeMethod<Object?>(method, payload);
+    final samples = List<int>.filled(_batches, 0);
     for (var b = 0; b < _batches; b++) {
       final start = DateTime.now().microsecondsSinceEpoch;
       for (var i = 0; i < _batchIters; i++) {
-        await _channel.invokeMethod<Uint8List>('echo', payload);
+        await _echo.invokeMethod<Object?>(method, payload);
       }
       final end = DateTime.now().microsecondsSinceEpoch;
       samples[b] = (end - start) * 1000 ~/ _batchIters; // ns/iter
@@ -94,10 +130,9 @@ class _BenchHomeState extends State<BenchHome> {
     return BenchStats.fromSamples(samples);
   }
 
-  // Future<BenchStats> _timePigeon(Uint8List payload) async {
-  //   final host = BenchHost();
-  //   final samples = List<int>.filled(_batches, 0);
+  // Future<BenchStats> _timePigeon(BenchHost host, Uint8List payload) async {
   //   await host.echo(payload); // warm-up
+  //   final samples = List<int>.filled(_batches, 0);
   //   for (var b = 0; b < _batches; b++) {
   //     final start = DateTime.now().microsecondsSinceEpoch;
   //     for (var i = 0; i < _batchIters; i++) {
@@ -109,13 +144,22 @@ class _BenchHomeState extends State<BenchHome> {
   //   return BenchStats.fromSamples(samples);
   // }
 
-  String _format(String mode, int payload, BenchStats s) =>
-      '${mode.padRight(15)} ${payload.toString().padLeft(7)}B  '
-      '${s.p50.toString().padLeft(6)} ns '
-      '${s.p95.toString().padLeft(6)} ns '
-      '${s.p99.toString().padLeft(6)} ns '
-      '${s.min.toString().padLeft(6)} ns '
-      '${s.max.toString().padLeft(6)} ns';
+  Future<void> _emit(
+    StringBuffer buf,
+    String mode,
+    int payload,
+    BenchStats s,
+  ) async {
+    final line = '${mode.padRight(15)} ${payload.toString().padLeft(7)}B  '
+        '${s.p50.toString().padLeft(6)} ns '
+        '${s.p95.toString().padLeft(6)} ns '
+        '${s.p99.toString().padLeft(6)} ns '
+        '${s.min.toString().padLeft(6)} ns '
+        '${s.max.toString().padLeft(6)} ns';
+    buf.writeln(line);
+    await _report.invokeMethod('line', line);
+    if (mounted) setState(() => _output = buf.toString());
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
