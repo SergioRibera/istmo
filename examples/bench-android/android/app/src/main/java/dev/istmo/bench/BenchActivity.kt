@@ -4,13 +4,20 @@ import android.app.Activity
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
-import android.view.View
+import android.util.Log
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import kotlin.concurrent.thread
 
+/**
+ * Bench UI. Interactive by default; drive from a shell with
+ * `adb shell am start -n dev.istmo.bench/.BenchActivity --ez auto true`
+ * to kick a run on launch and scrape the results from logcat (every
+ * output line is also logged with tag [LOG_TAG], bracketed between
+ * [LOG_BEGIN] and [LOG_END] so the host script knows when to stop).
+ */
 class BenchActivity : Activity() {
     private lateinit var output: TextView
     private lateinit var runButton: Button
@@ -33,15 +40,30 @@ class BenchActivity : Activity() {
         root.addView(runButton)
         root.addView(ScrollView(this).apply { addView(output) })
         setContentView(root)
+
+        if (intent?.getBooleanExtra("auto", false) == true) {
+            startRun()
+        }
     }
 
     private fun startRun() {
         runButton.isEnabled = false
         output.text = header() + "\nrunning…\n"
         thread(name = "istmo-bench") {
+            Log.i(LOG_TAG, LOG_BEGIN)
+            for (line in header().lines()) {
+                Log.i(LOG_TAG, line)
+            }
             val results = BenchRunner.runFullMatrix()
+            val rendered = render(results)
+            for (line in rendered.lines()) {
+                if (line.isNotEmpty()) {
+                    Log.i(LOG_TAG, line)
+                }
+            }
+            Log.i(LOG_TAG, LOG_END)
             runOnUiThread {
-                output.text = header() + "\n" + render(results)
+                output.text = header() + "\n" + rendered
                 runButton.isEnabled = true
             }
         }
@@ -68,5 +90,11 @@ class BenchActivity : Activity() {
             )
         }
         return sb.toString()
+    }
+
+    companion object {
+        const val LOG_TAG = "istmo-bench"
+        const val LOG_BEGIN = "BENCH_BEGIN"
+        const val LOG_END = "BENCH_END"
     }
 }

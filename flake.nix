@@ -116,6 +116,32 @@
           '';
         };
 
+        # ------ bench-android-device: build + install + capture --------
+        #
+        # Wraps `scripts/run-bench-android.sh` with the devshell tooling
+        # already resolved. Needs a device plugged in with USB debugging
+        # on; auto-detects a single attached device, otherwise asks for
+        # `--serial`.
+        benchAndroidDeviceApp = pkgs.writeShellApplication {
+          name = "run-bench-android-device";
+          runtimeInputs = [
+            pkgs.cargo-ndk
+            pkgs.gradle
+            rustAndroid
+            androidSdk
+            pkgs.jdk17
+            pkgs.android-tools
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.gawk
+            pkgs.gnugrep
+          ];
+          text = ''
+            ${androidEnv}
+            exec bash "${toString ./.}/scripts/run-bench-android.sh" "$@"
+          '';
+        };
+
         # ------ bench-flutter: Flutter APK -----------------------------
         benchFlutterApp = pkgs.writeShellApplication {
           name = "build-bench-flutter";
@@ -150,6 +176,10 @@
             type = "app";
             program = "${benchAndroidApp}/bin/build-bench-android";
           };
+          bench-android-device = {
+            type = "app";
+            program = "${benchAndroidDeviceApp}/bin/run-bench-android-device";
+          };
           bench-flutter = {
             type = "app";
             program = "${benchFlutterApp}/bin/build-bench-flutter";
@@ -164,6 +194,7 @@
         # a Gradle-FOD cache, which is a follow-up).
         packages = {
           bench-android = benchAndroidApp;
+          bench-android-device = benchAndroidDeviceApp;
           bench-flutter = benchFlutterApp;
         };
 
@@ -203,6 +234,7 @@
               pkgs.gradle
               androidSdk
               pkgs.jdk17
+              pkgs.android-tools
             ];
             shellHook = ''
               ${androidEnv}
