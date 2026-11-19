@@ -29,6 +29,22 @@ Runs `cargo ndk` for `arm64-v8a` and `./gradlew :app:assembleRelease`
 inside a devshell pinned by the repo's `flake.nix`. The APK lands at
 `examples/bench-android/android/app/build/outputs/apk/release/app-release-unsigned.apk`.
 
+### Connect a device and run the whole matrix
+
+```
+nix run .#bench-android-device                  # single attached device
+nix run .#bench-android-device -- --serial XYZ  # or by id
+```
+
+Builds the APK (unless `--skip-build`), installs it, launches the
+activity in auto-run mode, tails `adb logcat` filtered to `istmo-bench`
+and stops at `BENCH_END`. The result table is dumped both to stdout
+and to `results/bench-android/<device>-<timestamp>.txt`, ready to
+paste into the blog or diff across devices.
+
+Run it from the repo root so the script can resolve `examples/` and
+write under `results/`.
+
 ### Interactive via the Nix devshell
 
 ```

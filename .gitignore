@@ -89,3 +89,4 @@ examples/biometric-demo/android/app/src/main/java/dev/istmo/runtime/IstmoPluginR
 **/ios/.istmo/
 **/Plugins/IstmoMain.swift
 **/Plugins/IstmoPluginRegistry.swift
+results/

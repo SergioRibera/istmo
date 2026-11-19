@@ -33,7 +33,18 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve the repo root. When the script is installed into the Nix
+# store (via `nix run .#bench-android-device`), `$0` points at the
+# store copy and its parent is read-only; honour `$ISTMO_REPO` first,
+# then fall back to the working directory.
+if [ -n "${ISTMO_REPO:-}" ]; then
+    repo_root="$ISTMO_REPO"
+elif [ -f "$PWD/Cargo.toml" ] && grep -q '^\[workspace\]' "$PWD/Cargo.toml" 2>/dev/null; then
+    repo_root="$PWD"
+else
+    echo "cannot find the istmo workspace: run this from the repo root or set ISTMO_REPO" >&2
+    exit 2
+fi
 bench_dir="$repo_root/examples/bench-android"
 results_dir="$repo_root/results/bench-android"
 mkdir -p "$results_dir"
