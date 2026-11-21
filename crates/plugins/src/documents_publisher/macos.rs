@@ -4,7 +4,9 @@
 //! `odoc` Apple Event to the app — to the running instance when there is
 //! one, without starting a second process — so the socket never sees
 //! them. A small Objective-C object registers for that event and
-//! publishes each file on the documents queue.
+//! publishes each file on the documents queue. Links to a URL scheme the
+//! app registers come the same way, as a `GURL` event, and go to the
+//! deep-link queue.
 //!
 //! `NSApplication` installs its own `odoc` handler while it finishes
 //! launching, which would replace one registered earlier. The handler is
@@ -28,6 +30,8 @@ use crate::documents::{DocumentOrigin, Documents, OpenedDocument};
 const CORE_EVENT_CLASS: u32 = u32::from_be_bytes(*b"aevt");
 /// `kAEOpenDocuments` (`'odoc'`).
 const OPEN_DOCUMENTS: u32 = u32::from_be_bytes(*b"odoc");
+/// `kInternetEventClass` and `kAEGetURL` (both `'GURL'`).
+const GET_URL: u32 = u32::from_be_bytes(*b"GURL");
 /// `keyDirectObject` (`'----'`).
 const DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
 
@@ -50,6 +54,11 @@ define_class!(
         #[unsafe(method(istmoOpenDocuments:withReplyEvent:))]
         fn open_documents(&self, event: &AnyObject, _reply: &AnyObject) {
             deliver(event);
+        }
+
+        #[unsafe(method(istmoGetUrl:withReplyEvent:))]
+        fn get_url(&self, event: &AnyObject, _reply: &AnyObject) {
+            deliver_url(event);
         }
     }
 );
@@ -92,7 +101,7 @@ pub(super) fn install(runtime: &Arc<Runtime>) {
     std::mem::forget(opener);
 }
 
-/// Make `opener` the `odoc` handler.
+/// Make `opener` the `odoc` and `GURL` handler.
 fn register(opener: &Opener) {
     let Some(manager_class) = AnyClass::get(c"NSAppleEventManager") else {
         return;
@@ -115,6 +124,13 @@ fn register(opener: &Opener) {
             andSelector: sel!(istmoOpenDocuments:withReplyEvent:),
             forEventClass: CORE_EVENT_CLASS,
             andEventID: OPEN_DOCUMENTS
+        ];
+        let () = msg_send![
+            &*manager,
+            setEventHandler: handler,
+            andSelector: sel!(istmoGetUrl:withReplyEvent:),
+            forEventClass: GET_URL,
+            andEventID: GET_URL
         ];
     }
 }
@@ -198,14 +214,38 @@ fn file_path(descriptor: &AnyObject) -> Option<PathBuf> {
     let url = url?;
     // SAFETY: as above.
     let path: Option<Retained<AnyObject>> = unsafe { msg_send![&*url, path] };
-    let path = path?;
+    utf8(&path?).map(PathBuf::from)
+}
+
+/// Publish the URL of a `GURL` event as a deep link.
+fn deliver_url(event: &AnyObject) {
+    let Some(runtime) = RUNTIME.get().and_then(Weak::upgrade) else {
+        return;
+    };
+    // SAFETY: `event` is the `NSAppleEventDescriptor` of a `GURL` event;
+    // the getters return autoreleased objects or nil.
+    let url: Option<Retained<AnyObject>> =
+        unsafe { msg_send![event, paramDescriptorForKeyword: DIRECT_OBJECT] };
+    // SAFETY: as above; `-stringValue` coerces the descriptor to text.
+    let text: Option<Retained<AnyObject>> =
+        url.and_then(|url| unsafe { msg_send![&*url, stringValue] });
+    let Some(uri) = text.as_deref().and_then(utf8) else {
+        return;
+    };
+    super::publish_urls(&runtime, &[uri], "running");
+}
+
+/// Copy of an `NSString`.
+fn utf8(string: &AnyObject) -> Option<String> {
     // SAFETY: `-UTF8String` returns a NUL-terminated buffer owned by
-    // `path`, which stays alive until the copy below is done.
-    let utf8: *const c_char = unsafe { msg_send![&*path, UTF8String] };
+    // `string`, which stays alive until the copy below is done.
+    let utf8: *const c_char = unsafe { msg_send![string, UTF8String] };
     if utf8.is_null() {
         return None;
     }
     // SAFETY: non-null, NUL-terminated and alive (see above).
-    let text = unsafe { CStr::from_ptr(utf8) }.to_str().ok()?;
-    Some(PathBuf::from(text))
+    unsafe { CStr::from_ptr(utf8) }
+        .to_str()
+        .ok()
+        .map(str::to_owned)
 }

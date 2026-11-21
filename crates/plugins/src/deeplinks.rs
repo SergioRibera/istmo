@@ -89,6 +89,18 @@ impl DeepLinks {
     pub fn stream(&self) -> DeepLinkStream {
         EarlyStream::new(self.queue.subscribe())
     }
+
+    /// Publish a link from Rust (desktop publisher, tests). Native
+    /// shells publish through `Frame::EarlyEvent` on the same channel.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::Codec`] when the link does not encode.
+    pub fn publish(rt: &Runtime, link: &DeepLink) -> Result<(), IstmoError> {
+        let bytes = istmo_core::codec::encode(link)?;
+        rt.publish_early_queue(DEEPLINKS_CHANNEL, DEFAULT_DEEPLINKS_CAPACITY, bytes);
+        Ok(())
+    }
 }
 
 /// Deep links as they arrive.
