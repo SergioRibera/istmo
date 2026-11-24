@@ -21,7 +21,7 @@ pub enum WebViewError {
     /// isolated on this platform / OS version.
     ProfileUnsupported,
     /// The engine is not installed. Carries a URL the user can install
-    /// it from (WebView2 bootstrapper), or the missing library name.
+    /// it from (`WebView2` bootstrapper), or the missing library name.
     RuntimeMissing(String),
     /// Another component of the process owns the toolkit the backend
     /// needs (an already initialised GTK on another thread).

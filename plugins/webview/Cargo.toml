@@ -16,11 +16,18 @@ links = "istmo_webview"
 default = []
 # `ScriptedWebView`: an engine-less host for testing app flows.
 testing = []
+# Rust hosts for Linux, macOS and Windows (Linux: WebKitGTK 4.1).
+desktop = ["linux-webkit2gtk-4-1"]
+# Linux engines, loaded with `dlopen` at run time: no headers or
+# pkg-config at build time. Only one GTK / WebKit major per process.
+linux-webkit2gtk-4-1 = ["dep:libloading", "dep:istmo-window"]
+linux-webkitgtk-6-0 = ["dep:libloading", "dep:istmo-window"]
 
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
 flume = { workspace = true }
+oneshot = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"
 
@@ -54,3 +61,11 @@ unused_async_trait_impl = "allow"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = { version = "0.8", optional = true }
+istmo-window = { workspace = true, optional = true }
+
+[[example]]
+name = "gtk_smoke"
+required-features = ["desktop"]

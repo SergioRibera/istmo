@@ -35,6 +35,14 @@
 
 #![doc(html_root_url = "https://docs.rs/istmo-webview")]
 
+#[cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos", target_os = "windows"),
+        feature = "desktop"
+    ),
+    test
+))]
+pub mod desktop;
 mod error;
 mod handle;
 pub mod host;

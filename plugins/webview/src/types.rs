@@ -24,7 +24,7 @@ pub struct WebViewTag(std::convert::Infallible);
 
 /// Plugin-wide settings, fixed for the lifetime of a client instance.
 ///
-/// Custom schemes live here rather than per view: WebView2 registers
+/// Custom schemes live here rather than per view: `WebView2` registers
 /// them when its environment is created, and every view of the
 /// environment shares the registration.
 #[message(crate = "::istmo_core")]
@@ -231,7 +231,7 @@ pub struct WebViewSettings {
     pub file_access: bool,
     /// Password and form autofill.
     pub autofill: bool,
-    /// WebAuthn / passkeys where the platform allows them in a view.
+    /// `WebAuthn` / passkeys where the platform allows them in a view.
     pub webauthn: bool,
     /// Draw nothing behind transparent page content.
     pub transparent: bool,

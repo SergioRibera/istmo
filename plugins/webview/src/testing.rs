@@ -31,7 +31,7 @@ use crate::{
 };
 
 /// A call the scripted host received.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(
     missing_docs,
     reason = "each variant records the trait method of the same name"
@@ -164,7 +164,7 @@ impl ScriptedView {
                     .publish(ControlEvent::Intercepted(InterceptedNav {
                         navigation_id,
                         url: url.to_owned(),
-                    }))
+                    }));
             }
             RuleAction::Ask => {
                 let request_id = self.asks.insert(url.to_owned());
