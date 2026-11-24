@@ -51,8 +51,8 @@
         # versions follow the bench project's `compileSdk = 35` and the
         # NDK Gradle picks up through `cargo-ndk`.
         androidComposition = pkgs.androidenv.composeAndroidPackages {
-          platformVersions = [ "35" "34" ];
-          buildToolsVersions = [ "34.0.0" "35.0.0" ];
+          platformVersions = [ "36" "35" "34" ];
+          buildToolsVersions = [ "34.0.0" "35.0.0" "36.0.0" ];
           includeNDK = true;
           ndkVersions = [ "26.3.11579264" ];
           includeEmulator = false;
