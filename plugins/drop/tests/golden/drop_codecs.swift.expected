@@ -90,6 +90,40 @@ public final class FileDropCodecsImpl: FileDropCodecs {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
+    public func readDragState(_ c: inout Bincode.Cursor) throws -> DragState {
+        let disc = try Bincode.readVarintU32(&c)
+        switch disc {
+        case 0: return .idle
+        case 1: return .over(try self.readDragOver(&c))
+        case 2: return .receiving(try Bincode.readVarintU32(&c))
+        default: throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
+        }
+    }
+
+    public func writeDragState(_ out: inout Data, _ value: DragState) {
+        switch value {
+        case .idle:
+            Bincode.writeVarintU32(&out, 0)
+        case .over(let payload):
+            Bincode.writeVarintU32(&out, 1)
+            self.writeDragOver(&out, payload)
+        case .receiving(let payload):
+            Bincode.writeVarintU32(&out, 2)
+            Bincode.writeVarintU32(&out, payload)
+        }
+    }
+
+    public func readDragOver(_ c: inout Bincode.Cursor) throws -> DragOver {
+        let count = try Bincode.readVarintU32(&c)
+        let position = try Bincode.readOption(&c) { c1 in try self.readDropPoint(&c1) }
+        return DragOver(count: count, position: position)
+    }
+
+    public func writeDragOver(_ out: inout Data, _ value: DragOver) {
+        Bincode.writeVarintU32(&out, value.count)
+        Bincode.writeOption(&out, value.position) { o1, v1 in self.writeDropPoint(&o1, v1) }
+    }
+
     public func readDropPoint(_ c: inout Bincode.Cursor) throws -> DropPoint {
         let x = try Bincode.readF32(&c)
         let y = try Bincode.readF32(&c)

@@ -60,6 +60,23 @@ public enum SkipReason: UInt32 {
     case tooLarge = 0
     case unreadable = 1
     case notAFile = 2
+    case wrongType = 3
+}
+
+public enum DragState {
+    case idle
+    case over(DragOver)
+    case receiving(UInt32)
+}
+
+public struct DragOver {
+    public let count: UInt32
+    public let position: DropPoint?
+
+    public init(count: UInt32, position: DropPoint?) {
+        self.count = count
+        self.position = position
+    }
 }
 
 public struct DropPoint {

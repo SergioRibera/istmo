@@ -18,6 +18,10 @@ public protocol FileDropBackend: AnyObject {
 /// User provides one impl; each entry typically delegates to a
 /// helper on the type itself.
 public protocol FileDropCodecs {
+    func readDragOver(_ c: inout Bincode.Cursor) throws -> DragOver
+    func writeDragOver(_ out: inout Data, _ value: DragOver)
+    func readDragState(_ c: inout Bincode.Cursor) throws -> DragState
+    func writeDragState(_ out: inout Data, _ value: DragState)
     func readDropError(_ c: inout Bincode.Cursor) throws -> DropError
     func writeDropError(_ out: inout Data, _ value: DropError)
     func readDropOptions(_ c: inout Bincode.Cursor) throws -> DropOptions

@@ -91,9 +91,10 @@ fn cleanup_never_touches_files_outside_the_drop_dir() {
         ],
         ..DroppedFiles::default()
     };
-    let err = DropInbox::cleanup(&dropped).expect_err("refused");
-    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    // Left alone, and no error: a receive loop using `?` keeps going.
+    dropped.cleanup().expect("foreign paths are skipped");
     assert_eq!(std::fs::read(&mine).expect("kept"), b"keep");
+    assert!(inside.exists(), "only the files named are deleted");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -118,4 +119,38 @@ fn options_builders() {
     assert_eq!(options.mime_types, ["image/*", "application/pdf"]);
     assert_eq!(options.max_bytes, 10);
     assert_eq!(DropOptions::any(), DropOptions::default());
+}
+
+#[test]
+fn the_drag_state_starts_idle_and_follows_the_backend() {
+    use istmo_drop::{DRAG_CHANNEL, DragOver, DragState};
+
+    let rt = runtime();
+    let inbox = DropInbox::from_runtime(&rt).expect("declared");
+    assert_eq!(inbox.drag_state(), DragState::Idle);
+    let over = DragState::Over(DragOver {
+        count: 2,
+        position: Some(DropPoint { x: 1.0, y: 2.0 }),
+    });
+    rt.publish_early_latest(
+        DRAG_CHANNEL,
+        istmo_core::codec::encode(&over).expect("encode"),
+    );
+    assert_eq!(inbox.drag_state(), over);
+    let changes = inbox.drag_changes();
+    assert_eq!(changes.recv().expect("current first"), over);
+}
+
+#[test]
+fn a_domain_error_comes_back_typed() {
+    use istmo_drop::DropError;
+
+    let bytes = istmo_core::codec::encode(&DropError::Unsupported).expect("encode");
+    let err = istmo_core::IstmoError::PluginError { bytes };
+    assert!(matches!(
+        DropError::try_from_istmo(err),
+        Ok(DropError::Unsupported)
+    ));
+    let transport = DropError::from(istmo_core::IstmoError::ChannelClosed);
+    assert!(matches!(transport, DropError::Backend(_)));
 }

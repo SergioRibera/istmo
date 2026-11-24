@@ -33,8 +33,20 @@ data class SkippedFile(
 enum class SkipReason {
     TooLarge,
     Unreadable,
-    NotAFile
+    NotAFile,
+    WrongType
 }
+
+sealed class DragState {
+    object Idle : DragState()
+    data class Over(val value: DragOver) : DragState()
+    data class Receiving(val value: UInt) : DragState()
+}
+
+data class DragOver(
+    val count: UInt,
+    val position: DropPoint?
+)
 
 data class DropPoint(
     val x: Float,

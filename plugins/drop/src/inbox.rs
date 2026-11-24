@@ -10,10 +10,10 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use flume::Receiver;
-use istmo_core::early_events::PreMainQueue;
+use istmo_core::early_events::{LatestValueSlot, PreMainQueue};
 use istmo_core::{IstmoError, Plugin, Runtime, codec};
 
-use crate::{DroppedFiles, FileDropClient};
+use crate::{DragState, DroppedFiles, FileDropClient};
 
 /// Early-event channel drops are published on. Native code publishes
 /// with `publishEarlyQueue(DROP_CHANNEL, DROP_QUEUE_CAPACITY, bytes)`.
@@ -21,6 +21,10 @@ pub const DROP_CHANNEL: &str = "istmo.drop.files";
 
 /// Drops kept before the app subscribes.
 pub const DROP_QUEUE_CAPACITY: usize = 8;
+
+/// Latest-value channel of the [`DragState`]. Native code publishes with
+/// `publishEarlyLatest(DRAG_CHANNEL, bytes)`.
+pub const DRAG_CHANNEL: &str = "istmo.drop.drag";
 
 /// Directory (as path components) the backends copy dropped files into:
 /// `<cache>/istmo-drop/incoming/<uuid>/<name>` on Android and iOS.
@@ -34,6 +38,7 @@ const MAX_DROP_BYTES: usize = 1 << 20;
 #[derive(Debug, Clone)]
 pub struct DropInbox {
     queue: Arc<PreMainQueue>,
+    drag: Arc<LatestValueSlot>,
 }
 
 impl DropInbox {
@@ -46,10 +51,10 @@ impl DropInbox {
     /// declarations and `istmo.drop` was not declared.
     pub fn from_runtime(runtime: &Arc<Runtime>) -> Result<Self, IstmoError> {
         runtime.check_declared(FileDropClient::PLUGIN_ID)?;
+        let events = runtime.early_events();
         Ok(Self {
-            queue: runtime
-                .early_events()
-                .queue(DROP_CHANNEL, DROP_QUEUE_CAPACITY),
+            queue: events.queue(DROP_CHANNEL, DROP_QUEUE_CAPACITY),
+            drag: events.latest_slot(DRAG_CHANNEL),
         })
     }
 
@@ -59,6 +64,24 @@ impl DropInbox {
     pub fn stream(&self) -> DropStream {
         DropStream {
             rx: self.queue.subscribe(),
+        }
+    }
+
+    /// What is being dragged over the window now.
+    #[must_use]
+    pub fn drag_state(&self) -> DragState {
+        self.drag
+            .peek()
+            .and_then(|bytes| codec::decode_exact_capped(&bytes, MAX_DROP_BYTES).ok())
+            .unwrap_or_default()
+    }
+
+    /// Every change of the [`DragState`], starting with the current one:
+    /// an overlay while files hover, a note while they are copied.
+    #[must_use]
+    pub fn drag_changes(&self) -> DragStream {
+        DragStream {
+            rx: self.drag.subscribe(),
         }
     }
 
@@ -76,12 +99,11 @@ impl DropInbox {
     /// Delete the copies of `dropped`'s files.
     ///
     /// Only regular files that, once canonicalised, sit inside a
-    /// [`DROP_DIR`] directory are deleted; any other path (a forwarded
-    /// desktop drop naming the person's own file, `..` tricks, symlinks
-    /// out of the directory) is refused with
-    /// [`std::io::ErrorKind::PermissionDenied`]. The per-drop folder goes
-    /// once empty. Missing files are ignored; the first other error is
-    /// returned after trying every file.
+    /// [`DROP_DIR`] directory are deleted. Any other path is left alone
+    /// without an error: a desktop drop forwarded with the person's own
+    /// files, `..` tricks, symlinks out of the directory. The per-drop
+    /// folder goes once empty. Missing files are ignored; the first other
+    /// I/O error is returned after trying every file.
     pub fn cleanup(dropped: &DroppedFiles) -> std::io::Result<()> {
         let mut first_error = None;
         for file in &dropped.files {
@@ -98,11 +120,9 @@ impl DropInbox {
 
 fn remove_copy(path: &Path) -> std::io::Result<()> {
     let canonical = std::fs::canonicalize(path)?;
+    // Not a copy this plugin made: never ours to delete.
     if !is_in_drop_dir(&canonical) || !std::fs::symlink_metadata(&canonical)?.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("{} is not a dropped file's copy", path.display()),
-        ));
+        return Ok(());
     }
     std::fs::remove_file(&canonical)?;
     // The `<uuid>` folder of the drop, when that was its last file.
@@ -153,6 +173,30 @@ impl DropStream {
     #[must_use]
     pub fn try_recv(&self) -> Option<Result<DroppedFiles, IstmoError>> {
         self.rx.try_recv().ok().map(|bytes| decode(&bytes))
+    }
+}
+
+/// Stream of [`DragState`] changes.
+#[derive(Debug)]
+pub struct DragStream {
+    rx: Receiver<Vec<u8>>,
+}
+
+impl DragStream {
+    /// Block for the next change.
+    pub fn recv(&self) -> Result<DragState, IstmoError> {
+        let bytes = self.rx.recv().map_err(|_| IstmoError::ChannelClosed)?;
+        Ok(codec::decode_exact_capped(&bytes, MAX_DROP_BYTES)?)
+    }
+
+    /// Await the next change.
+    pub async fn recv_async(&self) -> Result<DragState, IstmoError> {
+        let bytes = self
+            .rx
+            .recv_async()
+            .await
+            .map_err(|_| IstmoError::ChannelClosed)?;
+        Ok(codec::decode_exact_capped(&bytes, MAX_DROP_BYTES)?)
     }
 }
 

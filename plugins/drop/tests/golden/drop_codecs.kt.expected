@@ -108,6 +108,54 @@ class FileDropCodecsImpl : FileDropCodecs {
         Bincode.writeEnumDiscriminant(out, value.ordinal)
     }
 
+    override fun readDragState(bytes: ByteArray, offset: Int): Bincode.Decoded<DragState> {
+        var cursor = offset
+        val disc = Bincode.readEnumDiscriminant(bytes, cursor)
+        cursor = disc.consumed
+        return when (disc.value) {
+            0 -> Bincode.Decoded(DragState.Idle, cursor)
+            1 -> {
+                val d_inner = readDragOver(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(DragState.Over(inner) as DragState, cursor)
+            }
+            2 -> {
+                val d_inner = Bincode.readU32(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(DragState.Receiving(inner) as DragState, cursor)
+            }
+            else -> throw Bincode.DecodeException("DragState: unknown discriminant ${disc.value}")
+        }
+    }
+
+    override fun writeDragState(out: ByteArrayOutputStream, value: DragState) {
+        when (value) {
+            DragState.Idle -> Bincode.writeEnumDiscriminant(out, 0)
+            is DragState.Over -> {
+                Bincode.writeEnumDiscriminant(out, 1)
+                writeDragOver(out, value.value)
+            }
+            is DragState.Receiving -> {
+                Bincode.writeEnumDiscriminant(out, 2)
+                Bincode.writeU32(out, value.value)
+            }
+        }
+    }
+
+    override fun readDragOver(bytes: ByteArray, offset: Int): Bincode.Decoded<DragOver> {
+        var cursor = offset
+        val d_count = Bincode.readU32(bytes, cursor); cursor = d_count.consumed
+        val count = d_count.value
+        val d_position = Bincode.readOption(bytes, cursor) { b1, c1 -> readDropPoint(b1, c1) }; cursor = d_position.consumed
+        val position = d_position.value
+        return Bincode.Decoded(DragOver(count = count, position = position), cursor)
+    }
+
+    override fun writeDragOver(out: ByteArrayOutputStream, value: DragOver) {
+        Bincode.writeU32(out, value.count)
+        Bincode.writeOption(out, value.position) { s1, v1 -> writeDropPoint(s1, v1) }
+    }
+
     override fun readDropPoint(bytes: ByteArray, offset: Int): Bincode.Decoded<DropPoint> {
         var cursor = offset
         val d_x = Bincode.readF32(bytes, cursor); cursor = d_x.consumed

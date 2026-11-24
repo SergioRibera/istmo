@@ -5,36 +5,47 @@ import UIKit
 import UniformTypeIdentifiers
 #endif
 
-/// Backend of `istmo.drop` on iPadOS (and iPhone, for drags inside the
-/// app): files dragged from another app onto the app's window.
+/// Backend of `istmo.drop` on iPadOS and iOS: files dragged from another
+/// app onto the app's windows (iPad, and iPhone since iOS 15).
 ///
-/// Nothing listens until Rust calls `listen`. Then a `UIDropInteraction`
-/// sits on the key window's root view, and moves to a new one when a
-/// scene becomes active. A drag carrying none of the accepted types is
-/// refused while it hovers: the system shows it cannot be dropped here.
+/// Nothing listens until Rust calls `listen`. Then every window of every
+/// scene gets a `UIDropInteraction`, sheets included (it sits on the
+/// window, not on a view controller), and windows of scenes that connect
+/// later get one too. A drag carrying none of the accepted types is not
+/// handled. While one the window takes hovers, `DragState.over` goes on
+/// the `istmo.drop.drag` channel (with its position, a few dozen times a
+/// second at most); `receiving` while the files load, `idle` after.
 ///
 /// On drop each file is copied, inside its load callback (the system
-/// deletes its copy right after), into
-/// `<caches>/istmo-drop/incoming/<uuid>/`, and one `DroppedFiles` goes on
-/// the `istmo.drop.files` queue. Files above the size limit and
-/// unreadable ones are listed as skipped. The copies are the app's: Rust
-/// deletes them with `DropInbox::cleanup`; leftovers older than a day go
-/// when the backend starts.
+/// deletes its own copy right after), into
+/// `<caches>/istmo-drop/incoming/<uuid>/<n>/`, and one `DroppedFiles`
+/// goes on the `istmo.drop.files` queue. Folders, text and links (unless
+/// the app takes `text/*`), files above the size limit and unreadable ones
+/// come back as skipped. The copies are the app's: Rust deletes them with
+/// `DropInbox::cleanup`; leftovers older than a day go when the backend
+/// starts.
 public final class FileDropBackendImpl: NSObject, FileDropBackend {
-    // Same values as `DROP_CHANNEL`, `DROP_QUEUE_CAPACITY`, `DROP_DIR` and
-    // `DEFAULT_MAX_BYTES` in the Rust crate.
+    // Same values as `DROP_CHANNEL`, `DROP_QUEUE_CAPACITY`, `DRAG_CHANNEL`,
+    // `DROP_DIR` and `DEFAULT_MAX_BYTES` in the Rust crate.
     private static let channel = "istmo.drop.files"
     private static let capacity: UInt32 = 8
+    private static let dragChannel = "istmo.drop.drag"
     private static let incomingDir = "istmo-drop/incoming"
     private static let defaultMaxBytes: UInt64 = 512 * 1024 * 1024
     private static let maxAge: TimeInterval = 24 * 60 * 60
+    private static let moveInterval: TimeInterval = 1.0 / 30
+    private static let maxNameBytes = 200
 
     private let codecs = FileDropCodecsImpl()
-    /// Main thread only.
+    /// Main thread only, like everything below.
     private var options: DropOptions?
     #if canImport(UIKit)
-    private var interaction: UIDropInteraction?
-    private var sceneObserver: NSObjectProtocol?
+    private var accepted: [UTType] = []
+    private var interactions: [ObjectIdentifier: UIDropInteraction] = [:]
+    private var observers: [NSObjectProtocol] = []
+    private var lastMove = Date.distantPast
+    /// Files of a drop are loading: `sessionDidEnd` must not go idle.
+    private var receiving = false
     #endif
 
     public override init() {
@@ -44,9 +55,14 @@ public final class FileDropBackendImpl: NSObject, FileDropBackend {
 
     public func listen(options: DropOptions) async throws {
         #if canImport(UIKit)
+        let types = Self.types(for: options.mimeTypes)
+        if types.isEmpty {
+            throw DropError.backend("none of \(options.mimeTypes) names a known type")
+        }
         await MainActor.run {
             self.options = options
-            self.attach()
+            self.accepted = types
+            self.attachEverywhere()
             self.followScenes()
         }
         #else
@@ -58,11 +74,15 @@ public final class FileDropBackendImpl: NSObject, FileDropBackend {
         #if canImport(UIKit)
         await MainActor.run {
             self.options = nil
-            self.detach()
-            if let observer = self.sceneObserver {
-                NotificationCenter.default.removeObserver(observer)
-                self.sceneObserver = nil
+            for interaction in self.interactions.values {
+                interaction.view?.removeInteraction(interaction)
             }
+            self.interactions.removeAll()
+            for observer in self.observers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            self.observers.removeAll()
+            self.publishState(.idle)
         }
         #endif
     }
@@ -87,8 +107,10 @@ public final class FileDropBackendImpl: NSObject, FileDropBackend {
         }
     }
 
-    /// Without path separators, control characters or bidi overrides.
-    private static func safeName(_ name: String?) -> String {
+    /// Without path separators, control characters or bidi overrides,
+    /// short enough in UTF-8 bytes for APFS once " (n)" is added, its
+    /// extension kept; `ext` added when it has none.
+    static func safeName(_ name: String?, ext: String?) -> String {
         let bidi: Set<Character> = [
             "\u{202A}", "\u{202B}", "\u{202C}", "\u{202D}", "\u{202E}",
             "\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}", "\u{200E}", "\u{200F}",
@@ -101,179 +123,255 @@ public final class FileDropBackendImpl: NSObject, FileDropBackend {
             .replacingOccurrences(of: ":", with: "_")
             .trimmingCharacters(in: .whitespaces)
         while cleaned.hasPrefix(".") { cleaned.removeFirst() }
-        cleaned = String(cleaned.prefix(120))
-        return cleaned.isEmpty ? "file" : cleaned
+        if cleaned.isEmpty { cleaned = "file" }
+        if let ext = ext, !ext.isEmpty, (cleaned as NSString).pathExtension.isEmpty {
+            cleaned += ".\(ext)"
+        }
+        guard cleaned.utf8.count > maxNameBytes else { return cleaned }
+        let suffix = (cleaned as NSString).pathExtension
+        let tail = suffix.isEmpty || suffix.utf8.count > 16 ? "" : ".\(suffix)"
+        var stem = tail.isEmpty ? cleaned : (cleaned as NSString).deletingPathExtension
+        while stem.utf8.count + tail.utf8.count > maxNameBytes { stem.removeLast() }
+        return stem + tail
     }
 }
 
 #if canImport(UIKit)
 extension FileDropBackendImpl: UIDropInteractionDelegate {
-    @MainActor
-    private func rootView() -> UIView? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let window = scenes.flatMap(\.windows).first(where: \.isKeyWindow) ?? scenes.first?.windows.first
-        return window?.rootViewController?.view ?? window
-    }
-
-    @MainActor
-    private func attach() {
-        guard let view = rootView() else { return }
-        if let interaction = interaction, interaction.view === view { return }
-        detach()
-        let next = UIDropInteraction(delegate: self)
-        view.addInteraction(next)
-        interaction = next
-    }
-
-    @MainActor
-    private func detach() {
-        if let interaction = interaction {
-            interaction.view?.removeInteraction(interaction)
-        }
-        interaction = nil
-    }
-
-    /// The window may come later than `listen` (cold start) or change
-    /// (another scene): attach again whenever a scene becomes active.
-    @MainActor
-    private func followScenes() {
-        guard sceneObserver == nil else { return }
-        sceneObserver = NotificationCenter.default.addObserver(
-            forName: UIScene.didActivateNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self = self, self.options != nil else { return }
-                self.attach()
-            }
-        }
-    }
-
-    /// Types the window takes: the MIME types asked for, or any file.
-    private func acceptedTypes() -> [UTType] {
-        let mimeTypes = options?.mimeTypes ?? []
-        if mimeTypes.isEmpty { return [.item] }
-        return mimeTypes.compactMap { mime in
+    /// What `mimeTypes` names, wildcards through their supertype; every
+    /// file when empty.
+    static func types(for mimeTypes: [String]) -> [UTType] {
+        if mimeTypes.isEmpty { return [.data] }
+        return mimeTypes.compactMap { mime -> UTType? in
             switch mime {
-            case "*/*": return .item
+            case "*/*": return .data
             case "image/*": return .image
             case "text/*": return .text
             case "audio/*": return .audio
             case "video/*": return .movie
-            default: return UTType(mimeType: mime)
+            case "font/*": return .font
+            case "model/*": return .threeDContent
+            case "application/*": return .data
+            default:
+                // A type the system does not know has no real identifier.
+                guard let type = UTType(mimeType: mime), !type.isDynamic else { return nil }
+                return type
             }
         }
     }
 
+    private func takesText() -> Bool {
+        accepted.contains { $0.conforms(to: .text) }
+    }
+
+    @MainActor
+    private func attachEverywhere() {
+        let windows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+        let live = Set(windows.map(ObjectIdentifier.init))
+        for (id, interaction) in interactions where !live.contains(id) {
+            interaction.view?.removeInteraction(interaction)
+            interactions[id] = nil
+        }
+        for window in windows where interactions[ObjectIdentifier(window)] == nil {
+            let interaction = UIDropInteraction(delegate: self)
+            window.addInteraction(interaction)
+            interactions[ObjectIdentifier(window)] = interaction
+        }
+    }
+
+    /// Windows come later than `listen` (cold start) and with new scenes:
+    /// attach again when one connects or becomes active.
+    @MainActor
+    private func followScenes() {
+        guard observers.isEmpty else { return }
+        for name in [UIScene.willConnectNotification, UIScene.didActivateNotification,
+                     UIScene.didDisconnectNotification] {
+            observers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self = self, self.options != nil else { return }
+                    self.attachEverywhere()
+                }
+            })
+        }
+    }
+
+    @MainActor
+    private func publishState(_ state: DragState) {
+        var out = Data()
+        codecs.writeDragState(&out, state)
+        IstmoRuntime.shared.publishEarlyLatest(channel: Self.dragChannel, payload: out)
+    }
+
+    private func over(_ session: UIDropSession, in view: UIView?) -> DragState {
+        let point = view.map { session.location(in: $0) }
+        return .over(DragOver(
+            count: UInt32(session.items.count),
+            position: point.map { DropPoint(x: Float($0.x), y: Float($0.y)) }
+        ))
+    }
+
     public func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
         guard options != nil else { return false }
-        return session.hasItemsConforming(toTypeIdentifiers: acceptedTypes().map(\.identifier))
+        return session.items.contains { fileType(of: $0.itemProvider) != nil }
+    }
+
+    public func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnter session: UIDropSession) {
+        publishState(over(session, in: interaction.view))
     }
 
     public func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: UIDropSession) -> UIDropProposal {
-        UIDropProposal(operation: options == nil ? .forbidden : .copy)
+        let now = Date()
+        if now.timeIntervalSince(lastMove) >= Self.moveInterval {
+            lastMove = now
+            publishState(over(session, in: interaction.view))
+        }
+        return UIDropProposal(operation: options == nil ? .forbidden : .copy)
+    }
+
+    public func dropInteraction(_ interaction: UIDropInteraction, sessionDidExit session: UIDropSession) {
+        publishState(.idle)
+    }
+
+    public func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) {
+        // A drop moved the state on to `receiving`; `performDrop` ends it.
+        if !receiving { publishState(.idle) }
+    }
+
+    /// The most specific type of `provider` the window takes: a file, not
+    /// text or a link unless the app asked for text, never a folder.
+    private func fileType(of provider: NSItemProvider) -> UTType? {
+        let types = provider.registeredTypeIdentifiers.compactMap(UTType.init)
+        if types.contains(where: { $0.conforms(to: .directory) || $0.conforms(to: .package) }) {
+            return nil
+        }
+        if !takesText(), !types.isEmpty,
+           types.allSatisfy({ $0.conforms(to: .text) || $0.conforms(to: .url) }) {
+            return nil
+        }
+        return types.first { candidate in
+            candidate.conforms(to: .data) && accepted.contains { candidate.conforms(to: $0) }
+        }
     }
 
     public func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
         guard let options = options else { return }
-        let accepted = acceptedTypes()
         let limit = options.maxBytes == 0 ? Self.defaultMaxBytes : options.maxBytes
         let location = interaction.view.map { session.location(in: $0) }
         let folder = Self.incomingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let collected = Collected()
         let group = DispatchGroup()
+        receiving = true
+        publishState(.receiving(UInt32(session.items.count)))
         for (index, item) in session.items.enumerated() {
             let provider = item.itemProvider
-            let name = Self.safeName(provider.suggestedName)
-            // The most specific type the provider has that the window takes.
-            guard let type = provider.registeredTypeIdentifiers
-                .compactMap(UTType.init)
-                .first(where: { candidate in accepted.contains { candidate.conforms(to: $0) } })
-            else {
-                collected.skip(SkippedFile(displayName: name, reason: .notAFile))
+            guard let type = fileType(of: provider) else {
+                let accepted = provider.registeredTypeIdentifiers.compactMap(UTType.init)
+                    .contains { $0.conforms(to: .data) && !$0.conforms(to: .text) }
+                collected.skip(index, SkippedFile(
+                    displayName: Self.safeName(provider.suggestedName, ext: nil),
+                    reason: accepted ? .wrongType : .notAFile
+                ))
                 continue
             }
             group.enter()
             provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
                 defer { group.leave() }
+                let name = Self.safeName(
+                    provider.suggestedName ?? url?.deletingPathExtension().lastPathComponent,
+                    ext: type.preferredFilenameExtension
+                )
                 // The file at `url` is deleted when this returns: copy now.
                 guard let url = url else {
-                    collected.skip(SkippedFile(displayName: name, reason: .unreadable))
+                    collected.skip(index, SkippedFile(displayName: name, reason: .unreadable))
                     return
                 }
-                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(UInt64.init) ?? 0
-                if size > limit {
-                    collected.skip(SkippedFile(displayName: name, reason: .tooLarge))
+                let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard values?.isRegularFile == true else {
+                    collected.skip(index, SkippedFile(displayName: name, reason: .notAFile))
                     return
                 }
+                if let size = values?.fileSize, UInt64(size) > limit {
+                    collected.skip(index, SkippedFile(displayName: name, reason: .tooLarge))
+                    return
+                }
+                // One folder per item: two items may carry the same name.
+                let place = folder.appendingPathComponent("\(index)", isDirectory: true)
                 do {
-                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    let target = Self.uniqueFile(in: folder, name: name)
+                    try FileManager.default.createDirectory(at: place, withIntermediateDirectories: true)
+                    let target = place.appendingPathComponent(name)
                     try FileManager.default.copyItem(at: url, to: target)
+                    // The size may be unknown before the copy.
+                    let copied = (try? target.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                    if UInt64(copied) > limit {
+                        try? FileManager.default.removeItem(at: place)
+                        collected.skip(index, SkippedFile(displayName: name, reason: .tooLarge))
+                        return
+                    }
                     collected.add(index, DroppedFile(
                         path: target.path,
                         displayName: name,
                         mimeType: type.preferredMIMEType,
-                        size: size
+                        size: UInt64(copied)
                     ))
                 } catch {
-                    collected.skip(SkippedFile(displayName: name, reason: .unreadable))
+                    try? FileManager.default.removeItem(at: place)
+                    collected.skip(index, SkippedFile(displayName: name, reason: .unreadable))
                 }
             }
         }
-        group.notify(queue: .global(qos: .userInitiated)) { [codecs] in
+        group.notify(queue: .main) { [weak self, codecs] in
             let (files, skipped) = collected.take()
-            if files.isEmpty && skipped.isEmpty { return }
-            let dropped = DroppedFiles(
-                files: files,
-                skipped: skipped,
-                position: location.map { DropPoint(x: Float($0.x), y: Float($0.y)) },
-                receivedAtMs: UInt64(Date().timeIntervalSince1970 * 1000)
-            )
-            var out = Data()
-            codecs.writeDroppedFiles(&out, dropped)
-            IstmoRuntime.shared.publishEarlyQueue(
-                channel: Self.channel, capacity: Self.capacity, payload: out
-            )
+            if !files.isEmpty || !skipped.isEmpty {
+                let dropped = DroppedFiles(
+                    files: files,
+                    skipped: skipped,
+                    position: location.map { DropPoint(x: Float($0.x), y: Float($0.y)) },
+                    receivedAtMs: UInt64(Date().timeIntervalSince1970 * 1000)
+                )
+                var out = Data()
+                codecs.writeDroppedFiles(&out, dropped)
+                IstmoRuntime.shared.publishEarlyQueue(
+                    channel: Self.channel, capacity: Self.capacity, payload: out
+                )
+            }
+            MainActor.assumeIsolated {
+                self?.receiving = false
+                self?.publishState(.idle)
+            }
         }
-    }
-
-    private static func uniqueFile(in folder: URL, name: String) -> URL {
-        var candidate = folder.appendingPathComponent(name)
-        var n = 1
-        let stem = (name as NSString).deletingPathExtension
-        let ext = (name as NSString).pathExtension
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            let next = ext.isEmpty ? "\(stem) (\(n))" : "\(stem) (\(n)).\(ext)"
-            candidate = folder.appendingPathComponent(next)
-            n += 1
-        }
-        return candidate
     }
 }
 
-/// What the load callbacks of one drop gather, from any thread.
+/// What the load callbacks of one drop gather, from any thread, kept in
+/// drag order.
 private final class Collected: @unchecked Sendable {
     private let lock = NSLock()
     private var files: [(Int, DroppedFile)] = []
-    private var skipped: [SkippedFile] = []
+    private var skipped: [(Int, SkippedFile)] = []
 
-    /// `index` is the file's place in the drag; loads finish in any order.
     func add(_ index: Int, _ file: DroppedFile) {
         lock.lock()
         files.append((index, file))
         lock.unlock()
     }
 
-    func skip(_ file: SkippedFile) {
+    func skip(_ index: Int, _ file: SkippedFile) {
         lock.lock()
-        skipped.append(file)
+        skipped.append((index, file))
         lock.unlock()
     }
 
     func take() -> ([DroppedFile], [SkippedFile]) {
         lock.lock()
         defer { lock.unlock() }
-        return (files.sorted { $0.0 < $1.0 }.map(\.1), skipped)
+        return (
+            files.sorted { $0.0 < $1.0 }.map(\.1),
+            skipped.sorted { $0.0 < $1.0 }.map(\.1)
+        )
     }
 }
 #endif

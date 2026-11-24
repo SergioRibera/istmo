@@ -18,6 +18,12 @@ interface FileDropBackend {
 /// User provides one impl; each entry typically delegates to a
 /// companion helper on the type itself.
 interface FileDropCodecs {
+    fun readDragOver(bytes: ByteArray, offset: Int): Bincode.Decoded<DragOver>
+    fun writeDragOver(out: ByteArrayOutputStream, value: DragOver)
+
+    fun readDragState(bytes: ByteArray, offset: Int): Bincode.Decoded<DragState>
+    fun writeDragState(out: ByteArrayOutputStream, value: DragState)
+
     fun readDropError(bytes: ByteArray, offset: Int): Bincode.Decoded<DropError>
     fun writeDropError(out: ByteArrayOutputStream, value: DropError)
 

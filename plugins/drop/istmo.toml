@@ -4,9 +4,10 @@ client_type = "::istmo_drop::FileDropClient"
 android_package = "dev.istmo.plugins.drop"
 default_deployment = "local"
 # The drag listener lives on the activity's window: the generated registry
-# hands the backend each activity (it implements `IstmoActivityBound`).
+# hands the backend each activity (it implements `IstmoActivityBound`). Any
+# `Activity` will do, `NativeActivity` included.
 android_backend = "dev.istmo.plugins.drop.FileDropBackendImpl"
-android_backend_arg = "activity"
+android_backend_arg = "android.app.Activity"
 
 [min_versions]
 # Drags between apps (`View.DRAG_FLAG_GLOBAL`) and
