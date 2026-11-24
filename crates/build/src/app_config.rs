@@ -28,6 +28,7 @@ use crate::manifest::{
     expect_table, parse_android_permissions,
 };
 use crate::min_versions::{MinVersions, OsVersion};
+use crate::url_schemes::UrlSchemes;
 
 const KNOWN_APP_KEYS: &[&str] = &[
     "android",
@@ -47,6 +48,7 @@ const KNOWN_APP_KEYS: &[&str] = &[
     "icon",
     "assets_dir",
     "document_type",
+    "url_scheme",
     "single_instance",
 ];
 
@@ -182,19 +184,22 @@ pub struct AppConfig {
     pub assets_dir: Option<PathBuf>,
     /// `[[app.document_type]]`: the file types the app opens.
     pub document_types: DocumentTypes,
+    /// `[[app.url_scheme]]`: the custom URL schemes the app answers.
+    pub url_schemes: UrlSchemes,
     /// Desktop: forward documents opened while the app runs to the
-    /// running instance. Unset means "on when `document_types` is not
-    /// empty"; see [`Self::single_instance`].
+    /// running instance. Unset means "on when `document_types` or
+    /// `url_schemes` is not empty"; see [`Self::single_instance`].
     pub single_instance: Option<bool>,
 }
 
 impl AppConfig {
     /// Effective `[app] single_instance`: explicit value, else on when
-    /// the app declares document types.
+    /// the app declares document types or URL schemes (a link opened
+    /// while the app runs starts a second process that must forward it).
     #[must_use]
     pub fn single_instance(&self) -> bool {
         self.single_instance
-            .unwrap_or_else(|| !self.document_types.is_empty())
+            .unwrap_or_else(|| !self.document_types.is_empty() || !self.url_schemes.is_empty())
     }
 
     pub fn parse(source: &str) -> Result<Self, ManifestError> {
@@ -278,6 +283,11 @@ impl AppConfig {
             document_types: table
                 .get("document_type")
                 .map(DocumentTypes::parse)
+                .transpose()?
+                .unwrap_or_default(),
+            url_schemes: table
+                .get("url_scheme")
+                .map(UrlSchemes::parse)
                 .transpose()?
                 .unwrap_or_default(),
             single_instance: boolean("single_instance", "app.single_instance")?,

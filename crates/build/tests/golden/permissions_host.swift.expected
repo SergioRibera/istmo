@@ -36,7 +36,7 @@ public final class PermissionsDispatcher: PluginHandler {
         self.codecs = codecs
     }
 
-    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {
+    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> PluginResult {
         switch method {
         case "check":
             var c = Bincode.Cursor(payload)
@@ -44,21 +44,21 @@ public final class PermissionsDispatcher: PluginHandler {
             let result = try await backend.check(permission: permission)
             var out = Data()
             codecs.writePermissionStatus(&out, result)
-            return out
+            return .unary(out)
         case "request":
             var c = Bincode.Cursor(payload)
             let permissions = try Bincode.readVec(&c) { c1 in try Bincode.readString(&c1) }
             let result = try await backend.request(permissions: permissions)
             var out = Data()
             Bincode.writeVec(&out, result) { o1, v1 in codecs.writePermissionOutcome(&o1, v1) }
-            return out
+            return .unary(out)
         case "should_show_rationale":
             var c = Bincode.Cursor(payload)
             let permission = try Bincode.readString(&c)
             let result = try await backend.should_show_rationale(permission: permission)
             var out = Data()
             Bincode.writeBool(&out, result)
-            return out
+            return .unary(out)
         default:
             throw PluginRuntimeError.unknownMethod(plugin: "Permissions", method: method)
         }

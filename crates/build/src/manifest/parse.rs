@@ -7,7 +7,7 @@ use std::path::Path;
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use super::{
-    AndroidBackendArg, AndroidPermission, AndroidServiceSpec, AssetEntry, Deployment,
+    AndroidBackendArg, AndroidPermission, AndroidQuery, AndroidServiceSpec, AssetEntry, Deployment,
     InfoPlistEntry, IosBackgroundKindSpec, IosBackgroundSpec, IosContinuousModeSpec, Manifest,
     ManifestError, PluginEntry, RemoteOverride, WindowsManifestFragment,
 };
@@ -42,6 +42,7 @@ const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "ios_background",
     "info_plist",
     "android_permissions",
+    "android_queries",
     "android_package",
     "android_backend",
     "android_backend_arg",
@@ -268,10 +269,7 @@ fn parse_plugin_entry(
         )?,
         None => Vec::new(),
     };
-    let android_permissions = match table.get("android_permissions") {
-        Some(item) => parse_android_permissions(item, "plugin.android_permissions")?,
-        None => Vec::new(),
-    };
+    let (android_permissions, android_queries) = parse_android_manifest_lists(table)?;
     let optional_string = |key: &'static str, full: &'static str| {
         table
             .get(key)
@@ -298,6 +296,7 @@ fn parse_plugin_entry(
         android_backend_arg,
         ios_backend: optional_string("ios_backend", "plugin.ios_backend")?,
         android_permissions,
+        android_queries,
     })
 }
 
@@ -867,4 +866,69 @@ fn static_field(context: &'static str, field: &'static str) -> &'static str {
         ("plugin.swift_package", "from_version") => "plugin.swift_package.from_version",
         _ => "unknown",
     }
+}
+
+/// A plugin's `android_permissions` and `android_queries`, both merged into
+/// the app manifest.
+fn parse_android_manifest_lists(
+    table: &Table,
+) -> Result<(Vec<AndroidPermission>, Vec<AndroidQuery>), ManifestError> {
+    let permissions = table
+        .get("android_permissions")
+        .map(|item| parse_android_permissions(item, "plugin.android_permissions"))
+        .transpose()?
+        .unwrap_or_default();
+    let queries = table
+        .get("android_queries")
+        .map(parse_android_queries)
+        .transpose()?
+        .unwrap_or_default();
+    Ok((permissions, queries))
+}
+
+const KNOWN_QUERY_KEYS: &[&str] = &["package", "action", "scheme", "mime_type"];
+
+fn parse_android_queries(item: &Item) -> Result<Vec<AndroidQuery>, ManifestError> {
+    const KEY: &str = "plugin.android_queries";
+    let mismatch = |expected: &'static str| ManifestError::TypeMismatch {
+        key: KEY.to_owned(),
+        expected,
+    };
+    let array = item.as_array().ok_or_else(|| {
+        mismatch("array of inline tables ({ action, scheme?, mime_type? } or { package })")
+    })?;
+    array
+        .iter()
+        .map(|value| {
+            let Value::InlineTable(table) = value else {
+                return Err(mismatch("inline table"));
+            };
+            for (ident, _) in table {
+                if !KNOWN_QUERY_KEYS.contains(&ident) {
+                    return Err(ManifestError::UnknownKey {
+                        key: format!("{KEY}.{ident}"),
+                    });
+                }
+            }
+            let string = |name: &str| -> Result<Option<String>, ManifestError> {
+                match table.get(name) {
+                    None => Ok(None),
+                    Some(Value::String(s)) if !s.value().is_empty() => Ok(Some(s.value().clone())),
+                    Some(_) => Err(ManifestError::TypeMismatch {
+                        key: format!("{KEY}.{name}"),
+                        expected: "non-empty string",
+                    }),
+                }
+            };
+            match (string("package")?, string("action")?) {
+                (Some(package), None) if table.len() == 1 => Ok(AndroidQuery::Package(package)),
+                (None, Some(action)) => Ok(AndroidQuery::Intent {
+                    action,
+                    scheme: string("scheme")?,
+                    mime_type: string("mime_type")?,
+                }),
+                _ => Err(mismatch("exactly one of `package` or `action` per entry")),
+            }
+        })
+        .collect()
 }

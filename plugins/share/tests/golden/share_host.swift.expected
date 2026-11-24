@@ -61,7 +61,7 @@ public final class ShareDispatcher: PluginHandler {
         self.codecs = codecs
     }
 
-    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {
+    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> PluginResult {
         switch method {
         case "share":
             do {
@@ -70,7 +70,7 @@ public final class ShareDispatcher: PluginHandler {
                 let result = try await backend.share(request: request)
                 var out = Data()
                 codecs.writeShareOutcome(&out, result)
-                return out
+                return .unary(out)
             } catch let err as ShareError {
                 var errOut = Data()
                 codecs.writeShareError(&errOut, err)
@@ -81,7 +81,7 @@ public final class ShareDispatcher: PluginHandler {
                 let result = try await backend.capabilities()
                 var out = Data()
                 codecs.writeShareCapabilities(&out, result)
-                return out
+                return .unary(out)
             } catch let err as ShareError {
                 var errOut = Data()
                 codecs.writeShareError(&errOut, err)
@@ -92,7 +92,7 @@ public final class ShareDispatcher: PluginHandler {
                 let result = try await backend.staging_dir()
                 var out = Data()
                 Bincode.writeString(&out, result)
-                return out
+                return .unary(out)
             } catch let err as ShareError {
                 var errOut = Data()
                 codecs.writeShareError(&errOut, err)
@@ -103,7 +103,7 @@ public final class ShareDispatcher: PluginHandler {
                 var c = Bincode.Cursor(payload)
                 let targets = try Bincode.readVec(&c) { c1 in try codecs.readShareTarget(&c1) }
                 try await backend.set_share_targets(targets: targets)
-                return Data()
+                return .unary(Data())
             } catch let err as ShareError {
                 var errOut = Data()
                 codecs.writeShareError(&errOut, err)

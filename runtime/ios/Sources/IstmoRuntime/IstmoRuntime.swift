@@ -353,7 +353,7 @@ public final class IstmoRuntime: @unchecked Sendable {
             return
         }
         spawnHosted(callId: callId) {
-            try await handler.handleCreateInstance(payload: payload)
+            .unary(try await handler.handleCreateInstance(payload: payload))
         } onFailure: { error in
             NSLog("IstmoRuntime: handleCreateInstance failed plugin=\(pluginId): \(error)")
         }
@@ -370,7 +370,7 @@ public final class IstmoRuntime: @unchecked Sendable {
     /// Cancelled calls get no response: Rust already forgot the call id.
     private func spawnHosted(
         callId: UInt64,
-        _ body: @escaping () async throws -> Data,
+        _ body: @escaping () async throws -> PluginResult,
         onFailure: @escaping (Error) -> Void
     ) {
         // Registering inside the serial queue guarantees the task's own
@@ -379,9 +379,13 @@ public final class IstmoRuntime: @unchecked Sendable {
             self.hostedTasks[callId] = Task {
                 defer { self.queue.async { self.hostedTasks.removeValue(forKey: callId) } }
                 do {
-                    let out = try await body()
-                    guard !Task.isCancelled else { return }
-                    Self.submitResponse(callId: callId, ok: true, payload: out)
+                    switch try await body() {
+                    case .unary(let out):
+                        guard !Task.isCancelled else { return }
+                        Self.submitResponse(callId: callId, ok: true, payload: out)
+                    case .stream(let items):
+                        await Self.pumpStream(streamId: callId, items)
+                    }
                 } catch let e as PluginException {
                     guard !Task.isCancelled else { return }
                     Self.submitResponse(callId: callId, ok: false, payload: e.payload)
@@ -401,6 +405,53 @@ public final class IstmoRuntime: @unchecked Sendable {
         }
         if let releaser = handler as? HandleReleaser {
             releaser.releaseNativeHandle(handleId)
+        }
+    }
+
+    /// Forwards a hosted stream to Rust: one `Event` per item, then a
+    /// `StreamEnd`. The stream id is the call id. A cancelled task (Rust
+    /// dropped the stream) sends nothing more: Rust already forgot the id.
+    private static func pumpStream(streamId: UInt64, _ items: AsyncThrowingStream<Data, Error>) async {
+        do {
+            for try await item in items {
+                guard !Task.isCancelled else { return }
+                submitEvent(streamId: streamId, payload: item)
+            }
+            guard !Task.isCancelled else { return }
+            submitStreamEnd(streamId: streamId, reason: streamEndComplete, payload: Data())
+        } catch let e as PluginException {
+            guard !Task.isCancelled else { return }
+            submitStreamEnd(streamId: streamId, reason: streamEndError, payload: e.payload)
+        } catch {
+            guard !Task.isCancelled else { return }
+            NSLog("IstmoRuntime: hosted stream \(streamId) failed: \(error)")
+            submitStreamEnd(streamId: streamId, reason: streamEndCancelled, payload: Data())
+        }
+    }
+
+    private static let streamEndComplete: UInt32 = 0
+    private static let streamEndCancelled: UInt32 = 1
+    private static let streamEndError: UInt32 = 2
+
+    private static func submitEvent(streamId: UInt64, payload: Data) {
+        if payload.isEmpty {
+            istmo_ios_submit_event(streamId, nil, 0)
+        } else {
+            payload.withUnsafeBytes { raw in
+                let ptr = raw.bindMemory(to: UInt8.self).baseAddress
+                istmo_ios_submit_event(streamId, ptr, payload.count)
+            }
+        }
+    }
+
+    private static func submitStreamEnd(streamId: UInt64, reason: UInt32, payload: Data) {
+        if payload.isEmpty {
+            istmo_ios_submit_stream_end(streamId, reason, nil, 0)
+        } else {
+            payload.withUnsafeBytes { raw in
+                let ptr = raw.bindMemory(to: UInt8.self).baseAddress
+                istmo_ios_submit_stream_end(streamId, reason, ptr, payload.count)
+            }
         }
     }
 

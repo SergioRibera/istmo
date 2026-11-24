@@ -10,7 +10,8 @@ use std::task::{Context, Poll};
 use flume::{Receiver as FlumeReceiver, Sender as FlumeSender, TrySendError, bounded};
 
 use crate::dispatch::{
-    CancelToken, Dispatch, DispatchError, DispatchMode, HostedStreamItem, Outcome, Plugin,
+    CallOrigin, CancelToken, Dispatch, DispatchError, DispatchMode, HostedStreamItem, Outcome,
+    Plugin,
 };
 use crate::early_events::EarlyEventStore;
 use crate::error::IstmoError;
@@ -165,6 +166,16 @@ enum Origin {
     /// A [`Frame::Call`] / [`Frame::CreateInstance`] from a runtime in
     /// another process, through [`Runtime::inject_wire_envelope`].
     Remote,
+}
+
+impl From<Origin> for CallOrigin {
+    fn from(origin: Origin) -> Self {
+        match origin {
+            Origin::Local => Self::Local,
+            Origin::Peer => Self::Peer,
+            Origin::Remote => Self::Remote,
+        }
+    }
 }
 
 /// Cancellation state for calls served by hosts on this runtime.
@@ -735,7 +746,7 @@ impl Runtime {
             .as_deref()
             .is_some_and(|pid| lock(&self.hosts).contains_key(pid));
         if hosted {
-            self.dispatch_hosted_destroy_instance(instance_id);
+            self.dispatch_hosted_destroy_instance(Origin::Local, instance_id);
             return Ok(());
         }
         self.routing.remove_instance(instance_id);
@@ -808,7 +819,7 @@ impl Runtime {
         let plugin_id = plugin_id.into();
         let method = method.into();
         if let Some(dispatcher) = self.host(&plugin_id) {
-            dispatch_notify(dispatcher, instance_id, method, payload);
+            dispatch_notify(dispatcher, Origin::Local, instance_id, method, payload);
             return Ok(());
         }
         self.send_outbound(Envelope::new(Frame::Notify {
@@ -962,7 +973,7 @@ impl Runtime {
                 if self.is_shut_down() {
                     tracing::debug!(plugin_id = %plugin_id, "dropped inbound Notify after shutdown");
                 } else if let Some(dispatcher) = self.host(&plugin_id) {
-                    dispatch_notify(dispatcher, instance_id, method, payload);
+                    dispatch_notify(dispatcher, origin, instance_id, method, payload);
                 } else {
                     tracing::warn!(plugin_id = %plugin_id, "inbound Notify for unregistered plugin");
                 }
@@ -982,7 +993,7 @@ impl Runtime {
                 Ok(())
             }
             Frame::DestroyInstance { instance_id } => {
-                self.dispatch_hosted_destroy_instance(instance_id);
+                self.dispatch_hosted_destroy_instance(origin, instance_id);
                 Ok(())
             }
             Frame::ReleaseNativeHandle { .. } => {
@@ -990,6 +1001,18 @@ impl Runtime {
                 Ok(())
             }
         }
+    }
+
+    fn refuse_origin(&self, origin: Origin, call_id: CallId, plugin_id: &str) {
+        tracing::warn!(plugin_id = %plugin_id, ?origin, "hosted request refused for its origin");
+        exec::finish_now(self.respond(
+            origin,
+            call_id,
+            Err(encode_dispatch_error_string(&format!(
+                "`{plugin_id}` refuses requests from this origin"
+            ))),
+            Wait::Block,
+        ));
     }
 
     fn reject_unhosted(&self, origin: Origin, call_id: CallId, plugin_id: &str, frame: &str) {
@@ -1354,6 +1377,10 @@ impl Runtime {
         method: String,
         payload: Vec<u8>,
     ) {
+        if !dispatcher.admits(origin.into()) {
+            self.refuse_origin(origin, call_id, dispatcher.plugin_id());
+            return;
+        }
         let Some(cancel) = self.begin_hosted(origin, call_id) else {
             return;
         };
@@ -1576,6 +1603,10 @@ impl Runtime {
         plugin_id: String,
         payload: Vec<u8>,
     ) {
+        if !dispatcher.admits(origin.into()) {
+            self.refuse_origin(origin, call_id, &plugin_id);
+            return;
+        }
         let Some(cancel) = self.begin_hosted(origin, call_id) else {
             return;
         };
@@ -1634,13 +1665,20 @@ impl Runtime {
         }
     }
 
-    fn dispatch_hosted_destroy_instance(&self, instance_id: InstanceId) {
-        let Some(plugin_id) = self.routing.remove_instance(instance_id) else {
+    fn dispatch_hosted_destroy_instance(&self, origin: Origin, instance_id: InstanceId) {
+        let Some(plugin_id) = self.routing.instance(instance_id) else {
             return;
         };
-        if let Some(dispatcher) = self.host(&plugin_id) {
-            dispatcher.destroy_instance(instance_id);
+        let Some(dispatcher) = self.host(&plugin_id) else {
+            self.routing.remove_instance(instance_id);
+            return;
+        };
+        if !dispatcher.admits(origin.into()) {
+            tracing::warn!(plugin_id = %plugin_id, ?origin, "refused DestroyInstance");
+            return;
         }
+        self.routing.remove_instance(instance_id);
+        dispatcher.destroy_instance(instance_id);
     }
 
     /// Forward a hosted stream's items until the producer closes or fails
@@ -1859,10 +1897,15 @@ enum Wait<'a> {
 /// Run a notification in the background; nothing is sent back.
 fn dispatch_notify(
     dispatcher: Arc<dyn Dispatch>,
+    origin: Origin,
     instance_id: Option<InstanceId>,
     method: String,
     payload: Vec<u8>,
 ) {
+    if !dispatcher.admits(origin.into()) {
+        tracing::warn!(plugin_id = dispatcher.plugin_id(), ?origin, method = %method, "refused Notify");
+        return;
+    }
     let spawned = exec::spawn("istmo-notify", async move {
         // Same unwind reasoning as `Runtime::dispatch_hosted_call`.
         let outcome = CatchUnwind::new(dispatcher.dispatch(

@@ -90,7 +90,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
         return instances[instanceId]
     }
 
-    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {
+    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> PluginResult {
         guard let backend = instance(instanceId) else { throw PluginRuntimeError.unknownInstance(instanceId) }
         switch method {
         case "sign_in":
@@ -100,7 +100,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.sign_in(mode: mode)
                 var out = Data()
                 codecs.writeSignInAccount(&out, result)
-                return out
+                return .unary(out)
             } catch let err as SignInError {
                 var errOut = Data()
                 codecs.writeSignInError(&errOut, err)
@@ -111,7 +111,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.silent_sign_in()
                 var out = Data()
                 Bincode.writeOption(&out, result) { o1, v1 in codecs.writeSignInAccount(&o1, v1) }
-                return out
+                return .unary(out)
             } catch let err as SignInError {
                 var errOut = Data()
                 codecs.writeSignInError(&errOut, err)
@@ -124,7 +124,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.refresh(credential: credential)
                 var out = Data()
                 codecs.writeSignInAccount(&out, result)
-                return out
+                return .unary(out)
             } catch let err as SignInError {
                 var errOut = Data()
                 codecs.writeSignInError(&errOut, err)
@@ -133,7 +133,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
         case "sign_out":
             do {
                 try await backend.sign_out()
-                return Data()
+                return .unary(Data())
             } catch let err as SignInError {
                 var errOut = Data()
                 codecs.writeSignInError(&errOut, err)
@@ -142,7 +142,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
         case "revoke":
             do {
                 try await backend.revoke()
-                return Data()
+                return .unary(Data())
             } catch let err as SignInError {
                 var errOut = Data()
                 codecs.writeSignInError(&errOut, err)

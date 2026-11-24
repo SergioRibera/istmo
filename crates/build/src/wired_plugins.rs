@@ -26,7 +26,7 @@ use proc_macro2::{Delimiter, Spacing, TokenTree};
 use syn::{Block, Expr, File, Item, Macro, Stmt};
 
 use crate::builtins;
-use crate::manifest::{Manifest, PluginEntry};
+use crate::manifest::{AndroidQuery, Manifest, PluginEntry};
 
 #[derive(Debug)]
 pub enum WiredError {
@@ -337,8 +337,57 @@ pub fn render_android_permissions_manifest(entries: &[PluginEntry]) -> String {
         }
         out.push_str("/>\n");
     }
+    render_android_queries(&mut out, entries);
     out.push_str("</manifest>\n");
     out
+}
+
+/// `<queries>` block aggregated across `entries`, sorted and deduplicated.
+fn render_android_queries(out: &mut String, entries: &[PluginEntry]) {
+    let mut queries: Vec<&AndroidQuery> = entries
+        .iter()
+        .flat_map(|e| e.android_queries.iter())
+        .collect();
+    queries.sort();
+    queries.dedup();
+    if queries.is_empty() {
+        return;
+    }
+    out.push_str("    <queries>\n");
+    for query in queries {
+        match query {
+            AndroidQuery::Package(name) => {
+                out.push_str("        <package android:name=\"");
+                out.push_str(&crate::xml::escape(name));
+                out.push_str("\"/>\n");
+            }
+            AndroidQuery::Intent {
+                action,
+                scheme,
+                mime_type,
+            } => {
+                out.push_str("        <intent>\n            <action android:name=\"");
+                out.push_str(&crate::xml::escape(action));
+                out.push_str("\"/>\n");
+                if scheme.is_some() || mime_type.is_some() {
+                    out.push_str("            <data");
+                    if let Some(scheme) = scheme {
+                        out.push_str(" android:scheme=\"");
+                        out.push_str(&crate::xml::escape(scheme));
+                        out.push('"');
+                    }
+                    if let Some(mime) = mime_type {
+                        out.push_str(" android:mimeType=\"");
+                        out.push_str(&crate::xml::escape(mime));
+                        out.push('"');
+                    }
+                    out.push_str("/>\n");
+                }
+                out.push_str("        </intent>\n");
+            }
+        }
+    }
+    out.push_str("    </queries>\n");
 }
 
 /// Permissions sidecar, relative to the Android project root. Lives in
@@ -496,6 +545,42 @@ mod tests {
         let out = render_android_permissions_manifest(&[]);
         assert!(out.contains("<manifest"));
         assert!(!out.contains("<uses-permission"));
+    }
+
+    #[test]
+    fn render_emits_sorted_deduplicated_queries() {
+        use crate::manifest::AndroidQuery;
+        let tabs = AndroidQuery::Intent {
+            action: "android.support.customtabs.action.CustomTabsService".into(),
+            scheme: None,
+            mime_type: None,
+        };
+        let a = PluginEntry {
+            id: "a".into(),
+            android_queries: vec![
+                tabs.clone(),
+                AndroidQuery::Package("com.android.chrome".into()),
+            ],
+            ..PluginEntry::default()
+        };
+        let b = PluginEntry {
+            id: "b".into(),
+            android_queries: vec![
+                tabs,
+                AndroidQuery::Intent {
+                    action: "android.intent.action.VIEW".into(),
+                    scheme: Some("https".into()),
+                    mime_type: None,
+                },
+            ],
+            ..PluginEntry::default()
+        };
+        let xml = render_android_permissions_manifest(&[a, b]);
+        assert_eq!(xml.matches("<queries>").count(), 1);
+        assert_eq!(xml.matches("CustomTabsService").count(), 1);
+        assert!(xml.contains("<package android:name=\"com.android.chrome\"/>"));
+        assert!(xml.contains("<data android:scheme=\"https\"/>"));
+        assert!(!render_android_permissions_manifest(&[]).contains("<queries>"));
     }
 
     #[test]

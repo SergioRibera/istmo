@@ -223,3 +223,12 @@ pub(crate) fn classify_return(output: &ReturnType) -> syn::Result<ReturnShape> {
         )),
     }
 }
+
+pub(crate) fn expect_lit_bool(expr: &Expr) -> syn::Result<bool> {
+    match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Bool(b), ..
+        }) => Ok(b.value),
+        _ => Err(syn::Error::new_spanned(expr, "expected `true` or `false`")),
+    }
+}

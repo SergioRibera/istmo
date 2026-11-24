@@ -59,6 +59,7 @@ impl Default for PluginEntry {
             android_backend_arg: AndroidBackendArg::default(),
             ios_backend: None,
             android_permissions: Vec::new(),
+            android_queries: Vec::new(),
         }
     }
 }
@@ -132,6 +133,33 @@ pub struct PluginEntry {
     /// vs `NetworkState`) rather than toggle inside one plugin. The
     /// wired-plugin set is the authoritative capability granularity.
     pub android_permissions: Vec<AndroidPermission>,
+
+    /// `<queries>` entries (Android 11+ package visibility) the plugin
+    /// needs to resolve other apps, e.g. browsers supporting Custom Tabs.
+    /// Merged into the app manifest next to [`Self::android_permissions`].
+    pub android_queries: Vec<AndroidQuery>,
+}
+
+/// One `<queries>` child contributed to the consuming app's
+/// `AndroidManifest.xml`.
+///
+/// ```toml
+/// android_queries = [
+///     { action = "android.support.customtabs.action.CustomTabsService" },
+///     { action = "android.intent.action.VIEW", scheme = "https" },
+///     { package = "com.android.chrome" },
+/// ]
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
+pub enum AndroidQuery {
+    /// `<package android:name="…"/>`.
+    Package(String),
+    /// `<intent>` with an action and optional `<data>` scheme / MIME type.
+    Intent {
+        action: String,
+        scheme: Option<String>,
+        mime_type: Option<String>,
+    },
 }
 
 /// One `<uses-permission>` entry contributed to the consuming app's

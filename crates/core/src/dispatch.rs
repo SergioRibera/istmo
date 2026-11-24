@@ -167,6 +167,20 @@ impl std::error::Error for DispatchError {
     }
 }
 
+/// Where a hosted request entered the runtime. See [`Dispatch::admits`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CallOrigin {
+    /// This process's own Rust code ([`Runtime::call`] and friends).
+    Local,
+    /// The platform peer of this runtime (Kotlin / Swift in the same
+    /// process), through [`Runtime::dispatch_inbound`].
+    Peer,
+    /// A runtime in another process (Android `:remote`, a desktop
+    /// helper), through [`Runtime::inject_wire_envelope`].
+    Remote,
+}
+
 /// Boxed future returned by [`Dispatch::dispatch`].
 pub type DispatchFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Outcome, DispatchError>> + Send + 'a>>;
@@ -251,6 +265,19 @@ pub trait Dispatch: Send + Sync + 'static {
     /// calls (e.g. re-enter the runtime to talk to another plugin).
     fn runtime_attached(&self, runtime: Weak<Runtime>) {
         let _ = runtime;
+    }
+
+    /// Whether calls, instance creation/destruction and notifications
+    /// from `origin` may reach this dispatcher.
+    ///
+    /// The runtime asks before every hosted request and answers refused
+    /// calls with an error (notifications are dropped). The default
+    /// admits everyone; hosts that hand out capabilities over the bus
+    /// (a webview that runs script, a credential store) refuse
+    /// [`CallOrigin::Remote`] so another process cannot drive them.
+    fn admits(&self, origin: CallOrigin) -> bool {
+        let _ = origin;
+        true
     }
 
     /// Dispatch a single call.

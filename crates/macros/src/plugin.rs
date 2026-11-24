@@ -9,8 +9,8 @@ use syn::{
 };
 
 use crate::common::{
-    ReturnShape, TraitKind, classify_return, desugar_async_methods, expect_lit_str,
-    expect_path_lit, reject_unsupported_trait_shape,
+    ReturnShape, TraitKind, classify_return, desugar_async_methods, expect_lit_bool,
+    expect_lit_str, expect_path_lit, reject_unsupported_trait_shape,
 };
 
 /// Capacity of the hop between a hosted stream's encoder thread and the
@@ -51,12 +51,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let client_methods: Vec<TokenStream> = specs
         .iter()
         .map(|spec| {
-            expand_client_method(
-                &plugin_id,
-                root,
-                spec,
-                is_stateless.then_some(&typed_ident),
-            )
+            expand_client_method(&plugin_id, root, spec, is_stateless.then_some(&typed_ident))
         })
         .collect::<syn::Result<_>>()?;
     let host_arms: Vec<TokenStream> = specs
@@ -64,6 +59,15 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
         .map(|spec| expand_host_arm(root, spec))
         .collect();
     let error_bounds = expand_error_bounds(&specs);
+    let admits = if args.admit_remote {
+        TokenStream::new()
+    } else {
+        quote! {
+            fn admits(&self, origin: #root::CallOrigin) -> bool {
+                origin != #root::CallOrigin::Remote
+            }
+        }
+    };
     let message_bounds = expand_message_bounds(root, &specs);
 
     let ctors = args.init.as_ref().map_or_else(
@@ -129,6 +133,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                 &plugin_id,
                 root,
                 &host_arms,
+                &admits,
             )
         },
         |init_ty| {
@@ -141,6 +146,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                 &plugin_id,
                 root,
                 &host_arms,
+                &admits,
             )
         },
     );
@@ -310,6 +316,7 @@ fn expand_stateless_host(
     plugin_id: &LitStr,
     root: &Path,
     host_arms: &[TokenStream],
+    admits: &TokenStream,
 ) -> TokenStream {
     let host_doc = format!(
         " Serves the [`{trait_ident}`] plugin from a Rust implementation; register it\n \
@@ -370,6 +377,8 @@ fn expand_stateless_host(
                 #plugin_id
             }
 
+            #admits
+
             fn dispatch<'__istmo_a>(
                 &'__istmo_a self,
                 _instance_id: ::core::option::Option<#root::InstanceId>,
@@ -405,6 +414,7 @@ fn expand_stateful_host(
     plugin_id: &LitStr,
     root: &Path,
     host_arms: &[TokenStream],
+    admits: &TokenStream,
 ) -> TokenStream {
     let host_doc = format!(
         " Serves the [`{trait_ident}`] plugin from per-instance Rust\n \
@@ -484,6 +494,8 @@ fn expand_stateful_host(
             fn plugin_id(&self) -> &'static str {
                 #plugin_id
             }
+
+            #admits
 
             fn create_instance<'__istmo_a>(
                 &'__istmo_a self,
@@ -673,6 +685,8 @@ struct PluginArgs {
     plugin_id: LitStr,
     init: Option<Type>,
     crate_path: Path,
+    /// `remote = false`: the host refuses requests from other processes.
+    admit_remote: bool,
 }
 
 impl syn::parse::Parse for PluginArgs {
@@ -681,6 +695,7 @@ impl syn::parse::Parse for PluginArgs {
         let mut plugin_id: Option<LitStr> = None;
         let mut init: Option<Type> = None;
         let mut crate_path: Option<Path> = None;
+        let mut admit_remote = true;
 
         for pair in pairs {
             let key = pair
@@ -696,10 +711,13 @@ impl syn::parse::Parse for PluginArgs {
                     init = Some(expect_type(&pair.value)?);
                 }
                 "crate" => crate_path = Some(expect_path_lit(&pair.value, "crate")?),
+                "remote" => admit_remote = expect_lit_bool(&pair.value)?,
                 other => {
                     return Err(syn::Error::new_spanned(
                         &pair.path,
-                        format!("unknown argument `{other}`; expected `name`, `init` or `crate`"),
+                        format!(
+                            "unknown argument `{other}`; expected `name`, `init`, `crate` or `remote`"
+                        ),
                     ));
                 }
             }
@@ -714,6 +732,7 @@ impl syn::parse::Parse for PluginArgs {
             })?,
             init,
             crate_path: crate_path.unwrap_or_else(|| parse_quote!(::istmo)),
+            admit_remote,
         })
     }
 }

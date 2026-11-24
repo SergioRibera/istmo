@@ -592,6 +592,7 @@ impl<'a> AppPass<'a> {
                 ios_plugins_subdir: &self.ios_plugins_subdir,
                 ios_info_plist_overrides: &self.config.info_plist,
                 document_types: &self.config.document_types,
+                url_schemes: &self.config.url_schemes,
                 lib_name: &self.app.krate.lib_name,
             },
         );

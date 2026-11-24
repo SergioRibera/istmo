@@ -55,7 +55,7 @@ public final class CoverageDispatcher: PluginHandler, HandleReleaser {
         (backend as? HandleReleaser)?.releaseNativeHandle(handleId)
     }
 
-    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {
+    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> PluginResult {
         switch method {
         case "object":
             do {
@@ -65,7 +65,7 @@ public final class CoverageDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.object(in: `in`, val: val)
                 var out = Data()
                 codecs.writeEverything(&out, result)
-                return out
+                return .unary(out)
             } catch let err as FirstError {
                 var errOut = Data()
                 codecs.writeFirstError(&errOut, err)
@@ -79,7 +79,7 @@ public final class CoverageDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.round_trip(value: value, shape: shape)
                 var out = Data()
                 Bincode.writeVec(&out, result) { o1, v1 in Bincode.writeOption(&o1, v1) { o2, v2 in Bincode.writeVec(&o2, v2) { o3, v3 in Bincode.writeString(&o3, v3) } } }
-                return out
+                return .unary(out)
             } catch let err as SecondError {
                 var errOut = Data()
                 codecs.writeSecondError(&errOut, err)
@@ -92,21 +92,43 @@ public final class CoverageDispatcher: PluginHandler, HandleReleaser {
                 let cursor = try Bincode.readVarintU16(&c)
                 let c_ = try Bincode.readVarintI16(&c)
                 try await backend.send(payload: payload_, cursor: cursor, c: c_)
-                return Data()
+                return .unary(Data())
             } catch let err as FirstError {
                 var errOut = Data()
                 codecs.writeFirstError(&errOut, err)
                 throw PluginException(payload: errOut)
             }
         case "watch":
-            throw PluginRuntimeError.unknownMethod(plugin: "Coverage", method: method)
+            var c = Bincode.Cursor(payload)
+            let mode = try codecs.readMode(&c)
+            return PluginResult.encoding(backend.watch(mode: mode), encode: { item in
+                var out = Data()
+                Bincode.writeOption(&out, item) { o1, v1 in Bincode.writeData(&o1, v1) }
+                return out
+            })
         case "follow":
-            throw PluginRuntimeError.unknownMethod(plugin: "Coverage", method: method)
+            var c = Bincode.Cursor(payload)
+            let next = try Bincode.readVarintU32(&c)
+            let codecs = self.codecs
+            return PluginResult.encoding(backend.follow(next: next), encode: { item in
+                var out = Data()
+                codecs.writeShape(&out, item)
+                return out
+            }, mapError: { error in
+                guard let err = error as? SecondError else { return error }
+                var errOut = Data()
+                codecs.writeSecondError(&errOut, err)
+                return PluginException(payload: errOut)
+            })
         case "default":
             try await backend.`default`()
-            return Data()
+            return .unary(Data())
         case "pulse":
-            throw PluginRuntimeError.unknownMethod(plugin: "Coverage", method: method)
+            var c = Bincode.Cursor(payload)
+            let hz = try Bincode.readVarintU32(&c)
+            return PluginResult.encoding(backend.pulse(gap: (), hz: hz), encode: { _ in
+                Data()
+            })
         default:
             throw PluginRuntimeError.unknownMethod(plugin: "Coverage", method: method)
         }

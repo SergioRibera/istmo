@@ -57,8 +57,8 @@ pub use wincode;
 
 pub use crate::bytes::Bytes;
 pub use crate::dispatch::{
-    CancelToken, Dispatch, DispatchError, DispatchFuture, DispatchMode, HostedStreamItem, Outcome,
-    Plugin,
+    CallOrigin, CancelToken, Dispatch, DispatchError, DispatchFuture, DispatchMode,
+    HostedStreamItem, Outcome, Plugin,
 };
 pub use crate::error::{CodecError, IstmoError};
 pub use crate::main_thread::{InlineMainThread, MainThread, MockMainThread, Task};

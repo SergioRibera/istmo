@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use flume::Receiver as FlumeReceiver;
 use istmo_core::{
-    CancelToken, Dispatch, DispatchFuture, Envelope, Frame, InstanceId, Outcome, Plugin, Runtime,
+    CallOrigin, CancelToken, Dispatch, DispatchFuture, Envelope, Frame, InstanceId, Outcome, Plugin,
+    Runtime,
     codec,
 };
 
@@ -344,4 +345,90 @@ fn mark_call_remote_routes_hosted_respond_through_sink() {
         typed_outbound.try_recv().is_err(),
         "respond must not reach typed outbound",
     );
+}
+
+/// Echo host that only admits calls from its own process.
+struct LocalOnlyHost {
+    calls: AtomicU32,
+}
+
+impl LocalOnlyHost {
+    const PLUGIN_ID: &'static str = "test.local.only";
+}
+
+impl Plugin for LocalOnlyHost {
+    const PLUGIN_ID: &'static str = Self::PLUGIN_ID;
+}
+
+impl Dispatch for LocalOnlyHost {
+    fn plugin_id(&self) -> &'static str {
+        Self::PLUGIN_ID
+    }
+
+    fn admits(&self, origin: CallOrigin) -> bool {
+        origin != CallOrigin::Remote
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        _instance_id: Option<InstanceId>,
+        _method: &'a str,
+        _payload: &'a [u8],
+        _cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move { Ok(Outcome::Ok(Vec::new())) })
+    }
+}
+
+#[test]
+fn host_refusing_remote_answers_injected_calls_with_an_error() {
+    let init = Runtime::mock();
+    let rt = init.runtime.clone();
+    let host = Arc::new(LocalOnlyHost {
+        calls: AtomicU32::new(0),
+    });
+    rt.register_host_arc(Arc::clone(&host));
+
+    let sink_bytes: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink_bytes_cb = Arc::clone(&sink_bytes);
+    rt.install_remote_envelope_sink(Arc::new(move |bytes: Vec<u8>| {
+        sink_bytes_cb.lock().unwrap().push(bytes);
+    }));
+
+    let call_id = istmo_core::CallId(77);
+    let call = Envelope::new(Frame::Call {
+        call_id,
+        plugin_id: LocalOnlyHost::PLUGIN_ID.to_owned(),
+        instance_id: None,
+        method: "run".to_owned(),
+        payload: Vec::new(),
+    });
+    rt.inject_wire_envelope(&call.to_wire_bytes().unwrap())
+        .expect("inbound accepted");
+
+    for _ in 0..500 {
+        if !sink_bytes.lock().unwrap().is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    let sink_snapshot = sink_bytes.lock().unwrap().clone();
+    assert_eq!(sink_snapshot.len(), 1, "refusal should reach the sink");
+    match Envelope::from_wire_bytes(&sink_snapshot[0]).unwrap().frame {
+        Frame::Respond {
+            call_id: got_id,
+            result,
+        } => {
+            assert_eq!(got_id, call_id);
+            assert!(result.is_err(), "remote call must be refused");
+        }
+        other => panic!("expected Respond, got {other:?}"),
+    }
+    assert_eq!(host.calls.load(Ordering::SeqCst), 0, "host never ran");
+
+    // The same host still serves its own process.
+    let handle = rt.call(LocalOnlyHost::PLUGIN_ID, None, "run", Vec::new());
+    assert!(handle.expect("local call").recv_blocking().is_ok());
+    assert_eq!(host.calls.load(Ordering::SeqCst), 1);
 }

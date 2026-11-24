@@ -41,18 +41,18 @@ public final class NotificationsDispatcher: PluginHandler {
         self.codecs = codecs
     }
 
-    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {
+    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> PluginResult {
         switch method {
         case "is_authorized":
             let result = try await backend.is_authorized()
             var out = Data()
             Bincode.writeBool(&out, result)
-            return out
+            return .unary(out)
         case "request_authorization":
             let result = try await backend.request_authorization()
             var out = Data()
             Bincode.writeBool(&out, result)
-            return out
+            return .unary(out)
         case "schedule":
             do {
                 var c = Bincode.Cursor(payload)
@@ -60,7 +60,7 @@ public final class NotificationsDispatcher: PluginHandler {
                 let result = try await backend.schedule(request: request)
                 var out = Data()
                 codecs.writeNotificationHandle(&out, result)
-                return out
+                return .unary(out)
             } catch let err as NotificationError {
                 var errOut = Data()
                 codecs.writeNotificationError(&errOut, err)
@@ -71,7 +71,7 @@ public final class NotificationsDispatcher: PluginHandler {
                 var c = Bincode.Cursor(payload)
                 let id_ = try Bincode.readVarintU32(&c)
                 try await backend.cancel(id: id_)
-                return Data()
+                return .unary(Data())
             } catch let err as NotificationError {
                 var errOut = Data()
                 codecs.writeNotificationError(&errOut, err)

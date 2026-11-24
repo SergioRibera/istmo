@@ -67,7 +67,7 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
         (backend as? HandleReleaser)?.releaseNativeHandle(handleId)
     }
 
-    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {
+    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> PluginResult {
         switch method {
         case "start":
             do {
@@ -81,7 +81,7 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.start(activity_type: activity_type, attributes: attributes, initial_state: initial_state, style: style, stale_after_seconds: stale_after_seconds, android_tier_hint: android_tier_hint)
                 var out = Data()
                 codecs.writeNativeHandleId(&out, result)
-                return out
+                return .unary(out)
             } catch let err as ActivityError {
                 var errOut = Data()
                 codecs.writeActivityError(&errOut, err)
@@ -94,7 +94,7 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
                 let state = try Bincode.readData(&c)
                 let alert = try Bincode.readOption(&c) { c1 in try codecs.readAlertConfig(&c1) }
                 try await backend.update(handle: handle, state: state, alert: alert)
-                return Data()
+                return .unary(Data())
             } catch let err as ActivityError {
                 var errOut = Data()
                 codecs.writeActivityError(&errOut, err)
@@ -107,7 +107,7 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
                 let final_state = try Bincode.readOption(&c) { c1 in try Bincode.readData(&c1) }
                 let dismissal = try codecs.readDismissalPolicy(&c)
                 try await backend.end(handle: handle, final_state: final_state, dismissal: dismissal)
-                return Data()
+                return .unary(Data())
             } catch let err as ActivityError {
                 var errOut = Data()
                 codecs.writeActivityError(&errOut, err)
@@ -118,7 +118,7 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.are_activities_enabled()
                 var out = Data()
                 Bincode.writeBool(&out, result)
-                return out
+                return .unary(out)
             } catch let err as ActivityError {
                 var errOut = Data()
                 codecs.writeActivityError(&errOut, err)
@@ -129,7 +129,7 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.capabilities()
                 var out = Data()
                 codecs.writePlatformCapabilities(&out, result)
-                return out
+                return .unary(out)
             } catch let err as ActivityError {
                 var errOut = Data()
                 codecs.writeActivityError(&errOut, err)
@@ -140,7 +140,7 @@ public final class LiveActivityDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.restore_active()
                 var out = Data()
                 Bincode.writeVec(&out, result) { o1, v1 in codecs.writeRestoredActivity(&o1, v1) }
-                return out
+                return .unary(out)
             } catch let err as ActivityError {
                 var errOut = Data()
                 codecs.writeActivityError(&errOut, err)

@@ -98,7 +98,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
         return instances[instanceId]
     }
 
-    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {
+    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> PluginResult {
         guard let backend = instance(instanceId) else { throw PluginRuntimeError.unknownInstance(instanceId) }
         switch method {
         case "load_interstitial":
@@ -108,7 +108,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.load_interstitial(ad_unit_id: ad_unit_id)
                 var out = Data()
                 codecs.writeNativeHandleId(&out, result)
-                return out
+                return .unary(out)
             } catch let err as AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
@@ -121,7 +121,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.show_interstitial(ad: ad)
                 var out = Data()
                 codecs.writeInterstitialOutcome(&out, result)
-                return out
+                return .unary(out)
             } catch let err as AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
@@ -134,7 +134,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.load_rewarded(ad_unit_id: ad_unit_id)
                 var out = Data()
                 codecs.writeNativeHandleId(&out, result)
-                return out
+                return .unary(out)
             } catch let err as AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
@@ -147,7 +147,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.show_rewarded(ad: ad)
                 var out = Data()
                 codecs.writeRewardedOutcome(&out, result)
-                return out
+                return .unary(out)
             } catch let err as AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
@@ -160,7 +160,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 let result = try await backend.show_banner(request: request)
                 var out = Data()
                 codecs.writeNativeHandleId(&out, result)
-                return out
+                return .unary(out)
             } catch let err as AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
@@ -172,7 +172,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 let banner = try codecs.readNativeHandleId(&c)
                 let rect = try codecs.readBannerRect(&c)
                 try await backend.update_banner(banner: banner, rect: rect)
-                return Data()
+                return .unary(Data())
             } catch let err as AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
@@ -183,7 +183,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 var c = Bincode.Cursor(payload)
                 let banner = try codecs.readNativeHandleId(&c)
                 try await backend.hide_banner(banner: banner)
-                return Data()
+                return .unary(Data())
             } catch let err as AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)

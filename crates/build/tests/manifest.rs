@@ -424,3 +424,34 @@ fn parses_plugin_android_package() {
         assert!(Manifest::parse(&src).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn parses_android_queries() {
+    let m = Manifest::parse(
+        r#"
+[plugin]
+id = "istmo.web_auth"
+android_queries = [
+    { action = "android.support.customtabs.action.CustomTabsService" },
+    { action = "android.intent.action.VIEW", scheme = "https" },
+    { package = "com.android.chrome" },
+]
+"#,
+    )
+    .unwrap();
+    let queries = &m.plugins[0].android_queries;
+    assert_eq!(queries.len(), 3);
+    assert_eq!(
+        queries[2],
+        istmo_build::manifest::AndroidQuery::Package("com.android.chrome".into())
+    );
+    for bad in [
+        r#"android_queries = [{ package = "a", action = "b" }]"#,
+        r#"android_queries = [{ scheme = "https" }]"#,
+        r#"android_queries = [{ action = "a", host = "b" }]"#,
+        r#"android_queries = ["a"]"#,
+    ] {
+        let src = format!("[plugin]\nid = \"istmo.x\"\n{bad}\n");
+        assert!(Manifest::parse(&src).is_err(), "{bad}");
+    }
+}

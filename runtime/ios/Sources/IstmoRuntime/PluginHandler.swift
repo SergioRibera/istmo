@@ -4,9 +4,42 @@ import Foundation
 /// wraps. Generated codecs read and write it as a varint.
 public typealias NativeHandleId = UInt64
 
+/// Result of `PluginHandler.handleCall`. Unary methods produce `.unary`,
+/// stream methods (declared with `#[stream]` on the Rust side) produce
+/// `.stream`: the runtime sends each element as a `Frame::Event` back to
+/// the caller and ends the wire stream when the sequence finishes or
+/// throws (a `PluginException` ends it with its payload as the error).
+public enum PluginResult {
+    case unary(Data)
+    case stream(AsyncThrowingStream<Data, Error>)
+
+    /// Encodes every item of a backend stream. `mapError` turns a thrown
+    /// domain error into the `PluginException` carrying its encoding.
+    /// Terminating the returned stream cancels the backend's.
+    public static func encoding<Item>(
+        _ source: AsyncThrowingStream<Item, Error>,
+        encode: @escaping (Item) throws -> Data,
+        mapError: @escaping (Error) -> Error = { $0 }
+    ) -> PluginResult {
+        .stream(AsyncThrowingStream { cont in
+            let pump = Task {
+                do {
+                    for try await item in source {
+                        cont.yield(try encode(item))
+                    }
+                    cont.finish()
+                } catch {
+                    cont.finish(throwing: mapError(error))
+                }
+            }
+            cont.onTermination = { _ in pump.cancel() }
+        })
+    }
+}
+
 public protocol PluginHandler: AnyObject {
 
-    func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data
+    func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> PluginResult
 
     func handleCreateInstance(payload: Data) async throws -> Data
 

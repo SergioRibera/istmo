@@ -302,7 +302,7 @@ fn write_instance_table(out: &mut String, name: &str) {
 fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
     let _ = writeln!(
         out,
-        "    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {{",
+        "    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> PluginResult {{",
     );
     if stateful {
         let _ = writeln!(
@@ -312,7 +312,7 @@ fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
     }
     let _ = writeln!(out, "        switch method {{");
     for method in &contract.methods {
-        write_method_arm(out, contract, method);
+        write_method_arm(out, method);
     }
     let _ = writeln!(out, "        default:");
     let _ = writeln!(
@@ -324,23 +324,16 @@ fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
     let _ = writeln!(out, "    }}");
 }
 
-fn write_method_arm(out: &mut String, contract: &Contract, method: &Method) {
+fn write_method_arm(out: &mut String, method: &Method) {
     let _ = writeln!(out, "        case {}:", swift_string(&method.name));
-    if matches!(method.kind, MethodKind::Stream) {
-        // `PluginHandler.handleCall` answers with a single `Data`; the
-        // iOS runtime has no hosted-stream path to hand the backend's
-        // `AsyncThrowingStream` to yet.
-        let _ = writeln!(
-            out,
-            "            throw PluginRuntimeError.unknownMethod(plugin: {}, method: method)",
-            swift_string(&contract.type_name),
-        );
-        return;
-    }
-    if method.error.is_some() {
+    let is_stream = matches!(method.kind, MethodKind::Stream);
+    // Stream errors are thrown while iterating, after `handleCall` returned;
+    // `write_stream_return` maps them instead of a `do`/`catch` here.
+    let unary_error = method.error.as_ref().filter(|_| !is_stream);
+    if unary_error.is_some() {
         let _ = writeln!(out, "            do {{");
     }
-    let indent = if method.error.is_some() {
+    let indent = if unary_error.is_some() {
         "                "
     } else {
         "            "
@@ -366,18 +359,61 @@ fn write_method_arm(out: &mut String, contract: &Contract, method: &Method) {
         swift_ident(&method.name),
         call_args.join(", ")
     );
-    if method.returns.is_unit() {
+    if is_stream {
+        write_stream_return(out, indent, method, &call);
+    } else if method.returns.is_unit() {
         let _ = writeln!(out, "{indent}try await {call}");
-        let _ = writeln!(out, "{indent}return Data()");
+        let _ = writeln!(out, "{indent}return .unary(Data())");
     } else {
         let _ = writeln!(out, "{indent}let result = try await {call}");
         let _ = writeln!(out, "{indent}var out = Data()");
         WIRE.write_stmt(out, indent, &method.returns, "out", "result");
-        let _ = writeln!(out, "{indent}return out");
+        let _ = writeln!(out, "{indent}return .unary(out)");
     }
-    if let Some(err) = &method.error {
+    if let Some(err) = unary_error {
         write_error_catch(out, err);
     }
+}
+
+/// `return PluginResult.encoding(...)` over the backend's stream. The
+/// closures escape, so they capture `codecs` as a local rather than
+/// reaching through `self`.
+fn write_stream_return(out: &mut String, indent: &str, method: &Method, call: &str) {
+    let body = format!("{indent}    ");
+    let mut closures = String::new();
+    if method.returns.is_unit() {
+        // `()` items encode to no bytes.
+        let _ = writeln!(
+            closures,
+            "{indent}return PluginResult.encoding({call}, encode: {{ _ in"
+        );
+        let _ = writeln!(closures, "{body}Data()");
+    } else {
+        let _ = writeln!(
+            closures,
+            "{indent}return PluginResult.encoding({call}, encode: {{ item in"
+        );
+        let _ = writeln!(closures, "{body}var out = Data()");
+        WIRE.write_stmt(&mut closures, &body, &method.returns, "out", "item");
+        let _ = writeln!(closures, "{body}return out");
+    }
+    if let Some(err) = &method.error {
+        let _ = writeln!(closures, "{indent}}}, mapError: {{ error in");
+        let _ = writeln!(
+            closures,
+            "{body}guard let err = error as? {} else {{ return error }}",
+            err.to_swift()
+        );
+        let _ = writeln!(closures, "{body}var errOut = Data()");
+        WIRE.write_stmt(&mut closures, &body, err, "errOut", "err");
+        let _ = writeln!(closures, "{body}return PluginException(payload: errOut)");
+    }
+    let _ = writeln!(closures, "{indent}}})");
+    // An unused local would draw swiftc's "never used" warning.
+    if closures.contains("codecs.") {
+        let _ = writeln!(out, "{indent}let codecs = self.codecs");
+    }
+    out.push_str(&closures);
 }
 
 fn write_error_catch(out: &mut String, err: &TypeRef) {

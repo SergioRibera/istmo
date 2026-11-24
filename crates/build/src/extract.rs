@@ -212,7 +212,7 @@ fn parse_plugin_attr(attr: &Attribute) -> Result<PluginAttrArgs, ExtractError> {
                 init = Some(type_to_ref(&ty).map_err(|e| in_site(e, "plugin `init`"))?);
             }
             // Codegen paths only; they do not change the contract.
-            "crate" | "wincode" => {}
+            "crate" | "wincode" | "remote" => {}
             other => {
                 return Err(ExtractError::Unsupported(format!(
                     "unknown `#[istmo::plugin]` argument `{other}`; expected `name`, `init` or `crate`"

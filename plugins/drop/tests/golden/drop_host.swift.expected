@@ -51,14 +51,14 @@ public final class FileDropDispatcher: PluginHandler {
         self.codecs = codecs
     }
 
-    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> Data {
+    public func handleCall(instanceId: UInt64, method: String, payload: Data) async throws -> PluginResult {
         switch method {
         case "listen":
             do {
                 var c = Bincode.Cursor(payload)
                 let options = try codecs.readDropOptions(&c)
                 try await backend.listen(options: options)
-                return Data()
+                return .unary(Data())
             } catch let err as DropError {
                 var errOut = Data()
                 codecs.writeDropError(&errOut, err)
@@ -67,7 +67,7 @@ public final class FileDropDispatcher: PluginHandler {
         case "stop":
             do {
                 try await backend.stop()
-                return Data()
+                return .unary(Data())
             } catch let err as DropError {
                 var errOut = Data()
                 codecs.writeDropError(&errOut, err)
