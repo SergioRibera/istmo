@@ -1,0 +1,24 @@
+[plugin]
+id = "istmo.webview"
+client_type = "::istmo_webview::WebViewClient"
+android_package = "dev.istmo.plugins.webview"
+default_deployment = "local"
+# Views are `PopupWindow`s over the host Activity (a NativeActivity's
+# surface covers content-view children), rebuilt on Activity recreation.
+android_backend = "dev.istmo.plugins.webview.WebViewFactoryImpl"
+android_backend_arg = "activity"
+android_permissions = ["android.permission.INTERNET"]
+
+# `addDocumentStartJavaScript`, `addWebMessageListener`, profiles,
+# `WebViewAssetLoader`, isolated worlds, navigation listeners.
+[[gradle]]
+group = "androidx.webkit"
+artifact = "webkit"
+version = "1.16.0"
+
+[min_versions]
+# androidx.webkit raised its floor to 24.
+android = 24
+# Content worlds and reply handlers need 14; newer APIs sit behind
+# `#available` and surface as capability flags.
+ios = "14.0"

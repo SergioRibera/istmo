@@ -1,0 +1,44 @@
+# scheme	host	port	path_prefix	url	expect
+# One Allow rule per line over a Deny default; '-' = empty / no port.
+# Every backend (Rust, Kotlin, Swift) must agree with this file.
+https	example.com	-	-	https://example.com/	match
+https	example.com	-	-	HTTPS://EXAMPLE.COM/	match
+https	example.com	-	-	https://example.com./x	match
+https	example.com	-	-	https://example.com:443/	match
+https	example.com	-	-	https://example.com:8443/	nomatch
+https	example.com	8443	-	https://example.com:8443/	match
+https	example.com	-	-	http://example.com/	nomatch
+https	example.com	-	-	https://example.com.evil/	nomatch
+https	example.com	-	-	https://xexample.com/	nomatch
+https	example.com	-	-	https://a.example.com/	nomatch
+https	example.com	-	-	https://example.com@evil.com/	nomatch
+https	evil.com	-	-	https://example.com@evil.com/	nomatch
+https	*.example.com	-	-	https://a.example.com/	match
+https	*.example.com	-	-	https://a.b.example.com/	match
+https	*.example.com	-	-	https://example.com/	nomatch
+https	*.example.com	-	-	https://xexample.com/	nomatch
+https	*.example.com	-	-	https://a.example.com.evil/	nomatch
+https	bücher.example	-	-	https://xn--bcher-kva.example/	match
+https	xn--bcher-kva.example	-	-	https://bücher.example/	match
+http	127.0.0.1	-	-	http://0x7f.1/	match
+http	127.0.0.1	-	-	http://2130706433/	match
+http	127.0.0.1	-	-	http://localhost/	nomatch
+http	127.0.0.1	-	-	http://[::1]/	nomatch
+http	127.0.0.1	51234	/cb	http://127.0.0.1:51234/cb?code=x&state=y	match
+http	127.0.0.1	51234	/cb	http://127.0.0.1:51235/cb	nomatch
+https	example.com	-	/cb	https://example.com/cb	match
+https	example.com	-	/cb	https://example.com/cb/	match
+https	example.com	-	/cb	https://example.com/cb/x	match
+https	example.com	-	/cb	https://example.com/cb-x	nomatch
+https	example.com	-	/cb	https://example.com/cb%2Fx	nomatch
+https	example.com	-	/cb	https://example.com/a/../cb	match
+https	example.com	-	/cb	https://example.com\cb	match
+https	example.com	-	/cb/	https://example.com/cb	match
+https	example.com	-	/cb	https://example.com/CB	nomatch
+com.example.app	*	-	-	com.example.app://callback?code=1	match
+com.example.app	*	-	-	com.example.app:/callback	match
+com.example.app	*	-	-	com.example.other://callback	nomatch
+*	*	-	-	javascript:alert(1)	nomatch
+*	*	-	-	data:text/html,x	nomatch
+*	*	-	-	file:///etc/passwd	nomatch
+*	*	-	-	intent://scan#Intent;end	nomatch

@@ -1,0 +1,56 @@
+[package]
+name = "istmo-webview"
+version = "0.1.1-alpha.6"
+description = "Cross-platform web view plugin for the istmo framework: embedded or windowed views, navigation rules, a JS bridge bound to origins, custom schemes, profiles and cookies behind one typed Rust surface."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["istmo", "webview", "browser", "mobile", "webkit"]
+categories = ["gui", "web-programming", "api-bindings"]
+links = "istmo_webview"
+
+[features]
+default = []
+# `ScriptedWebView`: an engine-less host for testing app flows.
+testing = []
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+flume = { workspace = true }
+tracing = { workspace = true }
+url = "2.5"
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+# The scripted host drives the end-to-end tests.
+istmo-webview = { path = ".", features = ["testing"] }
+istmo-build = { workspace = true }
+pollster = { workspace = true }
+
+[lints.rust]
+# Toolchains older than clippy 1.100 do not know `unused_async_trait_impl`.
+unknown_lints = { level = "allow", priority = -2 }
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unreachable_pub = "warn"
+# Engine bindings (desktop backends) opt in per module.
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+redundant_pub_crate = "allow"
+# Plugin traits are async; sync backends implement them with `async fn`
+# rather than hand-built `std::future::ready` futures.
+unused_async_trait_impl = "allow"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = "0.3"
