@@ -10,12 +10,15 @@ class FileDropCodecsImpl : FileDropCodecs {
         val mimeTypes = d_mimeTypes.value
         val d_maxBytes = Bincode.readU64(bytes, cursor); cursor = d_maxBytes.consumed
         val maxBytes = d_maxBytes.value
-        return Bincode.Decoded(DropOptions(mimeTypes = mimeTypes, maxBytes = maxBytes), cursor)
+        val d_folders = Bincode.readBool(bytes, cursor); cursor = d_folders.consumed
+        val folders = d_folders.value
+        return Bincode.Decoded(DropOptions(mimeTypes = mimeTypes, maxBytes = maxBytes, folders = folders), cursor)
     }
 
     override fun writeDropOptions(out: ByteArrayOutputStream, value: DropOptions) {
         Bincode.writeVec(out, value.mimeTypes) { s1, v1 -> Bincode.writeString(s1, v1) }
         Bincode.writeU64(out, value.maxBytes)
+        Bincode.writeBool(out, value.folders)
     }
 
     override fun readDropError(bytes: ByteArray, offset: Int): Bincode.Decoded<DropError> {
@@ -53,7 +56,9 @@ class FileDropCodecsImpl : FileDropCodecs {
         val position = d_position.value
         val d_receivedAtMs = Bincode.readOption(bytes, cursor) { b1, c1 -> Bincode.readU64(b1, c1) }; cursor = d_receivedAtMs.consumed
         val receivedAtMs = d_receivedAtMs.value
-        return Bincode.Decoded(DroppedFiles(files = files, skipped = skipped, position = position, receivedAtMs = receivedAtMs), cursor)
+        val d_windowId = Bincode.readOption(bytes, cursor) { b1, c1 -> Bincode.readU64(b1, c1) }; cursor = d_windowId.consumed
+        val windowId = d_windowId.value
+        return Bincode.Decoded(DroppedFiles(files = files, skipped = skipped, position = position, receivedAtMs = receivedAtMs, windowId = windowId), cursor)
     }
 
     override fun writeDroppedFiles(out: ByteArrayOutputStream, value: DroppedFiles) {
@@ -61,6 +66,7 @@ class FileDropCodecsImpl : FileDropCodecs {
         Bincode.writeVec(out, value.skipped) { s1, v1 -> writeSkippedFile(s1, v1) }
         Bincode.writeOption(out, value.position) { s1, v1 -> writeDropPoint(s1, v1) }
         Bincode.writeOption(out, value.receivedAtMs) { s1, v1 -> Bincode.writeU64(s1, v1) }
+        Bincode.writeOption(out, value.windowId) { s1, v1 -> Bincode.writeU64(s1, v1) }
     }
 
     override fun readDroppedFile(bytes: ByteArray, offset: Int): Bincode.Decoded<DroppedFile> {
@@ -148,12 +154,15 @@ class FileDropCodecsImpl : FileDropCodecs {
         val count = d_count.value
         val d_position = Bincode.readOption(bytes, cursor) { b1, c1 -> readDropPoint(b1, c1) }; cursor = d_position.consumed
         val position = d_position.value
-        return Bincode.Decoded(DragOver(count = count, position = position), cursor)
+        val d_windowId = Bincode.readOption(bytes, cursor) { b1, c1 -> Bincode.readU64(b1, c1) }; cursor = d_windowId.consumed
+        val windowId = d_windowId.value
+        return Bincode.Decoded(DragOver(count = count, position = position, windowId = windowId), cursor)
     }
 
     override fun writeDragOver(out: ByteArrayOutputStream, value: DragOver) {
         Bincode.writeU32(out, value.count)
         Bincode.writeOption(out, value.position) { s1, v1 -> writeDropPoint(s1, v1) }
+        Bincode.writeOption(out, value.windowId) { s1, v1 -> Bincode.writeU64(s1, v1) }
     }
 
     override fun readDropPoint(bytes: ByteArray, offset: Int): Bincode.Decoded<DropPoint> {

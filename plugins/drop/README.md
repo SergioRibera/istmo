@@ -13,7 +13,8 @@ landed. While a drag hovers, a `DragState` tells you so you can show it.
 |---|---|---|
 | Android 7+ | yes | from other apps' windows, any `Activity` (`NativeActivity` included) |
 | iOS / iPadOS 14+ | yes | every window of every scene; iPhone gets drops from other apps since iOS 15 |
-| Desktop | through your UI toolkit | forward them with `DropInbox::publish` for one code path |
+| Linux Wayland | yes | from the compositor, for windows registered with `istmo-window`; Flatpak through the document portal |
+| X11, Windows, macOS | through your UI toolkit | forward them with `DropPublisher::publish_paths` |
 
 ## Use it
 
@@ -104,42 +105,47 @@ while let Ok(state) = changes.recv_async().await {
 
 ## Desktop
 
-Desktop windows receive drops from your UI toolkit (winit
-`WindowEvent::DroppedFile`, Freya `on_file_drop`, ...). Nothing answers
-`listen` there unless you register the desktop host, and the call would
-wait forever. Register it on desktop only: on mobile it would shadow the
-native backend.
+Install the desktop side once, on desktop only (on mobile it would
+shadow the native backend), and let it follow your windows:
 
 ```rust
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-istmo_drop::register_desktop(&runtime);
+let drops = {
+    let drops = istmo_drop::register_desktop(&runtime);
+    drops.follow_registry(istmo_window::WindowRegistry::global())?;
+    drops
+};
 ```
 
-For a single receiving path, forward the toolkit's drops. `position` is
-`None` unless your toolkit gives one (winit does not); convert physical
-pixels to logical ones when it does.
+Without it nothing answers `listen` on desktop and the call waits
+forever.
 
-```rust
-use istmo_drop::{DropInbox, DroppedFile, DroppedFiles};
+- **Wayland.** winit delivers no drops there. The publisher opens a
+  second connection on the window's `wl_display` (the one registered
+  with `istmo-window`) and binds a `wl_data_device` of its own, like
+  `istmo-pen` does for tablets. You get the full `DragState` (with
+  `window_id` and the position in logical pixels; `count` is 0, Wayland
+  does not say before the drop) and `DroppedFiles` with the paths.
+- **Flatpak.** Inside the sandbox host paths cannot be opened. When the
+  source offers a portal file transfer (GTK, Qt, Firefox, file managers)
+  the files come through the document portal instead, as paths under
+  `/run/user/<uid>/doc/`. Nothing to declare: the document portal is
+  available to every Flatpak app.
+- **X11, Windows, macOS.** The UI toolkit gets the drop (winit
+  `WindowEvent::DroppedFile`, Freya `on_file_drop`). Forward it for one
+  receiving path; the options `listen` set are applied the same way:
 
-// in your toolkit's drop handler
-DropInbox::acquire()?.publish(DroppedFiles {
-    files: paths
-        .iter()
-        .map(|path| DroppedFile {
-            path: path.display().to_string(),
-            display_name: path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
-            mime_type: None,
-            size: std::fs::metadata(path).map_or(0, |meta| meta.len()),
-        })
-        .collect(),
-    ..DroppedFiles::default()
-})?;
-```
+  ```rust
+  drops.publish_paths(paths, None, Some(window_id))?;
+  // hover, when the toolkit reports it (winit `HoveredFile`)
+  drops.publish_state(DragState::Over(DragOver::default()));
+  ```
+
+Desktop drops are not copied: the paths are the person's own files,
+and `cleanup` leaves them alone. Types are told from the extension;
+a file whose type cannot be told only passes `*/*` or
+`application/octet-stream`. Folders come through only with
+`DropOptions::with_folders()`, as entries of type `inode/directory`.
 
 ## Native backends
 

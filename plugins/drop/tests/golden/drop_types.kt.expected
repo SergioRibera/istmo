@@ -3,7 +3,8 @@
 
 data class DropOptions(
     val mimeTypes: List<String>,
-    val maxBytes: ULong
+    val maxBytes: ULong,
+    val folders: Boolean
 )
 
 sealed class DropError {
@@ -15,7 +16,8 @@ data class DroppedFiles(
     val files: List<DroppedFile>,
     val skipped: List<SkippedFile>,
     val position: DropPoint?,
-    val receivedAtMs: ULong?
+    val receivedAtMs: ULong?,
+    val windowId: ULong?
 )
 
 data class DroppedFile(
@@ -45,7 +47,8 @@ sealed class DragState {
 
 data class DragOver(
     val count: UInt,
-    val position: DropPoint?
+    val position: DropPoint?,
+    val windowId: ULong?
 )
 
 data class DropPoint(

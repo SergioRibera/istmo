@@ -26,10 +26,12 @@
 //! # Ok(()) }
 //! ```
 //!
-//! Desktop windows get drops from their UI toolkit (winit, Freya, …),
-//! not from this plugin. [`DesktopFileDrop`] answers `listen` there, and
-//! an app that wants one code path forwards its toolkit's drops with
-//! [`DropInbox::publish`].
+//! On desktop, [`register_desktop`] installs a [`DropPublisher`]. On
+//! Wayland, where winit delivers no drops, it takes them from the
+//! compositor for every window registered with `istmo-window` (through
+//! the document portal inside Flatpak). Elsewhere the UI toolkit gets
+//! them and the app forwards them with [`DropPublisher::publish_paths`],
+//! so every platform ends in the same [`DroppedFiles`].
 //!
 //! Declare the plugin in `istmo::runtime!` and add the crate: the
 //! Android and iOS backends register themselves through the generated
@@ -63,6 +65,10 @@ pub struct DropOptions {
     /// Larger ones are left out and listed in
     /// [`DroppedFiles::skipped`].
     pub max_bytes: u64,
+    /// Take dropped folders as entries of their own (MIME type
+    /// `inode/directory`, size 0) instead of skipping them. Desktop only:
+    /// phones and tablets drag files, never folders.
+    pub folders: bool,
 }
 
 impl DropOptions {
@@ -82,6 +88,7 @@ impl DropOptions {
         Self {
             mime_types: mime_types.into_iter().map(Into::into).collect(),
             max_bytes: 0,
+            folders: false,
         }
     }
 
@@ -90,6 +97,13 @@ impl DropOptions {
     #[must_use]
     pub const fn max_bytes(mut self, bytes: u64) -> Self {
         self.max_bytes = bytes;
+        self
+    }
+
+    /// Take dropped folders too ([`DropOptions::folders`]).
+    #[must_use]
+    pub const fn with_folders(mut self) -> Self {
+        self.folders = true;
         self
     }
 }
@@ -159,6 +173,9 @@ pub struct DroppedFiles {
     pub position: Option<DropPoint>,
     /// Unix milliseconds when the drop happened.
     pub received_at_ms: Option<u64>,
+    /// The window it landed on, as registered with `istmo-window`, when
+    /// the platform says (Wayland on desktop).
+    pub window_id: Option<u64>,
 }
 
 impl DroppedFiles {
@@ -231,11 +248,15 @@ pub enum DragState {
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct DragOver {
-    /// Items in the drag, files or not.
+    /// Items in the drag, files or not; 0 when the platform does not say
+    /// before the drop (Wayland).
     pub count: u32,
     /// Where the pointer or finger is, when the platform says; updated a
     /// few dozen times a second at most.
     pub position: Option<DropPoint>,
+    /// The window under it, as registered with `istmo-window`, when the
+    /// platform says (Wayland on desktop).
+    pub window_id: Option<u64>,
 }
 
 /// A point on the app window in logical pixels (Android dp, iOS points).
@@ -263,30 +284,46 @@ pub trait FileDrop {
     async fn stop(&self) -> Result<(), DropError>;
 }
 
-/// Desktop backend, which takes the options and does nothing.
+/// Desktop host of the plugin: keeps what `listen` asked for.
 ///
-/// Desktop windows get drops from their UI toolkit, which the app
-/// forwards with [`DropInbox::publish`] if it wants; this keeps the same
-/// `listen` call working on every platform.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DesktopFileDrop;
+/// On X11, Windows and macOS the UI toolkit delivers drops; the app
+/// hands them to [`DropPublisher::publish_paths`], which applies these
+/// options. On Wayland, where winit has no drops, the publisher takes
+/// them from the compositor itself. Built by [`DropPublisher::install`];
+/// registering it alone only makes `listen` answer.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[derive(Debug, Clone, Default)]
+pub struct DesktopFileDrop {
+    listening: desktop::Listening,
+}
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl FileDrop for DesktopFileDrop {
-    async fn listen(&self, _options: DropOptions) -> Result<(), DropError> {
+    async fn listen(&self, options: DropOptions) -> Result<(), DropError> {
+        self.listening.set(Some(options));
         Ok(())
     }
 
     async fn stop(&self) -> Result<(), DropError> {
+        self.listening.set(None);
         Ok(())
     }
 }
 
-/// Register [`DesktopFileDrop`] on `runtime`, so `listen` answers on desktop.
-///
-/// There, nothing else would, and the call would wait forever.
-/// Mobile builds get their native backend from the plugin registry
-/// instead, so this exists only off Android and iOS.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn register_desktop(runtime: &std::sync::Arc<istmo_core::Runtime>) {
-    runtime.register_host(FileDropHost::new(DesktopFileDrop));
+mod desktop;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use desktop::DropPublisher;
+
+/// Install the desktop side on `runtime`: [`DropPublisher::install`].
+///
+/// Needed on desktop, where nothing else answers `listen` and the call
+/// would wait forever. Mobile builds get their native backend from the
+/// plugin registry instead, so this exists only off Android and iOS.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn register_desktop(
+    runtime: &std::sync::Arc<istmo_core::Runtime>,
+) -> std::sync::Arc<DropPublisher> {
+    DropPublisher::install(runtime)
 }

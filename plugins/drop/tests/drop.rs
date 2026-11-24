@@ -11,7 +11,7 @@ use istmo_drop::{
 fn runtime() -> Arc<Runtime> {
     Runtime::mock()
         .expects::<FileDropClient>()
-        .host(FileDropHost::new(DesktopFileDrop))
+        .host(FileDropHost::new(DesktopFileDrop::default()))
         .finish()
         .runtime
 }
@@ -46,6 +46,7 @@ fn a_drop_published_before_anyone_listens_waits_whole() {
             }],
             position: Some(DropPoint { x: 12.5, y: 40.0 }),
             received_at_ms: None,
+            window_id: None,
         })
         .expect("publish before subscribing");
 
@@ -131,6 +132,7 @@ fn the_drag_state_starts_idle_and_follows_the_backend() {
     let over = DragState::Over(DragOver {
         count: 2,
         position: Some(DropPoint { x: 1.0, y: 2.0 }),
+        window_id: Some(3),
     });
     rt.publish_early_latest(
         DRAG_CHANNEL,

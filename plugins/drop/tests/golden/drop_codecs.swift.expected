@@ -10,12 +10,14 @@ public final class FileDropCodecsImpl: FileDropCodecs {
     public func readDropOptions(_ c: inout Bincode.Cursor) throws -> DropOptions {
         let mimeTypes = try Bincode.readVec(&c) { c1 in try Bincode.readString(&c1) }
         let maxBytes = try Bincode.readVarintU64(&c)
-        return DropOptions(mimeTypes: mimeTypes, maxBytes: maxBytes)
+        let folders = try Bincode.readBool(&c)
+        return DropOptions(mimeTypes: mimeTypes, maxBytes: maxBytes, folders: folders)
     }
 
     public func writeDropOptions(_ out: inout Data, _ value: DropOptions) {
         Bincode.writeVec(&out, value.mimeTypes) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeVarintU64(&out, value.maxBytes)
+        Bincode.writeBool(&out, value.folders)
     }
 
     public func readDropError(_ c: inout Bincode.Cursor) throws -> DropError {
@@ -42,7 +44,8 @@ public final class FileDropCodecsImpl: FileDropCodecs {
         let skipped = try Bincode.readVec(&c) { c1 in try self.readSkippedFile(&c1) }
         let position = try Bincode.readOption(&c) { c1 in try self.readDropPoint(&c1) }
         let receivedAtMs = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
-        return DroppedFiles(files: files, skipped: skipped, position: position, receivedAtMs: receivedAtMs)
+        let windowId = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
+        return DroppedFiles(files: files, skipped: skipped, position: position, receivedAtMs: receivedAtMs, windowId: windowId)
     }
 
     public func writeDroppedFiles(_ out: inout Data, _ value: DroppedFiles) {
@@ -50,6 +53,7 @@ public final class FileDropCodecsImpl: FileDropCodecs {
         Bincode.writeVec(&out, value.skipped) { o1, v1 in self.writeSkippedFile(&o1, v1) }
         Bincode.writeOption(&out, value.position) { o1, v1 in self.writeDropPoint(&o1, v1) }
         Bincode.writeOption(&out, value.receivedAtMs) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
+        Bincode.writeOption(&out, value.windowId) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
     }
 
     public func readDroppedFile(_ c: inout Bincode.Cursor) throws -> DroppedFile {
@@ -116,12 +120,14 @@ public final class FileDropCodecsImpl: FileDropCodecs {
     public func readDragOver(_ c: inout Bincode.Cursor) throws -> DragOver {
         let count = try Bincode.readVarintU32(&c)
         let position = try Bincode.readOption(&c) { c1 in try self.readDropPoint(&c1) }
-        return DragOver(count: count, position: position)
+        let windowId = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
+        return DragOver(count: count, position: position, windowId: windowId)
     }
 
     public func writeDragOver(_ out: inout Data, _ value: DragOver) {
         Bincode.writeVarintU32(&out, value.count)
         Bincode.writeOption(&out, value.position) { o1, v1 in self.writeDropPoint(&o1, v1) }
+        Bincode.writeOption(&out, value.windowId) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
     }
 
     public func readDropPoint(_ c: inout Bincode.Cursor) throws -> DropPoint {

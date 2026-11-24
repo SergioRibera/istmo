@@ -210,7 +210,8 @@ extension FileDropBackendImpl: UIDropInteractionDelegate {
         let point = view.map { session.location(in: $0) }
         return .over(DragOver(
             count: UInt32(session.items.count),
-            position: point.map { DropPoint(x: Float($0.x), y: Float($0.y)) }
+            position: point.map { DropPoint(x: Float($0.x), y: Float($0.y)) },
+            windowId: nil
         ))
     }
 
@@ -330,7 +331,8 @@ extension FileDropBackendImpl: UIDropInteractionDelegate {
                     files: files,
                     skipped: skipped,
                     position: location.map { DropPoint(x: Float($0.x), y: Float($0.y)) },
-                    receivedAtMs: UInt64(Date().timeIntervalSince1970 * 1000)
+                    receivedAtMs: UInt64(Date().timeIntervalSince1970 * 1000),
+                    windowId: nil
                 )
                 var out = Data()
                 codecs.writeDroppedFiles(&out, dropped)

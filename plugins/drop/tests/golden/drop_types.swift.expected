@@ -6,10 +6,12 @@ import Foundation
 public struct DropOptions {
     public let mimeTypes: [String]
     public let maxBytes: UInt64
+    public let folders: Bool
 
-    public init(mimeTypes: [String], maxBytes: UInt64) {
+    public init(mimeTypes: [String], maxBytes: UInt64, folders: Bool) {
         self.mimeTypes = mimeTypes
         self.maxBytes = maxBytes
+        self.folders = folders
     }
 }
 
@@ -23,12 +25,14 @@ public struct DroppedFiles {
     public let skipped: [SkippedFile]
     public let position: DropPoint?
     public let receivedAtMs: UInt64?
+    public let windowId: UInt64?
 
-    public init(files: [DroppedFile], skipped: [SkippedFile], position: DropPoint?, receivedAtMs: UInt64?) {
+    public init(files: [DroppedFile], skipped: [SkippedFile], position: DropPoint?, receivedAtMs: UInt64?, windowId: UInt64?) {
         self.files = files
         self.skipped = skipped
         self.position = position
         self.receivedAtMs = receivedAtMs
+        self.windowId = windowId
     }
 }
 
@@ -72,10 +76,12 @@ public enum DragState {
 public struct DragOver {
     public let count: UInt32
     public let position: DropPoint?
+    public let windowId: UInt64?
 
-    public init(count: UInt32, position: DropPoint?) {
+    public init(count: UInt32, position: DropPoint?, windowId: UInt64?) {
         self.count = count
         self.position = position
+        self.windowId = windowId
     }
 }
 

@@ -157,7 +157,7 @@ class FileDropBackendImpl(
         // `clipDescription` only; the items are not readable before the drop.
         val count = event.clipData?.itemCount ?: 0
         return DragState.Over(
-            DragOver(count.toUInt(), DropPoint(event.x / density, event.y / density)),
+            DragOver(count.toUInt(), DropPoint(event.x / density, event.y / density), null),
         )
     }
 
@@ -220,6 +220,7 @@ class FileDropBackendImpl(
                     skipped = skipped,
                     position = position,
                     receivedAtMs = System.currentTimeMillis().toULong(),
+                    windowId = null,
                 )
                 val out = ByteArrayOutputStream()
                 codecs.writeDroppedFiles(out, dropped)
