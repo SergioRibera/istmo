@@ -1,0 +1,26 @@
+[plugin]
+id = "istmo.web_auth"
+client_type = "::istmo_web_auth::WebAuthClient"
+android_package = "dev.istmo.plugins.webauth"
+default_deployment = "local"
+# Auth Tab / Custom Tabs launch from the host Activity and register their
+# result callback on its `ActivityResultRegistry`.
+android_backend = "dev.istmo.plugins.webauth.WebAuthBackendImpl"
+android_backend_arg = "activity"
+# Android 11+ package visibility: find browsers that support Custom Tabs.
+android_queries = [
+    { action = "android.support.customtabs.action.CustomTabsService" },
+    { action = "android.intent.action.VIEW", scheme = "https" },
+]
+
+# `AuthTabIntent` (Auth Tab, with automatic Custom Tab fallback).
+[[gradle]]
+group = "androidx.browser"
+artifact = "browser"
+version = "1.9.0"
+
+[min_versions]
+android = 23
+# `ASWebAuthenticationSession` is older; the `Callback` API (17.4) sits
+# behind `#available`.
+ios = "14.0"

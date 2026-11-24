@@ -1,0 +1,50 @@
+[package]
+name = "istmo-web-auth"
+version = "0.1.1-alpha.6"
+description = "Browser-based sign-in for the istmo framework: ASWebAuthenticationSession, Android Auth Tab / Custom Tabs and the system browser with a loopback or app-scheme callback, with PKCE and state checks."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["istmo", "oauth", "oidc", "sign-in", "pkce"]
+categories = ["authentication", "api-bindings"]
+links = "istmo_web_auth"
+
+[features]
+default = []
+# Rust host for Linux, macOS and Windows (system browser + loopback or
+# app-scheme callback).
+desktop = ["dep:istmo-opener", "dep:istmo-plugins"]
+# `AuthMode::Embedded` on desktop through `istmo-webview`.
+embedded = ["desktop", "dep:istmo-webview"]
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+flume = { workspace = true }
+tracing = { workspace = true }
+# WHATWG parsing of authorize and callback URLs.
+url = "2.5"
+# PKCE S256 challenge.
+sha2 = "0.10"
+istmo-opener = { path = "../opener", version = "0.1.1-alpha.6", optional = true }
+istmo-plugins = { workspace = true, optional = true }
+istmo-webview = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# PKCE verifiers, `state` and `nonce`.
+getrandom = "0.3"
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+istmo-build = { workspace = true }
+pollster = { workspace = true }
+# The desktop flow test drives the Rust host.
+istmo-web-auth = { path = ".", features = ["desktop"] }
+
+[lints]
+workspace = true
