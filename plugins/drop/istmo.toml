@@ -1,0 +1,16 @@
+[plugin]
+id = "istmo.drop"
+client_type = "::istmo_drop::FileDropClient"
+android_package = "dev.istmo.plugins.drop"
+default_deployment = "local"
+# The drag listener lives on the activity's window: the generated registry
+# hands the backend each activity (it implements `IstmoActivityBound`).
+android_backend = "dev.istmo.plugins.drop.FileDropBackendImpl"
+android_backend_arg = "activity"
+
+[min_versions]
+# Drags between apps (`View.DRAG_FLAG_GLOBAL`) and
+# `Activity.requestDragAndDropPermissions`.
+android = 24
+# `UIDropInteraction` is iOS 11; the Swift runtime package itself needs 14.
+ios = "14.0"

@@ -26,6 +26,7 @@ members = [
     "plugins/barcode-scanner",
     "plugins/opener",
     "plugins/camera",
+    "plugins/drop",
     "examples/camera-demo",
     "examples/data-store-demo",
     "examples/live-activity-demo",
@@ -97,6 +98,7 @@ istmo-live-activity = { path = "plugins/live-activity", version = "0.1.1-alpha.6
 istmo-pen = { path = "plugins/istmo-pen", version = "0.1.1-alpha.6" }
 istmo-file-picker = { path = "plugins/file-picker", version = "0.1.1-alpha.6" }
 istmo-share = { path = "plugins/share", version = "0.1.1-alpha.6" }
+istmo-drop = { path = "plugins/drop", version = "0.1.1-alpha.6" }
 istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.6" }
 istmo-camera = { path = "plugins/camera", version = "0.1.1-alpha.6" }
 
