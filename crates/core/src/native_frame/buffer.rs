@@ -33,6 +33,12 @@ pub enum MemoryKind {
     CmSampleBuffer,
     /// Windows `ID3D11Texture2D`.
     D3d11Texture,
+    /// A browser `VideoFrame` (WebCodecs). Reserved: a `VideoFrame` is a
+    /// JS object bound to its thread, and buffers are `Send`, so web
+    /// producers copy the pixels out (`VideoFrame.copyTo` into a
+    /// [`NativeBuffer::from_bytes`] backing, [`Cpu`](Self::Cpu) memory)
+    /// until a thread-bound backing lands.
+    VideoFrame,
     /// Anything else; the producer documents the backing type.
     Other,
 }
@@ -47,6 +53,7 @@ impl fmt::Display for MemoryKind {
             Self::IoSurface => "IOSurface",
             Self::CmSampleBuffer => "CMSampleBuffer",
             Self::D3d11Texture => "D3D11 texture",
+            Self::VideoFrame => "VideoFrame",
             Self::Other => "native buffer",
         })
     }
