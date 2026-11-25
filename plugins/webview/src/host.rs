@@ -35,10 +35,14 @@ pub fn random_u64() -> u64 {
         getrandom::fill(&mut bytes).expect("invariant: the OS random source is available");
         u64::from_ne_bytes(bytes)
     }
+    #[cfg(all(target_arch = "wasm32", feature = "web"))]
+    if let Some(bytes) = crate::desktop::web_random_bytes() {
+        return u64::from_ne_bytes(bytes);
+    }
     #[cfg(target_arch = "wasm32")]
     {
-        // No Rust host runs on wasm (the web backend lives in the page),
-        // so ids only need to be distinct here.
+        // Without the browser host (feature `web`) no host runs here, so
+        // ids only need to be distinct.
         use std::hash::{BuildHasher, RandomState};
         RandomState::new().hash_one(std::ptr::from_ref(&()) as usize)
     }

@@ -638,6 +638,17 @@ impl ViewCore {
 
 /// Open `url` in the system's handler for it.
 fn open_externally(url: &str) {
+    #[cfg(all(target_arch = "wasm32", feature = "web"))]
+    {
+        super::web::open_external(url);
+    }
+    #[cfg(not(all(target_arch = "wasm32", feature = "web")))]
+    open_with_system(url);
+}
+
+/// Hand `url` to the desktop's URL handler.
+#[cfg(not(all(target_arch = "wasm32", feature = "web")))]
+fn open_with_system(url: &str) {
     #[cfg(target_os = "macos")]
     let program = "open";
     #[cfg(target_os = "windows")]

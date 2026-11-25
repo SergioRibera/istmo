@@ -49,6 +49,10 @@ mod macos;
 mod mock;
 pub(crate) mod text;
 mod timer;
+#[cfg(all(target_arch = "wasm32", feature = "web"))]
+mod web;
+#[cfg(all(target_arch = "wasm32", feature = "web"))]
+pub(crate) use self::web::random_bytes as web_random_bytes;
 #[cfg(all(target_os = "windows", feature = "desktop"))]
 #[allow(unsafe_code, reason = "WebView2 COM through windows-rs")]
 mod windows;
@@ -196,6 +200,14 @@ fn start_engine(
     Ok(windows::WinEngine::start()?)
 }
 
+#[cfg(all(target_arch = "wasm32", feature = "web"))]
+fn start_engine(
+    _options: &DesktopOptions,
+    _config: &WebViewInitConfig,
+) -> Result<Arc<dyn Engine>, WebViewError> {
+    Ok(web::WebEngine::start()?)
+}
+
 #[cfg(not(any(
     all(
         target_os = "linux",
@@ -206,6 +218,7 @@ fn start_engine(
         )
     ),
     all(any(target_os = "macos", target_os = "windows"), feature = "desktop"),
+    all(target_arch = "wasm32", feature = "web"),
 )))]
 fn start_engine(
     _options: &DesktopOptions,

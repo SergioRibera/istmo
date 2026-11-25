@@ -175,5 +175,5 @@ fn presenter_frames_reach_the_host_and_drop_releases_the_view() {
 
     drop(view);
     wait_for(&script, |calls| calls.contains(&RecordedCall::Released(id)));
-    assert!(script.open_views().is_empty());
+    assert_eq!(script.open_views(), []);
 }

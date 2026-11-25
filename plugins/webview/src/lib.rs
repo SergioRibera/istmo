@@ -48,6 +48,7 @@
             feature = "linux-qt"
         )
     ),
+    all(target_arch = "wasm32", feature = "web"),
     test
 ))]
 pub mod desktop;
@@ -75,6 +76,51 @@ use istmo_macros::{owned, plugin, stream};
 
 /// Wire identifier of the web view plugin.
 pub const WEBVIEW_PLUGIN_ID: &str = "istmo.webview";
+
+/// Script a page loads to get `window.istmo` when it is shown by the
+/// browser host (feature `web`, an `<iframe>`): cross-origin frames
+/// cannot be injected into, so the page brings the bridge itself.
+///
+/// Messages go to the parent frame. Set `window.istmoParentOrigin` to
+/// the app's origin before this runs so nothing reaches another
+/// embedder; it defaults to `"*"`. Answers are read only from the
+/// parent (and from that origin when it is set).
+pub const WEB_FRAME_BRIDGE: &str = r#"(() => {
+  if (window.istmo || window === window.parent) return;
+  const target = window.istmoParentOrigin || "*";
+  const listeners = new Set();
+  const pending = new Map();
+  let next = 1;
+  const enc = (d) => typeof d === "string" ? new TextEncoder().encode(d) : d instanceof Uint8Array ? d : new Uint8Array(d ?? []);
+  const send = (m) => window.parent.postMessage(Object.assign({ __istmo: 1 }, m), target);
+  window.addEventListener("message", (e) => {
+    const m = e.data;
+    if (e.source !== window.parent || !m || m.__istmo !== 1 || (target !== "*" && e.origin !== target)) return;
+    if (typeof m.r === "number") {
+      const p = pending.get(m.r);
+      if (!p) return;
+      pending.delete(m.r);
+      if (m.ok) p.resolve(new Uint8Array(m.d)); else p.reject(new Error(String(m.d)));
+    } else if (typeof m.e === "string") {
+      listeners.forEach((f) => { try { f({ channel: m.e, data: new Uint8Array(m.d) }); } catch (err) { console.error(err); } });
+    }
+  });
+  Object.defineProperty(window, "istmo", {
+    value: Object.freeze({
+      postMessage(channel, data) { send({ k: "post", c: String(channel), d: enc(data) }); },
+      invoke(channel, data) {
+        const i = next++;
+        return new Promise((resolve, reject) => {
+          pending.set(i, { resolve, reject });
+          send({ k: "invoke", i, c: String(channel), d: enc(data) });
+        });
+      },
+      addEventListener(type, f) { if (type === "message") listeners.add(f); },
+      removeEventListener(type, f) { if (type === "message") listeners.delete(f); },
+    }),
+    configurable: false, writable: false,
+  });
+})();"#;
 
 /// The web view contract. Backends implement it natively (Kotlin,
 /// Swift) or in Rust (desktop); apps use the generated

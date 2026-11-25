@@ -37,14 +37,8 @@ linux-webkitgtk-6-0 = ["dep:libloading", "dep:istmo-window"]
 # Qt6WebEngineWidgets (a warning, not an error, when it does not) and
 # loaded with `dlopen`: the app binary never links Qt.
 linux-qt = ["dep:libloading", "dep:istmo-window", "dep:cc", "dep:pkg-config"]
-objc2 = ["dep:objc2"]
-objc2-foundation = ["dep:objc2-foundation"]
-objc2-app-kit = ["dep:objc2-app-kit"]
-objc2-web-kit = ["dep:objc2-web-kit"]
-block2 = ["dep:block2"]
-dispatch2 = ["dep:dispatch2"]
-cc = ["dep:cc"]
-pkg-config = ["dep:pkg-config"]
+# Browser host (`wasm32-unknown-unknown`): views are iframes over the page.
+web = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:web-sys"]
 
 [dependencies]
 istmo-core = { workspace = true }
@@ -106,6 +100,12 @@ objc2-web-kit = { version = "0.3", default-features = false, features = ["std", 
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = { version = "0.39", optional = true }
 windows = { version = "0.62", default-features = false, features = ["std", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_UI_Shell", "Win32_System_Com_StructuredStorage", "Win32_UI_HiDpi"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", default-features = false, features = ["Window", "Document", "Element", "HtmlElement", "HtmlIFrameElement", "CssStyleDeclaration", "MessageEvent", "Event", "EventTarget", "Location", "History", "Navigator", "Node"], optional = true }
 
 [[example]]
 name = "gtk_smoke"
