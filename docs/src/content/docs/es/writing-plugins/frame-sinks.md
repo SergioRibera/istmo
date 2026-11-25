@@ -326,7 +326,7 @@ Build release, Ryzen 9 9950X3D, mismo proceso
 | | item de 16 B | item de 8 MiB |
 |---|---|---|
 | stream por el bus (codificar, rutear, decodificar) | ~390 ns | ~1,06 ms |
-| atajo tipado de stream / frame sink | ~330–360 ns | ~65–70 µs (la asignación propia del productor) |
+| atajo tipado de stream / frame sink | ~350–425 ns | ~60–76 µs (la asignación propia del productor) |
 | frame sink, buffers con pool | | ~18 µs |
 
 En un solo hilo, un push más su recepción cuesta ~50–60 ns (dos

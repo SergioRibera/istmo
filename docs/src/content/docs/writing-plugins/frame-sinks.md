@@ -321,7 +321,7 @@ Release build, Ryzen 9 9950X3D, same process
 | | 16 B item | 8 MiB item |
 |---|---|---|
 | bus stream (encode, route, decode) | ~390 ns | ~1.06 ms |
-| typed stream shortcut / frame sink | ~330–360 ns | ~65–70 µs (the producer's own allocation) |
+| typed stream shortcut / frame sink | ~350–425 ns | ~60–76 µs (the producer's own allocation) |
 | frame sink, pooled buffers | | ~18 µs |
 
 On one thread a push plus receive costs ~50–60 ns (two allocations:
