@@ -1,6 +1,6 @@
 //! End-to-end check of the plugin macro's typed in-process shortcut.
 //!
-//! Registers a hand-rolled host via the macro-generated `register`
+//! Registers a hand-rolled host via the `Runtime::register_host`
 //! helper, calls through the client, and verifies both the fast path
 //! and the wire fallback behave the same.
 
@@ -87,7 +87,7 @@ fn typed_shortcut_hits_backend_without_the_wire() {
         let rt = init.runtime;
         let outbound = init.outbound;
 
-        MathHost::new(Backend::new()).register(&rt);
+        rt.register_host(MathHost::new(Backend::new()));
 
         let client = MathClient::from_runtime(&rt).expect("client");
         let sum = client.add(2, 3).await.expect("add");
@@ -111,7 +111,7 @@ fn typed_shortcut_domain_error_surfaces_as_plugin_error() {
         let rt = init.runtime;
         drop(init.outbound);
 
-        MathHost::new(Backend::new()).register(&rt);
+        rt.register_host(MathHost::new(Backend::new()));
 
         let client = MathClient::from_runtime(&rt).expect("client");
         let err = client.add(i32::MAX, 1).await.expect_err("overflow");
@@ -147,7 +147,7 @@ fn typed_shortcut_host_panic_surfaces_as_plugin_error() {
         let rt = init.runtime;
         drop(init.outbound);
 
-        MathHost::new(PanicBackend).register(&rt);
+        rt.register_host(MathHost::new(PanicBackend));
 
         let client = MathClient::from_runtime(&rt).expect("client");
         let err = client.add(1, 2).await.expect_err("panic");
@@ -169,8 +169,11 @@ fn wire_fallback_when_no_typed_shortcut() {
         let rt: Arc<Runtime> = init.runtime;
         let _outbound = init.outbound;
 
-        // Register only via Dispatch (wire path), not typed.
-        rt.register_host(MathHost::new(Backend::new()));
+        // Opt out of the typed shortcut: every call takes the wire.
+        rt.register_host_wire_only(MathHost::new(Backend::new()));
+        let client = MathClient::from_runtime(&rt).expect("client");
+        assert!(!client.is_local());
+        drop(client);
 
         let client = MathClient::from_runtime(&rt).expect("client");
         let sum = client.add(7, 8).await.expect("add via wire");

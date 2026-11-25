@@ -1,4 +1,4 @@
-error: unknown argument `id`; expected `name`, `init`, `crate` or `remote`
+error: unknown argument `id`; expected `name`, `init`, `crate`, `remote`, `shortcut` or `native`
  --> tests/ui/fail/plugin_unknown_argument.rs:1:17
   |
 1 | #[istmo::plugin(id = "ui.unknown_argument")]

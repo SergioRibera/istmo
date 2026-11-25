@@ -398,6 +398,13 @@ impl HostCtx {
         }
     }
 
+    /// The context generated hosts build from their stored runtime.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn __from_weak(runtime: Weak<Runtime>, origin: CallOrigin) -> Self {
+        Self { runtime, origin }
+    }
+
     /// A context for a host that was never registered on a runtime
     /// (called directly, in a test): [`runtime`](Self::runtime) fails.
     #[must_use]

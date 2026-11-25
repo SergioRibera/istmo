@@ -104,7 +104,7 @@ impl Sensor for Backend {
 
 fn runtime_with(backend: Backend) -> (Arc<Runtime>, flume::Receiver<istmo::Envelope>) {
     let init = Runtime::mock();
-    SensorHost::new(backend).register(&init.runtime);
+    init.runtime.register_host(SensorHost::new(backend));
     (init.runtime, init.outbound)
 }
 
@@ -228,7 +228,7 @@ fn a_panicking_host_fails_the_open_like_the_unary_shortcut() {
 fn wire_path_still_serves_streams_without_the_shortcut() {
     let init = Runtime::mock();
     init.runtime
-        .register_host(SensorHost::new(Backend::default()));
+        .register_host_wire_only(SensorHost::new(Backend::default()));
     let client = SensorClient::from_runtime(&init.runtime).expect("client");
     let stream = client.samples(2).expect("open");
     assert!(!stream.is_local());

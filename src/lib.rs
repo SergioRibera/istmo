@@ -92,7 +92,8 @@
 
 pub use istmo_core::*;
 pub use istmo_macros::{
-    app_icon, handle, message, mobile_app, owned, plugin, redact, runtime, service, stream, worker,
+    app_icon, blocking, handle, message, mobile_app, owned, plugin, redact, runtime, service,
+    stream, worker,
 };
 
 /// First-party plugin surfaces (lifecycle, deep links, permissions,
@@ -119,7 +120,7 @@ pub use istmo_ios as ios;
 pub mod __private {
     pub use istmo_core::__private::{
         block_on, encode_hosted_stream, flume, set_app_assets, set_app_info, tracing,
-        typed_catch_unwind,
+        typed_call_cancellable, typed_catch_unwind,
     };
 }
 

@@ -411,9 +411,11 @@ fn is_u8(ty: &Type) -> bool {
         if path.segments.last().is_some_and(|s| s.ident == "u8"))
 }
 
+/// Arguments the Rust host fills in itself (`CancelToken`, `HostCtx`):
+/// never on the wire, so never in the native contract.
 fn is_cancel_token(ty: &Type) -> bool {
     matches!(ty, Type::Path(TypePath { path, .. })
-        if path.segments.last().is_some_and(|s| s.ident == "CancelToken"))
+        if path.segments.last().is_some_and(|s| s.ident == "CancelToken" || s.ident == "HostCtx"))
 }
 
 fn pat_name(pat: &syn::Pat) -> Option<String> {

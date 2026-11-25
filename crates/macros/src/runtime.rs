@@ -170,10 +170,13 @@ struct RuntimeInput {
     remote: Vec<Path>,
 }
 
-/// `Trait => impl_expr` inside `hosts:` / `services:` / `workers:`.
+/// `Trait => impl_expr` inside `hosts:` / `services:` / `workers:`,
+/// optionally preceded by `#[wire_only]` (hosts only).
 struct HostEntry {
     trait_path: Path,
     impl_expr: Expr,
+    /// `#[wire_only]`: register without the typed in-process shortcut.
+    wire_only: bool,
 }
 
 impl HostEntry {
@@ -181,7 +184,11 @@ impl HostEntry {
     fn register(&self, suffix: &str) -> TokenStream {
         let wrapper = with_suffix(&self.trait_path, suffix);
         let impl_expr = &self.impl_expr;
-        quote! { .host(#wrapper::new(#impl_expr)) }
+        if self.wire_only {
+            quote! { .host_wire_only(#wrapper::new(#impl_expr)) }
+        } else {
+            quote! { .host(#wrapper::new(#impl_expr)) }
+        }
     }
 }
 
@@ -233,12 +240,24 @@ impl Parse for RuntimeInput {
 
 impl Parse for HostEntry {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut wire_only = false;
+        for attr in input.call(syn::Attribute::parse_outer)? {
+            if attr.path().is_ident("wire_only") && matches!(attr.meta, syn::Meta::Path(_)) {
+                wire_only = true;
+            } else {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "unknown attribute on a host entry; expected `#[wire_only]`",
+                ));
+            }
+        }
         let trait_path: Path = input.parse()?;
         input.parse::<Token![=>]>()?;
         let impl_expr: Expr = input.parse()?;
         Ok(Self {
             trait_path,
             impl_expr,
+            wire_only,
         })
     }
 }

@@ -282,6 +282,30 @@ pub fn stream(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+/// Keep a plugin method on the dispatcher path.
+///
+/// A Rust host registered with `Runtime::register_host` (so every
+/// `runtime!(hosts: …)` entry) serves this process's own calls through
+/// the typed in-process shortcut: the client polls the method's future
+/// on the caller's thread and executor. Mark a method whose body blocks
+/// the thread (synchronous dialogs, `std::fs` on large files, sleeps,
+/// waits on another thread), hops to the main thread and waits, or only
+/// runs on a particular executor (one that needs a tokio reactor, say):
+/// its calls are then encoded and served on a dispatcher thread, as
+/// calls from Kotlin, Swift or another process always are.
+///
+/// ```
+/// #[istmo::plugin(name = "demo.picker")]
+/// pub trait Picker {
+///     #[istmo::blocking]
+///     async fn pick(&self) -> Option<String>;
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn blocking(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
 /// Marker for [`NativeHandle`](https://docs.rs/istmo-core/latest/istmo_core/native_handle/struct.NativeHandle.html)-carrying fields.
 ///
 /// Attaches a phantom type to a

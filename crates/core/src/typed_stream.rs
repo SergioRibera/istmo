@@ -253,8 +253,18 @@ impl<Item, Err> LocalStream<Item, Err> {
     ) -> StreamItem<Item, Err> {
         match received {
             Some(Ok(item)) => self.item(item),
-            Some(Err(RecvError::Disconnected)) => self.end(StreamItem::Completed),
+            Some(Err(RecvError::Disconnected)) => self.end(self.disconnected()),
             None => self.end(StreamItem::Cancelled),
+        }
+    }
+
+    /// What a producer that dropped its sender means: a cancel it obeyed,
+    /// or the end of the stream.
+    fn disconnected(&self) -> StreamItem<Item, Err> {
+        if self.cancel.is_cancelled() {
+            StreamItem::Cancelled
+        } else {
+            StreamItem::Completed
         }
     }
 
@@ -275,7 +285,7 @@ impl<Item, Err> LocalStream<Item, Err> {
         Ok(match received {
             Ok(item) => Step::Item(self.item(item)),
             Err(TryRecvError::Empty) => Step::Empty,
-            Err(TryRecvError::Disconnected) => Step::Item(self.end(StreamItem::Completed)),
+            Err(TryRecvError::Disconnected) => Step::Item(self.end(self.disconnected())),
         })
     }
 
