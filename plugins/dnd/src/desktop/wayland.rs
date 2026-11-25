@@ -99,9 +99,21 @@ impl Attachment {
     pub(super) fn start_drag(&self, request: &DragRequest, done: DragDone) {
         let (serial, surface) = {
             let press = lock(&self.press);
-            match (press.down, press.serial, press.surface.clone()) {
+            // A pointer bound while already over the window may never have
+            // been told it entered: the window's own surface stands in.
+            let surface = press.surface.clone().or_else(|| self.window_surface());
+            match (press.down, press.serial, surface) {
                 (true, Some(serial), Some(surface)) => (serial, surface),
-                _ => return done.finish(Err(DndError::NotPressed)),
+                (down, serial, surface) => {
+                    tracing::debug!(
+                        target: "istmo.dnd.wayland",
+                        down,
+                        serial = serial.is_some(),
+                        surface = surface.is_some(),
+                        "no press to drag from"
+                    );
+                    return done.finish(Err(DndError::NotPressed));
+                }
             }
         };
         let uris = outgoing::uri_list(&request.items);
@@ -139,6 +151,17 @@ impl Attachment {
             source.destroy();
             payload.finish(Err(DndError::Backend(err.to_string())));
         }
+    }
+
+    /// The first registered window's `wl_surface`, as a proxy of this
+    /// connection.
+    fn window_surface(&self) -> Option<WlSurface> {
+        let address = lock(&self.windows).first().map(|(_, surface)| *surface)?;
+        // SAFETY: the address is the live `wl_surface` of a window
+        // registered with `istmo-window`, on the display this connection
+        // shares; the id only borrows it.
+        let id = unsafe { ObjectId::from_ptr(WlSurface::interface(), address as *mut _).ok()? };
+        WlSurface::from_id(&self.conn, id).ok()
     }
 
     /// Forget window `id`; `false` once no window is left, so the caller
