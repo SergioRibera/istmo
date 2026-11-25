@@ -157,6 +157,7 @@ class BenchRunner(
     fun matrix() {
         out("== per-call matrix (warm-up $warmup, measured $iters)")
         line("base", "ClockOverhead", 0, "idle", rustCellSamples(BenchNative.Cell.ClockOverhead, 0))
+        line("base", "kt nanoTime pair", 0, "idle", timed {})
         line("jni", "kt->rs noop", 0, "idle", timed { BenchNative.noopJni() })
         for (size in sizes) {
             val payload = ByteArray(size)
