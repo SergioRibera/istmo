@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local page</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Served from app assets</h1>
+  <p>This page comes from <code>assets/web/</code> through the <code>app:</code> scheme. Nothing here touches the network.</p>
+  <section>
+    <h2>Bridge</h2>
+    <p><button id="ask">Ask Rust for the time</button> <output id="answer"></output></p>
+    <p>Messages from the app:</p>
+    <ul id="inbox"></ul>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

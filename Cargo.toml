@@ -35,6 +35,7 @@ members = [
     "examples/pen-demo",
     "examples/share-demo",
     "examples/biometric-demo",
+    "examples/webview-demo",
 ]
 
 [workspace.package]
