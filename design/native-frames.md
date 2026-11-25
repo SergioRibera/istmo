@@ -144,7 +144,7 @@ pub struct SinkStats { pub accepted: u64, pub delivered: u64, pub dropped: u64 }
 Opening, by the consumer:
 
 ```rust
-let sink: FrameSink<CaptureMeta> = rt.open_frame_sink(SinkPolicy::latest());
+let sink: FrameSink<CaptureMeta> = rt.open_frame_sink(SinkPolicy::latest())?;
 client.start(config, sink.id()).await?;          // FrameSinkId<CaptureMeta> is a wire arg
 while let Some(frame) = sink.recv_async().await {
     let meta: &CaptureMeta = &frame.meta;
