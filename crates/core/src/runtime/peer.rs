@@ -1,6 +1,6 @@
 //! Calls to the platform peer delivered on the caller's own thread.
 
-use crate::protocol::{CallId, InstanceId};
+use crate::protocol::{CallId, InstanceId, StreamId};
 use crate::routing::CallResult;
 
 /// A transport that hands a call to the peer (Kotlin, Swift) on the
@@ -25,6 +25,14 @@ pub trait DirectPeer: Send + Sync + 'static {
         method: &str,
         payload: &[u8],
     ) -> DirectOutcome;
+
+    /// Deliver one item of a stream the peer opened, now; `false` when
+    /// it was not taken (the runtime queues it instead). The default
+    /// takes nothing.
+    fn event(&self, stream_id: StreamId, payload: &[u8]) -> bool {
+        let _ = (stream_id, payload);
+        false
+    }
 }
 
 /// What became of a call handed to a [`DirectPeer`].

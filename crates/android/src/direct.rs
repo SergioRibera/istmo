@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use istmo_core::{CallId, DirectOutcome, DirectPeer, InstanceId};
+use istmo_core::{CallId, DirectOutcome, DirectPeer, InstanceId, StreamId};
 use jni::JNIEnv;
 use jni::JavaVM;
 use jni::objects::{GlobalRef, JByteArray, JStaticMethodID, JValue};
-use jni::signature::ReturnType;
+use jni::signature::{Primitive, ReturnType};
 
 use crate::pump::take_pending_exception;
 
@@ -30,6 +30,7 @@ pub(crate) struct AndroidPeer {
     jvm: JavaVM,
     class: GlobalRef,
     on_call_direct: JStaticMethodID,
+    on_event: JStaticMethodID,
     /// Plugin ids and method names as Java strings: built once instead
     /// of per call.
     names: Mutex<HashMap<String, GlobalRef>>,
@@ -42,8 +43,8 @@ impl std::fmt::Debug for AndroidPeer {
 }
 
 impl AndroidPeer {
-    /// Resolve `onCallDirect` on `class` (the runtime class `nativeStart`
-    /// received).
+    /// Resolve `onCallDirect` and `onEvent` on `class` (the runtime class
+    /// `nativeStart` received).
     pub(crate) fn resolve(
         env: &mut JNIEnv<'_>,
         class: GlobalRef,
@@ -53,12 +54,41 @@ impl AndroidPeer {
             "onCallDirect",
             "(JLjava/lang/String;JLjava/lang/String;[B)[B",
         )?;
+        let on_event = env.get_static_method_id(&class, "onEvent", "(J[B)V")?;
         Ok(Self {
             jvm: env.get_java_vm()?,
             class,
             on_call_direct,
+            on_event,
             names: Mutex::new(HashMap::new()),
         })
+    }
+
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "ids cross JNI as the same 64 bits; Kotlin reads them back as Long"
+    )]
+    fn deliver_event(
+        &self,
+        env: &mut JNIEnv<'_>,
+        stream_id: StreamId,
+        payload: &[u8],
+    ) -> Result<(), jni::errors::Error> {
+        let payload_j = env.byte_array_from_slice(payload)?;
+        // SAFETY: `on_event` was resolved on `self.class` (kept loaded by
+        // the `GlobalRef`) with signature `(J[B)V`; the arguments match.
+        unsafe {
+            env.call_static_method_unchecked(
+                &self.class,
+                self.on_event,
+                ReturnType::Primitive(Primitive::Void),
+                &[
+                    JValue::Long(stream_id.get() as i64).as_jni(),
+                    JValue::Object(&payload_j).as_jni(),
+                ],
+            )?;
+        }
+        Ok(())
     }
 
     /// `name` as a global Java string.
@@ -168,5 +198,25 @@ impl DirectPeer for AndroidPeer {
             tracing::error!(?err, "no JNI local frame for a direct Kotlin call");
             DirectOutcome::Unavailable
         })
+    }
+
+    fn event(&self, stream_id: StreamId, payload: &[u8]) -> bool {
+        let Ok(mut env) = self.jvm.attach_current_thread_as_daemon() else {
+            return false;
+        };
+        if env.exception_check().unwrap_or(true) {
+            return false;
+        }
+        let delivered = env.with_local_frame(CALL_LOCAL_CAPACITY, |env| {
+            if let Err(err) = self.deliver_event(env, stream_id, payload) {
+                // `onEvent` never throws; a JNI failure around it may have
+                // delivered the item already, so it is not sent twice.
+                let thrown = take_pending_exception(env);
+                tracing::error!(?err, ?thrown, ?stream_id, "direct Kotlin event failed");
+            }
+            Ok::<(), jni::errors::Error>(())
+        });
+        // No local frame: nothing reached Kotlin, queue it instead.
+        delivered.is_ok()
     }
 }

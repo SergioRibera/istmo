@@ -1811,28 +1811,6 @@ impl Runtime {
         }
     }
 
-    /// Deliver a batch of items the peer produced for `stream_id`, in
-    /// order, with one routing lookup for all of them. Waits while the
-    /// consumer's buffer is full, like one [`Frame::Event`] per item
-    /// through [`dispatch_inbound`](Self::dispatch_inbound) would.
-    ///
-    /// # Errors
-    ///
-    /// As [`dispatch_inbound`](Self::dispatch_inbound) for a
-    /// [`Frame::Event`]; items before a failure were delivered.
-    pub fn deliver_peer_events(
-        &self,
-        stream_id: StreamId,
-        items: impl IntoIterator<Item = Vec<u8>>,
-    ) -> Result<(), IstmoError> {
-        let tx = self.routing.stream_sender(stream_id)?;
-        for item in items {
-            tx.send(StreamMessage::Event(item))
-                .map_err(|_| IstmoError::ChannelClosed)?;
-        }
-        Ok(())
-    }
-
     fn take_peer_credit(&self, stream_id: StreamId) -> Option<FlumeReceiver<u32>> {
         lock(&self.peer_credits).get_mut(&stream_id)?.rx.take()
     }
@@ -2189,6 +2167,7 @@ impl Runtime {
                 )),
                 Err(err) => Err(err),
             },
+            Origin::Peer if self.event_to_peer_directly(stream_id, &payload) => Ok(true),
             Origin::Peer | Origin::Remote => {
                 self.send_to_issuer(
                     origin,
@@ -2201,6 +2180,21 @@ impl Runtime {
         delivered
             .inspect_err(|err| tracing::debug!(?err, ?stream_id, "hosted stream event undelivered"))
             .unwrap_or(false)
+    }
+
+    /// Hand a peer stream's item to the [`DirectPeer`] when nothing waits
+    /// in the outbound channel ahead of it; `false`: it goes through the
+    /// channel.
+    fn event_to_peer_directly(&self, stream_id: StreamId, payload: &[u8]) -> bool {
+        let Some(peer) = self.direct_peer.get() else {
+            return false;
+        };
+        if self.outbound_backlog.load(Ordering::Acquire) != 0
+            || lock(&self.remote_calls).incoming.contains(&stream_id.get())
+        {
+            return false;
+        }
+        peer.event(stream_id, payload)
     }
 
     /// Send a hosted stream's end. Once the stream is cancelled the end

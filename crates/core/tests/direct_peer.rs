@@ -133,3 +133,85 @@ fn remote_plugins_never_go_direct() {
     assert!(peer.seen.lock().unwrap().is_empty());
     assert!(init.outbound.try_recv().is_ok(), "no sink: the channel");
 }
+
+/// Takes every stream item directly.
+#[derive(Default)]
+struct EventPeer {
+    items: Mutex<Vec<(u64, Vec<u8>)>>,
+}
+
+impl DirectPeer for EventPeer {
+    fn call(
+        &self,
+        _call_id: CallId,
+        _plugin_id: &str,
+        _instance_id: Option<InstanceId>,
+        _method: &str,
+        _payload: &[u8],
+    ) -> DirectOutcome {
+        DirectOutcome::Unavailable
+    }
+
+    fn event(&self, stream_id: istmo_core::StreamId, payload: &[u8]) -> bool {
+        self.items
+            .lock()
+            .unwrap()
+            .push((stream_id.get(), payload.to_vec()));
+        true
+    }
+}
+
+struct Three;
+
+impl istmo_core::Dispatch for Three {
+    fn plugin_id(&self) -> &'static str {
+        "test.three"
+    }
+
+    fn mode(&self) -> istmo_core::DispatchMode {
+        istmo_core::DispatchMode::Inline
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        _instance: Option<InstanceId>,
+        _method: &'a str,
+        _payload: &'a [u8],
+        _cancel: istmo_core::CancelToken,
+    ) -> istmo_core::DispatchFuture<'a> {
+        Box::pin(async {
+            let (tx, rx) = flume::bounded(4);
+            for i in 0..3u8 {
+                tx.send(Ok(vec![i])).unwrap();
+            }
+            Ok(istmo_core::Outcome::StreamOpened(rx))
+        })
+    }
+}
+
+#[test]
+fn peer_stream_items_go_straight_to_the_peer_and_the_end_follows_them() {
+    let init = Runtime::mock();
+    let peer = Arc::new(EventPeer::default());
+    init.runtime
+        .install_direct_peer(Arc::clone(&peer) as Arc<dyn DirectPeer>);
+    init.runtime.register_host(Three);
+    init.runtime
+        .dispatch_inbound(Envelope::new(Frame::Call {
+            call_id: CallId(11),
+            plugin_id: "test.three".to_owned(),
+            instance_id: None,
+            method: "s".to_owned(),
+            payload: Vec::new(),
+        }))
+        .expect("call");
+    let end = init
+        .outbound
+        .recv_timeout(Duration::from_secs(5))
+        .expect("end");
+    assert!(matches!(end.frame, Frame::StreamEnd { .. }), "{:?}", end.frame);
+    assert_eq!(
+        *peer.items.lock().unwrap(),
+        [(11, vec![0]), (11, vec![1]), (11, vec![2])]
+    );
+}
