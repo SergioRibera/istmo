@@ -116,10 +116,19 @@ fn dropping_the_consumer_closes_producers_and_releases_queued_frames() {
     drop(sink);
     assert_eq!(released.load(Ordering::SeqCst), 2);
     assert!(sender.is_closed());
+    assert_eq!(
+        rt.submit_native_frame(
+            id.raw(),
+            &codec::encode(&3u32).expect("meta"),
+            counted(&released)
+        ),
+        SubmitStatus::Closed,
+        "a native producer hears the consumer left"
+    );
     let refused = sender.push(3, counted(&released)).expect_err("closed");
     assert!(refused.is_closed());
     drop(refused);
-    assert_eq!(released.load(Ordering::SeqCst), 3);
+    assert_eq!(released.load(Ordering::SeqCst), 4);
     assert!(matches!(
         rt.frame_sender(id),
         Err(IstmoError::UnknownFrameSink(_))

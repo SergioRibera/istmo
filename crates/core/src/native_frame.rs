@@ -31,7 +31,7 @@
 //! assert_eq!(frame.buffer.cpu_bytes().map(<[u8]>::len), Some(16));
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -130,7 +130,15 @@ impl<M> fmt::Display for FrameSinkId<M> {
 #[derive(Default)]
 pub(crate) struct FrameSinks {
     sinks: Mutex<HashMap<u64, Arc<dyn ErasedSink>>>,
+    /// Ids of the most recently closed sinks, oldest first, so a native
+    /// producer that keeps submitting after its consumer left hears
+    /// `Closed` rather than `UnknownSink`. Bounded by
+    /// [`RECENTLY_CLOSED`].
+    closed: Mutex<VecDeque<u64>>,
 }
+
+/// How many closed sink ids [`FrameSinks`] remembers.
+const RECENTLY_CLOSED: usize = 256;
 
 impl FrameSinks {
     pub(crate) fn open<M: Message + Send + 'static>(
@@ -163,8 +171,14 @@ impl FrameSinks {
 
     /// Push wire-encoded metadata and a buffer into sink `id`.
     pub(crate) fn submit(&self, id: u64, meta: &[u8], buffer: NativeBuffer) -> SubmitStatus {
-        self.get(id)
-            .map_or(SubmitStatus::UnknownSink, |sink| sink.submit(meta, buffer))
+        if let Some(sink) = self.get(id) {
+            return sink.submit(meta, buffer);
+        }
+        if lock(&self.closed).contains(&id) {
+            SubmitStatus::Closed
+        } else {
+            SubmitStatus::UnknownSink
+        }
     }
 
     /// Close sink `id` from the producer side; `false` when unknown.
@@ -175,8 +189,14 @@ impl FrameSinks {
         })
     }
 
+    /// Forget sink `id` (its consumer left), remembering it as closed.
     pub(crate) fn remove(&self, id: u64) {
         lock(&self.sinks).remove(&id);
+        let mut closed = lock(&self.closed);
+        if closed.len() == RECENTLY_CLOSED {
+            closed.pop_front();
+        }
+        closed.push_back(id);
     }
 
     /// Close every sink and forget them (runtime shutdown).
@@ -192,6 +212,7 @@ impl fmt::Debug for FrameSinks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FrameSinks")
             .field("open", &lock(&self.sinks).len())
+            .field("recently_closed", &lock(&self.closed).len())
             .finish()
     }
 }
