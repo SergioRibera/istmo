@@ -5,7 +5,7 @@
 //! is the only one.
 
 mod ffi;
-#[cfg(feature = "linux-webkit2gtk-4-1")]
+#[cfg(any(feature = "linux-webkit2gtk-4-1", feature = "linux-webkitgtk-6-0"))]
 mod gtk;
 mod x11;
 
@@ -15,6 +15,7 @@ use super::LinuxBackend;
 use super::core::Engine;
 use crate::WebViewError;
 
+#[cfg(feature = "linux-webkit2gtk-4-1")]
 /// Whether GDK must use X11: the app registered X11 windows (embedding
 /// targets), or there is no Wayland session at all.
 fn wants_x11() -> bool {
@@ -33,13 +34,27 @@ pub(super) fn start(backends: &[LinuxBackend]) -> Result<Arc<dyn Engine>, WebVie
     for backend in backends {
         match backend {
             #[cfg(feature = "linux-webkit2gtk-4-1")]
-            LinuxBackend::WebKit2Gtk41 => match gtk::GtkEngine::start(wants_x11()) {
+            LinuxBackend::WebKit2Gtk41 => {
+                match gtk::GtkEngine::start(gtk::Flavor::Gtk3, wants_x11()) {
+                    Ok(engine) => return Ok(engine),
+                    Err(err) => {
+                        tracing::debug!(%err, "WebKitGTK 4.1 unavailable");
+                        last = err;
+                    }
+                }
+            }
+            #[cfg(feature = "linux-webkitgtk-6-0")]
+            LinuxBackend::WebKitGtk60 => match gtk::GtkEngine::start(gtk::Flavor::Gtk4, false) {
                 Ok(engine) => return Ok(engine),
                 Err(err) => {
-                    tracing::debug!(%err, "WebKitGTK 4.1 unavailable");
+                    tracing::debug!(%err, "WebKitGTK 6.0 unavailable");
                     last = err;
                 }
             },
+            #[allow(
+                unreachable_patterns,
+                reason = "unreachable when every Linux engine is compiled in"
+            )]
             other => {
                 tracing::debug!(?other, "web engine not compiled in");
             }

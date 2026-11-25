@@ -63,10 +63,17 @@ pub(crate) struct GdkRGBA {
 }
 
 macro_rules! api {
-    ($( $lib:ident { $( fn $name:ident ( $($arg:ty),* ) $(-> $ret:ty)? ; )* } )*) => {
+    (
+        $( $lib:ident { $( fn $name:ident ( $($arg:ty),* ) $(-> $ret:ty)? ; )* } )*
+        @optional {
+            $( $olib:ident { $( fn $oname:ident ( $($oarg:ty),* ) $(-> $oret:ty)? ; )* } )*
+        }
+    ) => {
         /// Every symbol the GTK backend calls.
         pub(crate) struct Api {
             $( $( pub(crate) $name: unsafe extern "C" fn($($arg),*) $(-> $ret)?, )* )*
+            /// Symbols that only one `WebKitGTK` / GTK version has.
+            $( $( pub(crate) $oname: Option<unsafe extern "C" fn($($oarg),*) $(-> $oret)?>, )* )*
             _libs: Vec<Library>,
         }
 
@@ -85,6 +92,17 @@ macro_rules! api {
                                 concat!(stringify!($name), "\0").as_bytes(),
                             )
                             .map_err(|e| format!("{}: {e}", stringify!($name)))?
+                        },
+                    )* )*
+                    $( $(
+                        // SAFETY: as above; a missing symbol is `None`.
+                        $oname: unsafe {
+                            libs.$olib
+                                .get::<unsafe extern "C" fn($($oarg),*) $(-> $oret)?>(
+                                    concat!(stringify!($oname), "\0").as_bytes(),
+                                )
+                                .ok()
+                                .map(|s| *s)
                         },
                     )* )*
                     _libs: Vec::new(),
@@ -108,8 +126,28 @@ pub(crate) struct Libs {
 }
 
 impl Libs {
-    /// Open the `WebKitGTK` 4.1 stack by soname.
+    /// Open the `WebKitGTK` 4.1 (GTK 3) stack by soname.
     pub(crate) fn open_webkit2gtk_41() -> Result<Self, String> {
+        Self::open(&[
+            "libgtk-3.so.0",
+            "libgdk-3.so.0",
+            "libwebkit2gtk-4.1.so.0",
+            "libjavascriptcoregtk-4.1.so.0",
+        ])
+    }
+
+    /// Open the `WebKitGTK` 6.0 (GTK 4) stack by soname. GDK is part of
+    /// `libgtk-4`.
+    pub(crate) fn open_webkitgtk_60() -> Result<Self, String> {
+        Self::open(&[
+            "libgtk-4.so.1",
+            "libgtk-4.so.1",
+            "libwebkitgtk-6.0.so.4",
+            "libjavascriptcoregtk-6.0.so.1",
+        ])
+    }
+
+    fn open(toolkit: &[&str; 4]) -> Result<Self, String> {
         let open = |name: &str| {
             // SAFETY: loading a system library runs its constructors;
             // these are the GNOME stack's own libraries, loaded by
@@ -120,10 +158,10 @@ impl Libs {
             glib: open("libglib-2.0.so.0")?,
             gobject: open("libgobject-2.0.so.0")?,
             gio: open("libgio-2.0.so.0")?,
-            gtk: open("libgtk-3.so.0")?,
-            gdk: open("libgdk-3.so.0")?,
-            webkit: open("libwebkit2gtk-4.1.so.0")?,
-            jsc: open("libjavascriptcoregtk-4.1.so.0")?,
+            gtk: open(toolkit[0])?,
+            gdk: open(toolkit[1])?,
+            webkit: open(toolkit[2])?,
+            jsc: open(toolkit[3])?,
             soup: open("libsoup-3.0.so.0")?,
             cairo: open("libcairo.so.2")?,
         })
@@ -160,28 +198,19 @@ api! {
         fn g_unix_input_stream_new(c_int, gboolean) -> gpointer;
     }
     gtk {
-        fn gtk_init_check(*mut c_int, *mut *mut *mut c_char) -> gboolean;
-        fn gtk_window_new(c_int) -> gpointer;
         fn gtk_window_set_title(gpointer, *const c_char);
         fn gtk_window_set_default_size(gpointer, c_int, c_int);
         fn gtk_window_set_resizable(gpointer, gboolean);
         fn gtk_window_set_modal(gpointer, gboolean);
         fn gtk_window_set_decorated(gpointer, gboolean);
-        fn gtk_window_resize(gpointer, c_int, c_int);
         fn gtk_window_present(gpointer);
-        fn gtk_container_add(gpointer, gpointer);
-        fn gtk_widget_show_all(gpointer);
         fn gtk_widget_hide(gpointer);
         fn gtk_widget_realize(gpointer);
-        fn gtk_widget_destroy(gpointer);
         fn gtk_widget_grab_focus(gpointer);
-        fn gtk_widget_get_window(gpointer) -> gpointer;
     }
     gdk {
         fn gdk_set_allowed_backends(*const c_char);
         fn gdk_display_get_default() -> gpointer;
-        fn gdk_x11_window_get_xid(gpointer) -> std::ffi::c_ulong;
-        fn gdk_x11_display_get_xdisplay(gpointer) -> gpointer;
         fn gdk_x11_display_get_type() -> GType;
     }
     webkit {
@@ -192,15 +221,10 @@ api! {
         fn webkit_web_context_get_type() -> GType;
         fn webkit_website_data_manager_get_type() -> GType;
         fn webkit_web_context_get_default() -> gpointer;
-        fn webkit_web_context_new_ephemeral() -> gpointer;
-        fn webkit_web_context_set_sandbox_enabled(gpointer, gboolean);
         fn webkit_web_context_register_uri_scheme(gpointer, *const c_char, WebKitURISchemeRequestCallback, gpointer, Option<GDestroyNotify>);
-        fn webkit_web_context_get_cookie_manager(gpointer) -> gpointer;
-        fn webkit_web_context_get_website_data_manager(gpointer) -> gpointer;
         fn webkit_web_context_get_security_manager(gpointer) -> gpointer;
         fn webkit_security_manager_register_uri_scheme_as_secure(gpointer, *const c_char);
         fn webkit_security_manager_register_uri_scheme_as_cors_enabled(gpointer, *const c_char);
-        fn webkit_web_view_new_with_related_view(gpointer) -> gpointer;
         fn webkit_web_view_get_context(gpointer) -> gpointer;
         fn webkit_web_view_load_uri(gpointer, *const c_char);
         fn webkit_web_view_load_html(gpointer, *const c_char, *const c_char);
@@ -233,7 +257,6 @@ api! {
         fn webkit_web_view_get_settings(gpointer) -> gpointer;
         fn webkit_settings_set_enable_javascript(gpointer, gboolean);
         fn webkit_settings_set_enable_html5_local_storage(gpointer, gboolean);
-        fn webkit_settings_set_enable_html5_database(gpointer, gboolean);
         fn webkit_settings_set_media_playback_requires_user_gesture(gpointer, gboolean);
         fn webkit_settings_set_user_agent(gpointer, *const c_char);
         fn webkit_settings_get_user_agent(gpointer) -> *const c_char;
@@ -329,11 +352,50 @@ api! {
         fn soup_cookie_set_http_only(gpointer, gboolean);
         fn soup_cookie_set_same_site_policy(gpointer, c_int);
     }
-    cairo {
-        fn cairo_surface_write_to_png_stream(gpointer, cairo_write_func_t, gpointer) -> c_int;
-        fn cairo_surface_destroy(gpointer);
-        fn cairo_image_surface_get_width(gpointer) -> c_int;
-        fn cairo_image_surface_get_height(gpointer) -> c_int;
+    @optional {
+        glib {
+            fn g_bytes_get_data(gpointer, *mut usize) -> *const c_void;
+        }
+        gtk {
+            // GTK 3
+            fn gtk_container_add(gpointer, gpointer);
+            fn gtk_widget_show_all(gpointer);
+            fn gtk_widget_destroy(gpointer);
+            fn gtk_widget_get_window(gpointer) -> gpointer;
+            fn gtk_window_resize(gpointer, c_int, c_int);
+            // GTK 4
+            fn gtk_window_set_child(gpointer, gpointer);
+            fn gtk_window_destroy(gpointer);
+            fn gtk_widget_set_visible(gpointer, gboolean);
+        }
+        gdk {
+            fn gdk_x11_window_get_xid(gpointer) -> std::ffi::c_ulong;
+            fn gdk_x11_display_get_xdisplay(gpointer) -> gpointer;
+            fn gdk_texture_save_to_png_bytes(gpointer) -> gpointer;
+            fn gdk_texture_get_width(gpointer) -> c_int;
+            fn gdk_texture_get_height(gpointer) -> c_int;
+        }
+        webkit {
+            // WebKitGTK 4.1
+            fn webkit_web_context_new_ephemeral() -> gpointer;
+            fn webkit_web_context_set_sandbox_enabled(gpointer, gboolean);
+            fn webkit_web_context_get_cookie_manager(gpointer) -> gpointer;
+            fn webkit_web_context_get_website_data_manager(gpointer) -> gpointer;
+            fn webkit_settings_set_enable_html5_database(gpointer, gboolean);
+            // WebKitGTK 6.0
+            fn webkit_network_session_get_default() -> gpointer;
+            fn webkit_network_session_new_ephemeral() -> gpointer;
+            fn webkit_network_session_new(*const c_char, *const c_char) -> gpointer;
+            fn webkit_network_session_get_cookie_manager(gpointer) -> gpointer;
+            fn webkit_network_session_get_website_data_manager(gpointer) -> gpointer;
+            fn webkit_web_view_get_network_session(gpointer) -> gpointer;
+        }
+        cairo {
+            fn cairo_surface_write_to_png_stream(gpointer, cairo_write_func_t, gpointer) -> c_int;
+            fn cairo_surface_destroy(gpointer);
+            fn cairo_image_surface_get_width(gpointer) -> c_int;
+            fn cairo_image_surface_get_height(gpointer) -> c_int;
+        }
     }
 }
 

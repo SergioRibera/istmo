@@ -40,6 +40,10 @@
         any(target_os = "linux", target_os = "macos", target_os = "windows"),
         feature = "desktop"
     ),
+    all(
+        target_os = "linux",
+        any(feature = "linux-webkit2gtk-4-1", feature = "linux-webkitgtk-6-0")
+    ),
     test
 ))]
 pub mod desktop;

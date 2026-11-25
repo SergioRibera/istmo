@@ -42,9 +42,26 @@ const MIN_VERSION: (u32, u32) = (2, 40);
 /// Name of the page-visible message handler.
 const NATIVE: &str = "__istmoNative";
 
+/// Which `WebKitGTK` the engine loaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Flavor {
+    /// `webkit2gtk-4.1` on GTK 3.
+    Gtk3,
+    /// `webkitgtk-6.0` on GTK 4: windows only.
+    Gtk4,
+}
+
+/// `gtk_window_new` differs between GTK 3 (takes a type) and 4.
+#[derive(Clone, Copy)]
+enum WindowNew {
+    Gtk3(unsafe extern "C" fn(c_int) -> gpointer),
+    Gtk4(unsafe extern "C" fn() -> gpointer),
+}
+
 /// The engine: a handle to the GTK thread.
 pub(crate) struct GtkEngine {
     api: &'static Api,
+    flavor: Flavor,
     version: String,
     x11: Option<&'static X11>,
     frames: Mutex<HashMap<NativeHandleId, Arc<FrameState>>>,
@@ -83,6 +100,10 @@ impl FrameSink for GtkFrameSink {
 /// Mutable state of the GTK thread.
 struct Ui {
     api: &'static Api,
+    flavor: Flavor,
+    window_new: WindowNew,
+    /// GTK 4: network sessions per persistent profile.
+    sessions: HashMap<String, gpointer>,
     x11: Option<&'static X11>,
     views: HashMap<NativeHandleId, GtkView>,
     /// Web contexts per persistent profile name (`""` = default).
@@ -174,17 +195,18 @@ macro_rules! connect {
 
 impl GtkEngine {
     /// Start the GTK thread with `WebKitGTK` 4.1.
-    pub(crate) fn start(x11_embedding: bool) -> Result<Arc<Self>, WebViewError> {
+    pub(crate) fn start(flavor: Flavor, x11_embedding: bool) -> Result<Arc<Self>, WebViewError> {
         let (tx, rx) = flume::bounded(1);
         std::thread::Builder::new()
             .name("istmo-webview-gtk".into())
-            .spawn(move || run_ui_thread(x11_embedding, &tx))
+            .spawn(move || run_ui_thread(flavor, x11_embedding, &tx))
             .map_err(|e| WebViewError::Backend(format!("spawn GTK thread: {e}")))?;
         let (api, version, x11) = rx
             .recv()
             .map_err(|_| WebViewError::Backend("GTK thread exited".into()))??;
         let engine = Arc::new(Self {
             api,
+            flavor,
             version,
             x11,
             frames: Mutex::default(),
@@ -196,15 +218,23 @@ impl GtkEngine {
 
 type Started = Result<(&'static Api, String, Option<&'static X11>), WebViewError>;
 
-fn run_ui_thread(x11_embedding: bool, started: &flume::Sender<Started>) {
-    let setup = || -> Started {
-        let libs = Libs::open_webkit2gtk_41().map_err(WebViewError::RuntimeMissing)?;
+fn run_ui_thread(flavor: Flavor, x11_embedding: bool, started: &flume::Sender<Started>) {
+    let mut window_new = None;
+    let mut setup = || -> Started {
+        let libs = match flavor {
+            Flavor::Gtk3 => Libs::open_webkit2gtk_41(),
+            Flavor::Gtk4 => Libs::open_webkitgtk_60(),
+        }
+        .map_err(WebViewError::RuntimeMissing)?;
+        let (init, new) = toolkit_entry_points(&libs, flavor)?;
+        window_new = Some(new);
         let api: &'static Api = Box::leak(Box::new(
             Api::load(&libs)
                 .map_err(WebViewError::RuntimeMissing)?
                 .with_libs(libs),
         ));
         API.set(api).ok();
+        FLAVOR.set(flavor).ok();
         // SAFETY: version getters take no arguments.
         let version = unsafe {
             (
@@ -229,7 +259,7 @@ fn run_ui_thread(x11_embedding: bool, started: &flume::Sender<Started>) {
                 // Wayland (the app's window then lives on Xwayland).
                 (api.gdk_set_allowed_backends)(c"x11".as_ptr());
             }
-            if (api.gtk_init_check)(ptr::null_mut(), ptr::null_mut()) == FALSE {
+            if init() == FALSE {
                 return Err(WebViewError::Backend(
                     "gtk_init failed (no display?)".into(),
                 ));
@@ -242,7 +272,7 @@ fn run_ui_thread(x11_embedding: bool, started: &flume::Sender<Started>) {
                 && (api.g_type_check_instance_is_a)(display, (api.gdk_x11_display_get_type)())
                     != FALSE
         };
-        let x11 = if on_x11 {
+        let x11 = if on_x11 && flavor == Flavor::Gtk3 {
             X11::open().ok().map(|x| &*Box::leak(Box::new(x)))
         } else {
             None
@@ -254,6 +284,13 @@ fn run_ui_thread(x11_embedding: bool, started: &flume::Sender<Started>) {
         ))
     };
     let result = setup();
+    let Some(window_new) = window_new else {
+        drop(
+            started
+                .send(result.and_then(|_| Err(WebViewError::Backend("GTK did not start".into())))),
+        );
+        return;
+    };
     let (api, x11) = if let Ok((api, _, x11)) = &result {
         (*api, *x11)
     } else {
@@ -263,6 +300,9 @@ fn run_ui_thread(x11_embedding: bool, started: &flume::Sender<Started>) {
     UI.with(|cell| {
         *cell.borrow_mut() = Some(Ui {
             api,
+            flavor,
+            window_new,
+            sessions: HashMap::new(),
             x11,
             views: HashMap::new(),
             contexts: HashMap::new(),
@@ -287,7 +327,11 @@ unsafe extern "C" fn run_task(data: gpointer) -> gboolean {
 
 impl Engine for GtkEngine {
     fn describe(&self) -> (String, String) {
-        ("webkit2gtk-4.1".into(), self.version.clone())
+        let name = match self.flavor {
+            Flavor::Gtk3 => "webkit2gtk-4.1",
+            Flavor::Gtk4 => "webkitgtk-6.0",
+        };
+        (name.into(), self.version.clone())
     }
 
     fn capabilities(&self, caps: &mut WebViewCapabilities) {
@@ -444,35 +488,94 @@ fn data_dir(profile: &str) -> String {
 }
 
 impl Ui {
+    /// The view's web context and (GTK 4) network session.
     fn context(
+        &mut self,
+        profile: &WebProfile,
+        config: &WebViewInitConfig,
+    ) -> Result<(gpointer, Option<gpointer>), WebViewError> {
+        if let WebProfile::Persistent(p) = profile
+            && (p.name.is_empty()
+                || p.name.len() > 64
+                || !p
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+        {
+            return Err(WebViewError::InvalidArgument("profile name".into()));
+        }
+        match self.flavor {
+            Flavor::Gtk3 => self.context_gtk3(profile, config).map(|ctx| (ctx, None)),
+            Flavor::Gtk4 => {
+                // One context (schemes are registered there); storage is
+                // the network session.
+                let ctx = self.shared_context(config);
+                Ok((ctx, Some(self.session(profile)?)))
+            }
+        }
+    }
+
+    fn shared_context(&mut self, config: &WebViewInitConfig) -> gpointer {
+        if let Some(ctx) = self.contexts.get("") {
+            return *ctx;
+        }
+        // SAFETY: argument-less getter.
+        let ctx = unsafe { (self.api.webkit_web_context_get_default)() };
+        self.setup_context(ctx, config);
+        self.contexts.insert(String::new(), ctx);
+        ctx
+    }
+
+    fn session(&mut self, profile: &WebProfile) -> Result<gpointer, WebViewError> {
+        let api = self.api;
+        let missing = || WebViewError::RuntimeMissing("WebKitNetworkSession".into());
+        // SAFETY: WebKitGTK 6.0 constructors / getters.
+        unsafe {
+            match profile {
+                WebProfile::Shared => Ok(api
+                    .webkit_network_session_get_default
+                    .ok_or_else(missing)?()),
+                WebProfile::Ephemeral => Ok(api
+                    .webkit_network_session_new_ephemeral
+                    .ok_or_else(missing)?()),
+                WebProfile::Persistent(p) => {
+                    if let Some(session) = self.sessions.get(&p.name) {
+                        return Ok(*session);
+                    }
+                    let dir = data_dir(&p.name);
+                    let (data, cache) = (
+                        cstring(&format!("{dir}/data")),
+                        cstring(&format!("{dir}/cache")),
+                    );
+                    let session = api.webkit_network_session_new.ok_or_else(missing)?(
+                        data.as_ptr(),
+                        cache.as_ptr(),
+                    );
+                    self.sessions.insert(p.name.clone(), session);
+                    Ok(session)
+                }
+            }
+        }
+    }
+
+    fn context_gtk3(
         &mut self,
         profile: &WebProfile,
         config: &WebViewInitConfig,
     ) -> Result<gpointer, WebViewError> {
         let api = self.api;
-        let ctx = match profile {
-            // SAFETY: context constructors take no arguments.
-            WebProfile::Ephemeral => unsafe { (api.webkit_web_context_new_ephemeral)() },
-            WebProfile::Shared => {
-                if let Some(ctx) = self.contexts.get("") {
-                    return Ok(*ctx);
-                }
-                // SAFETY: as above.
-                let ctx = unsafe { (api.webkit_web_context_get_default)() };
+        match profile {
+            WebProfile::Ephemeral => {
+                let new = api.webkit_web_context_new_ephemeral.ok_or_else(|| {
+                    WebViewError::RuntimeMissing("webkit_web_context_new_ephemeral".into())
+                })?;
+                // SAFETY: argument-less constructor.
+                let ctx = unsafe { new() };
                 self.setup_context(ctx, config);
-                self.contexts.insert(String::new(), ctx);
-                return Ok(ctx);
+                Ok(ctx)
             }
+            WebProfile::Shared => Ok(self.shared_context(config)),
             WebProfile::Persistent(p) => {
-                if !p
-                    .name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-                    || p.name.is_empty()
-                    || p.name.len() > 64
-                {
-                    return Err(WebViewError::InvalidArgument("profile name".into()));
-                }
                 if let Some(ctx) = self.contexts.get(&p.name) {
                     return Ok(*ctx);
                 }
@@ -504,20 +607,21 @@ impl Ui {
                 unsafe { (api.g_object_unref)(manager) };
                 self.setup_context(ctx, config);
                 self.contexts.insert(p.name.clone(), ctx);
-                return Ok(ctx);
+                Ok(ctx)
             }
-        };
-        self.setup_context(ctx, config);
-        Ok(ctx)
+        }
     }
 
-    /// Sandbox and custom schemes, before the context spawns a process.
+    /// Sandbox (4.1; always on in 6.0) and custom schemes, before the
+    /// context spawns a process.
     fn setup_context(&self, ctx: gpointer, config: &WebViewInitConfig) {
         let api = self.api;
         // SAFETY: `ctx` is a live `WebKitWebContext`.
         unsafe {
-            if self.sandbox {
-                (api.webkit_web_context_set_sandbox_enabled)(ctx, TRUE);
+            if self.sandbox
+                && let Some(enable) = api.webkit_web_context_set_sandbox_enabled
+            {
+                enable(ctx, TRUE);
             }
             let security = (api.webkit_web_context_get_security_manager)(ctx);
             for scheme in &config.schemes {
@@ -549,23 +653,23 @@ impl Ui {
         if embedded && self.x11.is_none() {
             return Err(WebViewError::RenderModeUnsupported);
         }
-        let ctx = self.context(&core.spec.profile, &config)?;
+        let (ctx, session) = self.context(&core.spec.profile, &config)?;
         // SAFETY: plain constructors and setters on objects created here.
         unsafe {
             let ucm = (api.webkit_user_content_manager_new)();
             install_scripts(api, ucm, &core);
-            let web_view = new_object(
-                api,
-                (api.webkit_web_view_get_type)(),
-                vec![
-                    (c"web-context", GValueBox::object(api, ctx)),
-                    (c"user-content-manager", GValueBox::object(api, ucm)),
-                ],
-            );
+            let mut props = vec![
+                (c"web-context", GValueBox::object(api, ctx)),
+                (c"user-content-manager", GValueBox::object(api, ucm)),
+            ];
+            if let Some(session) = session {
+                props.push((c"network-session", GValueBox::object(api, session)));
+            }
+            let web_view = new_object(api, (api.webkit_web_view_get_type)(), props);
             (api.g_object_unref)(ucm);
             if matches!(core.spec.profile, WebProfile::Ephemeral) {
-                // The view keeps the ephemeral context alive.
-                (api.g_object_unref)(ctx);
+                // The view keeps its ephemeral context / session alive.
+                (api.g_object_unref)(session.unwrap_or(ctx));
             }
             self.attach(core, web_view, embedded)
         }
@@ -584,38 +688,59 @@ impl Ui {
         // SAFETY: `web_view` is a live `WebKitWebView`.
         unsafe {
             apply_settings(api, web_view, &core);
-            connect_signals(api, web_view, id, s.context_menu == ContextMenuMode::Hidden);
-
-            let window = if embedded {
-                let window = (api.gtk_window_new)(1);
+            connect_signals(
+                api,
+                self.flavor,
+                web_view,
+                id,
+                s.context_menu == ContextMenuMode::Hidden,
+            );
+            let window = toolkit::window(self.window_new, embedded);
+            if embedded {
                 (api.gtk_window_set_decorated)(window, FALSE);
-                window
             } else {
-                let window = (api.gtk_window_new)(0);
                 if let RenderTarget::Window(target) = &core.spec.target {
                     let title = cstring(&target.title);
                     (api.gtk_window_set_title)(window, title.as_ptr());
-                    let w = c_int::try_from(target.width).unwrap_or(800).max(1);
-                    let h = c_int::try_from(target.height).unwrap_or(600).max(1);
-                    (api.gtk_window_set_default_size)(
-                        window,
-                        if target.width == 0 { 800 } else { w },
-                        if target.height == 0 { 600 } else { h },
-                    );
+                    let w = if target.width == 0 {
+                        800
+                    } else {
+                        c_int::try_from(target.width).unwrap_or(800)
+                    };
+                    let h = if target.height == 0 {
+                        600
+                    } else {
+                        c_int::try_from(target.height).unwrap_or(600)
+                    };
+                    (api.gtk_window_set_default_size)(window, w, h);
                     (api.gtk_window_set_resizable)(window, i32::from(target.resizable));
                     (api.gtk_window_set_modal)(window, i32::from(target.modal));
                 }
-                connect!(
-                    api,
-                    window,
-                    "delete-event",
-                    on_delete as unsafe extern "C" fn(gpointer, gpointer, gpointer) -> gboolean,
-                    id
-                );
-                window
-            };
-            (api.gtk_container_add)(window, web_view);
-            let mut view = GtkView {
+                match self.flavor {
+                    Flavor::Gtk3 => {
+                        connect!(
+                            api,
+                            window,
+                            "delete-event",
+                            on_delete
+                                as unsafe extern "C" fn(gpointer, gpointer, gpointer) -> gboolean,
+                            id
+                        );
+                    }
+                    Flavor::Gtk4 => {
+                        connect!(
+                            api,
+                            window,
+                            "close-request",
+                            on_close_request
+                                as unsafe extern "C" fn(gpointer, gpointer) -> gboolean,
+                            id
+                        );
+                    }
+                }
+            }
+            toolkit::set_child(api, window, web_view);
+            let view = GtkView {
                 core,
                 web_view,
                 window,
@@ -627,7 +752,7 @@ impl Ui {
                 (api.gtk_widget_realize)(window);
                 view.reparent()?;
             } else {
-                (api.gtk_widget_show_all)(window);
+                toolkit::show(api, window);
                 (api.gtk_window_present)(window);
             }
             CORES.with(|c| c.borrow_mut().insert(id, Arc::clone(&view.core)));
@@ -648,7 +773,9 @@ unsafe fn apply_settings(api: &Api, web_view: gpointer, core: &ViewCore) {
         let settings = (api.webkit_web_view_get_settings)(web_view);
         (api.webkit_settings_set_enable_javascript)(settings, i32::from(s.javascript));
         (api.webkit_settings_set_enable_html5_local_storage)(settings, i32::from(s.dom_storage));
-        (api.webkit_settings_set_enable_html5_database)(settings, i32::from(s.dom_storage));
+        if let Some(set) = api.webkit_settings_set_enable_html5_database {
+            set(settings, i32::from(s.dom_storage));
+        }
         (api.webkit_settings_set_media_playback_requires_user_gesture)(
             settings,
             i32::from(!s.media_autoplay),
@@ -697,6 +824,7 @@ unsafe fn apply_settings(api: &Api, web_view: gpointer, core: &ViewCore) {
 )]
 unsafe fn connect_signals(
     api: &Api,
+    flavor: Flavor,
     web_view: gpointer,
     id: NativeHandleId,
     hide_context_menu: bool,
@@ -797,20 +925,39 @@ unsafe fn connect_signals(
             id
         );
         if s_hidden {
-            connect!(
-                api,
-                web_view,
-                "context-menu",
-                on_context_menu
-                    as unsafe extern "C" fn(
-                        gpointer,
-                        gpointer,
-                        gpointer,
-                        gpointer,
-                        gpointer,
-                    ) -> gboolean,
-                id
-            );
+            match flavor {
+                Flavor::Gtk3 => {
+                    connect!(
+                        api,
+                        web_view,
+                        "context-menu",
+                        on_context_menu
+                            as unsafe extern "C" fn(
+                                gpointer,
+                                gpointer,
+                                gpointer,
+                                gpointer,
+                                gpointer,
+                            ) -> gboolean,
+                        id
+                    );
+                }
+                Flavor::Gtk4 => {
+                    connect!(
+                        api,
+                        web_view,
+                        "context-menu",
+                        on_context_menu4
+                            as unsafe extern "C" fn(
+                                gpointer,
+                                gpointer,
+                                gpointer,
+                                gpointer,
+                            ) -> gboolean,
+                        id
+                    );
+                }
+            }
         }
         let find = (api.webkit_web_view_get_find_controller)(web_view);
         connect!(
@@ -944,9 +1091,30 @@ fn shim(subframes: bool) -> String {
 // GtkView
 // =====================================================================
 
+/// XID of a realised GTK 3 window and GDK's X display.
+fn x11_ids(window: gpointer) -> Option<(std::ffi::c_ulong, gpointer)> {
+    let api = api();
+    let (get_window, xid_of, xdisplay) = (
+        api.gtk_widget_get_window?,
+        api.gdk_x11_window_get_xid?,
+        api.gdk_x11_display_get_xdisplay?,
+    );
+    // SAFETY: GTK 3 getters on a live, realised window.
+    unsafe {
+        let gdk_window = get_window(window);
+        if gdk_window.is_null() {
+            return None;
+        }
+        Some((
+            xid_of(gdk_window),
+            xdisplay((api.gdk_display_get_default)()),
+        ))
+    }
+}
+
 impl GtkView {
     /// Put the popup window inside the app's registered X11 window.
-    fn reparent(&mut self) -> Result<(), WebViewError> {
+    fn reparent(&self) -> Result<(), WebViewError> {
         let RenderTarget::Embedded(target) = &self.core.spec.target else {
             return Ok(());
         };
@@ -966,13 +1134,9 @@ impl GtkView {
         let x11 = ui(|ui| ui.x11)
             .flatten()
             .ok_or(WebViewError::RenderModeUnsupported)?;
-        let api = api();
-        // SAFETY: the window was realised, so it has a GdkWindow / XID;
-        // the display pointer is GDK's own.
+        let (xid, display) = x11_ids(self.window).ok_or(WebViewError::RenderModeUnsupported)?;
+        // SAFETY: X calls on GDK's own display for our realised window.
         unsafe {
-            let gdk_window = (api.gtk_widget_get_window)(self.window);
-            let xid = (api.gdk_x11_window_get_xid)(gdk_window);
-            let display = (api.gdk_x11_display_get_xdisplay)((api.gdk_display_get_default)());
             (x11.XReparentWindow)(display, xid, parent_xid, 0, 0);
             (x11.XFlush)(display);
         }
@@ -990,16 +1154,18 @@ impl GtkView {
         // SAFETY: live window; X calls on GDK's display.
         unsafe {
             if !frame.visible || frame.width == 0 || frame.height == 0 {
-                (api.gtk_widget_hide)(self.window);
+                toolkit::hide(api, self.window);
                 return;
             }
-            (api.gtk_widget_show_all)(self.window);
-            let gdk_window = (api.gtk_widget_get_window)(self.window);
-            let xid = (api.gdk_x11_window_get_xid)(gdk_window);
-            let display = (api.gdk_x11_display_get_xdisplay)((api.gdk_display_get_default)());
-            let w = c_int::try_from(frame.width).unwrap_or(c_int::MAX);
-            let h = c_int::try_from(frame.height).unwrap_or(c_int::MAX);
-            (api.gtk_window_resize)(self.window, w, h);
+            toolkit::show(api, self.window);
+            let Some((xid, display)) = x11_ids(self.window) else {
+                return;
+            };
+            if let Some(resize) = api.gtk_window_resize {
+                let w = c_int::try_from(frame.width).unwrap_or(c_int::MAX);
+                let h = c_int::try_from(frame.height).unwrap_or(c_int::MAX);
+                resize(self.window, w, h);
+            }
             (x11.XMoveResizeWindow)(display, xid, frame.x, frame.y, frame.width, frame.height);
             (x11.XFlush)(display);
         }
@@ -1011,7 +1177,7 @@ impl GtkView {
         // SAFETY: destroying the toplevel destroys the web view inside it.
         unsafe {
             (api.webkit_web_view_stop_loading)(self.web_view);
-            (api.gtk_widget_destroy)(self.window);
+            toolkit::destroy(api, self.window);
         }
     }
 
@@ -1238,11 +1404,13 @@ impl UiView for GtkView {
         };
         let name = filter.name.clone();
         let c = cstring(&url);
+        // SAFETY: live view.
+        let Some(manager) = (unsafe { cookie_manager(api, self.web_view) }) else {
+            return done(Err(WebViewError::Unsupported("cookie manager".into())));
+        };
         let state: Box<CookieDone> = Box::new((name, done));
         // SAFETY: live view; `on_cookies` takes `state`.
         unsafe {
-            let ctx = ctx_of(api, self.web_view);
-            let manager = (api.webkit_web_context_get_cookie_manager)(ctx);
             (api.webkit_cookie_manager_get_cookies)(
                 manager,
                 c.as_ptr(),
@@ -1287,8 +1455,10 @@ impl UiView for GtkView {
                     SameSite::Strict => 2,
                 },
             );
-            let ctx = ctx_of(api, self.web_view);
-            let manager = (api.webkit_web_context_get_cookie_manager)(ctx);
+            let Some(manager) = cookie_manager(api, self.web_view) else {
+                (api.soup_cookie_free)(soup);
+                return done(Err(WebViewError::Unsupported("cookie manager".into())));
+            };
             let state: Box<UnitDone> = Box::new(done);
             (api.webkit_cookie_manager_add_cookie)(
                 manager,
@@ -1321,11 +1491,15 @@ impl UiView for GtkView {
                 .map_or(0, |d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX));
             (now - ms * 1000).max(0)
         });
+        // SAFETY: live view.
+        let Some(manager) = (unsafe { data_manager(api, self.web_view) }) else {
+            return done(Err(WebViewError::Unsupported(
+                "website data manager".into(),
+            )));
+        };
         let state: Box<UnitDone> = Box::new(done);
         // SAFETY: live context; `on_cleared` takes `state`.
         unsafe {
-            let ctx = ctx_of(api, self.web_view);
-            let manager = (api.webkit_web_context_get_website_data_manager)(ctx);
             (api.webkit_website_data_manager_clear)(
                 manager,
                 types,
@@ -1420,13 +1594,41 @@ impl UiView for GtkView {
     }
 }
 
-/// The view's web context.
+/// Cookie manager of the view's storage: its web context (4.1) or
+/// network session (6.0).
 ///
 /// # Safety
 /// `web_view` must be a live `WebKitWebView`.
-unsafe fn ctx_of(api: &Api, web_view: gpointer) -> gpointer {
-    // SAFETY: forwarded precondition.
-    unsafe { (api.webkit_web_view_get_context)(web_view) }
+unsafe fn cookie_manager(api: &Api, web_view: gpointer) -> Option<gpointer> {
+    // SAFETY: forwarded precondition; getters of the loaded version.
+    unsafe {
+        if let (Some(session_of), Some(get)) = (
+            api.webkit_web_view_get_network_session,
+            api.webkit_network_session_get_cookie_manager,
+        ) {
+            return Some(get(session_of(web_view)));
+        }
+        api.webkit_web_context_get_cookie_manager
+            .map(|get| get((api.webkit_web_view_get_context)(web_view)))
+    }
+}
+
+/// Website data manager of the view's storage.
+///
+/// # Safety
+/// `web_view` must be a live `WebKitWebView`.
+unsafe fn data_manager(api: &Api, web_view: gpointer) -> Option<gpointer> {
+    // SAFETY: forwarded precondition; getters of the loaded version.
+    unsafe {
+        if let (Some(session_of), Some(get)) = (
+            api.webkit_web_view_get_network_session,
+            api.webkit_network_session_get_website_data_manager,
+        ) {
+            return Some(get(session_of(web_view)));
+        }
+        api.webkit_web_context_get_website_data_manager
+            .map(|get| get((api.webkit_web_view_get_context)(web_view)))
+    }
 }
 
 type CookieDone = (Option<String>, Done<Vec<WebCookie>>);
@@ -1540,16 +1742,13 @@ unsafe extern "C" fn on_snapshot(source: gpointer, result: gpointer, data: gpoin
             error,
         );
     }
-    let mut png = Vec::new();
-    // SAFETY: live surface; `png_sink` appends to `png`.
-    let (w, h) = unsafe {
-        (api.cairo_surface_write_to_png_stream)(surface, png_sink, (&raw mut png).cast());
-        let size = (
-            (api.cairo_image_surface_get_width)(surface),
-            (api.cairo_image_surface_get_height)(surface),
-        );
-        (api.cairo_surface_destroy)(surface);
-        size
+    let encoded = if FLAVOR.get() == Some(&Flavor::Gtk4) {
+        texture_png(api, surface)
+    } else {
+        surface_png(api, surface)
+    };
+    let Some((png, w, h)) = encoded else {
+        return done(Err(WebViewError::Backend("snapshot encoding".into())));
     };
     done(Ok(WebSnapshot {
         width: u32::try_from(w).unwrap_or(0),
@@ -1722,6 +1921,23 @@ unsafe extern "C" fn on_delete(_window: gpointer, _event: gpointer, data: gpoint
     TRUE
 }
 
+const unsafe extern "C" fn on_context_menu4(
+    _v: gpointer,
+    _m: gpointer,
+    _h: gpointer,
+    _d: gpointer,
+) -> gboolean {
+    TRUE
+}
+
+unsafe extern "C" fn on_close_request(_window: gpointer, data: gpointer) -> gboolean {
+    if let Some(core) = core_of(ptr_id(data)) {
+        core.emit(crate::ControlEvent::CloseRequested);
+    }
+    // Keep the window: the app closes the view.
+    TRUE
+}
+
 const unsafe extern "C" fn on_context_menu(
     _v: gpointer,
     _m: gpointer,
@@ -1760,8 +1976,14 @@ unsafe extern "C" fn on_create(view: gpointer, action: gpointer, data: gpointer)
     let Some((core, instance)) = opener.new_popup(spec) else {
         return ptr::null_mut();
     };
-    // SAFETY: a related view shares the opener's process and context.
-    let child = unsafe { (api.webkit_web_view_new_with_related_view)(view) };
+    // A related view shares the opener's process, context and storage.
+    // SAFETY: type getter.
+    let ty = unsafe { (api.webkit_web_view_get_type)() };
+    let child = new_object(
+        api,
+        ty,
+        vec![(c"related-view", GValueBox::object(api, view))],
+    );
     let attached = ui(|ui| ui.attach(Arc::clone(&core), child, false)).is_some_and(|r| r.is_ok());
     if !attached {
         return ptr::null_mut();
@@ -2352,5 +2574,154 @@ impl SchemeResponder for GtkResponder {
                 }
             }
         }
+    }
+}
+
+/// `gtk_init_check` and `gtk_window_new`, whose C signatures differ
+/// between GTK 3 and GTK 4.
+#[expect(clippy::type_complexity, reason = "two raw C entry points")]
+fn toolkit_entry_points(
+    libs: &Libs,
+    flavor: Flavor,
+) -> Result<(Box<dyn Fn() -> gboolean>, WindowNew), WebViewError> {
+    let missing = |e: libloading::Error| WebViewError::RuntimeMissing(e.to_string());
+    // SAFETY: each lookup uses the prototype of the GTK version loaded.
+    unsafe {
+        match flavor {
+            Flavor::Gtk3 => {
+                let init = *libs
+                    .gtk
+                    .get::<unsafe extern "C" fn(*mut c_int, *mut *mut *mut c_char) -> gboolean>(
+                        b"gtk_init_check\0",
+                    )
+                    .map_err(missing)?;
+                let new = *libs
+                    .gtk
+                    .get::<unsafe extern "C" fn(c_int) -> gpointer>(b"gtk_window_new\0")
+                    .map_err(missing)?;
+                // GTK 3 accepts null argc / argv.
+                Ok((
+                    Box::new(move || init(ptr::null_mut(), ptr::null_mut())),
+                    WindowNew::Gtk3(new),
+                ))
+            }
+            Flavor::Gtk4 => {
+                let init = *libs
+                    .gtk
+                    .get::<unsafe extern "C" fn() -> gboolean>(b"gtk_init_check\0")
+                    .map_err(missing)?;
+                let new = *libs
+                    .gtk
+                    .get::<unsafe extern "C" fn() -> gpointer>(b"gtk_window_new\0")
+                    .map_err(missing)?;
+                Ok((Box::new(move || init()), WindowNew::Gtk4(new)))
+            }
+        }
+    }
+}
+
+/// Toolkit calls whose name or shape differs between GTK 3 and 4.
+mod toolkit {
+    use super::{Api, FALSE, TRUE, WindowNew, gpointer};
+
+    /// A new top-level (or, GTK 3 only, popup) window.
+    pub(super) fn window(new: WindowNew, popup: bool) -> gpointer {
+        // SAFETY: constructors with the version's own prototype.
+        unsafe {
+            match new {
+                WindowNew::Gtk3(f) => f(i32::from(popup)),
+                WindowNew::Gtk4(f) => f(),
+            }
+        }
+    }
+
+    pub(super) fn set_child(api: &Api, window: gpointer, child: gpointer) {
+        // SAFETY: live widgets; exactly one of the two exists.
+        unsafe {
+            if let Some(f) = api.gtk_window_set_child {
+                f(window, child);
+            } else if let Some(f) = api.gtk_container_add {
+                f(window, child);
+            }
+        }
+    }
+
+    pub(super) fn show(api: &Api, window: gpointer) {
+        // SAFETY: live widget.
+        unsafe {
+            if let Some(f) = api.gtk_widget_show_all {
+                f(window);
+            } else if let Some(f) = api.gtk_widget_set_visible {
+                f(window, TRUE);
+            }
+        }
+    }
+
+    pub(super) fn hide(api: &Api, window: gpointer) {
+        // SAFETY: live widget.
+        unsafe {
+            if let Some(f) = api.gtk_widget_set_visible {
+                f(window, FALSE);
+            } else {
+                (api.gtk_widget_hide)(window);
+            }
+        }
+    }
+
+    pub(super) fn destroy(api: &Api, window: gpointer) {
+        // SAFETY: live window, destroyed once.
+        unsafe {
+            if let Some(f) = api.gtk_window_destroy {
+                f(window);
+            } else if let Some(f) = api.gtk_widget_destroy {
+                f(window);
+            }
+        }
+    }
+}
+
+/// Loaded version, for callbacks that cannot reach the UI state.
+static FLAVOR: std::sync::OnceLock<Flavor> = std::sync::OnceLock::new();
+
+/// 4.1 snapshots are cairo surfaces.
+fn surface_png(api: &Api, surface: gpointer) -> Option<(Vec<u8>, c_int, c_int)> {
+    let (write, width, height, destroy) = (
+        api.cairo_surface_write_to_png_stream?,
+        api.cairo_image_surface_get_width?,
+        api.cairo_image_surface_get_height?,
+        api.cairo_surface_destroy?,
+    );
+    let mut png = Vec::new();
+    // SAFETY: live surface; `png_sink` appends to `png`; destroyed once.
+    unsafe {
+        write(surface, png_sink, (&raw mut png).cast());
+        let size = (width(surface), height(surface));
+        destroy(surface);
+        Some((png, size.0, size.1))
+    }
+}
+
+/// 6.0 snapshots are `GdkTexture`s.
+fn texture_png(api: &Api, texture: gpointer) -> Option<(Vec<u8>, c_int, c_int)> {
+    let (save, width, height, data_of) = (
+        api.gdk_texture_save_to_png_bytes?,
+        api.gdk_texture_get_width?,
+        api.gdk_texture_get_height?,
+        api.g_bytes_get_data?,
+    );
+    // SAFETY: live texture; the bytes object is read then released.
+    unsafe {
+        let bytes = save(texture);
+        let mut len = 0_usize;
+        let data = data_of(bytes, &raw mut len).cast::<u8>();
+        let png = if data.is_null() {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(data, len).to_vec()
+        };
+        let size = (width(texture), height(texture));
+        (api.g_bytes_unref)(bytes);
+        (api.g_object_unref)(texture);
+        Some((png, size.0, size.1))
     }
 }
