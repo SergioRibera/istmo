@@ -414,6 +414,8 @@ pub trait DragAndDrop {
     /// Stop taking drops: drags over the window are refused again.
     async fn stop(&self) -> Result<(), DndError>;
 
+    // macOS starts the drag with a synchronous hop to the main thread.
+    #[istmo_macros::blocking]
     /// Drag `request` out of the window, from the press in progress.
     /// Returns when the drag ends: dropped on another app or cancelled.
     /// Call it when the press turns into a drag (moved past a threshold),

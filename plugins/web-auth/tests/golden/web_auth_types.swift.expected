@@ -3,7 +3,7 @@
 
 import Foundation
 
-public struct WebAuthCapabilities {
+public struct WebAuthCapabilities: Sendable {
     public let backend: String
     public let loopbackCallbacks: Bool
     public let schemeCallbacks: Bool
@@ -21,13 +21,13 @@ public struct WebAuthCapabilities {
     }
 }
 
-public enum CallbackSpec {
+public enum CallbackSpec: Sendable {
     case loopback(LoopbackCallback)
     case customScheme(SchemeCallback)
     case https(HttpsCallback)
 }
 
-public struct LoopbackCallback {
+public struct LoopbackCallback: Sendable {
     public let path: String
 
     public init(path: String) {
@@ -35,7 +35,7 @@ public struct LoopbackCallback {
     }
 }
 
-public struct SchemeCallback {
+public struct SchemeCallback: Sendable {
     public let scheme: String
     public let host: String
     public let path: String
@@ -47,7 +47,7 @@ public struct SchemeCallback {
     }
 }
 
-public struct HttpsCallback {
+public struct HttpsCallback: Sendable {
     public let host: String
     public let path: String
 
@@ -57,7 +57,7 @@ public struct HttpsCallback {
     }
 }
 
-public struct PreparedRedirect {
+public struct PreparedRedirect: Sendable {
     public let redirectUri: String
     public let session: UInt64
 
@@ -67,12 +67,12 @@ public struct PreparedRedirect {
     }
 }
 
-public enum AuthMode: UInt32 {
+public enum AuthMode: UInt32, Sendable {
     case system = 0
     case embedded = 1
 }
 
-public struct AuthRequest {
+public struct AuthRequest: Sendable {
     public let session: UInt64
     public let authorizeUrl: String
     public let expectedState: String
@@ -90,7 +90,7 @@ public struct AuthRequest {
     }
 }
 
-public struct AuthCallback {
+public struct AuthCallback: Sendable {
     public let url: String
 
     public init(url: String) {

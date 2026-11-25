@@ -279,6 +279,9 @@ pub trait WebAuth {
 
     /// Show the authorization page and wait for the callback whose
     /// `state` matches. One sign-in at a time.
+    // Waits for the browser round trip on its thread (a polling loop):
+    // it keeps the dispatcher path.
+    #[istmo_macros::blocking]
     async fn authenticate(
         &self,
         request: AuthRequest,

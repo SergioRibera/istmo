@@ -3,7 +3,7 @@
 
 import Foundation
 
-public struct DropOptions {
+public struct DropOptions: Sendable {
     public let mimeTypes: [String]
     public let maxBytes: UInt64
     public let folders: Bool
@@ -21,7 +21,7 @@ public enum DndError: Error {
     case notPressed
 }
 
-public struct DroppedFiles {
+public struct DroppedFiles: Sendable {
     public let files: [DroppedFile]
     public let skipped: [SkippedFile]
     public let position: DropPoint?
@@ -37,7 +37,7 @@ public struct DroppedFiles {
     }
 }
 
-public struct DroppedFile {
+public struct DroppedFile: Sendable {
     public let path: String
     public let displayName: String
     public let mimeType: String?
@@ -51,7 +51,7 @@ public struct DroppedFile {
     }
 }
 
-public struct SkippedFile {
+public struct SkippedFile: Sendable {
     public let displayName: String
     public let reason: SkipReason
 
@@ -61,20 +61,20 @@ public struct SkippedFile {
     }
 }
 
-public enum SkipReason: UInt32 {
+public enum SkipReason: UInt32, Sendable {
     case tooLarge = 0
     case unreadable = 1
     case notAFile = 2
     case wrongType = 3
 }
 
-public enum DragState {
+public enum DragState: Sendable {
     case idle
     case over(DragOver)
     case receiving(UInt32)
 }
 
-public struct DragOver {
+public struct DragOver: Sendable {
     public let count: UInt32
     public let position: DropPoint?
     public let windowId: UInt64?
@@ -86,7 +86,7 @@ public struct DragOver {
     }
 }
 
-public struct DropPoint {
+public struct DropPoint: Sendable {
     public let x: Float
     public let y: Float
 
@@ -96,13 +96,13 @@ public struct DropPoint {
     }
 }
 
-public enum DragItem {
+public enum DragItem: Sendable {
     case text(String)
     case url(String)
     case file(DragFile)
 }
 
-public struct DragFile {
+public struct DragFile: Sendable {
     public let path: String
     public let mimeType: String?
 
@@ -112,7 +112,7 @@ public struct DragFile {
     }
 }
 
-public struct DragImage {
+public struct DragImage: Sendable {
     public let png: Data
     public let width: UInt32
     public let height: UInt32
@@ -124,7 +124,7 @@ public struct DragImage {
     }
 }
 
-public struct DragRequest {
+public struct DragRequest: Sendable {
     public let items: [DragItem]
     public let preview: DragImage?
     public let windowId: UInt64?
@@ -136,7 +136,7 @@ public struct DragRequest {
     }
 }
 
-public enum DragResult: UInt32 {
+public enum DragResult: UInt32, Sendable {
     case dropped = 0
     case cancelled = 1
 }

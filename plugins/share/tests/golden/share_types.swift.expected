@@ -3,7 +3,7 @@
 
 import Foundation
 
-public struct ShareRect {
+public struct ShareRect: Sendable {
     public let x: Double
     public let y: Double
     public let width: Double
@@ -17,7 +17,7 @@ public struct ShareRect {
     }
 }
 
-public struct ShareAnchor {
+public struct ShareAnchor: Sendable {
     public let windowId: UInt64?
     public let rect: ShareRect?
 
@@ -27,12 +27,12 @@ public struct ShareAnchor {
     }
 }
 
-public enum ShareFileSource {
+public enum ShareFileSource: Sendable {
     case path(String)
     case bytes(Data)
 }
 
-public struct ShareFile {
+public struct ShareFile: Sendable {
     public let source: ShareFileSource
     public let name: String?
     public let mimeType: String?
@@ -44,7 +44,7 @@ public struct ShareFile {
     }
 }
 
-public struct SharePreview {
+public struct SharePreview: Sendable {
     public let title: String?
     public let thumbnail: ShareFile?
     public let fetchLinkMetadata: Bool
@@ -56,7 +56,7 @@ public struct SharePreview {
     }
 }
 
-public struct ShareRequest {
+public struct ShareRequest: Sendable {
     public let text: String?
     public let url: String?
     public let subject: String?
@@ -74,14 +74,14 @@ public struct ShareRequest {
     }
 }
 
-public enum ShareOutcome {
+public enum ShareOutcome: Sendable {
     case shared(String?)
     case targetChosen(String)
     case dismissed
     case unknown
 }
 
-public struct ShareCapabilities {
+public struct ShareCapabilities: Sendable {
     public let send: Bool
     public let files: Bool
     public let mixedContent: Bool
@@ -115,7 +115,7 @@ public enum ShareError: Error {
     case backend(String)
 }
 
-public struct IncomingFile {
+public struct IncomingFile: Sendable {
     public let path: String
     public let name: String
     public let mimeType: String?
@@ -129,7 +129,7 @@ public struct IncomingFile {
     }
 }
 
-public struct IncomingShare {
+public struct IncomingShare: Sendable {
     public let text: String?
     public let url: String?
     public let subject: String?
@@ -149,7 +149,7 @@ public struct IncomingShare {
     }
 }
 
-public struct ShareTarget {
+public struct ShareTarget: Sendable {
     public let id: String
     public let label: String
     public let icon: ShareFile?

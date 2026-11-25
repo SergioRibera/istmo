@@ -242,6 +242,8 @@ impl std::error::Error for FilePickerError {}
 pub trait FilePicker {
     /// Present a single-file picker. `Ok(None)` when the user cancels.
     #[owned]
+    // Native dialogs are modal and synchronous (rfd).
+    #[istmo_macros::blocking]
     async fn pick_file(&self, config: PickConfig) -> Result<Option<PickedFile>, FilePickerError>;
 
     /// Present a file picker that returns a list. Empty `Vec` when the
@@ -251,6 +253,7 @@ pub trait FilePicker {
     /// otherwise the picker is single-select and the `Vec` holds at most
     /// one file.
     #[owned]
+    #[istmo_macros::blocking]
     async fn pick_files(&self, config: PickConfig) -> Result<Vec<PickedFile>, FilePickerError>;
 
     /// Present a save-file picker. `Ok(None)` when the user cancels.
@@ -259,6 +262,7 @@ pub trait FilePicker {
     /// backend created via `ACTION_CREATE_DOCUMENT`; write to it via
     /// [`FilePicker::open_write`].
     #[owned]
+    #[istmo_macros::blocking]
     async fn save_file(&self, config: SaveConfig) -> Result<Option<PickedFile>, FilePickerError>;
 
     /// Open the picked resource for reading, returning a native fd /

@@ -551,6 +551,9 @@ impl ShareTarget {
 /// see [`ShareInbox`].
 #[plugin(name = "istmo.share", crate = "::istmo_core")]
 pub trait Share {
+    // Stages payloads with blocking file I/O and, on Windows, joins the
+    // calling thread to the WinRT MTA: it keeps the dispatcher path.
+    #[istmo_macros::blocking]
     /// Present the share sheet for `request` and resolve with what the
     /// user did.
     ///
@@ -563,6 +566,8 @@ pub trait Share {
         request: ShareRequest,
     ) -> Result<ShareOutcome, ShareError>;
 
+    // Initialises WinRT on the calling thread for packaged Windows apps.
+    #[istmo_macros::blocking]
     /// Report what this platform supports, so apps can hide the share
     /// button or render their own UI (Linux).
     async fn capabilities(&self) -> Result<ShareCapabilities, ShareError>;

@@ -20,7 +20,7 @@ public enum WebViewError: Error {
     case backend(String)
 }
 
-public struct WebViewInitConfig {
+public struct WebViewInitConfig: Sendable {
     public let schemes: [CustomScheme]
     public let allowInspector: Bool
     public let userAgentSuffix: String?
@@ -32,7 +32,7 @@ public struct WebViewInitConfig {
     }
 }
 
-public struct CustomScheme {
+public struct CustomScheme: Sendable {
     public let name: String
     public let source: SchemeSource
 
@@ -42,12 +42,12 @@ public struct CustomScheme {
     }
 }
 
-public enum SchemeSource {
+public enum SchemeSource: Sendable {
     case assets(AssetsSource)
     case dynamic
 }
 
-public struct AssetsSource {
+public struct AssetsSource: Sendable {
     public let dir: String
 
     public init(dir: String) {
@@ -55,7 +55,7 @@ public struct AssetsSource {
     }
 }
 
-public struct WebViewCapabilities {
+public struct WebViewCapabilities: Sendable {
     public let backend: String
     public let engineVersion: String
     public let embedded: Bool
@@ -97,7 +97,7 @@ public struct WebViewCapabilities {
     }
 }
 
-public struct SchemeOrigin {
+public struct SchemeOrigin: Sendable {
     public let scheme: String
     public let origin: String
     public let baseUrl: String
@@ -109,7 +109,7 @@ public struct SchemeOrigin {
     }
 }
 
-public struct WebViewSpec {
+public struct WebViewSpec: Sendable {
     public let target: RenderTarget
     public let profile: WebProfile
     public let settings: WebViewSettings
@@ -131,12 +131,12 @@ public struct WebViewSpec {
     }
 }
 
-public enum RenderTarget {
+public enum RenderTarget: Sendable {
     case embedded(EmbeddedTarget)
     case window(WindowTarget)
 }
 
-public struct EmbeddedTarget {
+public struct EmbeddedTarget: Sendable {
     public let windowId: UInt64
 
     public init(windowId: UInt64) {
@@ -144,7 +144,7 @@ public struct EmbeddedTarget {
     }
 }
 
-public struct WindowTarget {
+public struct WindowTarget: Sendable {
     public let title: String
     public let width: UInt32
     public let height: UInt32
@@ -162,13 +162,13 @@ public struct WindowTarget {
     }
 }
 
-public enum WebProfile {
+public enum WebProfile: Sendable {
     case ephemeral
     case persistent(PersistentProfile)
     case shared
 }
 
-public struct PersistentProfile {
+public struct PersistentProfile: Sendable {
     public let name: String
 
     public init(name: String) {
@@ -176,7 +176,7 @@ public struct PersistentProfile {
     }
 }
 
-public struct WebViewSettings {
+public struct WebViewSettings: Sendable {
     public let javascript: Bool
     public let domStorage: Bool
     public let mediaAutoplay: Bool
@@ -208,12 +208,12 @@ public struct WebViewSettings {
     }
 }
 
-public enum ContextMenuMode: UInt32 {
+public enum ContextMenuMode: UInt32, Sendable {
     case native = 0
     case hidden = 1
 }
 
-public struct WebColor {
+public struct WebColor: Sendable {
     public let r: UInt8
     public let g: UInt8
     public let b: UInt8
@@ -227,7 +227,7 @@ public struct WebColor {
     }
 }
 
-public struct UserScript {
+public struct UserScript: Sendable {
     public let source: String
     public let injectAt: InjectionTime
     public let mainFrameOnly: Bool
@@ -243,17 +243,17 @@ public struct UserScript {
     }
 }
 
-public enum InjectionTime: UInt32 {
+public enum InjectionTime: UInt32, Sendable {
     case documentStart = 0
     case documentEnd = 1
 }
 
-public enum ScriptWorld: UInt32 {
+public enum ScriptWorld: UInt32, Sendable {
     case page = 0
     case isolated = 1
 }
 
-public struct BridgeConfig {
+public struct BridgeConfig: Sendable {
     public let channels: [String]
     public let allowedOrigins: [String]
     public let allowSubframes: Bool
@@ -265,7 +265,7 @@ public struct BridgeConfig {
     }
 }
 
-public struct DecisionTimeouts {
+public struct DecisionTimeouts: Sendable {
     public let navigationMs: UInt32
     public let schemeHeadMs: UInt32
 
@@ -275,7 +275,7 @@ public struct DecisionTimeouts {
     }
 }
 
-public struct NavigationRules {
+public struct NavigationRules: Sendable {
     public let defaultAction: RuleAction
     public let rules: [NavigationRule]
 
@@ -285,7 +285,7 @@ public struct NavigationRules {
     }
 }
 
-public struct NavigationRule {
+public struct NavigationRule: Sendable {
     public let pattern: UrlPattern
     public let action: RuleAction
 
@@ -295,7 +295,7 @@ public struct NavigationRule {
     }
 }
 
-public enum RuleAction: UInt32 {
+public enum RuleAction: UInt32, Sendable {
     case allow = 0
     case deny = 1
     case intercept = 2
@@ -303,7 +303,7 @@ public enum RuleAction: UInt32 {
     case ask = 4
 }
 
-public struct UrlPattern {
+public struct UrlPattern: Sendable {
     public let scheme: String
     public let host: String
     public let port: UInt16?
@@ -317,7 +317,7 @@ public struct UrlPattern {
     }
 }
 
-public struct WebViewInstance {
+public struct WebViewInstance: Sendable {
     public let view: NativeHandleId
     public let tokenHi: UInt64
     public let tokenLo: UInt64
@@ -329,7 +329,7 @@ public struct WebViewInstance {
     }
 }
 
-public struct ViewRef {
+public struct ViewRef: Sendable {
     public let view: NativeHandleId
     public let tokenHi: UInt64
     public let tokenLo: UInt64
@@ -341,7 +341,7 @@ public struct ViewRef {
     }
 }
 
-public struct ViewFrame {
+public struct ViewFrame: Sendable {
     public let x: Int32
     public let y: Int32
     public let width: UInt32
@@ -357,7 +357,7 @@ public struct ViewFrame {
     }
 }
 
-public struct LoadRequest {
+public struct LoadRequest: Sendable {
     public let url: String
     public let headers: [HttpHeader]
     public let postBody: Data?
@@ -369,7 +369,7 @@ public struct LoadRequest {
     }
 }
 
-public struct HttpHeader {
+public struct HttpHeader: Sendable {
     public let name: String
     public let value: String
 
@@ -379,7 +379,7 @@ public struct HttpHeader {
     }
 }
 
-public enum HistoryNav {
+public enum HistoryNav: Sendable {
     case back
     case forward
     case reload
@@ -388,7 +388,7 @@ public enum HistoryNav {
     case offset(Int32)
 }
 
-public struct WebHistory {
+public struct WebHistory: Sendable {
     public let entries: [HistoryEntry]
     public let current: UInt32
 
@@ -398,7 +398,7 @@ public struct WebHistory {
     }
 }
 
-public struct HistoryEntry {
+public struct HistoryEntry: Sendable {
     public let url: String
     public let title: String
 
@@ -408,7 +408,7 @@ public struct HistoryEntry {
     }
 }
 
-public struct ScriptCall {
+public struct ScriptCall: Sendable {
     public let source: String
     public let world: ScriptWorld
     public let expectedOrigin: String
@@ -420,7 +420,7 @@ public struct ScriptCall {
     }
 }
 
-public struct OutgoingMessage {
+public struct OutgoingMessage: Sendable {
     public let channel: String
     public let data: Data
     public let expectedOrigin: String
@@ -432,7 +432,7 @@ public struct OutgoingMessage {
     }
 }
 
-public struct BridgeReply {
+public struct BridgeReply: Sendable {
     public let replyId: UInt64
     public let result: ReplyResult
 
@@ -442,12 +442,12 @@ public struct BridgeReply {
     }
 }
 
-public enum ReplyResult {
+public enum ReplyResult: Sendable {
     case ok(Data)
     case err(String)
 }
 
-public struct Decision {
+public struct Decision: Sendable {
     public let requestId: UInt64
     public let response: DecisionResponse
 
@@ -457,7 +457,7 @@ public struct Decision {
     }
 }
 
-public enum DecisionResponse {
+public enum DecisionResponse: Sendable {
     case allow
     case deny
     case grant([WebPermission])
@@ -467,7 +467,7 @@ public enum DecisionResponse {
     case downloadTo(String)
 }
 
-public struct HttpCredentials {
+public struct HttpCredentials: Sendable {
     public let user: String
     public let password: String
 
@@ -477,7 +477,7 @@ public struct HttpCredentials {
     }
 }
 
-public struct SchemeResponseHead {
+public struct SchemeResponseHead: Sendable {
     public let requestId: UInt64
     public let status: UInt16
     public let mimeType: String
@@ -493,7 +493,7 @@ public struct SchemeResponseHead {
     }
 }
 
-public struct SchemeChunk {
+public struct SchemeChunk: Sendable {
     public let requestId: UInt64
     public let body: SchemeBody
 
@@ -503,13 +503,13 @@ public struct SchemeChunk {
     }
 }
 
-public enum SchemeBody {
+public enum SchemeBody: Sendable {
     case data(Data)
     case end
     case abort(String)
 }
 
-public struct WebCookie {
+public struct WebCookie: Sendable {
     public let name: String
     public let value: String
     public let domain: String
@@ -531,13 +531,13 @@ public struct WebCookie {
     }
 }
 
-public enum SameSite: UInt32 {
+public enum SameSite: UInt32, Sendable {
     case lax = 0
     case strict = 1
     case none = 2
 }
 
-public struct CookieFilter {
+public struct CookieFilter: Sendable {
     public let url: String?
     public let name: String?
 
@@ -547,7 +547,7 @@ public struct CookieFilter {
     }
 }
 
-public struct ClearDataRequest {
+public struct ClearDataRequest: Sendable {
     public let kinds: [DataKind]
     public let sinceUnixMs: Int64?
 
@@ -557,7 +557,7 @@ public struct ClearDataRequest {
     }
 }
 
-public enum DataKind: UInt32 {
+public enum DataKind: UInt32, Sendable {
     case cookies = 0
     case cache = 1
     case localStorage = 2
@@ -566,7 +566,7 @@ public enum DataKind: UInt32 {
     case all = 5
 }
 
-public struct FindQuery {
+public struct FindQuery: Sendable {
     public let text: String
     public let backwards: Bool
     public let caseSensitive: Bool
@@ -580,7 +580,7 @@ public struct FindQuery {
     }
 }
 
-public struct FindResult {
+public struct FindResult: Sendable {
     public let matches: UInt32
     public let active: UInt32
 
@@ -590,7 +590,7 @@ public struct FindResult {
     }
 }
 
-public struct SnapshotOptions {
+public struct SnapshotOptions: Sendable {
     public let maxWidth: UInt32
     public let format: SnapshotFormat
 
@@ -600,12 +600,12 @@ public struct SnapshotOptions {
     }
 }
 
-public enum SnapshotFormat {
+public enum SnapshotFormat: Sendable {
     case png
     case jpeg(UInt8)
 }
 
-public struct WebSnapshot {
+public struct WebSnapshot: Sendable {
     public let width: UInt32
     public let height: UInt32
     public let format: SnapshotFormat
@@ -619,7 +619,7 @@ public struct WebSnapshot {
     }
 }
 
-public struct DownloadOp {
+public struct DownloadOp: Sendable {
     public let downloadId: UInt64
     public let action: DownloadAction
 
@@ -629,13 +629,13 @@ public struct DownloadOp {
     }
 }
 
-public enum DownloadAction: UInt32 {
+public enum DownloadAction: UInt32, Sendable {
     case cancel = 0
     case pause = 1
     case resume = 2
 }
 
-public enum ControlEvent {
+public enum ControlEvent: Sendable {
     case navigationStarted(NavInfo)
     case navigationCommitted(NavInfo)
     case navigationFinished(NavInfo)
@@ -650,7 +650,7 @@ public enum ControlEvent {
     case processTerminated(TerminationInfo)
 }
 
-public struct NavInfo {
+public struct NavInfo: Sendable {
     public let navigationId: UInt64
     public let url: String
     public let isRedirect: Bool
@@ -664,7 +664,7 @@ public struct NavInfo {
     }
 }
 
-public struct NavFailure {
+public struct NavFailure: Sendable {
     public let navigationId: UInt64
     public let url: String
     public let kind: NavErrorKind
@@ -678,7 +678,7 @@ public struct NavFailure {
     }
 }
 
-public enum NavErrorKind: UInt32 {
+public enum NavErrorKind: UInt32, Sendable {
     case network = 0
     case dns = 1
     case timeout = 2
@@ -688,7 +688,7 @@ public enum NavErrorKind: UInt32 {
     case other = 6
 }
 
-public struct InterceptedNav {
+public struct InterceptedNav: Sendable {
     public let navigationId: UInt64
     public let url: String
 
@@ -698,7 +698,7 @@ public struct InterceptedNav {
     }
 }
 
-public struct DecisionRequest {
+public struct DecisionRequest: Sendable {
     public let requestId: UInt64
     public let kind: DecisionKind
 
@@ -708,7 +708,7 @@ public struct DecisionRequest {
     }
 }
 
-public enum DecisionKind {
+public enum DecisionKind: Sendable {
     case navigation(NavInfo)
     case newWindow(NewWindowAsk)
     case permission(PermissionAsk)
@@ -719,7 +719,7 @@ public enum DecisionKind {
     case download(DownloadAsk)
 }
 
-public struct NewWindowAsk {
+public struct NewWindowAsk: Sendable {
     public let url: String
     public let userGesture: Bool
 
@@ -729,7 +729,7 @@ public struct NewWindowAsk {
     }
 }
 
-public struct PermissionAsk {
+public struct PermissionAsk: Sendable {
     public let permissions: [WebPermission]
     public let frameOrigin: String
     public let topOrigin: String
@@ -741,7 +741,7 @@ public struct PermissionAsk {
     }
 }
 
-public enum WebPermission: UInt32 {
+public enum WebPermission: UInt32, Sendable {
     case camera = 0
     case microphone = 1
     case geolocation = 2
@@ -752,7 +752,7 @@ public enum WebPermission: UInt32 {
     case other = 7
 }
 
-public struct HttpAuthAsk {
+public struct HttpAuthAsk: Sendable {
     public let host: String
     public let realm: String
     public let isProxy: Bool
@@ -764,7 +764,7 @@ public struct HttpAuthAsk {
     }
 }
 
-public struct TlsErrorInfo {
+public struct TlsErrorInfo: Sendable {
     public let url: String
     public let host: String
     public let description: String
@@ -778,7 +778,7 @@ public struct TlsErrorInfo {
     }
 }
 
-public struct FileChooserAsk {
+public struct FileChooserAsk: Sendable {
     public let multiple: Bool
     public let accept: [String]
     public let capture: Bool
@@ -790,7 +790,7 @@ public struct FileChooserAsk {
     }
 }
 
-public struct DialogAsk {
+public struct DialogAsk: Sendable {
     public let kind: DialogKind
     public let message: String
     public let defaultText: String
@@ -804,14 +804,14 @@ public struct DialogAsk {
     }
 }
 
-public enum DialogKind: UInt32 {
+public enum DialogKind: UInt32, Sendable {
     case alert = 0
     case confirm = 1
     case prompt = 2
     case beforeUnload = 3
 }
 
-public struct DownloadAsk {
+public struct DownloadAsk: Sendable {
     public let downloadId: UInt64
     public let url: String
     public let suggestedName: String
@@ -827,7 +827,7 @@ public struct DownloadAsk {
     }
 }
 
-public struct SchemeRequestInfo {
+public struct SchemeRequestInfo: Sendable {
     public let requestId: UInt64
     public let scheme: String
     public let method: String
@@ -847,7 +847,7 @@ public struct SchemeRequestInfo {
     }
 }
 
-public struct BridgeMessage {
+public struct BridgeMessage: Sendable {
     public let channel: String
     public let origin: String
     public let isMainFrame: Bool
@@ -865,7 +865,7 @@ public struct BridgeMessage {
     }
 }
 
-public struct NewViewInfo {
+public struct NewViewInfo: Sendable {
     public let instance: WebViewInstance
     public let url: String
 
@@ -875,7 +875,7 @@ public struct NewViewInfo {
     }
 }
 
-public struct TerminationInfo {
+public struct TerminationInfo: Sendable {
     public let reason: TerminationReason
 
     public init(reason: TerminationReason) {
@@ -883,13 +883,13 @@ public struct TerminationInfo {
     }
 }
 
-public enum TerminationReason: UInt32 {
+public enum TerminationReason: UInt32, Sendable {
     case crashed = 0
     case killed = 1
     case other = 2
 }
 
-public enum TelemetryKind: UInt32 {
+public enum TelemetryKind: UInt32, Sendable {
     case progress = 0
     case title = 1
     case url = 2
@@ -899,7 +899,7 @@ public enum TelemetryKind: UInt32 {
     case downloads = 6
 }
 
-public enum TelemetryEvent {
+public enum TelemetryEvent: Sendable {
     case progress(Float)
     case title(String)
     case url(String)
@@ -911,7 +911,7 @@ public enum TelemetryEvent {
     case dropped(UInt32)
 }
 
-public struct HistoryState {
+public struct HistoryState: Sendable {
     public let canGoBack: Bool
     public let canGoForward: Bool
 
@@ -921,7 +921,7 @@ public struct HistoryState {
     }
 }
 
-public struct ConsoleLine {
+public struct ConsoleLine: Sendable {
     public let level: ConsoleLevel
     public let message: String
     public let source: String
@@ -935,7 +935,7 @@ public struct ConsoleLine {
     }
 }
 
-public enum ConsoleLevel: UInt32 {
+public enum ConsoleLevel: UInt32, Sendable {
     case debug = 0
     case log = 1
     case info = 2
@@ -943,7 +943,7 @@ public enum ConsoleLevel: UInt32 {
     case error = 4
 }
 
-public struct DownloadProgress {
+public struct DownloadProgress: Sendable {
     public let downloadId: UInt64
     public let received: UInt64
     public let total: UInt64?
@@ -955,7 +955,7 @@ public struct DownloadProgress {
     }
 }
 
-public struct DownloadDone {
+public struct DownloadDone: Sendable {
     public let downloadId: UInt64
     public let path: String?
     public let error: String?
