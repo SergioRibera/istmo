@@ -78,7 +78,32 @@ impl SwiftWire {
             Shape::Named(name) => format!("try {}read{name}(&{cursor})", self.prefix()),
             Shape::Vec(inner) => self.read_container("readVec", inner, cursor, depth),
             Shape::Option(inner) => self.read_container("readOption", inner, cursor, depth),
+            Shape::FrameSink(meta) => self.read_frame_sink(meta, cursor, depth),
         }
+    }
+
+    /// A sink id, wrapped with the writer of its metadata so the backend
+    /// hands typed metadata to `IstmoFrameSink`. The closure escapes, so
+    /// it captures what it encodes with (`codecs` or `self`) explicitly.
+    fn read_frame_sink(self, meta: &TypeRef, cursor: &str, depth: usize) -> String {
+        let ty = meta.to_swift();
+        let id = format!("try Bincode.readVarintU64(&{cursor})");
+        if meta.is_unit() {
+            return format!("IstmoFrameSink<{ty}>(id: {id}, encode: {{ _ in Data() }})");
+        }
+        let (o, v) = (format!("o{depth}"), format!("v{depth}"));
+        let body = self.write_at(meta, &o, &v, depth + 1);
+        let mut named = false;
+        meta.for_each_named(&mut |_| named = true);
+        let capture = match (named, self.named) {
+            (false, _) => "",
+            (true, NamedAccess::Codecs) => "[codecs = codecs] ",
+            (true, NamedAccess::SelfImpl) => "[self] ",
+        };
+        format!(
+            "IstmoFrameSink<{ty}>(id: {id}, encode: {{ {capture}{v} in \
+             var {o} = Data(); {body}; return {o} }})"
+        )
     }
 
     fn read_container(self, helper: &str, inner: &TypeRef, cursor: &str, depth: usize) -> String {
@@ -102,6 +127,7 @@ impl SwiftWire {
             Shape::Named(name) => format!("{}write{name}(&{buf}, {value})", self.prefix()),
             Shape::Vec(inner) => self.write_container("writeVec", inner, buf, value, depth),
             Shape::Option(inner) => self.write_container("writeOption", inner, buf, value, depth),
+            Shape::FrameSink(_) => format!("Bincode.writeVarintU64(&{buf}, {value}.id)"),
         }
     }
 

@@ -57,6 +57,8 @@ pub(crate) enum Shape<'a> {
     Named(&'a str),
     Vec(&'a TypeRef),
     Option(&'a TypeRef),
+    /// A frame sink id carrying metadata of the inner type.
+    FrameSink(&'a TypeRef),
 }
 
 impl TypeRef {
@@ -79,6 +81,7 @@ impl TypeRef {
             Self::Vec(inner) => Shape::Vec(inner),
             Self::Option(inner) => Shape::Option(inner),
             Self::Named(name) => Shape::Named(name.as_str()),
+            Self::FrameSink(meta) => Shape::FrameSink(meta),
         }
     }
 
@@ -90,7 +93,9 @@ impl TypeRef {
     pub(crate) fn for_each_named<'a>(&'a self, f: &mut impl FnMut(&'a str)) {
         match self {
             Self::Named(name) => f(name),
-            Self::Vec(inner) | Self::Option(inner) => inner.for_each_named(f),
+            Self::Vec(inner) | Self::Option(inner) | Self::FrameSink(inner) => {
+                inner.for_each_named(f);
+            }
             Self::Unit
             | Self::Bool
             | Self::U8
@@ -129,6 +134,7 @@ impl TypeRef {
             Self::Vec(inner) => format!("{}List", inner.ident_fragment()),
             Self::Option(inner) => format!("Optional{}", inner.ident_fragment()),
             Self::Named(name) => name.clone(),
+            Self::FrameSink(meta) => format!("{}FrameSink", meta.ident_fragment()),
         }
     }
 }

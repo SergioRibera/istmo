@@ -96,6 +96,10 @@ pub enum TypeRef {
     Vec(Box<Self>),
     Option(Box<Self>),
     Named(String),
+    /// A `FrameSinkId<M>` argument: a `u64` on the wire, a typed sink
+    /// (`IstmoFrameSink<M>`) on the Kotlin / Swift side, `M` being the
+    /// metadata each frame carries. Only valid as a method argument.
+    FrameSink(Box<Self>),
 }
 
 impl TypeRef {
@@ -119,6 +123,7 @@ impl TypeRef {
             Self::Vec(inner) => format!("List<{}>", inner.to_kotlin()),
             Self::Option(inner) => format!("{}?", inner.to_kotlin()),
             Self::Named(name) => name.clone(),
+            Self::FrameSink(meta) => format!("IstmoFrameSink<{}>", meta.to_kotlin()),
         }
     }
 
@@ -142,6 +147,7 @@ impl TypeRef {
             Self::Vec(inner) => format!("[{}]", inner.to_swift()),
             Self::Option(inner) => format!("{}?", inner.to_swift()),
             Self::Named(name) => name.clone(),
+            Self::FrameSink(meta) => format!("IstmoFrameSink<{}>", meta.to_swift()),
         }
     }
 }

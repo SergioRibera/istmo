@@ -26,6 +26,8 @@ interface CoverageBackend {
     suspend fun default()
 
     fun pulse(gap: Unit, hz: UInt): kotlinx.coroutines.flow.Flow<Unit>
+
+    suspend fun feed(frames: IstmoFrameSink<Everything>, levels: IstmoFrameSink<UInt>, ticks: IstmoFrameSink<Unit>)
 }
 
 /// Reader / writer per `Named` type referenced by the `Coverage` contract.
@@ -159,6 +161,16 @@ class CoverageDispatcher(
                         ByteArray(0)
                     }
                 )
+            }
+            "feed" -> {
+                var cursor = 0
+                val d_frames = Bincode.readVarintU64(payload, cursor).let { d1 -> Bincode.Decoded(IstmoFrameSink<Everything>(d1.value) { s1, v1 -> codecs.writeEverything(s1, v1) }, d1.consumed) }; cursor = d_frames.consumed
+                val frames = d_frames.value
+                val d_levels = Bincode.readVarintU64(payload, cursor).let { d1 -> Bincode.Decoded(IstmoFrameSink<UInt>(d1.value) { s1, v1 -> Bincode.writeU32(s1, v1) }, d1.consumed) }; cursor = d_levels.consumed
+                val levels = d_levels.value
+                val ticks = Bincode.readVarintU64(payload, cursor).let { d1 -> Bincode.Decoded(IstmoFrameSink<Unit>(d1.value) { _, _ -> }, d1.consumed) }.value
+                backend.feed(frames, levels, ticks)
+                PluginResult.Unary(ByteArray(0))
             }
             else -> error("unknown Coverage method: $method")
         }

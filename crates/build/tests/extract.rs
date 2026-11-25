@@ -469,3 +469,50 @@ fn parse_errors_report_line_and_column() {
     let msg = err.to_string();
     assert!(msg.contains("line 2"), "{msg}");
 }
+
+#[test]
+fn frame_sink_arguments_keep_their_metadata_type() {
+    let path = write_source(
+        r#"
+        use istmo::{message, plugin, FrameSinkId};
+
+        #[message]
+        pub struct FrameInfo { pub width: u32 }
+
+        #[plugin(name = "istmo.capture", crate = "::istmo_core")]
+        pub trait Capture {
+            async fn start(&self, sink: FrameSinkId<FrameInfo>, levels: istmo::FrameSinkId<u32>);
+        }
+        "#,
+    );
+
+    let got = extract_contract(&path, "Capture").expect("extract");
+    let args: Vec<_> = got.methods[0].args.iter().map(|a| a.ty.clone()).collect();
+    assert_eq!(
+        args,
+        [
+            TypeRef::FrameSink(Box::new(TypeRef::Named("FrameInfo".to_owned()))),
+            TypeRef::FrameSink(Box::new(TypeRef::U32)),
+        ]
+    );
+}
+
+#[test]
+fn frame_sinks_outside_method_arguments_are_rejected() {
+    let path = write_source(
+        r#"
+        use istmo::{message, plugin, FrameSinkId};
+
+        #[message]
+        pub struct Holder { pub sink: FrameSinkId<u32> }
+
+        #[plugin(name = "istmo.capture", crate = "::istmo_core")]
+        pub trait Capture {
+            async fn keep(&self, holder: Holder);
+        }
+        "#,
+    );
+
+    let err = extract_contract(&path, "Capture").expect_err("a sink in a struct");
+    assert!(err.to_string().contains("FrameSinkId"), "{err}");
+}

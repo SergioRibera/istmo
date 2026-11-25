@@ -136,3 +136,17 @@ fn coverage_values_match_golden_bytes() {
         "coverage wire bytes changed: the Kotlin/Swift codecs must be re-checked against them"
     );
 }
+
+/// Kotlin and Swift read and write a `FrameSinkId<M>` argument with the
+/// `NativeHandleId` helpers, so the two must share their bytes.
+#[test]
+fn frame_sink_ids_share_the_native_handle_layout() {
+    for raw in [0, 1, 250, 251, u64::MAX >> 1, u64::MAX] {
+        let sink = codec::encode(&istmo_core::FrameSinkId::<SecondError>::from_raw(raw));
+        assert_eq!(
+            sink.expect("encode sink"),
+            codec::encode(&NativeHandleId(raw)).expect("encode handle"),
+            "raw {raw}"
+        );
+    }
+}

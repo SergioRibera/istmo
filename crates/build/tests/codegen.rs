@@ -1562,6 +1562,17 @@ fn coverage_methods() -> Vec<Method> {
             returns: TypeRef::Unit,
             error: None,
         },
+        Method {
+            name: "feed".to_owned(),
+            kind: MethodKind::Unary,
+            args: vec![
+                arg("frames", TypeRef::FrameSink(Box::new(named("Everything")))),
+                arg("levels", TypeRef::FrameSink(Box::new(TypeRef::U32))),
+                arg("ticks", TypeRef::FrameSink(Box::new(TypeRef::Unit))),
+            ],
+            returns: TypeRef::Unit,
+            error: None,
+        },
     ]
 }
 

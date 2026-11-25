@@ -376,9 +376,13 @@ fn type_to_ref(ty: &Type) -> Result<TypeRef, ExtractError> {
                     let inner = generic_arg_ty(&seg.arguments, "Option")?;
                     Ok(TypeRef::Option(Box::new(type_to_ref(inner)?)))
                 }
+                "FrameSinkId" => {
+                    let meta = generic_arg_ty(&seg.arguments, "FrameSinkId")?;
+                    Ok(TypeRef::FrameSink(Box::new(type_to_ref(meta)?)))
+                }
                 _ if !seg.arguments.is_none() => Err(ExtractError::Unsupported(format!(
-                    "generic type `{}` is not supported; only `Vec<T>` and `Option<T>` \
-                     map to Kotlin/Swift",
+                    "generic type `{}` is not supported; only `Vec<T>`, `Option<T>` and \
+                     `FrameSinkId<T>` map to Kotlin/Swift",
                     tokens(ty)
                 ))),
                 _ => Ok(TypeRef::Named(name)),

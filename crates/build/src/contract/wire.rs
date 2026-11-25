@@ -10,7 +10,7 @@ use wincode::{ReadError, ReadResult, SchemaRead, SchemaWrite, WriteResult};
 
 use super::TypeRef;
 
-/// Deepest `Vec`/`Option` nesting a decoded [`TypeRef`] may have.
+/// Deepest `Vec` / `Option` / `FrameSink` nesting a decoded [`TypeRef`] may have.
 const MAX_DEPTH: usize = 64;
 
 impl TypeRef {
@@ -33,13 +33,16 @@ impl TypeRef {
             Self::Vec(_) => 14,
             Self::Option(_) => 15,
             Self::Named(_) => 16,
+            Self::FrameSink(_) => 17,
         }
     }
 
     fn wire_size<C: Config>(&self) -> WriteResult<usize> {
         let tag = <u32 as SchemaWrite<C>>::size_of(&self.tag())?;
         let body = match self {
-            Self::Vec(inner) | Self::Option(inner) => inner.wire_size::<C>()?,
+            Self::Vec(inner) | Self::Option(inner) | Self::FrameSink(inner) => {
+                inner.wire_size::<C>()?
+            }
             Self::Named(name) => <String as SchemaWrite<C>>::size_of(name)?,
             _ => 0,
         };
@@ -49,7 +52,9 @@ impl TypeRef {
     fn wire_write<C: Config>(&self, mut writer: impl Writer) -> WriteResult<()> {
         <u32 as SchemaWrite<C>>::write(writer.by_ref(), &self.tag())?;
         match self {
-            Self::Vec(inner) | Self::Option(inner) => inner.wire_write::<C>(writer),
+            Self::Vec(inner) | Self::Option(inner) | Self::FrameSink(inner) => {
+                inner.wire_write::<C>(writer)
+            }
             Self::Named(name) => <String as SchemaWrite<C>>::write(writer, name),
             _ => Ok(()),
         }
@@ -81,6 +86,7 @@ impl TypeRef {
             14 => Self::Vec(nested(reader)?),
             15 => Self::Option(nested(reader)?),
             16 => Self::Named(<String as SchemaRead<'de, C>>::get(reader)?),
+            17 => Self::FrameSink(nested(reader)?),
             other => return Err(ReadError::InvalidTagEncoding(other as usize)),
         })
     }

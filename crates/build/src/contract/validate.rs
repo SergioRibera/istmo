@@ -31,6 +31,8 @@ pub enum ContractError {
     DuplicateType { name: String },
     /// Two fields of one struct share a (camelCase) wire name.
     DuplicateField { ty: String, field: String },
+    /// A `FrameSinkId<M>` anywhere but as a method argument itself.
+    FrameSinkPlacement { site: String },
 }
 
 impl fmt::Display for ContractError {
@@ -61,6 +63,11 @@ impl fmt::Display for ContractError {
                 f,
                 "struct `{ty}` has two fields named `{field}` once converted to camelCase"
             ),
+            Self::FrameSinkPlacement { site } => write!(
+                f,
+                "{site} uses `FrameSinkId<_>` outside a method argument; a frame sink \
+                 is only passed to a method, never stored, returned or nested"
+            ),
         }
     }
 }
@@ -82,14 +89,17 @@ impl Contract {
                 });
             }
         }
-        let check = |site: String, ty: &TypeRef| check_type(&declared, &site, ty, false);
+        let check =
+            |site: String, ty: &TypeRef| check_type(&declared, &site, ty, Position::Nested(false));
+        let check_arg =
+            |site: String, ty: &TypeRef| check_type(&declared, &site, ty, Position::Argument);
 
         if let Some(init) = &self.init {
             check("plugin `init`".to_owned(), init)?;
         }
         for m in &self.methods {
             for arg in &m.args {
-                check(
+                check_arg(
                     format!("method `{}` argument `{}`", m.name, arg.name),
                     &arg.ty,
                 )?;
@@ -134,13 +144,29 @@ impl Contract {
     }
 }
 
+/// Where a type reference sits, which decides what it may be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Position {
+    /// A method argument itself: the only place a frame sink may be.
+    Argument,
+    /// Anywhere else; `true` inside a `Vec` / `Option`.
+    Nested(bool),
+}
+
 fn check_type(
     declared: &BTreeSet<&str>,
     site: &str,
     ty: &TypeRef,
-    in_container: bool,
+    position: Position,
 ) -> Result<(), ContractError> {
+    let in_container = position == Position::Nested(true);
     match ty {
+        TypeRef::FrameSink(meta) if position == Position::Argument => {
+            check_type(declared, site, meta, Position::Nested(false))
+        }
+        TypeRef::FrameSink(_) => Err(ContractError::FrameSinkPlacement {
+            site: site.to_owned(),
+        }),
         TypeRef::Named(name) => {
             if declared.contains(name.as_str()) || BUILTIN_NAMED.contains(&name.as_str()) {
                 Ok(())
@@ -156,7 +182,9 @@ fn check_type(
                 site: site.to_owned(),
             })
         }
-        TypeRef::Vec(inner) | TypeRef::Option(inner) => check_type(declared, site, inner, true),
+        TypeRef::Vec(inner) | TypeRef::Option(inner) => {
+            check_type(declared, site, inner, Position::Nested(true))
+        }
         TypeRef::Unit if in_container => Err(ContractError::UnitInContainer {
             site: site.to_owned(),
         }),
@@ -248,6 +276,26 @@ mod tests {
         assert!(matches!(
             contract(arg(unit), vec![]).validate(),
             Err(ContractError::UnitInContainer { .. })
+        ));
+    }
+
+    #[test]
+    fn frame_sinks_are_only_method_arguments() {
+        let sink = || TypeRef::FrameSink(Box::new(TypeRef::U32));
+        assert_eq!(contract(arg(sink()), vec![]).validate(), Ok(()));
+        assert!(matches!(
+            contract(arg(TypeRef::Option(Box::new(sink()))), vec![]).validate(),
+            Err(ContractError::FrameSinkPlacement { .. })
+        ));
+        let nested = TypeRef::FrameSink(Box::new(sink()));
+        assert!(matches!(
+            contract(arg(nested), vec![]).validate(),
+            Err(ContractError::FrameSinkPlacement { .. })
+        ));
+        let unknown = TypeRef::FrameSink(Box::new(TypeRef::Named("Nope".to_owned())));
+        assert!(matches!(
+            contract(arg(unknown), vec![]).validate(),
+            Err(ContractError::UnknownType { .. })
         ));
     }
 

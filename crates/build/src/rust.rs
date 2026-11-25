@@ -168,7 +168,10 @@ impl<'a> DeriveTable<'a> {
                 .get(name.as_str())
                 .copied()
                 .unwrap_or(Derives::NONE),
-            TypeRef::Unit
+            // A sink id is a `Copy` + `Eq` + `Hash` newtype (validation keeps it
+            // out of message types anyway).
+            TypeRef::FrameSink(_)
+            | TypeRef::Unit
             | TypeRef::Bool
             | TypeRef::U8
             | TypeRef::I8
@@ -201,6 +204,7 @@ fn rust_ty(ty: &TypeRef) -> String {
         TypeRef::Vec(inner) => format!("Vec<{}>", rust_ty(inner)),
         TypeRef::Option(inner) => format!("Option<{}>", rust_ty(inner)),
         TypeRef::Named(name) => name.clone(),
+        TypeRef::FrameSink(meta) => format!("FrameSinkId<{}>", rust_ty(meta)),
     }
 }
 
