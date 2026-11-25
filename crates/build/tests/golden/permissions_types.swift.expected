@@ -3,7 +3,7 @@
 
 import Foundation
 
-public enum PermissionStatus: UInt32 {
+public enum PermissionStatus: UInt32, Sendable {
     case granted = 0
     case denied = 1
     case permanentlyDenied = 2
@@ -11,7 +11,7 @@ public enum PermissionStatus: UInt32 {
     case notSupported = 4
 }
 
-public struct PermissionOutcome {
+public struct PermissionOutcome: Sendable {
     public let permission: String
     public let status: PermissionStatus
 

@@ -93,15 +93,6 @@ class CoverageClient(
             Unit
         }
     }
-
-    suspend fun feed(frames: IstmoFrameSink<Everything>, levels: IstmoFrameSink<UInt>, ticks: IstmoFrameSink<Unit>) {
-        val payloadBuf = ByteArrayOutputStream()
-        Bincode.writeU64(payloadBuf, frames.id.toULong())
-        Bincode.writeU64(payloadBuf, levels.id.toULong())
-        Bincode.writeU64(payloadBuf, ticks.id.toULong())
-        val payload = payloadBuf.toByteArray()
-        IstmoRuntime.call(PLUGIN_ID, "feed", payload)
-    }
 }
 
 /// Kotlin-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.

@@ -1569,6 +1569,10 @@ fn coverage_methods() -> Vec<Method> {
                 arg("frames", TypeRef::FrameSink(Box::new(named("Everything")))),
                 arg("levels", TypeRef::FrameSink(Box::new(TypeRef::U32))),
                 arg("ticks", TypeRef::FrameSink(Box::new(TypeRef::Unit))),
+                arg(
+                    "audio",
+                    TypeRef::Option(Box::new(TypeRef::FrameSink(Box::new(TypeRef::Bytes)))),
+                ),
             ],
             returns: TypeRef::Unit,
             error: None,

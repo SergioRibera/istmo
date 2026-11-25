@@ -150,11 +150,12 @@ pub(super) fn mark_codegen_dir(dir: &Path) {
 }
 
 /// Runtime types generated Kotlin may name unqualified.
-const KOTLIN_RUNTIME_SYMBOLS: [&str; 9] = [
+const KOTLIN_RUNTIME_SYMBOLS: [&str; 10] = [
     "BackendException",
     "Bincode",
     "HandleReleaser",
-    "IstmoFrameSink",
+    "IstmoFrameSender",
+    "IstmoGeneratedApi",
     "IstmoRuntime",
     "NativeHandleId",
     "PluginException",

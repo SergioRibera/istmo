@@ -83,7 +83,8 @@ impl KotlinWire {
     }
 
     /// A sink id, wrapped with the writer of its metadata so the backend
-    /// hands typed metadata to `IstmoFrameSink`. Same bits as
+    /// opens an `IstmoFrameSender` (the backend's producer
+    /// session) presenting the metadata type's fingerprint. Same bits as
     /// `NativeHandleId`: a `Long` that may read back negative.
     fn read_frame_sink(self, meta: &TypeRef, bytes: &str, cursor: &str, depth: usize) -> String {
         let d = format!("d{depth}");
@@ -95,9 +96,11 @@ impl KotlinWire {
             format!("{{ {s}, {v} -> {body} }}")
         };
         format!(
-            "Bincode.readVarintU64({bytes}, {cursor}).let {{ {d} -> \
-             Bincode.Decoded(IstmoFrameSink<{}>({d}.value) {writer}, {d}.consumed) }}",
-            meta.to_kotlin()
+            "Bincode.readVarintU64({bytes}, {cursor}).let {{ {d} -> Bincode.Decoded(\
+             @OptIn(IstmoGeneratedApi::class) IstmoFrameSender.open<{}>({d}.value, \
+             0x{:016x}UL.toLong()) {writer}, {d}.consumed) }}",
+            meta.to_kotlin(),
+            meta.meta_fingerprint(),
         )
     }
 
@@ -127,7 +130,7 @@ impl KotlinWire {
             Shape::Named(name) => format!("{}write{name}({buf}, {value})", self.prefix()),
             Shape::Vec(inner) => self.write_container("writeVec", inner, buf, value, depth),
             Shape::Option(inner) => self.write_container("writeOption", inner, buf, value, depth),
-            Shape::FrameSink(_) => format!("Bincode.writeU64({buf}, {value}.id.toULong())"),
+            Shape::FrameSink(_) => format!("Bincode.writeU64({buf}, {value}.sinkId.toULong())"),
         }
     }
 

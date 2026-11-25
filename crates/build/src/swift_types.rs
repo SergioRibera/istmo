@@ -75,7 +75,9 @@ fn error_type_names(contract: &Contract) -> BTreeSet<&str> {
 }
 
 fn write_struct(out: &mut String, s: &StructDef, is_error: bool) {
-    let conform = if is_error { ": Error" } else { "" };
+    // `Error` refines `Sendable`; plain types state it, so backends can
+    // capture them in `@Sendable` capture callbacks (Swift 6 mode).
+    let conform = if is_error { ": Error" } else { ": Sendable" };
     let _ = writeln!(out, "public struct {}{conform} {{", s.name);
     for f in &s.fields {
         let _ = writeln!(
@@ -103,13 +105,13 @@ fn write_struct(out: &mut String, s: &StructDef, is_error: bool) {
 
 fn write_enum(out: &mut String, e: &EnumDef, is_error: bool) {
     if e.variants.iter().all(|v| v.payload.is_empty()) {
-        let conform = if is_error { ", Error" } else { "" };
+        let conform = if is_error { ", Error" } else { ", Sendable" };
         let _ = writeln!(out, "public enum {}: UInt32{conform} {{", e.name);
         for (i, v) in e.variants.iter().enumerate() {
             let _ = writeln!(out, "    case {} = {i}", to_swift_case(&v.name));
         }
     } else {
-        let conform = if is_error { ": Error" } else { "" };
+        let conform = if is_error { ": Error" } else { ": Sendable" };
         let _ = writeln!(out, "public enum {}{conform} {{", e.name);
         for v in &e.variants {
             let case_name = to_swift_case(&v.name);

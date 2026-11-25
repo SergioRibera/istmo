@@ -150,3 +150,31 @@ fn frame_sink_ids_share_the_native_handle_layout() {
         );
     }
 }
+
+/// The fingerprint generated Kotlin and Swift senders present must be
+/// the one the Rust sink computes for the same metadata type.
+#[test]
+fn generated_fingerprints_match_the_rust_sinks() {
+    use istmo_build::contract::TypeRef;
+    use istmo_core::native_frame::meta_fingerprint;
+
+    let named = |n: &str| TypeRef::Named(n.to_owned());
+    let cases: [(TypeRef, u64); 7] = [
+        (TypeRef::U32, meta_fingerprint::<u32>()),
+        (TypeRef::Unit, meta_fingerprint::<()>()),
+        (TypeRef::String, meta_fingerprint::<String>()),
+        (TypeRef::Bytes, meta_fingerprint::<Vec<u8>>()),
+        (named("SecondError"), meta_fingerprint::<SecondError>()),
+        (
+            TypeRef::Vec(Box::new(named("SecondError"))),
+            meta_fingerprint::<Vec<SecondError>>(),
+        ),
+        (
+            TypeRef::Option(Box::new(TypeRef::I64)),
+            meta_fingerprint::<Option<i64>>(),
+        ),
+    ];
+    for (ty, rust) in cases {
+        assert_eq!(ty.meta_fingerprint(), rust, "{}", ty.rust_short_name());
+    }
+}

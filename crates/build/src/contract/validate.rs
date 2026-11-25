@@ -66,7 +66,7 @@ impl fmt::Display for ContractError {
             Self::FrameSinkPlacement { site } => write!(
                 f,
                 "{site} uses `FrameSinkId<_>` outside a method argument; a frame sink \
-                 is only passed to a method, never stored, returned or nested"
+                 is only passed to a method (optionally as an `Option`), never stored, returned or nested"
             ),
         }
     }
@@ -182,6 +182,11 @@ fn check_type(
                 site: site.to_owned(),
             })
         }
+        TypeRef::Option(inner)
+            if position == Position::Argument && matches!(**inner, TypeRef::FrameSink(_)) =>
+        {
+            check_type(declared, site, inner, Position::Argument)
+        }
         TypeRef::Vec(inner) | TypeRef::Option(inner) => {
             check_type(declared, site, inner, Position::Nested(true))
         }
@@ -283,8 +288,13 @@ mod tests {
     fn frame_sinks_are_only_method_arguments() {
         let sink = || TypeRef::FrameSink(Box::new(TypeRef::U32));
         assert_eq!(contract(arg(sink()), vec![]).validate(), Ok(()));
-        assert!(matches!(
+        assert_eq!(
             contract(arg(TypeRef::Option(Box::new(sink()))), vec![]).validate(),
+            Ok(()),
+            "an optional sink argument is fine"
+        );
+        assert!(matches!(
+            contract(arg(TypeRef::Vec(Box::new(sink()))), vec![]).validate(),
             Err(ContractError::FrameSinkPlacement { .. })
         ));
         let nested = TypeRef::FrameSink(Box::new(sink()));

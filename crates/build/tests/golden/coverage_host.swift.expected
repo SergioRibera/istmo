@@ -18,7 +18,7 @@ public protocol CoverageBackend: AnyObject {
     func follow(next: UInt32) -> AsyncThrowingStream<Shape, Error>
     func `default`() async throws -> Void
     func pulse(gap: Void, hz: UInt32) -> AsyncThrowingStream<Void, Error>
-    func feed(frames: IstmoFrameSink<Everything>, levels: IstmoFrameSink<UInt32>, ticks: IstmoFrameSink<Void>) async throws -> Void
+    func feed(frames: IstmoFrameSender<Everything>, levels: IstmoFrameSender<UInt32>, ticks: IstmoFrameSender<Void>, audio: IstmoFrameSender<Data>?) async throws -> Void
 }
 
 /// Reader / writer per `Named` type referenced by the `Coverage` contract.
@@ -132,10 +132,11 @@ public final class CoverageDispatcher: PluginHandler, HandleReleaser {
             })
         case "feed":
             var c = Bincode.Cursor(payload)
-            let frames = IstmoFrameSink<Everything>(id: try Bincode.readVarintU64(&c), encode: { [codecs = codecs] v1 in var o1 = Data(); codecs.writeEverything(&o1, v1); return o1 })
-            let levels = IstmoFrameSink<UInt32>(id: try Bincode.readVarintU64(&c), encode: { v1 in var o1 = Data(); Bincode.writeVarintU32(&o1, v1); return o1 })
-            let ticks = IstmoFrameSink<Void>(id: try Bincode.readVarintU64(&c), encode: { _ in Data() })
-            try await backend.feed(frames: frames, levels: levels, ticks: ticks)
+            let frames = IstmoFrameSender<Everything>.open(sinkId: try Bincode.readVarintU64(&c), fingerprint: 0x651f3a92741d9520, encode: { [codecs = codecs] v1 in var o1 = Data(); codecs.writeEverything(&o1, v1); return o1 })
+            let levels = IstmoFrameSender<UInt32>.open(sinkId: try Bincode.readVarintU64(&c), fingerprint: 0x4d2bdf193e8526d1, encode: { v1 in var o1 = Data(); Bincode.writeVarintU32(&o1, v1); return o1 })
+            let ticks = IstmoFrameSender<Void>.open(sinkId: try Bincode.readVarintU64(&c), fingerprint: 0x07e11f07b4a6665a, encode: { _ in Data() })
+            let audio = try Bincode.readOption(&c) { c1 in IstmoFrameSender<Data>.open(sinkId: try Bincode.readVarintU64(&c1), fingerprint: 0xfddda3e6018940d8, encode: { v2 in var o2 = Data(); Bincode.writeData(&o2, v2); return o2 }) }
+            try await backend.feed(frames: frames, levels: levels, ticks: ticks, audio: audio)
             return .unary(Data())
         default:
             throw PluginRuntimeError.unknownMethod(plugin: "Coverage", method: method)

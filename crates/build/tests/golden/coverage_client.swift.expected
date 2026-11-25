@@ -126,14 +126,6 @@ public final class CoverageClient {
             return ()
         })
     }
-
-    public func feed(frames: IstmoFrameSink<Everything>, levels: IstmoFrameSink<UInt32>, ticks: IstmoFrameSink<Void>) async throws -> Void {
-        var payload = Data()
-        Bincode.writeVarintU64(&payload, frames.id)
-        Bincode.writeVarintU64(&payload, levels.id)
-        Bincode.writeVarintU64(&payload, ticks.id)
-        _ = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "feed", payload: payload)
-    }
 }
 
 /// Swift-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.

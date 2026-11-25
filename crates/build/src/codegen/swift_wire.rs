@@ -83,13 +83,17 @@ impl SwiftWire {
     }
 
     /// A sink id, wrapped with the writer of its metadata so the backend
-    /// hands typed metadata to `IstmoFrameSink`. The closure escapes, so
+    /// opens an `IstmoFrameSender` (the backend's producer
+    /// session) presenting the metadata type's fingerprint. The closure escapes, so
     /// it captures what it encodes with (`codecs` or `self`) explicitly.
     fn read_frame_sink(self, meta: &TypeRef, cursor: &str, depth: usize) -> String {
         let ty = meta.to_swift();
-        let id = format!("try Bincode.readVarintU64(&{cursor})");
+        let id = format!(
+            "try Bincode.readVarintU64(&{cursor}), fingerprint: 0x{:016x}",
+            meta.meta_fingerprint()
+        );
         if meta.is_unit() {
-            return format!("IstmoFrameSink<{ty}>(id: {id}, encode: {{ _ in Data() }})");
+            return format!("IstmoFrameSender<{ty}>.open(sinkId: {id}, encode: {{ _ in Data() }})");
         }
         let (o, v) = (format!("o{depth}"), format!("v{depth}"));
         let body = self.write_at(meta, &o, &v, depth + 1);
@@ -101,7 +105,7 @@ impl SwiftWire {
             (true, NamedAccess::SelfImpl) => "[self] ",
         };
         format!(
-            "IstmoFrameSink<{ty}>(id: {id}, encode: {{ {capture}{v} in \
+            "IstmoFrameSender<{ty}>.open(sinkId: {id}, encode: {{ {capture}{v} in \
              var {o} = Data(); {body}; return {o} }})"
         )
     }
@@ -127,7 +131,7 @@ impl SwiftWire {
             Shape::Named(name) => format!("{}write{name}(&{buf}, {value})", self.prefix()),
             Shape::Vec(inner) => self.write_container("writeVec", inner, buf, value, depth),
             Shape::Option(inner) => self.write_container("writeOption", inner, buf, value, depth),
-            Shape::FrameSink(_) => format!("Bincode.writeVarintU64(&{buf}, {value}.id)"),
+            Shape::FrameSink(_) => format!("Bincode.writeVarintU64(&{buf}, {value}.sinkId)"),
         }
     }
 

@@ -39,7 +39,9 @@ pub fn generate_kotlin_client(contract: &Contract) -> String {
         kt_string(&contract.plugin_id),
     );
     let _ = writeln!(out, "    }}");
-    for method in &contract.methods {
+    // A frame sink is opened by a Rust consumer: methods taking one have
+    // no Kotlin caller.
+    for method in contract.methods.iter().filter(|m| !m.takes_frame_sink()) {
         let _ = writeln!(out);
         write_client_method(&mut out, contract, method);
     }

@@ -4,7 +4,7 @@
 import Foundation
 import IstmoRuntime
 
-public struct Everything {
+public struct Everything: Sendable {
     public let unit: Void
     public let flag: Bool
     public let byte: UInt8
@@ -58,13 +58,13 @@ public struct Everything {
     }
 }
 
-public enum Shape {
+public enum Shape: Sendable {
     case `default`
     case circle(Double)
     case path([Int32], String?)
 }
 
-public enum Mode: UInt32 {
+public enum Mode: UInt32, Sendable {
     case `in` = 0
     case out = 1
 }

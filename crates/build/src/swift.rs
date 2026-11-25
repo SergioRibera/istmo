@@ -57,7 +57,9 @@ pub fn generate_swift_client(contract: &Contract) -> String {
     } else {
         let _ = writeln!(out, "    public init() {{}}");
     }
-    for method in &contract.methods {
+    // A frame sink is opened by a Rust consumer: methods taking one have
+    // no Swift caller.
+    for method in contract.methods.iter().filter(|m| !m.takes_frame_sink()) {
         let _ = writeln!(out);
         match method.kind {
             MethodKind::Unary => write_unary(&mut out, contract, method),
