@@ -133,6 +133,14 @@ fn api() -> &'static Api {
 
 static API: std::sync::OnceLock<&'static Api> = std::sync::OnceLock::new();
 
+/// Xlib, when GDK runs on X11 (embedding). A static, not `Ui` state: view
+/// code runs while the `Ui` cell is borrowed.
+static X11_API: std::sync::OnceLock<&'static X11> = std::sync::OnceLock::new();
+
+fn x11_api() -> Option<&'static X11> {
+    X11_API.get().copied()
+}
+
 fn cstring(s: &str) -> CString {
     CString::new(s.replace('\0', "")).unwrap_or_default()
 }
@@ -277,6 +285,9 @@ fn run_ui_thread(flavor: Flavor, x11_embedding: bool, started: &flume::Sender<St
         } else {
             None
         };
+        if let Some(x11) = x11 {
+            X11_API.set(x11).ok();
+        }
         Ok((
             api,
             format!("{}.{}.{}", version.0, version.1, version.2),
@@ -1113,9 +1124,7 @@ impl GtkView {
             istmo_window::NativeWindow::Xcb { window, .. } => std::ffi::c_ulong::from(window.get()),
             _ => return Err(WebViewError::RenderModeUnsupported),
         };
-        let x11 = ui(|ui| ui.x11)
-            .flatten()
-            .ok_or(WebViewError::RenderModeUnsupported)?;
+        let x11 = x11_api().ok_or(WebViewError::RenderModeUnsupported)?;
         let (xid, display) = x11_ids(self.window).ok_or(WebViewError::RenderModeUnsupported)?;
         // SAFETY: X calls on GDK's own display for our realised window.
         unsafe {
@@ -1130,7 +1139,7 @@ impl GtkView {
             return;
         }
         let api = api();
-        let Some(x11) = ui(|ui| ui.x11).flatten() else {
+        let Some(x11) = x11_api() else {
             return;
         };
         // SAFETY: live window; X calls on GDK's display.
