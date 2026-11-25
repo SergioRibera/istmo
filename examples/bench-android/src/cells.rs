@@ -28,7 +28,7 @@ pub enum Cell {
     /// Kotlin-produced stream, paced: per-item emit → receive.
     KotlinStreamPaced,
     /// Kotlin-produced stream, back to back: per-item emit → receive,
-    /// extra[0] = whole-stream ns.
+    /// `extra[0]` = whole-stream ns.
     KotlinStreamBurst,
     /// flume bounded(1) round trip between two threads.
     FlumePingPong,
