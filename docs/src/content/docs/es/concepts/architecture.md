@@ -148,7 +148,16 @@ Istmo es **agnóstico al executor**. Usa canales `flume` y
 - Cada transporte móvil usa un hilo del SO dedicado — un daemon
   enganchado a JNI en Android (`istmo-android-pump`), `istmo-ios-pump`
   en iOS — que entrega los frames salientes a los callbacks de
-  Kotlin/Swift.
+  Kotlin/Swift. En Android las llamadas a Kotlin lo saltan cuando no
+  tiene nada encolado: corren en el hilo de Rust que llama y vuelven
+  como valor de retorno de la llamada JNI si el backend no se suspende.
+- Ninguna llamada crea un hilo. Los hosts en Rust corren en el hilo que
+  entregó la llamada hasta su primera espera, y luego en unos pocos
+  workers asíncronos persistentes (`istmo-worker-*`); los métodos
+  `#[istmo::blocking]` y los hosts escritos a mano con
+  `DispatchMode::Isolated` corren en workers bloqueantes persistentes
+  (`istmo-blocking-*`, como mucho 64). Las esperas calientes giran hasta
+  20 µs antes de dormir y lo dejan de hacer cuando no rinde.
 
 ## Siguiente
 

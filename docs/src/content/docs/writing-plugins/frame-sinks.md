@@ -262,7 +262,7 @@ override suspend fun start(count: UInt, frames: IstmoFrameSender<FrameInfo>) {
 | `submit(image, meta)` (API 28+) | its own `AHardwareBuffer` reference; the `Image` stays open until Rust releases it (after its acquire fence, API 33+) |
 | `submit(hardwareBuffer, meta, owner)` (API 26+) | its own reference; `owner` (if any) is closed once Rust releases it |
 | `openSlotPool(size, count)`, `acquireSlot()`, `submit(slot, length, meta)` | Rust-owned memory Kotlin filled: no copy. A slot's `buffer` is valid only until it is submitted or `release(slot)`d |
-| `submit(byteBuffer, meta)`, `submitBytes(bytes, meta)` | one copy; your buffer is yours again when the call returns |
+| `submit(byteBuffer, meta)`, `submitBytes(bytes, meta)` | one copy, into Rust memory the sender reuses once the consumer drops a frame (no fresh allocation per frame); your buffer is yours again when the call returns |
 
 ## Producing from Swift
 

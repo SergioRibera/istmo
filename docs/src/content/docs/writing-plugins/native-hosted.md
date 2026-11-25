@@ -269,6 +269,25 @@ idiomatic; Istmo does not impose an executor. If your work must land
 on the main thread (UIKit APIs, view-lifecycle work), gate it with
 `MainActor.run` / `withContext(Dispatchers.Main)` as usual.
 
+On Android a call from Rust starts your backend **on the thread that
+made it** (the Rust caller's thread, attached to the JVM on its first
+call), with `CoroutineStart.UNDISPATCHED`: a method that never suspends
+answers before that thread returns, with no thread hop at all; one that
+suspends continues wherever it resumes (`Dispatchers.Default`, or the
+dispatcher it switched to). So, as for any `suspend fun`, do not block
+the thread: move blocking work into `withContext(Dispatchers.IO)`. A
+backend that cannot follow that registers with
+`IstmoRuntime.registerHandler(id, handler, startInPlace = false)` and
+every call starts on `Dispatchers.Default`, as before.
+
+Calls from Rust reach Kotlin directly only while nothing queued earlier
+is still on its way (a notification, a cancel, a stream item): a call
+never overtakes a frame the same thread sent before it. Calls made from
+different threads were never ordered with each other.
+
+On iOS calls keep arriving on the runtime's delivery thread and run in a
+`Task`.
+
 ## Next
 
 - Streaming events: [Streams](/istmo/writing-plugins/streams/).

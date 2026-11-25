@@ -97,6 +97,16 @@ Overflow behaviour is controlled by the channel bound you pick. Prefer
 bounded channels — an unbounded stream that produces faster than the
 consumer reads will grow forever.
 
+A Kotlin collector (`IstmoRuntime.stream`, and so every generated
+client's stream) holds the producer back: Rust sends at most
+`bufferCapacity` (default 256) items ahead of what the collector took,
+and the collector hands credit back in batches of half that window. A
+producer that runs ahead waits on its bounded channel — `send` blocks,
+`send_async` waits — instead of overflowing the collector. Items are
+never dropped; apply `.conflate()` in the collector when only the latest
+value matters. Back-to-back items cross JNI in batches of up to 64 in
+both directions.
+
 ## Producing items — native-hosted
 
 On Android the generated `<T>Backend` interface declares the stream as

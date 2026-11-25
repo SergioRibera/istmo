@@ -99,6 +99,16 @@ El comportamiento ante overflow lo controla el límite del canal que
 elijas. Prefiere canales bounded — un stream unbounded que produce más
 rápido de lo que el consumidor lee crecerá para siempre.
 
+Un colector en Kotlin (`IstmoRuntime.stream`, y por tanto el stream de
+cada cliente generado) frena al productor: Rust envía como mucho
+`bufferCapacity` (256 por defecto) ítems por delante de lo que el
+colector tomó, y el colector devuelve crédito en lotes de la mitad de
+esa ventana. Un productor que se adelanta espera en su canal bounded —
+`send` bloquea, `send_async` espera — en lugar de desbordar al colector.
+Nunca se descartan ítems; aplica `.conflate()` en el colector si solo
+importa el último valor. Los ítems seguidos cruzan JNI en lotes de hasta
+64 en ambas direcciones.
+
 ## Producir items — native-hosted
 
 En Android la interfaz `<T>Backend` generada declara el stream como un

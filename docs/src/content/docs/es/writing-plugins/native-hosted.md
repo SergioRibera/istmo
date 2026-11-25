@@ -274,6 +274,27 @@ aterrizar en el main thread (APIs de UIKit, trabajo de ciclo de vida
 de vista), protégelo con `MainActor.run` /
 `withContext(Dispatchers.Main)` como siempre.
 
+En Android una llamada desde Rust arranca tu backend **en el hilo que
+la hizo** (el hilo del llamador en Rust, enganchado a la JVM en su
+primera llamada), con `CoroutineStart.UNDISPATCHED`: un método que
+nunca se suspende responde antes de que ese hilo regrese, sin ningún
+salto de hilo; uno que se suspende continúa donde se reanude
+(`Dispatchers.Default`, o el dispatcher al que cambió). Así que, como en
+cualquier `suspend fun`, no bloquees el hilo: mueve el trabajo
+bloqueante a `withContext(Dispatchers.IO)`. Un backend que no pueda
+cumplirlo se registra con
+`IstmoRuntime.registerHandler(id, handler, startInPlace = false)` y cada
+llamada arranca en `Dispatchers.Default`, como antes.
+
+Las llamadas desde Rust llegan directo a Kotlin solo mientras no quede
+en camino nada encolado antes (una notificación, un cancel, un ítem de
+stream): una llamada nunca adelanta a un frame que el mismo hilo envió
+antes. Las llamadas de hilos distintos nunca estuvieron ordenadas entre
+sí.
+
+En iOS las llamadas siguen llegando por el hilo de entrega del runtime
+y corren en un `Task`.
+
 ## Siguiente
 
 - Streaming de eventos: [Streams](/istmo/es/writing-plugins/streams/).
