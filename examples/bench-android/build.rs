@@ -15,10 +15,11 @@ const PACKAGE: &str = "dev.istmo.bench.gen";
 
 /// Runtime types generated Kotlin may name unqualified (as `istmo-build`'s
 /// app codegen imports them).
-const RUNTIME_SYMBOLS: [&str; 10] = [
+const RUNTIME_SYMBOLS: [&str; 11] = [
     "BackendException",
     "Bincode",
     "HandleReleaser",
+    "IstmoBytesOut",
     "IstmoFrameSender",
     "IstmoGeneratedApi",
     "IstmoRuntime",
