@@ -312,7 +312,11 @@ internal class ManagedView(
     }
 
     fun telemetryFlow(kinds: List<TelemetryKind>): Flow<TelemetryEvent> {
-        val wanted = kinds.toSet().intersect(spec.telemetry.toSet())
+        val missing = kinds.filter { it !in spec.telemetry }
+        if (missing.isNotEmpty()) {
+            return flow { throw BackendException(WebViewError.InvalidArgument("telemetry kinds not in the view spec: $missing")) }
+        }
+        val wanted = kinds.toSet()
         val channel = Channel<TelemetryEvent>(TELEMETRY_DEPTH, BufferOverflow.SUSPEND)
         telemetrySubs[channel] = wanted
         return flow {

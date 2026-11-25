@@ -283,7 +283,11 @@ final class ManagedWebView: NSObject {
     }
 
     func telemetryStream(_ kinds: [TelemetryKind]) -> AsyncThrowingStream<TelemetryEvent, Error> {
-        let wanted = Set(kinds).intersection(spec.telemetry)
+        let missing = kinds.filter { !spec.telemetry.contains($0) }
+        if !missing.isEmpty {
+            return AsyncThrowingStream { $0.finish(throwing: WebViewError.invalidArgument("telemetry kinds not in the view spec: \(missing)")) }
+        }
+        let wanted = Set(kinds)
         let key = UUID()
         return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(64)) { cont in
             DispatchQueue.main.async {

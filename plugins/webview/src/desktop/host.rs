@@ -447,11 +447,18 @@ impl WebView for DesktopWebView {
     ) -> flume::Receiver<Result<TelemetryEvent, WebViewError>> {
         match self.views.get(&view) {
             Ok(core) => {
-                let allowed: Vec<_> = kinds
-                    .into_iter()
-                    .filter(|k| core.spec.telemetry.contains(k))
+                // Asking for a kind the spec did not enable is a mistake,
+                // not a stream that stays silent.
+                let missing: Vec<_> = kinds
+                    .iter()
+                    .filter(|k| !core.spec.telemetry.contains(k))
                     .collect();
-                core.telemetry.subscribe(allowed)
+                if !missing.is_empty() {
+                    return failed_stream(WebViewError::InvalidArgument(format!(
+                        "telemetry kinds not in the view spec: {missing:?}"
+                    )));
+                }
+                core.telemetry.subscribe(kinds)
             }
             Err(err) => failed_stream(err),
         }
