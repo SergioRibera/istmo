@@ -3,7 +3,7 @@
 //! resolve.
 
 use istmo_build::{
-    CONTRACTS_KEY, Contract, Method, MethodKind, TypeRef, collect_contracts_from,
+    CONTRACTS_FORMAT, CONTRACTS_KEY, Contract, Method, MethodKind, TypeRef, collect_contracts_from,
     contracts_handover_line, deserialize_contracts, serialize_contracts,
 };
 
@@ -55,6 +55,12 @@ fn multi_payload_refuses_trailing_bytes_and_bad_hex() {
     assert!(deserialize_contracts(&format!("{hex}00")).is_err());
     assert!(deserialize_contracts("zz").is_err());
     assert!(deserialize_contracts("FFFFFFFFFF").is_err());
+    // A payload of another format is refused by its first byte.
+    let other = format!("{:02x}{}", CONTRACTS_FORMAT + 1, &hex[2..]);
+    assert!(matches!(
+        deserialize_contracts(&other),
+        Err(istmo_build::HandoverError::ContractFormat { .. })
+    ));
 }
 
 #[test]
@@ -130,8 +136,11 @@ fn a_plugin_id_claimed_by_two_crates_keeps_the_first_by_links_name() {
     assert_eq!(ids(&got), [("dup.id", "FromAlpha"), ("b.own", "B")]);
 }
 
+/// A contract that does not decode would silently drop a plugin's
+/// generated code: the build stops with the variable's name instead.
 #[test]
-fn a_corrupt_payload_is_skipped_without_dropping_the_others() {
+#[should_panic(expected = "istmo: cannot read")]
+fn a_corrupt_payload_stops_the_build() {
     let got = collect_contracts_from([
         var("BROKEN", CONTRACTS_KEY, "DEADBEEF".to_owned()),
         var("ODD", CONTRACTS_KEY, "ABC".to_owned()),

@@ -31,8 +31,16 @@ pub const MANIFEST_KEY: &str = "ISTMO_MANIFEST";
 pub const ASSETS_KEY: &str = "ISTMO_ASSETS";
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum HandoverError {
     InvalidHex,
+
+    /// A contract payload written by an `istmo-build` with another
+    /// contract format.
+    ContractFormat {
+        found: u8,
+        expected: u8,
+    },
 
     Decode(DecodeError),
 
@@ -43,6 +51,11 @@ impl std::fmt::Display for HandoverError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidHex => f.write_str("handover payload was not valid hex"),
+            Self::ContractFormat { found, expected } => write!(
+                f,
+                "contract handover format {found}, this istmo-build reads {expected}: build \
+                 every plugin crate with the same istmo-build version"
+            ),
             Self::Decode(err) => write!(f, "handover decode: {err}"),
             Self::Encode(err) => write!(f, "handover encode: {err}"),
         }
@@ -54,10 +67,14 @@ impl std::error::Error for HandoverError {
         match self {
             Self::Decode(err) => Some(err),
             Self::Encode(err) => Some(err),
-            Self::InvalidHex => None,
+            Self::InvalidHex | Self::ContractFormat { .. } => None,
         }
     }
 }
+
+/// Format of a [`CONTRACTS_KEY`] payload: its first byte. Bumped whenever
+/// the encoding of [`Contract`] changes (2: `TypeRef::FrameSink`).
+pub const CONTRACTS_FORMAT: u8 = 2;
 
 /// Hex payload for [`CONTRACTS_KEY`]: every contract of one crate.
 ///
@@ -65,7 +82,8 @@ impl std::error::Error for HandoverError {
 ///
 /// [`HandoverError::Encode`] when the contracts exceed the codec limit.
 pub fn serialize_contracts(contracts: &[Contract]) -> Result<String, HandoverError> {
-    let bytes = wincode::config::serialize(contracts, codec()).map_err(HandoverError::Encode)?;
+    let mut bytes = vec![CONTRACTS_FORMAT];
+    bytes.extend(wincode::config::serialize(contracts, codec()).map_err(HandoverError::Encode)?);
     Ok(hex_encode(&bytes))
 }
 
@@ -77,7 +95,19 @@ pub fn serialize_contracts(contracts: &[Contract]) -> Result<String, HandoverErr
 /// payload that is not exactly one encoded contract list.
 pub fn deserialize_contracts(hex: &str) -> Result<Vec<Contract>, HandoverError> {
     let bytes = hex_decode(hex)?;
-    wincode::config::deserialize_exact::<Vec<Contract>, _>(&bytes, codec())
+    let Some((&format, body)) = bytes.split_first() else {
+        return Err(HandoverError::ContractFormat {
+            found: 0,
+            expected: CONTRACTS_FORMAT,
+        });
+    };
+    if format != CONTRACTS_FORMAT {
+        return Err(HandoverError::ContractFormat {
+            found: format,
+            expected: CONTRACTS_FORMAT,
+        });
+    }
+    wincode::config::deserialize_exact::<Vec<Contract>, _>(body, codec())
         .map_err(HandoverError::Decode)
 }
 
@@ -277,13 +307,10 @@ where
     let mut owners: BTreeMap<String, String> = BTreeMap::new();
     let mut out = Vec::new();
     for (links, (var, payload)) in by_links {
-        let contracts = match deserialize_contracts(&payload) {
-            Ok(contracts) => contracts,
-            Err(err) => {
-                warn_decode(&var, &err);
-                continue;
-            }
-        };
+        // A contract that does not decode would silently drop a plugin's
+        // generated code: stop the build instead.
+        let contracts = deserialize_contracts(&payload)
+            .unwrap_or_else(|err| panic!("istmo: cannot read {var}: {err}"));
         for contract in contracts {
             match owners.get(&contract.plugin_id) {
                 None => {
@@ -425,8 +452,8 @@ mod tests {
 
     #[test]
     fn deserialize_reports_decode_failure_on_valid_hex_bad_bytes() {
-        let hex = "DEADBEEF";
-        let err = deserialize_contracts(hex).expect_err("decode should fail");
+        let hex = format!("{CONTRACTS_FORMAT:02x}DEADBEEF");
+        let err = deserialize_contracts(&hex).expect_err("decode should fail");
         assert!(matches!(err, HandoverError::Decode(_)));
     }
 
