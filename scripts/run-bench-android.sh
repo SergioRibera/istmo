@@ -144,15 +144,25 @@ for mode in $modes; do
     adb_cmd shell am force-stop dev.istmo.bench
     adb_cmd logcat -c
     adb_cmd shell am start -W -n dev.istmo.bench/.BenchActivity --ez auto true --es mode "$mode" >/dev/null
-    # Our tag only, stop at BENCH_END (or give up after 30 minutes).
-    timeout 1800 adb -s "$serial" logcat -v raw istmo-bench:I '*:S' \
-        | while IFS= read -r line; do
-            echo "$line" >> "$out"
-            case "$line" in
-                *BENCH_END*) echo "$line"; break ;;
-                *) echo "$line" ;;
-            esac
-        done || echo "::  mode $mode timed out" | tee -a "$out"
+    # Our tag only, into a file polled for BENCH_END (or 30 minutes):
+    # piping `logcat` into a loop that stops reading leaves it blocked
+    # until its next write, which never comes.
+    capture=$(mktemp)
+    adb -s "$serial" logcat -v raw istmo-bench:I '*:S' > "$capture" &
+    logcat_pid=$!
+    deadline=$((SECONDS + 1800))
+    shown=0
+    until grep -q BENCH_END "$capture" || [ "$SECONDS" -ge "$deadline" ]; do
+        sleep 2
+        lines=$(wc -l < "$capture")
+        [ "$lines" -gt "$shown" ] && sed -n "$((shown + 1)),${lines}p" "$capture" && shown=$lines
+    done
+    kill "$logcat_pid" 2>/dev/null || true
+    wait "$logcat_pid" 2>/dev/null || true
+    sed -n "$((shown + 1)),\$p" "$capture"
+    grep -q BENCH_END "$capture" || echo "::  mode $mode timed out" | tee -a "$capture"
+    cat "$capture" >> "$out"
+    rm -f "$capture"
 done
 adb_cmd shell am force-stop dev.istmo.bench
 
