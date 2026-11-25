@@ -1,85 +1,54 @@
 # bench-android
 
-On-device istmo call-overhead benchmark. Compares `DispatchMode::Isolated`,
-`DispatchMode::Inline`, and the typed in-process shortcut across four
-payload sizes, reporting p50 / p95 / p99 in nanoseconds.
+On-device latency benchmark of istmo's Rust ↔ Kotlin path. The app
+starts the real runtime (`IstmoRuntime.start`, JNI pump, generated
+dispatcher and client) and measures, per call:
 
-## What it measures
+| Section | What |
+|---|---|
+| `jni` | bare JNI both ways (`CallStaticVoidMethod`, registered native, with and without `byte[]`), thread attach + detach |
+| `rs` | Rust → Rust hosts: `DispatchMode::Isolated`, `Inline`, typed shortcut |
+| `rs->kt` | Rust → a Kotlin-implemented plugin (`KotlinBench.echo`), generated client and raw bytes |
+| `kt->rs` | generated Kotlin client → Rust-hosted plugin (`RustBench.echo`, Isolated), raw `IstmoRuntime.call` to an Inline and an Isolated host |
+| `stream` | Kotlin-produced `#[stream]` consumed in Rust and the reverse, paced (200 µs) and burst: per-item latency + items/s |
+| `wake` | futex, condvar, flume (and spin-then-park), thread spawn, Kotlin park/unpark, `Looper` post, `withContext(Default)` |
+| `frames` | Kotlin frame-sink producers (`submitBytes`, slot pool, `HardwareBuffer` + owner, `Image` from an `ImageReader`) at 4 KB / 1 MB / 8 MB (1080p RGBA): submit → Rust `recv`, submit cost, Rust drop → owner closed |
+| sensitivity | a subset pinned to little / big cores, with one and with all-core spinning load |
+| breakdown | (`probe` mode) every hop of a Rust → Kotlin → Rust and a Kotlin → Rust → Kotlin call, stamped with `CLOCK_MONOTONIC` on both sides |
+| legacy | (`legacy` mode) the original batch-mean matrix, for comparison with older runs |
 
-Each run does 1 000 echo roundtrips, 100 batches per cell, 400 cells per
-device. Warm-up batch is discarded. For each cell the harness records
-total ns, min, max, and three percentiles.
+Each cell runs 100 discarded warm-up iterations and 1000 measured ones,
+each timed on its own; `first` is the very first (cold) sample and the
+part after `|` is the CPU each involved thread last ran on.
 
-Payload sizes: 0, 64, 1024, 65 536 bytes.
-Modes: `Isolated`, `Inline`, `Typed`.
+The `probe` mode starts the runtime with `ProbeRuntime` as the pump's
+callback class (it stamps, then forwards to `IstmoRuntime`) and enables
+`istmo-android`'s off-by-default `latency-probe` feature stamps; the
+runtime's own code paths are unchanged.
 
-The Rust side is a single cdylib: three echo hosts (one per mode) plus a
-typed shortcut registered on the inline one. The Kotlin side is a tiny
-`Activity` with a Run button and a monospace output pane.
-
-## Building
-
-### One shot through Nix
-
-```
-nix run .#bench-android
-```
-
-Runs `cargo ndk` for `arm64-v8a` and `./gradlew :app:assembleRelease`
-inside a devshell pinned by the repo's `flake.nix`. The APK lands at
-`examples/bench-android/android/app/build/outputs/apk/release/app-release-unsigned.apk`.
-
-### Connect a device and run the whole matrix
+## Run
 
 ```
-nix run .#bench-android-device                  # single attached device
-nix run .#bench-android-device -- --serial XYZ  # or by id
+nix run .#bench-android-device -- --serial XYZ                 # full, probe, legacy
+nix run .#bench-android-device -- --serial XYZ --modes probe   # one mode
+nix run .#bench-android-device -- --serial XYZ --skip-build    # reuse the APK
 ```
 
-Builds the APK (unless `--skip-build`), installs it, launches the
-activity in auto-run mode, tails `adb logcat` filtered to `istmo-bench`
-and stops at `BENCH_END`. The result table is dumped both to stdout
-and to `results/bench-android/<device>-<timestamp>.txt`, ready to
-paste into the blog or diff across devices.
+Run it from the repo root. It builds the cdylib (`cargo ndk`) and the APK
+(Gradle, Kotlin 1.9.24 like the demos, runtime from this checkout),
+installs it, keeps the device awake (restoring the setting afterwards;
+the activity also holds `FLAG_KEEP_SCREEN_ON` for vendor builds that
+refuse `svc power stayon`), runs each mode in its own process and writes
+`results/mobile-latency/<device>-<timestamp>.txt` plus a `.freq.txt`
+with CPU frequencies, thermal status and battery temperature every 2 s.
 
-Run it from the repo root so the script can resolve `examples/` and
-write under `results/`.
-
-### Interactive via the Nix devshell
-
-```
-nix develop .#bench-android
-cd examples/bench-android
-cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build -p bench-android --release
-(cd android && ./gradlew :app:installRelease)
-```
-
-Open the app on the device, press "Run benchmark matrix", and copy the
-monospace table into the blog.
-
-### Without Nix
-
-`cargo ndk` + Android SDK 35 + NDK 26 + JDK 17 + Gradle 8.x on the
-`PATH`, then the same commands as above.
-
-## Device matrix for the blog
-
-Minimum useful coverage:
-
-| Tier | Example | Chipset |
-|---|---|---|
-| Low | Moto G Play (2024) | SD 680 |
-| Mid | Pixel 7a | Tensor G2 |
-| High | Pixel 9 Pro | Tensor G4 |
-
-Add a flagship Qualcomm (SD 8 Gen 3) when available.
+The Kotlin side of the two bench plugins is generated by `build.rs` from
+`src/contracts.rs` into `android/app/src/main/java/dev/istmo/bench/gen/`.
 
 ## Caveats
 
-- Debug builds skew heavily — always install the `release` variant.
-- Thermal state matters; run with the device cool and plugged in.
-- Battery saver / performance mode affect scheduling — leave the device
-  on balanced profile.
-- Android's Little-Big scheduler can migrate the bench thread between
-  cores. The harness does not pin an affinity; variance between batches
-  is expected.
+- Keep the device cool, plugged in, screen on and the app in the
+  foreground; the script refuses to start on a locked device.
+- Unpinned cells move between little and big cores and DVFS states:
+  compare the `|` CPU column and the frequency log before comparing
+  cells.
