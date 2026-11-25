@@ -178,6 +178,16 @@ impl From<Origin> for CallOrigin {
     }
 }
 
+/// One call on its way to a host registered on this runtime.
+#[derive(Debug)]
+struct HostedCall {
+    origin: Origin,
+    call_id: CallId,
+    instance_id: Option<InstanceId>,
+    method: String,
+    payload: Vec<u8>,
+}
+
 /// Cancellation state for calls served by hosts on this runtime.
 #[derive(Debug, Default)]
 struct HostedCalls {
@@ -577,11 +587,13 @@ impl Runtime {
         if let Some(dispatcher) = host {
             self.dispatch_hosted_call(
                 dispatcher,
-                Origin::Local,
-                call_id,
-                instance_id,
-                method.into(),
-                payload,
+                HostedCall {
+                    origin: Origin::Local,
+                    call_id,
+                    instance_id,
+                    method: method.into(),
+                    payload,
+                },
             );
         } else {
             self.send_or_unregister(
@@ -635,11 +647,13 @@ impl Runtime {
         if let Some(dispatcher) = host {
             self.dispatch_hosted_call(
                 dispatcher,
-                Origin::Local,
-                call_id,
-                instance_id,
-                method.into(),
-                payload,
+                HostedCall {
+                    origin: Origin::Local,
+                    call_id,
+                    instance_id,
+                    method: method.into(),
+                    payload,
+                },
             );
         } else {
             self.send_or_unregister(
@@ -942,11 +956,13 @@ impl Runtime {
                 match self.host(&plugin_id) {
                     Some(dispatcher) => self.dispatch_hosted_call(
                         dispatcher,
-                        origin,
-                        call_id,
-                        instance_id,
-                        method,
-                        payload,
+                        HostedCall {
+                            origin,
+                            call_id,
+                            instance_id,
+                            method,
+                            payload,
+                        },
                     ),
                     None => self.reject_unhosted(origin, call_id, &plugin_id, "Call"),
                 }
@@ -1368,61 +1384,41 @@ impl Runtime {
         Err(IstmoError::PluginNotDeclared(plugin_id))
     }
 
-    fn dispatch_hosted_call(
-        self: &Arc<Self>,
-        dispatcher: Arc<dyn Dispatch>,
-        origin: Origin,
-        call_id: CallId,
-        instance_id: Option<InstanceId>,
-        method: String,
-        payload: Vec<u8>,
-    ) {
-        if !dispatcher.admits(origin.into()) {
-            self.refuse_origin(origin, call_id, dispatcher.plugin_id());
+    fn dispatch_hosted_call(self: &Arc<Self>, dispatcher: Arc<dyn Dispatch>, call: HostedCall) {
+        if !dispatcher.admits(call.origin.into()) {
+            self.refuse_origin(call.origin, call.call_id, dispatcher.plugin_id());
             return;
         }
-        let Some(cancel) = self.begin_hosted(origin, call_id) else {
+        let Some(cancel) = self.begin_hosted(call.origin, call.call_id) else {
             return;
         };
         match dispatcher.mode() {
-            DispatchMode::Inline => self.dispatch_hosted_call_inline(
-                &dispatcher,
-                origin,
-                call_id,
-                instance_id,
-                &method,
-                &payload,
-                cancel,
-            ),
+            DispatchMode::Inline => self.dispatch_hosted_call_inline(&dispatcher, &call, &cancel),
             // `OnCallerExecutor` is not yet implemented end-to-end; its
             // handle-level plumbing lands in a follow-up. For now it
             // falls back to the isolated path so the hint is forward
             // compatible.
-            DispatchMode::OnCallerExecutor | DispatchMode::Isolated => self
-                .dispatch_hosted_call_spawned(
-                    dispatcher,
-                    origin,
-                    call_id,
-                    instance_id,
-                    method,
-                    payload,
-                    cancel,
-                ),
+            DispatchMode::OnCallerExecutor | DispatchMode::Isolated => {
+                self.dispatch_hosted_call_spawned(dispatcher, call, cancel);
+            }
         }
     }
 
     fn dispatch_hosted_call_spawned(
         self: &Arc<Self>,
         dispatcher: Arc<dyn Dispatch>,
-        origin: Origin,
-        call_id: CallId,
-        instance_id: Option<InstanceId>,
-        method: String,
-        payload: Vec<u8>,
+        call: HostedCall,
         cancel: CancelToken,
     ) {
         let runtime = Arc::clone(self);
-        let task_cancel = cancel.clone();
+        let HostedCall {
+            origin,
+            call_id,
+            instance_id,
+            method,
+            payload,
+        } = call;
+        let refuse_cancel = cancel.clone();
         let spawned = exec::spawn("istmo-call", async move {
             // The dispatcher is shared, so a panic can leave its state
             // half-updated for later calls whether or not it is caught.
@@ -1433,15 +1429,15 @@ impl Runtime {
                 instance_id,
                 &method,
                 &payload,
-                task_cancel.clone(),
+                cancel.clone(),
             ))
             .await;
             runtime
-                .finish_hosted_call(origin, call_id, &task_cancel, outcome)
+                .finish_hosted_call(origin, call_id, &cancel, outcome)
                 .await;
         });
         if let Err(err) = spawned {
-            self.refuse_spawn(origin, call_id, &cancel, err);
+            self.refuse_spawn(origin, call_id, &refuse_cancel, err);
         }
     }
 
@@ -1455,26 +1451,22 @@ impl Runtime {
     fn dispatch_hosted_call_inline(
         self: &Arc<Self>,
         dispatcher: &Arc<dyn Dispatch>,
-        origin: Origin,
-        call_id: CallId,
-        instance_id: Option<InstanceId>,
-        method: &str,
-        payload: &[u8],
-        cancel: CancelToken,
+        call: &HostedCall,
+        cancel: &CancelToken,
     ) {
+        let (origin, call_id) = (call.origin, call.call_id);
         // `CatchUnwind` already stores its inner future in a `Pin<Box<_>>`
         // and the dispatcher's `DispatchFuture` is itself a boxed trait
         // object, so pinning on the stack here spares one extra heap
         // allocation per inline call.
         let future = CatchUnwind::new(dispatcher.dispatch(
-            instance_id,
-            method,
-            payload,
+            call.instance_id,
+            &call.method,
+            &call.payload,
             cancel.clone(),
         ));
         let mut future = std::pin::pin!(future);
-        let waker = std::task::Waker::noop();
-        let mut cx = Context::from_waker(&waker);
+        let mut cx = Context::from_waker(std::task::Waker::noop());
         let outcome = match future.as_mut().poll(&mut cx) {
             Poll::Ready(outcome) => outcome,
             Poll::Pending => {
@@ -1489,7 +1481,7 @@ impl Runtime {
                     Err(encode_dispatch_error_string(
                         "inline-mode host yielded Pending",
                     )),
-                    Wait::UnlessCancelled(&cancel),
+                    Wait::UnlessCancelled(cancel),
                 ));
                 lock(&self.hosted).finish(origin, call_id);
                 return;
@@ -1507,7 +1499,7 @@ impl Runtime {
                     .await;
             });
             if let Err(err) = spawned {
-                self.refuse_spawn(origin, call_id, &cancel, err);
+                self.refuse_spawn(origin, call_id, cancel, err);
             }
             return;
         }
@@ -1515,7 +1507,7 @@ impl Runtime {
         // through `finish_hosted_call` never yield on a local caller and
         // only yield on remote ones when the outbound channel is full;
         // `finish_now` drives it on the current thread.
-        exec::finish_now(self.finish_hosted_call(origin, call_id, &cancel, outcome));
+        exec::finish_now(self.finish_hosted_call(origin, call_id, cancel, outcome));
     }
 
     /// Answer a hosted call whose task could not start.
@@ -1984,13 +1976,10 @@ pub async fn typed_catch_unwind<F, T>(fut: F) -> Result<T, Vec<u8>>
 where
     F: Future<Output = T>,
 {
-    match CatchUnwind::new(fut).await {
-        Ok(value) => Ok(value),
-        Err(_) => {
-            tracing::error!("typed-shortcut host panicked");
-            Err(encode_dispatch_error_string("host panicked"))
-        }
-    }
+    CatchUnwind::new(fut).await.map_err(|_| {
+        tracing::error!("typed-shortcut host panicked");
+        encode_dispatch_error_string("host panicked")
+    })
 }
 
 fn build(config: RuntimeConfig) -> RuntimeInit {
