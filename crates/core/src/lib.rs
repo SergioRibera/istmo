@@ -25,6 +25,9 @@
 //! - [`message`] — the [`Message`] trait every wire type implements.
 //! - [`native_handle`] — opaque platform-owned references
 //!   ([`NativeHandle`], [`NativeHandleId`]).
+//! - [`native_frame`] — frame sinks: buffers moved from a producer to
+//!   a consumer without touching the wire ([`FrameSink`],
+//!   [`NativeBuffer`]).
 //! - [`early_events`] — buffers for values published before their first
 //!   subscriber attaches.
 //! - [`main_thread`] — abstraction over "run this on the platform's
@@ -43,6 +46,7 @@ pub mod early_events;
 pub mod error;
 pub mod main_thread;
 pub mod message;
+pub mod native_frame;
 pub mod native_handle;
 pub mod path;
 pub mod protocol;
@@ -63,6 +67,9 @@ pub use crate::dispatch::{
 pub use crate::error::{CodecError, IstmoError};
 pub use crate::main_thread::{InlineMainThread, MainThread, MockMainThread, Task};
 pub use crate::message::Message;
+pub use crate::native_frame::{
+    FrameSender, FrameSink, FrameSinkId, MemoryKind, NativeBuffer, NativeFrame, SinkPolicy,
+};
 pub use crate::native_handle::NativeHandle;
 pub use crate::protocol::{
     CallId, EarlyEventKind, Envelope, Frame, InstanceId, NativeHandleId, PROTOCOL_VERSION,

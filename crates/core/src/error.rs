@@ -57,6 +57,12 @@ pub enum IstmoError {
     /// about. Add the client to the `plugins:` list of
     /// [`runtime!`](../../istmo_macros/macro.runtime.html).
     PluginNotDeclared(&'static str),
+    /// No frame sink with this raw id is open in this runtime: it was
+    /// closed, or opened by another runtime or process.
+    UnknownFrameSink(u64),
+    /// The frame sink exists but carries another metadata type than the
+    /// one asked for.
+    FrameSinkTypeMismatch(u64),
 }
 
 impl fmt::Display for IstmoError {
@@ -80,6 +86,10 @@ impl fmt::Display for IstmoError {
             }
             Self::PluginNotDeclared(id) => {
                 write!(f, "plugin `{id}` not declared in istmo::runtime!")
+            }
+            Self::UnknownFrameSink(id) => write!(f, "no frame sink {id} in this runtime"),
+            Self::FrameSinkTypeMismatch(id) => {
+                write!(f, "frame sink {id} carries another metadata type")
             }
         }
     }

@@ -16,6 +16,11 @@ use crate::dispatch::{
 use crate::early_events::EarlyEventStore;
 use crate::error::IstmoError;
 use crate::main_thread::{InlineMainThread, MainThread};
+use crate::message::Message;
+use crate::native_frame::{
+    FrameSender, FrameSink, FrameSinkId, FrameSinks, NativeBuffer, SenderLookup, SinkPolicy,
+    SubmitStatus,
+};
 use crate::protocol::{
     CallId, EarlyEventKind, Envelope, Frame, InstanceId, NativeHandleId, PROTOCOL_VERSION,
     StreamEndReason, StreamId,
@@ -372,6 +377,9 @@ pub struct Runtime {
     remote_sink: Mutex<Option<RemoteEnvelopeSink>>,
 
     native_handle_release_hooks: Mutex<Vec<NativeHandleReleaseHook>>,
+
+    /// Open [`FrameSink`]s, by raw id.
+    frame_sinks: FrameSinks,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -1114,6 +1122,110 @@ impl Runtime {
         Some(Arc::clone(&outer))
     }
 
+    /// Open a [`FrameSink`] whose frames carry metadata `M`.
+    ///
+    /// Pass [`FrameSink::id`] to the producer as a plugin method
+    /// argument. A Rust producer in this runtime resolves it with
+    /// [`frame_sender`](Self::frame_sender); Kotlin and Swift producers
+    /// submit through the transport's native entry points, which land in
+    /// [`submit_native_frame`](Self::submit_native_frame).
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::RuntimeShutDown`] after [`shutdown`](Self::shutdown).
+    pub fn open_frame_sink<M: Message + Send + 'static>(
+        self: &Arc<Self>,
+        policy: SinkPolicy,
+    ) -> Result<FrameSink<M>, IstmoError> {
+        self.ensure_running()?;
+        let id = self.next_id();
+        let sink = self.frame_sinks.open(id, policy, Arc::downgrade(self));
+        // `shutdown` raises its flag before closing every sink: a sink
+        // registered after that close is caught here (and closed by its
+        // own drop).
+        if self.is_shut_down() {
+            return Err(IstmoError::RuntimeShutDown);
+        }
+        Ok(sink)
+    }
+
+    /// The producer end of the sink `id`, for a Rust host in this
+    /// process. No bytes are involved: frames are moved.
+    ///
+    /// Resolve once per session and clone the sender; dropping the last
+    /// clone closes the sink.
+    ///
+    /// # Errors
+    ///
+    /// - [`IstmoError::UnknownFrameSink`] when no such sink is open here
+    ///   (closed, or opened by another runtime or process).
+    /// - [`IstmoError::FrameSinkTypeMismatch`] when the sink carries
+    ///   another metadata type.
+    pub fn frame_sender<M: Message + Send + 'static>(
+        &self,
+        id: FrameSinkId<M>,
+    ) -> Result<FrameSender<M>, IstmoError> {
+        self.frame_sinks
+            .sender(id.raw())
+            .map_err(|lookup| match lookup {
+                SenderLookup::Unknown => IstmoError::UnknownFrameSink(id.raw()),
+                SenderLookup::TypeMismatch => IstmoError::FrameSinkTypeMismatch(id.raw()),
+            })
+    }
+
+    /// Push a frame whose metadata is still wire-encoded into the sink
+    /// `sink`: the native entry of the Android and iOS transports.
+    ///
+    /// `meta` must decode as exactly the sink's metadata type. Whatever
+    /// the status, `buffer` is either queued or released before this
+    /// returns.
+    #[must_use]
+    pub fn submit_native_frame(
+        &self,
+        sink: u64,
+        meta: &[u8],
+        buffer: NativeBuffer,
+    ) -> SubmitStatus {
+        self.frame_sinks.submit(sink, meta, buffer)
+    }
+
+    /// Close the sink `sink` from the producer side; its consumer
+    /// receives what is queued, then the end. `false` when no such sink
+    /// is open.
+    pub fn close_frame_sink(&self, sink: u64) -> bool {
+        self.frame_sinks.close(sink)
+    }
+
+    /// Drop the registry entry of a sink whose consumer went away.
+    pub(crate) fn forget_frame_sink(&self, sink: u64) {
+        self.frame_sinks.remove(sink);
+    }
+
+    /// Whether frame sinks opened here can be fed by `plugin_id`'s host:
+    /// `false` for plugins declared remote
+    /// ([`declare_remote_plugin`](Self::declare_remote_plugin)), whose
+    /// producers live in another process and cannot resolve a sink id.
+    #[must_use]
+    pub fn shares_native_frames(&self, plugin_id: &str) -> bool {
+        !self.is_remote_plugin(plugin_id)
+    }
+
+    /// Track a stream served by a typed in-process shortcut like a
+    /// hosted stream, so [`shutdown`](Self::shutdown) cancels it.
+    pub(crate) fn begin_local_stream(&self) -> Result<(StreamId, CancelToken), IstmoError> {
+        self.ensure_running()?;
+        let id = self.next_id();
+        let token = lock(&self.hosted)
+            .begin(Origin::Local, CallId(id))
+            .ok_or(IstmoError::RuntimeShutDown)?;
+        Ok((StreamId(id), token))
+    }
+
+    /// Stop tracking a typed in-process stream.
+    pub(crate) fn finish_local_stream(&self, stream_id: StreamId) {
+        lock(&self.hosted).finish(Origin::Local, CallId(stream_id.get()));
+    }
+
     /// Record that this runtime expects to call plugin `plugin_id`.
     ///
     /// Interacts with [`Runtime::set_enforce_declarations`] to reject
@@ -1851,7 +1963,8 @@ impl Runtime {
     /// [`notify`](Self::notify) return [`IstmoError::RuntimeShutDown`],
     /// and inbound calls are answered with an error. Pending handles
     /// resolve with [`IstmoError::ChannelClosed`], hosted calls and
-    /// streams have their [`CancelToken`]s tripped, and the remote and
+    /// streams have their [`CancelToken`]s tripped, every frame sink
+    /// closes (queued frames are released), and the remote and
     /// instance tables are cleared. The outbound channel itself stays
     /// open until the runtime is dropped, so frames already queued still
     /// reach a transport that keeps draining.
@@ -1869,6 +1982,7 @@ impl Runtime {
         self.has_typed_hosts.store(false, Ordering::Release);
         *lock(&self.remote_calls) = RemoteCalls::default();
         lock(&self.remote_instances).clear();
+        self.frame_sinks.close_all();
         if count > 0 {
             tracing::info!(count, "istmo runtime shutdown cancelled pending operations");
         }
@@ -1959,6 +2073,18 @@ pub fn encode_hosted_stream<T: Send + 'static>(
     Ok(Outcome::StreamOpened(rx))
 }
 
+/// Wait for the next item of `rx` unless `cancel` trips first; `None`
+/// when it did. The item wins a tie.
+pub(crate) async fn recv_unless_cancelled<T>(
+    rx: &FlumeReceiver<T>,
+    cancel: &CancelToken,
+) -> Option<Result<T, flume::RecvError>> {
+    match race(rx.recv_async(), cancel.cancelled()).await {
+        Either::Left(received) => Some(received),
+        Either::Right(()) => None,
+    }
+}
+
 fn encode_dispatch_error_string(message: &str) -> Vec<u8> {
     crate::codec::encode(&message.to_owned()).unwrap_or_default()
 }
@@ -2004,6 +2130,7 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         remote_instances: Mutex::new(HashSet::new()),
         remote_sink: Mutex::new(None),
         native_handle_release_hooks: Mutex::new(Vec::new()),
+        frame_sinks: FrameSinks::default(),
     });
     RuntimeInit {
         runtime,
