@@ -48,6 +48,7 @@ use crate::sync::lock;
 use sink::{ErasedSink, Shared};
 
 mod buffer;
+mod pool;
 mod sink;
 
 pub use buffer::{
@@ -55,6 +56,7 @@ pub use buffer::{
 };
 #[cfg(unix)]
 pub use buffer::{DmaBuf, DmaBufPlane};
+pub use pool::{BytePool, DEFAULT_POOLED_BUFFERS, DEFAULT_POOLED_BYTES};
 pub use sink::{
     EndReason, FrameSender, FrameSink, NativeFrame, Overflow, PushError, Pushed, SinkError,
     SinkPolicy, SinkStats, SubmitStatus,

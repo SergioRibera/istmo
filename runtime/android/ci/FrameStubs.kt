@@ -9,7 +9,8 @@ open class HardwareBuffer : AutoCloseable {
     override fun close() {}
 }
 
-class SyncFence {
+class SyncFence : AutoCloseable {
     val isValid: Boolean get() = false
     fun await(timeout: java.time.Duration): Boolean = true
+    override fun close() {}
 }

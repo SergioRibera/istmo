@@ -69,9 +69,9 @@ pub use crate::error::{CodecError, IstmoError};
 pub use crate::main_thread::{InlineMainThread, MainThread, MockMainThread, Task};
 pub use crate::message::Message;
 pub use crate::native_frame::{
-    BufferIdentity, BufferLease, EndReason, FrameSender, FrameSink, FrameSinkId, IntoBackingError,
-    MemoryKind, NativeBuffer, NativeFrame, NativeProducer, Overflow, PlatformBuffer, PushError,
-    Pushed, SinkError, SinkPolicy, SinkStats, SubmitStatus,
+    BufferIdentity, BufferLease, BytePool, EndReason, FrameSender, FrameSink, FrameSinkId,
+    IntoBackingError, MemoryKind, NativeBuffer, NativeFrame, NativeProducer, Overflow,
+    PlatformBuffer, PushError, Pushed, SinkError, SinkPolicy, SinkStats, SubmitStatus,
 };
 #[cfg(unix)]
 pub use crate::native_frame::{DmaBuf, DmaBufPlane};

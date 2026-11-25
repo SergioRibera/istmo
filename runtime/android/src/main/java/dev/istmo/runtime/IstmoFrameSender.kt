@@ -169,17 +169,30 @@ class IstmoFrameSender<M> private constructor(
             return IstmoSubmitStatus.UNSUPPORTED
         }
         if (android.os.Build.VERSION.SDK_INT >= 33) {
-            val fence = image.fence
-            if (fence.isValid) fence.await(java.time.Duration.ofSeconds(1))
+            // Each `fence` is a fresh fd: close it now instead of leaving
+            // it to the finalizer.
+            image.fence.use { fence ->
+                if (fence.isValid) fence.await(FENCE_TIMEOUT)
+            }
         }
         val buffer = image.hardwareBuffer
         if (buffer == null) {
             image.close()
             return IstmoSubmitStatus.UNSUPPORTED
         }
+        // An open image keeps its buffer open: skip the `isClosed` round
+        // trip of the public `HardwareBuffer` submit.
+        val ticket = lend(image)
+        var reached = false
         return try {
-            submit(buffer, meta, owner = image)
+            submitLocked(meta) { h, bytes, len ->
+                reached = true
+                IstmoFrames.nativeSubmitHardwareBuffer(h, buffer, ticket, bytes, len)
+            }
         } finally {
+            // Rust reports every ticket it was handed; one it never saw
+            // is ours to close.
+            if (!reached) owners.remove(ticket)?.close()
             buffer.close()
         }
     }
@@ -300,6 +313,9 @@ class IstmoFrameSender<M> private constructor(
     }
 
     companion object {
+        /** How long `submit(Image)` waits for an acquire fence; built on first use (`java.time` is API 26+). */
+        private val FENCE_TIMEOUT by lazy { java.time.Duration.ofSeconds(1) }
+
         /**
          * Open a sender on the sink [sinkId] whose metadata has the type
          * [fingerprint] names; only generated dispatchers call this.

@@ -15,7 +15,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
-use istmo_core::native_frame::{BufferIdentity, NativeBuffer, NativeProducer, SubmitStatus};
+use istmo_core::native_frame::{
+    BufferIdentity, BytePool, NativeBuffer, NativeProducer, SubmitStatus,
+};
 use istmo_core::sync::lock;
 
 /// Most slots one pool holds: the free and held sets are `u64` masks.
@@ -203,6 +205,8 @@ pub(crate) struct AndroidProducer {
     producer: NativeProducer,
     released: Arc<Released>,
     pool: OnceLock<Arc<SlotPool>>,
+    /// Memory of copied frames, reused once the consumer drops them.
+    bytes: BytePool,
 }
 
 impl AndroidProducer {
@@ -211,6 +215,7 @@ impl AndroidProducer {
             producer,
             released: Arc::new(Released::default()),
             pool: OnceLock::new(),
+            bytes: BytePool::default(),
         }
     }
 
@@ -232,10 +237,14 @@ impl AndroidProducer {
         buffer.with_release(move || released.push(ticket))
     }
 
+    /// The pool copied frames take their memory from.
+    pub(crate) const fn bytes(&self) -> &BytePool {
+        &self.bytes
+    }
+
     /// Submit a copy of `data`.
     pub(crate) fn submit_copy(&self, meta: &[u8], data: &[u8]) -> SubmitStatus {
-        self.producer
-            .submit(meta, NativeBuffer::from_bytes(data.to_vec()))
+        self.producer.submit(meta, self.bytes.copy_of(data))
     }
 
     /// The pool, created on first use with `slot_size` × `count`.

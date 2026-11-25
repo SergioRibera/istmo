@@ -256,16 +256,34 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoFrames_nativeSubmitBytes<'loc
         let Some((offset, length)) = span(offset, length, capacity) else {
             return SubmitStatus::Invalid.code();
         };
-        let mut data = vec![0i8; length];
-        let Ok(start) = jint::try_from(offset) else {
+        let (Ok(start), Ok(count)) = (jint::try_from(offset), jint::try_from(length)) else {
             return SubmitStatus::Invalid.code();
         };
-        if env.get_byte_array_region(&bytes, start, &mut data).is_err() {
-            return SubmitStatus::Invalid.code();
+        // Straight from the array into reused memory: one copy, no page
+        // faults once the pool is warm.
+        let mut data = producer.bytes().take(length);
+        if length > 0 {
+            let raw = env.get_native_interface();
+            // SAFETY: `raw` is this thread's live `JNIEnv`, `bytes` a valid
+            // local reference whose `[start, start + count)` range `span`
+            // checked against its length; `GetByteArrayRegion` writes
+            // exactly `count` bytes into the spare capacity `take`
+            // reserved, or raises an exception and writes nothing.
+            let copied = unsafe {
+                (**raw).GetByteArrayRegion.map(|get_region| {
+                    get_region(raw, bytes.as_raw(), start, count, data.as_mut_ptr().cast());
+                })
+            };
+            if copied.is_none() || env.exception_check().unwrap_or(true) {
+                let _ = env.exception_clear();
+                return SubmitStatus::Invalid.code();
+            }
+            // SAFETY: the region copy initialised all `length` bytes.
+            unsafe { data.set_len(length) };
         }
-        let data: Vec<u8> = data.into_iter().map(i8::cast_unsigned).collect();
+        let frame = producer.bytes().buffer(data);
         code(with_meta(&env, &meta, meta_len, |meta| {
-            producer.submit_copy(meta, &data)
+            producer.producer().submit(meta, frame)
         }))
     })
 }

@@ -24,7 +24,8 @@ use std::ptr::NonNull;
 
 use istmo_core::Runtime;
 use istmo_core::native_frame::{
-    MemoryKind, NATIVE_ABI_VERSION, NativeBuffer, NativeProducer, PlatformBuffer, SubmitStatus,
+    BytePool, MemoryKind, NATIVE_ABI_VERSION, NativeBuffer, NativeProducer, PlatformBuffer,
+    SubmitStatus,
 };
 
 /// Releases the +1 reference Swift passed (`CFRelease`, or
@@ -154,7 +155,7 @@ fn guard<R>(export: &'static str, on_panic: R, body: impl FnOnce() -> R) -> R {
 
 /// Opaque producer handle Swift's `IstmoFrameSender` holds.
 #[derive(Debug)]
-pub struct IstmoFrameProducer(NativeProducer);
+pub struct IstmoFrameProducer(NativeProducer, BytePool);
 
 /// Submit the retained `object` through `producer` (`None`: a null
 /// handle). `meta` is `None` when its buffer was malformed.
@@ -216,7 +217,7 @@ pub unsafe extern "C" fn istmo_ios_open_frame_producer(
     );
     let (handle, outcome) = match opened {
         Ok(producer) => (
-            Box::into_raw(Box::new(IstmoFrameProducer(producer))),
+            Box::into_raw(Box::new(IstmoFrameProducer(producer, BytePool::default()))),
             SubmitStatus::Accepted,
         ),
         Err(status) => (std::ptr::null_mut(), status),
@@ -339,10 +340,7 @@ pub unsafe extern "C" fn istmo_ios_submit_frame_bytes(
             let (Some(producer), Some(data), Some(meta)) = parts else {
                 return SubmitStatus::Invalid.code();
             };
-            producer
-                .0
-                .submit(meta, NativeBuffer::from_bytes(data.to_vec()))
-                .code()
+            producer.0.submit(meta, producer.1.copy_of(data)).code()
         },
     )
 }
@@ -500,6 +498,7 @@ mod tests {
                 istmo_core::native_frame::meta_fingerprint::<u32>(),
             )
             .expect("producer"),
+            BytePool::default(),
         )));
         let meta = codec::encode(&9u32).expect("meta");
         let data = [1u8, 2, 3];
