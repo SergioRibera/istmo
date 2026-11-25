@@ -6,7 +6,8 @@
 # Each mode runs in its own process (the istmo runtime starts once per
 # process): `full` (the matrix, runtime started the way apps start it),
 # `probe` (per-hop breakdown, pump callbacks stamped by the bench) and
-# `legacy` (the original batch-mean matrix).
+# `legacy` (the original batch-mean matrix) and `spin` (spin-before-park
+# on and off, idle and with every core busy).
 #
 # Requires `adb`, `cargo ndk`, `gradle`, the Android SDK/NDK and JDK 17
 # on the PATH: `nix run .#bench-android-device` provides all of them.
@@ -20,7 +21,7 @@ Usage: $(basename "$0") [--serial <id>] [--abi <abi>] [--skip-build] [--modes "f
   --serial <id>   ADB device id (needed when more than one is attached).
   --abi <abi>     Build + install only the given ABI (default: arm64-v8a).
   --skip-build    Reuse the APK already built, just install + run.
-  --modes <list>  Which runs to do, in order (default: "full probe legacy").
+  --modes <list>  Which runs to do, in order (default: "full probe legacy spin").
 USAGE
     exit "${1:-0}"
 }
@@ -28,7 +29,7 @@ USAGE
 serial=""
 abi="arm64-v8a"
 skip_build=0
-modes="full probe legacy"
+modes="full probe legacy spin"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -99,10 +100,17 @@ adb_cmd install -r "$apk" >/dev/null
 # exit. Some vendor builds (MIUI) refuse this from adb; the activity
 # also holds FLAG_KEEP_SCREEN_ON, so the run proceeds either way.
 stay_on_before=$(adb_cmd shell settings get global stay_on_while_plugged_in | tr -d '\r\n')
+screen_off_before=$(adb_cmd shell settings get system screen_off_timeout | tr -d '\r\n')
+# Long enough for every mode; put back on exit.
+adb_cmd shell settings put system screen_off_timeout 1800000 >/dev/null 2>&1 || true
 adb_cmd shell svc power stayon usb >/dev/null 2>&1 || echo "::  note: svc power stayon refused; relying on FLAG_KEEP_SCREEN_ON"
 sampler_pid=""
 restore() {
     [ -n "$sampler_pid" ] && kill "$sampler_pid" 2>/dev/null || true
+    case "$screen_off_before" in
+        ""|null) ;;
+        *) adb_cmd shell settings put system screen_off_timeout "$screen_off_before" >/dev/null 2>&1 || true ;;
+    esac
     case "$stay_on_before" in
         0) adb_cmd shell svc power stayon false >/dev/null 2>&1 || true ;;
         *) adb_cmd shell settings put global stay_on_while_plugged_in "$stay_on_before" >/dev/null 2>&1 || true ;;

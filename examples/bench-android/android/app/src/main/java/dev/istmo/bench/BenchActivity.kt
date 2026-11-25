@@ -78,13 +78,14 @@ class BenchActivity : Activity() {
                 when (mode) {
                     "probe" -> runner.breakdown()
                     "legacy" -> runner.legacy()
+                    "spin" -> runner.spinAB()
+                    "streams" -> runner.streams()
                     else -> {
                         runner.matrix()
                         runner.streams()
                         runner.wakeups()
                         runner.frames()
                         runner.sensitivity()
-                        runner.spinAB()
                     }
                 }
             } catch (e: Throwable) {
