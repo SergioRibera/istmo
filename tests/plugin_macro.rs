@@ -337,7 +337,8 @@ pub struct Account<T> {
     pub credential: istmo::NativeHandleId,
 }
 
-#[istmo::plugin(name = "com.example.accounts")]
+// A generic message stays in Rust: no Kotlin / Swift mapping to check.
+#[istmo::plugin(name = "com.example.accounts", native = false)]
 pub trait Accounts {
     #[istmo::owned]
     async fn sign_in(&self) -> Account<u8>;

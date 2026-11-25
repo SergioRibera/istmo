@@ -26,7 +26,9 @@ pub struct Account<T> {
 /// An alias under another name is opaque and travels whole.
 pub type Reply = Result<u32, Failure>;
 
-#[istmo::plugin(name = "ui.shapes")]
+// Generic messages stay in Rust; the native shapes are checked in
+// `fail/plugin_portable_shapes.rs`.
+#[istmo::plugin(name = "ui.shapes", native = false)]
 pub trait Shapes {
     /// Docs are carried over to the client.
     async fn plain(&self, a: u32, b: String) -> u32;
