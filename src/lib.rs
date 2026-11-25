@@ -151,3 +151,14 @@ macro_rules! single_instance {
         )
     };
 }
+
+/// The Rust examples of the documentation pages that describe this
+/// crate's newest APIs, compiled and run as doctests so they cannot rot.
+#[cfg(doctest)]
+mod doc_pages {
+    #[doc = include_str!("../docs/src/content/docs/writing-plugins/frame-sinks.md")]
+    struct FrameSinks;
+
+    #[doc = include_str!("../docs/src/content/docs/es/writing-plugins/frame-sinks.md")]
+    struct FrameSinksEs;
+}

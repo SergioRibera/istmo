@@ -123,3 +123,4 @@ convertirse en un plugin Rust-hosted.
 
 - Native-hosted end-to-end: [Escribir un plugin native-hosted](/istmo/es/writing-plugins/native-hosted/).
 - Rust-hosted end-to-end: [Escribir un plugin Rust-hosted](/istmo/es/writing-plugins/rust-hosted/).
+- Buffers que nunca tocan el wire: [Frame sinks](/istmo/es/writing-plugins/frame-sinks/).

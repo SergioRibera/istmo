@@ -145,11 +145,65 @@ Every client method returns `Result<T, IstmoError>`. A domain error
 ```rust
 match hasher.dimensions(pixels).await {
     Ok(dims) => { /* ... */ }
-    Err(IstmoError::PluginError { bytes }) => {
-        let (err, _) = istmo::codec::decode::<HashError>(&bytes)?;
-        log::warn!("{err}");
-    }
-    Err(other) => return Err(other.into()),
+    Err(err) => match err.domain_error::<HashError>() {
+        Some(hash_error) => log::warn!("{hash_error}"),
+        None => return Err(err.into()),
+    },
+}
+```
+
+## Calls from the same process
+
+A host registered through `runtime!(hosts: …)`, `RuntimeInit::host` or
+`Runtime::register_host` also installs a **typed in-process shortcut**
+(stateless plugins): a client in the same process calls the
+implementation directly — no encode, no routing, no dispatcher thread —
+and polls its future on the caller's own task. `client.is_local()` says
+whether that happens. Calls from Kotlin, Swift or another process keep
+the wire path, so both are live at once.
+
+The implementation runs where the caller is, which asks two things of
+it:
+
+- **Do not block.** A method that waits on a thread (a synchronous
+  dialog, `std::fs` on large files, `thread::sleep`, a synchronous hop
+  to the main thread) or that only runs on one executor (it needs a tokio
+  reactor, say) would stall or panic the caller. Mark it
+  `#[istmo::blocking]`: its calls are encoded and served on a dispatcher
+  thread, as every call used to be.
+
+  ```rust
+  #[istmo::plugin(name = "acme.picker")]
+  pub trait Picker {
+      #[istmo::blocking]
+      async fn pick(&self) -> Option<String>;
+  }
+  ```
+
+- **Cancel through the token.** Dropping the call drops the future. A
+  method that takes a `CancelToken` sees it trip and still gets to finish
+  its cleanup (the runtime hands the abandoned future to a thread of its
+  own, as the dispatcher would have); a method without one just stops at
+  its last `.await`.
+
+To keep a whole plugin on the wire path, declare it
+`#[plugin(name = "…", shortcut = false)]`; to keep one registration on it,
+mark the entry `runtime!(hosts: [#[wire_only] Picker => DesktopPicker])`
+(or call `Runtime::register_host_wire_only`).
+
+### Who called
+
+An argument of type `istmo::HostCtx` is filled in by the host and never
+crosses the wire. It tells the implementation who called
+(`ctx.origin()`: `Local`, `Peer` — Kotlin or Swift in this process — or
+`Remote`) and reaches the runtime the call came through
+(`ctx.runtime()`, `ctx.frame_sender(sink)` for
+[frame sinks](/istmo/writing-plugins/frame-sinks/)).
+
+```rust
+#[istmo::plugin(name = "acme.vault")]
+pub trait Vault {
+    async fn read(&self, ctx: istmo::HostCtx, key: String) -> Option<String>;
 }
 ```
 

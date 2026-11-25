@@ -158,8 +158,9 @@ existe, y `Err(IstmoError::Codec(..))` si un item no decodifica.
 
 ## Atajo en proceso
 
-Cuando el host es una implementación Rust en el mismo proceso,
-registrada con `<Trait>Host::register(&runtime)` (plugins sin estado),
+Cuando el host es una implementación Rust en el mismo proceso (un plugin
+sin estado registrado con `runtime!(hosts: …)` o `Runtime::register_host`,
+ver [Llamadas desde el mismo proceso](/istmo/es/writing-plugins/rust-hosted/#llamadas-desde-el-mismo-proceso)),
 el cliente también evita el wire para los streams: `updates()` llama a
 la implementación en el hilo del llamador y envuelve **el propio
 `flume::Receiver` de la implementación** en el `TypedStream`. Los items
@@ -178,8 +179,8 @@ Swift y llamadores remotos.
 
 Como el método de stream corre en el hilo del llamador, debe devolver su
 receiver enseguida (lanza el productor, como arriba) — el mismo contrato
-que el atajo unario. `RuntimeInit::host` / `runtime!(hosts: …)` registran
-solo el camino del wire. Para buffers que no deben copiarse ni una vez
+que el atajo unario; un método que no puede hacerlo se marca
+`#[istmo::blocking]` y conserva el camino del wire. Para buffers que no deben copiarse ni una vez
 (frames, audio), usa un [frame sink](/istmo/es/writing-plugins/frame-sinks/).
 
 ## Cancelación

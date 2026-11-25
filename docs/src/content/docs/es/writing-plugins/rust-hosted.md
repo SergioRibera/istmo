@@ -150,11 +150,65 @@ dominio (`Err(HashError)` desde la implementación) llega como
 ```rust
 match hasher.dimensions(pixels).await {
     Ok(dims) => { /* ... */ }
-    Err(IstmoError::PluginError { bytes }) => {
-        let (err, _) = istmo::codec::decode::<HashError>(&bytes)?;
-        log::warn!("{err}");
-    }
-    Err(other) => return Err(other.into()),
+    Err(err) => match err.domain_error::<HashError>() {
+        Some(hash_error) => log::warn!("{hash_error}"),
+        None => return Err(err.into()),
+    },
+}
+```
+
+## Llamadas desde el mismo proceso
+
+Un host registrado con `runtime!(hosts: …)`, `RuntimeInit::host` o
+`Runtime::register_host` instala también un **atajo tipado en proceso**
+(plugins sin estado): un cliente del mismo proceso llama a la
+implementación directamente — sin codificar, sin rutear, sin hilo de
+dispatcher — y hace poll de su future en la propia tarea del llamador.
+`client.is_local()` dice si ocurre. Las llamadas desde Kotlin, Swift u
+otro proceso siguen por el wire, así que ambos caminos conviven.
+
+La implementación corre donde está el llamador, lo que le pide dos
+cosas:
+
+- **No bloquear.** Un método que espera en un hilo (un diálogo síncrono,
+  `std::fs` sobre archivos grandes, `thread::sleep`, un salto síncrono
+  al hilo principal) o que solo corre en un executor (necesita un
+  reactor de tokio, por ejemplo) detendría o haría fallar al llamador.
+  Márcalo `#[istmo::blocking]`: sus llamadas se codifican y se atienden
+  en un hilo de dispatcher, como todas antes.
+
+  ```rust
+  #[istmo::plugin(name = "acme.picker")]
+  pub trait Picker {
+      #[istmo::blocking]
+      async fn pick(&self) -> Option<String>;
+  }
+  ```
+
+- **Cancelar mediante el token.** Soltar la llamada suelta el future. Un
+  método que recibe un `CancelToken` lo ve dispararse y aún termina su
+  limpieza (el runtime pasa el future abandonado a un hilo propio, como
+  lo habría hecho el dispatcher); uno sin token simplemente se detiene en
+  su último `.await`.
+
+Para dejar todo un plugin en el wire, declara
+`#[plugin(name = "…", shortcut = false)]`; para dejar un registro,
+marca la entrada `runtime!(hosts: [#[wire_only] Picker => DesktopPicker])`
+(o llama a `Runtime::register_host_wire_only`).
+
+### Quién llamó
+
+Un argumento de tipo `istmo::HostCtx` lo rellena el host y nunca cruza
+el wire. Le dice a la implementación quién llamó (`ctx.origin()`:
+`Local`, `Peer` — Kotlin o Swift en este proceso — o `Remote`) y alcanza
+el runtime por el que llegó la llamada (`ctx.runtime()`,
+`ctx.frame_sender(sink)` para
+[frame sinks](/istmo/es/writing-plugins/frame-sinks/)).
+
+```rust
+#[istmo::plugin(name = "acme.vault")]
+pub trait Vault {
+    async fn read(&self, ctx: istmo::HostCtx, key: String) -> Option<String>;
 }
 ```
 

@@ -156,9 +156,10 @@ gone or a terminal item was handed out, and `Err(IstmoError::Codec(..))` if an i
 
 ## In-process shortcut
 
-When the host is a Rust implementation in the same process, registered
-with `<Trait>Host::register(&runtime)` (stateless plugins), the client
-skips the wire for streams too: `updates()` calls the implementation on
+When the host is a Rust implementation in the same process (a stateless
+plugin registered through `runtime!(hosts: …)` or `Runtime::register_host`,
+see [Calls from the same process](/istmo/writing-plugins/rust-hosted/#calls-from-the-same-process)),
+the client skips the wire for streams too: `updates()` calls the implementation on
 the caller's thread and wraps **the implementation's own
 `flume::Receiver`** in the `TypedStream`. Items are moved, not encoded;
 no encoder thread, pump or routing table sits in between, and the
@@ -175,8 +176,8 @@ registered for Kotlin, Swift and remote callers.
 
 Because the stream method runs on the caller's thread, it must return
 its receiver promptly (spawn the producer, as above) — the same contract
-as the unary shortcut. `RuntimeInit::host` / `runtime!(hosts: …)`
-register the wire path only. For buffers that must not be copied even
+as the unary shortcut; a method that cannot is marked
+`#[istmo::blocking]` and keeps the wire path. For buffers that must not be copied even
 once (frames, audio), use a [frame sink](/istmo/writing-plugins/frame-sinks/).
 
 ## Cancellation

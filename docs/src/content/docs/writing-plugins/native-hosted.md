@@ -274,3 +274,4 @@ on the main thread (UIKit APIs, view-lifecycle work), gate it with
 - Streaming events: [Streams](/istmo/writing-plugins/streams/).
 - Handing native resources back and forth: [Native handles](/istmo/writing-plugins/native-handles/).
 - Long-running work: [Services and workers](/istmo/writing-plugins/services-workers/).
+- Frames, audio and other high-rate buffers: [Frame sinks](/istmo/writing-plugins/frame-sinks/).

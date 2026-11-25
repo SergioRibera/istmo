@@ -279,3 +279,4 @@ de vista), protégelo con `MainActor.run` /
 - Streaming de eventos: [Streams](/istmo/es/writing-plugins/streams/).
 - Pasar recursos nativos de ida y vuelta: [Native handles](/istmo/es/writing-plugins/native-handles/).
 - Trabajo de larga duración: [Servicios y workers](/istmo/es/writing-plugins/services-workers/).
+- Frames, audio y otros buffers de alta frecuencia: [Frame sinks](/istmo/es/writing-plugins/frame-sinks/).
