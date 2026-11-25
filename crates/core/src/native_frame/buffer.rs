@@ -33,7 +33,7 @@ pub enum MemoryKind {
     CmSampleBuffer,
     /// Windows `ID3D11Texture2D`.
     D3d11Texture,
-    /// A browser `VideoFrame` (WebCodecs). Reserved: a `VideoFrame` is a
+    /// A browser `VideoFrame` (`WebCodecs`). Reserved: a `VideoFrame` is a
     /// JS object bound to its thread, and buffers are `Send`, so web
     /// producers copy the pixels out (`VideoFrame.copyTo` into a
     /// [`NativeBuffer::from_bytes`] backing, [`Cpu`](Self::Cpu) memory)
