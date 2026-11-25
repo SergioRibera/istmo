@@ -41,13 +41,19 @@ fn pump_loop(
     outbound: &FlumeReceiver<Envelope>,
     shutdown: &FlumeReceiver<()>,
 ) {
+    static WAIT: istmo_core::spin::SpinWait = istmo_core::spin::SpinWait::new();
     loop {
-        let step = flume::Selector::new()
-            .recv(shutdown, |_| PumpStep::Shutdown)
-            .recv(outbound, |envelope| {
-                envelope.map_or(PumpStep::Shutdown, PumpStep::Deliver)
-            })
-            .wait();
+        // A frame queued right after the last delivery is taken without
+        // parking the pump.
+        let quick = WAIT.spin(|| outbound.try_recv().ok().map(PumpStep::Deliver));
+        let step = quick.unwrap_or_else(|| {
+            flume::Selector::new()
+                .recv(shutdown, |_| PumpStep::Shutdown)
+                .recv(outbound, |envelope| {
+                    envelope.map_or(PumpStep::Shutdown, PumpStep::Deliver)
+                })
+                .wait()
+        });
 
         let envelope = match step {
             PumpStep::Shutdown => break,

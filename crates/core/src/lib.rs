@@ -52,6 +52,7 @@ pub mod path;
 pub mod protocol;
 pub mod routing;
 pub mod runtime;
+pub mod spin;
 pub mod sync;
 pub mod typed_stream;
 

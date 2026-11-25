@@ -188,7 +188,11 @@ impl Pool {
 }
 
 fn worker_loop(rx: &Receiver<Arc<Task>>) {
-    while let Ok(task) = rx.recv() {
+    static WAIT: crate::spin::SpinWait = crate::spin::SpinWait::new();
+    // A task woken right after the last one finished is picked up
+    // without parking the worker.
+    let next = || WAIT.spin(|| rx.try_recv().ok()).or_else(|| rx.recv().ok());
+    while let Some(task) = next() {
         task.state.store(state::RUNNING, Ordering::Release);
         task.run();
     }

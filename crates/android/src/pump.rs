@@ -198,18 +198,30 @@ impl Pump {
         remote: &FlumeReceiver<Vec<u8>>,
         shutdown: &FlumeReceiver<()>,
     ) {
+        static WAIT: istmo_core::spin::SpinWait = istmo_core::spin::SpinWait::new();
         // Started after `Runtime::init`, so the runtime exists.
         let runtime = istmo_core::Runtime::global().ok();
         loop {
-            let step = flume::Selector::new()
-                .recv(shutdown, |_| PumpStep::Shutdown)
-                .recv(outbound, |envelope| {
-                    envelope.map_or(PumpStep::Shutdown, PumpStep::Deliver)
-                })
-                .recv(remote, |bytes| {
-                    bytes.map_or(PumpStep::Shutdown, PumpStep::DeliverRemote)
-                })
-                .wait();
+            // A frame queued right after the last delivery is taken
+            // without parking the pump.
+            let quick = WAIT.spin(|| {
+                outbound
+                    .try_recv()
+                    .ok()
+                    .map(PumpStep::Deliver)
+                    .or_else(|| remote.try_recv().ok().map(PumpStep::DeliverRemote))
+            });
+            let step = quick.unwrap_or_else(|| {
+                flume::Selector::new()
+                    .recv(shutdown, |_| PumpStep::Shutdown)
+                    .recv(outbound, |envelope| {
+                        envelope.map_or(PumpStep::Shutdown, PumpStep::Deliver)
+                    })
+                    .recv(remote, |bytes| {
+                        bytes.map_or(PumpStep::Shutdown, PumpStep::DeliverRemote)
+                    })
+                    .wait()
+            });
             probe!(PumpDequeued);
 
             // The pump never returns to Java, so local references are

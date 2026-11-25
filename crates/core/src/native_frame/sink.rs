@@ -763,9 +763,17 @@ impl<M> FrameSink<M> {
     /// drained.
     #[must_use]
     pub fn recv(&self) -> Option<NativeFrame<M>> {
+        static WAIT: crate::spin::SpinWait = crate::spin::SpinWait::new();
         THREAD_WAKER.with(|waker| {
             loop {
                 if let Poll::Ready(frame) = self.shared.poll_pop(Some(waker)) {
+                    return frame;
+                }
+                // A producer about to push is caught without a wake-up.
+                if let Some(frame) = WAIT.spin(|| match self.shared.poll_pop(None) {
+                    Poll::Ready(frame) => Some(frame),
+                    Poll::Pending => None,
+                }) {
                     return frame;
                 }
                 // A wake between the registration and here leaves the

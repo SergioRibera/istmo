@@ -2486,8 +2486,15 @@ impl CallHandle {
     /// [`IstmoError::ChannelClosed`] if the response channel is closed
     /// before a value is delivered (usually a shutting-down runtime).
     pub fn recv_blocking(mut self) -> Result<CallResult, IstmoError> {
+        static WAIT: crate::spin::SpinWait = crate::spin::SpinWait::new();
         let rx = self.receiver.take().ok_or(IstmoError::ChannelClosed)?;
-        rx.recv().map_err(|_| IstmoError::ChannelClosed)
+        // A quick answer is caught without parking.
+        let quick = WAIT.spin(|| match rx.try_recv() {
+            Ok(result) => Some(Ok(result)),
+            Err(oneshot::TryRecvError::Disconnected) => Some(Err(IstmoError::ChannelClosed)),
+            Err(oneshot::TryRecvError::Empty) => None,
+        });
+        quick.unwrap_or_else(|| rx.recv().map_err(|_| IstmoError::ChannelClosed))
     }
 }
 
@@ -2571,10 +2578,15 @@ impl StreamHandle {
     /// [`IstmoError::ChannelClosed`] if the stream's channel closes
     /// without delivering another value.
     pub fn recv(&self) -> Result<StreamMessage, IstmoError> {
-        self.receiver
-            .recv()
+        static WAIT: crate::spin::SpinWait = crate::spin::SpinWait::new();
+        let quick = WAIT.spin(|| match self.receiver.try_recv() {
+            Ok(message) => Some(Ok(message)),
+            Err(flume::TryRecvError::Disconnected) => Some(Err(IstmoError::ChannelClosed)),
+            Err(flume::TryRecvError::Empty) => None,
+        });
+        quick
+            .unwrap_or_else(|| self.receiver.recv().map_err(|_| IstmoError::ChannelClosed))
             .map(|message| self.observe(message))
-            .map_err(|_| IstmoError::ChannelClosed)
     }
 
     /// Async variant of [`recv`](Self::recv).
