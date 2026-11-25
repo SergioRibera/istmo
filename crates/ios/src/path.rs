@@ -27,20 +27,13 @@ pub fn install_from_bundle() {
 
 #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))]
 fn resolve() -> PlatformPaths {
-    use objc2_foundation::{
-        NSFileManager, NSSearchPathDirectory, NSSearchPathDomainMask, NSString,
-    };
+    use objc2_foundation::{NSFileManager, NSSearchPathDirectory, NSSearchPathDomainMask};
 
     fn dir_for(kind: NSSearchPathDirectory) -> PathBuf {
-        // SAFETY: `defaultManager` is a thread-safe class getter with no
-        // preconditions; objc2 marks it unsafe only because it is generated.
-        let fm = unsafe { NSFileManager::defaultManager() };
-        // SAFETY: `kind` and the domain mask are valid enum values; the
-        // method has no other preconditions.
-        let urls = unsafe { fm.URLsForDirectory_inDomains(kind, NSSearchPathDomainMask::User) };
-        if let Some(url) = urls.first() {
-            // SAFETY: `url` is a live file URL returned by the file manager.
-            let path = unsafe { url.path() };
+        let fm = NSFileManager::defaultManager();
+        let urls = fm.URLsForDirectory_inDomains(kind, NSSearchPathDomainMask::UserDomainMask);
+        if let Some(url) = urls.firstObject() {
+            let path = url.path();
             if let Some(path) = path {
                 let _ = std::fs::create_dir_all(PathBuf::from(path.to_string()));
                 return PathBuf::from(path.to_string());
@@ -50,20 +43,15 @@ fn resolve() -> PlatformPaths {
     }
 
     fn temporary_directory() -> PathBuf {
-        // SAFETY: as in `dir_for`; `temporaryDirectory` has no preconditions.
-        let ns = unsafe { NSFileManager::defaultManager().temporaryDirectory() };
-        // SAFETY: `ns` is a live file URL returned by the file manager.
-        let path = unsafe { ns.path() };
-        match path {
-            Some(p) => PathBuf::from(p.to_string()),
-            None => std::env::temp_dir(),
-        }
+        let ns = NSFileManager::defaultManager().temporaryDirectory();
+        ns.path()
+            .map_or_else(std::env::temp_dir, |p| PathBuf::from(p.to_string()))
     }
 
-    let app_support = dir_for(NSSearchPathDirectory::NSApplicationSupportDirectory);
-    let caches = dir_for(NSSearchPathDirectory::NSCachesDirectory);
-    let documents = dir_for(NSSearchPathDirectory::NSDocumentDirectory);
-    let library = dir_for(NSSearchPathDirectory::NSLibraryDirectory);
+    let app_support = dir_for(NSSearchPathDirectory::ApplicationSupportDirectory);
+    let caches = dir_for(NSSearchPathDirectory::CachesDirectory);
+    let documents = dir_for(NSSearchPathDirectory::DocumentDirectory);
+    let library = dir_for(NSSearchPathDirectory::LibraryDirectory);
     let preferences = library.join("Preferences");
     let _ = std::fs::create_dir_all(&preferences);
     let temp = temporary_directory();
