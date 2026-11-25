@@ -311,7 +311,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall<'loc
 /// Inbound Call via a `java.nio.ByteBuffer.allocateDirect`-backed payload.
 ///
 /// Skips the `GetByteArrayElements` / `convert_byte_array` pinning the
-/// regular [`nativeSubmitCall`] entry point goes through: the payload is
+/// regular `nativeSubmitCall` entry point goes through: the payload is
 /// read straight out of the direct buffer with one `memcpy` into the
 /// frame. On Android that typically trims ~500 ns of per-call JNI
 /// machinery for small payloads, and avoids pinning the JVM heap for
