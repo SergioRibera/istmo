@@ -9,7 +9,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
-use std::fmt::Write as _;
 use std::io::Write as _;
 use std::os::fd::IntoRawFd as _;
 use std::ptr;
@@ -1089,69 +1088,6 @@ fn js_result(done: EvalDone, value: gpointer, error: *mut GError) {
     done(Ok(if json.is_empty() { "null".into() } else { json }));
 }
 
-fn base64(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize]));
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
-fn unbase64(text: &str) -> Option<Vec<u8>> {
-    let value = |c: u8| -> Option<u32> {
-        Some(u32::from(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        }))
-    };
-    let bytes: Vec<u8> = text.bytes().filter(|b| *b != b'=').collect();
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
-    for chunk in bytes.chunks(4) {
-        let mut n = 0_u32;
-        for (i, c) in chunk.iter().enumerate() {
-            n |= value(*c)? << (18 - 6 * i);
-        }
-        for i in 0..chunk.len().saturating_sub(1) {
-            #[expect(clippy::cast_possible_truncation, reason = "one byte of the group")]
-            out.push((n >> (16 - 8 * i)) as u8);
-        }
-    }
-    Some(out)
-}
-
-fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '<' => out.push_str("\\u003c"),
-            c if (c as u32) < 0x20 || c == '\u{2028}' || c == '\u{2029}' => {
-                write!(out, "\\u{:04x}", c as u32).ok();
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 impl UiView for GtkView {
     fn load(&mut self, request: &LoadRequest) {
         let api = api();
@@ -1263,7 +1199,7 @@ impl UiView for GtkView {
         // as a JS value turned into JSON.
         let body = cstring(&format!(
             "return await eval(\"{}\");",
-            json_escape(&call.source)
+            crate::desktop::text::json_escape(&call.source)
         ));
         let world = (call.world == ScriptWorld::Isolated).then(|| cstring("istmo"));
         let state: Box<EvalDone> = Box::new(Box::new(done));
@@ -1287,8 +1223,8 @@ impl UiView for GtkView {
     fn deliver(&mut self, channel: &str, data: &[u8]) {
         let script = format!(
             "window.__istmoDeliver && window.__istmoDeliver(\"{}\", \"{}\");",
-            json_escape(channel),
-            base64(data)
+            crate::desktop::text::json_escape(channel),
+            crate::desktop::text::base64(data)
         );
         self.eval_in(&script, None, None);
     }
@@ -2116,7 +2052,7 @@ unsafe extern "C" fn on_bridge_message(
                 unsafe {
                     match result {
                         ReplyResult::Ok(bytes) => {
-                            let s = cstring(&base64(&bytes));
+                            let s = cstring(&crate::desktop::text::base64(&bytes));
                             let js = (api.jsc_value_new_string)(context.ptr(), s.as_ptr());
                             (api.webkit_script_message_reply_return_value)(reply.ptr(), js);
                             (api.g_object_unref)(js);
@@ -2183,7 +2119,7 @@ fn parse_bridge(raw: &str) -> Option<(String, String, Vec<u8>, String, bool)> {
     Some((
         field("t")?,
         field("c")?,
-        unbase64(&field("b")?)?,
+        crate::desktop::text::unbase64(&field("b")?)?,
         field("o")?,
         main,
     ))

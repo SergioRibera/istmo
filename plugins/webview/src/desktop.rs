@@ -34,6 +34,10 @@ mod linux;
 mod macos;
 #[cfg(test)]
 mod mock;
+pub(crate) mod text;
+#[cfg(all(target_os = "windows", feature = "desktop"))]
+#[allow(unsafe_code, reason = "WebView2 COM through windows-rs")]
+mod windows;
 
 use std::sync::{Arc, Mutex, Weak};
 
@@ -129,12 +133,17 @@ fn start_engine(_options: &DesktopOptions) -> Result<Arc<dyn Engine>, WebViewErr
     Ok(macos::MacEngine::start())
 }
 
+#[cfg(all(target_os = "windows", feature = "desktop"))]
+fn start_engine(_options: &DesktopOptions) -> Result<Arc<dyn Engine>, WebViewError> {
+    Ok(windows::WinEngine::start()?)
+}
+
 #[cfg(not(any(
     all(
         target_os = "linux",
         any(feature = "linux-webkit2gtk-4-1", feature = "linux-webkitgtk-6-0")
     ),
-    all(target_os = "macos", feature = "desktop"),
+    all(any(target_os = "macos", target_os = "windows"), feature = "desktop"),
 )))]
 fn start_engine(_options: &DesktopOptions) -> Result<Arc<dyn Engine>, WebViewError> {
     Err(WebViewError::Unsupported(

@@ -272,19 +272,10 @@ fn data_store(
     }
 }
 
-fn origin_guard(origins: &[String], source: &str) -> String {
-    let list = origins
-        .iter()
-        .map(|o| format!("\"{}\"", json_escape(o)))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("if ([{list}].includes(location.origin)) {{\n{source}\n}}")
-}
-
 fn shim(origins: &[String], subframes: bool) -> String {
     let list = origins
         .iter()
-        .map(|o| format!("\"{}\"", json_escape(o)))
+        .map(|o| format!("\"{}\"", super::text::json_escape(o)))
         .collect::<Vec<_>>()
         .join(",");
     format!(
@@ -321,23 +312,6 @@ fn shim(origins: &[String], subframes: bool) -> String {
     )
 }
 
-fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '<' => out.push_str("\\u003c"),
-            c if (c as u32) < 0x20 || c == '\u{2028}' || c == '\u{2029}' => {
-                use std::fmt::Write as _;
-                write!(out, "\\u{:04x}", c as u32).ok();
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 fn configuration(
     core: &ViewCore,
     mtm: MainThreadMarker,
@@ -371,7 +345,7 @@ fn configuration(
             let source = if script.allowed_origins.is_empty() {
                 script.source.clone()
             } else {
-                origin_guard(&script.allowed_origins, &script.source)
+                super::text::origin_guard(&script.allowed_origins, &script.source)
             };
             let time = if script.inject_at == InjectionTime::DocumentStart {
                 WKUserScriptInjectionTime::AtDocumentStart
@@ -620,14 +594,14 @@ fn json_of(value: *mut AnyObject) -> String {
     // SAFETY: WebKit returns a live Foundation object.
     let object = unsafe { &*value };
     if let Some(s) = object.downcast_ref::<NSString>() {
-        return format!("\"{}\"", json_escape(&s.to_string()));
+        return format!("\"{}\"", super::text::json_escape(&s.to_string()));
     }
     if let Some(n) = object.downcast_ref::<NSNumber>() {
         return n.stringValue().to_string();
     }
     // SAFETY: every Foundation object answers `description`.
     let description: Retained<NSString> = unsafe { msg_send![object, description] };
-    format!("\"{}\"", json_escape(&description.to_string()))
+    format!("\"{}\"", super::text::json_escape(&description.to_string()))
 }
 
 #[expect(
@@ -723,14 +697,17 @@ impl UiView for MacView {
     }
 
     fn eval(&mut self, call: &ScriptCall, done: Done<String>) {
-        let body = format!("return await eval(\"{}\");", json_escape(&call.source));
+        let body = format!(
+            "return await eval(\"{}\");",
+            super::text::json_escape(&call.source)
+        );
         self.js(&body, call.world, Some(done));
     }
 
     fn deliver(&mut self, channel: &str, data: &[u8]) {
         let body = format!(
             "window.__istmoDeliver && window.__istmoDeliver(\"{}\", \"{}\");",
-            json_escape(channel),
+            super::text::json_escape(channel),
             base64(data)
         );
         self.js(&body, ScriptWorld::Page, None);
