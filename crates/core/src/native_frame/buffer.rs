@@ -674,6 +674,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    #[cfg_attr(miri, ignore = "opens /dev/null and reads /proc")]
     fn dmabuf_fds_close_when_the_last_arc_drops() {
         use std::os::fd::AsRawFd;
 

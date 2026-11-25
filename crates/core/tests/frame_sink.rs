@@ -624,7 +624,7 @@ fn reentrant_releases_do_not_deadlock() {
     reason = "the consumer holds the lock while it receives, on purpose: dropping the sink races it"
 )]
 fn stress_every_buffer_is_released_exactly_once() {
-    for round in 0..24 {
+    for round in 0..if cfg!(miri) { 3 } else { 24 } {
         let rt = Runtime::mock().runtime;
         let created = Arc::new(AtomicUsize::new(0));
         let released = Arc::new(AtomicUsize::new(0));
@@ -665,7 +665,7 @@ fn stress_every_buffer_is_released_exactly_once() {
         let consumer = {
             let sink = Arc::clone(&sink);
             std::thread::spawn(move || {
-                for _ in 0..2000 {
+                for _ in 0..if cfg!(miri) { 50 } else { 2000 } {
                     let guard = sink.lock().unwrap();
                     let Some(sink) = guard.as_ref() else { break };
                     if let Some(frame) = sink.try_recv() {
@@ -709,4 +709,28 @@ fn remote_plugins_do_not_share_native_frames() {
     assert!(rt.shares_native_frames("local.p"));
     rt.declare_remote_plugin("remote.p");
     assert!(!rt.shares_native_frames("remote.p"));
+}
+
+#[test]
+fn into_backing_racing_clone_drops_releases_exactly_once() {
+    for _ in 0..if cfg!(miri) { 10 } else { 500 } {
+        let released = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&released);
+        let buffer = NativeBuffer::from_bytes(vec![1u8, 2, 3]).with_release(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        let clone = buffer.clone();
+        let dropper = std::thread::spawn(move || drop(clone));
+        let taken = buffer.into_backing::<Vec<u8>>();
+        dropper.join().unwrap();
+        match taken {
+            Ok((bytes, lease)) => {
+                assert_eq!(bytes, [1, 2, 3]);
+                assert_eq!(released.load(Ordering::SeqCst), 0);
+                drop(lease);
+            }
+            Err(err) => drop(err.into_buffer()),
+        }
+        assert_eq!(released.load(Ordering::SeqCst), 1);
+    }
 }
