@@ -78,9 +78,9 @@ class ShareDispatcher(
                 try {
                     val request = codecs.readShareRequest(payload, 0).value
                     val result = backend.share(request)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeShareOutcome(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ShareError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -91,9 +91,9 @@ class ShareDispatcher(
             "capabilities" -> {
                 try {
                     val result = backend.capabilities()
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeShareCapabilities(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ShareError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -104,9 +104,9 @@ class ShareDispatcher(
             "staging_dir" -> {
                 try {
                     val result = backend.staging_dir()
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     Bincode.writeString(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ShareError ?: throw e
                     val errOut = ByteArrayOutputStream()

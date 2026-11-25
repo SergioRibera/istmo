@@ -104,9 +104,9 @@ class DragAndDropDispatcher(
                 try {
                     val request = codecs.readDragRequest(payload, 0).value
                     val result = backend.start_drag(request)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeDragResult(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? DndError ?: throw e
                     val errOut = ByteArrayOutputStream()

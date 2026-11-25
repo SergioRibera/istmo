@@ -14,9 +14,9 @@ class ShareClient(
     }
 
     suspend fun share(request: ShareRequest): ShareOutcome {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         codecs.writeShareRequest(payloadBuf, request)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         val bytes = try {
             IstmoRuntime.call(PLUGIN_ID, "share", payload)
         } catch (e: PluginException) {
@@ -49,9 +49,9 @@ class ShareClient(
     }
 
     suspend fun set_share_targets(targets: List<ShareTarget>) {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         Bincode.writeVec(payloadBuf, targets) { s1, v1 -> codecs.writeShareTarget(s1, v1) }
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         try {
             IstmoRuntime.call(PLUGIN_ID, "set_share_targets", payload)
         } catch (e: PluginException) {

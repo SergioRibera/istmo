@@ -392,9 +392,9 @@ class WebViewDispatcher(
             "capabilities" -> {
                 try {
                     val result = backend.capabilities()
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeWebViewCapabilities(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? WebViewError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -417,9 +417,9 @@ class WebViewDispatcher(
                 try {
                     val spec = codecs.readWebViewSpec(payload, 0).value
                     val result = backend.open(spec)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeWebViewInstance(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? WebViewError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -517,9 +517,9 @@ class WebViewDispatcher(
                 try {
                     val view = codecs.readViewRef(payload, 0).value
                     val result = backend.history(view)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeWebHistory(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? WebViewError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -534,9 +534,9 @@ class WebViewDispatcher(
                     val view = d_view.value
                     val call = codecs.readScriptCall(payload, cursor).value
                     val result = backend.eval(view, call)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     Bincode.writeString(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? WebViewError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -627,9 +627,9 @@ class WebViewDispatcher(
                 val __istmo_flow = backend.scheme_request_body(view, request_id)
                 PluginResult.Stream(
                     __istmo_flow.map { __istmo_item ->
-                        val out = ByteArrayOutputStream()
+                        val out = IstmoBytesOut()
                         Bincode.writeBytes(out, __istmo_item)
-                        out.toByteArray()
+                        out.toExactArray()
                     }.catch { e ->
                         val err = (e as? BackendException)?.error as? WebViewError ?: throw e
                         val errOut = ByteArrayOutputStream()
@@ -645,9 +645,9 @@ class WebViewDispatcher(
                     val view = d_view.value
                     val filter = codecs.readCookieFilter(payload, cursor).value
                     val result = backend.cookies(view, filter)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     Bincode.writeVec(out, result) { s1, v1 -> codecs.writeWebCookie(s1, v1) }
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? WebViewError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -707,9 +707,9 @@ class WebViewDispatcher(
                     val view = d_view.value
                     val query = codecs.readFindQuery(payload, cursor).value
                     val result = backend.find(view, query)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeFindResult(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? WebViewError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -724,9 +724,9 @@ class WebViewDispatcher(
                     val view = d_view.value
                     val options = codecs.readSnapshotOptions(payload, cursor).value
                     val result = backend.snapshot(view, options)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeWebSnapshot(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? WebViewError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -781,9 +781,9 @@ class WebViewDispatcher(
                 val __istmo_flow = backend.control_events(view)
                 PluginResult.Stream(
                     __istmo_flow.map { __istmo_item ->
-                        val out = ByteArrayOutputStream()
+                        val out = IstmoBytesOut()
                         codecs.writeControlEvent(out, __istmo_item)
-                        out.toByteArray()
+                        out.toExactArray()
                     }.catch { e ->
                         val err = (e as? BackendException)?.error as? WebViewError ?: throw e
                         val errOut = ByteArrayOutputStream()
@@ -800,9 +800,9 @@ class WebViewDispatcher(
                 val __istmo_flow = backend.telemetry(view, kinds)
                 PluginResult.Stream(
                     __istmo_flow.map { __istmo_item ->
-                        val out = ByteArrayOutputStream()
+                        val out = IstmoBytesOut()
                         codecs.writeTelemetryEvent(out, __istmo_item)
-                        out.toByteArray()
+                        out.toExactArray()
                     }.catch { e ->
                         val err = (e as? BackendException)?.error as? WebViewError ?: throw e
                         val errOut = ByteArrayOutputStream()

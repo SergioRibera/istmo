@@ -68,9 +68,9 @@ class WebAuthDispatcher(
             "capabilities" -> {
                 try {
                     val result = backend.capabilities()
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeWebAuthCapabilities(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? WebAuthError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -82,9 +82,9 @@ class WebAuthDispatcher(
                 try {
                     val callback = codecs.readCallbackSpec(payload, 0).value
                     val result = backend.prepare(callback)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writePreparedRedirect(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? WebAuthError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -96,9 +96,9 @@ class WebAuthDispatcher(
                 try {
                     val request = codecs.readAuthRequest(payload, 0).value
                     val result = backend.authenticate(request)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeAuthCallback(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? WebAuthError ?: throw e
                     val errOut = ByteArrayOutputStream()
