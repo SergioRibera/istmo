@@ -318,10 +318,15 @@ struct RemoteCalls {
 ///
 /// # Threads
 ///
-/// Every hosted call, notification and stream runs on its own named OS
-/// thread. Hosts may block for as long as they like and may call back
-/// into the same runtime while serving a call; a fixed-size pool would
-/// deadlock once every worker waits on a call queued behind it.
+/// No hosted call creates a thread. Each runs where its
+/// [`DispatchMode`] puts it: [`DispatchMode::Inline`] work starts on the
+/// thread that delivered it and, once it waits, continues on a few
+/// persistent async workers that never block (a waiting future does not
+/// hold one, so their number cannot deadlock anything);
+/// [`DispatchMode::Isolated`] work runs on persistent blocking workers,
+/// started while every one is busy up to 64 and reused afterwards. Hosts
+/// on blocking workers may block and call back into the runtime; past
+/// 64 such calls blocked on each other at once, new ones queue.
 ///
 /// A host thread that would wait on a full channel (the outbound
 /// envelope channel, or a local consumer's bounded stream) gives up as
@@ -1538,19 +1543,14 @@ impl Runtime {
         let Some(cancel) = self.begin_hosted(call.origin, call.call_id) else {
             return;
         };
-        match dispatcher.mode() {
-            DispatchMode::Inline => self.dispatch_hosted_call_inline(&dispatcher, &call, &cancel),
-            // `OnCallerExecutor` is not yet implemented end-to-end; its
-            // handle-level plumbing lands in a follow-up. For now it
-            // falls back to the isolated path so the hint is forward
-            // compatible.
-            DispatchMode::OnCallerExecutor | DispatchMode::Isolated => {
-                self.dispatch_hosted_call_spawned(dispatcher, call, cancel);
-            }
+        match dispatcher.method_mode(&call.method) {
+            DispatchMode::Inline => self.dispatch_hosted_call_inline(dispatcher, call, cancel),
+            DispatchMode::Isolated => self.dispatch_hosted_call_blocking(dispatcher, call, cancel),
         }
     }
 
-    fn dispatch_hosted_call_spawned(
+    /// Serve the call on a blocking worker ([`DispatchMode::Isolated`]).
+    fn dispatch_hosted_call_blocking(
         self: &Arc<Self>,
         dispatcher: Arc<dyn Dispatch>,
         call: HostedCall,
@@ -1565,7 +1565,7 @@ impl Runtime {
             payload,
         } = call;
         let refuse_cancel = cancel.clone();
-        let spawned = exec::spawn("istmo-call", async move {
+        let spawned = exec::spawn_blocking(async move {
             // The dispatcher is shared, so a panic can leave its state
             // half-updated for later calls whether or not it is caught.
             // Catching it at least answers this call instead of leaving
@@ -1579,6 +1579,16 @@ impl Runtime {
                 cancel.clone(),
             ))
             .await;
+            if let Ok(Ok(Outcome::StreamOpened(_))) = &outcome {
+                // A stream pump waits for items most of its life: it
+                // belongs on the async workers, not on a blocking thread.
+                exec::spawn(async move {
+                    runtime
+                        .finish_hosted_call(origin, call_id, &cancel, outcome)
+                        .await;
+                });
+                return;
+            }
             runtime
                 .finish_hosted_call(origin, call_id, &cancel, outcome)
                 .await;
@@ -1588,74 +1598,43 @@ impl Runtime {
         }
     }
 
-    /// Dispatch the call directly on the current thread.
-    ///
-    /// Reserved for dispatchers declaring [`DispatchMode::Inline`]: their
-    /// future must complete in a single poll. A dispatcher that yields
-    /// `Pending` here answers the caller with a dispatch error — the
-    /// runtime cannot park the current thread without breaking the
-    /// executor-agnostic contract Inline promises.
+    /// Serve the call on the current thread ([`DispatchMode::Inline`]):
+    /// a host that completes without waiting is answered before this
+    /// returns; one that waits continues on the async workers.
     fn dispatch_hosted_call_inline(
         self: &Arc<Self>,
-        dispatcher: &Arc<dyn Dispatch>,
-        call: &HostedCall,
-        cancel: &CancelToken,
+        dispatcher: Arc<dyn Dispatch>,
+        call: HostedCall,
+        cancel: CancelToken,
     ) {
-        let (origin, call_id) = (call.origin, call.call_id);
-        // `CatchUnwind` already stores its inner future in a `Pin<Box<_>>`
-        // and the dispatcher's `DispatchFuture` is itself a boxed trait
-        // object, so pinning on the stack here spares one extra heap
-        // allocation per inline call.
-        let future = CatchUnwind::new(dispatcher.dispatch_from(
-            origin.into(),
-            call.instance_id,
-            &call.method,
-            &call.payload,
-            cancel.clone(),
-        ));
-        let mut future = std::pin::pin!(future);
-        let mut cx = Context::from_waker(std::task::Waker::noop());
-        let outcome = match future.as_mut().poll(&mut cx) {
-            Poll::Ready(outcome) => outcome,
-            Poll::Pending => {
-                tracing::error!(
-                    plugin_id = dispatcher.plugin_id(),
-                    ?call_id,
-                    "inline-mode host yielded Pending; answering with a dispatch error",
-                );
-                exec::finish_now(self.respond(
-                    origin,
-                    call_id,
-                    Err(encode_dispatch_error_string(
-                        "inline-mode host yielded Pending",
-                    )),
-                    Wait::UnlessCancelled(cancel),
-                ));
-                lock(&self.hosted).finish(origin, call_id);
-                return;
+        let runtime = Arc::clone(self);
+        let HostedCall {
+            origin,
+            call_id,
+            instance_id,
+            method,
+            payload,
+        } = call;
+        exec::run_here(async move {
+            // Same unwind reasoning as the blocking path.
+            let outcome = CatchUnwind::new(dispatcher.dispatch_from(
+                origin.into(),
+                instance_id,
+                &method,
+                &payload,
+                cancel.clone(),
+            ))
+            .await;
+            if let Ok(Ok(Outcome::StreamOpened(_))) = &outcome {
+                // The pump runs as long as the stream; leave the
+                // delivering thread now rather than forward the items
+                // already buffered on it.
+                exec::yield_now().await;
             }
-        };
-        // A StreamOpened outcome still needs a background pump: parking
-        // the caller until the stream ends would defeat the Inline
-        // promise. Hand the pump to a spawned task and return.
-        if let Ok(Ok(Outcome::StreamOpened(_))) = &outcome {
-            let runtime = Arc::clone(self);
-            let task_cancel = cancel.clone();
-            let spawned = exec::spawn("istmo-inline-stream-pump", async move {
-                runtime
-                    .finish_hosted_call(origin, call_id, &task_cancel, outcome)
-                    .await;
-            });
-            if let Err(err) = spawned {
-                self.refuse_spawn(origin, call_id, cancel, err);
-            }
-            return;
-        }
-        // Unary (success / domain error / dispatch error / panic) paths
-        // through `finish_hosted_call` never yield on a local caller and
-        // only yield on remote ones when the outbound channel is full;
-        // `finish_now` drives it on the current thread.
-        exec::finish_now(self.finish_hosted_call(origin, call_id, cancel, outcome));
+            runtime
+                .finish_hosted_call(origin, call_id, &cancel, outcome)
+                .await;
+        });
     }
 
     /// Answer a hosted call whose task could not start.
@@ -1752,7 +1731,8 @@ impl Runtime {
         };
         let runtime = Arc::clone(self);
         let task_cancel = cancel.clone();
-        let spawned = exec::spawn("istmo-create", async move {
+        let mode = dispatcher.mode();
+        let task = async move {
             // Same unwind reasoning as `dispatch_hosted_call`.
             let outcome =
                 CatchUnwind::new(dispatcher.create_instance(&payload, task_cancel.clone())).await;
@@ -1799,9 +1779,16 @@ impl Runtime {
                 .respond_unless_cancelled(origin, call_id, result, &task_cancel)
                 .await;
             lock(&runtime.hosted).finish(origin, call_id);
-        });
-        if let Err(err) = spawned {
-            self.refuse_spawn(origin, call_id, &cancel, err);
+        };
+        match mode {
+            DispatchMode::Inline => {
+                exec::run_here(task);
+            }
+            DispatchMode::Isolated => {
+                if let Err(err) = exec::spawn_blocking(task) {
+                    self.refuse_spawn(origin, call_id, &cancel, err);
+                }
+            }
         }
     }
 
@@ -2048,7 +2035,8 @@ fn dispatch_notify(
         tracing::warn!(plugin_id = dispatcher.plugin_id(), ?origin, method = %method, "refused Notify");
         return;
     }
-    let spawned = exec::spawn("istmo-notify", async move {
+    let mode = dispatcher.method_mode(&method);
+    let task = async move {
         // Same unwind reasoning as `Runtime::dispatch_hosted_call`.
         let outcome = CatchUnwind::new(dispatcher.dispatch_from(
             origin.into(),
@@ -2063,12 +2051,16 @@ fn dispatch_notify(
             Ok(Err(err)) => tracing::warn!(?err, method = %method, "notify dispatch failed"),
             Err(_) => tracing::error!(method = %method, "notify dispatch panicked"),
         }
-    });
-    if let Err(err) = spawned {
-        tracing::error!(
-            ?err,
-            "failed to spawn a notify thread; notification dropped"
-        );
+    };
+    match mode {
+        DispatchMode::Inline => {
+            exec::run_here(task);
+        }
+        DispatchMode::Isolated => {
+            if let Err(err) = exec::spawn_blocking(task) {
+                tracing::error!(?err, "no blocking worker for a notification; dropped");
+            }
+        }
     }
 }
 
@@ -2079,9 +2071,12 @@ fn dispatch_notify(
 /// `encode` returns the item's bytes, or the `Err` chunk that ends the
 /// stream (a domain error, or an encode failure as a string).
 ///
+/// The encoder is a task on the runtime's async workers.
+///
 /// # Errors
 ///
-/// [`DispatchError::Spawn`] when the OS refused the encoder thread.
+/// None today; the signature keeps room for an encoder that cannot
+/// start.
 #[doc(hidden)]
 pub fn encode_hosted_stream<T: Send + 'static>(
     method: &'static str,
@@ -2089,8 +2084,9 @@ pub fn encode_hosted_stream<T: Send + 'static>(
     capacity: usize,
     encode: impl Fn(T) -> HostedStreamItem + Send + 'static,
 ) -> Result<Outcome, DispatchError> {
+    let _ = method;
     let (tx, rx) = bounded::<HostedStreamItem>(capacity);
-    exec::spawn("istmo-stream-enc", async move {
+    exec::spawn(async move {
         while let Ok(item) = source.recv_async().await {
             let chunk = encode(item);
             let ends = chunk.is_err();
@@ -2098,15 +2094,7 @@ pub fn encode_hosted_stream<T: Send + 'static>(
                 break;
             }
         }
-    })
-    .map_err(|err| {
-        tracing::error!(
-            ?err,
-            method,
-            "failed to spawn the hosted stream encoder thread"
-        );
-        DispatchError::Spawn(err)
-    })?;
+    });
     Ok(Outcome::StreamOpened(rx))
 }
 
@@ -2151,10 +2139,10 @@ where
 /// wire path.
 ///
 /// A host that observes its token usually still has work to do (stop a
-/// sensor, release a claim). On the wire path its dispatcher thread
-/// keeps polling it after the caller left; here the caller's own task
-/// polled it, so a call dropped early hands the host future to a thread
-/// of its own that runs it to the end.
+/// sensor, release a claim). On the wire path the runtime keeps polling
+/// it after the caller left; here the caller's own task polled it, so a
+/// call dropped early hands the host future to the runtime's async
+/// workers, which run it to the end.
 #[doc(hidden)]
 pub async fn typed_call_cancellable<F, T>(
     runtime: &Arc<Runtime>,
@@ -2193,18 +2181,12 @@ where
                 return;
             };
             self.cancel.cancel();
-            let spawned = exec::spawn("istmo-cancelled-call", async move {
+            exec::spawn(async move {
                 if future.await.is_err() {
                     tracing::error!("typed-shortcut host panicked after its call was dropped");
                 }
                 finish();
             });
-            if let Err(err) = spawned {
-                tracing::warn!(%err, "no thread to finish a dropped call; its host stops where it was");
-                if let Some(runtime) = self.runtime.upgrade() {
-                    runtime.finish_local_stream(self.id);
-                }
-            }
         }
     }
     let (id, cancel) = runtime.begin_local_stream()?;

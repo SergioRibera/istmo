@@ -1,14 +1,23 @@
 //! Where hosted work runs.
 //!
-//! Every hosted call, instance creation, notification and stream pump
-//! is a future handed to [`spawn`]:
+//! Native targets keep two sets of persistent threads, started on first
+//! use and never one per call:
 //!
-//! - native targets run it on its own named OS thread under
-//!   [`pollster::block_on`], so a host may block or call back into the
-//!   runtime without stalling anything else;
-//! - `wasm32-unknown-unknown` has no threads: the future goes to the
-//!   browser's event loop through `wasm_bindgen_futures::spawn_local`,
-//!   and every wait inside it is an `.await`, never a blocking wait.
+//! - the async workers ([`spawn`], [`run_here`]): a few threads polling
+//!   futures that must not block — [`DispatchMode::Inline`] hosts,
+//!   stream pumps and encoders. [`run_here`] polls a future on the
+//!   calling thread first, so one that completes without waiting never
+//!   leaves it;
+//! - the blocking workers ([`spawn_blocking`]): threads for
+//!   [`DispatchMode::Isolated`] work, which may block or call back into
+//!   the runtime and wait.
+//!
+//! `wasm32-unknown-unknown` has no threads: every future goes to the
+//! browser's event loop through `wasm_bindgen_futures::spawn_local`, and
+//! every wait inside it is an `.await`, never a blocking wait.
+//!
+//! [`DispatchMode::Inline`]: crate::DispatchMode::Inline
+//! [`DispatchMode::Isolated`]: crate::DispatchMode::Isolated
 
 use std::any::Any;
 use std::future::Future;
@@ -20,23 +29,63 @@ use flume::{Sender, TrySendError};
 
 use crate::dispatch::CancelToken;
 
-/// Run `task` in the background.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+mod blocking;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+mod tasks;
+
+/// Run `task` on the async workers. It must not block the thread
+/// polling it.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub(super) fn spawn(task: impl Future<Output = ()> + Send + 'static) {
+    tasks::spawn(task);
+}
+
+/// Run `task` on the browser's event loop.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(super) fn spawn(task: impl Future<Output = ()> + Send + 'static) {
+    wasm_bindgen_futures::spawn_local(task);
+}
+
+/// Poll `task` on the calling thread until it first waits, then leave
+/// it to the async workers. `true` when it finished before returning.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub(super) fn run_here(task: impl Future<Output = ()> + Send + 'static) -> bool {
+    tasks::run_here(task)
+}
+
+/// Poll `task` once here; a pending one goes to the browser's event
+/// loop.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(super) fn run_here(task: impl Future<Output = ()> + Send + 'static) -> bool {
+    let mut task = Box::pin(task);
+    let mut cx = Context::from_waker(std::task::Waker::noop());
+    // The noop waker loses the wake-up, so the event loop polls the task
+    // afresh instead of relying on this poll's registration.
+    match task.as_mut().poll(&mut cx) {
+        Poll::Ready(()) => true,
+        Poll::Pending => {
+            wasm_bindgen_futures::spawn_local(task);
+            false
+        }
+    }
+}
+
+/// Run `task` to completion on a blocking worker, which it may block.
 ///
 /// # Errors
 ///
-/// The OS refused a thread (native targets only).
+/// The OS refused a thread while every blocking worker was busy; `task`
+/// is dropped unrun.
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-pub(super) fn spawn(
-    name: &str,
+pub(super) fn spawn_blocking(
     task: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    std::thread::Builder::new()
-        .name(name.to_owned())
-        .spawn(move || pollster::block_on(task))
-        .map(drop)
+    blocking::spawn(move || pollster::block_on(task))
 }
 
-/// Run `task` in the background.
+/// Run `task` on the browser's event loop: nothing can block there, so
+/// the blocking workers are the event loop too.
 ///
 /// # Errors
 ///
@@ -44,14 +93,29 @@ pub(super) fn spawn(
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 #[expect(
     clippy::unnecessary_wraps,
-    reason = "same signature as the native spawn"
+    reason = "same signature as the native spawn_blocking"
 )]
-pub(super) fn spawn(
-    _name: &str,
+pub(super) fn spawn_blocking(
     task: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
     wasm_bindgen_futures::spawn_local(task);
     Ok(())
+}
+
+/// Pending once (waking itself), then ready: hands the rest of a
+/// [`run_here`] task to the workers.
+pub(super) async fn yield_now() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await;
 }
 
 /// Finish a send from a synchronous caller.

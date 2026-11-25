@@ -167,15 +167,24 @@ dispatcher — y hace poll de su future en la propia tarea del llamador.
 `client.is_local()` dice si ocurre. Las llamadas desde Kotlin, Swift u
 otro proceso siguen por el wire, así que ambos caminos conviven.
 
+El wire tampoco salta de hilo: una llamada desde Kotlin o Swift se
+ejecuta en el hilo que la envió, y la que termina sin esperar se
+responde antes de que ese hilo regrese. Un método que espera (un
+`.await` sobre otra llamada, un temporizador, un canal) libera ese hilo
+en su primera espera y termina en uno de los pocos workers asíncronos
+del runtime. Ninguna llamada crea un hilo.
+
 La implementación corre donde está el llamador, lo que le pide dos
 cosas:
 
 - **No bloquear.** Un método que espera en un hilo (un diálogo síncrono,
   `std::fs` sobre archivos grandes, `thread::sleep`, un salto síncrono
   al hilo principal) o que solo corre en un executor (necesita un
-  reactor de tokio, por ejemplo) detendría o haría fallar al llamador.
+  reactor de tokio, por ejemplo) detendría o haría fallar al llamador, o
+  a un worker asíncrono que comparten todas las llamadas en espera.
   Márcalo `#[istmo::blocking]`: sus llamadas se codifican y se atienden
-  en un hilo de dispatcher, como todas antes.
+  en uno de los workers bloqueantes persistentes del runtime, que sí
+  pueden bloquear.
 
   ```rust
   #[istmo::plugin(name = "acme.picker")]
@@ -187,9 +196,9 @@ cosas:
 
 - **Cancelar mediante el token.** Soltar la llamada suelta el future. Un
   método que recibe un `CancelToken` lo ve dispararse y aún termina su
-  limpieza (el runtime pasa el future abandonado a un hilo propio, como
-  lo habría hecho el dispatcher); uno sin token simplemente se detiene en
-  su último `.await`.
+  limpieza (el runtime pasa el future abandonado a sus workers
+  asíncronos, como lo habría hecho el dispatcher); uno sin token
+  simplemente se detiene en su último `.await`.
 
 Para dejar todo un plugin en el wire, declara
 `#[plugin(name = "…", shortcut = false)]`; para dejar un registro,

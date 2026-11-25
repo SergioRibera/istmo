@@ -71,6 +71,8 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
             }
         }
     };
+    let method_mode = expand_method_mode(root, &specs);
+    let admits = quote! { #admits #method_mode };
     let message_bounds = expand_message_bounds(root, &specs);
 
     let ctors = args.init.as_ref().map_or_else(
@@ -201,6 +203,33 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
 
         #typed_block
     })
+}
+
+/// `Dispatch::method_mode` of a generated host: every method starts on
+/// the delivering thread, except those marked `#[istmo::blocking]`,
+/// which run on a blocking worker.
+fn expand_method_mode(root: &Path, specs: &[MethodSpec]) -> TokenStream {
+    let blocking: Vec<&LitStr> = specs
+        .iter()
+        .filter(|spec| spec.blocking)
+        .map(|spec| &spec.method_name_str)
+        .collect();
+    if blocking.is_empty() {
+        return quote! {
+            fn method_mode(&self, _method: &str) -> #root::DispatchMode {
+                #root::DispatchMode::Inline
+            }
+        };
+    }
+    quote! {
+        fn method_mode(&self, method: &str) -> #root::DispatchMode {
+            if matches!(method, #(#blocking)|*) {
+                #root::DispatchMode::Isolated
+            } else {
+                #root::DispatchMode::Inline
+            }
+        }
+    }
 }
 
 /// The typed in-process shortcut: a `<Trait>Typed` trait the host

@@ -304,7 +304,7 @@ mod tests {
         let meta = codec::encode(&1u32).expect("meta");
         let first = producer.ticketed(NativeBuffer::from_bytes(vec![1u8]), 7);
         assert!(producer.producer().submit(&meta, first).is_taken());
-        assert!(producer.released().wait(Duration::ZERO).is_empty());
+        assert_eq!(producer.released().wait(Duration::ZERO), [0i64; 0]);
         let second = producer.ticketed(NativeBuffer::from_bytes(vec![2u8]), 8);
         assert!(producer.producer().submit(&meta, second).is_taken());
         assert_eq!(producer.released().wait(Duration::ZERO), [7], "evicted");

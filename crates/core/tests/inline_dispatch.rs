@@ -76,11 +76,12 @@ struct ParkOnce {
 impl Future for ParkOnce {
     type Output = Result<Outcome, istmo_core::DispatchError>;
 
-    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if self.parked {
-            Poll::Ready(Ok(Outcome::Ok(Vec::new())))
+            Poll::Ready(Ok(Outcome::Ok(thread_id_as_u64().to_le_bytes().to_vec())))
         } else {
             self.parked = true;
+            cx.waker().wake_by_ref();
             Poll::Pending
         }
     }
@@ -121,7 +122,7 @@ fn inline_dispatch_runs_on_caller_thread() {
 }
 
 #[test]
-fn inline_dispatch_rejects_pending() {
+fn inline_dispatch_finishes_waiting_hosts_on_a_worker() {
     let init = Runtime::mock();
     let rt: Arc<Runtime> = init.runtime;
     drop(init.outbound);
@@ -129,17 +130,120 @@ fn inline_dispatch_rejects_pending() {
     rt.register_host(PendingInlineHost);
 
     let handle = rt
-        .call(PendingInlineHost::PLUGIN_ID, None, "stuck", Vec::new())
+        .call(PendingInlineHost::PLUGIN_ID, None, "waits", Vec::new())
         .expect("call");
-    let bytes = handle
-        .recv_blocking()
-        .expect("recv")
-        .expect_err("expected dispatch error");
-    let message = String::from_utf8_lossy(&bytes).to_string();
-    assert!(
-        message.contains("Pending"),
-        "unexpected error payload: {message:?}",
+    let bytes = handle.recv_blocking().expect("recv").expect("answered");
+    let finished_on = u64::from_le_bytes(bytes.try_into().expect("thread tag"));
+    assert_ne!(
+        finished_on,
+        thread_id_as_u64(),
+        "the caller must not wait for a host that waits"
     );
+}
+
+/// Host whose calls block the thread serving them: the default mode.
+struct BlockingHost;
+
+impl Dispatch for BlockingHost {
+    fn plugin_id(&self) -> &'static str {
+        "test.blocking"
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        _instance: Option<InstanceId>,
+        _method: &'a str,
+        _payload: &'a [u8],
+        _cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        Box::pin(async {
+            thread::sleep(Duration::from_millis(50));
+            Ok(Outcome::Ok(
+                thread::current().name().unwrap_or("").as_bytes().to_vec(),
+            ))
+        })
+    }
+}
+
+#[test]
+fn isolated_calls_block_persistent_workers_not_the_caller() {
+    let init = Runtime::mock();
+    let rt: Arc<Runtime> = init.runtime;
+    drop(init.outbound);
+    rt.register_host(BlockingHost);
+
+    // Sixteen calls blocking at once all run concurrently.
+    let started = std::time::Instant::now();
+    let handles: Vec<_> = (0..16)
+        .map(|_| {
+            rt.call("test.blocking", None, "m", Vec::new())
+                .expect("call")
+        })
+        .collect();
+    assert!(
+        started.elapsed() < Duration::from_millis(40),
+        "issuing the calls must not wait for them"
+    );
+    for handle in handles {
+        let name = handle.recv_blocking().expect("recv").expect("ok");
+        assert!(
+            String::from_utf8_lossy(&name).starts_with("istmo-blocking-"),
+            "served by {:?}",
+            String::from_utf8_lossy(&name)
+        );
+    }
+    assert!(started.elapsed() < Duration::from_millis(16 * 50));
+}
+
+/// Generated-host style: a blocking method among inline ones.
+struct MixedHost;
+
+impl Dispatch for MixedHost {
+    fn plugin_id(&self) -> &'static str {
+        "test.mixed"
+    }
+
+    fn mode(&self) -> DispatchMode {
+        DispatchMode::Inline
+    }
+
+    fn method_mode(&self, method: &str) -> DispatchMode {
+        if method == "slow" {
+            DispatchMode::Isolated
+        } else {
+            DispatchMode::Inline
+        }
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        _instance: Option<InstanceId>,
+        _method: &'a str,
+        _payload: &'a [u8],
+        _cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        let tag = thread_id_as_u64();
+        Box::pin(async move { Ok(Outcome::Ok(tag.to_le_bytes().to_vec())) })
+    }
+}
+
+#[test]
+fn method_mode_picks_the_thread_per_method() {
+    let init = Runtime::mock();
+    let rt: Arc<Runtime> = init.runtime;
+    drop(init.outbound);
+    rt.register_host(MixedHost);
+    let served_on = |method: &str| {
+        let bytes = rt
+            .call("test.mixed", None, method, Vec::new())
+            .expect("call")
+            .recv_blocking()
+            .expect("recv")
+            .expect("ok");
+        u64::from_le_bytes(bytes.try_into().expect("tag"))
+    };
+    assert_eq!(served_on("fast"), thread_id_as_u64());
+    assert_ne!(served_on("slow"), thread_id_as_u64());
 }
 
 /// Inline host that panics on its first poll.

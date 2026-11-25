@@ -162,15 +162,23 @@ and polls its future on the caller's own task. `client.is_local()` says
 whether that happens. Calls from Kotlin, Swift or another process keep
 the wire path, so both are live at once.
 
+The wire path does not hop threads either: a call from Kotlin or Swift
+is polled on the thread that submitted it, and one that completes
+without waiting is answered before that thread returns. A method that
+waits (an `.await` on another plugin call, a timer, a channel) frees the
+submitting thread at its first wait and finishes on one of the
+runtime's few async workers. No call creates a thread.
+
 The implementation runs where the caller is, which asks two things of
 it:
 
 - **Do not block.** A method that waits on a thread (a synchronous
   dialog, `std::fs` on large files, `thread::sleep`, a synchronous hop
   to the main thread) or that only runs on one executor (it needs a tokio
-  reactor, say) would stall or panic the caller. Mark it
-  `#[istmo::blocking]`: its calls are encoded and served on a dispatcher
-  thread, as every call used to be.
+  reactor, say) would stall or panic the caller, or an async worker
+  every waiting call shares. Mark it `#[istmo::blocking]`: its calls are
+  encoded and served on one of the runtime's persistent blocking
+  workers, which may block.
 
   ```rust
   #[istmo::plugin(name = "acme.picker")]
@@ -182,9 +190,9 @@ it:
 
 - **Cancel through the token.** Dropping the call drops the future. A
   method that takes a `CancelToken` sees it trip and still gets to finish
-  its cleanup (the runtime hands the abandoned future to a thread of its
-  own, as the dispatcher would have); a method without one just stops at
-  its last `.await`.
+  its cleanup (the runtime hands the abandoned future to its async
+  workers, as the dispatcher would have); a method without one just
+  stops at its last `.await`.
 
 To keep a whole plugin on the wire path, declare it
 `#[plugin(name = "…", shortcut = false)]`; to keep one registration on it,

@@ -113,6 +113,53 @@ fn blocking_methods_keep_the_dispatcher_thread() {
 }
 
 #[test]
+fn generated_hosts_pick_a_mode_per_method() {
+    let host = CameraHost::new(Impl);
+    assert_eq!(host.method_mode("thread"), istmo::DispatchMode::Inline);
+    assert_eq!(
+        host.method_mode("blocking_thread"),
+        istmo::DispatchMode::Isolated
+    );
+    assert_eq!(
+        WireOnlyHost::new(Impl).method_mode("ping"),
+        istmo::DispatchMode::Inline
+    );
+}
+
+#[test]
+fn peer_calls_run_inline_unless_blocking() {
+    // A call delivered by the platform peer is served on the delivering
+    // thread; a blocking method on a blocking worker.
+    let init = Runtime::mock();
+    let rt = init.runtime;
+    rt.register_host(CameraHost::new(Impl));
+    let here = thread_name(std::thread::current().id());
+    let served_on = |call_id: u64, method: &str| {
+        rt.dispatch_inbound(istmo::Envelope::new(istmo::Frame::Call {
+            call_id: istmo::CallId(call_id),
+            plugin_id: "test.ctx.camera".to_owned(),
+            instance_id: None,
+            method: method.to_owned(),
+            payload: Vec::new(),
+        }))
+        .expect("inbound");
+        let envelope = init
+            .outbound
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("respond");
+        let istmo::Frame::Respond {
+            result: Ok(bytes), ..
+        } = envelope.frame
+        else {
+            panic!("unexpected {:?}", envelope.frame);
+        };
+        codec::decode::<String>(&bytes).expect("decode").0
+    };
+    assert_eq!(served_on(1, "thread"), here);
+    assert_ne!(served_on(2, "blocking_thread"), here);
+}
+
+#[test]
 fn shortcut_opt_outs_keep_every_call_on_the_wire() {
     let rt = Runtime::mock().runtime;
     rt.register_host(WireOnlyHost::new(Impl));

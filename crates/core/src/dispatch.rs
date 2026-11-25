@@ -196,38 +196,39 @@ pub enum CallOrigin {
 pub type DispatchFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Outcome, DispatchError>> + Send + 'a>>;
 
-/// Hint that lets the runtime pick how it runs a host's dispatch future.
+/// How the runtime runs a host's dispatch future.
 ///
-/// Dispatchers declare this through [`Dispatch::mode`]. The runtime reads
-/// the hint on the first call and keeps that scheduling shape for the
-/// lifetime of the dispatcher.
+/// Dispatchers declare it per method through [`Dispatch::method_mode`]
+/// (default: [`Dispatch::mode`]). No mode creates a thread per call:
+/// both run on threads the runtime starts once and keeps.
 ///
-/// Trade-off summary:
+/// - [`Inline`](Self::Inline): the future is polled on the thread that
+///   delivered the call (the Rust caller, or the Kotlin / Swift thread
+///   that submitted it). One that completes without waiting is answered
+///   right there — the fastest path, a few hundred nanoseconds of
+///   runtime work. One that waits (`.await` on a pending call, a timer,
+///   a channel) frees the delivering thread at its first wait and is
+///   polled to completion by the runtime's few async workers. The future
+///   **must not block** the thread polling it: no blocking I/O, no
+///   `recv_blocking`, no sleeping, no lock held while waiting on another
+///   thread. Breaking that stalls the caller, or one of the async workers
+///   every waiting call shares.
+/// - [`Isolated`](Self::Isolated): the future runs on one of the
+///   runtime's blocking workers, a pool of persistent threads that grows
+///   while every thread is busy (up to 64) and is reused afterwards. The
+///   future may block, call synchronous platform SDKs, hold locks or
+///   re-enter the runtime and wait for the answer. Costs one thread
+///   hand-off per call. The default for hand-written dispatchers;
+///   generated hosts use it for methods marked `#[istmo::blocking]`.
 ///
-/// - [`Inline`](Self::Inline): fastest, strictest. The future runs on the
-///   caller's stack. The dispatcher **must not block**, hold a lock across
-///   the boundary, re-enter the runtime recursively from the same call, or
-///   await anything that requires another executor to make progress.
-///   Breaking that stalls the caller. Suits pure computation (parsers,
-///   formatters, state machines).
-/// - [`OnCallerExecutor`](Self::OnCallerExecutor): the future runs as a
-///   child of the caller's executor. `.await` points yield normally and
-///   other work on that executor can interleave. The dispatcher must not
-///   block the thread between await points.
-/// - [`Isolated`](Self::Isolated): the future runs on a dedicated OS
-///   thread the runtime spawns for the call. The dispatcher is free to
-///   block, call synchronous platform SDKs, hold locks, or re-enter the
-///   runtime. This is the safe default.
+/// Either way a panic inside the future is caught and answered with an
+/// error, and the call's [`CancelToken`] trips when the caller cancels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DispatchMode {
-    /// Poll the dispatch future on the caller's thread with the caller's
-    /// waker. No thread spawn, no cross-task handoff.
+    /// Start on the delivering thread; continue on the async workers
+    /// after the first wait. Must not block.
     Inline,
-    /// Chain the dispatch future into the caller's executor. No thread
-    /// spawn; `.await` yields back to the caller's executor.
-    OnCallerExecutor,
-    /// Dedicate a fresh OS thread to the dispatch future. The runtime
-    /// picks this when a dispatcher may block or re-enter.
+    /// Run on a blocking worker. May block or re-enter the runtime.
     Isolated,
 }
 
@@ -253,20 +254,26 @@ pub trait Dispatch: Send + Sync + 'static {
     /// Plugin id this dispatcher answers on.
     fn plugin_id(&self) -> &'static str;
 
-    /// Scheduling shape the runtime picks for this dispatcher.
+    /// How the runtime runs this dispatcher's calls, instance creation
+    /// and notifications, unless [`method_mode`](Self::method_mode) says
+    /// otherwise for a method.
     ///
-    /// The default is [`DispatchMode::Isolated`]: every call runs on its
-    /// own OS thread, so the dispatch future is free to block, hold
-    /// locks, or re-enter the runtime recursively. Dispatchers that
-    /// never do any of those can override to [`DispatchMode::Inline`] or
-    /// [`DispatchMode::OnCallerExecutor`] to avoid the per-call thread
-    /// spawn.
-    ///
-    /// The runtime reads this on registration and keeps the answer for
-    /// the dispatcher's lifetime, so it is effectively a per-type choice
-    /// even though the method takes `&self`.
+    /// The default is [`DispatchMode::Isolated`]: the dispatch future
+    /// runs on a blocking worker, free to block, hold locks or re-enter
+    /// the runtime. Dispatchers that never do any of those override it
+    /// with [`DispatchMode::Inline`] and save the thread hand-off.
     fn mode(&self) -> DispatchMode {
         DispatchMode::Isolated
+    }
+
+    /// How the runtime runs calls and notifications of `method`; asked
+    /// once per call. The default is [`mode`](Self::mode). Hosts
+    /// generated by `#[istmo::plugin]` answer [`DispatchMode::Inline`],
+    /// and [`DispatchMode::Isolated`] for methods marked
+    /// `#[istmo::blocking]`.
+    fn method_mode(&self, method: &str) -> DispatchMode {
+        let _ = method;
+        self.mode()
     }
 
     /// Called once when the dispatcher is registered with a runtime.

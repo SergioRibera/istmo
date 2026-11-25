@@ -80,7 +80,7 @@ mod worker;
 ///   `istmo-core` directly instead of the facade override it.
 /// - `remote = false` — the host refuses requests from other processes.
 /// - `shortcut = false` — no typed in-process shortcut: calls from this
-///   process are encoded and served on a dispatcher thread too. By
+///   process are encoded and served through the wire dispatcher too. By
 ///   default `Runtime::register_host` (and so every `runtime!(hosts: …)`
 ///   entry) installs the shortcut of a stateless plugin, and this
 ///   process's clients poll the host's futures on their own task; mark
@@ -304,17 +304,19 @@ pub fn stream(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
-/// Keep a plugin method on the dispatcher path.
+/// Serve a plugin method on a blocking worker.
 ///
-/// A Rust host registered with `Runtime::register_host` (so every
-/// `runtime!(hosts: …)` entry) serves this process's own calls through
-/// the typed in-process shortcut: the client polls the method's future
-/// on the caller's thread and executor. Mark a method whose body blocks
-/// the thread (synchronous dialogs, `std::fs` on large files, sleeps,
-/// waits on another thread), hops to the main thread and waits, or only
-/// runs on a particular executor (one that needs a tokio reactor, say):
-/// its calls are then encoded and served on a dispatcher thread, as
-/// calls from Kotlin, Swift or another process always are.
+/// A generated Rust host starts every call on the thread that delivers
+/// it: this process's own calls go through the typed in-process shortcut
+/// (the client polls the method's future on the caller's thread and
+/// executor), and calls from Kotlin, Swift or another process are polled
+/// on the thread that submitted them, continuing on the runtime's async
+/// workers once they wait. Neither may block. Mark a method whose body
+/// blocks the thread (synchronous dialogs, `std::fs` on large files,
+/// sleeps, waits on another thread), hops to the main thread and waits,
+/// or only runs on a particular executor (one that needs a tokio
+/// reactor, say): its calls are then encoded and served on one of the
+/// runtime's persistent blocking workers (`DispatchMode::Isolated`).
 ///
 /// ```
 /// #[istmo::plugin(name = "demo.picker")]
