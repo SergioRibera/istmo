@@ -27,7 +27,8 @@ use istmo_core::{
 };
 use jni::JNIEnv;
 use jni::objects::{
-    GlobalRef, JByteArray, JByteBuffer, JClass, JMethodID, JObject, JString, JThrowable, JValue,
+    GlobalRef, JByteArray, JByteBuffer, JClass, JMethodID, JObject, JObjectArray, JString,
+    JThrowable, JValue,
 };
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong};
 
@@ -335,6 +336,86 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent<'lo
             stream_id: StreamId(wire_id(stream_id)),
             payload: bytes,
         }))?;
+        Ok(())
+    });
+}
+
+/// Several items of one Kotlin-produced stream in one crossing: the
+/// first `count` arrays of `items`, delivered in order.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvents<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    stream_id: jlong,
+    items: JObjectArray<'local>,
+    count: jint,
+) {
+    probe!(SubmitEventEntered);
+    guarded(&mut env, "nativeSubmitEvents", (), |env| {
+        let count = usize::try_from(count).map_err(|_| {
+            AndroidRuntimeError::InvalidArgument(format!("negative item count {count}"))
+        })?;
+        let mut batch = Vec::with_capacity(count);
+        for index in 0..count {
+            let index = jint::try_from(index).map_err(|_| {
+                AndroidRuntimeError::InvalidArgument("item count past jint".to_owned())
+            })?;
+            let item = JByteArray::from(env.get_object_array_element(&items, index)?);
+            batch.push(read_array(env, &item)?);
+            env.delete_local_ref(item)?;
+        }
+        Runtime::global()?.deliver_peer_events(StreamId(wire_id(stream_id)), batch)?;
+        Ok(())
+    });
+}
+
+/// Open a stream on a Rust-hosted plugin that sends at most `window`
+/// items ahead of the Kotlin collector; `nativeStreamCredit` grants
+/// more as it takes them. Reads the first `len` bytes of `payload`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitStream<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    call_id: jlong,
+    plugin_id: JString<'local>,
+    instance_id: jlong,
+    method: JString<'local>,
+    payload: JByteArray<'local>,
+    len: jint,
+    window: jint,
+) {
+    guarded(&mut env, "nativeSubmitStream", (), |env| {
+        let plugin_id: String = env.get_string(&plugin_id)?.into();
+        let method: String = env.get_string(&method)?.into();
+        let payload = read_payload(env, &payload, len)?;
+        let window = u32::try_from(window).map_err(|_| {
+            AndroidRuntimeError::InvalidArgument(format!("negative stream window {window}"))
+        })?;
+        Runtime::global()?.serve_peer_stream(
+            CallId(wire_id(call_id)),
+            &plugin_id,
+            instance_from_wire(instance_id),
+            method,
+            payload,
+            window,
+        );
+        Ok(())
+    });
+}
+
+/// The Kotlin collector of `streamId` took `items` more.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeStreamCredit<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    stream_id: jlong,
+    items: jint,
+) {
+    guarded(&mut env, "nativeStreamCredit", (), |_env| {
+        let items = u32::try_from(items).map_err(|_| {
+            AndroidRuntimeError::InvalidArgument(format!("negative credit {items}"))
+        })?;
+        Runtime::global()?.grant_stream_credit(StreamId(wire_id(stream_id)), items);
         Ok(())
     });
 }

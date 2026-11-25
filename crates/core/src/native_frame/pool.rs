@@ -17,8 +17,9 @@ pub const DEFAULT_POOLED_BUFFERS: usize = 6;
 /// are freed).
 pub const DEFAULT_POOLED_BYTES: usize = 96 << 20;
 
-/// Recycles the byte buffers of copied frames: a frame built with
-/// [`copy_of`](Self::copy_of) or [`buffer`](Self::buffer) returns its
+/// Recycles the byte buffers of copied frames.
+///
+/// A frame built with [`copy_of`](Self::copy_of) or [`buffer`](Self::buffer) returns its
 /// memory here when the consumer drops it, and the next frame of a
 /// fitting size reuses it.
 ///

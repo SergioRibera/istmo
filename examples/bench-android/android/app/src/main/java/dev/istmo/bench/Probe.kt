@@ -87,6 +87,12 @@ object ProbeRuntime {
     }
 
     @JvmStatic
+    fun onEvents(streamId: Long, payloads: Array<ByteArray>) {
+        Probe.stamp(Probe.ON_EVENT_ENTER)
+        IstmoRuntime.onEvents(streamId, payloads)
+    }
+
+    @JvmStatic
     fun onStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray) =
         IstmoRuntime.onStreamEnd(streamId, reason, errorPayload)
 

@@ -5,7 +5,7 @@ use flume::{Receiver as FlumeReceiver, Sender as FlumeSender, unbounded};
 use istmo_core::{Envelope, Frame};
 use jni::JNIEnv;
 use jni::JavaVM;
-use jni::objects::{GlobalRef, JStaticMethodID, JString, JValue};
+use jni::objects::{GlobalRef, JObject, JStaticMethodID, JString, JValue};
 use jni::signature::{Primitive, ReturnType};
 
 /// Local references one delivery may create: at most three arguments
@@ -136,6 +136,9 @@ pub(crate) struct PumpMethods {
     on_destroy_instance: JStaticMethodID,
     on_respond: JStaticMethodID,
     on_event: JStaticMethodID,
+    on_events: JStaticMethodID,
+    /// `byte[]`, the element class of `onEvents`' batch.
+    byte_array_class: GlobalRef,
     on_stream_end: JStaticMethodID,
     on_release_native_handle: JStaticMethodID,
     on_notify: JStaticMethodID,
@@ -162,6 +165,11 @@ impl PumpMethods {
             on_destroy_instance: env.get_static_method_id(class, "onDestroyInstance", "(J)V")?,
             on_respond: env.get_static_method_id(class, "onRespond", "(JZ[B)V")?,
             on_event: env.get_static_method_id(class, "onEvent", "(J[B)V")?,
+            on_events: env.get_static_method_id(class, "onEvents", "(J[[B)V")?,
+            byte_array_class: {
+                let local = env.find_class("[B")?;
+                env.new_global_ref(local)?
+            },
             on_stream_end: env.get_static_method_id(class, "onStreamEnd", "(JI[B)V")?,
             on_release_native_handle: env.get_static_method_id(
                 class,
@@ -198,30 +206,15 @@ impl Pump {
         remote: &FlumeReceiver<Vec<u8>>,
         shutdown: &FlumeReceiver<()>,
     ) {
-        static WAIT: istmo_core::spin::SpinWait = istmo_core::spin::SpinWait::new();
         // Started after `Runtime::init`, so the runtime exists.
         let runtime = istmo_core::Runtime::global().ok();
+        // A frame taken while collecting a batch of events that did not
+        // belong to it: delivered next.
+        let mut carry: Option<Envelope> = None;
         loop {
-            // A frame queued right after the last delivery is taken
-            // without parking the pump.
-            let quick = WAIT.spin(|| {
-                outbound
-                    .try_recv()
-                    .ok()
-                    .map(PumpStep::Deliver)
-                    .or_else(|| remote.try_recv().ok().map(PumpStep::DeliverRemote))
-            });
-            let step = quick.unwrap_or_else(|| {
-                flume::Selector::new()
-                    .recv(shutdown, |_| PumpStep::Shutdown)
-                    .recv(outbound, |envelope| {
-                        envelope.map_or(PumpStep::Shutdown, PumpStep::Deliver)
-                    })
-                    .recv(remote, |bytes| {
-                        bytes.map_or(PumpStep::Shutdown, PumpStep::DeliverRemote)
-                    })
-                    .wait()
-            });
+            let step = carry
+                .take()
+                .map_or_else(|| next_step(outbound, remote, shutdown), PumpStep::Deliver);
             probe!(PumpDequeued);
 
             // The pump never returns to Java, so local references are
@@ -229,6 +222,25 @@ impl Pump {
             // frame per delivery keeps the local table bounded.
             let delivered = match step {
                 PumpStep::Shutdown => break,
+                PumpStep::Deliver(Envelope {
+                    frame: Frame::Event { stream_id, payload },
+                    ..
+                }) => {
+                    // Events queued back to back for one stream cross in
+                    // one call.
+                    let (batch, next) = collect_events(outbound, payload, stream_id);
+                    carry = next;
+                    let frames = batch.len();
+                    let delivered = env.with_local_frame(DELIVERY_LOCAL_CAPACITY, |env| {
+                        let result = self.deliver_events(env, stream_id, &batch);
+                        report_failure(env, "deliver_events", result);
+                        Ok::<(), jni::errors::Error>(())
+                    });
+                    if let Some(runtime) = &runtime {
+                        (0..frames).for_each(|_| runtime.outbound_delivered());
+                    }
+                    delivered
+                }
                 PumpStep::Deliver(envelope) => {
                     let delivered = env.with_local_frame(DELIVERY_LOCAL_CAPACITY, |env| {
                         let result = self.deliver(env, envelope.frame);
@@ -258,6 +270,41 @@ impl Pump {
             }
         }
         tracing::info!("istmo pump thread exiting");
+    }
+
+    /// One event through `onEvent`, several through one `onEvents`.
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "ids cross JNI as the same 64 bits; Kotlin reads them back as Long"
+    )]
+    fn deliver_events(
+        &self,
+        env: &mut JNIEnv<'_>,
+        stream_id: istmo_core::StreamId,
+        batch: &[Vec<u8>],
+    ) -> Result<(), jni::errors::Error> {
+        let stream_j = JValue::Long(stream_id.get() as i64).as_jni();
+        if let [single] = batch {
+            let payload_j = env.byte_array_from_slice(single)?;
+            return self.call_static_void(
+                env,
+                self.methods.on_event,
+                &[stream_j, JValue::Object(&payload_j).as_jni()],
+            );
+        }
+        let len = i32::try_from(batch.len()).unwrap_or(i32::MAX);
+        let class: &jni::objects::JClass<'_> = self.methods.byte_array_class.as_obj().into();
+        let items = env.new_object_array(len, class, JObject::null())?;
+        for (index, item) in (0..len).zip(batch) {
+            let item_j = env.byte_array_from_slice(item)?;
+            env.set_object_array_element(&items, index, &item_j)?;
+            env.delete_local_ref(item_j)?;
+        }
+        self.call_static_void(
+            env,
+            self.methods.on_events,
+            &[stream_j, JValue::Object(&items).as_jni()],
+        )
     }
 
     fn deliver_remote(&self, env: &mut JNIEnv<'_>, bytes: &[u8]) -> Result<(), jni::errors::Error> {
@@ -476,4 +523,107 @@ pub(crate) fn take_pending_exception(env: &mut JNIEnv<'_>) -> Option<String> {
         let _ = env.exception_clear();
         "<java exception without printable toString>".to_owned()
     }))
+}
+
+/// The next thing to deliver: a frame queued right after the last
+/// delivery is taken without parking the pump.
+fn next_step(
+    outbound: &FlumeReceiver<Envelope>,
+    remote: &FlumeReceiver<Vec<u8>>,
+    shutdown: &FlumeReceiver<()>,
+) -> PumpStep {
+    static WAIT: istmo_core::spin::SpinWait = istmo_core::spin::SpinWait::new();
+    let quick = WAIT.spin(|| {
+        outbound
+            .try_recv()
+            .ok()
+            .map(PumpStep::Deliver)
+            .or_else(|| remote.try_recv().ok().map(PumpStep::DeliverRemote))
+    });
+    quick.unwrap_or_else(|| {
+        flume::Selector::new()
+            .recv(shutdown, |_| PumpStep::Shutdown)
+            .recv(outbound, |envelope| {
+                envelope.map_or(PumpStep::Shutdown, PumpStep::Deliver)
+            })
+            .recv(remote, |bytes| {
+                bytes.map_or(PumpStep::Shutdown, PumpStep::DeliverRemote)
+            })
+            .wait()
+    })
+}
+
+/// Most events one `onEvents` call carries.
+const MAX_EVENT_BATCH: usize = 64;
+
+/// `first` plus the events for `stream_id` queued right behind it (up
+/// to [`MAX_EVENT_BATCH`]), and the first other frame taken, if any.
+fn collect_events(
+    outbound: &FlumeReceiver<Envelope>,
+    first: Vec<u8>,
+    stream_id: istmo_core::StreamId,
+) -> (Vec<Vec<u8>>, Option<Envelope>) {
+    let mut batch = vec![first];
+    while batch.len() < MAX_EVENT_BATCH {
+        let Ok(envelope) = outbound.try_recv() else {
+            break;
+        };
+        match envelope.frame {
+            Frame::Event {
+                stream_id: next,
+                payload,
+            } if next == stream_id => batch.push(payload),
+            frame => {
+                return (batch, Some(Envelope { frame, ..envelope }));
+            }
+        }
+    }
+    (batch, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use istmo_core::StreamId;
+
+    fn event(stream: u64, byte: u8) -> Envelope {
+        Envelope::new(Frame::Event {
+            stream_id: StreamId(stream),
+            payload: vec![byte],
+        })
+    }
+
+    #[test]
+    fn back_to_back_events_of_one_stream_batch_and_stop_at_anything_else() {
+        let (tx, rx) = flume::unbounded();
+        for byte in 1..=3 {
+            tx.send(event(7, byte)).unwrap();
+        }
+        tx.send(event(8, 9)).unwrap();
+        tx.send(event(7, 4)).unwrap();
+        let (batch, next) = collect_events(&rx, vec![0], StreamId(7));
+        assert_eq!(batch, [vec![0], vec![1], vec![2], vec![3]]);
+        assert!(matches!(
+            next.map(|e| e.frame),
+            Some(Frame::Event {
+                stream_id: StreamId(8),
+                ..
+            })
+        ));
+        let (batch, next) = collect_events(&rx, vec![5], StreamId(7));
+        assert_eq!(batch, [vec![5], vec![4]]);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn a_batch_is_capped() {
+        let (tx, rx) = flume::unbounded();
+        for _ in 0..100 {
+            tx.send(event(1, 0)).unwrap();
+        }
+        let (batch, next) = collect_events(&rx, vec![0], StreamId(1));
+        assert_eq!(batch.len(), MAX_EVENT_BATCH);
+        assert!(next.is_none());
+        assert_eq!(rx.len(), 100 - (MAX_EVENT_BATCH - 1));
+    }
 }

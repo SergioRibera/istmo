@@ -9,11 +9,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 
@@ -284,13 +285,13 @@ object IstmoRuntime {
      * [StreamCancelledException] when the host cancels it. Cancelling the
      * collector cancels the call on the Rust side.
      *
-     * Items arrive on the pump thread, which delivers every other frame
-     * too, so it never waits on a collector: up to [bufferCapacity]
-     * undelivered items are held here, and one more fails the flow with
-     * [StreamOverflowException] and cancels the call rather than block
-     * the pump or drop items silently. A collector that only wants the
-     * latest value applies `.conflate()` downstream, which drains this
-     * buffer as fast as items arrive.
+     * Backpressure: the host sends at most [bufferCapacity] items ahead
+     * of the collector. Each item the collector takes (its `emit`
+     * returned) is credited back to Rust in batches of half the window,
+     * and a Rust producer that runs ahead waits — its stream's bounded
+     * channel fills — instead of overflowing this buffer. Nothing is
+     * dropped. A collector that only wants the latest value applies
+     * `.conflate()` downstream.
      */
     fun stream(
         pluginId: String,
@@ -300,23 +301,37 @@ object IstmoRuntime {
         bufferCapacity: Int = DEFAULT_STREAM_BUFFER,
     ): Flow<ByteArray> {
         require(bufferCapacity > 0) { "bufferCapacity must be positive" }
-        return callbackFlow {
+        return flow {
             val callId = nextCallId.getAndIncrement()
-            outboundStreams[callId] = PendingStream(channel)
+            // Rust never sends more than the credit it holds, which is at
+            // most this capacity: `onEvent`'s `trySend` always has room.
+            val items = Channel<ByteArray>(bufferCapacity)
+            outboundStreams[callId] = PendingStream(items)
             try {
-                nativeSubmitCall(callId, pluginId, instanceId, method, payload)
+                nativeSubmitStream(callId, pluginId, instanceId, method, payload, payload.size, bufferCapacity)
             } catch (e: Throwable) {
                 outboundStreams.remove(callId)
                 throw e
             }
-            awaitClose {
+            val grantEvery = maxOf(1, bufferCapacity / 2)
+            var taken = 0
+            try {
+                for (item in items) {
+                    emit(item)
+                    taken++
+                    if (taken >= grantEvery) {
+                        nativeStreamCredit(callId, taken)
+                        taken = 0
+                    }
+                }
+            } finally {
                 // Still registered means the host has not ended it: the
                 // collector left early, so stop the producer.
                 if (outboundStreams.remove(callId) != null) {
                     runCatching { nativeSubmitCancel(callId) }
                 }
             }
-        }.buffer(bufferCapacity)
+        }
     }
 
     fun stream(
@@ -462,7 +477,27 @@ object IstmoRuntime {
             // dedicated Rust OS threads, so the native call never blocks
             // on UI work.
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Unconfined) {
-                flow.collect { bytes -> nativeSubmitEvent(callId, bytes) }
+                // Items the backend emits faster than Rust takes them
+                // queue here and cross in batches: one JNI call and one
+                // routing lookup for up to STREAM_BATCH items. A paced
+                // stream still crosses item by item.
+                val items = flow.buffer(STREAM_BATCH).produceIn(this)
+                val batch = arrayOfNulls<ByteArray>(STREAM_BATCH)
+                for (first in items) {
+                    batch[0] = first
+                    var count = 1
+                    while (count < STREAM_BATCH) {
+                        val next = items.tryReceive().getOrNull() ?: break
+                        batch[count] = next
+                        count++
+                    }
+                    if (count == 1) {
+                        nativeSubmitEvent(callId, first)
+                    } else {
+                        nativeSubmitEvents(callId, batch, count)
+                    }
+                    java.util.Arrays.fill(batch, 0, count, null)
+                }
             }
             nativeSubmitStreamEnd(callId, STREAM_END_COMPLETE, null)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -536,13 +571,30 @@ object IstmoRuntime {
     @JvmStatic
     fun onEvent(streamId: Long, payload: ByteArray) {
         val stream = outboundStreams[streamId] ?: return
+        offer(streamId, stream, payload)
+    }
+
+    /** Several items of one stream, in order. */
+    @JvmStatic
+    fun onEvents(streamId: Long, payloads: Array<ByteArray>) {
+        val stream = outboundStreams[streamId] ?: return
+        for (payload in payloads) {
+            if (!offer(streamId, stream, payload)) return
+        }
+    }
+
+    /** Queue one item; `false` once the stream is gone. */
+    private fun offer(streamId: Long, stream: PendingStream, payload: ByteArray): Boolean {
         val sent = stream.channel.trySend(payload)
-        // A closed channel means the collector already left and its
-        // `awaitClose` cancels the call; only a full buffer is overflow.
-        if (sent.isFailure && !sent.isClosed && outboundStreams.remove(streamId) != null) {
+        if (sent.isSuccess) return true
+        // A closed channel means the collector already left and cancels
+        // the call itself; a full buffer (credit overrun, or a stream
+        // opened without credit) is overflow.
+        if (!sent.isClosed && outboundStreams.remove(streamId) != null) {
             stream.channel.close(StreamOverflowException())
             runCatching { nativeSubmitCancel(streamId) }
         }
+        return false
     }
 
     @JvmStatic
@@ -603,6 +655,17 @@ object IstmoRuntime {
     )
     external fun nativeSubmitResponse(callId: Long, ok: Boolean, payload: ByteArray)
     external fun nativeSubmitEvent(streamId: Long, payload: ByteArray)
+    external fun nativeSubmitEvents(streamId: Long, payloads: Array<ByteArray?>, count: Int)
+    external fun nativeSubmitStream(
+        callId: Long,
+        pluginId: String,
+        instanceId: Long,
+        method: String,
+        payload: ByteArray,
+        payloadLen: Int,
+        window: Int,
+    )
+    external fun nativeStreamCredit(streamId: Long, items: Int)
     external fun nativeSubmitStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray?)
     external fun nativeSubmitEarlyLatest(channel: String, payload: ByteArray)
     external fun nativeSubmitEarlyQueue(channel: String, capacity: Int, payload: ByteArray)
@@ -620,6 +683,9 @@ object IstmoRuntime {
     private val EMPTY_PAYLOAD = ByteArray(0)
 
     private const val DEFAULT_STREAM_BUFFER = 256
+
+    /** Most items a Kotlin-produced stream hands Rust in one call. */
+    private const val STREAM_BATCH = 64
 
     /**
      * An outbound call's answer slot: whichever of the answer and the

@@ -250,6 +250,14 @@ impl DirectReply {
     }
 }
 
+/// Credit a peer granted to one of its streams: the pump takes `rx`
+/// when the stream opens, grants arrive on `tx`.
+#[derive(Debug)]
+struct CreditLane {
+    tx: FlumeSender<u32>,
+    rx: Option<FlumeReceiver<u32>>,
+}
+
 /// Cancellation state for calls served by hosts on this runtime.
 #[derive(Debug, Default)]
 struct HostedCalls {
@@ -450,6 +458,10 @@ pub struct Runtime {
     /// Frames put on the outbound channel and not yet reported delivered
     /// by the transport ([`outbound_delivered`](Self::outbound_delivered)).
     outbound_backlog: AtomicUsize,
+
+    /// Credit lanes of peer streams opened with a window
+    /// ([`serve_peer_stream`](Self::serve_peer_stream)).
+    peer_credits: Mutex<HashMap<StreamId, CreditLane>>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -1746,6 +1758,89 @@ impl Runtime {
         direct.close()
     }
 
+    /// Open a stream for the platform peer that takes items by credit:
+    /// the host's items go out only while the peer has credit left, and
+    /// `window` is the credit it starts with. The peer grants more with
+    /// [`grant_stream_credit`](Self::grant_stream_credit) as its consumer
+    /// takes items, so its buffer never holds more than it granted and a
+    /// fast producer waits instead of overflowing it (its own bounded
+    /// channel fills and holds it back).
+    ///
+    /// Otherwise like a [`Frame::Call`] through
+    /// [`dispatch_inbound`](Self::dispatch_inbound): events, the end and
+    /// any error answer go out as frames. The typed inbound wrapper
+    /// behind Android `nativeSubmitStream`.
+    pub fn serve_peer_stream(
+        self: &Arc<Self>,
+        call_id: CallId,
+        plugin_id: &str,
+        instance_id: Option<InstanceId>,
+        method: String,
+        payload: Vec<u8>,
+        window: u32,
+    ) {
+        let stream_id = StreamId(call_id.get());
+        let (tx, rx) = flume::unbounded();
+        // Unbounded and still connected: the send cannot fail.
+        let _ = tx.send(window.max(1));
+        lock(&self.peer_credits).insert(stream_id, CreditLane { tx, rx: Some(rx) });
+        let Some(dispatcher) = self.host(plugin_id) else {
+            self.forget_peer_credit(stream_id);
+            self.reject_unhosted(Origin::Peer, call_id, plugin_id, "Call");
+            return;
+        };
+        self.dispatch_hosted_call(
+            dispatcher,
+            HostedCall {
+                origin: Origin::Peer,
+                call_id,
+                instance_id,
+                method,
+                payload,
+            },
+        );
+    }
+
+    /// The peer's consumer of `stream_id` took `items` more: let that
+    /// many more go out. Ignored for streams that ended or were not
+    /// opened with [`serve_peer_stream`](Self::serve_peer_stream).
+    pub fn grant_stream_credit(&self, stream_id: StreamId, items: u32) {
+        if let Some(lane) = lock(&self.peer_credits).get(&stream_id) {
+            // The pump may have dropped its end already: nothing to do.
+            let _ = lane.tx.send(items);
+        }
+    }
+
+    /// Deliver a batch of items the peer produced for `stream_id`, in
+    /// order, with one routing lookup for all of them. Waits while the
+    /// consumer's buffer is full, like one [`Frame::Event`] per item
+    /// through [`dispatch_inbound`](Self::dispatch_inbound) would.
+    ///
+    /// # Errors
+    ///
+    /// As [`dispatch_inbound`](Self::dispatch_inbound) for a
+    /// [`Frame::Event`]; items before a failure were delivered.
+    pub fn deliver_peer_events(
+        &self,
+        stream_id: StreamId,
+        items: impl IntoIterator<Item = Vec<u8>>,
+    ) -> Result<(), IstmoError> {
+        let tx = self.routing.stream_sender(stream_id)?;
+        for item in items {
+            tx.send(StreamMessage::Event(item))
+                .map_err(|_| IstmoError::ChannelClosed)?;
+        }
+        Ok(())
+    }
+
+    fn take_peer_credit(&self, stream_id: StreamId) -> Option<FlumeReceiver<u32>> {
+        lock(&self.peer_credits).get_mut(&stream_id)?.rx.take()
+    }
+
+    fn forget_peer_credit(&self, stream_id: StreamId) {
+        lock(&self.peer_credits).remove(&stream_id);
+    }
+
     /// Serve the call on a blocking worker ([`DispatchMode::Isolated`]).
     fn dispatch_hosted_call_blocking(
         self: &Arc<Self>,
@@ -1891,6 +1986,9 @@ impl Runtime {
                 let reason = self.pump_stream(origin, stream_id, cancel, &receiver).await;
                 // Release the producer before the end goes out.
                 drop(receiver);
+                if origin == Origin::Peer {
+                    self.forget_peer_credit(stream_id);
+                }
                 self.end_stream(origin, stream_id, reason, cancel).await;
                 lock(&self.hosted).finish(origin, call_id);
                 return;
@@ -1906,6 +2004,11 @@ impl Runtime {
                 Err(encode_dispatch_error_string("host panicked"))
             }
         };
+        // A stream call answered like a unary one (refused, failed to
+        // open) leaves no credit lane behind.
+        if origin == Origin::Peer {
+            self.forget_peer_credit(StreamId(call_id.get()));
+        }
         // A synchronous caller still waiting takes the answer itself.
         let result = match direct {
             Some(direct) => match direct.offer(result) {
@@ -2027,6 +2130,16 @@ impl Runtime {
         cancel: &CancelToken,
         receiver: &FlumeReceiver<HostedStreamItem>,
     ) -> StreamEndReason {
+        // A peer that opened the stream with a credit window takes at
+        // most that many items ahead of its consumer: the pump holds the
+        // next item until there is credit for it, so the producer's own
+        // bounded channel is what fills and holds it back. The end and
+        // errors need no credit.
+        let mut credit = match origin {
+            Origin::Peer => self.take_peer_credit(stream_id),
+            Origin::Local | Origin::Remote => None,
+        };
+        let mut available: u64 = 0;
         loop {
             let step = race(receiver.recv_async(), cancel.cancelled()).await;
             // A producer that never stops sending keeps its receiver
@@ -2036,6 +2149,17 @@ impl Runtime {
             }
             match step {
                 Either::Left(Ok(Ok(payload))) => {
+                    if let Some(lane) = credit.take() {
+                        match await_credit(&lane, &mut available, cancel).await {
+                            Credit::Granted => {
+                                available -= 1;
+                                credit = Some(lane);
+                            }
+                            // The lane is gone (shutdown): stop gating.
+                            Credit::Ungated => {}
+                            Credit::Cancelled => return StreamEndReason::Cancelled,
+                        }
+                    }
                     if !self.emit_event(origin, stream_id, payload, cancel).await {
                         return StreamEndReason::Cancelled;
                     }
@@ -2216,6 +2340,7 @@ impl Runtime {
         *lock(&self.remote_calls) = RemoteCalls::default();
         lock(&self.remote_instances).clear();
         self.frame_sinks.close_all();
+        lock(&self.peer_credits).clear();
         if count > 0 {
             tracing::info!(count, "istmo runtime shutdown cancelled pending operations");
         }
@@ -2306,6 +2431,38 @@ pub fn encode_hosted_stream<T: Send + 'static>(
         }
     });
     Ok(Outcome::StreamOpened(rx))
+}
+
+/// What [`await_credit`] found.
+enum Credit {
+    /// At least one item may go out (`available > 0`).
+    Granted,
+    /// The credit lane closed: send without credit from now on.
+    Ungated,
+    /// The stream was cancelled while waiting.
+    Cancelled,
+}
+
+/// Collect credit granted on `lane` into `available`, waiting while
+/// there is none.
+async fn await_credit(
+    lane: &FlumeReceiver<u32>,
+    available: &mut u64,
+    cancel: &CancelToken,
+) -> Credit {
+    loop {
+        while let Ok(granted) = lane.try_recv() {
+            *available += u64::from(granted);
+        }
+        if *available > 0 {
+            return Credit::Granted;
+        }
+        match race(lane.recv_async(), cancel.cancelled()).await {
+            Either::Left(Ok(granted)) => *available += u64::from(granted),
+            Either::Left(Err(_)) => return Credit::Ungated,
+            Either::Right(()) => return Credit::Cancelled,
+        }
+    }
 }
 
 /// Wait for the next item of `rx` unless `cancel` trips first; `None`
@@ -2447,6 +2604,7 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         frame_sinks: FrameSinks::default(),
         direct_peer: OnceLock::new(),
         outbound_backlog: AtomicUsize::new(0),
+        peer_credits: Mutex::new(HashMap::new()),
     });
     RuntimeInit {
         runtime,
