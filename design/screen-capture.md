@@ -150,6 +150,13 @@ pub trait ScreenCapture {
     async fn open_preview(&self, config: SessionConfig, target: PreviewTarget)
         -> Result<CaptureSession, CaptureError>;
 
+    /// Preview plus frames from one consent. On Android this is the GPU
+    /// fan-out (`CopyStage::PreviewFanOut`); elsewhere the frames are
+    /// shared with the preview without a copy where the OS allows it.
+    #[owned]
+    async fn open_preview_with_frames(&self, config: SessionConfig, target: PreviewTarget,
+                                      video: FrameSinkId<FrameMeta>) -> Result<CaptureSession, CaptureError>;
+
     /// Frame rate, cursor, region, format tiers, pause / resume.
     /// Returns the renegotiated stream or an error leaving it as it was.
     async fn update(&self, session: NativeHandleId, update: SessionUpdate)
@@ -171,7 +178,7 @@ session, sinks and events.
 `Cursor(CursorRequest)`, `Region(RegionSelector)`,
 `Formats(FormatRequest)`, `Pause`, `Resume`.
 
-Why three `open` methods: `Option<FrameSinkId<_>>` is not a legal
+Why several `open` methods: `Option<FrameSinkId<_>>` is not a legal
 contract shape (`ContractError::FrameSinkPlacement`), and a preview
 session has no sink at all. Separate methods also let the Kotlin /
 Swift client generators drop the sink-taking methods for the client
@@ -660,6 +667,7 @@ pub enum CopyStage {
     ShmTransport,         // wl_shm / MemFd / XShm: producer copied into CPU memory
     LiveBufferSnapshot,   // X11 DRI3 / KMS live buffer copied so it stops changing
     WebCopyTo,            // VideoFrame.copyTo into wasm memory
+    PreviewFanOut,        // Android: one capture drawn into the preview surface and the sink
     LegacyRing,           // iOS legacy extension → app ring
 }
 ```
@@ -716,7 +724,7 @@ Android an `ANativeWindow`. Only same-process hosts resolve it.
 
 | Platform | How | Copies | Frames to Rust as well |
 |---|---|---|---|
-| Android | VirtualDisplay renders into the `Surface` (SurfaceView, TextureView, or a `MediaCodec` input surface) | none | no: one VirtualDisplay per consent; both would need a GPU fan-out (later, declared) |
+| Android | VirtualDisplay renders into the `Surface` (SurfaceView, TextureView, or a `MediaCodec` input surface) | none | yes, through the GPU fan-out below (one `CopyStage::PreviewFanOut` per frame) |
 | iOS 27 / macOS | SCK sample buffers enqueued into `AVSampleBufferDisplayLayer` | none (retain) | possible; a combined method is added when a consumer needs it |
 | Web | `video.srcObject = stream` | none | possible (`MediaStreamTrackProcessor` alongside), same note |
 | Linux / Windows | not offered: desktop consumers render from sinks (DMA-BUF / D3D11 import) | — | — |
@@ -728,6 +736,29 @@ Resize, rotation and letterboxing are handled by the backend
 
 The `MediaCodec` input surface is also the best Android encode path
 for ferricast: capture to encoder with no buffer leaving the GPU.
+
+### Preview and frames together on Android
+
+One consent gives one VirtualDisplay, and a VirtualDisplay renders into
+one surface. Two ways to show a preview while Rust also gets frames:
+
+- **Fan-out (the plugin does it):** `open_preview_with_frames(config,
+  target, sink)` makes the VirtualDisplay render into a plugin-owned
+  `SurfaceTexture`; on each frame the plugin draws that texture into
+  the preview surface and into the sink's `ImageReader` surface with
+  EGL / GLES. One GPU copy per frame per extra output (well under 1 ms
+  on current phones, some battery), declared as
+  `CopyStage::PreviewFanOut` in `NegotiatedStream.copies`. Works with
+  no app-side rendering.
+- **The app renders its own preview (recommended when it already
+  draws):** open a sink session only and draw the received
+  `AHardwareBuffer` frames in the app's own renderer (e.g. Freya
+  importing them through Vulkan). No extra copy: the app renders those
+  frames anyway. This is ferricast's path.
+
+Asking for both a preview target and a sink without the fan-out method
+stays an error (`Unsatisfiable(PreviewAndFrames)`), so the copy is
+never added silently.
 
 ## Screenshots
 
