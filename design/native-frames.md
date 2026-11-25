@@ -186,9 +186,9 @@ Rust host, a Kotlin host or a Swift host.
   consumer can move DMA-BUF fds into its own types (ferricast's
   `DmaBufFd`) and keep the producer's pool slot reserved for as long as
   it holds the lease.
-- Core ships two backings: `CpuBuffer` (any `AsRef<[u8]> + Send + Sync`
-  owner: `Vec<u8>`, `Bytes`, an mmap, a JNI direct `ByteBuffer`) and,
-  on Unix, `DmaBuf` (planes of `OwnedFd` + offset + stride, fourcc,
+- Core ships two constructors: `from_cpu` (the backing is any
+  `AsRef<[u8]> + Send + Sync` owner — `Vec<u8>`, `Bytes`, an mmap, a JNI
+  direct `ByteBuffer` — read with `cpu_bytes()`) and, on Unix, `DmaBuf` (planes of `OwnedFd` + offset + stride, fourcc,
   modifier, size). Platform backings live where they are created:
   `istmo_android::HardwareBuffer`, `istmo_ios::RetainedBuffer`, and
   plugin-owned types (a D3D11 texture, an `IOSurface`). Consumers
@@ -268,8 +268,8 @@ family**; codegen gives each plugin a typed wrapper on top.
 | Kotlin `external fun` | Rust behaviour |
 |---|---|
 | `nativeSubmitHardwareBuffer(sink: Long, buffer: HardwareBuffer, meta: ByteArray): Int` | `AHardwareBuffer_fromHardwareBuffer` + `AHardwareBuffer_acquire` (one reference for Rust; `AHardwareBuffer_describe` captured), wrap in `HardwareBuffer` backing, decode nothing — hand `meta` bytes to the sink, which decodes `M` |
-| `nativeSubmitDirectBuffer(sink: Long, buffer: ByteBuffer, meta: ByteArray): Int` | zero-copy view of a direct `ByteBuffer` held by a JNI `GlobalRef` |
-| `nativeSubmitFrameBytes(sink: Long, bytes: ByteArray, meta: ByteArray): Int` | one copy into a `CpuBuffer` (heap arrays cannot be pinned safely past the call) |
+| `nativeSubmitDirectBuffer(sink: Long, buffer: ByteBuffer, length: Int, meta: ByteArray): Int` | zero-copy view of a direct `ByteBuffer` held by a JNI `GlobalRef` |
+| `nativeSubmitFrameBytes(sink: Long, bytes: ByteArray, meta: ByteArray): Int` | one copy into a CPU buffer (heap arrays cannot be pinned safely past the call) |
 | `nativeCloseFrameSink(sink: Long)` | producer-side close |
 
 The NDK functions are resolved with `dlsym` on first use, not linked:
@@ -277,10 +277,11 @@ The NDK functions are resolved with `dlsym` on first use, not linked:
 make the whole `.so` fail to load on older devices. Below API 26 the
 entry answers `UNSUPPORTED`.
 
-The `Int` status is `SubmitStatus` (`0 ACCEPTED`, `1 DROPPED` — taken
-but a frame was dropped by the policy, `2 CLOSED`, `3 UNKNOWN_SINK`,
-`4 BAD_META`, `5 UNSUPPORTED`, `6 NOT_STARTED`, `7 INVALID`). On every
-status other than `ACCEPTED` / `DROPPED` Rust did not keep a
+The `Int` status is `SubmitStatus` (`0 ACCEPTED`, `1 DISPLACED` — taken,
+an older frame was evicted by the policy, `2 CLOSED`, `3 UNKNOWN_SINK`,
+`4 BAD_META`, `5 UNSUPPORTED`, `6 NOT_STARTED`, `7 INVALID`, `8 FULL` —
+refused by a `DropNewest` sink). On every status other than
+`ACCEPTED` / `DISPLACED` Rust did not keep a
 reference, so the caller still owns its own (it always does: Rust
 acquires its own reference and Kotlin closes its `HardwareBuffer` /
 `Image` whenever it likes).
@@ -314,12 +315,16 @@ the contract, `TypeRef::FrameSink(Named("CaptureMeta"))`. Generators:
 - **Kotlin**: the backend receives `IstmoFrameSink<CaptureMeta>`
   (`dev.istmo.runtime`), built by the dispatcher from the wire id and
   an encoder lambda over `<T>Codecs.writeCaptureMeta`. Methods:
-  `submit(buffer: HardwareBuffer, meta: M)`, `submit(buffer: ByteBuffer, meta: M)`,
+  `submit(buffer: HardwareBuffer, meta: M)`, `submit(buffer: ByteBuffer, length: Int, meta: M)`,
   `submitBytes(bytes, meta)`, `close()`, each returning `IstmoSubmitStatus`.
-- **Swift**: `IstmoFrameSink<CaptureMeta>` with
-  `submit(_ pixelBuffer: CVPixelBuffer, meta:)`,
-  `submit(_ surface: IOSurfaceRef, meta:)`, `submitBytes(_:meta:)`,
-  `close()`.
+- **Swift**: `IstmoFrameSink<CaptureMeta>` (`IstmoRuntime`) with
+  `submitRetained(_:kind:release:meta:)`, `submitBytes(_:meta:)` and
+  `close()` in `IstmoFrameSink.swift` (Foundation only, type-checked on
+  Linux), plus `submit(_ pixelBuffer: CVPixelBuffer, meta:)` and
+  `submit(_ surface: IOSurfaceRef, meta:)` behind `#if canImport(…)` in
+  `IstmoFrameSink+Apple.swift`. The closure capturing `codecs` is
+  emitted only when the metadata names a declared type (swiftc warns on
+  unused captures).
 - Rust client / host code needs nothing generated: `FrameSinkId<M>` is
   the Rust type on both sides.
 
@@ -391,12 +396,39 @@ channel it uses now.
 
 ## Measurements
 
-`crates/core/benches/stream_paths.rs` (criterion, release, this
-machine: Ryzen / Linux 6.18). Per item, producer and consumer on two
-threads, steady state:
+`crates/core/benches/stream_paths.rs` (criterion 0.7, `cargo bench`,
+AMD Ryzen 9 9950X3D, Linux 6.18, rustc 1.95). Every variant allocates its
+payload with `vec![0; n]` on the producer side, so rows differ by
+transport only.
 
-See the results table appended under *Benchmark results* at the end of
-this file.
+Pipelined: a producer thread streams a batch (2 000 items of 16 B, or
+16 items of 8 MiB) to the consumer; time per item:
+
+| Path | 16 B | 8 MiB |
+|---|---|---|
+| bus stream (encoder thread, pump, routing, decode) | 391 ns | 1 058 µs |
+| typed stream shortcut | 356 ns | 71 µs |
+| frame sink, Rust producer | 329 ns | 64 µs |
+| frame sink, native entry (`submit_native_frame`, meta decoded) | 488 ns | 62 µs |
+
+Single thread, one item handed over and taken back (no scheduler
+wake-ups):
+
+| Path | 16 B |
+|---|---|
+| flume hand-off (what the typed shortcut leaves) | 23 ns |
+| encode + channel + decode (bus minus its two thread hops) | 43 ns |
+| frame sink push + try_recv (one allocation per buffer) | 43 ns |
+| frame sink native submit (meta decoded) + try_recv | 64 ns |
+
+Reading: for large buffers both new paths remove the two full copies
+(15× at 8 MiB; what remains is the producer's own allocation). For
+small items everything is bound by cross-thread hand-off; the shortcut
+still saves the encoder thread and the pump per stream, and sinks are
+not meant for tiny items a stream carries just as well. Two sink
+optimisations came out of these runs: one allocation per buffer
+(backing and hooks in a single `Arc`), and ringing the doorbell only
+when the consumer found the queue empty.
 
 ## Open questions
 
