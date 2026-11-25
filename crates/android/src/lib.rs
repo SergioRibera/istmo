@@ -61,6 +61,7 @@ pub use frame_producer::PoolSlot;
 pub use native_buffer::{HardwareBuffer, HardwareBufferDesc};
 
 pub use jni_exports::{
+    Java_dev_istmo_runtime_IstmoRuntime_nativeCall,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInjectEnvelope,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallAssets,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths,

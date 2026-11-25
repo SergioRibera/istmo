@@ -155,4 +155,16 @@ fn status_codes_match_in_swift_and_c() {
         )),
         "Swift abiVersion must be {NATIVE_ABI_VERSION}"
     );
+    assert_eq!(
+        c_constants(&header, "ISTMO_IOS_CALL_"),
+        [
+            (
+                "PENDING".to_owned(),
+                i64::from(istmo_ios::ISTMO_IOS_CALL_PENDING)
+            ),
+            ("OK".to_owned(), i64::from(istmo_ios::ISTMO_IOS_CALL_OK)),
+            ("ERR".to_owned(), i64::from(istmo_ios::ISTMO_IOS_CALL_ERR)),
+        ],
+        "C call results"
+    );
 }

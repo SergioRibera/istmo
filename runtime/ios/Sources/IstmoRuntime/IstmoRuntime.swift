@@ -158,22 +158,36 @@ public final class IstmoRuntime: @unchecked Sendable {
                     cont.resume(throwing: IstmoRuntimeError.shutdown)
                     return
                 }
+                // Registered first: a host that waits answers through
+                // `on_respond`, which looks the call up here.
                 self.pending[callId] = PendingCall(pluginId: pluginId, cont: cont)
                 let pidBytes = Array(pluginId.utf8)
                 let mBytes = Array(method.utf8)
-                payload.withUnsafeBytes { payloadPtr in
+                var reply = IstmoIosReply(ptr: nil, len: 0, cap: 0)
+                let status = payload.withUnsafeBytes { payloadPtr in
                     pidBytes.withUnsafeBufferPointer { pidBuf in
                         mBytes.withUnsafeBufferPointer { mBuf in
-                            istmo_ios_submit_call(
+                            istmo_ios_call(
                                 callId,
                                 pidBuf.baseAddress, pidBuf.count,
                                 0,
                                 mBuf.baseAddress, mBuf.count,
                                 payloadPtr.bindMemory(to: UInt8.self).baseAddress,
-                                payload.count
+                                payload.count,
+                                &reply
                             )
                         }
                     }
+                }
+                // An inline host answered in place: no frame follows.
+                guard status != Int32(ISTMO_IOS_CALL_PENDING) else { return }
+                let answer = reply.ptr.map { Data(bytes: $0, count: reply.len) } ?? Data()
+                istmo_ios_free_reply(&reply)
+                guard let waiting = self.pending.removeValue(forKey: callId)?.cont else { return }
+                if status == Int32(ISTMO_IOS_CALL_OK) {
+                    waiting.resume(returning: answer)
+                } else {
+                    waiting.resume(throwing: PluginException(payload: answer))
                 }
             }
         }

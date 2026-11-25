@@ -547,7 +547,7 @@ fn status_codes_are_stable() {
     assert!(SubmitStatus::Closed.should_stop());
     assert!(!SubmitStatus::Full.should_stop());
     assert_eq!(SubmitStatus::TypeMismatch.name(), "TYPE_MISMATCH");
-    assert_eq!(NATIVE_ABI_VERSION, 1);
+    assert_eq!(NATIVE_ABI_VERSION, 2);
     assert_eq!(fingerprint_of(""), 0xcbf2_9ce4_8422_2325);
 }
 

@@ -26,11 +26,13 @@ mod pump;
 mod state;
 
 pub use cdecl_exports::{
-    IstmoIosCallbacks, OnCallFn, OnCancelFn, OnCreateInstanceFn, OnDestroyInstanceFn, OnEventFn,
-    OnNotifyFn, OnReleaseNativeHandleFn, OnRespondFn, OnStreamEndFn, istmo_ios_shutdown,
-    istmo_ios_start, istmo_ios_submit_call, istmo_ios_submit_cancel, istmo_ios_submit_early_latest,
-    istmo_ios_submit_early_queue, istmo_ios_submit_event, istmo_ios_submit_notify,
-    istmo_ios_submit_response, istmo_ios_submit_stream_end,
+    ISTMO_IOS_CALL_ERR, ISTMO_IOS_CALL_OK, ISTMO_IOS_CALL_PENDING, IstmoIosCallbacks,
+    IstmoIosReply, OnCallFn, OnCancelFn, OnCreateInstanceFn, OnDestroyInstanceFn, OnEventFn,
+    OnNotifyFn, OnReleaseNativeHandleFn, OnRespondFn, OnStreamEndFn, istmo_ios_call,
+    istmo_ios_free_reply, istmo_ios_shutdown, istmo_ios_start, istmo_ios_submit_call,
+    istmo_ios_submit_cancel, istmo_ios_submit_early_latest, istmo_ios_submit_early_queue,
+    istmo_ios_submit_event, istmo_ios_submit_notify, istmo_ios_submit_response,
+    istmo_ios_submit_stream_end,
 };
 pub use error::IosRuntimeError;
 pub use native_buffer::{

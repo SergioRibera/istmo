@@ -136,8 +136,41 @@ void istmo_ios_submit_call(
     const uint8_t *payload,
     size_t payload_len);
 
-/* Cooperatively cancels a call started with `istmo_ios_submit_call`.
- * A late or unknown call_id is ignored. */
+/* Answer bytes `istmo_ios_call` hands back: copy them out, then return
+ * the buffer with `istmo_ios_free_reply`. */
+typedef struct IstmoIosReply {
+    uint8_t *ptr;
+    size_t len;
+    size_t cap;
+} IstmoIosReply;
+
+/* `istmo_ios_call` results. PENDING: the answer comes through
+ * `on_respond` under the call id; `reply` is left empty. */
+enum {
+    ISTMO_IOS_CALL_PENDING = 0,
+    ISTMO_IOS_CALL_OK = 1,
+    ISTMO_IOS_CALL_ERR = 2,
+};
+
+/* Like `istmo_ios_submit_call`, but a host that answers before returning
+ * (an inline host that did not wait) answers here: OK or ERR with the
+ * bytes in `*reply`. instance_id 0 = stateless call. */
+int32_t istmo_ios_call(
+    uint64_t call_id,
+    const uint8_t *plugin_id_utf8,
+    size_t plugin_id_len,
+    uint64_t instance_id,
+    const uint8_t *method_utf8,
+    size_t method_len,
+    const uint8_t *payload,
+    size_t payload_len,
+    IstmoIosReply *reply);
+
+/* Frees the bytes `istmo_ios_call` left in `reply` and empties it. */
+void istmo_ios_free_reply(IstmoIosReply *reply);
+
+/* Cooperatively cancels a call started with `istmo_ios_submit_call` or
+ * `istmo_ios_call`. A late or unknown call_id is ignored. */
 void istmo_ios_submit_cancel(uint64_t call_id);
 
 /* Fire-and-forget call: no response follows. instance_id 0 = stateless. */

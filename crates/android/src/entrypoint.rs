@@ -15,6 +15,7 @@ pub use crate::{
     Java_dev_istmo_runtime_IstmoFrames_nativeSubmitDirectBuffer,
     Java_dev_istmo_runtime_IstmoFrames_nativeSubmitHardwareBuffer,
     Java_dev_istmo_runtime_IstmoFrames_nativeSubmitSlot,
+    Java_dev_istmo_runtime_IstmoRuntime_nativeCall,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInjectEnvelope,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallAssets,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths,

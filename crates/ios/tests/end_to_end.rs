@@ -7,7 +7,8 @@ use istmo_core::{
     CancelToken, Dispatch, DispatchError, DispatchFuture, InstanceId, Outcome, Plugin, RuntimeInit,
 };
 use istmo_ios::{
-    IstmoIosCallbacks, istmo_ios_shutdown, istmo_ios_start, istmo_ios_submit_call,
+    ISTMO_IOS_CALL_OK, ISTMO_IOS_CALL_PENDING, IstmoIosCallbacks, IstmoIosReply, istmo_ios_call,
+    istmo_ios_free_reply, istmo_ios_shutdown, istmo_ios_start, istmo_ios_submit_call,
     istmo_ios_submit_cancel, istmo_ios_submit_notify, istmo_ios_submit_response,
 };
 
@@ -24,6 +25,14 @@ impl Dispatch for EchoHost {
         PLUGIN_ID
     }
 
+    fn method_mode(&self, method: &str) -> istmo_core::DispatchMode {
+        if method == "echo_inline" {
+            istmo_core::DispatchMode::Inline
+        } else {
+            istmo_core::DispatchMode::Isolated
+        }
+    }
+
     fn dispatch<'a>(
         &'a self,
         _instance_id: Option<InstanceId>,
@@ -38,7 +47,7 @@ impl Dispatch for EchoHost {
                     HANG_CANCELLED.store(true, Ordering::SeqCst);
                     Ok(Outcome::Ok(Vec::new()))
                 }
-                "echo" => {
+                "echo" | "echo_inline" => {
                     let ((msg,), _): ((String,), _) =
                         istmo_core::codec::decode(payload).map_err(DispatchError::Decode)?;
                     let reply = format!("echo:{msg}");
@@ -367,6 +376,67 @@ fn ios_transport_end_to_end() {
     assert!(ok);
     let (reply, _): (String, _) = istmo_core::codec::decode(&payload).unwrap();
     assert_eq!(reply, "echo:hello");
+
+    // The synchronous entry: an inline host answers in place, a blocking
+    // one through `on_respond`.
+    let sync_call = |call_id: u64, method: &str| {
+        let mut reply = IstmoIosReply {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        // SAFETY: every pointer/length pair borrows a live buffer and
+        // `reply` is writable.
+        let status = unsafe {
+            istmo_ios_call(
+                call_id,
+                PLUGIN_ID.as_ptr(),
+                PLUGIN_ID.len(),
+                0,
+                method.as_ptr(),
+                method.len(),
+                args.as_ptr(),
+                args.len(),
+                &raw mut reply,
+            )
+        };
+        let bytes = if reply.ptr.is_null() {
+            Vec::new()
+        } else {
+            // SAFETY: a filled reply holds `len` initialised bytes.
+            unsafe { std::slice::from_raw_parts(reply.ptr, reply.len).to_vec() }
+        };
+        // SAFETY: `reply` was last written by `istmo_ios_call`.
+        unsafe { istmo_ios_free_reply(&raw mut reply) };
+        assert!(reply.ptr.is_null(), "freeing empties the reply");
+        (status, bytes)
+    };
+    let (status, bytes) = sync_call(43, "echo_inline");
+    assert_eq!(status, ISTMO_IOS_CALL_OK);
+    let (reply, _): (String, _) = istmo_core::codec::decode(&bytes).unwrap();
+    assert_eq!(reply, "echo:hello");
+    let (status, bytes) = sync_call(44, "echo");
+    assert_eq!(status, ISTMO_IOS_CALL_PENDING);
+    assert_eq!(bytes, [0u8; 0]);
+    wait_for(|| {
+        (received(|r| {
+            matches!(
+                r,
+                Received::Respond {
+                    call_id: 44,
+                    ok: true,
+                    ..
+                }
+            )
+        }) == 1)
+            .then_some(())
+    });
+    settle();
+    assert_eq!(
+        received(|r| matches!(r, Received::Respond { call_id: 43, .. })),
+        0,
+        "a direct answer sends no frame"
+    );
 
     let runtime = istmo_core::Runtime::global().expect("started");
     let handle = runtime

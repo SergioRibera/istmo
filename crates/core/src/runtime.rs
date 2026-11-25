@@ -205,6 +205,48 @@ struct HostedCall {
     payload: Vec<u8>,
 }
 
+/// Where a hosted call's answer goes while its synchronous caller
+/// ([`Runtime::serve_peer_call`]) has not returned yet.
+#[derive(Debug, Default)]
+struct DirectReply {
+    slot: Mutex<DirectSlot>,
+}
+
+#[derive(Debug, Default)]
+enum DirectSlot {
+    /// The caller still waits for the answer.
+    #[default]
+    Waiting,
+    /// Answered before the caller returned; it takes the answer.
+    Answered(CallResult),
+    /// The caller returned without an answer: it goes out as a frame.
+    Gone,
+}
+
+impl DirectReply {
+    /// Leave `result` for the caller; handed back when the caller is
+    /// gone and the answer must be sent instead.
+    fn offer(&self, result: CallResult) -> Result<(), CallResult> {
+        let mut slot = lock(&self.slot);
+        if !matches!(*slot, DirectSlot::Waiting) {
+            return Err(result);
+        }
+        *slot = DirectSlot::Answered(result);
+        drop(slot);
+        Ok(())
+    }
+
+    /// The caller returns: take the answer if there is one, otherwise
+    /// let a later answer go out as a frame.
+    fn close(&self) -> Option<CallResult> {
+        let previous = std::mem::replace(&mut *lock(&self.slot), DirectSlot::Gone);
+        match previous {
+            DirectSlot::Answered(result) => Some(result),
+            DirectSlot::Waiting | DirectSlot::Gone => None,
+        }
+    }
+}
+
 /// Cancellation state for calls served by hosts on this runtime.
 #[derive(Debug, Default)]
 struct HostedCalls {
@@ -1536,17 +1578,78 @@ impl Runtime {
     }
 
     fn dispatch_hosted_call(self: &Arc<Self>, dispatcher: Arc<dyn Dispatch>, call: HostedCall) {
+        self.dispatch_hosted_call_with(dispatcher, call, None);
+    }
+
+    /// Serve a hosted call. With `direct`, an answer ready before this
+    /// returns is left in it for the synchronous caller instead of being
+    /// sent; `false` when the call did not run inline, so no answer can
+    /// land there.
+    fn dispatch_hosted_call_with(
+        self: &Arc<Self>,
+        dispatcher: Arc<dyn Dispatch>,
+        call: HostedCall,
+        direct: Option<Arc<DirectReply>>,
+    ) -> bool {
         if !dispatcher.admits(call.origin.into()) {
             self.refuse_origin(call.origin, call.call_id, dispatcher.plugin_id());
-            return;
+            return false;
         }
         let Some(cancel) = self.begin_hosted(call.origin, call.call_id) else {
-            return;
+            return false;
         };
         match dispatcher.method_mode(&call.method) {
-            DispatchMode::Inline => self.dispatch_hosted_call_inline(dispatcher, call, cancel),
-            DispatchMode::Isolated => self.dispatch_hosted_call_blocking(dispatcher, call, cancel),
+            DispatchMode::Inline => {
+                self.dispatch_hosted_call_inline(dispatcher, call, cancel, direct);
+                true
+            }
+            DispatchMode::Isolated => {
+                self.dispatch_hosted_call_blocking(dispatcher, call, cancel);
+                false
+            }
         }
+    }
+
+    /// Serve a call from the platform peer (Kotlin / Swift in this
+    /// process) and hand its answer back when the host gives it before
+    /// this returns: an [`Inline`](DispatchMode::Inline) host that
+    /// completes without waiting. `None` means the answer goes out as a
+    /// [`Frame::Respond`] once it exists, like for
+    /// [`dispatch_inbound`](Self::dispatch_inbound) — a host that waits,
+    /// a blocking host, a stream, a refused or unhosted call, a call the
+    /// peer marked as coming from another process.
+    ///
+    /// The typed inbound wrapper behind the transports' synchronous call
+    /// entries (Android `nativeCall`, iOS `istmo_ios_call`).
+    pub fn serve_peer_call(
+        self: &Arc<Self>,
+        call_id: CallId,
+        plugin_id: &str,
+        instance_id: Option<InstanceId>,
+        method: String,
+        payload: Vec<u8>,
+    ) -> Option<CallResult> {
+        let call = HostedCall {
+            origin: Origin::Peer,
+            call_id,
+            instance_id,
+            method,
+            payload,
+        };
+        let Some(dispatcher) = self.host(plugin_id) else {
+            self.reject_unhosted(Origin::Peer, call_id, plugin_id, "Call");
+            return None;
+        };
+        // A bridge-forwarded call answers through the remote sink.
+        if lock(&self.remote_calls).incoming.contains(&call_id.get()) {
+            self.dispatch_hosted_call(dispatcher, call);
+            return None;
+        }
+        let direct = Arc::new(DirectReply::default());
+        if !self.dispatch_hosted_call_with(dispatcher, call, Some(Arc::clone(&direct))) {
+            return None;
+        }
+        direct.close()
     }
 
     /// Serve the call on a blocking worker ([`DispatchMode::Isolated`]).
@@ -1584,13 +1687,13 @@ impl Runtime {
                 // belongs on the async workers, not on a blocking thread.
                 exec::spawn(async move {
                     runtime
-                        .finish_hosted_call(origin, call_id, &cancel, outcome)
+                        .finish_hosted_call(origin, call_id, &cancel, outcome, None)
                         .await;
                 });
                 return;
             }
             runtime
-                .finish_hosted_call(origin, call_id, &cancel, outcome)
+                .finish_hosted_call(origin, call_id, &cancel, outcome, None)
                 .await;
         });
         if let Err(err) = spawned {
@@ -1606,6 +1709,7 @@ impl Runtime {
         dispatcher: Arc<dyn Dispatch>,
         call: HostedCall,
         cancel: CancelToken,
+        direct: Option<Arc<DirectReply>>,
     ) {
         let runtime = Arc::clone(self);
         let HostedCall {
@@ -1632,7 +1736,7 @@ impl Runtime {
                 exec::yield_now().await;
             }
             runtime
-                .finish_hosted_call(origin, call_id, &cancel, outcome)
+                .finish_hosted_call(origin, call_id, &cancel, outcome, direct.as_deref())
                 .await;
         });
     }
@@ -1683,6 +1787,7 @@ impl Runtime {
         call_id: CallId,
         cancel: &CancelToken,
         outcome: Result<Result<Outcome, DispatchError>, Box<dyn Any + Send>>,
+        direct: Option<&DirectReply>,
     ) {
         let result = match outcome {
             Ok(Ok(Outcome::StreamOpened(receiver))) => {
@@ -1706,6 +1811,17 @@ impl Runtime {
                 tracing::error!(?call_id, "hosted dispatch panicked");
                 Err(encode_dispatch_error_string("host panicked"))
             }
+        };
+        // A synchronous caller still waiting takes the answer itself.
+        let result = match direct {
+            Some(direct) => match direct.offer(result) {
+                Ok(()) => {
+                    lock(&self.hosted).finish(origin, call_id);
+                    return;
+                }
+                Err(result) => result,
+            },
+            None => result,
         };
         // The call leaves the table only once its response is out, so a
         // cancel still frees a response waiting on a full channel.

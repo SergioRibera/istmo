@@ -171,7 +171,7 @@ public final class IstmoFrameSender<M>: @unchecked Sendable {
 
 enum IstmoFrames {
     /// The native entry version this runtime was built against.
-    static let abiVersion: UInt32 = 1
+    static let abiVersion: UInt32 = 2
 
     /// The library's entry version, when it differs from ours.
     static func abiMismatch() -> UInt32? {

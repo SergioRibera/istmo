@@ -80,6 +80,7 @@ fn c_to_rust(ty: &str) -> String {
         "IstmoFrameProducer *" => "*mut IstmoFrameProducer",
         "const IstmoFrameProducer *" => "*const IstmoFrameProducer",
         "int32_t *" => "*mut i32",
+        "IstmoIosReply *" => "*mut IstmoIosReply",
         other => panic!("C type `{other}` has no Rust mapping in this test"),
     }
     .to_owned()

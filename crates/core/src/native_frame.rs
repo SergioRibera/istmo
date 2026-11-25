@@ -65,7 +65,7 @@ pub use sink::{
 /// Android exports it as `nativeAbiVersion`, Apple as
 /// `istmo_abi_version`. The Kotlin and Swift runtimes refuse to start against a library built
 /// with another one.
-pub const NATIVE_ABI_VERSION: u32 = 1;
+pub const NATIVE_ABI_VERSION: u32 = 2;
 
 /// Process-local address of a [`FrameSink`] whose frames carry
 /// metadata `M`.

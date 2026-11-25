@@ -358,6 +358,144 @@ pub unsafe extern "C" fn istmo_ios_submit_call(
     });
 }
 
+/// Answer bytes [`istmo_ios_call`] hands back; Swift copies them out and
+/// returns the buffer with [`istmo_ios_free_reply`].
+#[repr(C)]
+#[derive(Debug)]
+pub struct IstmoIosReply {
+    /// First byte, null when empty.
+    pub ptr: *mut u8,
+    /// Bytes at `ptr`.
+    pub len: usize,
+    /// Allocation size; Rust's to free.
+    pub cap: usize,
+}
+
+/// [`istmo_ios_call`]: no answer yet, it comes through `on_respond`.
+pub const ISTMO_IOS_CALL_PENDING: i32 = 0;
+/// [`istmo_ios_call`]: answered, `reply` holds the result bytes.
+pub const ISTMO_IOS_CALL_OK: i32 = 1;
+/// [`istmo_ios_call`]: answered with an error, `reply` holds its bytes.
+pub const ISTMO_IOS_CALL_ERR: i32 = 2;
+
+/// Call a Rust-hosted plugin, answered in place when it can.
+///
+/// A host that answers before this returns (an inline host that did not
+/// wait) gives [`ISTMO_IOS_CALL_OK`] / [`ISTMO_IOS_CALL_ERR`] with the bytes in
+/// `*reply`. [`ISTMO_IOS_CALL_PENDING`] (also for any failure to submit)
+/// means the answer arrives through `on_respond` under `call_id`, as for
+/// [`istmo_ios_submit_call`]; `*reply` is left empty then.
+///
+/// # Safety
+///
+/// Each `(ptr, len)` pair follows the module's buffer contract; `reply`
+/// points at a writable [`IstmoIosReply`]. A filled reply must be
+/// returned once with [`istmo_ios_free_reply`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn istmo_ios_call(
+    call_id: u64,
+    plugin_id_utf8: *const u8,
+    plugin_id_len: usize,
+    instance_id: u64,
+    method_utf8: *const u8,
+    method_len: usize,
+    payload: *const u8,
+    payload_len: usize,
+    reply: *mut IstmoIosReply,
+) -> i32 {
+    ffi_guard("istmo_ios_call", ISTMO_IOS_CALL_PENDING, || {
+        if reply.is_null() {
+            tracing::error!("istmo_ios_call without a reply slot");
+            return ISTMO_IOS_CALL_PENDING;
+        }
+        // SAFETY: `reply` is non-null and writable per the contract.
+        unsafe { reply.write(IstmoIosReply::empty()) };
+        // SAFETY: forwarded from this function's contract.
+        let target = unsafe {
+            Target::copy(
+                plugin_id_utf8,
+                plugin_id_len,
+                instance_id,
+                method_utf8,
+                method_len,
+                payload,
+                payload_len,
+            )
+        };
+        let answer = target.and_then(|t| {
+            Ok(Runtime::global()?.serve_peer_call(
+                CallId(call_id),
+                &t.plugin_id,
+                t.instance_id,
+                t.method,
+                t.payload,
+            ))
+        });
+        let (status, bytes) = match answer {
+            Ok(None) => return ISTMO_IOS_CALL_PENDING,
+            Ok(Some(Ok(bytes))) => (ISTMO_IOS_CALL_OK, bytes),
+            Ok(Some(Err(bytes))) => (ISTMO_IOS_CALL_ERR, bytes),
+            Err(err) => {
+                tracing::error!(%err, "istmo_ios_call failed");
+                return ISTMO_IOS_CALL_PENDING;
+            }
+        };
+        // SAFETY: as above.
+        unsafe { reply.write(IstmoIosReply::from_vec(bytes)) };
+        status
+    })
+}
+
+/// Free the bytes [`istmo_ios_call`] left in `reply` and empty it.
+///
+/// # Safety
+///
+/// `reply` is null or points at an [`IstmoIosReply`] last written by
+/// [`istmo_ios_call`] (or already freed).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn istmo_ios_free_reply(reply: *mut IstmoIosReply) {
+    ffi_guard("istmo_ios_free_reply", (), || {
+        if reply.is_null() {
+            return;
+        }
+        // SAFETY: non-null and written by `istmo_ios_call` per the
+        // contract, so its fields describe a live `Vec<u8>` or are empty.
+        let taken = unsafe { reply.replace(IstmoIosReply::empty()) };
+        drop(taken.into_vec());
+    });
+}
+
+impl IstmoIosReply {
+    const fn empty() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        }
+    }
+
+    fn from_vec(bytes: Vec<u8>) -> Self {
+        if bytes.capacity() == 0 {
+            return Self::empty();
+        }
+        let mut bytes = std::mem::ManuallyDrop::new(bytes);
+        Self {
+            ptr: bytes.as_mut_ptr(),
+            len: bytes.len(),
+            cap: bytes.capacity(),
+        }
+    }
+
+    fn into_vec(self) -> Vec<u8> {
+        if self.ptr.is_null() || self.cap == 0 {
+            return Vec::new();
+        }
+        // SAFETY: a non-empty reply was built by `from_vec` from a
+        // `Vec<u8>` whose parts it kept unchanged.
+        unsafe { Vec::from_raw_parts(self.ptr, self.len, self.cap) }
+    }
+}
+
 /// Cooperatively cancel a Rust-hosted call that Swift started through
 /// [`istmo_ios_submit_call`]. A late or unknown `call_id` is ignored.
 #[unsafe(no_mangle)]

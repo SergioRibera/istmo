@@ -2,8 +2,6 @@ package dev.istmo.runtime
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -203,7 +201,7 @@ object IstmoRuntime {
         scope.cancel()
         jobs.clear()
         for ((_, pending) in outboundCalls) {
-            pending.cont.cancel()
+            pending.complete(Result.failure(kotlinx.coroutines.CancellationException("runtime shut down")))
         }
         outboundCalls.clear()
         for ((_, pending) in outboundStreams) {
@@ -212,29 +210,46 @@ object IstmoRuntime {
         outboundStreams.clear()
     }
 
+    /**
+     * Call a Rust-hosted plugin with the first [payloadLen] bytes of
+     * [payload]. A host that answers without waiting answers right here,
+     * on the calling thread, with no suspension; otherwise the call
+     * suspends until the answer arrives. Errors throw [PluginException].
+     */
     suspend fun call(
         pluginId: String,
         instanceId: Long,
         method: String,
         payload: ByteArray,
-    ): ByteArray = suspendCancellableCoroutine { cont ->
+        payloadLen: Int = payload.size,
+    ): ByteArray {
         val callId = nextCallId.getAndIncrement()
-        outboundCalls[callId] = PendingCall(cont)
-        cont.invokeOnCancellation {
-            // Cancellation handlers must not throw; a cancel racing
-            // shutdown has nothing left to stop anyway.
-            if (outboundCalls.remove(callId) != null) {
-                runCatching { nativeSubmitCancel(callId) }
-            }
-        }
-        try {
-            nativeSubmitCall(callId, pluginId, instanceId, method, payload)
+        // Registered first: an answer that comes through `onRespond`
+        // before this coroutine suspends waits in the entry.
+        val pending = PendingCall()
+        outboundCalls[callId] = pending
+        val direct = try {
+            nativeCall(callId, pluginId, instanceId, method, payload, payloadLen)
         } catch (e: Throwable) {
-            // Not only IllegalStateException: a pending JNI error (e.g.
-            // OutOfMemoryError) or UnsatisfiedLinkError must not leak the
-            // pending entry either.
+            // A thrown `PluginException` is the host's error answer; any
+            // other throwable (a pending JNI error, UnsatisfiedLinkError)
+            // must not leak the entry either.
             outboundCalls.remove(callId)
             throw e
+        }
+        if (direct != null) {
+            outboundCalls.remove(callId)
+            return direct
+        }
+        return suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation {
+                // Cancellation handlers must not throw; a cancel racing
+                // shutdown has nothing left to stop anyway.
+                if (outboundCalls.remove(callId) != null) {
+                    runCatching { nativeSubmitCancel(callId) }
+                }
+            }
+            pending.attach(cont)
         }
     }
 
@@ -434,11 +449,7 @@ object IstmoRuntime {
             )
             return
         }
-        if (ok) {
-            pending.cont.resume(payload)
-        } else {
-            pending.cont.resumeWithException(PluginException(payload))
-        }
+        pending.complete(if (ok) Result.success(payload) else Result.failure(PluginException(payload)))
     }
 
     @JvmStatic
@@ -488,6 +499,14 @@ object IstmoRuntime {
     // silently on the Rust side.
     external fun nativeStart(runtimeClass: Class<*>): Boolean
     external fun nativeSubmitCancel(callId: Long)
+    external fun nativeCall(
+        callId: Long,
+        pluginId: String,
+        instanceId: Long,
+        method: String,
+        payload: ByteArray,
+        payloadLen: Int,
+    ): ByteArray?
     external fun nativeSubmitCall(
         callId: Long,
         pluginId: String,
@@ -521,7 +540,34 @@ object IstmoRuntime {
 
     private const val DEFAULT_STREAM_BUFFER = 256
 
-    private class PendingCall(val cont: CancellableContinuation<ByteArray>)
+    /**
+     * An outbound call's answer slot: whichever of the answer and the
+     * suspended caller arrives second resumes the caller.
+     */
+    private class PendingCall {
+        private var cont: CancellableContinuation<ByteArray>? = null
+        private var outcome: Result<ByteArray>? = null
+
+        fun complete(result: Result<ByteArray>) {
+            val waiting = synchronized(this) {
+                cont ?: run {
+                    outcome = result
+                    null
+                }
+            }
+            waiting?.resumeWith(result)
+        }
+
+        fun attach(waiting: CancellableContinuation<ByteArray>) {
+            val ready = synchronized(this) {
+                outcome ?: run {
+                    cont = waiting
+                    null
+                }
+            }
+            if (ready != null) waiting.resumeWith(ready)
+        }
+    }
 
     private class PendingStream(val channel: SendChannel<ByteArray>)
 }

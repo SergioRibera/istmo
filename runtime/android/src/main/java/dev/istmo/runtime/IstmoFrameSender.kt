@@ -342,7 +342,7 @@ internal object IstmoFrames {
     external fun nativeAwaitReleased(handle: Long, timeoutMs: Long): LongArray?
 
     /** The native entry version this runtime was built against. */
-    const val ABI_VERSION = 1
+    const val ABI_VERSION = 2
 
     /** Throw when the loaded library speaks another entry version. */
     fun checkAbi() {

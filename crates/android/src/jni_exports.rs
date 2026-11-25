@@ -19,15 +19,17 @@
 
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use istmo_core::{
     CallId, EarlyEventKind, Envelope, Frame, InstanceId, Runtime, RuntimeConfig, RuntimeInit,
     StreamEndReason, StreamId,
 };
 use jni::JNIEnv;
-use jni::objects::{JByteArray, JByteBuffer, JClass, JObject, JString};
-use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong};
+use jni::objects::{
+    GlobalRef, JByteArray, JByteBuffer, JClass, JMethodID, JObject, JString, JThrowable, JValue,
+};
+use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong};
 
 use crate::assets;
 use crate::error::AndroidRuntimeError;
@@ -148,6 +150,47 @@ fn direct_buffer_to_vec(
     Ok(slice.to_vec())
 }
 
+/// Copy the first `len` bytes of `array` into a fresh `Vec<u8>`: one
+/// copy, no zero fill. Kotlin passes a reused, larger encode buffer plus
+/// the length it filled, so no exact-size array is built per call.
+fn read_payload(
+    env: &JNIEnv<'_>,
+    array: &JByteArray<'_>,
+    len: jint,
+) -> Result<Vec<u8>, AndroidRuntimeError> {
+    let len_usize = usize::try_from(len).map_err(|_| {
+        AndroidRuntimeError::InvalidArgument(format!("negative payload length {len}"))
+    })?;
+    if len_usize == 0 {
+        return Ok(Vec::new());
+    }
+    let capacity = env.get_array_length(array)?;
+    if len > capacity {
+        return Err(AndroidRuntimeError::InvalidArgument(format!(
+            "payload length {len} exceeds its array ({capacity})"
+        )));
+    }
+    let mut bytes = Vec::<u8>::with_capacity(len_usize);
+    let raw = env.get_native_interface();
+    // SAFETY: `raw` is this thread's live `JNIEnv`; `array` is a valid
+    // local reference checked to hold at least `len` elements, so
+    // `GetByteArrayRegion` writes exactly `len` bytes into the spare
+    // capacity reserved above (or raises ArrayIndexOutOfBounds and
+    // writes nothing).
+    unsafe {
+        let get_region = (**raw).GetByteArrayRegion.ok_or(AndroidRuntimeError::Jni(
+            jni::errors::Error::JNIEnvMethodNotFound("GetByteArrayRegion"),
+        ))?;
+        get_region(raw, array.as_raw(), 0, len, bytes.as_mut_ptr().cast());
+    }
+    if env.exception_check()? {
+        return Err(AndroidRuntimeError::Jni(jni::errors::Error::JavaException));
+    }
+    // SAFETY: the region copy above initialised all `len_usize` bytes.
+    unsafe { bytes.set_len(len_usize) };
+    Ok(bytes)
+}
+
 fn stream_end_reason(
     env: &JNIEnv<'_>,
     reason: jint,
@@ -204,6 +247,7 @@ fn start(env: &mut JNIEnv<'_>, runtime_class: &JClass<'_>) -> Result<(), Android
     // after it would leave a runtime with no pump.
     let class_ref = env.new_global_ref(runtime_class)?;
     let methods = PumpMethods::resolve(env, &class_ref)?;
+    resolve_plugin_exception(env)?;
     let jvm = env.get_java_vm()?;
     let pump = pump::spawn(jvm, class_ref, methods).map_err(AndroidRuntimeError::Pump)?;
 
@@ -307,6 +351,90 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall<'loc
         probe!(SubmitCallDispatched);
         Ok(())
     });
+}
+
+/// Call a Rust-hosted plugin from Kotlin, answered in place when it can.
+///
+/// A host that answers before this returns (an inline host that did not
+/// wait) gives the reply bytes as the return value, or a thrown
+/// `PluginException` for an error answer. `null` means the answer comes
+/// later through `onRespond` under `callId`, as for `nativeSubmitCall`.
+///
+/// Reads the first `len` bytes of `payload`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeCall<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+    call_id: jlong,
+    plugin_id: JString<'local>,
+    instance_id: jlong,
+    method: JString<'local>,
+    payload: JByteArray<'local>,
+    len: jint,
+) -> jbyteArray {
+    probe!(SubmitCallEntered);
+    guarded(&mut env, "nativeCall", std::ptr::null_mut(), |env| {
+        let plugin_id = env.get_string(&plugin_id)?;
+        let plugin_id = plugin_id.to_str().map_err(|err| {
+            AndroidRuntimeError::InvalidArgument(format!("plugin id is not UTF-8: {err}"))
+        })?;
+        let plugin_id = plugin_id.to_owned();
+        let method: String = env.get_string(&method)?.into();
+        let payload = read_payload(env, &payload, len)?;
+        let reply = Runtime::global()?.serve_peer_call(
+            CallId(wire_id(call_id)),
+            &plugin_id,
+            instance_from_wire(instance_id),
+            method,
+            payload,
+        );
+        probe!(SubmitCallDispatched);
+        match reply {
+            None => Ok(std::ptr::null_mut()),
+            Some(Ok(bytes)) => Ok(env.byte_array_from_slice(&bytes)?.into_raw()),
+            Some(Err(bytes)) => {
+                throw_plugin_exception(env, &bytes)?;
+                Ok(std::ptr::null_mut())
+            }
+        }
+    })
+}
+
+/// `dev.istmo.runtime.PluginException` and its `(ByteArray)`
+/// constructor, resolved by `nativeStart` on a thread whose class loader
+/// sees the runtime classes.
+struct PluginExceptionClass {
+    class: GlobalRef,
+    ctor: JMethodID,
+}
+
+static PLUGIN_EXCEPTION: OnceLock<PluginExceptionClass> = OnceLock::new();
+
+fn resolve_plugin_exception(env: &mut JNIEnv<'_>) -> Result<(), AndroidRuntimeError> {
+    if PLUGIN_EXCEPTION.get().is_some() {
+        return Ok(());
+    }
+    let class = env.find_class("dev/istmo/runtime/PluginException")?;
+    let ctor = env.get_method_id(&class, "<init>", "([B)V")?;
+    let class = env.new_global_ref(class)?;
+    let _ = PLUGIN_EXCEPTION.set(PluginExceptionClass { class, ctor });
+    Ok(())
+}
+
+/// Throw `PluginException(payload)` on this thread.
+fn throw_plugin_exception(env: &mut JNIEnv<'_>, payload: &[u8]) -> Result<(), AndroidRuntimeError> {
+    let resolved = PLUGIN_EXCEPTION
+        .get()
+        .ok_or(AndroidRuntimeError::NotStarted)?;
+    let bytes = env.byte_array_from_slice(payload)?;
+    let class: &JClass<'_> = resolved.class.as_obj().into();
+    // SAFETY: `ctor` was resolved on this class with signature `([B)V`,
+    // and the one argument is a `byte[]`.
+    let exception = unsafe {
+        env.new_object_unchecked(class, resolved.ctor, &[JValue::Object(&bytes).as_jni()])?
+    };
+    env.throw(JThrowable::from(exception))?;
+    Ok(())
 }
 
 /// Inbound Call via a `java.nio.ByteBuffer.allocateDirect`-backed payload.
