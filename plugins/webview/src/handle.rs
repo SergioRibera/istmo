@@ -460,6 +460,16 @@ impl ViewEvents {
         }
     }
 
+    /// The next queued event without waiting, for UIs that poll once
+    /// per frame. `None` when nothing is queued or the view is closed.
+    #[must_use]
+    pub fn try_next(&self) -> Option<ViewEvent> {
+        match self.stream.try_recv() {
+            Some(Ok(StreamItem::Event(event))) => Some(self.wrap(event)),
+            _ => None,
+        }
+    }
+
     /// Blocking [`Self::next`].
     #[must_use]
     pub fn next_blocking(&self) -> Option<ViewEvent> {
