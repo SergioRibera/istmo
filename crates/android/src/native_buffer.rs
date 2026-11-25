@@ -1,13 +1,14 @@
 //! Platform buffers Kotlin hands to Rust frame sinks.
 //!
-//! Two backings land in a [`NativeBuffer`]:
+//! A [`HardwareBuffer`] is an `AHardwareBuffer` Rust holds its own
+//! reference to (`AHardwareBuffer_acquire`), released on drop. That
+//! keeps the memory alive, not the producer off it: a buffer that came
+//! from an `ImageReader` stays in Kotlin's `Image` until Rust reports
+//! its ticket released (see `frame_producer`), so the producer never
+//! renders into a buffer a consumer still reads.
 //!
-//! - [`HardwareBuffer`]: an `AHardwareBuffer` Rust holds its own
-//!   reference to (`AHardwareBuffer_acquire`), released on drop. Kotlin
-//!   may close its `android.hardware.HardwareBuffer` / `Image` right
-//!   after submitting.
-//! - [`DirectByteBuffer`]: the memory of a direct `java.nio.ByteBuffer`,
-//!   kept alive by a JNI global reference, read in place.
+//! Byte data either goes through Rust-owned pool slots (no copy) or is
+//! copied: Rust never reads memory the JVM may free or rewrite.
 //!
 //! The NDK `AHardwareBuffer_*` functions are API 26; the library's
 //! minimum is lower, so they are looked up with `dlsym` on first use
@@ -18,8 +19,7 @@ use std::ffi::c_void;
 use std::fmt;
 use std::ptr::NonNull;
 
-use istmo_core::native_frame::NativeBuffer;
-use jni::objects::GlobalRef;
+use istmo_core::native_frame::{MemoryKind, NativeBuffer, PlatformBuffer, SubmitStatus};
 
 /// What `AHardwareBuffer_describe` reported when the buffer arrived.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,71 +91,37 @@ impl fmt::Debug for HardwareBuffer {
     }
 }
 
-/// The memory of a direct `java.nio.ByteBuffer`, read in place.
-///
-/// Kotlin must not write the buffer once it submitted it: Rust reads it
-/// until the frame drops.
-pub struct DirectByteBuffer {
-    // Keeps the `ByteBuffer` (and so its memory) alive.
-    _buffer: GlobalRef,
-    ptr: NonNull<u8>,
-    len: usize,
-}
-
-// SAFETY: the memory belongs to a direct buffer pinned by a JNI global
-// reference (itself `Send + Sync`); nothing here mutates it.
-unsafe impl Send for DirectByteBuffer {}
-// SAFETY: as above: shared access is read-only.
-unsafe impl Sync for DirectByteBuffer {}
-
-impl DirectByteBuffer {
-    /// The first `len` bytes of the direct buffer at `ptr`, kept alive
-    /// by `buffer`.
-    ///
-    /// # Safety
-    ///
-    /// `ptr` must be the address `GetDirectBufferAddress` returned for
-    /// the buffer `buffer` refers to, and `len` at most its capacity.
-    pub(crate) const unsafe fn new(buffer: GlobalRef, ptr: NonNull<u8>, len: usize) -> Self {
-        Self {
-            _buffer: buffer,
-            ptr,
-            len,
-        }
+impl PlatformBuffer for HardwareBuffer {
+    fn kind(&self) -> MemoryKind {
+        MemoryKind::HardwareBuffer
     }
-}
 
-impl AsRef<[u8]> for DirectByteBuffer {
-    fn as_ref(&self) -> &[u8] {
-        // SAFETY: `new`'s contract: `ptr` addresses at least `len` bytes
-        // of a direct buffer kept alive by `_buffer`.
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
-    }
-}
-
-impl fmt::Debug for DirectByteBuffer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DirectByteBuffer")
-            .field("len", &self.len)
-            .finish_non_exhaustive()
+    fn as_ptr(&self) -> NonNull<c_void> {
+        self.ptr
     }
 }
 
 /// Wrap the `android.hardware.HardwareBuffer` `object` in a
-/// [`NativeBuffer`], taking a reference of Rust's own. `None` when the
-/// NDK functions are missing (below API 26) or the object is no buffer.
+/// [`NativeBuffer`], taking a reference of Rust's own.
+///
+/// # Errors
+///
+/// [`SubmitStatus::Unsupported`] below API 26 (no NDK functions),
+/// [`SubmitStatus::Invalid`] when `object` is not a live buffer. Kotlin
+/// checks `isClosed` first: a buffer closed concurrently with this call
+/// is the caller's race to avoid.
 #[cfg(target_os = "android")]
 pub(crate) fn hardware_buffer(
     env: &jni::JNIEnv<'_>,
     object: &jni::objects::JObject<'_>,
-) -> Option<NativeBuffer> {
-    let api = ndk::api()?;
+) -> Result<NativeBuffer, SubmitStatus> {
+    let api = ndk::api().ok_or(SubmitStatus::Unsupported)?;
     // SAFETY: `env` is the calling thread's live JNI environment and
     // `object` a local reference valid for this call;
     // `AHardwareBuffer_fromHardwareBuffer` borrows the native buffer the
     // Java object wraps (or returns null for anything else).
     let ptr = unsafe { (api.from_java)(env.get_raw(), object.as_raw()) };
-    let ptr = NonNull::new(ptr)?;
+    let ptr = NonNull::new(ptr).ok_or(SubmitStatus::Invalid)?;
     let mut raw = ndk::RawDesc::default();
     // SAFETY: `ptr` is a live buffer (the Java object holds it for the
     // duration of this call); acquiring takes Rust's own reference before
@@ -176,10 +142,7 @@ pub(crate) fn hardware_buffer(
         },
         release: api.release,
     };
-    Some(NativeBuffer::new(
-        istmo_core::native_frame::MemoryKind::HardwareBuffer,
-        buffer,
-    ))
+    Ok(NativeBuffer::from_platform(buffer))
 }
 
 /// `HardwareBuffer` needs Android.
@@ -187,8 +150,8 @@ pub(crate) fn hardware_buffer(
 pub(crate) const fn hardware_buffer(
     _env: &jni::JNIEnv<'_>,
     _object: &jni::objects::JObject<'_>,
-) -> Option<NativeBuffer> {
-    None
+) -> Result<NativeBuffer, SubmitStatus> {
+    Err(SubmitStatus::Unsupported)
 }
 
 /// The NDK functions, resolved at run time.

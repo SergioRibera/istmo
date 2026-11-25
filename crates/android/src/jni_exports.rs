@@ -21,9 +21,6 @@ use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Mutex;
 
-use std::ptr::NonNull;
-
-use istmo_core::native_frame::{NativeBuffer, SubmitStatus};
 use istmo_core::{
     CallId, EarlyEventKind, Envelope, Frame, InstanceId, Runtime, RuntimeConfig, RuntimeInit,
     StreamEndReason, StreamId,
@@ -34,7 +31,6 @@ use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong};
 
 use crate::assets;
 use crate::error::AndroidRuntimeError;
-use crate::native_buffer::{self, DirectByteBuffer};
 use crate::path as path_provider;
 use crate::pump::{self, PumpMethods};
 use crate::state::{self, RuntimeState};
@@ -537,123 +533,6 @@ fn shutdown() {
             tracing::error!("istmo pump thread panicked");
         }
     }
-}
-
-/// What a frame submit answers when no runtime is running.
-fn submit_with_runtime(submit: impl FnOnce(&Runtime) -> SubmitStatus) -> jint {
-    Runtime::global()
-        .map_or(SubmitStatus::NotStarted, |runtime| submit(&runtime))
-        .code()
-}
-
-/// Hand an `android.hardware.HardwareBuffer` to the frame sink `sink`,
-/// with its metadata wire-encoded in `meta`.
-///
-/// Rust takes a reference of its own: Kotlin may close the buffer (or
-/// the `Image` it came from) as soon as this returns. Returns a
-/// `SubmitStatus` code; `UNSUPPORTED` below API 26.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitHardwareBuffer<'local>(
-    mut env: JNIEnv<'local>,
-    _caller: JClass<'local>,
-    sink: jlong,
-    buffer: JObject<'local>,
-    meta: JByteArray<'local>,
-) -> jint {
-    let invalid = SubmitStatus::Invalid.code();
-    guarded(&mut env, "nativeSubmitHardwareBuffer", invalid, |env| {
-        if buffer.is_null() || meta.is_null() {
-            return Ok(invalid);
-        }
-        let meta = env.convert_byte_array(&meta)?;
-        Ok(submit_with_runtime(|runtime| {
-            native_buffer::hardware_buffer(env, &buffer)
-                .map_or(SubmitStatus::Unsupported, |native| {
-                    runtime.submit_native_frame(wire_id(sink), &meta, native)
-                })
-        }))
-    })
-}
-
-/// Hand the first `len` bytes of a direct `java.nio.ByteBuffer` to the
-/// frame sink `sink`, read in place (no copy). Kotlin must not write the
-/// buffer afterwards. Returns a `SubmitStatus` code.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitDirectBuffer<'local>(
-    mut env: JNIEnv<'local>,
-    _caller: JClass<'local>,
-    sink: jlong,
-    buffer: JByteBuffer<'local>,
-    len: jint,
-    meta: JByteArray<'local>,
-) -> jint {
-    let invalid = SubmitStatus::Invalid.code();
-    guarded(&mut env, "nativeSubmitDirectBuffer", invalid, |env| {
-        if buffer.is_null() || meta.is_null() {
-            return Ok(invalid);
-        }
-        let Ok(len) = usize::try_from(len) else {
-            return Ok(invalid);
-        };
-        let meta = env.convert_byte_array(&meta)?;
-        let native = if len == 0 {
-            NativeBuffer::from_cpu(Vec::new())
-        } else {
-            if len > env.get_direct_buffer_capacity(&buffer)? {
-                return Ok(invalid);
-            }
-            let Some(ptr) = NonNull::new(env.get_direct_buffer_address(&buffer)?) else {
-                return Ok(invalid);
-            };
-            let global = env.new_global_ref(&buffer)?;
-            // SAFETY: `ptr` is the direct buffer's address and `len` was
-            // checked against its capacity; `global` keeps the buffer
-            // alive for as long as the backing lives.
-            NativeBuffer::from_cpu(unsafe { DirectByteBuffer::new(global, ptr, len) })
-        };
-        Ok(submit_with_runtime(|runtime| {
-            runtime.submit_native_frame(wire_id(sink), &meta, native)
-        }))
-    })
-}
-
-/// Copy `bytes` into a frame for the sink `sink`: the path for heap
-/// arrays, which cannot be held past the call. Returns a `SubmitStatus`
-/// code.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitFrameBytes<'local>(
-    mut env: JNIEnv<'local>,
-    _caller: JClass<'local>,
-    sink: jlong,
-    bytes: JByteArray<'local>,
-    meta: JByteArray<'local>,
-) -> jint {
-    let invalid = SubmitStatus::Invalid.code();
-    guarded(&mut env, "nativeSubmitFrameBytes", invalid, |env| {
-        if bytes.is_null() || meta.is_null() {
-            return Ok(invalid);
-        }
-        let data = env.convert_byte_array(&bytes)?;
-        let meta = env.convert_byte_array(&meta)?;
-        Ok(submit_with_runtime(|runtime| {
-            runtime.submit_native_frame(wire_id(sink), &meta, NativeBuffer::from_cpu(data))
-        }))
-    })
-}
-
-/// Close the frame sink `sink` from the producer side: the consumer
-/// receives what is queued, then the end. `false` when no such sink is
-/// open (or no runtime runs).
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeCloseFrameSink<'local>(
-    mut env: JNIEnv<'local>,
-    _caller: JClass<'local>,
-    sink: jlong,
-) -> jboolean {
-    guarded(&mut env, "nativeCloseFrameSink", JNI_FALSE, |_env| {
-        let closed = Runtime::global().is_ok_and(|runtime| runtime.close_frame_sink(wire_id(sink)));
-        Ok(if closed { JNI_TRUE } else { JNI_FALSE })
-    })
 }
 
 #[cfg(test)]

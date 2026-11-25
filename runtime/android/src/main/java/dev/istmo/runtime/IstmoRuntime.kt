@@ -29,6 +29,7 @@ object IstmoRuntime {
     private val services = ConcurrentHashMap<String, android.app.Service>()
 
     private val handleOwners = ConcurrentHashMap<Long, String>()
+    private val appObjects = ConcurrentHashMap<Long, Any>()
     private val nextGlobalHandleId = AtomicLong(1)
 
     private val outboundCalls = ConcurrentHashMap<Long, PendingCall>()
@@ -79,6 +80,30 @@ object IstmoRuntime {
         handleOwners.remove(handleId)
     }
 
+    /**
+     * Register a platform object app code hands to a plugin (a preview
+     * `Surface`, a consent grant) and get the `NativeHandleId` to pass as
+     * the plugin argument. The plugin's backend reads it back with
+     * [objectFor]; it is released when Rust drops its `NativeHandle`, or
+     * with [releaseObject].
+     */
+    fun registerObject(obj: Any): Long {
+        val id = nextGlobalHandleId.getAndIncrement()
+        appObjects[id] = obj
+        return id
+    }
+
+    /** The object [registerObject] stored under [handleId], if it is a [T]. */
+    inline fun <reified T : Any> objectFor(handleId: Long): T? = objectAny(handleId) as? T
+
+    /** The object stored under [handleId], untyped. */
+    fun objectAny(handleId: Long): Any? = appObjects[handleId]
+
+    /** Forget an object [registerObject] stored. */
+    fun releaseObject(handleId: Long) {
+        appObjects.remove(handleId)
+    }
+
     fun start(libraryName: String): Boolean {
         System.loadLibrary(libraryName)
         return start()
@@ -108,6 +133,7 @@ object IstmoRuntime {
      * process.
      */
     fun start(): Boolean {
+        IstmoFrames.checkAbi()
         val ok = nativeStart(IstmoRuntime::class.java)
         synchronized(pendingEarlyQueue) { flushPendingEarlyQueueLocked() }
         return ok
@@ -440,7 +466,7 @@ object IstmoRuntime {
 
     @JvmStatic
     fun onReleaseNativeHandle(handleId: Long) {
-
+        if (appObjects.remove(handleId) != null) return
         val ownerId = handleOwners.remove(handleId) ?: return
         (handlers[ownerId] as? HandleReleaser)?.releaseNativeHandle(handleId)
     }
@@ -480,13 +506,6 @@ object IstmoRuntime {
     external fun nativeSubmitStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray?)
     external fun nativeSubmitEarlyLatest(channel: String, payload: ByteArray)
     external fun nativeSubmitEarlyQueue(channel: String, capacity: Int, payload: ByteArray)
-
-    // Frame sinks answer with an `IstmoSubmitStatus` code instead of
-    // throwing: a closed or unknown sink is an expected outcome.
-    external fun nativeSubmitHardwareBuffer(sink: Long, buffer: android.hardware.HardwareBuffer, meta: ByteArray): Int
-    external fun nativeSubmitDirectBuffer(sink: Long, buffer: java.nio.ByteBuffer, length: Int, meta: ByteArray): Int
-    external fun nativeSubmitFrameBytes(sink: Long, bytes: ByteArray, meta: ByteArray): Int
-    external fun nativeCloseFrameSink(sink: Long): Boolean
 
     external fun nativeInjectEnvelope(bytes: ByteArray)
     external fun nativeInstallAssets(assetManager: android.content.res.AssetManager)

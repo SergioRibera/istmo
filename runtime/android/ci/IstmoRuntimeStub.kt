@@ -15,8 +15,4 @@ object IstmoRuntime {
     fun start(): Boolean = true
     fun registerService(pluginId: String, service: android.app.Service) {}
     fun unregisterService(pluginId: String) {}
-    fun nativeSubmitHardwareBuffer(sink: Long, buffer: android.hardware.HardwareBuffer, meta: ByteArray): Int = 0
-    fun nativeSubmitDirectBuffer(sink: Long, buffer: java.nio.ByteBuffer, length: Int, meta: ByteArray): Int = 0
-    fun nativeSubmitFrameBytes(sink: Long, bytes: ByteArray, meta: ByteArray): Int = 0
-    fun nativeCloseFrameSink(sink: Long): Boolean = true
 }

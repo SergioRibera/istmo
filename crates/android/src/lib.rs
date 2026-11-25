@@ -19,6 +19,8 @@ pub mod entrypoint;
 pub mod error;
 pub mod path;
 
+mod frame_exports;
+mod frame_producer;
 mod jni_exports;
 mod native_buffer;
 mod pump;
@@ -29,10 +31,24 @@ pub use android_activity;
 #[cfg(target_os = "android")]
 pub use app::{android_activity_object, android_app, set_android_app};
 pub use error::AndroidRuntimeError;
-pub use native_buffer::{DirectByteBuffer, HardwareBuffer, HardwareBufferDesc};
+pub use frame_exports::{
+    Java_dev_istmo_runtime_IstmoFrames_nativeAbiVersion,
+    Java_dev_istmo_runtime_IstmoFrames_nativeAcquireSlot,
+    Java_dev_istmo_runtime_IstmoFrames_nativeAwaitReleased,
+    Java_dev_istmo_runtime_IstmoFrames_nativeEndProducer,
+    Java_dev_istmo_runtime_IstmoFrames_nativeFreeProducer,
+    Java_dev_istmo_runtime_IstmoFrames_nativeOpenProducer,
+    Java_dev_istmo_runtime_IstmoFrames_nativeOpenSlotPool,
+    Java_dev_istmo_runtime_IstmoFrames_nativeReleaseSlot,
+    Java_dev_istmo_runtime_IstmoFrames_nativeSubmitBytes,
+    Java_dev_istmo_runtime_IstmoFrames_nativeSubmitDirectBuffer,
+    Java_dev_istmo_runtime_IstmoFrames_nativeSubmitHardwareBuffer,
+    Java_dev_istmo_runtime_IstmoFrames_nativeSubmitSlot,
+};
+pub use frame_producer::PoolSlot;
+pub use native_buffer::{HardwareBuffer, HardwareBufferDesc};
 
 pub use jni_exports::{
-    Java_dev_istmo_runtime_IstmoRuntime_nativeCloseFrameSink,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInjectEnvelope,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallAssets,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths,
@@ -41,12 +57,9 @@ pub use jni_exports::{
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCallDirect,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCancel,
-    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitDirectBuffer,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLatest,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyQueue,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent,
-    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitFrameBytes,
-    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitHardwareBuffer,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitNotify,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitStreamEnd,
