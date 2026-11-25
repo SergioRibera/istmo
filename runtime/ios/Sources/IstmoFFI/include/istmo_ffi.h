@@ -163,6 +163,40 @@ void istmo_ios_submit_early_queue(
     const uint8_t *payload,
     size_t payload_len);
 
+/*
+ * Frame sinks. Both submits return a status code: 0 accepted, 1
+ * displaced (accepted, an older frame was dropped), 2 closed (stop
+ * producing), 3 unknown sink, 4 bad metadata, 5 unsupported, 6 runtime
+ * not started, 7 invalid argument, 8 full (refused).
+ *
+ * `istmo_ios_submit_native_buffer` takes over the +1 reference in
+ * `object` whatever the status, releasing it through `release` (on any
+ * thread) once the frame drops or at once when it is refused. Only a NULL
+ * `object` or `release` leaves ownership with the caller (status 7).
+ * kind: 0 other, 1 CVPixelBufferRef, 2 IOSurfaceRef, 3 CMSampleBufferRef.
+ */
+typedef void (*IstmoReleaseFn)(void *object);
+
+int32_t istmo_ios_submit_native_buffer(
+    uint64_t sink,
+    uint32_t kind,
+    void *object,
+    IstmoReleaseFn release,
+    const uint8_t *meta,
+    size_t meta_len);
+
+/* Copies `(bytes, len)` into a frame. */
+int32_t istmo_ios_submit_frame_bytes(
+    uint64_t sink,
+    const uint8_t *bytes,
+    size_t len,
+    const uint8_t *meta,
+    size_t meta_len);
+
+/* Producer-side close: the consumer gets what is queued, then the end.
+ * False when no such sink is open. */
+bool istmo_ios_close_frame_sink(uint64_t sink);
+
 #ifdef __cplusplus
 }
 #endif

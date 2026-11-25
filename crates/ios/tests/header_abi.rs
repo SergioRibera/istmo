@@ -72,6 +72,8 @@ fn c_to_rust(ty: &str) -> String {
         "const uint8_t *" => "*const u8",
         "bool" => "bool",
         "uint32_t" => "u32",
+        "int32_t" => "i32",
+        "IstmoReleaseFn" => "Option<ReleaseFn>",
         "uint64_t" => "u64",
         "size_t" => "usize",
         "IstmoIosCallbacks" => "IstmoIosCallbacks",

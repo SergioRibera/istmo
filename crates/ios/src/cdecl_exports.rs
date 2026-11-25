@@ -17,12 +17,14 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::slice;
 use std::sync::Arc;
 
+use istmo_core::native_frame::{NativeBuffer, SubmitStatus};
 use istmo_core::{
     CallId, EarlyEventKind, Envelope, Frame, InstanceId, Runtime, RuntimeConfig, RuntimeInit,
     StreamEndReason, StreamId,
 };
 
 use crate::error::IosRuntimeError;
+use crate::native_buffer::{ReleaseFn, submit_retained};
 use crate::pump;
 use crate::state::{self, RuntimeState};
 
@@ -472,6 +474,95 @@ pub unsafe extern "C" fn istmo_ios_submit_early_queue(
             tracing::error!(%err, "istmo_ios_submit_early_queue failed");
         }
     });
+}
+
+/// Hand a retained Core Foundation object to the frame sink `sink`.
+///
+/// `kind`: 1 `CVPixelBufferRef`, 2 `IOSurfaceRef`, 3 `CMSampleBufferRef`,
+/// 0 anything else. The metadata is wire-encoded in `(meta, meta_len)`.
+///
+/// Returns a `SubmitStatus` code. Rust takes over the +1 reference in
+/// `object` whatever the status (releasing it at once when the frame is
+/// refused), unless `object` or `release` is null: then the status is
+/// `INVALID` (7) and the caller keeps it.
+///
+/// # Safety
+///
+/// `object` carries a +1 reference that `release` gives up; `release`
+/// may run on any thread. `(meta, meta_len)` follows the module's buffer
+/// contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn istmo_ios_submit_native_buffer(
+    sink: u64,
+    kind: u32,
+    object: *mut c_void,
+    release: Option<ReleaseFn>,
+    meta: *const u8,
+    meta_len: usize,
+) -> i32 {
+    ffi_guard(
+        "istmo_ios_submit_native_buffer",
+        SubmitStatus::Invalid.code(),
+        || {
+            // SAFETY: forwarded from this function's contract.
+            let meta = unsafe { copy_bytes(meta, meta_len) }.ok();
+            let runtime = Runtime::global().ok();
+            // SAFETY: forwarded from this function's contract.
+            unsafe {
+                submit_retained(
+                    runtime.as_deref(),
+                    sink,
+                    kind,
+                    object,
+                    release,
+                    meta.as_deref(),
+                )
+            }
+            .code()
+        },
+    )
+}
+
+/// Copy `(bytes, len)` into a frame for the sink `sink`. Returns a
+/// `SubmitStatus` code.
+///
+/// # Safety
+///
+/// Both `(ptr, len)` pairs follow the module's buffer contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn istmo_ios_submit_frame_bytes(
+    sink: u64,
+    bytes: *const u8,
+    len: usize,
+    meta: *const u8,
+    meta_len: usize,
+) -> i32 {
+    ffi_guard(
+        "istmo_ios_submit_frame_bytes",
+        SubmitStatus::Invalid.code(),
+        || {
+            // SAFETY: forwarded from this function's contract.
+            let copied = unsafe { (copy_bytes(bytes, len), copy_bytes(meta, meta_len)) };
+            let (Ok(data), Ok(meta)) = copied else {
+                return SubmitStatus::Invalid.code();
+            };
+            Runtime::global()
+                .map_or(SubmitStatus::NotStarted, |runtime| {
+                    runtime.submit_native_frame(sink, &meta, NativeBuffer::from_cpu(data))
+                })
+                .code()
+        },
+    )
+}
+
+/// Close the frame sink `sink` from the producer side: the consumer
+/// receives what is queued, then the end. False when no such sink is open
+/// (or no runtime runs).
+#[unsafe(no_mangle)]
+pub extern "C" fn istmo_ios_close_frame_sink(sink: u64) -> bool {
+    ffi_guard("istmo_ios_close_frame_sink", false, || {
+        Runtime::global().is_ok_and(|runtime| runtime.close_frame_sink(sink))
+    })
 }
 
 /// Run `body`, turning a panic into `on_panic`: unwinding into Swift is
