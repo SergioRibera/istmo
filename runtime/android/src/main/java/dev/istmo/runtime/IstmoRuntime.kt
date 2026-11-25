@@ -4,6 +4,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -37,7 +38,23 @@ object IstmoRuntime {
     /** Early events published before the native library was loaded. */
     private val pendingEarlyQueue = java.util.ArrayDeque<Triple<String, Int, ByteArray>>()
 
-    fun registerHandler(pluginId: String, handler: PluginHandler) {
+    /** Plugins whose calls always start on `Dispatchers.Default`. */
+    private val dispatchedHandlers = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Serve calls to [pluginId] with [handler].
+     *
+     * By default every call starts on the thread that delivers it (the
+     * Rust caller, or the runtime's delivery thread) and runs there until
+     * its first suspension; a backend that never suspends answers before
+     * that thread returns, one that suspends continues wherever it
+     * resumes (its own dispatcher, or `Dispatchers.Default`). Like any
+     * `suspend fun`, a backend method must not block the thread: wrap
+     * blocking work in `withContext(Dispatchers.IO)`, or pass
+     * [startInPlace] `false` to start every call on `Dispatchers.Default`.
+     */
+    fun registerHandler(pluginId: String, handler: PluginHandler, startInPlace: Boolean = true) {
+        if (startInPlace) dispatchedHandlers.remove(pluginId) else dispatchedHandlers.add(pluginId)
         handlers[pluginId] = handler
     }
 
@@ -48,6 +65,7 @@ object IstmoRuntime {
      */
     fun unregisterHandler(pluginId: String) {
         handlers.remove(pluginId)
+        dispatchedHandlers.remove(pluginId)
     }
 
     /**
@@ -342,22 +360,41 @@ object IstmoRuntime {
             nativeSubmitResponse(callId, false, EMPTY_PAYLOAD)
             return
         }
-        val job = scope.launch {
+        launchHosted(callId, pluginId) {
+            when (val result = handler.handleCall(instanceId, method, payload)) {
+                is PluginResult.Unary -> nativeSubmitResponse(callId, true, result.bytes)
+                is PluginResult.Stream -> pumpStream(callId, result.flow)
+            }
+        }
+    }
+
+    /**
+     * Run a hosted call as a coroutine registered under [callId] (so
+     * `onCancel` reaches it), started in place unless [pluginId] opted
+     * out. A [PluginException] answers with its payload, anything else
+     * with an empty error.
+     */
+    private inline fun launchHosted(callId: Long, pluginId: String, crossinline body: suspend () -> Unit) {
+        // The job exists before the body runs: a body that finishes in
+        // place, or a cancel that arrives while it runs, finds it.
+        val job = Job(scope.coroutineContext[Job])
+        jobs[callId] = job
+        val start = if (pluginId in dispatchedHandlers) CoroutineStart.DEFAULT else CoroutineStart.UNDISPATCHED
+        scope.launch(job, start) {
             try {
-                val result = handler.handleCall(instanceId, method, payload)
-                when (result) {
-                    is PluginResult.Unary -> nativeSubmitResponse(callId, true, result.bytes)
-                    is PluginResult.Stream -> pumpStream(callId, result.flow)
-                }
+                body()
             } catch (e: PluginException) {
                 nativeSubmitResponse(callId, false, e.payload)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Rust cancelled the call: nobody waits for an answer.
+                throw e
             } catch (_: Throwable) {
                 nativeSubmitResponse(callId, false, EMPTY_PAYLOAD)
             } finally {
-                jobs.remove(callId)
+                jobs.remove(callId, job)
+                job.complete()
             }
         }
-        jobs[callId] = job
     }
 
     private suspend fun pumpStream(callId: Long, flow: kotlinx.coroutines.flow.Flow<ByteArray>) {
@@ -403,7 +440,8 @@ object IstmoRuntime {
         payload: ByteArray,
     ) {
         val handler = handlers[pluginId] ?: return
-        scope.launch {
+        val start = if (pluginId in dispatchedHandlers) CoroutineStart.DEFAULT else CoroutineStart.UNDISPATCHED
+        scope.launch(start = start) {
             runCatching { handler.handleCall(instanceId, method, payload) }
         }
     }
@@ -415,19 +453,9 @@ object IstmoRuntime {
             nativeSubmitResponse(callId, false, EMPTY_PAYLOAD)
             return
         }
-        val job = scope.launch {
-            try {
-                val instanceIdBytes = handler.handleCreateInstance(payload)
-                nativeSubmitResponse(callId, true, instanceIdBytes)
-            } catch (e: PluginException) {
-                nativeSubmitResponse(callId, false, e.payload)
-            } catch (_: Throwable) {
-                nativeSubmitResponse(callId, false, EMPTY_PAYLOAD)
-            } finally {
-                jobs.remove(callId)
-            }
+        launchHosted(callId, pluginId) {
+            nativeSubmitResponse(callId, true, handler.handleCreateInstance(payload))
         }
-        jobs[callId] = job
     }
 
     @JvmStatic
