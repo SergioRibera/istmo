@@ -65,8 +65,11 @@ pub fn random_token(bytes: usize) -> String {
     base64url(&buf)
 }
 
-/// Random `u64` (session ids).
-#[cfg(feature = "desktop")]
+/// Random `u64` (session ids of the desktop host).
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "desktop"
+))]
 #[must_use]
 pub(crate) fn random_u64() -> u64 {
     let mut bytes = [0_u8; 8];

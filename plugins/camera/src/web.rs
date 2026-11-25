@@ -40,6 +40,10 @@
 //! format returns [`CameraError::FormatUnsupported`] on `open`.
 
 #![cfg(all(target_arch = "wasm32", feature = "web"))]
+#![allow(
+    clippy::future_not_send,
+    reason = "wasm32-unknown-unknown is single-threaded: futures stay on the JS event loop"
+)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -102,7 +106,7 @@ impl WebCamera {
         NativeHandleId::new(self.next_session.fetch_add(1, Ordering::Relaxed))
     }
 
-    fn pool_depth(&self) -> usize {
+    const fn pool_depth(&self) -> usize {
         let d = self.config.frame_pool_depth as usize;
         if d == 0 { 3 } else { d }
     }
@@ -140,15 +144,15 @@ impl Drop for WebSessionEntry {
         }
         stop_tracks(&self.stream);
         self.fanout.close();
-        let _ = self.video.remove();
-        let _ = self.canvas.remove();
+        self.video.remove();
+        self.canvas.remove();
     }
 }
 
 #[allow(clippy::missing_errors_doc)]
 impl Camera for WebCamera {
     async fn devices(&self) -> Result<Vec<CameraDevice>, CameraError> {
-        relay(|| enumerate_devices_impl()).await
+        relay(enumerate_devices_impl).await
     }
 
     async fn concurrent_support(&self) -> Result<ConcurrentSupport, CameraError> {
@@ -160,11 +164,11 @@ impl Camera for WebCamera {
     }
 
     async fn access_status(&self) -> Result<AccessStatus, CameraError> {
-        relay(|| access_status_impl()).await
+        relay(access_status_impl).await
     }
 
     async fn request_access(&self) -> Result<AccessStatus, CameraError> {
-        relay(|| request_access_impl()).await
+        relay(request_access_impl).await
     }
 
     async fn open(&self, config: SessionConfig) -> Result<CameraSession, CameraError> {
@@ -374,7 +378,7 @@ async fn access_status_impl() -> Result<AccessStatus, CameraError> {
     Ok(match status.state() {
         PermissionState::Granted => AccessStatus::Granted,
         PermissionState::Denied => AccessStatus::Denied,
-        PermissionState::Prompt => AccessStatus::NotDetermined,
+        // `Prompt`, and states newer browsers add.
         _ => AccessStatus::NotDetermined,
     })
 }
@@ -445,6 +449,10 @@ async fn open_impl(
     canvas.set_height(height);
 
     let fps = config.target_fps.unwrap_or(30).max(1);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "1000 / fps is at most 1000"
+    )]
     let interval_ms = ((1000.0 / f64::from(fps)).round() as i32).max(1);
 
     let fanout = Arc::new(FrameFanout::new(pool_depth));
@@ -732,18 +740,13 @@ fn make_pump(
         if video.ready_state() < 2 {
             return;
         }
-        let bytes = match read_frame(&ctx, &video, width, height) {
-            Ok(mut bytes) => {
-                if matches!(pixel_format, PixelFormat::Bgra8) {
-                    swap_rb_in_place(&mut bytes);
-                }
-                bytes
-            }
-            Err(_) => {
-                fanout.record_drop();
-                return;
-            }
+        let Ok(mut bytes) = read_frame(&ctx, &video, width, height) else {
+            fanout.record_drop();
+            return;
         };
+        if matches!(pixel_format, PixelFormat::Bgra8) {
+            swap_rb_in_place(&mut bytes);
+        }
 
         let plane = FramePlane {
             offset: 0,
@@ -787,7 +790,7 @@ fn read_frame(
 }
 
 fn swap_rb_in_place(bytes: &mut [u8]) {
-    for px in bytes.chunks_exact_mut(4) {
+    for px in bytes.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
     }
 }
@@ -816,6 +819,7 @@ fn classify_get_user_media_error(err: JsValue) -> CameraError {
     }
 }
 
+#[expect(clippy::needless_pass_by_value, reason = "shaped for `map_err`")]
 fn js_err(err: JsValue) -> String {
     err.as_string()
         .or_else(|| js_sys::JSON::stringify(&err).ok().map(Into::into))
@@ -826,5 +830,11 @@ fn now_ns() -> u64 {
     let now = web_sys::window()
         .and_then(|w| w.performance())
         .map_or(0.0, |p| p.now());
-    (now * 1_000_000.0) as u64
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "`performance.now()` is non-negative milliseconds since page load"
+    )]
+    let ns = (now * 1_000_000.0) as u64;
+    ns
 }

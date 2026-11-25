@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn empty_renders_nothing() {
         let schemes = UrlSchemes::default();
-        assert!(schemes.render_android_intent_filters().is_empty());
-        assert!(schemes.render_info_plist().is_empty());
+        assert_eq!(schemes.render_android_intent_filters(), "");
+        assert_eq!(schemes.render_info_plist(), "");
     }
 }

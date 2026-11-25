@@ -143,6 +143,13 @@ fn guess_mime(path: &Path) -> Option<&'static str> {
 
 /// Local paths in a `text/uri-list` payload, and how many entries were
 /// not local files.
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "uri-lists arrive through Wayland; tested everywhere"
+    )
+)]
 pub(super) fn parse_uri_list(list: &str) -> (Vec<PathBuf>, usize) {
     let mut paths = Vec::new();
     let mut others = 0;
@@ -159,6 +166,13 @@ pub(super) fn parse_uri_list(list: &str) -> (Vec<PathBuf>, usize) {
 }
 
 /// The local path of a `file:` URL (`file:///a%20b`, `file://localhost/x`).
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "uri-lists arrive through Wayland; tested everywhere"
+    )
+)]
 fn file_url_path(url: &str) -> Option<PathBuf> {
     let rest = url
         .get(..5)
@@ -205,6 +219,10 @@ fn percent_decode(text: &str) -> Option<std::ffi::OsString> {
 }
 
 #[cfg(not(unix))]
+#[allow(
+    dead_code,
+    reason = "uri-lists arrive through Wayland; tested everywhere"
+)]
 fn percent_decode(text: &str) -> Option<std::ffi::OsString> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -221,10 +239,10 @@ fn percent_decode(text: &str) -> Option<std::ffi::OsString> {
     }
     let text = String::from_utf8(out).ok()?;
     // `file:///C:/x` names `C:/x`.
-    let text = text
+    let drive = text
         .strip_prefix('/')
-        .filter(|rest| rest.as_bytes().get(1) == Some(&b':'))
-        .map_or(text.clone(), str::to_owned);
+        .is_some_and(|rest| rest.as_bytes().get(1) == Some(&b':'));
+    let text = if drive { text[1..].to_owned() } else { text };
     Some(text.into())
 }
 

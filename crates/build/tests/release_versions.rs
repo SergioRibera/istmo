@@ -150,7 +150,7 @@ fn example_runtime_dependencies_share_the_release_version() {
 fn every_replacement_runs_on_pre_releases() {
     for entry in replacements() {
         assert_eq!(
-            entry.get("prerelease").and_then(|v| v.as_bool()),
+            entry.get("prerelease").and_then(toml_edit::Value::as_bool),
             Some(true),
             "{} needs `prerelease = true`",
             entry["file"].as_str().unwrap_or_default()

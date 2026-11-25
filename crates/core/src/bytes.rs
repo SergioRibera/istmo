@@ -190,13 +190,13 @@ impl From<Arc<[u8]>> for Bytes {
 }
 
 impl From<Bytes> for Vec<u8> {
-    fn from(bytes: Bytes) -> Vec<u8> {
+    fn from(bytes: Bytes) -> Self {
         bytes.into_vec()
     }
 }
 
 impl From<&Bytes> for Vec<u8> {
-    fn from(bytes: &Bytes) -> Vec<u8> {
+    fn from(bytes: &Bytes) -> Self {
         bytes.as_slice().to_vec()
     }
 }
@@ -236,6 +236,6 @@ mod tests {
     #[test]
     fn into_vec_matches_slice() {
         let b = Bytes::from(vec![1, 2, 3]);
-        assert_eq!(b.clone().into_vec(), vec![1, 2, 3]);
+        assert_eq!(b.into_vec(), vec![1, 2, 3]);
     }
 }

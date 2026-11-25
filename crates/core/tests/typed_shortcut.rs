@@ -68,6 +68,11 @@ fn typed_shortcut_missing_plugin_returns_none() {
 
 #[test]
 fn typed_shortcut_wrong_trait_type_returns_none() {
+    trait OtherTyped: Send + Sync + 'static {
+        #[allow(dead_code)]
+        fn x(&self) -> i64;
+    }
+
     let init = Runtime::mock();
     let rt = init.runtime;
     drop(init.outbound);
@@ -78,10 +83,6 @@ fn typed_shortcut_wrong_trait_type_returns_none() {
     rt.register_typed_host("test.math", impl_);
 
     // Downcast to a different trait object should fail cleanly.
-    trait OtherTyped: Send + Sync + 'static {
-        #[allow(dead_code)]
-        fn x(&self) -> i64;
-    }
     assert!(rt.typed_host::<dyn OtherTyped>("test.math").is_none());
 }
 

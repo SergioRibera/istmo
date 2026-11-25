@@ -71,7 +71,8 @@ impl Dispatch for NoopDispatch {
 }
 
 fn mk_payload(size: usize) -> Vec<u8> {
-    (0..size).map(|i| i as u8).collect()
+    // The low byte of the index: a repeating 0..=255 pattern.
+    (0..size).map(|i| i.to_le_bytes()[0]).collect()
 }
 
 fn codec_roundtrip(c: &mut Criterion) {
@@ -194,9 +195,7 @@ fn typed_shortcut_call(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(size as u64));
         group.bench_function(format!("{size}B"), |b| {
             b.iter(|| {
-                let typed = rt
-                    .typed_host::<dyn EchoTyped>("bench.typed")
-                    .expect("slot");
+                let typed = rt.typed_host::<dyn EchoTyped>("bench.typed").expect("slot");
                 let out = typed.echo(payload.clone());
                 let _ = std::hint::black_box(out);
             });

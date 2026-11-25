@@ -587,6 +587,6 @@ mod tests {
         let app = [entry("NSCameraUsageDescription", "both")];
         let (merged, conflicts) = merge_info_plist_entries(&wired, &app);
         assert_eq!(merged, [entry("NSCameraUsageDescription", "both")]);
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
     }
 }

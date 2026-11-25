@@ -138,9 +138,11 @@ impl AdMobClient {
     }
 }
 
-/// Host for platforms without Google Mobile Ads (desktop, web): every
-/// call fails with [`AdError::Internal`] naming the missing backend, so
-/// [`AdMobClient`] calls resolve instead of waiting for a native side.
+/// Host for platforms without Google Mobile Ads (desktop, web).
+///
+/// Every call fails with [`AdError::Internal`] naming the missing
+/// backend, so [`AdMobClient`] calls resolve instead of waiting for a
+/// native side.
 ///
 /// ```rust,ignore
 /// runtime.register_host(AdMobHost::new(UnavailableAdMob));

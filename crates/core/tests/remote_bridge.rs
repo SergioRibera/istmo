@@ -6,9 +6,8 @@ use std::time::Duration;
 
 use flume::Receiver as FlumeReceiver;
 use istmo_core::{
-    CallOrigin, CancelToken, Dispatch, DispatchFuture, Envelope, Frame, InstanceId, Outcome, Plugin,
-    Runtime,
-    codec,
+    CallOrigin, CancelToken, Dispatch, DispatchFuture, Envelope, Frame, InstanceId, Outcome,
+    Plugin, Runtime, codec,
 };
 
 struct RemoteHost {
@@ -384,7 +383,7 @@ impl Dispatch for LocalOnlyHost {
 #[test]
 fn host_refusing_remote_answers_injected_calls_with_an_error() {
     let init = Runtime::mock();
-    let rt = init.runtime.clone();
+    let rt = init.runtime;
     let host = Arc::new(LocalOnlyHost {
         calls: AtomicU32::new(0),
     });

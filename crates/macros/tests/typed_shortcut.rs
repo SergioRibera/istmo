@@ -58,7 +58,7 @@ struct Backend {
 }
 
 impl Backend {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             calls: AtomicU64::new(0),
         }

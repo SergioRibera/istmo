@@ -6,7 +6,7 @@
 //! still links.
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn main() {}
+const fn main() {}
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {

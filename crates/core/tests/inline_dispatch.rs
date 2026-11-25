@@ -36,8 +36,7 @@ impl Dispatch for InlineEcho {
         payload: &'a [u8],
         _cancel: CancelToken,
     ) -> DispatchFuture<'a> {
-        self.thread_tag
-            .store(thread_id_as_u64(), Ordering::SeqCst);
+        self.thread_tag.store(thread_id_as_u64(), Ordering::SeqCst);
         let bytes = payload.to_vec();
         Box::pin(async move { Ok(Outcome::Ok(bytes)) })
     }
@@ -78,11 +77,11 @@ impl Future for ParkOnce {
     type Output = Result<Outcome, istmo_core::DispatchError>;
 
     fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if !self.parked {
+        if self.parked {
+            Poll::Ready(Ok(Outcome::Ok(Vec::new())))
+        } else {
             self.parked = true;
             Poll::Pending
-        } else {
-            Poll::Ready(Ok(Outcome::Ok(Vec::new())))
         }
     }
 }
@@ -254,19 +253,12 @@ fn inline_dispatch_streams_through_pump() {
         )
         .expect("open");
     let mut items = Vec::new();
-    loop {
-        match stream.recv().expect("recv") {
-            StreamMessage::Event(bytes) => items.push(bytes),
-            StreamMessage::End(_) => break,
-        }
+    while let StreamMessage::Event(bytes) = stream.recv().expect("recv") {
+        items.push(bytes);
     }
     assert_eq!(
         items,
-        vec![
-            b"first".to_vec(),
-            b"second".to_vec(),
-            b"third".to_vec(),
-        ],
+        vec![b"first".to_vec(), b"second".to_vec(), b"third".to_vec(),],
     );
 }
 

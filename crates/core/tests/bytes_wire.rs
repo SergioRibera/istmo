@@ -29,7 +29,7 @@ fn bytes_encodes_like_vec_u8() {
 
     let v = VecPayload { body: body.clone() };
     let b = BytesPayload {
-        body: Bytes::from(body.clone()),
+        body: Bytes::from(body),
     };
 
     let v_bytes = codec::encode(&v).expect("encode vec");
@@ -61,9 +61,7 @@ fn vec_decodes_from_bytes_wire() {
 
 #[test]
 fn bytes_empty_roundtrips() {
-    let b = BytesPayload {
-        body: Bytes::new(),
-    };
+    let b = BytesPayload { body: Bytes::new() };
     let wire = codec::encode(&b).expect("encode empty bytes");
     let (decoded, _) = codec::decode::<BytesPayload>(&wire).expect("decode empty");
     assert_eq!(decoded.body, Bytes::new());
