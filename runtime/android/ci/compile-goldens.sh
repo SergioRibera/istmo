@@ -23,7 +23,7 @@ compile() {
     # shellcheck disable=SC2086 # KOTLINC may carry its own arguments.
     ${KOTLINC:-kotlinc} -Werror ${KOTLIN_CLASSPATH:+-classpath "$KOTLIN_CLASSPATH"} \
         -d "$work/out-$label" \
-        "$runtime/Bincode.kt" "$runtime/PluginHandler.kt" "$ci"/*.kt "$@"
+        "$runtime/Bincode.kt" "$runtime/PluginHandler.kt" "$runtime/IstmoFrameSink.kt" "$ci"/*.kt "$@"
 }
 
 # Generated files carry no `package` line: the app build prepends it.

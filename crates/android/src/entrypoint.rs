@@ -3,6 +3,7 @@
 //! all of them in the final cdylib; keep it in sync with the crate root.
 
 pub use crate::{
+    Java_dev_istmo_runtime_IstmoRuntime_nativeCloseFrameSink,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInjectEnvelope,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallAssets,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths,
@@ -11,9 +12,12 @@ pub use crate::{
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCallDirect,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCancel,
+    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitDirectBuffer,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLatest,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyQueue,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent,
+    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitFrameBytes,
+    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitHardwareBuffer,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitNotify,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitStreamEnd,

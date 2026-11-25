@@ -20,6 +20,7 @@ pub mod error;
 pub mod path;
 
 mod jni_exports;
+mod native_buffer;
 mod pump;
 mod state;
 
@@ -28,8 +29,10 @@ pub use android_activity;
 #[cfg(target_os = "android")]
 pub use app::{android_activity_object, android_app, set_android_app};
 pub use error::AndroidRuntimeError;
+pub use native_buffer::{DirectByteBuffer, HardwareBuffer, HardwareBufferDesc};
 
 pub use jni_exports::{
+    Java_dev_istmo_runtime_IstmoRuntime_nativeCloseFrameSink,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInjectEnvelope,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallAssets,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths,
@@ -38,9 +41,12 @@ pub use jni_exports::{
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCallDirect,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCancel,
+    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitDirectBuffer,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLatest,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyQueue,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent,
+    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitFrameBytes,
+    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitHardwareBuffer,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitNotify,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitStreamEnd,

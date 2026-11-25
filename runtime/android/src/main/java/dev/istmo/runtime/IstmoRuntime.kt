@@ -481,6 +481,13 @@ object IstmoRuntime {
     external fun nativeSubmitEarlyLatest(channel: String, payload: ByteArray)
     external fun nativeSubmitEarlyQueue(channel: String, capacity: Int, payload: ByteArray)
 
+    // Frame sinks answer with an `IstmoSubmitStatus` code instead of
+    // throwing: a closed or unknown sink is an expected outcome.
+    external fun nativeSubmitHardwareBuffer(sink: Long, buffer: android.hardware.HardwareBuffer, meta: ByteArray): Int
+    external fun nativeSubmitDirectBuffer(sink: Long, buffer: java.nio.ByteBuffer, length: Int, meta: ByteArray): Int
+    external fun nativeSubmitFrameBytes(sink: Long, bytes: ByteArray, meta: ByteArray): Int
+    external fun nativeCloseFrameSink(sink: Long): Boolean
+
     external fun nativeInjectEnvelope(bytes: ByteArray)
     external fun nativeInstallAssets(assetManager: android.content.res.AssetManager)
     external fun nativeInstallPaths(
