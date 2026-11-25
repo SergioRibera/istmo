@@ -9,6 +9,7 @@
 //!
 //! [`DispatchMode::Inline`]: crate::DispatchMode::Inline
 
+use std::cell::Cell;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
@@ -40,6 +41,48 @@ mod state {
     pub(super) const DONE: u8 = 4;
 }
 
+/// Tasks a worker runs from its own slot in a row before it takes the
+/// shared queue again.
+const MAX_LOCAL_RUN: u32 = 32;
+
+/// The worker's own slot.
+mod slot {
+    // Both initialisers are `const` blocks already; clippy's
+    // `missing_const_for_thread_local` still fires on some targets
+    // (aarch64-linux-android with 1.100).
+    #![allow(
+        clippy::missing_const_for_thread_local,
+        reason = "false positive on some targets; the initialisers are const"
+    )]
+
+    use std::cell::{Cell, RefCell};
+    use std::sync::Arc;
+
+    thread_local! {
+        /// Set on async worker threads.
+        pub(super) static ON_WORKER: Cell<bool> = const { Cell::new(false) };
+        /// On a worker: the task it runs next, woken by the task it is
+        /// running (a stream encoder waking its pump). Running it right
+        /// after the current poll saves waking another worker.
+        pub(super) static NEXT: RefCell<Option<Arc<super::Task>>> = const { RefCell::new(None) };
+    }
+}
+
+use slot::{NEXT, ON_WORKER};
+
+/// Queue a woken task: in the current worker's own slot when a worker
+/// woke it, on the shared queue otherwise.
+fn schedule(task: Arc<Task>) {
+    if ON_WORKER.with(Cell::get) {
+        let displaced = NEXT.with(|next| next.borrow_mut().replace(task));
+        if let Some(displaced) = displaced {
+            pool().push(displaced);
+        }
+        return;
+    }
+    pool().push(task);
+}
+
 /// One spawned future and its scheduling state.
 struct Task {
     state: AtomicU8,
@@ -68,7 +111,7 @@ impl Wake for Task {
             {
                 Ok(_) => {
                     if next == state::SCHEDULED {
-                        pool().push(Arc::clone(self));
+                        schedule(Arc::clone(self));
                     }
                     return;
                 }
@@ -189,10 +232,30 @@ impl Pool {
 
 fn worker_loop(rx: &Receiver<Arc<Task>>) {
     static WAIT: crate::spin::SpinWait = crate::spin::SpinWait::new();
+    ON_WORKER.with(|on| on.set(true));
     // A task woken right after the last one finished is picked up
     // without parking the worker.
-    let next = || WAIT.spin(|| rx.try_recv().ok()).or_else(|| rx.recv().ok());
-    while let Some(task) = next() {
+    let shared = || WAIT.spin(|| rx.try_recv().ok()).or_else(|| rx.recv().ok());
+    let mut local_run = 0u32;
+    loop {
+        let local = NEXT.with(|next| next.borrow_mut().take());
+        let task = match local {
+            Some(task) if local_run < MAX_LOCAL_RUN => {
+                local_run += 1;
+                task
+            }
+            Some(task) => {
+                // Let the shared queue in: the local task waits its turn.
+                local_run = 0;
+                pool().push(task);
+                continue;
+            }
+            None => {
+                local_run = 0;
+                let Some(task) = shared() else { return };
+                task
+            }
+        };
         task.state.store(state::RUNNING, Ordering::Release);
         task.run();
     }
@@ -295,6 +358,26 @@ mod tests {
             done_tx.send(()).unwrap();
         });
         done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn a_task_woken_by_a_worker_runs_next_on_that_worker() {
+        let (item_tx, item_rx) = flume::bounded::<()>(1);
+        let (seen_tx, seen_rx) = flume::bounded(2);
+        let consumer_seen = seen_tx.clone();
+        // The consumer waits; the producer wakes it from a worker.
+        spawn(async move {
+            item_rx.recv_async().await.unwrap();
+            consumer_seen.send(std::thread::current().id()).unwrap();
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        spawn(async move {
+            seen_tx.send(std::thread::current().id()).unwrap();
+            item_tx.send_async(()).await.unwrap();
+        });
+        let producer = seen_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let consumer = seen_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(producer, consumer, "no hand-off to another worker");
     }
 
     #[test]
