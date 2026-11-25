@@ -156,6 +156,32 @@ loop {
 `recv*` retornan `Err(IstmoError::ChannelClosed)` cuando el canal ya no
 existe, y `Err(IstmoError::Codec(..))` si un item no decodifica.
 
+## Atajo en proceso
+
+Cuando el host es una implementación Rust en el mismo proceso,
+registrada con `<Trait>Host::register(&runtime)` (plugins sin estado),
+el cliente también evita el wire para los streams: `updates()` llama a
+la implementación en el hilo del llamador y envuelve **el propio
+`flume::Receiver` de la implementación** en el `TypedStream`. Los items
+se mueven, no se codifican; no hay hilo codificador, bomba ni tabla de
+ruteo en medio, y el límite del canal que eligió la implementación es la
+contrapresión. `TypedStream::is_local()` indica qué camino tomó un
+stream.
+
+Todo lo demás se comporta como en el wire: el primer `Err` de un stream
+falible produce `Failed`, el productor que suelta su sender produce
+`Completed`, soltar el `TypedStream` dispara el `CancelToken` del
+productor, `Runtime::shutdown` termina el stream con `Cancelled`, y un
+panic al abrir falla la llamada con `IstmoError::PluginError`
+(`"host panicked"`). El camino del wire sigue registrado para Kotlin,
+Swift y llamadores remotos.
+
+Como el método de stream corre en el hilo del llamador, debe devolver su
+receiver enseguida (lanza el productor, como arriba) — el mismo contrato
+que el atajo unario. `RuntimeInit::host` / `runtime!(hosts: …)` registran
+solo el camino del wire. Para buffers que no deben copiarse ni una vez
+(frames, audio), usa un [frame sink](/istmo/es/writing-plugins/frame-sinks/).
+
 ## Cancelación
 
 Suelta el `TypedStream` para cancelarlo. Antes de que el stream

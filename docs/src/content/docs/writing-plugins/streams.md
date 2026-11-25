@@ -152,7 +152,32 @@ loop {
 | `Failed(E)` | A fallible stream ended with its domain error, decoded. |
 
 `recv*` return `Err(IstmoError::ChannelClosed)` once the channel is
-gone, and `Err(IstmoError::Codec(..))` if an item does not decode.
+gone or a terminal item was handed out, and `Err(IstmoError::Codec(..))` if an item does not decode.
+
+## In-process shortcut
+
+When the host is a Rust implementation in the same process, registered
+with `<Trait>Host::register(&runtime)` (stateless plugins), the client
+skips the wire for streams too: `updates()` calls the implementation on
+the caller's thread and wraps **the implementation's own
+`flume::Receiver`** in the `TypedStream`. Items are moved, not encoded;
+no encoder thread, pump or routing table sits in between, and the
+channel bound the implementation chose is the backpressure.
+`TypedStream::is_local()` tells which path a stream took.
+
+Everything else behaves as on the wire: the first `Err` of a fallible
+stream yields `Failed`, the producer dropping its sender yields
+`Completed`, dropping the `TypedStream` trips the producer's
+`CancelToken`, `Runtime::shutdown` ends the stream with `Cancelled`, and
+a panic while opening fails the call with
+`IstmoError::PluginError` (`"host panicked"`). The wire path stays
+registered for Kotlin, Swift and remote callers.
+
+Because the stream method runs on the caller's thread, it must return
+its receiver promptly (spawn the producer, as above) — the same contract
+as the unary shortcut. `RuntimeInit::host` / `runtime!(hosts: …)`
+register the wire path only. For buffers that must not be copied even
+once (frames, audio), use a [frame sink](/istmo/writing-plugins/frame-sinks/).
 
 ## Cancellation
 

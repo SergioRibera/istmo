@@ -2,7 +2,7 @@
 title: Cancelación
 description: Cancela cooperativamente llamadas en vuelo y streams de larga duración.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 Istmo usa un modelo de cancelación **cooperativo**. Un caller señala

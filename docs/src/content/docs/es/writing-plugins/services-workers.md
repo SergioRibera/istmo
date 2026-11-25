@@ -2,7 +2,7 @@
 title: Servicios y workers
 description: Corre código de background de larga vida sin convertir tu plugin en un service manager.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 Dos adapters extienden las macros de plugin para cubrir las dos formas

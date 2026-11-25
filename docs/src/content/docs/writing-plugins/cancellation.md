@@ -2,7 +2,7 @@
 title: Cancellation
 description: Cooperatively cancel in-flight calls and long-running streams.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 Istmo uses a **cooperative** cancellation model. A caller signals

@@ -2,7 +2,7 @@
 title: Services and workers
 description: Run long-lived background code without turning your plugin into a service manager.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 Two adapters extend the plugin macros to cover the two most common
