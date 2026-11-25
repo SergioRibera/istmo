@@ -2149,39 +2149,85 @@ where
 /// [`typed_catch_unwind`], with a token that trips when the caller drops
 /// the call before it finished or the runtime shuts down, as on the
 /// wire path.
+///
+/// A host that observes its token usually still has work to do (stop a
+/// sensor, release a claim). On the wire path its dispatcher thread
+/// keeps polling it after the caller left; here the caller's own task
+/// polled it, so a call dropped early hands the host future to a thread
+/// of its own that runs it to the end.
 #[doc(hidden)]
 pub async fn typed_call_cancellable<F, T>(
     runtime: &Arc<Runtime>,
     open: impl FnOnce(CancelToken) -> F,
 ) -> Result<T, IstmoError>
 where
-    F: Future<Output = T>,
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
 {
-    /// Cancels the token unless the call finished.
-    struct Pending<'a> {
-        runtime: &'a Runtime,
+    /// The host future until it finished; cancels and hands it off when
+    /// dropped before that.
+    struct Pending<F: Future + Send + 'static>
+    where
+        F::Output: Send,
+    {
+        runtime: Weak<Runtime>,
         id: StreamId,
         cancel: CancelToken,
-        finished: bool,
+        future: Option<CatchUnwind<F>>,
     }
-    impl Drop for Pending<'_> {
+    impl<F: Future + Send + 'static> Drop for Pending<F>
+    where
+        F::Output: Send,
+    {
         fn drop(&mut self) {
-            if !self.finished {
-                self.cancel.cancel();
+            let finish = {
+                let (runtime, id) = (self.runtime.clone(), self.id);
+                move || {
+                    if let Some(runtime) = runtime.upgrade() {
+                        runtime.finish_local_stream(id);
+                    }
+                }
+            };
+            let Some(future) = self.future.take() else {
+                finish();
+                return;
+            };
+            self.cancel.cancel();
+            let spawned = exec::spawn("istmo-cancelled-call", async move {
+                if future.await.is_err() {
+                    tracing::error!("typed-shortcut host panicked after its call was dropped");
+                }
+                finish();
+            });
+            if let Err(err) = spawned {
+                tracing::warn!(%err, "no thread to finish a dropped call; its host stops where it was");
+                if let Some(runtime) = self.runtime.upgrade() {
+                    runtime.finish_local_stream(self.id);
+                }
             }
-            self.runtime.finish_local_stream(self.id);
         }
     }
     let (id, cancel) = runtime.begin_local_stream()?;
     let mut pending = Pending {
-        runtime,
+        runtime: Arc::downgrade(runtime),
         id,
         cancel: cancel.clone(),
-        finished: false,
+        future: Some(CatchUnwind::new(open(cancel))),
     };
-    let outcome = typed_catch_unwind(open(cancel)).await;
-    pending.finished = true;
-    outcome.map_err(|bytes| IstmoError::PluginError { bytes })
+    let outcome = std::future::poll_fn(|cx| {
+        pending
+            .future
+            .as_mut()
+            .map_or(Poll::Pending, |future| Pin::new(future).poll(cx))
+    })
+    .await;
+    pending.future = None;
+    outcome.map_err(|_| {
+        tracing::error!("typed-shortcut host panicked");
+        IstmoError::PluginError {
+            bytes: encode_dispatch_error_string("host panicked"),
+        }
+    })
 }
 
 fn build(config: RuntimeConfig) -> RuntimeInit {

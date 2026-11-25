@@ -283,6 +283,19 @@ fn expand_typed_trait_method(root: &Path, spec: &MethodSpec) -> TokenStream {
             ) -> #root::__private::flume::Receiver<#ret_ty>;
         };
     }
+    if spec.has_role(ArgRole::Cancel) {
+        // Owns its host: a call dropped early is finished on a thread of
+        // its own, as on the wire path (`typed_call_cancellable`).
+        return quote! {
+            fn #name(
+                self: ::std::sync::Arc<Self>,
+                #(#params,)*
+                #(#extra,)*
+            ) -> ::core::pin::Pin<::std::boxed::Box<
+                dyn ::core::future::Future<Output = #ret_ty> + ::core::marker::Send + 'static
+            >>;
+        };
+    }
     quote! {
         fn #name<'__istmo_a>(
             &'__istmo_a self,
@@ -335,6 +348,19 @@ fn expand_typed_delegating_impl_method(root: &Path, spec: &MethodSpec) -> TokenS
             }
         };
     }
+    if spec.has_role(ArgRole::Cancel) {
+        return quote! {
+            fn #name(
+                self: ::std::sync::Arc<Self>,
+                #(#params,)*
+                #(#extra,)*
+            ) -> ::core::pin::Pin<::std::boxed::Box<
+                dyn ::core::future::Future<Output = #ret_ty> + ::core::marker::Send + 'static
+            >> {
+                ::std::boxed::Box::pin(async move { self.inner.#name(#(#call_args),*).await })
+            }
+        };
+    }
     quote! {
         fn #name<'__istmo_a>(
             &'__istmo_a self,
@@ -359,6 +385,10 @@ fn typed_return_ty(ret: &ReturnShape) -> TokenStream {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one quote! block holding the whole host; each argument is a distinct piece of it"
+)]
 fn expand_stateless_host(
     vis: &syn::Visibility,
     trait_ident: &Ident,
@@ -1469,7 +1499,7 @@ fn expand_typed_fast_path(
     let call = if spec.has_role(ArgRole::Cancel) {
         quote! {
             #root::__private::typed_call_cancellable(&self.__runtime, |__istmo_cancel| {
-                __istmo_typed.#name(#(#arg_names,)* #ctx_arg __istmo_cancel)
+                ::std::sync::Arc::clone(&__istmo_typed).#name(#(#arg_names,)* #ctx_arg __istmo_cancel)
             })
             .await
         }
