@@ -47,7 +47,7 @@ use sink::{ErasedSink, Shared};
 mod buffer;
 mod sink;
 
-pub use buffer::{BufferLease, CpuBuffer, MemoryKind, NativeBuffer};
+pub use buffer::{BufferLease, MemoryKind, NativeBuffer};
 #[cfg(unix)]
 pub use buffer::{DmaBuf, DmaBufPlane};
 pub use sink::{

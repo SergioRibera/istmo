@@ -235,6 +235,10 @@ struct State<M> {
     queue: VecDeque<NativeFrame<M>>,
     /// No frame is accepted any more; queued ones are still delivered.
     closed: bool,
+    /// The consumer found the queue empty and may be waiting on the
+    /// doorbell: the next push rings it. Pushes to a consumer that is
+    /// busy anyway skip the ring.
+    waiting: bool,
     next_seq: u64,
     pending_drops: u64,
     stats: SinkStats,
@@ -260,6 +264,7 @@ pub(super) struct Shared<M> {
 impl<M> Shared<M> {
     fn push(&self, meta: M, buffer: NativeBuffer) -> Result<Pushed, PushError<M>> {
         let evicted;
+        let wake;
         {
             let mut state = lock(&self.state);
             if state.closed {
@@ -284,8 +289,11 @@ impl<M> Shared<M> {
                 seq,
                 dropped_before: 0,
             });
+            wake = std::mem::take(&mut state.waiting);
         }
-        self.ring();
+        if wake {
+            self.ring();
+        }
         // Released outside the lock: a release may call into JNI or
         // CoreFoundation.
         let pushed = if evicted.is_some() {
@@ -304,7 +312,12 @@ impl<M> Shared<M> {
             state.stats.delivered += 1;
             return Pop::Frame(frame);
         }
-        if state.closed { Pop::Ended } else { Pop::Empty }
+        if state.closed {
+            Pop::Ended
+        } else {
+            state.waiting = true;
+            Pop::Empty
+        }
     }
 
     fn close(&self) {
@@ -567,6 +580,7 @@ pub(super) fn open<M: Message + Send + 'static>(
         state: Mutex::new(State {
             queue: VecDeque::with_capacity(policy.depth.get()),
             closed: false,
+            waiting: false,
             next_seq: 0,
             pending_drops: 0,
             stats: SinkStats::default(),

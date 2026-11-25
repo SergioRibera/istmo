@@ -14,7 +14,8 @@ use crate::sync::lock;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum MemoryKind {
-    /// Bytes in this process's address space ([`CpuBuffer`]).
+    /// Bytes in this process's address space
+    /// ([`NativeBuffer::from_cpu`]).
     Cpu,
     /// Linux DMA-BUF planes ([`DmaBuf`]).
     DmaBuf,
@@ -46,22 +47,55 @@ impl fmt::Display for MemoryKind {
 
 type ReleaseHook = Box<dyn FnOnce() + Send>;
 
-struct Inner {
+/// What [`NativeBuffer`] needs from its holder without knowing the
+/// backing type.
+trait Backing: Any + Send + Sync {
+    fn kind(&self) -> MemoryKind;
+    fn cpu_bytes(&self) -> Option<&[u8]>;
+    fn add_release(&self, hook: ReleaseHook);
+}
+
+/// The one allocation behind a [`NativeBuffer`]: the backing plus its
+/// release hooks.
+struct Holder<B> {
     kind: MemoryKind,
     /// `None` only once [`NativeBuffer::into_backing`] moved it out.
-    backing: Option<Box<dyn Any + Send + Sync>>,
+    backing: Option<B>,
+    /// Reads a CPU backing's bytes.
+    cpu: Option<fn(&B) -> &[u8]>,
     /// Run in order after the backing dropped.
     release: Mutex<Vec<ReleaseHook>>,
 }
 
-impl Drop for Inner {
+impl<B> Holder<B> {
+    fn take_hooks(&mut self) -> Vec<ReleaseHook> {
+        std::mem::take(self.release.get_mut().unwrap_or_else(|p| p.into_inner()))
+    }
+}
+
+impl<B> Drop for Holder<B> {
     fn drop(&mut self) {
         // The backing releases what it owns first (fds, platform
         // references); the hooks then tell a pooled producer the slot is
         // free again.
         drop(self.backing.take());
-        let hooks = std::mem::take(self.release.get_mut().unwrap_or_else(|p| p.into_inner()));
-        run_hooks(hooks);
+        run_hooks(self.take_hooks());
+    }
+}
+
+impl<B: Any + Send + Sync> Backing for Holder<B> {
+    fn kind(&self) -> MemoryKind {
+        self.kind
+    }
+
+    fn cpu_bytes(&self) -> Option<&[u8]> {
+        self.cpu
+            .zip(self.backing.as_ref())
+            .map(|(view, backing)| view(backing))
+    }
+
+    fn add_release(&self, hook: ReleaseHook) {
+        lock(&self.release).push(hook);
     }
 }
 
@@ -80,26 +114,36 @@ fn run_hooks(hooks: Vec<ReleaseHook>) {
 /// producers that reuse the memory.
 ///
 /// Cloning shares the backing: release happens once, when the last
-/// clone drops, on whichever thread drops it.
+/// clone drops, on whichever thread drops it. One allocation per
+/// buffer, whatever the backing.
 #[derive(Clone)]
-pub struct NativeBuffer(Arc<Inner>);
+pub struct NativeBuffer(Arc<dyn Backing>);
 
 impl NativeBuffer {
-    /// Wrap `backing`, a value of `kind` memory.
-    #[must_use]
-    pub fn new<B: Any + Send + Sync>(kind: MemoryKind, backing: B) -> Self {
-        Self(Arc::new(Inner {
+    fn holder<B: Any + Send + Sync>(
+        kind: MemoryKind,
+        backing: B,
+        cpu: Option<fn(&B) -> &[u8]>,
+    ) -> Self {
+        Self(Arc::new(Holder {
             kind,
-            backing: Some(Box::new(backing)),
+            backing: Some(backing),
+            cpu,
             release: Mutex::new(Vec::new()),
         }))
     }
 
-    /// CPU bytes owned by `data` (a `Vec<u8>`, `Bytes`, a mapping, …),
-    /// moved, not copied.
+    /// Wrap `backing`, a value of `kind` memory.
     #[must_use]
-    pub fn from_cpu(data: impl AsRef<[u8]> + Send + Sync + 'static) -> Self {
-        Self::new(MemoryKind::Cpu, CpuBuffer::new(data))
+    pub fn new<B: Any + Send + Sync>(kind: MemoryKind, backing: B) -> Self {
+        Self::holder(kind, backing, None)
+    }
+
+    /// CPU bytes owned by `data` (a `Vec<u8>`, `Bytes`, a mapping, …),
+    /// kept as the backing: moved, not copied.
+    #[must_use]
+    pub fn from_cpu<T: AsRef<[u8]> + Send + Sync + 'static>(data: T) -> Self {
+        Self::holder(MemoryKind::Cpu, data, Some(<T as AsRef<[u8]>>::as_ref))
     }
 
     /// DMA-BUF planes; the fds close when the buffer is released.
@@ -113,26 +157,27 @@ impl NativeBuffer {
     /// the backing itself). Hooks run in the order they were added.
     #[must_use]
     pub fn with_release(self, release: impl FnOnce() + Send + 'static) -> Self {
-        lock(&self.0.release).push(Box::new(release));
+        self.0.add_release(Box::new(release));
         self
     }
 
     /// The kind of memory held.
     #[must_use]
     pub fn kind(&self) -> MemoryKind {
-        self.0.kind
+        self.0.kind()
     }
 
     /// The backing as a `B`, when it is one.
     #[must_use]
     pub fn downcast_ref<B: Any>(&self) -> Option<&B> {
-        self.0.backing.as_deref()?.downcast_ref()
+        let holder: &dyn Any = &*self.0;
+        holder.downcast_ref::<Holder<B>>()?.backing.as_ref()
     }
 
-    /// The bytes of a [`CpuBuffer`] backing.
+    /// The bytes of a buffer made with [`from_cpu`](Self::from_cpu).
     #[must_use]
     pub fn cpu_bytes(&self) -> Option<&[u8]> {
-        self.downcast_ref::<CpuBuffer>().map(CpuBuffer::as_bytes)
+        self.0.cpu_bytes()
     }
 
     /// The [`DmaBuf`] backing.
@@ -156,29 +201,30 @@ impl NativeBuffer {
     ///
     /// Gives `self` back when it is shared with another clone or its
     /// backing is not a `B`.
-    pub fn into_backing<B: Any>(self) -> Result<(B, BufferLease), Self> {
-        let mut inner = Arc::try_unwrap(self.0).map_err(Self)?;
-        let Some(backing) = inner.backing.take() else {
-            return Err(Self(Arc::new(inner)));
+    pub fn into_backing<B: Any + Send + Sync>(self) -> Result<(B, BufferLease), Self> {
+        let any: Arc<dyn Any + Send + Sync> = self.0.clone();
+        let Ok(typed) = any.downcast::<Holder<B>>() else {
+            return Err(self);
         };
-        match backing.downcast::<B>() {
-            Ok(backing) => {
-                let hooks =
-                    std::mem::take(inner.release.get_mut().unwrap_or_else(|p| p.into_inner()));
-                Ok((*backing, BufferLease { hooks }))
-            }
-            Err(backing) => {
-                inner.backing = Some(backing);
-                Err(Self(Arc::new(inner)))
-            }
-        }
+        // `typed` is now the only other reference when nobody else holds
+        // one.
+        drop(self);
+        let mut holder = Arc::try_unwrap(typed).map_err(|shared| Self(shared))?;
+        let hooks = holder.take_hooks();
+        // Only `into_backing` empties a holder, and it consumes it: the
+        // else branch cannot run, but stays harmless if it ever did.
+        let Some(backing) = holder.backing.take() else {
+            holder.release = Mutex::new(hooks);
+            return Err(Self(Arc::new(holder)));
+        };
+        Ok((backing, BufferLease { hooks }))
     }
 }
 
 impl fmt::Debug for NativeBuffer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NativeBuffer")
-            .field("kind", &self.0.kind)
+            .field("kind", &self.0.kind())
             .field("refs", &Arc::strong_count(&self.0))
             .finish_non_exhaustive()
     }
@@ -202,35 +248,6 @@ impl fmt::Debug for BufferLease {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BufferLease")
             .field("hooks", &self.hooks.len())
-            .finish()
-    }
-}
-
-/// CPU bytes owned by whatever produced them.
-pub struct CpuBuffer {
-    data: Box<dyn AsRef<[u8]> + Send + Sync>,
-}
-
-impl CpuBuffer {
-    /// Bytes owned by `data`, which is kept, not copied.
-    #[must_use]
-    pub fn new(data: impl AsRef<[u8]> + Send + Sync + 'static) -> Self {
-        Self {
-            data: Box::new(data),
-        }
-    }
-
-    /// The bytes.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        (*self.data).as_ref()
-    }
-}
-
-impl fmt::Debug for CpuBuffer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CpuBuffer")
-            .field("len", &self.as_bytes().len())
             .finish()
     }
 }
@@ -308,7 +325,7 @@ mod tests {
 
         let shared = buffer.clone();
         let buffer = buffer
-            .into_backing::<CpuBuffer>()
+            .into_backing::<Vec<u8>>()
             .expect_err("shared buffers keep their backing");
         drop(shared);
 
@@ -318,9 +335,9 @@ mod tests {
         assert_eq!(buffer.cpu_bytes(), Some(&[1u8, 2, 3][..]));
 
         let (cpu, lease) = buffer
-            .into_backing::<CpuBuffer>()
+            .into_backing::<Vec<u8>>()
             .expect("unique, right type");
-        assert_eq!(cpu.as_bytes(), [1, 2, 3]);
+        assert_eq!(cpu, [1, 2, 3]);
         assert_eq!(released.load(Ordering::SeqCst), 0);
         drop(lease);
         assert_eq!(released.load(Ordering::SeqCst), 1);
