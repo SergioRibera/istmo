@@ -1458,26 +1458,9 @@ fn respond(
 }
 
 fn serve_asset(task: &ProtocolObject<dyn WKURLSchemeTask>, url: &str, dir: &str, path: &str) {
-    let rest = path.trim_start_matches('/');
-    let rest = if rest.is_empty() { "index.html" } else { rest };
-    if rest
-        .split('/')
-        .any(|s| s.is_empty() || s == "." || s == "..")
-        || rest.contains(['\\', '\0', '%'])
-    {
-        return respond(task, url, 400, "text/plain", &[]);
-    }
-    let Some(mime) = super::mime_for(rest) else {
-        return respond(task, url, 415, "text/plain", &[]);
-    };
-    let key = if dir.trim_matches('/').is_empty() {
-        rest.to_owned()
-    } else {
-        format!("{}/{rest}", dir.trim_matches('/'))
-    };
-    match istmo_core::assets::read(&key) {
-        Ok(bytes) => respond(task, url, 200, mime, &bytes),
-        Err(_) => respond(task, url, 404, "text/plain", &[]),
+    match super::read_asset(dir, path) {
+        Ok((mime, bytes)) => respond(task, url, 200, mime, &bytes),
+        Err(status) => respond(task, url, status, "text/plain", &[]),
     }
 }
 

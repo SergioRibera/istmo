@@ -1,4 +1,4 @@
-//! `WebKitGTK` 4.1 engine on a dedicated GTK thread.
+//! `WebKitGTK` 4.1 (GTK 3) and 6.0 (GTK 4) engine on a dedicated GTK thread.
 //!
 //! The thread calls `gtk_init` and iterates the default `GMainContext`
 //! (GTK and `WebKit` attach their sources there); every engine call is
@@ -469,24 +469,6 @@ fn new_object(api: &Api, ty: GType, props: Vec<(&'static CStr, GValueBox)>) -> g
     obj
 }
 
-fn data_dir(profile: &str) -> String {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
-        })
-        .unwrap_or_else(std::env::temp_dir);
-    let app = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "istmo-app".into());
-    base.join(app)
-        .join("istmo-webview")
-        .join(profile)
-        .to_string_lossy()
-        .into_owned()
-}
-
 impl Ui {
     /// The view's web context and (GTK 4) network session.
     fn context(
@@ -494,16 +476,6 @@ impl Ui {
         profile: &WebProfile,
         config: &WebViewInitConfig,
     ) -> Result<(gpointer, Option<gpointer>), WebViewError> {
-        if let WebProfile::Persistent(p) = profile
-            && (p.name.is_empty()
-                || p.name.len() > 64
-                || !p
-                    .name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
-        {
-            return Err(WebViewError::InvalidArgument("profile name".into()));
-        }
         match self.flavor {
             Flavor::Gtk3 => self.context_gtk3(profile, config).map(|ctx| (ctx, None)),
             Flavor::Gtk4 => {
@@ -542,7 +514,7 @@ impl Ui {
                     if let Some(session) = self.sessions.get(&p.name) {
                         return Ok(*session);
                     }
-                    let dir = data_dir(&p.name);
+                    let dir = super::profile_dir(&p.name)?;
                     let (data, cache) = (
                         cstring(&format!("{dir}/data")),
                         cstring(&format!("{dir}/cache")),
@@ -579,7 +551,7 @@ impl Ui {
                 if let Some(ctx) = self.contexts.get(&p.name) {
                     return Ok(*ctx);
                 }
-                let dir = data_dir(&p.name);
+                let dir = super::profile_dir(&p.name)?;
                 // SAFETY: type getter.
                 let manager_type = unsafe { (api.webkit_website_data_manager_get_type)() };
                 let manager = new_object(
@@ -2412,33 +2384,9 @@ unsafe extern "C" fn on_scheme_request(request: gpointer, _data: gpointer) {
 }
 
 fn serve_asset(held: Held, dir: &str, path: &str) {
-    let rest = path.trim_start_matches('/');
-    let rest = if rest.is_empty() { "index.html" } else { rest };
-    let decoded: Option<String> =
-        url::form_urlencoded::parse(format!("p={}", rest.replace('+', "%2B")).as_bytes())
-            .next()
-            .map(|(_, v)| v.into_owned());
-    let Some(rest) = decoded else {
-        return finish_status(held, 400, "text/plain", b"");
-    };
-    if rest
-        .split('/')
-        .any(|s| s.is_empty() || s == "." || s == "..")
-        || rest.contains(['\\', '\0'])
-    {
-        return finish_status(held, 400, "text/plain", b"");
-    }
-    let Some(mime) = crate::desktop::mime_for(&rest) else {
-        return finish_status(held, 415, "text/plain", b"");
-    };
-    let key = if dir.trim_matches('/').is_empty() {
-        rest
-    } else {
-        format!("{}/{rest}", dir.trim_matches('/'))
-    };
-    match istmo_core::assets::read(&key) {
-        Ok(bytes) => finish_status(held, 200, mime, &bytes),
-        Err(_) => finish_status(held, 404, "text/plain", b""),
+    match crate::desktop::read_asset(dir, path) {
+        Ok((mime, bytes)) => finish_status(held, 200, mime, &bytes),
+        Err(status) => finish_status(held, status, "text/plain", b""),
     }
 }
 

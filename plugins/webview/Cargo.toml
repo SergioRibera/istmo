@@ -33,12 +33,18 @@ desktop = [
 # pkg-config at build time. Only one GTK / WebKit major per process.
 linux-webkit2gtk-4-1 = ["dep:libloading", "dep:istmo-window"]
 linux-webkitgtk-6-0 = ["dep:libloading", "dep:istmo-window"]
+# Qt WebEngine through a C++ shim built here when pkg-config finds
+# Qt6WebEngineWidgets (a warning, not an error, when it does not) and
+# loaded with `dlopen`: the app binary never links Qt.
+linux-qt = ["dep:libloading", "dep:istmo-window", "dep:cc", "dep:pkg-config"]
 objc2 = ["dep:objc2"]
 objc2-foundation = ["dep:objc2-foundation"]
 objc2-app-kit = ["dep:objc2-app-kit"]
 objc2-web-kit = ["dep:objc2-web-kit"]
 block2 = ["dep:block2"]
 dispatch2 = ["dep:dispatch2"]
+cc = ["dep:cc"]
+pkg-config = ["dep:pkg-config"]
 
 [dependencies]
 istmo-core = { workspace = true }
@@ -49,7 +55,10 @@ tracing = { workspace = true }
 url = "2.5"
 
 [build-dependencies]
+# Qt shim (`linux-qt`): compiled to its own `.so`, loaded at run time.
+cc = { version = "1.11", optional = true }
 istmo-build = { workspace = true }
+pkg-config = { version = "0.3", optional = true }
 
 [dev-dependencies]
 # The scripted host drives the end-to-end tests.

@@ -42,7 +42,11 @@
     ),
     all(
         target_os = "linux",
-        any(feature = "linux-webkit2gtk-4-1", feature = "linux-webkitgtk-6-0")
+        any(
+            feature = "linux-webkit2gtk-4-1",
+            feature = "linux-webkitgtk-6-0",
+            feature = "linux-qt"
+        )
     ),
     test
 ))]

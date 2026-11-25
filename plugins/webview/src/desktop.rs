@@ -11,7 +11,10 @@
 //! thread: answers come back through it.
 
 #[cfg_attr(
-    not(all(target_os = "linux", feature = "linux-webkit2gtk-4-1")),
+    not(all(
+        target_os = "linux",
+        any(feature = "linux-webkit2gtk-4-1", feature = "linux-qt")
+    )),
     allow(
         dead_code,
         reason = "hooks only a real engine calls; the mock skips them"
@@ -19,15 +22,25 @@
 )]
 mod core;
 #[cfg_attr(
-    not(all(target_os = "linux", feature = "linux-webkit2gtk-4-1")),
+    not(all(
+        target_os = "linux",
+        any(feature = "linux-webkit2gtk-4-1", feature = "linux-qt")
+    )),
     allow(dead_code, reason = "popups are opened by a real engine")
 )]
 mod host;
 #[cfg(all(
     target_os = "linux",
-    any(feature = "linux-webkit2gtk-4-1", feature = "linux-webkitgtk-6-0")
+    any(
+        feature = "linux-webkit2gtk-4-1",
+        feature = "linux-webkitgtk-6-0",
+        feature = "linux-qt"
+    )
 ))]
-#[allow(unsafe_code, reason = "hand-written GLib / GTK / WebKit bindings")]
+#[allow(
+    unsafe_code,
+    reason = "hand-written GLib / GTK / WebKit and Qt shim bindings"
+)]
 mod linux;
 #[cfg(all(target_os = "macos", feature = "desktop"))]
 #[allow(unsafe_code, reason = "AppKit / WebKit through objc2")]
@@ -39,6 +52,7 @@ pub(crate) mod text;
 #[allow(unsafe_code, reason = "WebView2 COM through windows-rs")]
 mod windows;
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
 use istmo_core::Runtime;
@@ -50,7 +64,7 @@ use crate::{WebViewError, WebViewFactory, WebViewInitConfig};
 
 /// Linux engines, in the order [`DesktopOptions::linux_backends`] tries
 /// them. Only the ones compiled in (Cargo features) are candidates, and
-/// only one GTK / `WebKit` major version can live in a process.
+/// only one of them can live in a process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LinuxBackend {
@@ -59,6 +73,10 @@ pub enum LinuxBackend {
     WebKit2Gtk41,
     /// `libwebkitgtk-6.0` (GTK 4): windows only.
     WebKitGtk60,
+    /// Qt 6 `WebEngine` (Chromium) through `libistmo_webview_qt.so`:
+    /// windows on X11 and Wayland, embedding on X11. Custom schemes are
+    /// registered once, from the first [`WebViewInitConfig`].
+    QtWebEngine,
 }
 
 /// Desktop-only knobs (the wire init config stays portable).
@@ -66,13 +84,38 @@ pub enum LinuxBackend {
 pub struct DesktopOptions {
     /// Linux engine preference.
     pub linux_backends: Vec<LinuxBackend>,
+    /// Path of `libistmo_webview_qt.so`. `None` looks in
+    /// `ISTMO_WEBVIEW_QT_SHIM`, next to the executable, in its `../lib`,
+    /// at the copy this crate's build produced, then on the loader path.
+    pub qt_shim: Option<PathBuf>,
 }
 
 impl Default for DesktopOptions {
     fn default() -> Self {
         Self {
-            linux_backends: vec![LinuxBackend::WebKit2Gtk41, LinuxBackend::WebKitGtk60],
+            linux_backends: vec![
+                LinuxBackend::WebKit2Gtk41,
+                LinuxBackend::WebKitGtk60,
+                LinuxBackend::QtWebEngine,
+            ],
+            qt_shim: None,
         }
+    }
+}
+
+impl DesktopOptions {
+    /// Linux engines to try, in order.
+    #[must_use]
+    pub fn with_linux_backends(mut self, backends: impl Into<Vec<LinuxBackend>>) -> Self {
+        self.linux_backends = backends.into();
+        self
+    }
+
+    /// Explicit location of the Qt shim library.
+    #[must_use]
+    pub fn with_qt_shim(mut self, path: impl Into<PathBuf>) -> Self {
+        self.qt_shim = Some(path.into());
+        self
     }
 }
 
@@ -112,40 +155,61 @@ impl DesktopWebViewFactory {
         }
     }
 
-    fn engine(&self) -> Result<Arc<dyn Engine>, WebViewError> {
+    /// The shared engine; the first `config` seen starts it.
+    fn engine(&self, config: &WebViewInitConfig) -> Result<Arc<dyn Engine>, WebViewError> {
         lock(&self.engine)
-            .get_or_insert_with(|| start_engine(&self.options))
+            .get_or_insert_with(|| start_engine(&self.options, config))
             .clone()
     }
 }
 
 #[cfg(all(
     target_os = "linux",
-    any(feature = "linux-webkit2gtk-4-1", feature = "linux-webkitgtk-6-0")
+    any(
+        feature = "linux-webkit2gtk-4-1",
+        feature = "linux-webkitgtk-6-0",
+        feature = "linux-qt"
+    )
 ))]
-fn start_engine(options: &DesktopOptions) -> Result<Arc<dyn Engine>, WebViewError> {
-    linux::start(&options.linux_backends)
+fn start_engine(
+    options: &DesktopOptions,
+    config: &WebViewInitConfig,
+) -> Result<Arc<dyn Engine>, WebViewError> {
+    linux::start(options, config)
 }
 
 #[cfg(all(target_os = "macos", feature = "desktop"))]
 #[expect(clippy::unnecessary_wraps, reason = "same signature on every platform")]
-fn start_engine(_options: &DesktopOptions) -> Result<Arc<dyn Engine>, WebViewError> {
+fn start_engine(
+    _options: &DesktopOptions,
+    _config: &WebViewInitConfig,
+) -> Result<Arc<dyn Engine>, WebViewError> {
     Ok(macos::MacEngine::start())
 }
 
 #[cfg(all(target_os = "windows", feature = "desktop"))]
-fn start_engine(_options: &DesktopOptions) -> Result<Arc<dyn Engine>, WebViewError> {
+fn start_engine(
+    _options: &DesktopOptions,
+    _config: &WebViewInitConfig,
+) -> Result<Arc<dyn Engine>, WebViewError> {
     Ok(windows::WinEngine::start()?)
 }
 
 #[cfg(not(any(
     all(
         target_os = "linux",
-        any(feature = "linux-webkit2gtk-4-1", feature = "linux-webkitgtk-6-0")
+        any(
+            feature = "linux-webkit2gtk-4-1",
+            feature = "linux-webkitgtk-6-0",
+            feature = "linux-qt"
+        )
     ),
     all(any(target_os = "macos", target_os = "windows"), feature = "desktop"),
 )))]
-fn start_engine(_options: &DesktopOptions) -> Result<Arc<dyn Engine>, WebViewError> {
+fn start_engine(
+    _options: &DesktopOptions,
+    _config: &WebViewInitConfig,
+) -> Result<Arc<dyn Engine>, WebViewError> {
     Err(WebViewError::Unsupported(
         "no desktop web engine compiled in for this target".into(),
     ))
@@ -159,7 +223,7 @@ impl WebViewFactory for DesktopWebViewFactory {
         let engine = runtime
             .as_ref()
             .ok_or_else(|| WebViewError::Backend("istmo runtime is gone".into()))
-            .and_then(|_| self.engine());
+            .and_then(|_| self.engine(&config));
         match runtime {
             Some(rt) => DesktopWebView::new(&rt, config, engine),
             None => DesktopWebView::detached(config),
@@ -171,7 +235,14 @@ impl WebViewFactory for DesktopWebViewFactory {
 /// the file rather than letting the engine sniff it.
 #[cfg_attr(
     not(any(
-        all(target_os = "linux", feature = "linux-webkit2gtk-4-1"),
+        all(
+            target_os = "linux",
+            any(
+                feature = "linux-webkit2gtk-4-1",
+                feature = "linux-webkitgtk-6-0",
+                feature = "linux-qt"
+            )
+        ),
         all(any(target_os = "macos", target_os = "windows"), feature = "desktop")
     )),
     allow(dead_code, reason = "used by the engines")
@@ -205,4 +276,64 @@ pub(crate) fn mime_for(path: &str) -> Option<&'static str> {
         "pdf" => "application/pdf",
         _ => return None,
     })
+}
+
+/// MIME type and bytes of the app asset a scheme URL `path` names under
+/// `dir`, or the HTTP status that refuses it. The path is percent-decoded
+/// once; empty, `.` / `..` segments, backslashes and NULs are refused.
+#[cfg_attr(
+    not(any(
+        all(
+            target_os = "linux",
+            any(
+                feature = "linux-webkit2gtk-4-1",
+                feature = "linux-webkitgtk-6-0",
+                feature = "linux-qt"
+            )
+        ),
+        all(any(target_os = "macos", target_os = "windows"), feature = "desktop")
+    )),
+    allow(dead_code, reason = "used by the engines")
+)]
+pub(crate) fn read_asset(dir: &str, path: &str) -> Result<(&'static str, Vec<u8>), u16> {
+    let rest = path.trim_start_matches('/');
+    let rest = if rest.is_empty() { "index.html" } else { rest };
+    // `+` stays literal: form decoding would turn it into a space.
+    let rest = url::form_urlencoded::parse(format!("p={}", rest.replace('+', "%2B")).as_bytes())
+        .next()
+        .map(|(_, v)| v.into_owned())
+        .ok_or(400_u16)?;
+    if rest
+        .split('/')
+        .any(|s| s.is_empty() || s == "." || s == "..")
+        || rest.contains(['\\', '\0'])
+    {
+        return Err(400);
+    }
+    let mime = mime_for(&rest).ok_or(415_u16)?;
+    let dir = dir.trim_matches('/');
+    let key = if dir.is_empty() {
+        rest
+    } else {
+        format!("{dir}/{rest}")
+    };
+    istmo_core::assets::read(&key)
+        .map(|bytes| (mime, bytes))
+        .map_err(|_| 404)
+}
+
+#[cfg(test)]
+mod asset_tests {
+    use super::read_asset;
+
+    #[test]
+    fn refuses_traversal_and_unknown_types() {
+        assert_eq!(read_asset("web", "/../secret.html"), Err(400));
+        assert_eq!(read_asset("web", "/a/%2e%2e/b.html"), Err(400));
+        assert_eq!(read_asset("web", "/a//b.html"), Err(400));
+        assert_eq!(read_asset("web", "/a%5Cb.html"), Err(400));
+        assert_eq!(read_asset("web", "/a%00.html"), Err(400));
+        assert_eq!(read_asset("web", "/run.exe"), Err(415));
+        assert_eq!(read_asset("web", "/missing+file.html"), Err(404));
+    }
 }

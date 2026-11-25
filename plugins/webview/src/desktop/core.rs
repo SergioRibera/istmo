@@ -489,8 +489,6 @@ impl ViewCore {
 
     /// A dynamic scheme request; `responder` answers it on the UI thread.
     /// Without a head within the timeout it gets `504`.
-    /// A dynamic scheme request; `responder` answers it on the UI thread.
-    /// Without a head within the timeout it gets `504`.
     pub(crate) fn scheme_request(
         self: &Arc<Self>,
         mut info: SchemeRequestInfo,

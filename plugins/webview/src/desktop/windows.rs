@@ -1219,29 +1219,10 @@ fn scheme_request(
         return Ok(());
     }
     match &scheme.source {
-        SchemeSource::Assets(source) => {
-            let rest = parsed.path().trim_start_matches('/');
-            let rest = if rest.is_empty() { "index.html" } else { rest };
-            if rest
-                .split('/')
-                .any(|s| s.is_empty() || s == "." || s == "..")
-                || rest.contains(['\\', '\0', '%'])
-            {
-                respond(args, 400, "text/plain", &[], b"");
-            } else if let Some(mime) = super::mime_for(rest) {
-                let key = if source.dir.trim_matches('/').is_empty() {
-                    rest.to_owned()
-                } else {
-                    format!("{}/{rest}", source.dir.trim_matches('/'))
-                };
-                match istmo_core::assets::read(&key) {
-                    Ok(bytes) => respond(args, 200, mime, &[], &bytes),
-                    Err(_) => respond(args, 404, "text/plain", &[], b""),
-                }
-            } else {
-                respond(args, 415, "text/plain", &[], b"");
-            }
-        }
+        SchemeSource::Assets(source) => match super::read_asset(&source.dir, parsed.path()) {
+            Ok((mime, bytes)) => respond(args, 200, mime, &[], &bytes),
+            Err(status) => respond(args, status, "text/plain", &[], b""),
+        },
         SchemeSource::Dynamic => {
             // SAFETY: WebView2 thread.
             let deferral = unsafe { args.GetDeferral()? };

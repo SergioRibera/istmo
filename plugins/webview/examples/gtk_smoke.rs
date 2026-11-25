@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use istmo_core::Runtime;
-use istmo_webview::desktop::{DesktopOptions, DesktopWebViewFactory};
+use istmo_webview::desktop::{DesktopOptions, DesktopWebViewFactory, LinuxBackend};
 use istmo_webview::{
     BridgeConfig, ControlEvent, NavigationRules, RuleAction, ScriptCall, ScriptWorld, UrlPattern,
     ViewEvent, WebViewClient, WebViewClientExt, WebViewHost, WebViewInitConfig, WebViewSpec,
@@ -21,12 +21,18 @@ window.addEventListener("load", async () => {
 });
 </script>"#;
 
+#[expect(clippy::too_many_lines, reason = "one linear smoke scenario")]
 fn main() {
     let rt = Runtime::mock().runtime;
-    rt.register_host(WebViewHost::new(DesktopWebViewFactory::new(
-        &rt,
-        DesktopOptions::default(),
-    )));
+    // SMOKE_QT / SMOKE_GTK4 pick one engine; default tries them in order.
+    let options = if std::env::var_os("SMOKE_QT").is_some() {
+        DesktopOptions::default().with_linux_backends([LinuxBackend::QtWebEngine])
+    } else if std::env::var_os("SMOKE_GTK4").is_some() {
+        DesktopOptions::default().with_linux_backends([LinuxBackend::WebKitGtk60])
+    } else {
+        DesktopOptions::default()
+    };
+    rt.register_host(WebViewHost::new(DesktopWebViewFactory::new(&rt, options)));
     let client = Arc::new(
         pollster::block_on(WebViewClient::from_runtime_with(
             &rt,
