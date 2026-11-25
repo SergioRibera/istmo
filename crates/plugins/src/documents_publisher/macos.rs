@@ -214,7 +214,8 @@ fn file_path(descriptor: &AnyObject) -> Option<PathBuf> {
     let url = url?;
     // SAFETY: as above.
     let path: Option<Retained<AnyObject>> = unsafe { msg_send![&*url, path] };
-    utf8(&path?).map(PathBuf::from)
+    let path = path?;
+    utf8(&path).map(PathBuf::from)
 }
 
 /// Publish the URL of a `GURL` event as a deep link.
