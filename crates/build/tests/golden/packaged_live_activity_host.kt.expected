@@ -3,6 +3,7 @@ package dev.istmo.plugins.liveactivity
 import dev.istmo.runtime.BackendException
 import dev.istmo.runtime.Bincode
 import dev.istmo.runtime.HandleReleaser
+import dev.istmo.runtime.IstmoBytesOut
 import dev.istmo.runtime.NativeHandleId
 import dev.istmo.runtime.PluginException
 import dev.istmo.runtime.PluginHandler
@@ -106,9 +107,9 @@ class LiveActivityDispatcher(
                     val stale_after_seconds = d_stale_after_seconds.value
                     val android_tier_hint = Bincode.readOption(payload, cursor) { b1, c1 -> codecs.readAndroidTierHint(b1, c1) }.value
                     val result = backend.start(activity_type, attributes, initial_state, style, stale_after_seconds, android_tier_hint)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeNativeHandleId(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -153,9 +154,9 @@ class LiveActivityDispatcher(
             "are_activities_enabled" -> {
                 try {
                     val result = backend.are_activities_enabled()
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     Bincode.writeBool(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -166,9 +167,9 @@ class LiveActivityDispatcher(
             "capabilities" -> {
                 try {
                     val result = backend.capabilities()
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writePlatformCapabilities(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -179,9 +180,9 @@ class LiveActivityDispatcher(
             "restore_active" -> {
                 try {
                     val result = backend.restore_active()
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     Bincode.writeVec(out, result) { s1, v1 -> codecs.writeRestoredActivity(s1, v1) }
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? ActivityError ?: throw e
                     val errOut = ByteArrayOutputStream()

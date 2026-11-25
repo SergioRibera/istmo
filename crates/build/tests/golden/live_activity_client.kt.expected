@@ -14,14 +14,14 @@ class LiveActivityClient(
     }
 
     suspend fun start(activity_type: String, attributes: ByteArray, initial_state: ByteArray, style: ActivityStyle, stale_after_seconds: UInt?, android_tier_hint: AndroidTierHint?): NativeHandleId {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         Bincode.writeString(payloadBuf, activity_type)
         Bincode.writeBytes(payloadBuf, attributes)
         Bincode.writeBytes(payloadBuf, initial_state)
         codecs.writeActivityStyle(payloadBuf, style)
         Bincode.writeOption(payloadBuf, stale_after_seconds) { s1, v1 -> Bincode.writeU32(s1, v1) }
         Bincode.writeOption(payloadBuf, android_tier_hint) { s1, v1 -> codecs.writeAndroidTierHint(s1, v1) }
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         val bytes = try {
             IstmoRuntime.call(PLUGIN_ID, "start", payload)
         } catch (e: PluginException) {
@@ -32,11 +32,11 @@ class LiveActivityClient(
     }
 
     suspend fun update(handle: NativeHandleId, state: ByteArray, alert: AlertConfig?) {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         codecs.writeNativeHandleId(payloadBuf, handle)
         Bincode.writeBytes(payloadBuf, state)
         Bincode.writeOption(payloadBuf, alert) { s1, v1 -> codecs.writeAlertConfig(s1, v1) }
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         try {
             IstmoRuntime.call(PLUGIN_ID, "update", payload)
         } catch (e: PluginException) {
@@ -46,11 +46,11 @@ class LiveActivityClient(
     }
 
     suspend fun end(handle: NativeHandleId, final_state: ByteArray?, dismissal: DismissalPolicy) {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         codecs.writeNativeHandleId(payloadBuf, handle)
         Bincode.writeOption(payloadBuf, final_state) { s1, v1 -> Bincode.writeBytes(s1, v1) }
         codecs.writeDismissalPolicy(payloadBuf, dismissal)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         try {
             IstmoRuntime.call(PLUGIN_ID, "end", payload)
         } catch (e: PluginException) {

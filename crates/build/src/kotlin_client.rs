@@ -176,11 +176,11 @@ fn write_payload_build(out: &mut String, method: &Method, locals: &Locals, inden
         let _ = writeln!(out, "{indent}val {payload} = ByteArray(0)");
         return;
     }
-    let _ = writeln!(out, "{indent}val {payload_buf} = ByteArrayOutputStream()");
+    let _ = writeln!(out, "{indent}val {payload_buf} = IstmoBytesOut()");
     for arg in &method.args {
         WIRE.write_stmt(out, indent, &arg.ty, payload_buf, &kt_ident(&arg.name));
     }
-    let _ = writeln!(out, "{indent}val {payload} = {payload_buf}.toByteArray()");
+    let _ = writeln!(out, "{indent}val {payload} = {payload_buf}.toExactArray()");
 }
 
 fn write_stream_map_body(out: &mut String, ret: &TypeRef, locals: &Locals, indent: &str) {

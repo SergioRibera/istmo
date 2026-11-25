@@ -16,10 +16,10 @@ class CoverageClient(
     }
 
     suspend fun `object`(`in`: UByte, `val`: Byte): Everything {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         Bincode.writeU8(payloadBuf, `in`)
         Bincode.writeI8(payloadBuf, `val`)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         val bytes = try {
             IstmoRuntime.call(PLUGIN_ID, "object", payload)
         } catch (e: PluginException) {
@@ -30,10 +30,10 @@ class CoverageClient(
     }
 
     suspend fun round_trip(value: Everything, shape: Shape): List<List<String>?> {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         codecs.writeEverything(payloadBuf, value)
         codecs.writeShape(payloadBuf, shape)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         val bytes = try {
             IstmoRuntime.call(PLUGIN_ID, "round_trip", payload)
         } catch (e: PluginException) {
@@ -44,11 +44,11 @@ class CoverageClient(
     }
 
     suspend fun send(payload: ByteArray, cursor: UShort, c: Short) {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         Bincode.writeBytes(payloadBuf, payload)
         Bincode.writeU16(payloadBuf, cursor)
         Bincode.writeI16(payloadBuf, c)
-        val payload_ = payloadBuf.toByteArray()
+        val payload_ = payloadBuf.toExactArray()
         try {
             IstmoRuntime.call(PLUGIN_ID, "send", payload_)
         } catch (e: PluginException) {
@@ -58,18 +58,18 @@ class CoverageClient(
     }
 
     fun watch(mode: Mode): kotlinx.coroutines.flow.Flow<ByteArray?> {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         codecs.writeMode(payloadBuf, mode)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         return IstmoRuntime.stream(PLUGIN_ID, "watch", payload).map { bytes ->
             Bincode.readOption(bytes, 0) { b1, c1 -> Bincode.readBytes(b1, c1) }.value
         }
     }
 
     fun follow(next: UInt): kotlinx.coroutines.flow.Flow<Shape> {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         Bincode.writeU32(payloadBuf, next)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         return IstmoRuntime.stream(PLUGIN_ID, "follow", payload).map { bytes ->
             codecs.readShape(bytes, 0).value
         }.catch { e ->
@@ -85,10 +85,10 @@ class CoverageClient(
     }
 
     fun pulse(@Suppress("UNUSED_PARAMETER") gap: Unit, hz: UInt): kotlinx.coroutines.flow.Flow<Unit> {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         // () — nothing to encode
         Bincode.writeU32(payloadBuf, hz)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         return IstmoRuntime.stream(PLUGIN_ID, "pulse", payload).map { _ ->
             Unit
         }

@@ -119,7 +119,7 @@ impl AndroidPeer {
         if reply.is_null() {
             return Ok(DirectOutcome::Pending);
         }
-        let bytes = env.convert_byte_array(JByteArray::from(reply))?;
+        let bytes = crate::jni_exports::read_array(env, &JByteArray::from(reply))?;
         Ok(DirectOutcome::Answered(Ok(bytes)))
     }
 }

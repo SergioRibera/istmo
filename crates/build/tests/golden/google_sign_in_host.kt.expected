@@ -85,9 +85,9 @@ class SignInDispatcher(
                 try {
                     val mode = codecs.readSignInMode(payload, 0).value
                     val result = backend.sign_in(mode)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeSignInAccount(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -98,9 +98,9 @@ class SignInDispatcher(
             "silent_sign_in" -> {
                 try {
                     val result = backend.silent_sign_in()
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     Bincode.writeOption(out, result) { s1, v1 -> codecs.writeSignInAccount(s1, v1) }
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -112,9 +112,9 @@ class SignInDispatcher(
                 try {
                     val credential = codecs.readNativeHandleId(payload, 0).value
                     val result = backend.refresh(credential)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeSignInAccount(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? SignInError ?: throw e
                     val errOut = ByteArrayOutputStream()

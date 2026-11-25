@@ -350,7 +350,7 @@ fn write_method_arm(out: &mut String, method: &Method) {
             let _ = writeln!(out, "{indent}        ByteArray(0)");
         } else {
             let _ = writeln!(out, "{indent}    __istmo_flow.map {{ __istmo_item ->");
-            let _ = writeln!(out, "{indent}        val out = ByteArrayOutputStream()");
+            let _ = writeln!(out, "{indent}        val out = IstmoBytesOut()");
             WIRE.write_stmt(
                 out,
                 &format!("{indent}        "),
@@ -358,7 +358,7 @@ fn write_method_arm(out: &mut String, method: &Method) {
                 "out",
                 "__istmo_item",
             );
-            let _ = writeln!(out, "{indent}        out.toByteArray()");
+            let _ = writeln!(out, "{indent}        out.toExactArray()");
         }
         if let Some(err) = &method.error {
             // The runtime ends the stream with `StreamEnd::Error` carrying
@@ -383,9 +383,9 @@ fn write_method_arm(out: &mut String, method: &Method) {
         let _ = writeln!(out, "{indent}PluginResult.Unary(ByteArray(0))");
     } else {
         let _ = writeln!(out, "{indent}val result = {call}");
-        let _ = writeln!(out, "{indent}val out = ByteArrayOutputStream()");
+        let _ = writeln!(out, "{indent}val out = IstmoBytesOut()");
         WIRE.write_stmt(out, indent, &method.returns, "out", "result");
-        let _ = writeln!(out, "{indent}PluginResult.Unary(out.toByteArray())");
+        let _ = writeln!(out, "{indent}PluginResult.Unary(out.toExactArray())");
     }
     if let Some(err) = unary_error {
         let _ = writeln!(out, "                }} catch (e: BackendException) {{");

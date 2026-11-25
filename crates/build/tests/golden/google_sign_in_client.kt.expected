@@ -14,9 +14,9 @@ class SignInClient(
     }
 
     suspend fun sign_in(mode: SignInMode): SignInAccount {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         codecs.writeSignInMode(payloadBuf, mode)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         val bytes = try {
             IstmoRuntime.call(PLUGIN_ID, "sign_in", payload)
         } catch (e: PluginException) {
@@ -38,9 +38,9 @@ class SignInClient(
     }
 
     suspend fun refresh(credential: NativeHandleId): SignInAccount {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         codecs.writeNativeHandleId(payloadBuf, credential)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         val bytes = try {
             IstmoRuntime.call(PLUGIN_ID, "refresh", payload)
         } catch (e: PluginException) {

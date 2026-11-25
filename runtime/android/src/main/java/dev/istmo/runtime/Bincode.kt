@@ -5,6 +5,26 @@ import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 
+/**
+ * The encode buffer generated code writes into: it grows to exactly what
+ * a large field reserves (no doubling copies) and hands its array out
+ * without a copy once full. Single use: do not write after taking the
+ * array.
+ */
+class IstmoBytesOut(initialSize: Int = 32) : ByteArrayOutputStream(initialSize) {
+    /** Make room for [extra] more bytes, growing to exactly that size. */
+    fun reserve(extra: Int) {
+        val needed = count + extra
+        if (needed > buf.size) buf = buf.copyOf(needed)
+    }
+
+    /** The backing array; its first [size] bytes are the encoded value. */
+    fun buffer(): ByteArray = buf
+
+    /** The encoded bytes: the backing array itself when it is exactly full. */
+    fun toExactArray(): ByteArray = if (count == buf.size) buf else buf.copyOf(count)
+}
+
 object Bincode {
 
     data class Decoded<T>(val value: T, val consumed: Int)
@@ -111,6 +131,7 @@ object Bincode {
 
     fun writeString(out: ByteArrayOutputStream, value: String) {
         val utf8 = value.toByteArray(Charsets.UTF_8)
+        reserveField(out, utf8.size)
         writeVarintU64(out, utf8.size.toLong())
         out.write(utf8)
     }
@@ -154,6 +175,7 @@ object Bincode {
     }
 
     fun writeBytes(out: ByteArrayOutputStream, value: ByteArray) {
+        reserveField(out, value.size)
         writeVarintU64(out, value.size.toLong())
         out.write(value)
     }
@@ -265,6 +287,19 @@ object Bincode {
             "bincode enum discriminant: ${v.value.toULong()} out of range"
         }
         return Decoded(v.value.toInt(), v.consumed)
+    }
+
+    /// Grow an [IstmoBytesOut] once to fit a length-prefixed field of
+    /// [length] bytes, instead of doubling through it.
+    private fun reserveField(out: ByteArrayOutputStream, length: Int) {
+        if (out is IstmoBytesOut && length > 64) out.reserve(varintSize(length.toLong()) + length)
+    }
+
+    private fun varintSize(value: Long): Int = when {
+        java.lang.Long.compareUnsigned(value, 250) <= 0 -> 1
+        java.lang.Long.compareUnsigned(value, 0xFFFF) <= 0 -> 3
+        java.lang.Long.compareUnsigned(value, 0xFFFF_FFFFL) <= 0 -> 5
+        else -> 9
     }
 
     fun writeVarintU64(out: ByteArrayOutputStream, value: Long) {

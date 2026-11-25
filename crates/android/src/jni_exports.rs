@@ -171,21 +171,49 @@ fn read_payload(
             "payload length {len} exceeds its array ({capacity})"
         )));
     }
+    Ok(copy_prefix(env, array, len)?)
+}
+
+/// Copy all of `array` into a fresh `Vec<u8>` (one copy, no zero fill,
+/// unlike `JNIEnv::convert_byte_array`). A null array reads as empty.
+pub(crate) fn read_array(env: &JNIEnv<'_>, array: &JByteArray<'_>) -> jni::errors::Result<Vec<u8>> {
+    if array.is_null() {
+        return Ok(Vec::new());
+    }
+    let len = env.get_array_length(array)?;
+    copy_prefix(env, array, len)
+}
+
+/// The first `len` (≤ the array's length) bytes of `array`.
+fn copy_prefix(
+    env: &JNIEnv<'_>,
+    array: &JByteArray<'_>,
+    len: jint,
+) -> jni::errors::Result<Vec<u8>> {
+    let Ok(len_usize) = usize::try_from(len) else {
+        return Ok(Vec::new());
+    };
+    if len_usize == 0 {
+        return Ok(Vec::new());
+    }
     let mut bytes = Vec::<u8>::with_capacity(len_usize);
     let raw = env.get_native_interface();
     // SAFETY: `raw` is this thread's live `JNIEnv`; `array` is a valid
-    // local reference checked to hold at least `len` elements, so
-    // `GetByteArrayRegion` writes exactly `len` bytes into the spare
-    // capacity reserved above (or raises ArrayIndexOutOfBounds and
-    // writes nothing).
+    // local reference holding at least `len` elements (checked by the
+    // callers), so `GetByteArrayRegion` writes exactly `len` bytes into
+    // the spare capacity reserved above (or raises
+    // ArrayIndexOutOfBounds and writes nothing).
     unsafe {
-        let get_region = (**raw).GetByteArrayRegion.ok_or(AndroidRuntimeError::Jni(
-            jni::errors::Error::JNIEnvMethodNotFound("GetByteArrayRegion"),
-        ))?;
+        let get_region =
+            (**raw)
+                .GetByteArrayRegion
+                .ok_or(jni::errors::Error::JNIEnvMethodNotFound(
+                    "GetByteArrayRegion",
+                ))?;
         get_region(raw, array.as_raw(), 0, len, bytes.as_mut_ptr().cast());
     }
     if env.exception_check()? {
-        return Err(AndroidRuntimeError::Jni(jni::errors::Error::JavaException));
+        return Err(jni::errors::Error::JavaException);
     }
     // SAFETY: the region copy above initialised all `len_usize` bytes.
     unsafe { bytes.set_len(len_usize) };
@@ -204,7 +232,7 @@ fn stream_end_reason(
             let bytes = if error_payload.is_null() {
                 Vec::new()
             } else {
-                env.convert_byte_array(error_payload)?
+                read_array(env, error_payload)?
             };
             Ok(StreamEndReason::Error(bytes))
         }
@@ -278,7 +306,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse<
 ) {
     probe!(SubmitResponseEntered);
     guarded(&mut env, "nativeSubmitResponse", (), |env| {
-        let bytes = env.convert_byte_array(&payload)?;
+        let bytes = read_array(env, &payload)?;
         let result = if ok == JNI_TRUE {
             Ok(bytes)
         } else {
@@ -302,7 +330,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent<'lo
 ) {
     probe!(SubmitEventEntered);
     guarded(&mut env, "nativeSubmitEvent", (), |env| {
-        let bytes = env.convert_byte_array(&payload)?;
+        let bytes = read_array(env, &payload)?;
         Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Event {
             stream_id: StreamId(wire_id(stream_id)),
             payload: bytes,
@@ -343,7 +371,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall<'loc
     guarded(&mut env, "nativeSubmitCall", (), |env| {
         let plugin_id: String = env.get_string(&plugin_id)?.into();
         let method: String = env.get_string(&method)?.into();
-        let payload = env.convert_byte_array(&payload)?;
+        let payload = read_array(env, &payload)?;
         Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Call {
             call_id: CallId(wire_id(call_id)),
             plugin_id,
@@ -508,7 +536,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitNotify<'l
     guarded(&mut env, "nativeSubmitNotify", (), |env| {
         let plugin_id: String = env.get_string(&plugin_id)?.into();
         let method: String = env.get_string(&method)?.into();
-        let payload = env.convert_byte_array(&payload)?;
+        let payload = read_array(env, &payload)?;
         Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Notify {
             plugin_id,
             instance_id: instance_from_wire(instance_id),
@@ -528,7 +556,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLate
 ) {
     guarded(&mut env, "nativeSubmitEarlyLatest", (), |env| {
         let channel: String = env.get_string(&channel)?.into();
-        let bytes = env.convert_byte_array(&payload)?;
+        let bytes = read_array(env, &payload)?;
         Runtime::submit_early_event(channel, EarlyEventKind::Latest, bytes)?;
         Ok(())
     });
@@ -544,7 +572,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyQueu
 ) {
     guarded(&mut env, "nativeSubmitEarlyQueue", (), |env| {
         let channel: String = env.get_string(&channel)?.into();
-        let bytes = env.convert_byte_array(&payload)?;
+        let bytes = read_array(env, &payload)?;
         let capacity = u32::try_from(capacity).unwrap_or(0);
         Runtime::submit_early_event(channel, EarlyEventKind::Queue { capacity }, bytes)?;
         Ok(())
@@ -558,7 +586,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeInjectEnvelope<
     bytes: JByteArray<'local>,
 ) {
     guarded(&mut env, "nativeInjectEnvelope", (), |env| {
-        let payload = env.convert_byte_array(&bytes)?;
+        let payload = read_array(env, &bytes)?;
         Runtime::global()?.inject_wire_envelope(&payload)?;
         Ok(())
     });

@@ -77,9 +77,9 @@ class CoverageDispatcher(
                     val `in` = d_in.value
                     val `val` = Bincode.readI8(payload, cursor).value
                     val result = backend.`object`(`in`, `val`)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeEverything(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? FirstError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -94,9 +94,9 @@ class CoverageDispatcher(
                     val value = d_value.value
                     val shape = codecs.readShape(payload, cursor).value
                     val result = backend.round_trip(value, shape)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     Bincode.writeVec(out, result) { s1, v1 -> Bincode.writeOption(s1, v1) { s2, v2 -> Bincode.writeVec(s2, v2) { s3, v3 -> Bincode.writeString(s3, v3) } } }
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? SecondError ?: throw e
                     val errOut = ByteArrayOutputStream()
@@ -126,9 +126,9 @@ class CoverageDispatcher(
                 val __istmo_flow = backend.watch(mode)
                 PluginResult.Stream(
                     __istmo_flow.map { __istmo_item ->
-                        val out = ByteArrayOutputStream()
+                        val out = IstmoBytesOut()
                         Bincode.writeOption(out, __istmo_item) { s1, v1 -> Bincode.writeBytes(s1, v1) }
-                        out.toByteArray()
+                        out.toExactArray()
                     }
                 )
             }
@@ -137,9 +137,9 @@ class CoverageDispatcher(
                 val __istmo_flow = backend.follow(next)
                 PluginResult.Stream(
                     __istmo_flow.map { __istmo_item ->
-                        val out = ByteArrayOutputStream()
+                        val out = IstmoBytesOut()
                         codecs.writeShape(out, __istmo_item)
-                        out.toByteArray()
+                        out.toExactArray()
                     }.catch { e ->
                         val err = (e as? BackendException)?.error as? SecondError ?: throw e
                         val errOut = ByteArrayOutputStream()

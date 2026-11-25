@@ -14,9 +14,9 @@ class EchoClient(
     }
 
     suspend fun ping(msg: String): String {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         Bincode.writeString(payloadBuf, msg)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         val bytes = try {
             IstmoRuntime.call(PLUGIN_ID, "ping", payload)
         } catch (e: PluginException) {
@@ -27,10 +27,10 @@ class EchoClient(
     }
 
     suspend fun add(a: Int, b: Int): Int {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         Bincode.writeI32(payloadBuf, a)
         Bincode.writeI32(payloadBuf, b)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         val bytes = IstmoRuntime.call(PLUGIN_ID, "add", payload)
         return Bincode.readI32(bytes, 0).value
     }

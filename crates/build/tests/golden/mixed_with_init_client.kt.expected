@@ -16,9 +16,9 @@ class WatchClient(
     }
 
     fun watchLocation(accuracy: Accuracy): kotlinx.coroutines.flow.Flow<Position> {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         codecs.writeAccuracy(payloadBuf, accuracy)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         return IstmoRuntime.stream(PLUGIN_ID, "watchLocation", payload).map { bytes ->
             codecs.readPosition(bytes, 0).value
         }.catch { e ->
@@ -29,17 +29,17 @@ class WatchClient(
     }
 
     suspend fun history(since: ULong?): List<Position> {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         Bincode.writeOption(payloadBuf, since) { s1, v1 -> Bincode.writeU64(s1, v1) }
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         val bytes = IstmoRuntime.call(PLUGIN_ID, "history", payload)
         return Bincode.readVec(bytes, 0) { b1, c1 -> codecs.readPosition(b1, c1) }.value
     }
 
     suspend fun raw(packet: ByteArray): Boolean {
-        val payloadBuf = ByteArrayOutputStream()
+        val payloadBuf = IstmoBytesOut()
         Bincode.writeBytes(payloadBuf, packet)
-        val payload = payloadBuf.toByteArray()
+        val payload = payloadBuf.toExactArray()
         val bytes = IstmoRuntime.call(PLUGIN_ID, "raw", payload)
         return Bincode.readBool(bytes, 0).value
     }

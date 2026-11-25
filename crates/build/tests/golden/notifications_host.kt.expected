@@ -47,23 +47,23 @@ class NotificationsDispatcher(
         return when (method) {
             "is_authorized" -> {
                 val result = backend.is_authorized()
-                val out = ByteArrayOutputStream()
+                val out = IstmoBytesOut()
                 Bincode.writeBool(out, result)
-                PluginResult.Unary(out.toByteArray())
+                PluginResult.Unary(out.toExactArray())
             }
             "request_authorization" -> {
                 val result = backend.request_authorization()
-                val out = ByteArrayOutputStream()
+                val out = IstmoBytesOut()
                 Bincode.writeBool(out, result)
-                PluginResult.Unary(out.toByteArray())
+                PluginResult.Unary(out.toExactArray())
             }
             "schedule" -> {
                 try {
                     val request = codecs.readNotificationRequest(payload, 0).value
                     val result = backend.schedule(request)
-                    val out = ByteArrayOutputStream()
+                    val out = IstmoBytesOut()
                     codecs.writeNotificationHandle(out, result)
-                    PluginResult.Unary(out.toByteArray())
+                    PluginResult.Unary(out.toExactArray())
                 } catch (e: BackendException) {
                     val err = e.error as? NotificationError ?: throw e
                     val errOut = ByteArrayOutputStream()
