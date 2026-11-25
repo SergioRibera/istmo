@@ -692,7 +692,10 @@ unsafe fn apply_settings(api: &Api, web_view: gpointer, core: &ViewCore) {
 ///
 /// # Safety
 /// `web_view` must be a live `WebKitWebView`.
-#[expect(clippy::too_many_lines, reason = "a flat list, one connection per signal")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "a flat list, one connection per signal"
+)]
 unsafe fn connect_signals(
     api: &Api,
     web_view: gpointer,
@@ -2267,7 +2270,7 @@ fn serve_asset(held: Held, dir: &str, path: &str) {
     {
         return finish_status(held, 400, "text/plain", b"");
     }
-    let Some(mime) = mime_for(&rest) else {
+    let Some(mime) = crate::desktop::mime_for(&rest) else {
         return finish_status(held, 415, "text/plain", b"");
     };
     let key = if dir.trim_matches('/').is_empty() {
@@ -2279,37 +2282,6 @@ fn serve_asset(held: Held, dir: &str, path: &str) {
         Ok(bytes) => finish_status(held, 200, mime, &bytes),
         Err(_) => finish_status(held, 404, "text/plain", b""),
     }
-}
-
-fn mime_for(path: &str) -> Option<&'static str> {
-    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
-    Some(match ext.as_str() {
-        "html" | "htm" => "text/html",
-        "css" => "text/css",
-        "js" | "mjs" => "text/javascript",
-        "json" | "map" => "application/json",
-        "wasm" => "application/wasm",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "avif" => "image/avif",
-        "ico" => "image/x-icon",
-        "woff" => "font/woff",
-        "woff2" => "font/woff2",
-        "ttf" => "font/ttf",
-        "otf" => "font/otf",
-        "txt" => "text/plain",
-        "xml" => "application/xml",
-        "mp4" => "video/mp4",
-        "webm" => "video/webm",
-        "mp3" => "audio/mpeg",
-        "ogg" => "audio/ogg",
-        "wav" => "audio/wav",
-        "pdf" => "application/pdf",
-        _ => return None,
-    })
 }
 
 /// Response headers with `nosniff`, plus the app's (never `ACAO: *`).

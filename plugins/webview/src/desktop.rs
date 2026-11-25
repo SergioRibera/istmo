@@ -12,7 +12,10 @@
 
 #[cfg_attr(
     not(all(target_os = "linux", feature = "linux-webkit2gtk-4-1")),
-    allow(dead_code, reason = "hooks only a real engine calls; the mock skips them")
+    allow(
+        dead_code,
+        reason = "hooks only a real engine calls; the mock skips them"
+    )
 )]
 mod core;
 #[cfg_attr(
@@ -26,6 +29,9 @@ mod host;
 ))]
 #[allow(unsafe_code, reason = "hand-written GLib / GTK / WebKit bindings")]
 mod linux;
+#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[allow(unsafe_code, reason = "AppKit / WebKit through objc2")]
+mod macos;
 #[cfg(test)]
 mod mock;
 
@@ -117,9 +123,18 @@ fn start_engine(options: &DesktopOptions) -> Result<Arc<dyn Engine>, WebViewErro
     linux::start(&options.linux_backends)
 }
 
-#[cfg(not(all(
-    target_os = "linux",
-    any(feature = "linux-webkit2gtk-4-1", feature = "linux-webkitgtk-6-0")
+#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[expect(clippy::unnecessary_wraps, reason = "same signature on every platform")]
+fn start_engine(_options: &DesktopOptions) -> Result<Arc<dyn Engine>, WebViewError> {
+    Ok(macos::MacEngine::start())
+}
+
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(feature = "linux-webkit2gtk-4-1", feature = "linux-webkitgtk-6-0")
+    ),
+    all(target_os = "macos", feature = "desktop"),
 )))]
 fn start_engine(_options: &DesktopOptions) -> Result<Arc<dyn Engine>, WebViewError> {
     Err(WebViewError::Unsupported(
@@ -141,4 +156,44 @@ impl WebViewFactory for DesktopWebViewFactory {
             None => DesktopWebView::detached(config),
         }
     }
+}
+
+/// MIME type served for an asset path (by extension); `None` refuses
+/// the file rather than letting the engine sniff it.
+#[cfg_attr(
+    not(any(
+        all(target_os = "linux", feature = "linux-webkit2gtk-4-1"),
+        all(any(target_os = "macos", target_os = "windows"), feature = "desktop")
+    )),
+    allow(dead_code, reason = "used by the engines")
+)]
+pub(crate) fn mime_for(path: &str) -> Option<&'static str> {
+    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
+    Some(match ext.as_str() {
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" | "mjs" => "text/javascript",
+        "json" | "map" => "application/json",
+        "wasm" => "application/wasm",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "txt" => "text/plain",
+        "xml" => "application/xml",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        "wav" => "audio/wav",
+        "pdf" => "application/pdf",
+        _ => return None,
+    })
 }

@@ -17,11 +17,26 @@ default = []
 # `ScriptedWebView`: an engine-less host for testing app flows.
 testing = []
 # Rust hosts for Linux, macOS and Windows (Linux: WebKitGTK 4.1).
-desktop = ["linux-webkit2gtk-4-1"]
+desktop = [
+    "linux-webkit2gtk-4-1",
+    "dep:istmo-window",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-app-kit",
+    "dep:objc2-web-kit",
+    "dep:block2",
+    "dep:dispatch2",
+]
 # Linux engines, loaded with `dlopen` at run time: no headers or
 # pkg-config at build time. Only one GTK / WebKit major per process.
 linux-webkit2gtk-4-1 = ["dep:libloading", "dep:istmo-window"]
 linux-webkitgtk-6-0 = ["dep:libloading", "dep:istmo-window"]
+objc2 = ["dep:objc2"]
+objc2-foundation = ["dep:objc2-foundation"]
+objc2-app-kit = ["dep:objc2-app-kit"]
+objc2-web-kit = ["dep:objc2-web-kit"]
+block2 = ["dep:block2"]
+dispatch2 = ["dep:dispatch2"]
 
 [dependencies]
 istmo-core = { workspace = true }
@@ -62,9 +77,20 @@ unused_async_trait_impl = "allow"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.3"
 
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+# The app registers the windows embedded views are placed in.
+istmo-window = { workspace = true, optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libloading = { version = "0.8", optional = true }
-istmo-window = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { version = "0.6", default-features = false, features = ["std"], optional = true }
+dispatch2 = { version = "0.3", default-features = false, features = ["std", "objc2"], optional = true }
+objc2 = { version = "0.6", default-features = false, features = ["std"], optional = true }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "NSGraphics", "NSApplication", "NSImage", "NSBitmapImageRep", "NSImageRep", "NSColor", "NSPrintOperation", "NSMenu", "objc2-core-foundation"], optional = true }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSUUID", "NSHTTPCookie", "NSObject", "NSSet", "NSString", "NSURL", "NSURLRequest", "NSURLResponse", "NSValue", "block2", "objc2-core-foundation"], optional = true }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKBackForwardList", "WKBackForwardListItem", "WKContentWorld", "WKFrameInfo", "WKHTTPCookieStore", "WKNavigation", "WKNavigationAction", "WKNavigationDelegate", "WKNavigationResponse", "WKPreferences", "WKScriptMessage", "WKScriptMessageHandlerWithReply", "WKSecurityOrigin", "WKUIDelegate", "WKURLSchemeHandler", "WKURLSchemeTask", "WKUserContentController", "WKUserScript", "WKWebView", "WKWebViewConfiguration", "WKWebpagePreferences", "WKWebsiteDataRecord", "WKWebsiteDataStore", "WKWindowFeatures", "WKOpenPanelParameters"], optional = true }
 
 [[example]]
 name = "gtk_smoke"
