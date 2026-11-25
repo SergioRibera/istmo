@@ -84,6 +84,7 @@ class BenchActivity : Activity() {
                         runner.wakeups()
                         runner.frames()
                         runner.sensitivity()
+                        runner.spinAB()
                     }
                 }
             } catch (e: Throwable) {

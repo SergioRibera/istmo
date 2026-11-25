@@ -69,6 +69,9 @@ object BenchNative {
 
     @JvmStatic external fun setProbing(on: Boolean)
 
+    /** Turn the runtime's spin-before-park on or off. */
+    @JvmStatic external fun setSpinning(on: Boolean)
+
     /** One probed Rust → Kotlin → Rust echo; see `jni.rs` for the layout. */
     @JvmStatic external fun probeRustToKotlin(size: Int, out: LongArray): Int
 

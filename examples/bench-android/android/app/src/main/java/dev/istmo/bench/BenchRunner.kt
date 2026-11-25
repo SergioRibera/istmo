@@ -5,8 +5,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import dev.istmo.bench.gen.RustBenchClient
 import dev.istmo.runtime.Bincode
+import dev.istmo.runtime.IstmoBytesOut
 import dev.istmo.runtime.IstmoRuntime
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -138,7 +138,7 @@ class BenchRunner(
     }
 
     private fun encodeBytes(payload: ByteArray): ByteArray =
-        ByteArrayOutputStream().also { Bincode.writeBytes(it, payload) }.toByteArray()
+        IstmoBytesOut().also { Bincode.writeBytes(it, payload) }.toExactArray()
 
     /** Kotlin → Rust crossings (Kotlin times them). */
     private fun kotlinToRust(cond: String, size: Int) {
@@ -202,7 +202,7 @@ class BenchRunner(
         }
     }
 
-    private fun rustStream(size: Int, gapUs: Int, name: String) {
+    private fun rustStream(size: Int, gapUs: Int, name: String, cond: String = "idle") {
         val latency = LongArray(total)
         var i = 0
         val t0 = System.nanoTime()
@@ -223,7 +223,7 @@ class BenchRunner(
             return
         }
         val elapsed = System.nanoTime() - t0
-        line("stream", name, size, "idle", latency.copyOf(minOf(i, total)), "items/s=%d first_item_ns=%d".format(i * 1_000_000_000L / elapsed, firstItem))
+        line("stream", name, size, cond, latency.copyOf(minOf(i, total)), "items/s=%d first_item_ns=%d".format(i * 1_000_000_000L / elapsed, firstItem))
     }
 
     // ---- wake-up baselines -----------------------------------------------
@@ -296,7 +296,7 @@ class BenchRunner(
         }
     }
 
-    private fun frameCell(path: FramePath, size: Int, gapUs: Int) {
+    private fun frameCell(path: FramePath, size: Int, gapUs: Int, cond: String = "idle") {
         val count = iters + 50
         val latency = LongArray(count)
         val release = LongArray(count)
@@ -307,12 +307,12 @@ class BenchRunner(
         val name = "frames ${path.name}"
         out(
             "%-8s %-22s %8d %-8s %s | %s".format(
-                "frames", "$name submit->recv", size, "idle", Stats.of(latency, from = 50, skipZero = true).render(), tail,
+                "frames", "$name submit->recv", size, cond, Stats.of(latency, from = 50, skipZero = true).render(), tail,
             ),
         )
-        out("%-8s %-22s %8d %-8s %s".format("frames", "$name submit cost", size, "idle", Stats.of(submit, from = 50, skipZero = true).render()))
+        out("%-8s %-22s %8d %-8s %s".format("frames", "$name submit cost", size, cond, Stats.of(submit, from = 50, skipZero = true).render()))
         if (path == FramePath.HardwareBuffer) {
-            out("%-8s %-22s %8d %-8s %s".format("frames", "$name drop->closed", size, "idle", Stats.of(release, from = 50, skipZero = true).render()))
+            out("%-8s %-22s %8d %-8s %s".format("frames", "$name drop->closed", size, cond, Stats.of(release, from = 50, skipZero = true).render()))
         }
     }
 
@@ -341,6 +341,38 @@ class BenchRunner(
                 out("freqs: ${BenchNative.cpuFreqs()}")
             } finally {
                 BenchNative.pinProcess(0)
+                BenchNative.stopSpinners()
+            }
+        }
+    }
+
+    // ---- spin-before-park A/B -----------------------------------------
+
+    /**
+     * The waits that still cross threads (stream items, frames, the pump,
+     * blocking hosts), with the runtime's spin-before-park on and off,
+     * idle and with every core busy.
+     */
+    fun spinAB() {
+        val cpus = Runtime.getRuntime().availableProcessors()
+        for (busy in listOf(false, true)) {
+            if (busy) BenchNative.startSpinners(cpus, 0)
+            try {
+                for (spin in listOf(true, false)) {
+                    BenchNative.setSpinning(spin)
+                    val cond = (if (busy) "busy" else "idle") + (if (spin) "/sp1" else "/sp0")
+                    out("== spin A/B: $cond")
+                    rustCell("stream", BenchNative.Cell.KotlinStreamPaced, 64, cond, "kt->rs paced")
+                    rustCell("stream", BenchNative.Cell.KotlinStreamBurst, 64, cond, "kt->rs burst")
+                    rustStream(64, 200, "rs->kt paced", cond)
+                    rustStream(64, 0, "rs->kt burst", cond)
+                    frameCell(FramePath.Bytes, 4096, 300, cond)
+                    rustToKotlin(cond, 64)
+                    kotlinToRust(cond, 64)
+                    rustCell("rs", BenchNative.Cell.IsolatedRaw, 64, cond)
+                }
+            } finally {
+                BenchNative.setSpinning(true)
                 BenchNative.stopSpinners()
             }
         }
@@ -441,28 +473,25 @@ class BenchRunner(
             chain, size,
             listOf(
                 Triple("encode (Rust codec)", "R0", "R1"),
-                Triple("Runtime::call: route + enqueue", "R1", "R2"),
-                Triple("pump thread wake", "R2", "PD"),
-                Triple("pump builds jstring×2 + byte[]", "PD", "PCK"),
-                Triple("JNI Rust→Kotlin CallStaticVoid", "PCK", "OCE"),
-                Triple("scope.launch + Default worker wake", "OCE", "HE"),
+                Triple("Runtime::call: route, names, byte[]", "R1", "DCK"),
+                Triple("JNI Rust→Kotlin CallStaticObject (caller thread)", "DCK", "OCE"),
+                Triple("onCallDirect: job + start in place", "OCE", "HE"),
                 Triple("decode (Kotlin dispatcher)", "HE", "BE"),
                 Triple("backend body", "BE", "BX"),
                 Triple("reply encode (Kotlin dispatcher)", "BX", "HX"),
-                Triple("reply JNI Kotlin→Rust entry", "HX", "SRE"),
-                Triple("byte[] copy + dispatch_inbound", "SRE", "SRD"),
-                Triple("Rust caller wake", "SRD", "R3"),
+                Triple("return to Rust (reply as return value)", "HX", "DKR"),
+                Triple("reply byte[] copy + complete the call", "DKR", "R2"),
+                Triple("recv (answer already there)", "R2", "R3"),
                 Triple("decode (Rust codec)", "R3", "R4"),
             ),
             listOf(
-                Triple("onCall body on pump (launch)", "OCE", "OCX"),
-                Triple("pump busy in Kotlin", "PCK", "PKR"),
+                Triple("onCallDirect body", "OCE", "OCX"),
             ),
         )
     }
 
     private fun breakdownKotlinToRust(size: Int, generated: Boolean) {
-        val title = if (generated) "Kotlin → Rust → Kotlin (RustBench.echo: generated client, Isolated host)"
+        val title = if (generated) "Kotlin → Rust → Kotlin (RustBench.echo: generated client, generated host)"
         else "Kotlin → Rust → Kotlin (raw IstmoRuntime.call, Inline host)"
         val chain = Chain(title)
         val payload = ByteArray(size) { it.toByte() }
@@ -491,27 +520,21 @@ class BenchRunner(
         }
         val head = listOf(
             Triple("encode (Kotlin Bincode)", "K0", "K1"),
-            Triple("JNI Kotlin→Rust nativeSubmitCall entry", "K1", "SCE"),
+            Triple("JNI Kotlin→Rust nativeCall entry", "K1", "SCE"),
         )
         val middle = if (generated) {
             listOf(
-                Triple("strings+byte[] copy, route, thread spawn+start, decode", "SCE", "H0"),
+                Triple("strings+byte[] copy, route, decode (inline host)", "SCE", "H0"),
                 Triple("host body", "H0", "H1"),
-                Triple("reply encode + enqueue + pump wake", "H1", "PD"),
+                Triple("reply encode + direct answer", "H1", "SCD"),
             )
         } else {
-            listOf(Triple("strings+byte[] copy, inline host, enqueue, pump wake", "SCE", "PD"))
+            listOf(Triple("strings+byte[] copy, inline host, direct answer", "SCE", "SCD"))
         }
         val tail = listOf(
-            Triple("pump builds byte[]", "PD", "PCK"),
-            Triple("JNI Rust→Kotlin CallStaticVoid", "PCK", "ORE"),
-            Triple("onRespond: resume continuation", "ORE", "ORX"),
-            Triple("Kotlin caller wake (runBlocking)", "ORX", "K5"),
+            Triple("reply byte[] + return to Kotlin", "SCD", "K5"),
             Triple("decode (Kotlin Bincode)", "K5", "K6"),
         )
-        renderChain(
-            chain, size, head + middle + tail,
-            listOf(Triple("nativeSubmitCall body (incl. spawn call)", "SCE", "SCD")),
-        )
+        renderChain(chain, size, head + middle + tail, emptyList())
     }
 }

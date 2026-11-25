@@ -91,11 +91,11 @@ const WATCHED: [&str; 9] = [
     "istmo-android-p",
     "DefaultDispatch",
     "istmo-bench",
-    "istmo-call",
+    "istmo-worker",
     "istmo-frame-rel",
     "bench-",
-    "istmo-stream",
-    "istmo-inline-st",
+    "istmo-blocking",
+    "main",
     "istmo-hosted",
 ];
 

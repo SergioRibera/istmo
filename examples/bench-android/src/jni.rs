@@ -391,3 +391,13 @@ pub extern "system" fn Java_dev_istmo_bench_BenchNative_readStamps<'local>(
     stamps.extend(transport_stamps());
     fill(&env, &out, &stamps)
 }
+
+/// Turn the runtime's spin-before-park on or off (A/B cells).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_bench_BenchNative_setSpinning(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    on: jboolean,
+) {
+    istmo::spin::set_enabled(on != 0);
+}
