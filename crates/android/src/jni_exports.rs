@@ -125,8 +125,9 @@ fn direct_buffer_to_vec(
     buffer: &JByteBuffer<'_>,
     len: jint,
 ) -> Result<Vec<u8>, AndroidRuntimeError> {
-    let len = usize::try_from(len)
-        .map_err(|_| AndroidRuntimeError::InvalidArgument(format!("negative buffer length {len}")))?;
+    let len = usize::try_from(len).map_err(|_| {
+        AndroidRuntimeError::InvalidArgument(format!("negative buffer length {len}"))
+    })?;
     if len == 0 {
         return Ok(Vec::new());
     }

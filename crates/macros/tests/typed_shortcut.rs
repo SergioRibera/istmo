@@ -83,48 +83,48 @@ impl Math for Backend {
 #[test]
 fn typed_shortcut_hits_backend_without_the_wire() {
     pollster::block_on(async {
-    let init = Runtime::mock();
-    let rt = init.runtime;
-    let outbound = init.outbound;
+        let init = Runtime::mock();
+        let rt = init.runtime;
+        let outbound = init.outbound;
 
-    MathHost::new(Backend::new()).register(&rt);
+        MathHost::new(Backend::new()).register(&rt);
 
-    let client = MathClient::from_runtime(&rt).expect("client");
-    let sum = client.add(2, 3).await.expect("add");
-    assert_eq!(sum, 5);
+        let client = MathClient::from_runtime(&rt).expect("client");
+        let sum = client.add(2, 3).await.expect("add");
+        assert_eq!(sum, 5);
 
-    let point = client
-        .shift(Point { x: 1, y: 2 }, 10, -3)
-        .await
-        .expect("shift");
-    assert_eq!(point, Point { x: 11, y: -1 });
+        let point = client
+            .shift(Point { x: 1, y: 2 }, 10, -3)
+            .await
+            .expect("shift");
+        assert_eq!(point, Point { x: 11, y: -1 });
 
-    // Fast path never produced an outbound envelope.
-    assert!(outbound.is_empty());
+        // Fast path never produced an outbound envelope.
+        assert!(outbound.is_empty());
     });
 }
 
 #[test]
 fn typed_shortcut_domain_error_surfaces_as_plugin_error() {
     pollster::block_on(async {
-    let init = Runtime::mock();
-    let rt = init.runtime;
-    drop(init.outbound);
+        let init = Runtime::mock();
+        let rt = init.runtime;
+        drop(init.outbound);
 
-    MathHost::new(Backend::new()).register(&rt);
+        MathHost::new(Backend::new()).register(&rt);
 
-    let client = MathClient::from_runtime(&rt).expect("client");
-    let err = client.add(i32::MAX, 1).await.expect_err("overflow");
-    match err {
-        IstmoError::PluginError { bytes } => {
-            // The error re-encoded through codec::encode so the caller
-            // can decode it with the existing wire path.
-            let (decoded, _) =
-                istmo::codec::decode::<WireMathError>(&bytes).expect("decode err");
-            assert_eq!(decoded, WireMathError("math error: overflow".to_owned()));
+        let client = MathClient::from_runtime(&rt).expect("client");
+        let err = client.add(i32::MAX, 1).await.expect_err("overflow");
+        match err {
+            IstmoError::PluginError { bytes } => {
+                // The error re-encoded through codec::encode so the caller
+                // can decode it with the existing wire path.
+                let (decoded, _) =
+                    istmo::codec::decode::<WireMathError>(&bytes).expect("decode err");
+                assert_eq!(decoded, WireMathError("math error: overflow".to_owned()));
+            }
+            other => panic!("unexpected error: {other:?}"),
         }
-        other => panic!("unexpected error: {other:?}"),
-    }
     });
 }
 
@@ -165,15 +165,15 @@ fn typed_shortcut_host_panic_surfaces_as_plugin_error() {
 #[test]
 fn wire_fallback_when_no_typed_shortcut() {
     pollster::block_on(async {
-    let init = Runtime::mock();
-    let rt: Arc<Runtime> = init.runtime;
-    let _outbound = init.outbound;
+        let init = Runtime::mock();
+        let rt: Arc<Runtime> = init.runtime;
+        let _outbound = init.outbound;
 
-    // Register only via Dispatch (wire path), not typed.
-    rt.register_host(MathHost::new(Backend::new()));
+        // Register only via Dispatch (wire path), not typed.
+        rt.register_host(MathHost::new(Backend::new()));
 
-    let client = MathClient::from_runtime(&rt).expect("client");
-    let sum = client.add(7, 8).await.expect("add via wire");
-    assert_eq!(sum, 15);
+        let client = MathClient::from_runtime(&rt).expect("client");
+        let sum = client.add(7, 8).await.expect("add via wire");
+        assert_eq!(sum, 15);
     });
 }
