@@ -19,8 +19,8 @@ use istmo_core::NativeHandleId;
 use istmo_core::sync::lock;
 
 use super::ffi::{
-    Api, FALSE, G_TYPE_OBJECT, G_TYPE_STRING, GError, GList, GType, GValue, GdkRGBA, Libs, TRUE,
-    gboolean, gpointer,
+    Api, FALSE, G_IO_ERR, G_IO_HUP, G_IO_OUT, G_TYPE_OBJECT, G_TYPE_STRING, GError, GList, GType,
+    GValue, GdkRGBA, Libs, TRUE, gboolean, gpointer,
 };
 use super::x11::X11;
 use crate::desktop::core::{Done, Engine, FrameSlot, SchemeResponder, UiTask, UiView, ViewCore};
@@ -352,6 +352,16 @@ impl Engine for GtkEngine {
         // SAFETY: `g_idle_add_full` is thread-safe; `run_task` takes
         // ownership of `data` exactly once.
         unsafe { (self.api.g_idle_add_full)(0, run_task, data.cast(), None) };
+    }
+
+    fn post_after(self: Arc<Self>, ms: u32, task: UiTask) {
+        let data = Box::into_raw(Box::new(task));
+        // SAFETY: `g_timeout_add_full` is thread-safe and attaches to the
+        // default context the GTK thread iterates; `run_task` takes `data`
+        // once.
+        unsafe {
+            (self.api.g_timeout_add_full)(0, c_uint::from(ms), run_task, data.cast(), None);
+        };
     }
 
     fn create(&self, core: Arc<ViewCore>, done: Done<()>) {
@@ -2376,7 +2386,7 @@ unsafe extern "C" fn on_scheme_request(request: gpointer, _data: gpointer) {
                 },
                 Box::new(GtkResponder {
                     request: Some(held),
-                    writer: None,
+                    pipe: None,
                 }),
             );
         }
@@ -2459,12 +2469,103 @@ fn finish_status(held: Held, status: u16, mime: &str, body: &[u8]) {
     unsafe { (api.g_object_unref)(held.ptr()) };
 }
 
-/// Streams a dynamic response through a pipe: `WebKit` reads one end as a
-/// `GUnixInputStream`; a writer thread feeds the other so the GTK
-/// thread never blocks on a slow page.
+/// Streams a dynamic response through a non-blocking pipe: `WebKit` reads
+/// one end as a `GUnixInputStream`; the GTK loop writes the other
+/// whenever it is writable. No thread per response, and neither a slow
+/// page nor a fast app blocks the GTK thread.
 struct GtkResponder {
     request: Option<Held>,
-    writer: Option<flume::Sender<Option<Vec<u8>>>>,
+    pipe: Option<u64>,
+}
+
+/// Write end of a response pipe and the bytes it has not taken yet.
+struct PipeOut {
+    file: std::fs::File,
+    queue: std::collections::VecDeque<Vec<u8>>,
+    offset: usize,
+    watching: bool,
+    ended: bool,
+}
+
+impl PipeOut {
+    /// Write what the pipe takes now; `Err` once the reader is gone.
+    fn flush(&mut self) -> std::io::Result<()> {
+        while let Some(chunk) = self.queue.front() {
+            match self.file.write(&chunk[self.offset..]) {
+                Ok(n) => {
+                    self.offset += n;
+                    if self.offset == chunk.len() {
+                        self.queue.pop_front();
+                        self.offset = 0;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    fn drained(&self) -> bool {
+        self.ended && self.queue.is_empty()
+    }
+}
+
+thread_local! {
+    static PIPES: RefCell<HashMap<u64, PipeOut>> = RefCell::new(HashMap::new());
+    static NEXT_PIPE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Flush pipe `key`; close it once ended and drained; watch it for
+/// writability while bytes are left.
+fn pump(key: u64) {
+    let watch = PIPES.with(|p| {
+        let mut pipes = p.borrow_mut();
+        let pipe = pipes.get_mut(&key)?;
+        if pipe.flush().is_err() || pipe.drained() {
+            pipes.remove(&key);
+            return None;
+        }
+        if pipe.queue.is_empty() || pipe.watching {
+            return None;
+        }
+        pipe.watching = true;
+        Some(std::os::fd::AsRawFd::as_raw_fd(&pipe.file))
+    });
+    if let Some(fd) = watch {
+        // SAFETY: the fd stays open while its `PipeOut` exists; the
+        // callback looks the pipe up by key and ignores a removed one.
+        unsafe {
+            (api().g_unix_fd_add_full)(
+                0,
+                fd,
+                G_IO_OUT | G_IO_ERR | G_IO_HUP,
+                on_pipe_writable,
+                id_ptr(NativeHandleId(key)),
+                None,
+            );
+        }
+    }
+}
+
+unsafe extern "C" fn on_pipe_writable(_fd: c_int, _condition: c_uint, data: gpointer) -> gboolean {
+    let key = ptr_id(data).0;
+    PIPES.with(|p| {
+        let mut pipes = p.borrow_mut();
+        let Some(pipe) = pipes.get_mut(&key) else {
+            return FALSE;
+        };
+        if pipe.flush().is_err() || pipe.drained() {
+            pipes.remove(&key);
+            return FALSE;
+        }
+        if pipe.queue.is_empty() {
+            pipe.watching = false;
+            return FALSE;
+        }
+        TRUE
+    })
 }
 
 impl SchemeResponder for GtkResponder {
@@ -2472,10 +2573,20 @@ impl SchemeResponder for GtkResponder {
         let Some(request) = self.request.take() else {
             return;
         };
-        let Ok((reader, mut writer)) = std::io::pipe() else {
+        let Ok((reader, writer)) = std::io::pipe() else {
             return finish_status(request, 500, "text/plain", b"");
         };
         let api = api();
+        let fd = std::os::fd::OwnedFd::from(writer);
+        // SAFETY: a live fd we own; a failure leaves it blocking, which
+        // the flush loop still handles (it just may stall the thread).
+        unsafe {
+            (api.g_unix_set_fd_nonblocking)(
+                std::os::fd::AsRawFd::as_raw_fd(&fd),
+                TRUE,
+                ptr::null_mut(),
+            );
+        }
         // SAFETY: WebKit owns the read end from here (close_fd = TRUE).
         let stream = unsafe { (api.g_unix_input_stream_new)(reader.into_raw_fd(), TRUE) };
         let length = head
@@ -2492,36 +2603,52 @@ impl SchemeResponder for GtkResponder {
         );
         // SAFETY: release the reference taken with the request.
         unsafe { (api.g_object_unref)(request.ptr()) };
-        let (tx, rx) = flume::unbounded::<Option<Vec<u8>>>();
-        let spawned = std::thread::Builder::new()
-            .name("istmo-webview-body".into())
-            .spawn(move || {
-                while let Ok(Some(chunk)) = rx.recv() {
-                    if writer.write_all(&chunk).is_err() {
-                        break;
-                    }
-                }
-            });
-        if spawned.is_ok() {
-            self.writer = Some(tx);
-        }
+        let key = NEXT_PIPE.with(|n| {
+            n.set(n.get() + 1);
+            n.get()
+        });
+        PIPES.with(|p| {
+            p.borrow_mut().insert(
+                key,
+                PipeOut {
+                    file: std::fs::File::from(fd),
+                    queue: std::collections::VecDeque::new(),
+                    offset: 0,
+                    watching: false,
+                    ended: false,
+                },
+            );
+        });
+        self.pipe = Some(key);
     }
 
     fn body(&mut self, body: SchemeBody) {
-        match body {
-            SchemeBody::Data(data) => {
-                if let Some(tx) = &self.writer {
-                    drop(tx.send(Some(data)));
-                }
-            }
-            // Dropping the sender ends the writer and closes the pipe.
-            SchemeBody::End | SchemeBody::Abort(_) => {
-                self.writer = None;
-                if let Some(held) = self.request.take() {
-                    finish_status(held, 502, "text/plain", b"");
-                }
-            }
+        if let Some(held) = self.request.take() {
+            // A body without a head: nothing was sent yet.
+            return finish_status(held, 502, "text/plain", b"");
         }
+        let Some(key) = self.pipe else { return };
+        let abort = PIPES.with(|p| {
+            let mut pipes = p.borrow_mut();
+            let pipe = pipes.get_mut(&key)?;
+            match body {
+                SchemeBody::Data(data) => {
+                    if !data.is_empty() {
+                        pipe.queue.push_back(data);
+                    }
+                }
+                SchemeBody::End => pipe.ended = true,
+                // Closing early truncates the body for the page.
+                SchemeBody::Abort(_) => return Some(()),
+            }
+            None
+        });
+        if abort.is_some() {
+            PIPES.with(|p| p.borrow_mut().remove(&key));
+            self.pipe = None;
+            return;
+        }
+        pump(key);
     }
 }
 

@@ -48,6 +48,7 @@ mod macos;
 #[cfg(test)]
 mod mock;
 pub(crate) mod text;
+mod timer;
 #[cfg(all(target_os = "windows", feature = "desktop"))]
 #[allow(unsafe_code, reason = "WebView2 COM through windows-rs")]
 mod windows;

@@ -21,6 +21,11 @@ pub(crate) type GType = usize;
 pub(crate) type GCallback = unsafe extern "C" fn();
 pub(crate) type GSourceFunc = unsafe extern "C" fn(gpointer) -> gboolean;
 pub(crate) type GDestroyNotify = unsafe extern "C" fn(gpointer);
+pub(crate) type GUnixFdSourceFunc = unsafe extern "C" fn(c_int, c_uint, gpointer) -> gboolean;
+/// `GIOCondition` bits.
+pub(crate) const G_IO_OUT: c_uint = 4;
+pub(crate) const G_IO_ERR: c_uint = 8;
+pub(crate) const G_IO_HUP: c_uint = 16;
 pub(crate) type GClosureNotify = unsafe extern "C" fn(gpointer, gpointer);
 pub(crate) type GAsyncReadyCallback = unsafe extern "C" fn(gpointer, gpointer, gpointer);
 pub(crate) type WebKitURISchemeRequestCallback = unsafe extern "C" fn(gpointer, gpointer);
@@ -175,6 +180,9 @@ api! {
         fn g_main_loop_new(gpointer, gboolean) -> gpointer;
         fn g_main_loop_run(gpointer);
         fn g_idle_add_full(c_int, GSourceFunc, gpointer, Option<GDestroyNotify>) -> c_uint;
+        fn g_timeout_add_full(c_int, c_uint, GSourceFunc, gpointer, Option<GDestroyNotify>) -> c_uint;
+        fn g_unix_fd_add_full(c_int, c_int, c_uint, GUnixFdSourceFunc, gpointer, Option<GDestroyNotify>) -> c_uint;
+        fn g_unix_set_fd_nonblocking(c_int, gboolean, *mut *mut GError) -> gboolean;
         fn g_free(gpointer);
         fn g_error_free(*mut GError);
         fn g_bytes_new(*const c_void, usize) -> gpointer;

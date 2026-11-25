@@ -366,6 +366,17 @@ impl Engine for QtEngine {
         unsafe { (self.shim.istmo_qt_post)(run_task, data.cast()) };
     }
 
+    fn post_after(self: Arc<Self>, ms: u32, task: UiTask) {
+        let shim = self.shim;
+        // Qt timers start on the Qt thread: hop there first.
+        self.post(Box::new(move || {
+            let data = Box::into_raw(Box::new(task));
+            let ms = c_int::try_from(ms).unwrap_or(c_int::MAX);
+            // SAFETY: Qt thread; `run_task` takes `data` once.
+            unsafe { (shim.istmo_qt_post_after)(ms, run_task, data.cast()) };
+        }));
+    }
+
     fn create(&self, core: Arc<ViewCore>, done: Done<()>) {
         self.post(Box::new(move || {
             let result = ui(|ui| ui.create(core, None))

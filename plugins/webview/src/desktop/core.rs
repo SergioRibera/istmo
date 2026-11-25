@@ -51,6 +51,15 @@ pub(crate) trait Engine: Send + Sync + 'static {
     fn with_view(&self, id: NativeHandleId, f: ViewTask);
     /// In-process frame sink for view `id`.
     fn frame_sink(&self, id: NativeHandleId) -> Arc<dyn FrameSink>;
+    /// Run `task` on the UI thread after `ms` milliseconds. The default
+    /// queues it on the shared timer thread; engines with a native timer
+    /// use it instead.
+    fn post_after(self: Arc<Self>, ms: u32, task: UiTask) {
+        super::timer::after(
+            Duration::from_millis(ms.into()),
+            Box::new(move || self.post(task)),
+        );
+    }
 }
 
 /// One native view, used on the UI thread only.
@@ -187,6 +196,12 @@ impl ViewCore {
     fn post(&self, task: UiTask) {
         if let Some(engine) = self.engine.upgrade() {
             engine.post(task);
+        }
+    }
+
+    fn post_after(&self, ms: u32, task: UiTask) {
+        if let Some(engine) = self.engine.upgrade() {
+            engine.post_after(ms, task);
         }
     }
 
@@ -436,19 +451,16 @@ impl ViewCore {
             }));
         if let Some(ms) = timeout_ms.filter(|ms| *ms > 0) {
             let core = Arc::downgrade(self);
-            let spawned = std::thread::Builder::new()
-                .name("istmo-webview-ask".into())
-                .spawn(move || {
-                    std::thread::sleep(Duration::from_millis(ms.into()));
+            self.post_after(
+                ms,
+                Box::new(move || {
                     if let Some(core) = core.upgrade()
                         && let Some(resolve) = core.asks.take(request_id)
                     {
-                        core.post(Box::new(move || resolve(DecisionResponse::Deny)));
+                        resolve(DecisionResponse::Deny);
                     }
-                });
-            if spawned.is_err() {
-                tracing::warn!("no thread for a decision timeout; it waits for the app");
-            }
+                }),
+            );
         }
     }
 
@@ -512,30 +524,25 @@ impl ViewCore {
         self.control.publish(ControlEvent::SchemeRequest(info));
         let core = Arc::downgrade(self);
         let ms = self.spec.timeouts.scheme_head_ms.max(1);
-        let spawned = std::thread::Builder::new()
-            .name("istmo-webview-scheme".into())
-            .spawn(move || {
-                std::thread::sleep(Duration::from_millis(ms.into()));
+        self.post_after(
+            ms,
+            Box::new(move || {
                 let Some(core) = core.upgrade() else { return };
                 if slot.answered.swap(true, Ordering::AcqRel) {
                     return;
                 }
                 lock(&core.schemes).remove(&request_id);
-                core.post(Box::new(move || {
-                    let mut responder = lock(&slot.responder);
-                    responder.head(&SchemeResponseHead {
-                        request_id,
-                        status: 504,
-                        mime_type: "text/plain".into(),
-                        headers: Vec::new(),
-                        content_length: Some(0),
-                    });
-                    responder.body(SchemeBody::End);
-                }));
-            });
-        if spawned.is_err() {
-            tracing::warn!("no thread for a scheme timeout");
-        }
+                let mut responder = lock(&slot.responder);
+                responder.head(&SchemeResponseHead {
+                    request_id,
+                    status: 504,
+                    mime_type: "text/plain".into(),
+                    headers: Vec::new(),
+                    content_length: Some(0),
+                });
+                responder.body(SchemeBody::End);
+            }),
+        );
     }
 
     // ---------------------------------------------------------------

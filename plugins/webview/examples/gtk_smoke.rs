@@ -108,6 +108,11 @@ fn main() {
                     println!("scheme request {}", req.info().url);
                     let body = req.stream(200, "text/html", None).await.expect("head");
                     body.write(b"<p>stream".to_vec()).await.expect("chunk");
+                    // Bigger than a pipe buffer: exercises back-pressure.
+                    let mut filler = b"<!--".to_vec();
+                    filler.resize(256 * 1024, b'x');
+                    filler.extend_from_slice(b"-->");
+                    body.write(filler).await.expect("chunk");
                     body.write(b"ed</p>".to_vec()).await.expect("chunk");
                     body.finish().await.expect("end");
                 }
