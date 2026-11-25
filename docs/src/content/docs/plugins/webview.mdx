@@ -1,0 +1,294 @@
+---
+title: Web view
+description: Embedded or windowed web views on Android, iOS, macOS, Windows, Linux and the browser, with navigation rules, an origin-bound JS bridge, custom schemes, profiles and decisions behind one Rust API.
+sidebar:
+  order: 11
+---
+
+import PluginTypes from '../../../generated/plugins/webview-types.mdx';
+
+`istmo-webview` puts a real browser engine in your app. The app decides
+where the view goes (inside its own window, placed every frame, or in a
+window the plugin owns) and everything the page may do: where it can
+navigate, which origins can talk to Rust, what it can read from the app.
+It is complete enough to build a browser on; for signing users in, use
+[`istmo-web-auth`](/istmo/plugins/web-auth/) and the system browser
+instead.
+
+| Platform | Engine | Embedded | Window | Minimum |
+| -------- | ------ | -------- | ------ | ------- |
+| Android | `android.webkit.WebView` + `androidx.webkit` | yes | yes | API 24 |
+| iOS | `WKWebView` | yes | yes | 14.0 |
+| macOS | `WKWebView` (feature `desktop`) | yes | yes | |
+| Windows | WebView2 (feature `desktop`) | yes | yes | WebView2 runtime |
+| Linux | WebKitGTK 4.1 / 6.0 or Qt WebEngine | X11 (4.1, Qt) | yes | WebKitGTK 2.40 |
+| Browser (wasm32) | `<iframe>` (feature `web`) | yes | no | |
+
+`capabilities()` reports what the running engine supports (embedding,
+profiles, isolated worlds, find, print, snapshots, the engine version),
+so the app can adapt instead of guessing.
+
+A runnable demo lives in
+[`examples/webview-demo`](https://github.com/SergioRibera/istmo/tree/main/examples/webview-demo):
+a small eframe browser with a local page that talks to Rust and a
+Microsoft sign-in.
+
+## Open a view
+
+```rust
+use std::sync::Arc;
+use istmo_webview::{WebViewClient, WebViewClientExt, WebViewInitConfig, WebViewSpec};
+
+let client = Arc::new(WebViewClient::acquire_with(WebViewInitConfig::default()).await?);
+let view = client.open_view(WebViewSpec::embedded(window_id)).await?;
+view.load_url("https://example.com").await?;
+```
+
+`WebViewSpec::embedded(window_id)` places the view inside a window the
+app registered with `istmo-window`; `WebViewSpec::window(title, w, h)`
+opens a window the plugin owns. Dropping the `ViewHandle` closes the
+view and releases everything it held.
+
+### Placing an embedded view
+
+The view is a native child of your window. Tell it where to be with
+the presenter, in physical pixels of that window:
+
+```rust
+use istmo_webview::ViewFrame;
+
+// every frame, or whenever your layout changes
+view.presenter().sync(ViewFrame { x, y, width, height, visible: true });
+```
+
+`sync` never blocks and never crosses the wire: it writes the latest
+frame into a slot the engine reads once per UI tick, so calling it on
+every frame costs nothing when the rect did not change and a fast resize
+produces one native update per tick, not one per call. `hide()` hides
+the view without closing it.
+
+## Navigation rules
+
+Every top-level navigation, redirect and page-opened window is checked
+against the view's rules before the engine commits to it. Rules match a
+scheme, host (exact or `*.example.com`), port and path prefix, and pick
+an action: `Allow`, `Deny`, `Intercept` (cancel and tell the app),
+`External` (hand it to the system) or `Ask` (the app decides).
+
+```rust
+use istmo_webview::{NavigationRules, RuleAction, UrlPattern};
+
+let spec = WebViewSpec::embedded(window_id).with_rules(
+    NavigationRules::allow_only([UrlPattern::host("https", "docs.example.com")])
+        .with(UrlPattern::host("https", "*.youtube.com"), RuleAction::External),
+);
+```
+
+URLs are normalised the WHATWG way (case, default ports, IDN, IPv4
+forms, dot segments) before matching. Every backend is held to the same table of vectors
+(`tests/rule_vectors.tsv`), so a rule means the same thing on Android,
+iOS, desktop and the browser. Top-level `javascript:`, `intent:`, `data:` and
+`vbscript:` loads are always refused, and `file:` unless
+`settings.file_access` allows it.
+
+`Ask` raises a `ViewEvent::Decision`. Engines that can hold a navigation
+open wait for your answer; the others cancel and reload the URL once you
+allow it. Unanswered decisions are denied after
+`spec.timeouts.navigation_ms`.
+
+## Talking to the page
+
+The page gets `window.istmo`:
+
+```js
+const reply = await istmo.invoke("rpc", new TextEncoder().encode("ping"));
+istmo.postMessage("analytics", "page-ready");
+istmo.addEventListener("message", (e) => console.log(e.channel, e.data));
+```
+
+On the Rust side, open the bridge to the origins you trust:
+
+```rust
+use istmo_webview::{BridgeConfig, OutgoingMessage, ViewEvent};
+
+let spec = spec.with_bridge(BridgeConfig::new(["rpc"]).allow_origin("https://app.example.com"));
+let view = client.open_view(spec).await?;
+let events = view.control().expect("first subscriber");
+while let Some(event) = events.next().await {
+    if let ViewEvent::Invoke(call) = event {
+        call.reply(Ok(b"pong".to_vec())).await?;
+    }
+}
+view.post_message(OutgoingMessage {
+    channel: "rpc".into(),
+    data: b"hello".to_vec(),
+    expected_origin: "https://app.example.com".into(),
+}).await?;
+```
+
+The origin of every message is the one the engine reports for the
+sending document, never what the page claims, and only listed channels
+pass. Replies are bound to the document that asked: after a navigation,
+a late reply is dropped instead of reaching the new page.
+`post_message` and `eval` take an `expected_origin` and are refused when
+the main document is somewhere else, which closes the race between "I
+checked the URL" and "the page navigated".
+
+Dropping a `BridgeRequest` without replying rejects the page's promise,
+so a forgotten request never hangs the page.
+
+## Custom schemes
+
+Declare schemes in the init config. Assets are served by the engine
+from your bundled istmo assets; dynamic schemes come to Rust and can be
+answered in one go or streamed:
+
+```rust
+use istmo_webview::{AssetsSource, CustomScheme, SchemeSource, WebViewInitConfig};
+
+let config = WebViewInitConfig {
+    schemes: vec![
+        CustomScheme { name: "app".into(), source: SchemeSource::Assets(AssetsSource { dir: "web".into() }) },
+        CustomScheme { name: "api".into(), source: SchemeSource::Dynamic },
+    ],
+    ..WebViewInitConfig::default()
+};
+```
+
+```rust
+if let ViewEvent::Scheme(request) = event {
+    let body = request.stream(200, "application/json", None).await?;
+    body.write(first_chunk).await?;
+    body.write(second_chunk).await?;
+    body.finish().await?;
+}
+```
+
+Only the scheme's own documents, or app loads, may read app content.
+Responses always carry `X-Content-Type-Options: nosniff`, the MIME type
+comes from the file extension (unknown extensions are refused instead
+of sniffed), and `Access-Control-Allow-Origin: *` is dropped. A dynamic
+request with no head after `spec.timeouts.scheme_head_ms` answers `504`.
+Documents on `app://localhost` have the origin `app://localhost` on
+iOS, desktop and Qt, so it can be a bridge origin. Android has no
+custom schemes for web content and serves them from
+`https://appassets.androidplatform.net/<scheme>/` instead;
+`capabilities().scheme_origins` gives the effective origin per scheme,
+so allow that one in the bridge.
+
+## Profiles, cookies and data
+
+`WebProfile::Ephemeral` keeps nothing on disk and shares nothing,
+`WebProfile::Persistent(PersistentProfile { name })` keeps cookies and
+storage under the app's data directory, `WebProfile::Shared` is the
+platform's default store. `cookies`, `set_cookie` and `clear_data`
+work per view's profile where the engine allows it.
+
+## Decisions
+
+Permissions, downloads, HTTP auth, TLS errors, file choosers, JS
+dialogs, new windows and `Ask` navigations arrive as
+`ViewEvent::Decision`. Answer with `allow()`, `deny()` or `respond(..)`.
+Dropping a decision answers it with the safe default (deny, cancel,
+dismiss), so nothing is left waiting on an app that forgot it.
+
+## Events and telemetry
+
+`view.control()` is the lossless lane: navigation lifecycle, bridge
+messages, scheme requests, decisions, crashes, close requests. It has a
+single subscriber and buffers until that subscriber arrives, so nothing
+emitted before you looked is lost.
+
+`view.telemetry(kinds)` is the lossy lane for UI chrome: title, URL,
+progress, favicon, history state, console lines, download progress.
+Kinds must be enabled in the spec, and nothing is produced for kinds
+nobody listens to:
+
+```rust
+use istmo_webview::TelemetryKind;
+
+let kinds = [TelemetryKind::Title, TelemetryKind::Progress];
+let view = client.open_view(spec.with_telemetry(kinds)).await?;
+let telemetry = view.telemetry(kinds)?;
+```
+
+When a subscriber falls behind, events are dropped and the next one is
+a `TelemetryEvent::Dropped(count)`. Asking for a kind the spec did not
+enable fails the stream right away.
+
+For UIs that redraw every frame, `events.try_next()` and
+`telemetry.try_recv()` never wait.
+
+## Hosts
+
+**Android / iOS**: the native backends ship with the plugin and are
+registered for you. Android needs `INTERNET`, which the plugin's
+manifest adds.
+
+**Desktop**: register the Rust host, and the window embedded views go
+into:
+
+```rust
+use istmo_webview::WebViewHost;
+use istmo_webview::desktop::{DesktopOptions, DesktopWebViewFactory};
+use istmo_window::{WindowId, WindowRegistry};
+
+WindowRegistry::global().register(WindowId(1), &window)?;
+runtime.register_host(WebViewHost::new(DesktopWebViewFactory::new(&runtime, DesktopOptions::default())));
+```
+
+The engine runs on its own thread (Linux) or the main thread (macOS,
+Windows); never block on a web view call from that thread.
+
+**Linux engines** are loaded at run time with `dlopen`: nothing links
+against GTK or Qt, and a machine without one of them gets
+`WebViewError::RuntimeMissing` instead of a binary that does not start.
+Features pick which engines are compiled in; `DesktopOptions::linux_backends`
+orders them:
+
+| Feature | Library | Notes |
+| ------- | ------- | ----- |
+| `linux-webkit2gtk-4-1` (in `desktop`) | `libwebkit2gtk-4.1.so.0` | GTK 3; embedding on X11 |
+| `linux-webkitgtk-6-0` | `libwebkitgtk-6.0.so.4` | GTK 4; windows only |
+| `linux-qt` | `libistmo_webview_qt.so` + Qt 6 WebEngine | embedding on X11 |
+
+Only one of them can live in a process. Qt needs a small C++ shim: the
+crate's build script compiles it when `pkg-config` finds
+`Qt6WebEngineWidgets` (set `CXX` if your compiler is not `g++`) and
+looks for it at run time in `DesktopOptions::qt_shim`,
+`ISTMO_WEBVIEW_QT_SHIM`, next to the executable, in `../lib`, then where
+the build put it. Ship `libistmo_webview_qt.so` with your app. Qt
+registers custom schemes once per process, from the first config.
+
+**Browser**: build with `web`; the same `DesktopWebViewFactory` drives
+iframes. Give the page an element with id `istmo-window-<window_id>`
+(position it, the iframe is placed inside it) or the iframe is fixed
+over the page. Cross-origin frames cannot be injected into, so the
+framed page loads the bridge itself from
+`istmo_webview::WEB_FRAME_BRIDGE` (set `window.istmoParentOrigin` to
+your app's origin first). The browser reports each message's origin and
+only the view's own frame is listened to. `sandbox` never combines
+scripts with your app's origin. Windows, custom schemes, cookies,
+history and `eval` on cross-origin frames are not available to a page,
+and `capabilities()` says so.
+
+**Tests**: the `testing` feature adds `ScriptedWebView`, an engine-less
+host you script to drive app flows (events, decisions, bridge calls) in
+plain unit tests. `UnavailableWebView` answers every call with an error
+on platforms you do not support.
+
+## Security defaults
+
+- Each view is a 128-bit capability: calls from other origins of the
+  runtime (`:remote` processes) are refused.
+- Bridge origins come from the engine; `expected_origin` guards
+  `post_message` and `eval`; replies are bound to their document.
+- File access is off; mixed content is blocked; the inspector follows
+  `allow_inspector`.
+- Every pending request (decisions, scheme responses, replies) gets a
+  safe answer when dropped, closed or timed out.
+- URLs of callbacks and requests are redacted from `Debug` output.
+
+## Wire types
+
+<PluginTypes />

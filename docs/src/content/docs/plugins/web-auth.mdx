@@ -1,0 +1,115 @@
+---
+title: Web sign-in
+description: OAuth 2.0 and OpenID Connect sign-in in the system browser (RFC 8252) with PKCE, state and issuer checks, on Android, iOS and desktop.
+sidebar:
+  order: 12
+---
+
+import PluginTypes from '../../../generated/plugins/web-auth-types.mdx';
+
+`istmo-web-auth` signs users in with any OAuth 2.0 / OpenID Connect
+provider (Microsoft Entra, Apple, GitHub, your own) the way
+[RFC 8252](https://www.rfc-editor.org/rfc/rfc8252) asks native apps to:
+in the system browser, where the user already has their passwords,
+passkeys and sessions, and where your app cannot read what they type.
+
+The plugin carries the authorization URL out and the callback back. It
+mints the PKCE pair, `state` and `nonce`, and checks `state` (and `iss`
+when you expect one) before handing you the callback. Exchanging the
+code for tokens stays with the app, because that is where the client
+configuration and the token storage live.
+
+| Platform | Browser | Callbacks | Minimum |
+| -------- | ------- | --------- | ------- |
+| iOS | `ASWebAuthenticationSession` | app scheme, `https` on 17.4+ | 14.0 |
+| Android | Auth Tab, falling back to Custom Tabs | app scheme, verified App Link | API 23 |
+| Desktop (feature `desktop`) | the default browser | loopback `http://127.0.0.1:<port>`, app scheme | |
+| Desktop (feature `embedded`) | an `istmo-webview` window | the intercepted redirect | |
+
+## Sign in
+
+```rust
+use istmo_web_auth::{CallbackSpec, SignInOptions, WebAuthClient, WebAuthClientExt};
+
+let auth = WebAuthClient::acquire()?;
+let flow = auth.begin(CallbackSpec::loopback("/callback")).await?;
+let url = format!(
+    "https://login.microsoftonline.com/common/oauth2/v2.0/authorize\
+     ?client_id={client_id}&response_type=code&scope=openid%20profile\
+     &redirect_uri={}&state={}&nonce={}&code_challenge={}&code_challenge_method={}",
+    flow.redirect_uri_encoded(),
+    flow.state(),
+    flow.nonce(),
+    flow.pkce().challenge(),
+    flow.pkce().method(),
+);
+let callback = flow.complete(url, SignInOptions::default()).await?;
+let code = callback.code()?;
+// POST `code` and `flow.pkce().verifier()` to the token endpoint.
+```
+
+`begin` reserves the redirect first (on desktop, a listener on a random
+loopback port) so `redirect_uri()` is known before you build the URL.
+`complete` opens the browser and resolves with a `VerifiedCallback`, or
+with `WebAuthError::Cancelled` when the user closes it,
+`StateMismatch` / `IssuerMismatch` when the callback does not belong to
+this flow, `Timeout` after `SignInOptions::timeout`. When the provider
+refuses (`error=access_denied`), `code()` fails with `MissingCode` and
+`callback.provider_error()` gives its error, description and URI.
+
+`SignInOptions::ephemeral` starts a browser session that does not share
+cookies with the user's browser: use it for "sign in with another
+account", leave it off for single sign-on.
+
+## Callbacks
+
+| `CallbackSpec` | Redirect URI | Where |
+| -------------- | ------------ | ----- |
+| `loopback("/callback")` | `http://127.0.0.1:<port>/callback` | desktop |
+| `scheme("com.example.app", "auth", "/done")` | `com.example.app://auth/done` | mobile, desktop |
+| `Https(..)` | `https://example.com/auth` | iOS 17.4+, Android App Links |
+
+App-scheme callbacks must be declared in the app's `istmo.toml`. The
+build registers them in `Info.plist` and the Android manifest, and
+desktop packaging reads the same table:
+
+```toml
+[[app.url_scheme]]
+scheme = "com.example.app"
+```
+
+Use a reverse-DNS scheme you own: any app can claim `myapp://`. On
+desktop the loopback listener accepts one request on the exact path,
+answers with a page telling the user to go back to the app, and closes.
+
+## Providers
+
+- **Microsoft Entra**: register a "Mobile and desktop applications"
+  platform with `http://localhost` (any port is accepted on loopback,
+  `[::1]` is not). Mobile apps use `msauth.<bundle id>://auth`.
+- **Apple**: `ASWebAuthenticationSession` works with Sign in with Apple
+  on the web flow.
+- **Google**: refuses embedded views, and custom schemes for new Android
+  clients. Use [`istmo-google-sign-in`](/istmo/plugins/google-sign-in/)
+  on mobile and the loopback callback on desktop.
+
+## Hosts
+
+Android and iOS backends ship with the plugin and register themselves.
+On desktop, register the Rust host:
+
+```rust
+use istmo_web_auth::WebAuthHost;
+use istmo_web_auth::desktop::DesktopWebAuth;
+
+runtime.register_host(WebAuthHost::new(DesktopWebAuth::new(&runtime)));
+```
+
+`DesktopWebAuth::with_launcher` replaces how the URL is opened (tests,
+kiosk setups). With the `embedded` feature, `AuthMode::Embedded` shows
+the page in an `istmo-webview` window and catches the redirect there
+instead; many providers refuse it, so keep it for providers you control.
+
+## Wire types
+
+<PluginTypes />

@@ -449,10 +449,21 @@ fn collect_module(
     dirs: &ModuleDirs,
     out: &mut Vec<TypeDef>,
 ) -> Result<(), ExtractError> {
-    let name = ident(&m.ident);
     if let Some((_, items)) = &m.content {
-        return collect_message_types(items, &dirs.inline(&name), out);
+        return collect_message_types(items, &dirs.inline(&ident(&m.ident)), out);
     }
+    let Some((file_path, child)) = module_file(m, dirs) else {
+        return Ok(());
+    };
+    let file = syn::parse_file(&fs::read_to_string(&file_path)?)?;
+    collect_message_types(&file.items, &child, out)
+}
+
+/// File of the out-of-line `mod name;` as rustc finds it (`#[path]`,
+/// `name.rs`, `name/mod.rs`) and where its own submodules live; `None`
+/// when no such file exists.
+fn module_file(m: &ItemMod, dirs: &ModuleDirs) -> Option<(PathBuf, ModuleDirs)> {
+    let name = ident(&m.ident);
     let attr = path_attr(&m.attrs);
     let candidates = attr.as_ref().map_or_else(
         || {
@@ -463,14 +474,41 @@ fn collect_module(
         },
         |p| vec![dirs.path_attr.join(p)],
     );
-    let Some(file_path) = candidates.into_iter().find(|p| p.is_file()) else {
-        return Ok(());
-    };
-    let source = fs::read_to_string(&file_path)?;
-    let file = syn::parse_file(&source)?;
+    let file_path = candidates.into_iter().find(|p| p.is_file())?;
     // rustc treats a file loaded through `#[path]` as mod-rs.
     let child = ModuleDirs::of_file(&file_path, attr.is_some());
-    collect_message_types(&file.items, &child, out)
+    Some((file_path, child))
+}
+
+/// Every item of the crate root at `path` and of the module files it
+/// declares, inline modules flattened, in source order.
+///
+/// # Errors
+/// [`ExtractError`] when a file cannot be read or parsed.
+pub(crate) fn crate_items(path: &Path) -> Result<Vec<Item>, ExtractError> {
+    fn flatten(
+        items: Vec<Item>,
+        dirs: &ModuleDirs,
+        out: &mut Vec<Item>,
+    ) -> Result<(), ExtractError> {
+        for item in items {
+            let Item::Mod(m) = item else {
+                out.push(item);
+                continue;
+            };
+            if let Some((_, inner)) = m.content {
+                flatten(inner, &dirs.inline(&ident(&m.ident)), out)?;
+            } else if let Some((file_path, child)) = module_file(&m, dirs) {
+                let file = syn::parse_file(&fs::read_to_string(&file_path)?)?;
+                flatten(file.items, &child, out)?;
+            }
+        }
+        Ok(())
+    }
+    let file = syn::parse_file(&fs::read_to_string(path)?)?;
+    let mut out = Vec::new();
+    flatten(file.items, &ModuleDirs::of_file(path, false), &mut out)?;
+    Ok(out)
 }
 
 fn path_attr(attrs: &[Attribute]) -> Option<String> {

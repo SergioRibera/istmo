@@ -56,8 +56,8 @@ Platform-specific transports (`istmo-android`, `istmo-ios`) are pulled
 in automatically by target cfg. First-party plugins ship as separate
 crates (`istmo-barcode-scanner`, `istmo-biometric`, `istmo-camera`,
 `istmo-data-store`, `istmo-file-picker`, `istmo-google-sign-in`,
-`istmo-live-activity`, `istmo-opener`, `istmo-pen`, `istmo-share`)
-at the same version. New projects start from
+`istmo-live-activity`, `istmo-opener`, `istmo-pen`, `istmo-share`,
+`istmo-web-auth`, `istmo-webview`) at the same version. New projects start from
 [`istmo-template`](https://github.com/SergioRibera/istmo-template)
 (`cargo generate --git https://github.com/SergioRibera/istmo-template`).
 

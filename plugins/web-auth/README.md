@@ -40,3 +40,5 @@ Provider notes: Google refuses embedded views and custom schemes for new
 Android clients (use `istmo-google-sign-in` on mobile, loopback on
 desktop); Microsoft Entra accepts any loopback port and no `[::1]`; Sign
 in with Apple works through `ASWebAuthenticationSession`.
+
+Full guide: <https://sergioribera.rs/istmo/plugins/web-auth/>.

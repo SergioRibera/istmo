@@ -48,14 +48,19 @@ pub struct VariantDoc {
 pub fn extract_message_docs(
     source_path: impl AsRef<Path>,
 ) -> Result<Vec<PluginTypeDoc>, ExtractError> {
-    let text = fs::read_to_string(source_path.as_ref()).map_err(io_err)?;
-    let file: File = syn::parse_file(&text).map_err(ExtractError::from)?;
-    extract_from_file(&file)
+    let items = crate::extract::crate_items(source_path.as_ref())?;
+    extract_from_items(&items)
 }
 
+/// Message types declared directly in `file` (its `mod foo;` files are
+/// not read).
 pub fn extract_from_file(file: &File) -> Result<Vec<PluginTypeDoc>, ExtractError> {
+    extract_from_items(&file.items)
+}
+
+fn extract_from_items(items: &[Item]) -> Result<Vec<PluginTypeDoc>, ExtractError> {
     let mut out = Vec::new();
-    for item in &file.items {
+    for item in items {
         match item {
             Item::Struct(s) if has_message_attr(&s.attrs) && is_public(&s.vis) => {
                 out.push(lower_struct(s)?);
@@ -379,10 +384,6 @@ fn snake_to_camel(name: &str) -> String {
         }
     }
     out
-}
-
-fn io_err(err: io::Error) -> ExtractError {
-    ExtractError::from(err)
 }
 
 /// Write the rendered MDX to `dest`, only touching disk if the payload
