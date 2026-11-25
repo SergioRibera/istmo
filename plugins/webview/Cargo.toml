@@ -1,6 +1,6 @@
 [package]
 name = "istmo-webview"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 description = "Cross-platform web view plugin for the istmo framework: embedded or windowed views, navigation rules, a JS bridge bound to origins, custom schemes, profiles and cookies behind one typed Rust surface."
 edition.workspace = true
 rust-version.workspace = true

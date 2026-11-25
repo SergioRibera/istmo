@@ -1,6 +1,6 @@
 [package]
 name = "istmo-web-auth"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 description = "Browser-based sign-in for the istmo framework: ASWebAuthenticationSession, Android Auth Tab / Custom Tabs and the system browser with a loopback or app-scheme callback, with PKCE and state checks."
 edition.workspace = true
 rust-version.workspace = true
@@ -29,7 +29,7 @@ tracing = { workspace = true }
 url = "2.5"
 # PKCE S256 challenge.
 sha2 = "0.10"
-istmo-opener = { path = "../opener", version = "0.1.1-alpha.6", optional = true }
+istmo-opener = { path = "../opener", version = "0.1.1-alpha.7", optional = true }
 istmo-plugins = { workspace = true, optional = true }
 istmo-webview = { workspace = true, optional = true }
 

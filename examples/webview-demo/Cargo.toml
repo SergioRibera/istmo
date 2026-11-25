@@ -1,6 +1,6 @@
 [package]
 name = "webview-demo"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 description = "Desktop istmo demo: a small browser on istmo-webview, a local page served from app assets that talks to Rust over the bridge, and Microsoft sign-in through istmo-web-auth."
 publish = false
 edition.workspace = true

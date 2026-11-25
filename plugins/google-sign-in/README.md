@@ -15,7 +15,7 @@ checked by the app's `build.rs`. Desktop has no backend.
 
 ```toml
 [dependencies]
-istmo-google-sign-in = "0.1.1-alpha.6"
+istmo-google-sign-in = "0.1.1-alpha.7"
 ```
 
 ## Usage

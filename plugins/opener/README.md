@@ -18,7 +18,7 @@ the app's `build.rs`; neither needs anything newer than the runtime.
 
 ```toml
 [dependencies]
-istmo-opener = "0.1.1-alpha.6"
+istmo-opener = "0.1.1-alpha.7"
 ```
 
 ## Usage

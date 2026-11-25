@@ -32,15 +32,15 @@ Android device).
 
 ```toml
 [dependencies]
-istmo-camera = "0.1.1-alpha.6"
+istmo-camera = "0.1.1-alpha.7"
 
 # Desktop apps: the Rust-hosted nokhwa backend.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
-istmo-camera = { version = "0.1.1-alpha.6", features = ["desktop"] }
+istmo-camera = { version = "0.1.1-alpha.7", features = ["desktop"] }
 
 # Browser apps: the web-sys backend.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-istmo-camera = { version = "0.1.1-alpha.6", features = ["web"] }
+istmo-camera = { version = "0.1.1-alpha.7", features = ["web"] }
 ```
 
 Mobile builds need no feature: the Kotlin and Swift backends shipped

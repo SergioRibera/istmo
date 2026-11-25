@@ -32,11 +32,11 @@ protocol is versioned and validated at runtime.
 
 ```toml
 [dependencies]
-istmo = { version = "0.1.1-alpha.6", default-features = false, features = ["game-activity"] }
+istmo = { version = "0.1.1-alpha.7", default-features = false, features = ["game-activity"] }
 ```
 
 Istmo ships as pre-releases, so name the exact version (a `"0.1"` or
-`"*"` requirement does not match `0.1.1-alpha.6`). `game-activity`
+`"*"` requirement does not match `0.1.1-alpha.7`). `game-activity`
 builds the Android side for `IstmoGameActivity`; the default
 `native-activity` targets `IstmoNativeActivity`.
 
@@ -81,11 +81,11 @@ dependencyResolutionManagement {
 // app/build.gradle.kts
 plugins {
     id("com.android.application")
-    id("io.github.sergioribera.istmo") version "0.1.1-alpha.6"
+    id("io.github.sergioribera.istmo") version "0.1.1-alpha.7"
 }
 
 dependencies {
-    implementation("io.github.sergioribera:istmo-runtime:0.1.1-alpha.6")
+    implementation("io.github.sergioribera:istmo-runtime:0.1.1-alpha.7")
 }
 ```
 
@@ -93,7 +93,7 @@ dependencies {
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/SergioRibera/istmo.git", from: "0.1.1-alpha.6"),
+    .package(url: "https://github.com/SergioRibera/istmo.git", from: "0.1.1-alpha.7"),
 ],
 targets: [
     .target(

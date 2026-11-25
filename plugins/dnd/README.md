@@ -21,7 +21,7 @@ landed. While a drag hovers, a `DragState` tells you so you can show it.
 ```toml
 # Cargo.toml
 [dependencies]
-istmo-dnd = "0.1.1-alpha.6"
+istmo-dnd = "0.1.1-alpha.7"
 ```
 
 ```rust

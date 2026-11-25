@@ -24,7 +24,7 @@ The plugin declares no `[min_versions]`.
 
 ```toml
 [dependencies]
-istmo-pen = "0.1.1-alpha.6"
+istmo-pen = "0.1.1-alpha.7"
 ```
 
 ## Usage

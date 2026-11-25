@@ -1,6 +1,6 @@
 [package]
 name = "bench-android"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 description = "On-device istmo call-overhead benchmark (Isolated / Inline / Typed)."
 publish = false
 edition.workspace = true

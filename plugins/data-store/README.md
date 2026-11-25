@@ -16,7 +16,7 @@ the istmo runtime supports.
 
 ```toml
 [dependencies]
-istmo-data-store = "0.1.1-alpha.6"
+istmo-data-store = "0.1.1-alpha.7"
 ```
 
 ## Usage

@@ -1,6 +1,6 @@
 [package]
 name = "istmo-dnd"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 description = "Files dragged into the app from other apps for the istmo framework: Android and iOS drops as copies the app owns, Wayland drops (Flatpak included) and toolkit drops on desktop."
 edition.workspace = true
 rust-version.workspace = true

@@ -35,11 +35,11 @@ re-exports from it.
 
 ```toml
 [dependencies]
-istmo = { version = "0.1.1-alpha.6", default-features = false, features = ["game-activity"] }
+istmo = { version = "0.1.1-alpha.7", default-features = false, features = ["game-activity"] }
 ```
 
 Istmo is published as pre-releases, so name the exact version: a plain
-`"0.1"` requirement does not match `0.1.1-alpha.6`. The `game-activity`
+`"0.1"` requirement does not match `0.1.1-alpha.7`. The `game-activity`
 feature builds the Android side for `IstmoGameActivity` (a
 `ComponentActivity`, which plugins such as sign-in, share or biometric
 need); the default `native-activity` targets `IstmoNativeActivity`.
@@ -48,9 +48,9 @@ If you use official plugins, add them alongside:
 
 ```toml
 [dependencies]
-istmo-data-store     = "0.1.1-alpha.6"   # key/value storage
-istmo-google-sign-in = "0.1.1-alpha.6"   # OAuth sign-in
-istmo-live-activity  = "0.1.1-alpha.6"   # iOS Live Activities + Android ongoing notif.
+istmo-data-store     = "0.1.1-alpha.7"   # key/value storage
+istmo-google-sign-in = "0.1.1-alpha.7"   # OAuth sign-in
+istmo-live-activity  = "0.1.1-alpha.7"   # iOS Live Activities + Android ongoing notif.
 ```
 
 Every crate in the Istmo ecosystem shares one workspace version — as
@@ -73,7 +73,7 @@ Add `istmo-build` to your `[build-dependencies]`:
 
 ```toml
 [build-dependencies]
-istmo-build = "0.1.1-alpha.6"
+istmo-build = "0.1.1-alpha.7"
 ```
 
 `emit()` figures out whether you're building a plugin, an app, or both.

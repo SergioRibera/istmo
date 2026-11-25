@@ -32,15 +32,15 @@ dispositivo Android).
 
 ```toml
 [dependencies]
-istmo-camera = "0.1.1-alpha.6"
+istmo-camera = "0.1.1-alpha.7"
 
 # Apps de escritorio: el backend de nokhwa, alojado en Rust.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
-istmo-camera = { version = "0.1.1-alpha.6", features = ["desktop"] }
+istmo-camera = { version = "0.1.1-alpha.7", features = ["desktop"] }
 
 # Apps de navegador: el backend de web-sys.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-istmo-camera = { version = "0.1.1-alpha.6", features = ["web"] }
+istmo-camera = { version = "0.1.1-alpha.7", features = ["web"] }
 ```
 
 En móvil no hace falta ninguna feature: ahí capturan los backends Kotlin
