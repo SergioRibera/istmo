@@ -229,6 +229,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse<
     ok: jboolean,
     payload: JByteArray<'local>,
 ) {
+    probe!(SubmitResponseEntered);
     guarded(&mut env, "nativeSubmitResponse", (), |env| {
         let bytes = env.convert_byte_array(&payload)?;
         let result = if ok == JNI_TRUE {
@@ -240,6 +241,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse<
             call_id: CallId(wire_id(call_id)),
             result,
         }))?;
+        probe!(SubmitResponseDispatched);
         Ok(())
     });
 }
@@ -251,6 +253,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent<'lo
     stream_id: jlong,
     payload: JByteArray<'local>,
 ) {
+    probe!(SubmitEventEntered);
     guarded(&mut env, "nativeSubmitEvent", (), |env| {
         let bytes = env.convert_byte_array(&payload)?;
         Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Event {
@@ -289,6 +292,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall<'loc
     method: JString<'local>,
     payload: JByteArray<'local>,
 ) {
+    probe!(SubmitCallEntered);
     guarded(&mut env, "nativeSubmitCall", (), |env| {
         let plugin_id: String = env.get_string(&plugin_id)?.into();
         let method: String = env.get_string(&method)?.into();
@@ -300,6 +304,7 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitCall<'loc
             method,
             payload,
         }))?;
+        probe!(SubmitCallDispatched);
         Ok(())
     });
 }

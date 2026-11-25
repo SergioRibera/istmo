@@ -208,6 +208,7 @@ impl Pump {
                     bytes.map_or(PumpStep::Shutdown, PumpStep::DeliverRemote)
                 })
                 .wait();
+            probe!(PumpDequeued);
 
             // The pump never returns to Java, so local references are
             // only freed when the frame they live in is popped. One
@@ -401,6 +402,7 @@ impl Pump {
         method_id: JStaticMethodID,
         args: &[jni::sys::jvalue],
     ) -> Result<(), jni::errors::Error> {
+        probe!(PumpCallingKotlin);
         // SAFETY: `method_id` was resolved by `PumpMethods::resolve` on
         // `self.class`, which the `GlobalRef` keeps loaded, so the id
         // stays valid. Every caller passes `args` whose count and JNI
@@ -414,6 +416,7 @@ impl Pump {
                 args,
             )?;
         }
+        probe!(PumpKotlinReturned);
         Ok(())
     }
 }

@@ -12,6 +12,18 @@
 
 #![doc(html_root_url = "https://docs.rs/istmo-android")]
 
+/// Stamp a `latency_probe::Stage`; expands to nothing unless the
+/// `latency-probe` feature is on.
+macro_rules! probe {
+    ($stage:ident) => {
+        #[cfg(feature = "latency-probe")]
+        $crate::latency_probe::stamp($crate::latency_probe::Stage::$stage);
+    };
+}
+
+#[cfg(feature = "latency-probe")]
+pub mod latency_probe;
+
 #[cfg(target_os = "android")]
 pub mod app;
 pub mod assets;

@@ -22,12 +22,17 @@ categories = ["os::android-apis", "development-tools::ffi"]
 default = ["native-activity"]
 native-activity = ["android-activity/native-activity"]
 game-activity = ["android-activity/game-activity"]
+# Off by default: stamps CLOCK_MONOTONIC at the pump and JNI entry
+# stages so an on-device benchmark can split a call into hops. The
+# facade never enables it; only `examples/bench-android` does.
+latency-probe = ["dep:libc"]
 
 [dependencies]
 istmo-core = { workspace = true }
 flume = { workspace = true }
 tracing = { workspace = true }
 jni = { workspace = true }
+libc = { version = "0.2", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", default-features = false }
