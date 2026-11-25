@@ -1,42 +1,48 @@
 #!/usr/bin/env bash
 # Build the bench APK, install it on an attached Android device, run the
-# matrix and capture the output into `results/<device>-<timestamp>.txt`.
+# latency matrix and capture it into
+# `results/mobile-latency/<device>-<timestamp>.txt`.
+#
+# Each mode runs in its own process (the istmo runtime starts once per
+# process): `full` (the matrix, runtime started the way apps start it),
+# `probe` (per-hop breakdown, pump callbacks stamped by the bench) and
+# `legacy` (the original batch-mean matrix).
 #
 # Requires `adb`, `cargo ndk`, `gradle`, the Android SDK/NDK and JDK 17
-# on the PATH. The easiest way to get all of them at once is to invoke
-# this script from inside `nix develop .#bench-android`.
+# on the PATH: `nix run .#bench-android-device` provides all of them.
 
 set -euo pipefail
 
 usage() {
-    cat <<EOF
-Usage: $(basename "$0") [--serial <id>] [--abi <arm64-v8a|x86_64|...>] [--skip-build]
+    cat <<USAGE
+Usage: $(basename "$0") [--serial <id>] [--abi <abi>] [--skip-build] [--modes "full probe legacy"]
 
   --serial <id>   ADB device id (needed when more than one is attached).
   --abi <abi>     Build + install only the given ABI (default: arm64-v8a).
-  --skip-build    Reuse an already-installed APK, just launch + capture.
-EOF
+  --skip-build    Reuse the APK already built, just install + run.
+  --modes <list>  Which runs to do, in order (default: "full probe legacy").
+USAGE
     exit "${1:-0}"
 }
 
 serial=""
 abi="arm64-v8a"
 skip_build=0
+modes="full probe legacy"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --serial) serial="$2"; shift 2 ;;
         --abi) abi="$2"; shift 2 ;;
         --skip-build) skip_build=1; shift ;;
+        --modes) modes="$2"; shift 2 ;;
         -h|--help) usage 0 ;;
         *) echo "unknown arg: $1" >&2; usage 1 ;;
     esac
 done
 
-# Resolve the repo root. When the script is installed into the Nix
-# store (via `nix run .#bench-android-device`), `$0` points at the
-# store copy and its parent is read-only; honour `$ISTMO_REPO` first,
-# then fall back to the working directory.
+# `$0` lives in the Nix store under `nix run`: resolve the checkout from
+# `$ISTMO_REPO` or the working directory.
 if [ -n "${ISTMO_REPO:-}" ]; then
     repo_root="$ISTMO_REPO"
 elif [ -f "$PWD/Cargo.toml" ] && grep -q '^\[workspace\]' "$PWD/Cargo.toml" 2>/dev/null; then
@@ -46,98 +52,109 @@ else
     exit 2
 fi
 bench_dir="$repo_root/examples/bench-android"
-results_dir="$repo_root/results/bench-android"
+results_dir="$repo_root/results/mobile-latency"
 mkdir -p "$results_dir"
 
 command -v adb >/dev/null || { echo "adb not on PATH (enter nix develop .#bench-android?)" >&2; exit 2; }
 
-if [ -n "$serial" ]; then
-    adb_flags=(-s "$serial")
-else
+if [ -z "$serial" ]; then
     devices=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
     count=$(echo "$devices" | grep -c . || true)
-    if [ "$count" -eq 0 ]; then
-        echo "no adb devices attached (adb devices)" >&2
-        exit 2
-    elif [ "$count" -gt 1 ]; then
+    if [ "$count" -ne 1 ]; then
         echo "$count devices attached; pick one with --serial:" >&2
         echo "$devices" >&2
         exit 2
     fi
     serial="$devices"
-    adb_flags=(-s "$serial")
 fi
+adb_cmd() { adb -s "$serial" "$@"; }
 
-echo "::  using device:   $serial"
-model=$(adb "${adb_flags[@]}" shell getprop ro.product.model | tr -d '\r\n ' | tr '[:upper:]' '[:lower:]')
-release=$(adb "${adb_flags[@]}" shell getprop ro.build.version.release | tr -d '\r\n')
-echo "::  model:          $model"
-echo "::  android:        $release"
+model=$(adb_cmd shell getprop ro.product.model | tr -d '\r\n ' | tr '[:upper:]' '[:lower:]')
+echo "::  device:         $serial ($model, android $(adb_cmd shell getprop ro.build.version.release | tr -d '\r\n'))"
 
 if [ "$skip_build" -eq 0 ]; then
     echo "::  building rust cdylib for $abi"
-    command -v cargo >/dev/null || { echo "cargo not on PATH" >&2; exit 2; }
-    command -v cargo-ndk >/dev/null || { echo "cargo-ndk not on PATH" >&2; exit 2; }
     (
         cd "$bench_dir"
-        cargo ndk -t "$abi" -o android/app/src/main/jniLibs build \
-            -p bench-android --release
+        cargo ndk -t "$abi" -o android/app/src/main/jniLibs build -p bench-android --release
     )
     echo "::  assembling apk"
-    # Nixpkgs ships Gradle with a hard-coded path to a patched `aapt2`
-    # that is not reachable from the Gradle sandbox after a store GC.
-    # Point Gradle at the `aapt2` bundled with the active build-tools
-    # instead; it works in and out of Nix.
-    aapt2_candidate=""
-    if [ -n "${ANDROID_SDK_ROOT:-}" ]; then
-        aapt2_candidate=$(ls "$ANDROID_SDK_ROOT"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -n1 || true)
-    fi
+    # Nixpkgs' Gradle hard-codes a patched `aapt2` path that does not
+    # survive a store GC; point it at the active build-tools' one.
     gradle_aapt2_flag=()
-    if [ -n "$aapt2_candidate" ] && [ -x "$aapt2_candidate" ]; then
-        gradle_aapt2_flag=(-Pandroid.aapt2FromMavenOverride="$aapt2_candidate")
-        echo "::  aapt2:          $aapt2_candidate"
+    if [ -n "${ANDROID_SDK_ROOT:-}" ]; then
+        aapt2=$(ls "$ANDROID_SDK_ROOT"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -n1 || true)
+        [ -n "$aapt2" ] && gradle_aapt2_flag=(-Pandroid.aapt2FromMavenOverride="$aapt2")
     fi
-    (
-        cd "$bench_dir/android"
-        if [ -x ./gradlew ]; then
-            ./gradlew "${gradle_aapt2_flag[@]}" :app:assembleRelease
-        else
-            gradle wrapper --gradle-version 8.10.2 >/dev/null
-            ./gradlew "${gradle_aapt2_flag[@]}" :app:assembleRelease
-        fi
-    )
+    (cd "$bench_dir/android" && ./gradlew "${gradle_aapt2_flag[@]}" :app:assembleRelease)
 fi
 
 apk="$bench_dir/android/app/build/outputs/apk/release/app-release.apk"
-if [ ! -f "$apk" ]; then
-    apk="$bench_dir/android/app/build/outputs/apk/release/app-release-unsigned.apk"
-fi
+[ -f "$apk" ] || apk="$bench_dir/android/app/build/outputs/apk/release/app-release-unsigned.apk"
 [ -f "$apk" ] || { echo "apk not found under release/" >&2; exit 2; }
-
 echo "::  installing"
-adb "${adb_flags[@]}" install -r "$apk" >/dev/null
+adb_cmd install -r "$apk" >/dev/null
 
-echo "::  clearing logcat"
-adb "${adb_flags[@]}" logcat -c
+# Keep the device awake while plugged in, and put the setting back on
+# exit. Some vendor builds (MIUI) refuse this from adb; the activity
+# also holds FLAG_KEEP_SCREEN_ON, so the run proceeds either way.
+stay_on_before=$(adb_cmd shell settings get global stay_on_while_plugged_in | tr -d '\r\n')
+adb_cmd shell svc power stayon usb >/dev/null 2>&1 || echo "::  note: svc power stayon refused; relying on FLAG_KEEP_SCREEN_ON"
+sampler_pid=""
+restore() {
+    [ -n "$sampler_pid" ] && kill "$sampler_pid" 2>/dev/null || true
+    case "$stay_on_before" in
+        0) adb_cmd shell svc power stayon false >/dev/null 2>&1 || true ;;
+        *) adb_cmd shell settings put global stay_on_while_plugged_in "$stay_on_before" >/dev/null 2>&1 || true ;;
+    esac
+}
+trap restore EXIT
 
-echo "::  launching activity (auto mode)"
-adb "${adb_flags[@]}" shell am start -W -n dev.istmo.bench/.BenchActivity \
-    --ez auto true >/dev/null
+awake=$(adb_cmd shell dumpsys power | grep -o 'mWakefulness=[A-Za-z]*' | head -n1)
+keyguard=$(adb_cmd shell dumpsys window | grep -o 'isKeyguardShowing=[a-z]*' | head -n1 || true)
+echo "::  power:          $awake $keyguard"
+if [ "$awake" != "mWakefulness=Awake" ] || [ "$keyguard" = "isKeyguardShowing=true" ]; then
+    echo "device is asleep or locked: wake and unlock it, then re-run" >&2
+    exit 3
+fi
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 out="$results_dir/$model-$timestamp.txt"
+freq_log="$results_dir/$model-$timestamp.freq.txt"
+echo "::  results:        $out"
 
-echo "::  capturing logcat → $out"
-# Filter to our tag at level I, silence everything else. Stop at
-# BENCH_END so the pipe closes cleanly instead of hanging.
-adb "${adb_flags[@]}" logcat -v raw istmo-bench:I '*:S' \
-    | while IFS= read -r line; do
-        echo "$line" >> "$out"
-        case "$line" in
-            *BENCH_END*) echo "$line"; break ;;
-            *) echo "$line" ;;
-        esac
+# Frequencies, thermal status and battery temperature every 2 s, from
+# the shell (the app sandbox cannot always read cpufreq).
+(
+    while true; do
+        line=$(adb_cmd shell 'f=""; for c in /sys/devices/system/cpu/cpu[0-9]*; do f="$f $(basename $c):$(cat $c/cpufreq/scaling_cur_freq 2>/dev/null)"; done; t=$(dumpsys thermalservice 2>/dev/null | grep -m1 "Thermal Status" | tr -d " "); b=$(dumpsys battery | grep -m1 temperature | tr -d " "); echo "$f $t $b"' 2>/dev/null | tr -d '\r')
+        echo "$(date -u +%H:%M:%S) $line" >> "$freq_log"
+        sleep 2
     done
+) &
+sampler_pid=$!
+
+{
+    echo "# governors: $(adb_cmd shell 'for c in /sys/devices/system/cpu/cpu[0-9]*; do printf "%s:%s " $(basename $c) $(cat $c/cpufreq/scaling_governor 2>/dev/null); done' | tr -d '\r')"
+    echo "# thermal: $(adb_cmd shell dumpsys thermalservice 2>/dev/null | grep -m1 'Thermal Status' | tr -d '\r')"
+} >> "$out"
+
+for mode in $modes; do
+    echo "::  running mode:   $mode"
+    adb_cmd shell am force-stop dev.istmo.bench
+    adb_cmd logcat -c
+    adb_cmd shell am start -W -n dev.istmo.bench/.BenchActivity --ez auto true --es mode "$mode" >/dev/null
+    # Our tag only, stop at BENCH_END (or give up after 30 minutes).
+    timeout 1800 adb -s "$serial" logcat -v raw istmo-bench:I '*:S' \
+        | while IFS= read -r line; do
+            echo "$line" >> "$out"
+            case "$line" in
+                *BENCH_END*) echo "$line"; break ;;
+                *) echo "$line" ;;
+            esac
+        done || echo "::  mode $mode timed out" | tee -a "$out"
+done
+adb_cmd shell am force-stop dev.istmo.bench
 
 echo
-echo "::  results captured to $out"
+echo "::  results captured to $out (frequencies: $freq_log)"
