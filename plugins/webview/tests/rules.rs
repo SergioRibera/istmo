@@ -51,3 +51,25 @@ fn shared_rule_vectors() {
     }
     assert!(checked > 30);
 }
+
+#[test]
+fn shared_origin_vectors() {
+    let table = include_str!("origin_vectors.tsv");
+    let mut checked = 0;
+    for (line_no, line) in table.lines().enumerate() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let Some((url, want)) = line.split_once('\t') else {
+            panic!("line {}: expected 2 tab-separated columns", line_no + 1);
+        };
+        let got = url::Url::parse(url)
+            .ok()
+            .as_ref()
+            .and_then(istmo_webview::rules::origin_of);
+        let want = (want != "-").then(|| want.to_owned());
+        assert_eq!(got, want, "line {}: {url}", line_no + 1);
+        checked += 1;
+    }
+    assert!(checked > 10);
+}

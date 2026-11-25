@@ -109,6 +109,7 @@ internal class CompiledRules(rules: NavigationRules) {
     companion object {
         private val BLOCKED = setOf("javascript", "intent", "data", "vbscript")
         private val DEFAULT_PORTS = mapOf("http" to 80, "https" to 443, "ws" to 80, "wss" to 443, "ftp" to 21)
+        private val OPAQUE_ORIGIN_SCHEMES = setOf("file", "data", "blob", "about", "javascript")
 
         fun isScheme(s: String): Boolean =
             s.isNotEmpty() && s[0] in 'a'..'z' && s.all { it in 'a'..'z' || it in '0'..'9' || it in "+-." }
@@ -172,10 +173,13 @@ internal class CompiledRules(rules: NavigationRules) {
             return "/" + out.joinToString("/") + if (trailing && out.isNotEmpty()) "/" else ""
         }
 
-        /** Origin of `raw` (`scheme://host[:port]`), `null` when opaque. */
+        /**
+         * Origin of `raw` (`scheme://host[:port]`), `null` when opaque. Custom
+         * schemes with a host count: engines key app-scheme documents that way.
+         */
         fun originOf(raw: String): String? {
             val url = Url.parse(raw) ?: return null
-            if (url.host == null || url.scheme !in DEFAULT_PORTS) return null
+            if (url.host == null || url.scheme in OPAQUE_ORIGIN_SCHEMES) return null
             return url.scheme + "://" + url.host + (url.explicitPort?.let { ":$it" } ?: "")
         }
     }

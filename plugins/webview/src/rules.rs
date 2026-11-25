@@ -225,7 +225,27 @@ fn path_matches(prefix: &str, path: &str) -> bool {
 #[must_use]
 pub fn origin_of(url: &Url) -> Option<String> {
     let origin = url.origin();
-    origin.is_tuple().then(|| origin.ascii_serialization())
+    if origin.is_tuple() {
+        return Some(origin.ascii_serialization());
+    }
+    // WHATWG gives custom schemes opaque origins, but engines key the
+    // documents an app scheme handler serves by `scheme://host[:port]`;
+    // so does every check here.
+    if matches!(
+        url.scheme(),
+        "file" | "data" | "blob" | "about" | "javascript"
+    ) {
+        return None;
+    }
+    let host = url
+        .host_str()
+        .filter(|h| !h.is_empty())?
+        .to_ascii_lowercase();
+    let scheme = url.scheme();
+    Some(url.port().map_or_else(
+        || format!("{scheme}://{host}"),
+        |port| format!("{scheme}://{host}:{port}"),
+    ))
 }
 
 /// Normalise an origin written by the app (`HTTPS://Example.COM:443`

@@ -360,16 +360,7 @@ impl ViewCore {
     /// origin, drop replies owed to the old document.
     pub(crate) fn committed(&self, url: &str) {
         self.document.fetch_add(1, Ordering::Relaxed);
-        let origin = url::Url::parse(url)
-            .ok()
-            .as_ref()
-            .and_then(origin_of)
-            .or_else(|| {
-                url::Url::parse(url)
-                    .ok()
-                    .filter(|u| u.host_str().is_some())
-                    .map(|u| format!("{}://{}", u.scheme(), u.host_str().unwrap_or_default()))
-            });
+        let origin = url::Url::parse(url).ok().as_ref().and_then(origin_of);
         *lock(&self.committed) = origin;
         for (_, callback) in self.replies.drain() {
             self.post(Box::new(move || {

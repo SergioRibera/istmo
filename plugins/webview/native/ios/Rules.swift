@@ -4,6 +4,7 @@
 struct CompiledRules {
     private static let blocked: Set<String> = ["javascript", "intent", "data", "vbscript"]
     static let defaultPorts: [String: Int] = ["http": 80, "https": 443, "ws": 80, "wss": 443, "ftp": 21]
+    static let opaqueOriginSchemes: Set<String> = ["file", "data", "blob", "about", "javascript"]
 
     private struct Pattern {
         let scheme: String?
@@ -135,9 +136,10 @@ struct CompiledRules {
         return UInt64(digits, radix: radix)
     }
 
-    /// `scheme://host[:port]` of `raw`, `nil` for opaque origins.
+    /// `scheme://host[:port]` of `raw`, `nil` for opaque origins. Custom
+    /// schemes with a host count: engines key app-scheme documents that way.
     static func origin(of raw: String) -> String? {
-        guard let url = RuleUrl.parse(raw), let host = url.host, defaultPorts[url.scheme] != nil else { return nil }
+        guard let url = RuleUrl.parse(raw), let host = url.host, !opaqueOriginSchemes.contains(url.scheme) else { return nil }
         return url.scheme + "://" + host + (url.explicitPort.map { ":\($0)" } ?? "")
     }
 }
