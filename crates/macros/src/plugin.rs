@@ -198,11 +198,11 @@ fn expand_typed_shortcut(
 ) -> TokenStream {
     let trait_methods: Vec<TokenStream> = specs
         .iter()
-        .filter_map(|spec| expand_typed_trait_method(root, spec))
+        .map(|spec| expand_typed_trait_method(root, spec))
         .collect();
     let impl_methods: Vec<TokenStream> = specs
         .iter()
-        .filter_map(|spec| expand_typed_delegating_impl_method(root, spec))
+        .map(|spec| expand_typed_delegating_impl_method(root, spec))
         .collect();
     let typed_doc = format!(
         " Typed in-process shortcut for the [`{trait_ident}`] plugin.\n\n \
@@ -249,14 +249,21 @@ fn expand_typed_shortcut(
     }
 }
 
-fn expand_typed_trait_method(root: &Path, spec: &MethodSpec) -> Option<TokenStream> {
-    if !matches!(spec.kind, MethodKind::Unary { .. }) {
-        return None;
-    }
+fn expand_typed_trait_method(root: &Path, spec: &MethodSpec) -> TokenStream {
     let name = &spec.name;
     let params = spec.client_params();
-    let ret_ty = typed_return_ty(root, &spec.ret);
-    Some(quote! {
+    if spec.kind == MethodKind::Stream {
+        let item_ty = typed_return_ty(&spec.ret);
+        return quote! {
+            fn #name(
+                &self,
+                #(#params,)*
+                __istmo_cancel: #root::CancelToken,
+            ) -> #root::__private::flume::Receiver<#item_ty>;
+        };
+    }
+    let ret_ty = typed_return_ty(&spec.ret);
+    quote! {
         fn #name<'__istmo_a>(
             &'__istmo_a self,
             #(#params),*
@@ -265,16 +272,43 @@ fn expand_typed_trait_method(root: &Path, spec: &MethodSpec) -> Option<TokenStre
                 + ::core::marker::Send
                 + '__istmo_a
         >>;
-    })
+    }
 }
 
-fn expand_typed_delegating_impl_method(root: &Path, spec: &MethodSpec) -> Option<TokenStream> {
-    if !matches!(spec.kind, MethodKind::Unary { .. }) {
-        return None;
-    }
+fn expand_typed_delegating_impl_method(root: &Path, spec: &MethodSpec) -> TokenStream {
     let name = &spec.name;
     let params = spec.client_params();
-    let ret_ty = typed_return_ty(root, &spec.ret);
+    let ret_ty = typed_return_ty(&spec.ret);
+    if spec.kind == MethodKind::Stream {
+        // The stream's token goes to every `CancelToken` argument; a
+        // method without one ignores it.
+        let takes_cancel = spec.args.iter().any(|a| a.role == ArgRole::Cancel);
+        let cancel_param = if takes_cancel {
+            quote! { __istmo_cancel }
+        } else {
+            quote! { _ }
+        };
+        let call_args: Vec<TokenStream> = spec
+            .args
+            .iter()
+            .map(|a| {
+                let n = &a.ident;
+                match a.role {
+                    ArgRole::Wire => quote! { #n },
+                    ArgRole::Cancel => quote! { ::core::clone::Clone::clone(&__istmo_cancel) },
+                }
+            })
+            .collect();
+        return quote! {
+            fn #name(
+                &self,
+                #(#params,)*
+                #cancel_param: #root::CancelToken,
+            ) -> #root::__private::flume::Receiver<#ret_ty> {
+                self.inner.#name(#(#call_args),*)
+            }
+        };
+    }
     let call_args: Vec<TokenStream> = spec
         .args
         .iter()
@@ -286,7 +320,7 @@ fn expand_typed_delegating_impl_method(root: &Path, spec: &MethodSpec) -> Option
             }
         })
         .collect();
-    Some(quote! {
+    quote! {
         fn #name<'__istmo_a>(
             &'__istmo_a self,
             #(#params),*
@@ -297,10 +331,10 @@ fn expand_typed_delegating_impl_method(root: &Path, spec: &MethodSpec) -> Option
         >> {
             ::std::boxed::Box::pin(self.inner.#name(#(#call_args),*))
         }
-    })
+    }
 }
 
-fn typed_return_ty(_root: &Path, ret: &ReturnShape) -> TokenStream {
+fn typed_return_ty(ret: &ReturnShape) -> TokenStream {
     match ret {
         ReturnShape::Plain(ty) => quote! { #ty },
         ReturnShape::Result { ok, err } => quote! {
@@ -884,7 +918,7 @@ fn expand_client_method(
     typed_ident: Option<&Ident>,
 ) -> syn::Result<TokenStream> {
     match spec.kind {
-        MethodKind::Stream => Ok(expand_stream_method(plugin_id, root, spec)),
+        MethodKind::Stream => Ok(expand_stream_method(plugin_id, root, spec, typed_ident)),
         MethodKind::Unary { owned } => {
             let base = expand_unary_method(plugin_id, root, spec, typed_ident);
             if owned {
@@ -1295,7 +1329,12 @@ fn expand_unary_owned_method(root: &Path, spec: &MethodSpec) -> syn::Result<Toke
     })
 }
 
-fn expand_stream_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> TokenStream {
+fn expand_stream_method(
+    plugin_id: &LitStr,
+    root: &Path,
+    spec: &MethodSpec,
+    typed_ident: Option<&Ident>,
+) -> TokenStream {
     let MethodSpec {
         name,
         method_name_str,
@@ -1312,12 +1351,16 @@ fn expand_stream_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> T
         || quote! { #root::TypedStream<#item_ty> },
         |err_ty| quote! { #root::TypedStream<#item_ty, #err_ty> },
     );
+    let typed_fast_path = typed_ident
+        .map(|typed_ident| expand_typed_stream_fast_path(root, spec, typed_ident))
+        .unwrap_or_default();
     quote! {
         #attrs
         pub fn #name(&self, #(#params),*) -> ::core::result::Result<
             #stream_ty,
             #root::IstmoError,
         > {
+            #typed_fast_path
             let payload = #payload_expr;
             let handle = self.__runtime.stream(
                 #plugin_id,
@@ -1327,6 +1370,35 @@ fn expand_stream_method(plugin_id: &LitStr, root: &Path, spec: &MethodSpec) -> T
                 0,
             )?;
             ::core::result::Result::Ok(#root::TypedStream::new(handle))
+        }
+    }
+}
+
+/// Client side of the typed shortcut for a stream: hand the consumer the
+/// implementation's own receiver, moved, with no encoder or pump.
+fn expand_typed_stream_fast_path(
+    root: &Path,
+    spec: &MethodSpec,
+    typed_ident: &Ident,
+) -> TokenStream {
+    let name = &spec.name;
+    let arg_names = spec.wire_arg_names();
+    let open = if spec.ret.err_ty().is_some() {
+        quote! { open_local_fallible }
+    } else {
+        quote! { open_local }
+    };
+    quote! {
+        if self.__instance_id.is_none()
+            && let ::core::option::Option::Some(__istmo_typed) = self
+                .__runtime
+                .typed_host::<dyn #typed_ident>(
+                    <Self as #root::Plugin>::PLUGIN_ID,
+                )
+        {
+            return #root::TypedStream::#open(&self.__runtime, |__istmo_cancel| {
+                __istmo_typed.#name(#(#arg_names,)* __istmo_cancel)
+            });
         }
     }
 }
