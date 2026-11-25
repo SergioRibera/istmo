@@ -9,7 +9,7 @@ mod private;
 pub mod wire;
 
 use istmo::plugins::{ServiceContext, TaskOutcome, WorkerContext};
-use istmo::{CancelToken, NativeHandleId, message, plugin};
+use istmo::{CancelToken, FrameSinkId, NativeHandleId, message, plugin};
 
 /// Generated wire types, as `istmo-plugins` includes them.
 pub mod generated {
@@ -118,6 +118,9 @@ pub trait Plain {
     async fn echo(&self, text: String) -> String;
     #[istmo::stream]
     fn events(&self) -> String;
+    #[istmo::stream]
+    fn watch(&self, every: u32, cancel: CancelToken) -> Result<u32, SyncError>;
+    async fn feed(&self, sink: FrameSinkId<wire::Shape>) -> bool;
 }
 
 /// Host-side [`Plain`] implementation.
@@ -131,6 +134,14 @@ impl Plain for Loopback {
 
     fn events(&self) -> flume::Receiver<String> {
         flume::unbounded().1
+    }
+
+    fn watch(&self, _every: u32, _cancel: CancelToken) -> flume::Receiver<Result<u32, SyncError>> {
+        flume::unbounded().1
+    }
+
+    fn feed(&self, _sink: FrameSinkId<wire::Shape>) -> impl Future<Output = bool> + Send {
+        std::future::ready(false)
     }
 }
 
