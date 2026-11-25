@@ -1,0 +1,24 @@
+--------- beginning of main
+BENCH_BEGIN
+device: LENOVO TB373FU
+abi: arm64-v8a · android: 16 (sdk 36)
+mode      payload    p50       p95       p99       min       max
+---------------------------------------------------------------
+JniNoop         0B      21 ns     38 ns    560 ns     21 ns    560 ns
+JniNoopBytes        0B      66 ns    264 ns   1363 ns     65 ns   1363 ns
+JniNoopBytes       64B     112 ns    491 ns   1823 ns    104 ns   1823 ns
+JniNoopBytes     1024B     132 ns    642 ns   1720 ns    128 ns   1720 ns
+JniNoopBytes    65536B    2360 ns   4857 ns   5373 ns   2214 ns   5373 ns
+Isolated        0B  155960 ns 170869 ns 180813 ns 105421 ns 180813 ns
+Isolated       64B  157092 ns 843689 ns 881150 ns 130085 ns 881150 ns
+Isolated     1024B  862283 ns 925019 ns 941609 ns 105706 ns 941609 ns
+Isolated    65536B  924280 ns 970683 ns 985447 ns 534994 ns 985447 ns
+Inline          0B     830 ns   2788 ns   4387 ns    824 ns   4387 ns
+Inline         64B     918 ns    927 ns    963 ns    913 ns    963 ns
+Inline       1024B     942 ns    949 ns    953 ns    941 ns    953 ns
+Inline      65536B    5556 ns   5575 ns   5629 ns   5534 ns   5629 ns
+Typed           0B       1 ns      1 ns      1 ns      1 ns      1 ns
+Typed          64B      46 ns     52 ns     64 ns     45 ns     64 ns
+Typed        1024B      61 ns     69 ns     74 ns     60 ns     74 ns
+Typed       65536B    1096 ns   1129 ns   1150 ns   1015 ns   1150 ns
+BENCH_END

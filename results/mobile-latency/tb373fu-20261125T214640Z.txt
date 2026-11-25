@@ -1,0 +1,317 @@
+# governors: cpu0: cpu1: cpu2: cpu3: cpu4: cpu5: cpu6: cpu7: 
+# thermal: Thermal Status: 2
+--------- beginning of main
+BENCH_BEGIN
+mode: full
+abi: IstmoRuntime.start passed the handshake (native=1 runtime=1 ok)
+device: LENOVO TB373FU sdk=36 release=16
+soc: Mediatek MT8792
+cpu0 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu1 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu2 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu3 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu4 part=0xd4d capacity=996 max_khz=3200000 governor=?
+cpu5 part=0xd4d capacity=996 max_khz=3200000 governor=?
+cpu6 part=0xd4d capacity=996 max_khz=3200000 governor=?
+cpu7 part=0xd4d capacity=1024 max_khz=3350000 governor=?
+freqs: 0:2200000 1:2200000 2:2200000 3:2200000 4:3200000 5:3200000 6:3200000 7:3350000
+masks: little=0xf big=0xf0
+clock: nanoTime vs CLOCK_MONOTONIC: 0/10000 outside the bracket (max off 0 ns), widest bracket 465231 ns
+== per-call matrix (warm-up 100, measured 1000)
+base     ClockOverhead                 0 idle     n= 1000 p50=        0 p95=      231 p99=      231 min=        0 max=      231 mean=       45 first=      231 | istmo-bench@5
+base     kt nanoTime pair              0 idle     n= 1000 p50=        0 p95=      231 p99=      231 min=        0 max=      231 mean=       69 first=      538 | istmo-bench@5
+jni      kt->rs noop                   0 idle     n= 1000 p50=       77 p95=      231 p99=      231 min=        0 max=      231 mean=       82 first=    20076 | istmo-bench@5
+jni      kt->rs noop(byte[])           0 idle     n= 1000 p50=       77 p95=      231 p99=      231 min=        0 max=    24308 mean=      163 first=    15769 | istmo-bench@5
+jni      kt->rs noop(byte[])          64 idle     n= 1000 p50=      231 p95=      308 p99=      308 min=       76 max=   314077 mean=      631 first=     2462 | istmo-bench@5
+jni      kt->rs noop(byte[])        1024 idle     n= 1000 p50=      231 p95=      308 p99=      308 min=        0 max=      615 mean=      211 first=    12616 | istmo-bench@5
+jni      kt->rs noop(byte[])       65536 idle     n= 1000 p50=     3384 p95=     4000 p99=     4385 min=     2769 max=   633000 mean=     4193 first=    36077 | istmo-bench@5
+jni      rs->kt CallStatic             0 idle     n= 1000 p50=       77 p95=      231 p99=      231 min=        0 max=      231 mean=      133 first=     4385 | istmo-bench@5
+jni      rs->kt Call(new byte[])        0 idle     n= 1000 p50=      307 p95=      308 p99=      308 min=       76 max=     1307 mean=      267 first=     9154 | istmo-bench@5
+jni      rs->kt Call(new byte[])       64 idle     n= 1000 p50=      307 p95=      308 p99=     1538 min=       76 max=   169924 mean=      487 first=     6385 | istmo-bench@5
+jni      rs->kt Call(new byte[])     1024 idle     n= 1000 p50=      308 p95=     1461 p99=     2385 min=       76 max=   122154 mean=      688 first=     6461 | istmo-bench@6
+jni      rs->kt Call(new byte[])    65536 idle     n= 1000 p50=    17616 p95=    38769 p99=   215385 min=    13000 max=  1633846 mean=    29089 first=    29538 | istmo-bench@7
+jni      rs->kt attach+detach          0 idle     n= 1000 p50=     6461 p95=     8616 p99=    44000 min=     5846 max=   453462 mean=     8080 first=    55615 | istmo-bench@7
+rs       IsolatedRaw                   0 idle     n= 1000 p50=    76000 p95=   307077 p99=  1250077 min=    56923 max=  2861231 mean=   127092 first=  1831462 | istmo-bench@7
+rs       InlineRaw                     0 idle     n= 1000 p50=      923 p95=      924 p99=      924 min=      692 max=    17308 mean=      932 first=     9307 | istmo-bench@7
+rs       Typed                         0 idle     n= 1000 p50=        0 p95=      231 p99=      231 min=        0 max=      231 mean=       48 first=       77 | istmo-bench@7
+rs       IsolatedRaw                  64 idle     n= 1000 p50=    73461 p95=   182846 p99=   697770 min=    56692 max=  1996923 mean=   102065 first=   150462 | istmo-bench@6
+rs       InlineRaw                    64 idle     n= 1000 p50=     1000 p95=     1154 p99=     1154 min=      923 max=    47077 mean=     1075 first=     5231 | istmo-bench@7
+rs       Typed                        64 idle     n= 1000 p50=       77 p95=      231 p99=      231 min=        0 max=      231 mean=       98 first=      846 | istmo-bench@7
+rs       IsolatedRaw                1024 idle     n= 1000 p50=    97846 p95=   133769 p99=   453154 min=    73230 max=  1666077 mean=   111936 first=   150385 | istmo-bench@6
+rs       InlineRaw                  1024 idle     n= 1000 p50=     1000 p95=     1230 p99=     1231 min=      923 max=     1231 mean=     1066 first=     7308 | istmo-bench@7
+rs       Typed                      1024 idle     n= 1000 p50=       77 p95=      231 p99=      231 min=        0 max=      231 mean=      114 first=      615 | istmo-bench@7
+rs       IsolatedRaw               65536 idle     n= 1000 p50=   103462 p95=   149154 p99=   400385 min=    74384 max=  1326461 mean=   115676 first=   229770 | istmo-bench@7
+rs       InlineRaw                 65536 idle     n= 1000 p50=     5539 p95=     5847 p99=     6077 min=     4692 max=    41539 mean=     5626 first=    26461 | istmo-bench@7
+rs       Typed                     65536 idle     n= 1000 p50=     1154 p95=     4538 p99=     5154 min=      923 max=   603692 mean=     2134 first=     7077 | istmo-bench@6
+rs->kt   KotlinEcho(client)            0 idle     n= 1000 p50=    58153 p95=   151077 p99=   537923 min=    40000 max=  1313000 mean=    77311 first=  2137539 | DefaultDispatch@5 DefaultDispatch@7 istmo-bench@6
+rs->kt   KotlinEcho(raw)               0 idle     n= 1000 p50=    43077 p95=    77230 p99=   196308 min=    32923 max=   457538 mean=    50873 first=  1431308 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+kt->rs   RustEcho(client,Isol)         0 idle     n= 1000 p50=   132616 p95=   216923 p99=   479923 min=    99692 max=  1993846 mean=   153488 first=  1406461 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@7
+kt->rs   RawCall(Inline)               0 idle     n= 1000 p50=    29154 p95=    53846 p99=   221230 min=    20539 max=  1443385 mean=    37519 first=   193923 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@4
+kt->rs   RawCall(Isolated)             0 idle     n= 1000 p50=   200538 p95=   316000 p99=   603923 min=    93154 max=  4104692 mean=   203545 first=  1799769 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@7
+rs->kt   KotlinEcho(client)           64 idle     n= 1000 p50=    81231 p95=   163384 p99=   458462 min=    66770 max=  3642539 mean=   100689 first=   220230 | DefaultDispatch@5 DefaultDispatch@6 istmo-bench@4
+rs->kt   KotlinEcho(raw)              64 idle     n= 1000 p50=    81615 p95=   182077 p99=   725539 min=    64000 max=  1768846 mean=   111231 first=   170231 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+kt->rs   RustEcho(client,Isol)        64 idle     n= 1000 p50=   238077 p95=   751462 p99=  2312384 min=   108308 max=  4163308 mean=   329537 first=  3167000 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@7
+kt->rs   RawCall(Inline)              64 idle     n= 1000 p50=    55924 p95=    73846 p99=   129923 min=    33539 max=  1306692 mean=    61594 first=   157230 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@4
+kt->rs   RawCall(Isolated)            64 idle     n= 1000 p50=   236000 p95=   344538 p99=   718153 min=   167077 max=  1610846 mean=   253795 first= 14586461 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+rs->kt   KotlinEcho(client)         1024 idle     n= 1000 p50=    88231 p95=   344923 p99=  1076307 min=    69846 max=  2139385 mean=   134091 first=  3175077 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@5
+rs->kt   KotlinEcho(raw)            1024 idle     n= 1000 p50=    83077 p95=   236616 p99=   896231 min=    65923 max=  1444615 mean=   120137 first=   177923 | DefaultDispatch@5 DefaultDispatch@6 istmo-bench@5
+kt->rs   RustEcho(client,Isol)      1024 idle     n= 1000 p50=   256000 p95=   345769 p99=   556000 min=   170462 max=   784231 mean=   265617 first=   882461 | DefaultDispatch@5 DefaultDispatch@6 istmo-bench@5
+kt->rs   RawCall(Inline)            1024 idle     n= 1000 p50=    60923 p95=    89923 p99=   500384 min=    48923 max=  2137231 mean=    76941 first=   238462 | DefaultDispatch@5 DefaultDispatch@6 istmo-bench@5
+kt->rs   RawCall(Isolated)          1024 idle     n= 1000 p50=   234769 p95=   332384 p99=   596923 min=   150077 max=  6589615 mean=   254113 first=  2583692 | DefaultDispatch@5 DefaultDispatch@6 istmo-bench@5
+rs->kt   KotlinEcho(client)        65536 idle     n= 1000 p50=   326539 p95=   985615 p99=  1676385 min=   255693 max=  3300231 mean=   431513 first=  3258462 | DefaultDispatch@4 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+rs->kt   KotlinEcho(raw)           65536 idle     n= 1000 p50=   289308 p95=   835615 p99=  2027692 min=   159385 max=  8681923 mean=   397678 first=   530461 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@7
+kt->rs   RustEcho(client,Isol)     65536 idle     n= 1000 p50=   478154 p95=   715693 p99=  4198154 min=   269769 max=  8952000 mean=   581314 first=   637231 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+kt->rs   RawCall(Inline)           65536 idle     n= 1000 p50=   119385 p95=   209231 p99=   602538 min=    92538 max=  2531693 mean=   141292 first=   265230 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+kt->rs   RawCall(Isolated)         65536 idle     n= 1000 p50=   293615 p95=   500538 p99=  1297000 min=   156616 max=  8757538 mean=   352230 first=  3928616 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+freqs: 0:2200000 1:2200000 2:2200000 3:2200000 4:2100000 5:2100000 6:2100000 7:1300000
+== streams (1000 items after 100 warm-up; paced = 200 us gap, burst = back to back)
+stream   kt->rs paced                 64 idle     n= 1000 p50=    28230 p95=   367077 p99=   683154 min=     8385 max=  1335693 mean=    94464 first=   367462 items/s=3333 first_item_ns=4596385 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@4
+stream   kt->rs burst                 64 idle     n= 1000 p50=  1547692 p95=  3235384 p99=  3382846 min=     5538 max=  3446846 mean=  1706399 first=    79462 items/s=105015 first_item_ns=4097847 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@7
+stream   rs->kt paced                 64 idle     n= 1000 p50=   153539 p95=   827000 p99=  1313923 min=    56923 max=  2134846 mean=   285192 first=   525538 items/s=3308 first_item_ns=3645615 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@5
+stream   rs->kt burst                 64 idle     n= 1000 p50=  1786462 p95=  8596231 p99=  8662769 min=   111384 max=  8689230 mean=  3505746 first=   706769 items/s=68781 first_item_ns=2210385 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+stream   kt->rs paced               1024 idle     n= 1000 p50=    25846 p95=   319616 p99=   585770 min=    14462 max=  1203077 mean=    68373 first=    91692 items/s=3335 first_item_ns=685846 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@5
+stream   kt->rs burst               1024 idle     n= 1000 p50=   137462 p95=   329231 p99=   433154 min=     3462 max=   449231 mean=   150200 first=    66077 items/s=179645 first_item_ns=366154 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+stream   rs->kt paced               1024 idle     n= 1000 p50=    98462 p95=   731770 p99=  1063077 min=    53231 max=  1636000 mean=   215637 first=   272308 items/s=3343 first_item_ns=3232616 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+stream   rs->kt burst               1024 idle     n= 1000 p50=  1884616 p95=  5752231 p99=  7637846 min=   590077 max=  7697230 mean=  3013343 first=   477231 items/s=55089 first_item_ns=2243461 | DefaultDispatch@5 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@7
+stream   kt->rs paced              65536 idle     n= 1000 p50=   148539 p95=   659000 p99=   867384 min=   104000 max=  1222154 mean=   233619 first=   231692 items/s=2293 first_item_ns=943692 | DefaultDispatch@4 DefaultDispatch@6 DefaultDispatch@7 istmo-bench@5
+stream   kt->rs burst              65536 idle     n= 1000 p50=    73308 p95=  1042231 p99=  2674154 min=    53847 max=  3488923 mean=   202670 first=   419692 items/s=10926 first_item_ns=4600308 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+stream   rs->kt paced              65536 idle     n= 1000 p50=   433000 p95=  1389000 p99=  1911769 min=   142461 max=  3189846 mean=   550651 first=  3071616 items/s=3311 first_item_ns=7974462 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+stream   rs->kt burst              65536 idle     n= 1000 p50=  7957538 p95= 13513231 p99= 14904384 min=  2390154 max= 15573770 mean=  8356221 first=   410769 items/s=16056 first_item_ns=4371769 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@7
+== thread hand-off baselines (idle); samples are round trips
+wake     futex                         0 idle     n= 1000 p50=    28692 p95=    48385 p99=    68692 min=    14693 max=  4899693 mean=    35145 first=  1730153 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+wake     condvar                       0 idle     n= 1000 p50=    31461 p95=    46153 p99=    70154 min=    18692 max=  1902231 mean=    36406 first=  1112000 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@5
+wake     flume                         0 idle     n= 1000 p50=    28924 p95=    34847 p99=    90461 min=    17231 max=  2521538 mean=    31946 first=   342846 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@4
+wake     flume spin5us                 5 idle     n= 1000 p50=      847 p95=      924 p99=     1154 min=      615 max=    37846 mean=      926 first=   380308 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@4
+wake     flume spin20us               20 idle     n= 1000 p50=      846 p95=      923 p99=     1154 min=      615 max=     1154 mean=      801 first=    64924 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@4
+wake     flume spin50us               50 idle     n= 1000 p50=      846 p95=      923 p99=      924 min=      615 max=     1154 mean=      836 first=    21231 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@4
+wake     spawn->start                  0 idle     n= 1000 p50=    71693 p95=   100077 p99=   172000 min=    35077 max=   823769 mean=    75658 first=   105231 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@4
+wake     spawn->join                   0 idle     n= 1000 p50=   110769 p95=   226846 p99=   900231 min=    61308 max=  3087000 mean=   143503 first=   248538 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@7
+wake     kt park/unpark                0 idle     n= 1000 p50=    28308 p95=    48000 p99=   100077 min=    15077 max=  1955769 mean=    31788 first=   596923 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@4
+wake     kt Looper post                0 idle     n= 1000 p50=    37230 p95=    48307 p99=    70846 min=    20616 max=   777846 mean=    39095 first=   403461 | DefaultDispatch@6 DefaultDispatch@7 istmo-bench@5
+wake     kt withContext(Default)        0 idle     n= 1000 p50=    52538 p95=    66769 p99=    93923 min=    21000 max=   562462 mean=    54906 first=   899769 | DefaultDispatch@4 DefaultDispatch@6 istmo-bench@4
+== frame sinks (Kotlin producer → Rust FrameSink queue(4); 1000 frames after 50 warm-up)
+frames   frames Bytes submit->recv     4096 idle     n=  999 p50=    35615 p95=   404384 p99=   669231 min=     8077 max=  1686692 mean=    96457 | received=1049 evicted=1 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=ok
+frames   frames Bytes submit cost     4096 idle     n= 1000 p50=    17231 p95=    69231 p99=   139153 min=     5462 max=   189847 mean=    27953
+frames   frames Bytes submit->recv  1048576 idle     n= 1000 p50=   564307 p95=  1162384 p99=  1349153 min=   110462 max=  1759308 mean=   627180 | received=1050 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=ok
+frames   frames Bytes submit cost  1048576 idle     n= 1000 p50=   238539 p95=   718846 p99=   782461 min=   103077 max=   913231 mean=   377521
+frames   frames Bytes submit->recv  8294400 idle     n= 1000 p50=  6555923 p95=  8381231 p99=  9709615 min=  4164307 max= 13715923 mean=  6715070 | received=1050 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=ok
+frames   frames Bytes submit cost  8294400 idle     n= 1000 p50=  6423769 p95=  8073231 p99=  9417308 min=  4745538 max= 10398769 mean=  6585332
+frames   frames Slot submit->recv     4096 idle     n= 1000 p50=    39154 p95=   413846 p99=   615308 min=     6462 max=  1092000 mean=   123419 | received=1050 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=ok
+frames   frames Slot submit cost     4096 idle     n= 1000 p50=    12923 p95=    41154 p99=    75769 min=     3461 max=   279462 mean=    17464
+frames   frames Slot submit->recv  1048576 idle     n= 1000 p50=    63385 p95=   487384 p99=   629538 min=    13539 max=  1175616 mean=   169438 | received=1050 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=ok
+frames   frames Slot submit cost  1048576 idle     n= 1000 p50=    13923 p95=    51616 p99=    85539 min=     4231 max=   174538 mean=    21824
+frames   frames Slot submit->recv  8294400 idle     n= 1000 p50=   272385 p95=   619000 p99=   798385 min=    11000 max=  1255616 mean=   280367 | received=1050 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=ok
+frames   frames Slot submit cost  8294400 idle     n= 1000 p50=    15769 p95=    75461 p99=   137231 min=     7385 max=   211154 mean=    28229
+frames   frames HardwareBuffer submit->recv     4096 idle     n= 1000 p50=    54231 p95=   459000 p99=   639693 min=     6693 max=  1448615 mean=   143648 | received=1050 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=ok
+frames   frames HardwareBuffer submit cost     4096 idle     n= 1000 p50=    19923 p95=    70231 p99=    92692 min=     5231 max=   296307 mean=    25859
+frames   frames HardwareBuffer drop->closed     4096 idle     n= 1000 p50=    51077 p95=   460923 p99=   695000 min=     3077 max=  1583692 mean=   135792
+frames   frames HardwareBuffer submit->recv  1048576 idle     n= 1000 p50=   191770 p95=   580308 p99=   867077 min=     5846 max=  1318154 mean=   227065 | received=1050 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=ok
+frames   frames HardwareBuffer submit cost  1048576 idle     n= 1000 p50=    16923 p95=    59615 p99=   108077 min=     3077 max=   233231 mean=    23870
+frames   frames HardwareBuffer drop->closed  1048576 idle     n= 1000 p50=    46539 p95=   330692 p99=   625616 min=     9846 max=   980616 mean=    85322
+frames   frames HardwareBuffer submit->recv  8294400 idle     n= 1000 p50=   324923 p95=   648385 p99=   781307 min=    23308 max=  1122154 mean=   336783 | received=1050 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=ok
+frames   frames HardwareBuffer submit cost  8294400 idle     n= 1000 p50=    28538 p95=   172077 p99=   256923 min=     8077 max=   682462 mean=    56632
+frames   frames HardwareBuffer drop->closed  8294400 idle     n= 1000 p50=   117923 p95=   575692 p99=   767154 min=    12846 max=  1403692 mean=   198465
+frames   frames Image submit->recv     4096 idle     n=  997 p50=   679923 p95=  1341846 p99=  1726846 min=   127923 max=  5382769 mean=   739822 | received=1047 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=only 1047 of 1050 images arrived
+frames   frames Image submit cost     4096 idle     n=  997 p50=   545462 p95=  1260000 p99=  1840539 min=    56308 max=  4800000 mean=   651659
+frames   frames Image submit->recv  1048576 idle     n=  997 p50=   617846 p95=  1311384 p99=  1744308 min=   114461 max= 10975308 mean=   721219 | received=1047 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=only 1047 of 1050 images arrived
+frames   frames Image submit cost  1048576 idle     n=  997 p50=   488308 p95=  1398538 p99=  1976539 min=    65616 max=  4525308 mean=   629100
+frames   frames Image submit->recv  8294400 idle     n=  999 p50=   499770 p95=   858769 p99=  1530538 min=   133154 max=  3069616 mean=   547161 | received=1049 evicted=0 unsound=0 not_taken=0 end=Some(Completed) first_refusal=0 pending_fences=0 note=only 1049 of 1050 images arrived
+frames   frames Image submit cost  8294400 idle     n=  999 p50=   424846 p95=   735923 p99=  1239462 min=    62462 max=  1844692 mean=   466020
+pinned 33 threads to 0xf
+== sensitivity: little
+rs->kt   KotlinEcho(client)           64 little   n= 1000 p50=   571077 p95=  1681000 p99=  2760385 min=   147615 max=  5875692 mean=   683480 first=   794539 | DefaultDispatch@1 DefaultDispatch@2 istmo-bench@0
+rs->kt   KotlinEcho(raw)              64 little   n= 1000 p50=   791692 p95=  1608923 p99=  1983692 min=   141539 max=  4348000 mean=   866178 first=  3667923 | DefaultDispatch@1 DefaultDispatch@2 istmo-bench@0
+kt->rs   RustEcho(client,Isol)        64 little   n= 1000 p50=   954384 p95=  1516384 p99=  2400308 min=   342385 max=  6214769 mean=   985718 first=  2146846 | DefaultDispatch@1 DefaultDispatch@2 istmo-bench@2
+kt->rs   RawCall(Inline)              64 little   n= 1000 p50=   505230 p95=   954462 p99=  1384000 min=   114769 max=  4943692 mean=   509341 first=   472923 | DefaultDispatch@1 DefaultDispatch@2 istmo-bench@3
+kt->rs   RawCall(Isolated)            64 little   n= 1000 p50=   972846 p95=  1505847 p99=  2080923 min=   335692 max=  4121154 mean=   995213 first=  1183385 | DefaultDispatch@1 DefaultDispatch@2 istmo-bench@1
+rs       IsolatedRaw                  64 little   n= 1000 p50=   568077 p95=  1141539 p99=  1793462 min=   210769 max=  3735307 mean=   633621 first=   391153 | DefaultDispatch@1 DefaultDispatch@2 istmo-bench@2
+rs       InlineRaw                    64 little   n= 1000 p50=     2769 p95=     3000 p99=     6462 min=     2461 max=    56616 mean=     2863 first=    24077 | DefaultDispatch@1 DefaultDispatch@2 istmo-bench@2
+wake     flume                         0 little   n= 1000 p50=    47154 p95=   309616 p99=   767385 min=    32615 max=  8404616 mean=   100370 first=   135770 | DefaultDispatch@1 DefaultDispatch@2 istmo-bench@0
+wake     flume spin20us               20 little   n= 1000 p50=      923 p95=     1770 p99=     2154 min=      692 max=   145923 mean=     1316 first=   398231 | DefaultDispatch@1 DefaultDispatch@2 istmo-bench@0
+wake     spawn->start                  0 little   n= 1000 p50=   397846 p95=   660616 p99=  1017538 min=   130231 max=  2836923 mean=   385301 first=   220923 | DefaultDispatch@1 DefaultDispatch@2 istmo-bench@3
+wake     kt withContext(Default)        0 little   n= 1000 p50=   534461 p95=  1038539 p99=  1538154 min=   115692 max=  4009539 mean=   562576 first=   726769 | DefaultDispatch@1 DefaultDispatch@2 DefaultDispatch@3 istmo-bench@0
+freqs: 0:2200000 1:2200000 2:2200000 3:2200000 4:400000 5:400000 6:400000 7:400000
+pinned 32 threads to 0xf0
+== sensitivity: big
+rs->kt   KotlinEcho(client)           64 big      n= 1000 p50=   215153 p95=  2095077 p99=  2480384 min=    37539 max=  5215615 mean=   566170 first=  1164616 | DefaultDispatch@2 DefaultDispatch@6 istmo-bench@6
+rs->kt   KotlinEcho(raw)              64 big      n= 1000 p50=   104385 p95=   306154 p99=  1347692 min=    35308 max= 15894154 mean=   177156 first=   364076 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@6 istmo-bench@4
+kt->rs   RustEcho(client,Isol)        64 big      n= 1000 p50=   219077 p95=   372000 p99=   970769 min=   136308 max=  6523077 mean=   252205 first=  9113308 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@6 istmo-bench@4
+kt->rs   RawCall(Inline)              64 big      n= 1000 p50=   161538 p95=   240615 p99=  1004846 min=    72000 max=  1793846 mean=   181010 first=   134462 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@6 istmo-bench@6
+kt->rs   RawCall(Isolated)            64 big      n= 1000 p50=   221000 p95=   336385 p99=   894384 min=   131616 max=  3563692 mean=   241807 first=  2106770 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@6 istmo-bench@5
+rs       IsolatedRaw                  64 big      n= 1000 p50=   151692 p95=   218462 p99=   559923 min=   100077 max=  3838154 mean=   168541 first=   161769 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@6 istmo-bench@4
+rs       InlineRaw                    64 big      n= 1000 p50=     2230 p95=     2385 p99=     2385 min=     2153 max=     2462 mean=     2236 first=    11462 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@6 istmo-bench@4
+wake     flume                         0 big      n= 1000 p50=    40615 p95=   141769 p99=   988923 min=    21308 max=  1991693 mean=    87366 first=   110385 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@6 istmo-bench@4
+wake     flume spin20us               20 big      n= 1000 p50=     1154 p95=     2384 p99=     2461 min=      923 max=     2692 mean=     1422 first=   835615 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@6 istmo-bench@4
+wake     spawn->start                  0 big      n= 1000 p50=    95077 p95=   149538 p99=   380385 min=    48923 max=  1489538 mean=   103725 first=   187077 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@6 istmo-bench@7
+wake     kt withContext(Default)        0 big      n= 1000 p50=   151384 p95=   849000 p99=  1580000 min=    45000 max=  2883693 mean=   235106 first=   331308 | DefaultDispatch@4 DefaultDispatch@5 DefaultDispatch@6 istmo-bench@5
+freqs: 0:480000 1:480000 2:480000 3:480000 4:800000 5:800000 6:800000 7:400000
+== sensitivity: busy1
+rs->kt   KotlinEcho(client)           64 busy1    n= 1000 p50=   618846 p95=  1364231 p99=  1881615 min=    30769 max=  8124077 mean=   532641 first=  1698461 | DefaultDispatch@4 DefaultDispatch@5 bench-spin-0@7 istmo-bench@1
+rs->kt   KotlinEcho(raw)              64 busy1    n= 1000 p50=   690692 p95=  1440692 p99=  1873923 min=    53769 max=  6387154 mean=   710413 first=  1141000 | DefaultDispatch@3 DefaultDispatch@5 bench-spin-0@7 istmo-bench@1
+kt->rs   RustEcho(client,Isol)        64 busy1    n= 1000 p50=   981615 p95=  1584615 p99=  1896923 min=   250384 max=  3083307 mean=   989214 first=  2478462 | DefaultDispatch@3 DefaultDispatch@5 bench-spin-0@7 istmo-bench@3
+kt->rs   RawCall(Inline)              64 busy1    n= 1000 p50=   468308 p95=   911154 p99=  1402770 min=    39692 max=  3706230 mean=   474443 first=  2574385 | DefaultDispatch@3 DefaultDispatch@5 bench-spin-0@7 istmo-bench@6
+kt->rs   RawCall(Isolated)            64 busy1    n= 1000 p50=   945230 p95=  1634077 p99=  2259615 min=   229154 max=  6468077 mean=   973300 first=  1256231 | DefaultDispatch@3 DefaultDispatch@5 bench-spin-0@7 istmo-bench@3
+rs       IsolatedRaw                  64 busy1    n= 1000 p50=   765461 p95=  1239384 p99=  1639077 min=   158154 max=  2797770 mean=   768574 first=  1239077 | DefaultDispatch@3 DefaultDispatch@5 bench-spin-0@7 istmo-bench@0
+rs       InlineRaw                    64 busy1    n= 1000 p50=     5615 p95=     6154 p99=    12308 min=     4692 max=   955692 mean=     7085 first=    42846 | DefaultDispatch@3 DefaultDispatch@5 bench-spin-0@7 istmo-bench@6
+wake     flume                         0 busy1    n= 1000 p50=   212923 p95=   453538 p99=  1057154 min=     6769 max=  2497615 mean=   215489 first=   462461 | DefaultDispatch@3 DefaultDispatch@5 bench-spin-0@7 istmo-bench@6
+wake     flume spin20us               20 busy1    n= 1000 p50=     2769 p95=     3308 p99=     3615 min=     1923 max=   367307 mean=     3312 first=   808616 | DefaultDispatch@3 DefaultDispatch@5 bench-spin-0@7 istmo-bench@6
+wake     spawn->start                  0 busy1    n= 1000 p50=   384693 p95=   749538 p99=  1012000 min=    58077 max=  2184923 mean=   390209 first=   297308 | DefaultDispatch@3 DefaultDispatch@5 bench-spin-0@7 istmo-bench@6
+wake     kt withContext(Default)        0 busy1    n= 1000 p50=   509769 p95=  1142847 p99=  1403154 min=    44308 max=  2055384 mean=   590467 first=  1400000 | DefaultDispatch@2 DefaultDispatch@3 DefaultDispatch@4 bench-spin-0@7 istmo-bench@2
+freqs: 0:480000 1:480000 2:480000 3:480000 4:500000 5:500000 6:500000 7:3350000
+== sensitivity: busyAll
+rs->kt   KotlinEcho(client)           64 busyAll  n= 1000 p50=    21846 p95=    34384 p99=    48616 min=    19385 max=   305770 mean=    24358 first= 20172846 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@5 bench-spin-0@3 bench-spin-1@4 bench-spin-2@0 bench-spin-3@2 bench-spin-4@6 bench-spin-5@7 bench-spin-6@5 bench-spin-7@1 istmo-bench@4
+rs->kt   KotlinEcho(raw)              64 busyAll  n= 1000 p50=    21538 p95=    28077 p99=    36615 min=    19923 max= 13012308 mean=    35571 first=    73769 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@5 bench-spin-0@5 bench-spin-1@4 bench-spin-2@1 bench-spin-3@1 bench-spin-4@7 bench-spin-5@2 bench-spin-6@3 bench-spin-7@0 istmo-bench@4
+kt->rs   RustEcho(client,Isol)        64 busyAll  n= 1000 p50= 12066846 p95= 23999308 p99= 28099077 min=   108615 max= 40021539 mean= 12779878 first=  7031692 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@5 bench-spin-0@0 bench-spin-1@5 bench-spin-2@6 bench-spin-3@1 bench-spin-4@3 bench-spin-5@4 bench-spin-6@2 bench-spin-7@7 istmo-bench@5
+kt->rs   RawCall(Inline)              64 busyAll  n= 1000 p50=    16000 p95=    21769 p99=    30154 min=    14769 max=  5907077 mean=    26219 first=    99384 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@5 bench-spin-0@4 bench-spin-1@6 bench-spin-2@1 bench-spin-3@6 bench-spin-4@7 bench-spin-5@2 bench-spin-6@0 bench-spin-7@3 istmo-bench@5
+kt->rs   RawCall(Isolated)            64 busyAll  n= 1000 p50= 15934769 p95= 24008077 p99= 28041538 min=   213846 max= 35981616 mean= 15415810 first= 14701538 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@5 bench-spin-0@0 bench-spin-1@7 bench-spin-2@4 bench-spin-3@2 bench-spin-4@1 bench-spin-5@3 bench-spin-6@5 bench-spin-7@6 istmo-bench@6
+rs       IsolatedRaw                  64 busyAll  n= 1000 p50=    83923 p95= 23960384 p99= 27997461 min=    52231 max= 40048923 mean=  6172278 first= 12528000 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@5 bench-spin-0@4 bench-spin-1@1 bench-spin-2@0 bench-spin-3@2 bench-spin-4@6 bench-spin-5@4 bench-spin-6@7 bench-spin-7@3 istmo-bench@5 istmo-call@5
+rs       InlineRaw                    64 busyAll  n= 1000 p50=     1153 p95=     1230 p99=     1231 min=      923 max=    14846 mean=     1098 first=     6692 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@5 bench-spin-0@4 bench-spin-1@6 bench-spin-2@0 bench-spin-3@2 bench-spin-4@1 bench-spin-5@4 bench-spin-6@3 bench-spin-7@7 istmo-bench@5 istmo-call@5
+wake     flume                         0 busyAll  n= 1000 p50=     4000 p95=     5154 p99=     5231 min=     3692 max=    43154 mean=     4266 first= 14572846 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@5 bench-partner@7 bench-spin-0@3 bench-spin-1@5 bench-spin-2@4 bench-spin-3@6 bench-spin-4@2 bench-spin-5@0 bench-spin-6@1 bench-spin-7@7 istmo-bench@7
+wake     flume spin20us               20 busyAll  n= 1000 p50=      615 p95=      692 p99=      846 min=      384 max=    17538 mean=      622 first= 14369846 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@5 bench-spin-0@2 bench-spin-1@1 bench-spin-2@4 bench-spin-3@3 bench-spin-4@0 bench-spin-5@7 bench-spin-6@5 bench-spin-7@6 istmo-bench@7
+wake     spawn->start                  0 busyAll  n= 1000 p50= 11947615 p95= 23613154 p99= 23995384 min=    33000 max= 35975692 mean=  9642076 first=  8827923 | DefaultDispatch@2 DefaultDispatch@4 DefaultDispatch@5 bench-spawned@7 bench-spin-0@4 bench-spin-1@0 bench-spin-2@7 bench-spin-3@3 bench-spin-4@1 bench-spin-5@5 bench-spin-6@6 bench-spin-7@2 istmo-bench@7
+wake     kt withContext(Default)        0 busyAll  n= 1000 p50=    14461 p95=    16923 p99=    23077 min=    13538 max=    47923 mean=    14820 first=   272846 | DefaultDispatch@2 DefaultDispatch@4 bench-spin-0@4 bench-spin-1@5 bench-spin-2@3 bench-spin-3@1 bench-spin-4@7 bench-spin-5@0 bench-spin-6@6 bench-spin-7@2 istmo-bench@4
+freqs: 0:2200000 1:2200000 2:2200000 3:2200000 4:2900000 5:2900000 6:2900000 7:3050000
+BENCH_END
+--------- beginning of main
+BENCH_BEGIN
+mode: probe
+abi: native=1 runtime=1 ok
+device: LENOVO TB373FU sdk=36 release=16
+soc: Mediatek MT8792
+cpu0 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu1 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu2 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu3 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu4 part=0xd4d capacity=996 max_khz=3200000 governor=?
+cpu5 part=0xd4d capacity=996 max_khz=3200000 governor=?
+cpu6 part=0xd4d capacity=996 max_khz=3200000 governor=?
+cpu7 part=0xd4d capacity=1024 max_khz=3350000 governor=?
+freqs: 0:2200000 1:2200000 2:2200000 3:2200000 4:2900000 5:2900000 6:2900000 7:3050000
+masks: little=0xf big=0xf0
+clock: nanoTime vs CLOCK_MONOTONIC: 0/10000 outside the bracket (max off 0 ns), widest bracket 503077 ns
+== breakdown: Rust → Kotlin → Rust (KotlinBench.echo, generated dispatcher) size=64 (p50 / p95 / mean ns per stage; means add up to the total mean)
+  stage  encode (Rust codec) [R0→R1]                          p50=      230 p95=      308 mean=      166
+  stage  Runtime::call: route + enqueue [R1→R2]               p50=     7154 p95=    60538 mean=    18236
+  stage  pump thread wake [R2→PD]                             p50=     5923 p95=    40538 mean=    15710 negative=59
+  stage  pump builds jstring×2 + byte[] [PD→PCK]              p50=     1461 p95=     8923 mean=     2970
+  stage  JNI Rust→Kotlin CallStaticVoid [PCK→OCE]             p50=      615 p95=     6231 mean=     1595
+  stage  scope.launch + Default worker wake [OCE→HE]          p50=    41231 p95=   261539 mean=    81257
+  stage  decode (Kotlin dispatcher) [HE→BE]                   p50=     4000 p95=    19384 mean=     6787
+  stage  backend body [BE→BX]                                 p50=      693 p95=     3923 mean=     1298
+  stage  reply encode (Kotlin dispatcher) [BX→HX]             p50=     1231 p95=     8693 mean=     2475
+  stage  reply JNI Kotlin→Rust entry [HX→SRE]                 p50=      615 p95=     3077 mean=      912
+  stage  byte[] copy + dispatch_inbound [SRE→SRD]             p50=     7769 p95=    21231 mean=    13527 negative=1
+  stage  Rust caller wake [SRD→R3]                            p50=     5616 p95=    71077 mean=    22643 negative=10
+  stage  decode (Rust codec) [R3→R4]                          p50=      307 p95=     1231 mean=      508
+  stage  TOTAL [R0→R4]                                        p50=    86385 p95=   541769 mean=   168091
+  info   onCall body on pump (launch) [OCE→OCX]               p50=    29770 p95=   122154 mean=    47868
+  info   pump busy in Kotlin [PCK→PKR]                        p50=    31154 p95=   131000 mean=    53735
+   threads: DefaultDispatch@7 istmo-bench@6
+== breakdown: Kotlin → Rust → Kotlin (RustBench.echo: generated client, Isolated host) size=64 (p50 / p95 / mean ns per stage; means add up to the total mean)
+  stage  encode (Kotlin Bincode) [K0→K1]                      p50=     1307 p95=     5000 mean=     1951
+  stage  JNI Kotlin→Rust nativeSubmitCall entry [K1→SCE]      p50=     4616 p95=    11385 mean=     5591
+  stage  strings+byte[] copy, route, thread spawn+start, decode [SCE→H0] p50=    84923 p95=   165539 mean=   100008
+  stage  host body [H0→H1]                                    p50=      231 p95=      308 mean=      342
+  stage  reply encode + enqueue + pump wake [H1→PD]           p50=    18462 p95=    70154 mean=    38549
+  stage  pump builds byte[] [PD→PCK]                          p50=      385 p95=     2385 mean=      772
+  stage  JNI Rust→Kotlin CallStaticVoid [PCK→ORE]             p50=      539 p95=     3385 mean=      984
+  stage  onRespond: resume continuation [ORE→ORX]             p50=     9846 p95=    32923 mean=    14540 negative=1
+  stage  Kotlin caller wake (runBlocking) [ORX→K5]            p50=     9923 p95=    21308 mean=    13466 negative=2
+  stage  decode (Kotlin Bincode) [K5→K6]                      p50=      616 p95=     2154 mean=     1021
+  stage  TOTAL [K0→K6]                                        p50=   136923 p95=   320693 mean=   177228
+  info   nativeSubmitCall body (incl. spawn call) [SCE→SCD]   p50=    51077 p95=    87154 mean=    56661
+   threads: DefaultDispatch@7 istmo-bench@6
+== breakdown: Kotlin → Rust → Kotlin (raw IstmoRuntime.call, Inline host) size=64 (p50 / p95 / mean ns per stage; means add up to the total mean)
+  stage  encode (Kotlin Bincode) [K0→K1]                      p50=        0 p95=      231 mean=       64
+  stage  JNI Kotlin→Rust nativeSubmitCall entry [K1→SCE]      p50=     2461 p95=     4308 mean=     2750
+  stage  strings+byte[] copy, inline host, enqueue, pump wake [SCE→PD] p50=    13847 p95=    18153 mean=    14558
+  stage  pump builds byte[] [PD→PCK]                          p50=      308 p95=      539 mean=      346
+  stage  JNI Rust→Kotlin CallStaticVoid [PCK→ORE]             p50=      308 p95=      539 mean=      334
+  stage  onRespond: resume continuation [ORE→ORX]             p50=     8846 p95=    12308 mean=     9081
+  stage  Kotlin caller wake (runBlocking) [ORX→K5]            p50=     5616 p95=     8308 mean=     6020 negative=1
+  stage  decode (Kotlin Bincode) [K5→K6]                      p50=        0 p95=      231 mean=       63
+  stage  TOTAL [K0→K6]                                        p50=    31692 p95=    41538 mean=    33219
+  info   nativeSubmitCall body (incl. spawn call) [SCE→SCD]   p50=    10154 p95=    13230 mean=    10613
+   threads: DefaultDispatch@7 istmo-bench@5
+== breakdown: Rust → Kotlin → Rust (KotlinBench.echo, generated dispatcher) size=65536 (p50 / p95 / mean ns per stage; means add up to the total mean)
+  stage  encode (Rust codec) [R0→R1]                          p50=     3692 p95=     4231 mean=     3810
+  stage  Runtime::call: route + enqueue [R1→R2]               p50=     9616 p95=    24385 mean=    11378
+  stage  pump thread wake [R2→PD]                             p50=     6462 p95=    28923 mean=    30974
+  stage  pump builds jstring×2 + byte[] [PD→PCK]              p50=    26231 p95=    45461 mean=    30224
+  stage  JNI Rust→Kotlin CallStaticVoid [PCK→OCE]             p50=      692 p95=     4077 mean=     1230
+  stage  scope.launch + Default worker wake [OCE→HE]          p50=    33231 p95=   194769 mean=    65275
+  stage  decode (Kotlin dispatcher) [HE→BE]                   p50=    24924 p95=    48923 mean=    30317
+  stage  backend body [BE→BX]                                 p50=      231 p95=      539 mean=      253
+  stage  reply encode (Kotlin dispatcher) [BX→HX]             p50=    40692 p95=    65923 mean=    49660
+  stage  reply JNI Kotlin→Rust entry [HX→SRE]                 p50=      308 p95=     1154 mean=      483
+  stage  byte[] copy + dispatch_inbound [SRE→SRD]             p50=    16077 p95=    31769 mean=    19017 negative=2
+  stage  Rust caller wake [SRD→R3]                            p50=     6692 p95=   105615 mean=    25718 negative=6
+  stage  decode (Rust codec) [R3→R4]                          p50=     3077 p95=     4308 mean=     3355
+  stage  TOTAL [R0→R4]                                        p50=   180692 p95=   778462 mean=   271700
+  info   onCall body on pump (launch) [OCE→OCX]               p50=    22076 p95=    64692 mean=    31923
+  info   pump busy in Kotlin [PCK→PKR]                        p50=    23000 p95=    69539 mean=    29945 negative=1
+   threads: DefaultDispatch@6 DefaultDispatch@7 istmo-bench@6
+== breakdown: Kotlin → Rust → Kotlin (RustBench.echo: generated client, Isolated host) size=65536 (p50 / p95 / mean ns per stage; means add up to the total mean)
+  stage  encode (Kotlin Bincode) [K0→K1]                      p50=    53846 p95=    95923 mean=    60705
+  stage  JNI Kotlin→Rust nativeSubmitCall entry [K1→SCE]      p50=     6153 p95=    12538 mean=     7118
+  stage  strings+byte[] copy, route, thread spawn+start, decode [SCE→H0] p50=   145769 p95=   253230 mean=   198165
+  stage  host body [H0→H1]                                    p50=      230 p95=      308 mean=      157
+  stage  reply encode + enqueue + pump wake [H1→PD]           p50=    46462 p95=   111615 mean=    62554
+  stage  pump builds byte[] [PD→PCK]                          p50=    34154 p95=    55692 mean=    37623
+  stage  JNI Rust→Kotlin CallStaticVoid [PCK→ORE]             p50=     1308 p95=     5769 mean=     6054
+  stage  onRespond: resume continuation [ORE→ORX]             p50=    24000 p95=    46847 mean=    28501
+  stage  Kotlin caller wake (runBlocking) [ORX→K5]            p50=    17154 p95=    37615 mean=    23752 negative=11
+  stage  decode (Kotlin Bincode) [K5→K6]                      p50=    35385 p95=    68000 mean=    40209
+  stage  TOTAL [K0→K6]                                        p50=   386461 p95=   689308 mean=   464844
+  info   nativeSubmitCall body (incl. spawn call) [SCE→SCD]   p50=    95077 p95=   172307 mean=   117569
+   threads: DefaultDispatch@6 DefaultDispatch@7 istmo-bench@7
+== breakdown: Kotlin → Rust → Kotlin (raw IstmoRuntime.call, Inline host) size=65536 (p50 / p95 / mean ns per stage; means add up to the total mean)
+  stage  encode (Kotlin Bincode) [K0→K1]                      p50=       77 p95=      231 mean=      118
+  stage  JNI Kotlin→Rust nativeSubmitCall entry [K1→SCE]      p50=     4615 p95=    12615 mean=     5735
+  stage  strings+byte[] copy, inline host, enqueue, pump wake [SCE→PD] p50=    44692 p95=    69154 mean=    51115
+  stage  pump builds byte[] [PD→PCK]                          p50=    39616 p95=    53539 mean=    42327
+  stage  JNI Rust→Kotlin CallStaticVoid [PCK→ORE]             p50=      616 p95=     1231 mean=     1080
+  stage  onRespond: resume continuation [ORE→ORX]             p50=    19692 p95=    29154 mean=    20996
+  stage  Kotlin caller wake (runBlocking) [ORX→K5]            p50=    12308 p95=    25538 mean=    22073 negative=1
+  stage  decode (Kotlin Bincode) [K5→K6]                      p50=       77 p95=      231 mean=      119
+  stage  TOTAL [K0→K6]                                        p50=   124615 p95=   192923 mean=   143566
+  info   nativeSubmitCall body (incl. spawn call) [SCE→SCD]   p50=    34846 p95=    50231 mean=    37803
+   threads: DefaultDispatch@6 DefaultDispatch@7 istmo-bench@4
+BENCH_END
+--------- beginning of main
+BENCH_BEGIN
+mode: legacy
+abi: IstmoRuntime.start passed the handshake (native=1 runtime=1 ok)
+device: LENOVO TB373FU sdk=36 release=16
+soc: Mediatek MT8792
+cpu0 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu1 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu2 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu3 part=0xd46 capacity=221 max_khz=2200000 governor=?
+cpu4 part=0xd4d capacity=996 max_khz=3200000 governor=?
+cpu5 part=0xd4d capacity=996 max_khz=3200000 governor=?
+cpu6 part=0xd4d capacity=996 max_khz=3200000 governor=?
+cpu7 part=0xd4d capacity=1024 max_khz=3350000 governor=?
+freqs: 0:2200000 1:2200000 2:2200000 3:2200000 4:2900000 5:2900000 6:2900000 7:3050000
+masks: little=0xf big=0xf0
+clock: nanoTime vs CLOCK_MONOTONIC: 0/10000 outside the bracket (max off 0 ns), widest bracket 731462 ns
+== legacy matrix (p50.. over 100 batch means of 1000 calls)
+mode      payload    p50       p95       p99       min       max
+JniNoop         0B      24 ns     25 ns     45 ns     21 ns     50 ns
+JniNoopBytes        0B      80 ns    108 ns    340 ns     75 ns    861 ns
+JniNoopBytes       64B     129 ns    173 ns    255 ns    128 ns    968 ns
+JniNoopBytes     1024B     151 ns    465 ns   1312 ns    149 ns   1500 ns
+JniNoopBytes    65536B    3515 ns   4747 ns   5240 ns   3474 ns   5662 ns
+Isolated        0B  161034 ns 175542 ns 179933 ns 125206 ns 199017 ns
+Isolated       64B  156969 ns 864060 ns 884113 ns 119593 ns 909460 ns
+Isolated     1024B  837033 ns 923272 ns 931761 ns 165124 ns 939278 ns
+Isolated    65536B  890937 ns 961512 ns 976719 ns 413650 ns 977056 ns
+Inline          0B     824 ns   1831 ns   3661 ns    817 ns   5931 ns
+Inline         64B     912 ns    920 ns    921 ns    902 ns    927 ns
+Inline       1024B     933 ns    941 ns    945 ns    930 ns    946 ns
+Inline      65536B    5633 ns   5732 ns   5763 ns   5320 ns   5770 ns
+Typed           0B       8 ns      8 ns      8 ns      8 ns      8 ns
+Typed          64B      50 ns     50 ns     51 ns     45 ns     71 ns
+Typed        1024B      64 ns     67 ns     80 ns     61 ns     82 ns
+Typed       65536B    1113 ns   1152 ns   1163 ns   1055 ns   1198 ns
+BENCH_END
