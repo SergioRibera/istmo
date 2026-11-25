@@ -313,6 +313,8 @@ const PROBE_STAGES: [Stage; Stage::COUNT] = [
     Stage::SubmitCallEntered,
     Stage::SubmitCallDispatched,
     Stage::SubmitEventEntered,
+    Stage::DirectCallingKotlin,
+    Stage::DirectKotlinReturned,
 ];
 
 /// Wait (up to 2 ms) until `after` is at least as recent as `before`.

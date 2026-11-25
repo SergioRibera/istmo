@@ -402,7 +402,7 @@ class BenchRunner(
         out("   threads: ${BenchNative.threadMap()}")
     }
 
-    private val transport = listOf("PD", "PCK", "PKR", "SRE", "SRD", "SCE", "SCD", "SEE")
+    private val transport = listOf("PD", "PCK", "PKR", "SRE", "SRD", "SCE", "SCD", "SEE", "DCK", "DKR")
 
     fun breakdown() {
         Probe.enabled = true

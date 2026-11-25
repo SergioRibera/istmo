@@ -198,6 +198,8 @@ impl Pump {
         remote: &FlumeReceiver<Vec<u8>>,
         shutdown: &FlumeReceiver<()>,
     ) {
+        // Started after `Runtime::init`, so the runtime exists.
+        let runtime = istmo_core::Runtime::global().ok();
         loop {
             let step = flume::Selector::new()
                 .recv(shutdown, |_| PumpStep::Shutdown)
@@ -216,11 +218,17 @@ impl Pump {
             let delivered = match step {
                 PumpStep::Shutdown => break,
                 PumpStep::Deliver(envelope) => {
-                    env.with_local_frame(DELIVERY_LOCAL_CAPACITY, |env| {
+                    let delivered = env.with_local_frame(DELIVERY_LOCAL_CAPACITY, |env| {
                         let result = self.deliver(env, envelope.frame);
                         report_failure(env, "deliver", result);
                         Ok::<(), jni::errors::Error>(())
-                    })
+                    });
+                    // Calls may go straight to Kotlin again once nothing
+                    // queued before them is still on its way.
+                    if let Some(runtime) = &runtime {
+                        runtime.outbound_delivered();
+                    }
+                    delivered
                 }
                 PumpStep::DeliverRemote(bytes) => {
                     env.with_local_frame(DELIVERY_LOCAL_CAPACITY, |env| {
@@ -440,7 +448,7 @@ fn report_failure(
 ///
 /// The stack trace goes to logcat through `ExceptionDescribe`; the
 /// returned `toString()` lands in the `tracing` event.
-fn take_pending_exception(env: &mut JNIEnv<'_>) -> Option<String> {
+pub(crate) fn take_pending_exception(env: &mut JNIEnv<'_>) -> Option<String> {
     if !env.exception_check().unwrap_or(false) {
         return None;
     }

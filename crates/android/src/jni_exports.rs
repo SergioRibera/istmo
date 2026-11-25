@@ -32,6 +32,7 @@ use jni::objects::{
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong};
 
 use crate::assets;
+use crate::direct::AndroidPeer;
 use crate::error::AndroidRuntimeError;
 use crate::path as path_provider;
 use crate::pump::{self, PumpMethods};
@@ -248,11 +249,13 @@ fn start(env: &mut JNIEnv<'_>, runtime_class: &JClass<'_>) -> Result<(), Android
     let class_ref = env.new_global_ref(runtime_class)?;
     let methods = PumpMethods::resolve(env, &class_ref)?;
     resolve_plugin_exception(env)?;
+    let peer = AndroidPeer::resolve(env, class_ref.clone())?;
     let jvm = env.get_java_vm()?;
     let pump = pump::spawn(jvm, class_ref, methods).map_err(AndroidRuntimeError::Pump)?;
 
     let init = Runtime::init(RuntimeConfig::inline())?;
     let runtime = init.runtime.clone();
+    runtime.install_direct_peer(std::sync::Arc::new(peer));
     let init = __istmo_configure_runtime(init);
     let (handles, remote_sender) = pump.start(init.outbound);
 

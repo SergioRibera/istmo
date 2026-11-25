@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::task::{Context, Poll};
 
@@ -29,6 +29,9 @@ use crate::routing::{CallResult, RoutingTables, StreamMessage};
 use crate::sync::lock;
 
 mod exec;
+mod peer;
+
+pub use peer::{DirectOutcome, DirectPeer};
 
 use exec::{CatchUnwind, Delivery, Either, race, send_unless_cancelled};
 
@@ -439,6 +442,14 @@ pub struct Runtime {
 
     /// Open [`FrameSink`]s, by raw id.
     frame_sinks: FrameSinks,
+
+    /// Delivers calls to the peer on the caller's thread; see
+    /// [`install_direct_peer`](Self::install_direct_peer).
+    direct_peer: OnceLock<Arc<dyn DirectPeer>>,
+
+    /// Frames put on the outbound channel and not yet reported delivered
+    /// by the transport ([`outbound_delivered`](Self::outbound_delivered)).
+    outbound_backlog: AtomicUsize,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -663,16 +674,19 @@ impl Runtime {
                 },
             );
         } else {
-            self.send_or_unregister(
-                call_id.get(),
-                Envelope::new(Frame::Call {
-                    call_id,
-                    plugin_id,
-                    instance_id,
-                    method: method.into(),
-                    payload,
-                }),
-            )?;
+            let method = method.into();
+            if !self.call_peer_directly(call_id, &plugin_id, instance_id, &method, &payload) {
+                self.send_or_unregister(
+                    call_id.get(),
+                    Envelope::new(Frame::Call {
+                        call_id,
+                        plugin_id,
+                        instance_id,
+                        method,
+                        payload,
+                    }),
+                )?;
+            }
         }
         Ok(CallHandle {
             call_id,
@@ -680,6 +694,70 @@ impl Runtime {
             runtime: Arc::downgrade(self),
             hosted,
         })
+    }
+
+    /// Hand a registered call to the [`DirectPeer`] when one is installed
+    /// and nothing waits in the outbound channel. `false`: not taken, it
+    /// goes through the channel.
+    fn call_peer_directly(
+        &self,
+        call_id: CallId,
+        plugin_id: &str,
+        instance_id: Option<InstanceId>,
+        method: &str,
+        payload: &[u8],
+    ) -> bool {
+        let Some(peer) = self.direct_peer.get() else {
+            return false;
+        };
+        // A frame queued earlier (a notification, a cancel) must reach
+        // the peer first; calls to another process go through its sink.
+        if self.outbound_backlog.load(Ordering::Acquire) != 0 || self.is_remote_plugin(plugin_id) {
+            return false;
+        }
+        match peer.call(call_id, plugin_id, instance_id, method, payload) {
+            DirectOutcome::Answered(result) => {
+                if let Err(err) = self.routing.complete(call_id, result) {
+                    tracing::debug!(?err, ?call_id, "direct answer after its caller left");
+                }
+                true
+            }
+            DirectOutcome::Pending => true,
+            DirectOutcome::Unavailable => false,
+        }
+    }
+
+    /// Install the transport's [`DirectPeer`]: calls to plugins with no
+    /// host here are then handed to the peer on the calling thread
+    /// whenever the outbound channel is drained. Once per runtime; later
+    /// installs are ignored.
+    ///
+    /// A transport installing one reports every frame it took off the
+    /// outbound channel with [`outbound_delivered`](Self::outbound_delivered)
+    /// once delivered; until it does, calls keep the channel.
+    pub fn install_direct_peer(&self, peer: Arc<dyn DirectPeer>) {
+        if self.direct_peer.set(peer).is_err() {
+            tracing::warn!("a direct peer is already installed; ignored");
+        }
+    }
+
+    /// The transport delivered one frame it took off the outbound
+    /// channel. See [`install_direct_peer`](Self::install_direct_peer).
+    pub fn outbound_delivered(&self) {
+        // Saturating: a transport reporting more than it took must not
+        // wrap the count and stall direct calls forever.
+        let mut current = self.outbound_backlog.load(Ordering::Acquire);
+        while let Some(next) = current.checked_sub(1) {
+            match self.outbound_backlog.compare_exchange_weak(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     /// Open a stream-returning plugin method.
@@ -1387,13 +1465,29 @@ impl Runtime {
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         {
             let _ = wait;
-            self.push_outbound_now(envelope)
+            let sent = self.push_outbound_now(envelope);
+            if matches!(sent, Ok(true)) {
+                self.outbound_backlog.fetch_add(1, Ordering::AcqRel);
+            }
+            sent
         }
     }
 
     /// Put `envelope` on the outbound channel. `Ok(false)` when `wait`
     /// gave up because the call was cancelled first.
     async fn push_outbound_async(
+        &self,
+        envelope: Envelope,
+        wait: Wait<'_>,
+    ) -> Result<bool, IstmoError> {
+        let sent = self.push_outbound_waiting(envelope, wait).await;
+        if matches!(sent, Ok(true)) {
+            self.outbound_backlog.fetch_add(1, Ordering::AcqRel);
+        }
+        sent
+    }
+
+    async fn push_outbound_waiting(
         &self,
         envelope: Envelope,
         wait: Wait<'_>,
@@ -2351,6 +2445,8 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         remote_sink: Mutex::new(None),
         native_handle_release_hooks: Mutex::new(Vec::new()),
         frame_sinks: FrameSinks::default(),
+        direct_peer: OnceLock::new(),
+        outbound_backlog: AtomicUsize::new(0),
     });
     RuntimeInit {
         runtime,

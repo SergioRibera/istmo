@@ -56,6 +56,14 @@ object ProbeRuntime {
     }
 
     @JvmStatic
+    fun onCallDirect(callId: Long, pluginId: String, instanceId: Long, method: String, payload: ByteArray): ByteArray? {
+        Probe.stamp(Probe.ON_CALL_ENTER)
+        val reply = IstmoRuntime.onCallDirect(callId, pluginId, instanceId, method, payload)
+        Probe.stamp(Probe.ON_CALL_EXIT)
+        return reply
+    }
+
+    @JvmStatic
     fun onCancel(callId: Long) = IstmoRuntime.onCancel(callId)
 
     @JvmStatic

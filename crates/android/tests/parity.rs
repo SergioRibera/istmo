@@ -149,6 +149,44 @@ fn kotlin_status_codes_and_abi_match_rust() {
     );
 }
 
+/// Names of the static Kotlin methods Rust resolves (`get_static_method_id`).
+fn rust_callbacks(source: &str) -> BTreeSet<String> {
+    source
+        .split("get_static_method_id(")
+        .skip(1)
+        .filter_map(|call| {
+            let open = call.find('"')? + 1;
+            let len = call[open..].find('"')?;
+            Some(call[open..open + len].to_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn every_callback_rust_resolves_is_a_jvm_static_on_the_runtime() {
+    let Some(runtime_kt) = read(&format!("{KOTLIN}/IstmoRuntime.kt")) else {
+        return;
+    };
+    let mut callbacks = rust_callbacks(&read("crates/android/src/pump.rs").expect("pump.rs"));
+    callbacks.extend(rust_callbacks(
+        &read("crates/android/src/direct.rs").expect("direct.rs"),
+    ));
+    assert!(callbacks.contains("onCallDirect"), "{callbacks:?}");
+    for name in &callbacks {
+        let declared = runtime_kt.split("@JvmStatic").skip(1).any(|item| {
+            // Other annotations may sit between `@JvmStatic` and `fun`.
+            item.lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty() && !line.starts_with('@'))
+                .is_some_and(|line| line.starts_with(&format!("fun {name}(")))
+        });
+        assert!(
+            declared,
+            "IstmoRuntime.{name} must be a @JvmStatic fun: Rust resolves it at start"
+        );
+    }
+}
+
 #[test]
 fn the_ci_stub_declares_no_stale_natives() {
     let Some(stub) = read("runtime/android/ci/IstmoRuntimeStub.kt") else {

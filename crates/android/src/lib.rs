@@ -31,6 +31,7 @@ pub mod entrypoint;
 pub mod error;
 pub mod path;
 
+mod direct;
 mod frame_exports;
 mod frame_producer;
 mod jni_exports;

@@ -369,6 +369,59 @@ object IstmoRuntime {
     }
 
     /**
+     * A call from Rust delivered on the Rust caller's own thread: runs
+     * like [onCall], and returns the reply bytes when the backend
+     * answered without suspending. `null`: the answer (or an error) goes
+     * through `nativeSubmitResponse`, possibly before this returns.
+     */
+    @JvmStatic
+    fun onCallDirect(
+        callId: Long,
+        pluginId: String,
+        instanceId: Long,
+        method: String,
+        payload: ByteArray,
+    ): ByteArray? {
+        val handler = handlers[pluginId]
+        if (handler == null) {
+            nativeSubmitResponse(callId, false, EMPTY_PAYLOAD)
+            return null
+        }
+        val direct = DirectReply()
+        launchHosted(callId, pluginId) {
+            when (val result = handler.handleCall(instanceId, method, payload)) {
+                is PluginResult.Unary ->
+                    if (!direct.offer(result.bytes)) nativeSubmitResponse(callId, true, result.bytes)
+                is PluginResult.Stream -> pumpStream(callId, result.flow)
+            }
+        }
+        return direct.close()
+    }
+
+    /**
+     * A direct call's answer while [onCallDirect] has not returned: taken
+     * as its return value, or sent once the call has left.
+     */
+    private class DirectReply {
+        private var waiting = true
+        private var bytes: ByteArray? = null
+
+        @Synchronized
+        fun offer(answer: ByteArray): Boolean {
+            if (!waiting) return false
+            bytes = answer
+            waiting = false
+            return true
+        }
+
+        @Synchronized
+        fun close(): ByteArray? {
+            waiting = false
+            return bytes.also { bytes = null }
+        }
+    }
+
+    /**
      * Run a hosted call as a coroutine registered under [callId] (so
      * `onCancel` reaches it), started in place unless [pluginId] opted
      * out. A [PluginException] answers with its payload, anything else

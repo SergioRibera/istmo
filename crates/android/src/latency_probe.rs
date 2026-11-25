@@ -29,11 +29,16 @@ pub enum Stage {
     SubmitCallDispatched = 6,
     /// `nativeSubmitEvent` entered Rust.
     SubmitEventEntered = 7,
+    /// A direct Rust → Kotlin call built its arguments and is about to
+    /// call `onCallDirect` on the caller's thread.
+    DirectCallingKotlin = 8,
+    /// `onCallDirect` returned to the direct caller.
+    DirectKotlinReturned = 9,
 }
 
 impl Stage {
     /// Number of stages.
-    pub const COUNT: usize = 8;
+    pub const COUNT: usize = 10;
 }
 
 static STAMPS: [AtomicU64; Stage::COUNT] = [const { AtomicU64::new(0) }; Stage::COUNT];
