@@ -17,7 +17,11 @@
 // its presence stops dlopen from failing on the unresolved reference
 // inside `istmo-android`.
 #[unsafe(no_mangle)]
-pub fn __istmo_configure_runtime(init: istmo::RuntimeInit) -> istmo::RuntimeInit {
+#[expect(
+    clippy::no_mangle_with_rust_abi,
+    reason = "istmo-android declares the hook `extern \"Rust\"`"
+)]
+pub const fn __istmo_configure_runtime(init: istmo::RuntimeInit) -> istmo::RuntimeInit {
     init
 }
 
@@ -136,7 +140,7 @@ fn boot_runtime() -> Arc<Runtime> {
 
 fn run_iterations(mode: Mode, iters: u64, payload_len: usize) -> u64 {
     let rt = boot_runtime();
-    let payload: Vec<u8> = (0..payload_len).map(|i| i as u8).collect();
+    let payload: Vec<u8> = (0..payload_len).map(|i| i.to_le_bytes()[0]).collect();
 
     match mode {
         Mode::Isolated | Mode::Inline => {
@@ -152,7 +156,7 @@ fn run_iterations(mode: Mode, iters: u64, payload_len: usize) -> u64 {
                     .expect("call");
                 let _ = handle.recv_blocking();
             }
-            start.elapsed().as_nanos() as u64
+            u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX)
         }
         Mode::Typed => {
             let typed = rt
@@ -163,7 +167,7 @@ fn run_iterations(mode: Mode, iters: u64, payload_len: usize) -> u64 {
                 let out = typed.echo(payload.clone());
                 let _ = std::hint::black_box(out);
             }
-            start.elapsed().as_nanos() as u64
+            u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX)
         }
     }
 }
@@ -177,7 +181,9 @@ pub extern "system" fn Java_dev_istmo_bench_BenchNative_runIters<'local>(
     iters: jni::sys::jlong,
     payload_len: jni::sys::jint,
 ) -> jni::sys::jlong {
-    let mode = u32::try_from(mode).ok().and_then(|m| Mode::try_from(m).ok());
+    let mode = u32::try_from(mode)
+        .ok()
+        .and_then(|m| Mode::try_from(m).ok());
     let iters = u64::try_from(iters).unwrap_or(0);
     let payload_len = usize::try_from(payload_len).unwrap_or(0);
     let Some(mode) = mode else { return -1 };

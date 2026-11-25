@@ -1,0 +1,5 @@
+# Gradle and the Rust build produce these.
+.gradle/
+build/
+app/build/
+app/src/main/jniLibs/
