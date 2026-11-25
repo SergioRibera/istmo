@@ -23,7 +23,7 @@ istmo = { path = "../..", default-features = false, features = ["game-activity"]
 istmo-core = { workspace = true }
 istmo-share = { workspace = true }
 # Here so CI compiles its Kotlin and Swift backends in a real app.
-istmo-drop = { workspace = true }
+istmo-dnd = { workspace = true }
 flume = { workspace = true }
 pollster = { workspace = true }
 log = "0.4"

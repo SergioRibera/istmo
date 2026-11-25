@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  istmo.dnd: merged into every variant's manifest by the istmo Gradle
+  plugin. Only adds components; never overrides the app's settings.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- content:// URIs for files dragged out of the app. Authority
+             must match DragAndDropBackendImpl.AUTHORITY_SUFFIX. -->
+        <provider
+            android:name="dev.istmo.plugins.dnd.IstmoDndFileProvider"
+            android:authorities="${applicationId}.istmo.dnd.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/istmo_dnd_paths" />
+        </provider>
+    </application>
+</manifest>

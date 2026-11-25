@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Roots IstmoDndFileProvider may expose: only the files dragged out,
+     under `istmo-dnd/outgoing/` of the cache dir. DragAndDropBackendImpl
+     copies anything else in before the drag. Keep in sync with its
+     OUTGOING_DIR. -->
+<paths>
+    <cache-path name="istmo_dnd_outgoing" path="istmo-dnd/outgoing/" />
+</paths>

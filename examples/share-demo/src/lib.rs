@@ -4,11 +4,11 @@
 pub mod app;
 mod png;
 
-use istmo_drop::FileDropClient;
+use istmo_dnd::DragAndDropClient;
 use istmo_share::ShareClient;
 
 istmo::runtime!(
-    plugins: [ShareClient, FileDropClient],
+    plugins: [ShareClient, DragAndDropClient],
 );
 
 #[cfg(any(target_os = "android", target_os = "ios"))]

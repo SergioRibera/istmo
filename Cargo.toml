@@ -26,7 +26,7 @@ members = [
     "plugins/barcode-scanner",
     "plugins/opener",
     "plugins/camera",
-    "plugins/drop",
+    "plugins/dnd",
     "plugins/webview",
     "plugins/web-auth",
     "examples/camera-demo",
@@ -101,7 +101,7 @@ istmo-live-activity = { path = "plugins/live-activity", version = "0.1.1-alpha.6
 istmo-pen = { path = "plugins/istmo-pen", version = "0.1.1-alpha.6" }
 istmo-file-picker = { path = "plugins/file-picker", version = "0.1.1-alpha.6" }
 istmo-share = { path = "plugins/share", version = "0.1.1-alpha.6" }
-istmo-drop = { path = "plugins/drop", version = "0.1.1-alpha.6" }
+istmo-dnd = { path = "plugins/dnd", version = "0.1.1-alpha.6" }
 istmo-webview = { path = "plugins/webview", version = "0.1.1-alpha.6" }
 istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.6" }
 istmo-camera = { path = "plugins/camera", version = "0.1.1-alpha.6" }
@@ -202,7 +202,7 @@ pre-release-replacements = [
     { file = "plugins/barcode-scanner/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
     { file = "plugins/biometric/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
     { file = "plugins/camera/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
-    { file = "plugins/drop/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
+    { file = "plugins/dnd/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
     { file = "plugins/data-store/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
     { file = "plugins/file-picker/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
     { file = "plugins/google-sign-in/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
