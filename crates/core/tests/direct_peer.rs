@@ -209,7 +209,11 @@ fn peer_stream_items_go_straight_to_the_peer_and_the_end_follows_them() {
         .outbound
         .recv_timeout(Duration::from_secs(5))
         .expect("end");
-    assert!(matches!(end.frame, Frame::StreamEnd { .. }), "{:?}", end.frame);
+    assert!(
+        matches!(end.frame, Frame::StreamEnd { .. }),
+        "{:?}",
+        end.frame
+    );
     assert_eq!(
         *peer.items.lock().unwrap(),
         [(11, vec![0]), (11, vec![1]), (11, vec![2])]
