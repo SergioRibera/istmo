@@ -1,10 +1,10 @@
-//! Peer streams opened with a credit window, and batched peer events.
+//! Peer streams opened with a credit window.
 
 use std::time::Duration;
 
 use istmo_core::{
     CallId, CancelToken, Dispatch, DispatchFuture, DispatchMode, Envelope, Frame, InstanceId,
-    Outcome, Runtime, StreamEndReason, StreamId, StreamMessage,
+    Outcome, Runtime, StreamEndReason, StreamId,
 };
 
 /// `flood` produces 1000 items as fast as the stream takes them.
@@ -135,25 +135,4 @@ fn an_unhosted_peer_stream_is_refused() {
             result: Err(_)
         }
     ));
-}
-
-#[test]
-fn batched_peer_events_arrive_in_order() {
-    let init = Runtime::mock();
-    let handle = init
-        .runtime
-        .stream("peer.p", None, "s", Vec::new(), 0)
-        .expect("stream");
-    let batch: Vec<Vec<u8>> = (0..10u8).map(|i| vec![i]).collect();
-    init.runtime
-        .deliver_peer_events(handle.stream_id(), batch)
-        .expect("batch");
-    for i in 0..10u8 {
-        assert_eq!(handle.recv().expect("item"), StreamMessage::Event(vec![i]));
-    }
-    assert!(
-        init.runtime
-            .deliver_peer_events(StreamId(999), [vec![1]])
-            .is_err()
-    );
 }

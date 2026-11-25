@@ -28,7 +28,6 @@ pub use crate::{
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyLatest,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEarlyQueue,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent,
-    Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvents,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitNotify,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse,
     Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitStream,

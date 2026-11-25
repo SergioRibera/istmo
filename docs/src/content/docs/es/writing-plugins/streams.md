@@ -106,8 +106,8 @@ colector tomó, y el colector devuelve crédito en lotes de la mitad de
 esa ventana. Un productor que se adelanta espera en su canal bounded —
 `send` bloquea, `send_async` espera — en lugar de desbordar al colector.
 Nunca se descartan ítems; aplica `.conflate()` en el colector si solo
-importa el último valor. Los ítems seguidos cruzan JNI en lotes de hasta
-64 en ambas direcciones.
+importa el último valor. Los ítems seguidos que envía Rust cruzan JNI en
+lotes de hasta 64.
 
 ## Producir items — native-hosted
 

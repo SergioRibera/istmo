@@ -12,9 +12,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 
@@ -477,27 +475,11 @@ object IstmoRuntime {
             // dedicated Rust OS threads, so the native call never blocks
             // on UI work.
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Unconfined) {
-                // Items the backend emits faster than Rust takes them
-                // queue here and cross in batches: one JNI call and one
-                // routing lookup for up to STREAM_BATCH items. A paced
-                // stream still crosses item by item.
-                val items = flow.buffer(STREAM_BATCH).produceIn(this)
-                val batch = arrayOfNulls<ByteArray>(STREAM_BATCH)
-                for (first in items) {
-                    batch[0] = first
-                    var count = 1
-                    while (count < STREAM_BATCH) {
-                        val next = items.tryReceive().getOrNull() ?: break
-                        batch[count] = next
-                        count++
-                    }
-                    if (count == 1) {
-                        nativeSubmitEvent(callId, first)
-                    } else {
-                        nativeSubmitEvents(callId, batch, count)
-                    }
-                    java.util.Arrays.fill(batch, 0, count, null)
-                }
+                // Item by item, on the emitting thread: a backend that emits
+                // without suspending (a sensor callback, a busy loop) gets
+                // every item across at once; Rust holds it back when its
+                // consumer falls behind.
+                flow.collect { bytes -> nativeSubmitEvent(callId, bytes) }
             }
             nativeSubmitStreamEnd(callId, STREAM_END_COMPLETE, null)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -655,7 +637,6 @@ object IstmoRuntime {
     )
     external fun nativeSubmitResponse(callId: Long, ok: Boolean, payload: ByteArray)
     external fun nativeSubmitEvent(streamId: Long, payload: ByteArray)
-    external fun nativeSubmitEvents(streamId: Long, payloads: Array<ByteArray?>, count: Int)
     external fun nativeSubmitStream(
         callId: Long,
         pluginId: String,
@@ -683,9 +664,6 @@ object IstmoRuntime {
     private val EMPTY_PAYLOAD = ByteArray(0)
 
     private const val DEFAULT_STREAM_BUFFER = 256
-
-    /** Most items a Kotlin-produced stream hands Rust in one call. */
-    private const val STREAM_BATCH = 64
 
     /**
      * An outbound call's answer slot: whichever of the answer and the

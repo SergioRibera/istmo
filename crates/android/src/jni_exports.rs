@@ -27,8 +27,7 @@ use istmo_core::{
 };
 use jni::JNIEnv;
 use jni::objects::{
-    GlobalRef, JByteArray, JByteBuffer, JClass, JMethodID, JObject, JObjectArray, JString,
-    JThrowable, JValue,
+    GlobalRef, JByteArray, JByteBuffer, JClass, JMethodID, JObject, JString, JThrowable, JValue,
 };
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong};
 
@@ -336,35 +335,6 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent<'lo
             stream_id: StreamId(wire_id(stream_id)),
             payload: bytes,
         }))?;
-        Ok(())
-    });
-}
-
-/// Several items of one Kotlin-produced stream in one crossing: the
-/// first `count` arrays of `items`, delivered in order.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvents<'local>(
-    mut env: JNIEnv<'local>,
-    _caller: JClass<'local>,
-    stream_id: jlong,
-    items: JObjectArray<'local>,
-    count: jint,
-) {
-    probe!(SubmitEventEntered);
-    guarded(&mut env, "nativeSubmitEvents", (), |env| {
-        let count = usize::try_from(count).map_err(|_| {
-            AndroidRuntimeError::InvalidArgument(format!("negative item count {count}"))
-        })?;
-        let mut batch = Vec::with_capacity(count);
-        for index in 0..count {
-            let index = jint::try_from(index).map_err(|_| {
-                AndroidRuntimeError::InvalidArgument("item count past jint".to_owned())
-            })?;
-            let item = JByteArray::from(env.get_object_array_element(&items, index)?);
-            batch.push(read_array(env, &item)?);
-            env.delete_local_ref(item)?;
-        }
-        Runtime::global()?.deliver_peer_events(StreamId(wire_id(stream_id)), batch)?;
         Ok(())
     });
 }

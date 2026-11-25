@@ -104,8 +104,8 @@ and the collector hands credit back in batches of half that window. A
 producer that runs ahead waits on its bounded channel — `send` blocks,
 `send_async` waits — instead of overflowing the collector. Items are
 never dropped; apply `.conflate()` in the collector when only the latest
-value matters. Back-to-back items cross JNI in batches of up to 64 in
-both directions.
+value matters. Back-to-back items from Rust cross JNI in batches of up
+to 64.
 
 ## Producing items — native-hosted
 
