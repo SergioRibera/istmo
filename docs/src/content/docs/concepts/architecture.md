@@ -144,7 +144,8 @@ Istmo is **executor-agnostic**. It uses `flume` channels and
 - Each mobile transport runs one dedicated OS thread — a JNI-attached
   daemon on Android (`istmo-android-pump`), `istmo-ios-pump` on iOS —
   that delivers outbound frames to the Kotlin/Swift callbacks. On
-  Android, calls to Kotlin skip it whenever it has nothing queued: they
+  Android, calls and stream items to Kotlin skip it whenever it has
+  nothing queued: they
   run on the calling Rust thread and come back as the JNI call's return
   value when the backend does not suspend.
 - No call creates a thread. Rust hosts run on the thread that delivered

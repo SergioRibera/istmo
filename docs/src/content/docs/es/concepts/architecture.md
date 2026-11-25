@@ -148,7 +148,8 @@ Istmo es **agnóstico al executor**. Usa canales `flume` y
 - Cada transporte móvil usa un hilo del SO dedicado — un daemon
   enganchado a JNI en Android (`istmo-android-pump`), `istmo-ios-pump`
   en iOS — que entrega los frames salientes a los callbacks de
-  Kotlin/Swift. En Android las llamadas a Kotlin lo saltan cuando no
+  Kotlin/Swift. En Android las llamadas e ítems de stream a Kotlin lo
+  saltan cuando no
   tiene nada encolado: corren en el hilo de Rust que llama y vuelven
   como valor de retorno de la llamada JNI si el backend no se suspende.
 - Ninguna llamada crea un hilo. Los hosts en Rust corren en el hilo que
