@@ -12,10 +12,11 @@ import 'package:pigeon/pigeon.dart';
 @ConfigurePigeon(
   PigeonOptions(
     dartOut: 'lib/generated/bench_api.g.dart',
+    dartPackageName: 'bench_flutter',
     kotlinOut:
-        'android/app/src/main/kotlin/dev/istmo/benchflutter/BenchPigeon.kt',
+        'android/app/src/main/kotlin/dev/istmo/bench_flutter/BenchPigeon.kt',
     kotlinOptions: KotlinOptions(
-      package: 'dev.istmo.benchflutter',
+      package: 'dev.istmo.bench_flutter',
       useJni: true,
     ),
     swiftOut: 'ios/Runner/BenchPigeon.swift',

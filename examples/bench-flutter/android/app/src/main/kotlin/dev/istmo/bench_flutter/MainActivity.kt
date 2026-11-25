@@ -1,4 +1,4 @@
-package dev.istmo.benchflutter
+package dev.istmo.bench_flutter
 
 import android.content.Intent
 import android.util.Log
@@ -66,8 +66,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        // Pigeon registration lands here once the generator has run:
-        // BenchHost.setUp(flutterEngine.dartExecutor.binaryMessenger, BenchHostImpl())
+        BenchHost.setUp(flutterEngine.dartExecutor.binaryMessenger, BenchHostImpl())
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -84,11 +83,6 @@ class MainActivity : FlutterActivity() {
     }
 }
 
-/**
- * Stub for the Pigeon-generated `BenchHost` interface. Uncomment and
- * wire into [MainActivity.configureFlutterEngine] once the generator
- * has emitted `BenchPigeon.kt`.
- */
-// class BenchHostImpl : BenchHost {
-//     override fun echo(payload: ByteArray): ByteArray = payload
-// }
+class BenchHostImpl : BenchHost {
+    override fun echo(payload: ByteArray): ByteArray = payload
+}

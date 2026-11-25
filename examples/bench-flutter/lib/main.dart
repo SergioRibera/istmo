@@ -18,7 +18,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-// import 'generated/bench_api.g.dart';
+import 'generated/bench_api.g.dart';
 
 void main() {
   runApp(const BenchApp());
@@ -92,13 +92,12 @@ class _BenchHomeState extends State<BenchHome> {
       await _emit(buf, 'MethodChannel', size, stats);
     }
 
-    // Pigeon FFI/JNI path lands here after the generator runs:
-    // final host = BenchHost();
-    // for (final size in _payloadSizes) {
-    //   final payload = _makePayload(size);
-    //   final stats = await _timePigeon(host, payload);
-    //   await _emit(buf, 'Pigeon', size, stats);
-    // }
+    final host = BenchHost();
+    for (final size in _payloadSizes) {
+      final payload = _makePayload(size);
+      final stats = await _timePigeon(host, payload);
+      await _emit(buf, 'Pigeon', size, stats);
+    }
 
     await _report.invokeMethod('end');
     setState(() {
@@ -130,19 +129,19 @@ class _BenchHomeState extends State<BenchHome> {
     return BenchStats.fromSamples(samples);
   }
 
-  // Future<BenchStats> _timePigeon(BenchHost host, Uint8List payload) async {
-  //   await host.echo(payload); // warm-up
-  //   final samples = List<int>.filled(_batches, 0);
-  //   for (var b = 0; b < _batches; b++) {
-  //     final start = DateTime.now().microsecondsSinceEpoch;
-  //     for (var i = 0; i < _batchIters; i++) {
-  //       await host.echo(payload);
-  //     }
-  //     final end = DateTime.now().microsecondsSinceEpoch;
-  //     samples[b] = (end - start) * 1000 ~/ _batchIters;
-  //   }
-  //   return BenchStats.fromSamples(samples);
-  // }
+  Future<BenchStats> _timePigeon(BenchHost host, Uint8List payload) async {
+    await host.echo(payload); // warm-up
+    final samples = List<int>.filled(_batches, 0);
+    for (var b = 0; b < _batches; b++) {
+      final start = DateTime.now().microsecondsSinceEpoch;
+      for (var i = 0; i < _batchIters; i++) {
+        await host.echo(payload);
+      }
+      final end = DateTime.now().microsecondsSinceEpoch;
+      samples[b] = (end - start) * 1000 ~/ _batchIters;
+    }
+    return BenchStats.fromSamples(samples);
+  }
 
   Future<void> _emit(
     StringBuffer buf,
