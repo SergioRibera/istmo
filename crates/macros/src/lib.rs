@@ -78,6 +78,19 @@ mod worker;
 /// - `crate = "::istmo_core"` — path the generated code reaches the
 ///   runtime through. Defaults to `::istmo`; crates that depend on
 ///   `istmo-core` directly instead of the facade override it.
+/// - `remote = false` — the host refuses requests from other processes.
+/// - `shortcut = false` — no typed in-process shortcut: calls from this
+///   process are encoded and served on a dispatcher thread too. By
+///   default `Runtime::register_host` (and so every `runtime!(hosts: …)`
+///   entry) installs the shortcut of a stateless plugin, and this
+///   process's clients poll the host's futures on their own task; mark
+///   single methods that block or need a particular executor
+///   [`#[blocking]`](macro@blocking) instead.
+/// - `native = false` — the plugin never leaves Rust: its signatures are
+///   not checked against the shapes Kotlin and Swift can map. Otherwise
+///   every argument and return type that has no mapping (tuples,
+///   `usize`, `Duration`, references, maps, other generics, a misplaced
+///   `FrameSinkId`) is reported at once, at the offending type.
 ///
 /// # Methods
 ///
@@ -102,6 +115,15 @@ mod worker;
 /// would otherwise be encoded differently by client and host. An alias
 /// under another name (`type Reply<T> = Result<T, MyError>`) is opaque
 /// to the macro and travels whole as the success payload.
+///
+/// # Host context
+///
+/// An argument whose type's last path segment is `HostCtx` is filled in
+/// by the host and stripped from the wire: it carries the call's
+/// [`CallOrigin`](https://docs.rs/istmo-core/latest/istmo_core/enum.CallOrigin.html)
+/// and the runtime (for `frame_sender`). A method taking a
+/// `FrameSinkId` only serves callers in this process; others get
+/// `DispatchError::OriginRefused`.
 ///
 /// # Cooperative cancellation
 ///
@@ -497,7 +519,10 @@ pub fn mobile_app(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   ends in `Client`, used as-is). A trait whose own name ends in
 ///   `Client` must therefore be written as its full client name.
 /// - `hosts: [Echo => EchoImpl, api::Store => Store::default()]` —
-///   Rust implementations registered as `<Trait>Host::new(expr)`.
+///   Rust implementations registered as `<Trait>Host::new(expr)`, with
+///   their typed in-process shortcut (see [`#[plugin]`](macro@plugin)).
+///   An entry written `#[wire_only] Echo => EchoImpl` is registered for
+///   the wire path only.
 /// - `services: [SyncService => Syncer]` / `workers: [Backup => Nightly]` —
 ///   registered as `<Trait>Adapter::new(expr)` /
 ///   `<Trait>WorkerAdapter::new(expr)` for `#[service]` / `#[worker]`

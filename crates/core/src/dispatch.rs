@@ -426,7 +426,7 @@ impl HostCtx {
     ///
     /// # Errors
     ///
-    /// [`IstmoError::RuntimeShutDown`] once the runtime is gone, or for
+    /// [`IstmoError::RuntimeShutDown`](crate::IstmoError::RuntimeShutDown) once the runtime is gone, or for
     /// a [`detached`](Self::detached) context.
     pub fn runtime(&self) -> Result<Arc<Runtime>, crate::IstmoError> {
         self.runtime
