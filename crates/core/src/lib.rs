@@ -61,15 +61,19 @@ pub use wincode;
 
 pub use crate::bytes::Bytes;
 pub use crate::dispatch::{
-    CallOrigin, CancelToken, Dispatch, DispatchError, DispatchFuture, DispatchMode,
+    CallOrigin, CancelToken, Dispatch, DispatchError, DispatchFuture, DispatchMode, HostCtx,
     HostedStreamItem, Outcome, Plugin,
 };
 pub use crate::error::{CodecError, IstmoError};
 pub use crate::main_thread::{InlineMainThread, MainThread, MockMainThread, Task};
 pub use crate::message::Message;
 pub use crate::native_frame::{
-    FrameSender, FrameSink, FrameSinkId, MemoryKind, NativeBuffer, NativeFrame, SinkPolicy,
+    BufferIdentity, BufferLease, EndReason, FrameSender, FrameSink, FrameSinkId, IntoBackingError,
+    MemoryKind, NativeBuffer, NativeFrame, NativeProducer, Overflow, PlatformBuffer, PushError,
+    Pushed, SinkError, SinkPolicy, SinkStats, SubmitStatus,
 };
+#[cfg(unix)]
+pub use crate::native_frame::{DmaBuf, DmaBufPlane};
 pub use crate::native_handle::NativeHandle;
 pub use crate::protocol::{
     CallId, EarlyEventKind, Envelope, Frame, InstanceId, NativeHandleId, PROTOCOL_VERSION,
@@ -96,5 +100,6 @@ pub mod __private {
     pub use crate::assets::set_app_assets;
     pub use crate::path::set_app_info;
     pub use crate::runtime::encode_hosted_stream;
+    pub use crate::runtime::typed_call_cancellable;
     pub use crate::runtime::typed_catch_unwind;
 }

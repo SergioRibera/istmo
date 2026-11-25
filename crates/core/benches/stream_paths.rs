@@ -11,7 +11,7 @@
 //!    moved.
 //! 4. `sink_native` — the frame sink fed the way the Android / iOS entry
 //!    points feed it: metadata wire-encoded, decoded once by the sink
-//!    (`Runtime::submit_native_frame`), buffer moved.
+//!    (a `NativeProducer` resolved once per session), buffer moved.
 //!
 //! Two item sizes: 16 bytes (control / sample traffic) and 8 MiB (a
 //! 1080p-to-4K raw frame). The producer allocates each payload with
@@ -21,11 +21,10 @@
 //! cost.
 
 use std::hint::black_box;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use istmo_core::native_frame::{NativeBuffer, Overflow, PushError, SinkPolicy};
+use istmo_core::native_frame::{NativeBuffer, Overflow, PushError, SinkPolicy, meta_fingerprint};
 use istmo_core::{Runtime, StreamItem, codec};
 use istmo_macros::{message, plugin};
 
@@ -91,14 +90,14 @@ fn drain(client: &SourceClient, count: u32, size: u32) {
 
 fn bus(c: &mut Criterion) {
     let rt = Runtime::mock().runtime;
-    rt.register_host(SourceHost::new(Producer));
+    rt.register_host_wire_only(SourceHost::new(Producer));
     let client = SourceClient::from_runtime(&rt).expect("client");
     run_stream_group(c, "stream_paths/bus", &client, false);
 }
 
 fn typed(c: &mut Criterion) {
     let rt = Runtime::mock().runtime;
-    SourceHost::new(Producer).register(&rt);
+    rt.register_host(SourceHost::new(Producer));
     let client = SourceClient::from_runtime(&rt).expect("client");
     run_stream_group(c, "stream_paths/typed", &client, true);
 }
@@ -120,20 +119,23 @@ fn run_stream_group(c: &mut Criterion, name: &str, client: &SourceClient, local:
 /// none) and the producer never waits: the row measures the hand-off,
 /// not a retry loop. The retry is there for correctness only.
 fn sink_batch(rt: &Arc<Runtime>, count: u32, size: u32, native: bool) {
-    let depth = NonZeroUsize::new(count as usize).expect("non-empty batch");
-    let policy = SinkPolicy::queue(depth).with_overflow(Overflow::DropNewest);
+    let policy = SinkPolicy::queue(count as usize).with_overflow(Overflow::DropNewest);
     let sink = rt.open_frame_sink::<Meta>(policy).expect("open sink");
     let producer = {
         let rt = Arc::clone(rt);
         let id = sink.id();
         std::thread::spawn(move || {
             let sender = rt.frame_sender(id).expect("sender");
+            let native_producer = rt
+                .open_native_producer(id.raw(), meta_fingerprint::<Meta>())
+                .expect("native producer");
+            drop(rt);
             for seq in 0..count {
-                let buffer = NativeBuffer::from_cpu(vec![0u8; size as usize]);
+                let buffer = NativeBuffer::from_bytes(vec![0u8; size as usize]);
                 if native {
                     let meta = codec::encode(&Meta { seq }).expect("encode meta");
                     loop {
-                        let status = rt.submit_native_frame(id.raw(), &meta, buffer.clone());
+                        let status = native_producer.submit(&meta, buffer.clone());
                         if status.is_taken() {
                             break;
                         }
@@ -150,7 +152,7 @@ fn sink_batch(rt: &Arc<Runtime>, count: u32, size: u32, native: bool) {
                             (meta, buffer) = (m, b);
                             std::thread::yield_now();
                         }
-                        Err(PushError::Closed(..)) => return,
+                        Err(_) => return,
                     }
                 }
             }
@@ -158,7 +160,7 @@ fn sink_batch(rt: &Arc<Runtime>, count: u32, size: u32, native: bool) {
     };
     let mut seen = 0;
     while let Some(frame) = sink.recv() {
-        black_box(frame.buffer.cpu_bytes().map(<[u8]>::len));
+        black_box(frame.buffer.as_bytes().map(<[u8]>::len));
         seen += 1;
     }
     producer.join().expect("producer");
@@ -214,36 +216,36 @@ fn handoff(c: &mut Criterion) {
     });
     let rt = Runtime::mock().runtime;
     let sink = rt
-        .open_frame_sink::<Meta>(SinkPolicy::queue(
-            NonZeroUsize::new(DEPTH).expect("non-zero"),
-        ))
+        .open_frame_sink::<Meta>(SinkPolicy::queue(DEPTH))
         .expect("open sink");
     let sender = rt.frame_sender(sink.id()).expect("sender");
     group.bench_function("sink", |b| {
         b.iter(|| {
             sender
-                .push(Meta { seq: 1 }, NativeBuffer::from_cpu(vec![0u8; 16]))
+                .push(Meta { seq: 1 }, NativeBuffer::from_bytes(vec![0u8; 16]))
                 .expect("push");
             black_box(
                 sink.try_recv()
                     .expect("frame")
                     .buffer
-                    .cpu_bytes()
+                    .as_bytes()
                     .map(<[u8]>::len),
             );
         });
     });
     let meta = codec::encode(&Meta { seq: 1 }).expect("encode meta");
-    let raw = sink.id().raw();
+    let native_producer = rt
+        .open_native_producer(sink.id().raw(), meta_fingerprint::<Meta>())
+        .expect("native producer");
     group.bench_function("sink_native", |b| {
         b.iter(|| {
-            let status = rt.submit_native_frame(raw, &meta, NativeBuffer::from_cpu(vec![0u8; 16]));
+            let status = native_producer.submit(&meta, NativeBuffer::from_bytes(vec![0u8; 16]));
             assert!(status.is_taken());
             black_box(
                 sink.try_recv()
                     .expect("frame")
                     .buffer
-                    .cpu_bytes()
+                    .as_bytes()
                     .map(<[u8]>::len),
             );
         });

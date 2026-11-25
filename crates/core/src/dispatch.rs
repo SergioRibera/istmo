@@ -143,6 +143,14 @@ pub enum DispatchError {
     /// The OS refused a thread needed to serve the call (a hosted call,
     /// a stream encoder or pump, a service body or its cancel watcher).
     Spawn(std::io::Error),
+    /// The method refuses callers of this origin (a method taking a
+    /// frame sink only serves this process's own Rust code).
+    OriginRefused {
+        /// The refused method.
+        method: String,
+        /// Who called.
+        origin: CallOrigin,
+    },
 }
 
 impl fmt::Display for DispatchError {
@@ -153,6 +161,9 @@ impl fmt::Display for DispatchError {
             Self::UnknownMethod(name) => write!(f, "unknown method: {name}"),
             Self::Unimplemented(name) => write!(f, "unimplemented method: {name}"),
             Self::Spawn(err) => write!(f, "could not spawn a dispatch thread: {err}"),
+            Self::OriginRefused { method, origin } => {
+                write!(f, "method `{method}` refuses {origin:?} callers")
+            }
         }
     }
 }
@@ -162,7 +173,7 @@ impl std::error::Error for DispatchError {
         match self {
             Self::Decode(err) | Self::Encode(err) => Some(err),
             Self::Spawn(err) => Some(err),
-            Self::UnknownMethod(_) | Self::Unimplemented(_) => None,
+            Self::UnknownMethod(_) | Self::Unimplemented(_) | Self::OriginRefused { .. } => None,
         }
     }
 }
@@ -297,6 +308,33 @@ pub trait Dispatch: Send + Sync + 'static {
         cancel: CancelToken,
     ) -> DispatchFuture<'a>;
 
+    /// [`dispatch`](Self::dispatch), knowing who called. The runtime
+    /// calls this one; the default ignores `origin`. Generated hosts
+    /// override it to hand the origin to the implementation
+    /// ([`HostCtx::origin`]) and to refuse frame-sink methods to
+    /// callers outside this process.
+    fn dispatch_from<'a>(
+        &'a self,
+        origin: CallOrigin,
+        instance_id: Option<InstanceId>,
+        method: &'a str,
+        payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        let _ = origin;
+        self.dispatch(instance_id, method, payload, cancel)
+    }
+
+    /// The typed in-process shortcut of this host, installed next to the
+    /// wire path by [`Runtime::register_host`]: generated clients in this
+    /// process call through it instead of encoding. `None` (the default,
+    /// and what `#[plugin(shortcut = false)]` hosts answer) keeps every
+    /// call on the wire path.
+    #[doc(hidden)]
+    fn typed_shortcut(self: Arc<Self>) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        None
+    }
+
     /// Handle a [`Frame::CreateInstance`](crate::protocol::Frame::CreateInstance)
     /// for stateful plugins hosted in this process.
     ///
@@ -321,5 +359,86 @@ pub trait Dispatch: Send + Sync + 'static {
     /// hosts override to reap the entry from their instance map.
     fn destroy_instance(&self, instance_id: InstanceId) {
         let _ = instance_id;
+    }
+}
+
+/// What a Rust host method can know about the call it serves: who made
+/// it and the runtime it came through.
+///
+/// Declare an argument of this type on a plugin trait method (any
+/// name; matched by the type's last path segment, like
+/// [`CancelToken`]) and the generated host fills it in. It never
+/// crosses the wire: Kotlin and Swift backends do not see it.
+///
+/// ```
+/// use istmo_core::{FrameSinkId, HostCtx, NativeBuffer};
+///
+/// async fn start(ctx: HostCtx, frames: FrameSinkId<u32>) -> Result<(), istmo_core::IstmoError> {
+///     let sender = ctx.frame_sender(frames)?;
+///     std::thread::spawn(move || {
+///         let _ = sender.push(1, NativeBuffer::from_bytes(vec![0u8; 4]));
+///     });
+///     Ok(())
+/// }
+/// # let _ = start;
+/// ```
+#[derive(Debug, Clone)]
+pub struct HostCtx {
+    runtime: Weak<Runtime>,
+    origin: CallOrigin,
+}
+
+impl HostCtx {
+    /// A context for a call from `origin` served on `runtime`.
+    #[must_use]
+    pub fn new(runtime: &Arc<Runtime>, origin: CallOrigin) -> Self {
+        Self {
+            runtime: Arc::downgrade(runtime),
+            origin,
+        }
+    }
+
+    /// A context for a host that was never registered on a runtime
+    /// (called directly, in a test): [`runtime`](Self::runtime) fails.
+    #[must_use]
+    pub const fn detached(origin: CallOrigin) -> Self {
+        Self {
+            runtime: Weak::new(),
+            origin,
+        }
+    }
+
+    /// Who made the call. The typed in-process shortcut always reports
+    /// [`CallOrigin::Local`].
+    #[must_use]
+    pub const fn origin(&self) -> CallOrigin {
+        self.origin
+    }
+
+    /// The runtime serving the call.
+    ///
+    /// # Errors
+    ///
+    /// [`IstmoError::RuntimeShutDown`] once the runtime is gone, or for
+    /// a [`detached`](Self::detached) context.
+    pub fn runtime(&self) -> Result<Arc<Runtime>, crate::IstmoError> {
+        self.runtime
+            .upgrade()
+            .ok_or(crate::IstmoError::RuntimeShutDown)
+    }
+
+    /// The producer end of the frame sink `id`, opened by a consumer in
+    /// this process.
+    ///
+    /// # Errors
+    ///
+    /// As [`Runtime::frame_sender`], plus
+    /// [`IstmoError::RuntimeShutDown`](crate::IstmoError::RuntimeShutDown)
+    /// when the runtime is gone.
+    pub fn frame_sender<M: crate::Message + Send + 'static>(
+        &self,
+        id: crate::FrameSinkId<M>,
+    ) -> Result<crate::FrameSender<M>, crate::IstmoError> {
+        self.runtime()?.frame_sender(id)
     }
 }

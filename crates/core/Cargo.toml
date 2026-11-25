@@ -17,6 +17,13 @@ flume = { workspace = true }
 oneshot = { workspace = true }
 pollster = { workspace = true }
 tracing = { workspace = true }
+# `Stream` for `FrameSink`; already in the graph through flume's async
+# feature.
+futures-core = { version = "0.3", default-features = false }
+
+# Debug builds check that DMA-BUF fds handed to a frame are close-on-exec.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std"] }
 
 # The browser has no threads: hosted work runs on its event loop.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

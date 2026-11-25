@@ -62,7 +62,17 @@ pub enum IstmoError {
     UnknownFrameSink(u64),
     /// The frame sink exists but carries another metadata type than the
     /// one asked for.
-    FrameSinkTypeMismatch(u64),
+    FrameSinkTypeMismatch {
+        /// The sink's raw id.
+        id: u64,
+        /// The metadata type the caller asked for.
+        expected: &'static str,
+        /// The metadata type the sink carries.
+        found: &'static str,
+    },
+    /// A frame sink id was passed to a plugin hosted in another process,
+    /// where no producer can reach the sink.
+    FrameSinkNotShareable(&'static str),
 }
 
 impl fmt::Display for IstmoError {
@@ -81,16 +91,32 @@ impl fmt::Display for IstmoError {
                 "protocol version mismatch: expected {expected}, got {got}",
             ),
             Self::RoutingMismatch(kind) => write!(f, "routing mismatch: {kind}"),
-            Self::PluginError { bytes } => {
-                write!(f, "plugin domain error ({} bytes)", bytes.len())
-            }
+            Self::PluginError { bytes } => write!(
+                f,
+                "plugin domain error ({} bytes; decode it with `IstmoError::domain_error`)",
+                bytes.len()
+            ),
             Self::PluginNotDeclared(id) => {
                 write!(f, "plugin `{id}` not declared in istmo::runtime!")
             }
-            Self::UnknownFrameSink(id) => write!(f, "no frame sink {id} in this runtime"),
-            Self::FrameSinkTypeMismatch(id) => {
-                write!(f, "frame sink {id} carries another metadata type")
+            Self::UnknownFrameSink(id) => {
+                write!(
+                    f,
+                    "no frame sink {id:#018x} in this runtime (closed, or opened elsewhere)"
+                )
             }
+            Self::FrameSinkTypeMismatch {
+                id,
+                expected,
+                found,
+            } => write!(
+                f,
+                "frame sink {id:#018x} carries `{found}` metadata, not `{expected}`"
+            ),
+            Self::FrameSinkNotShareable(plugin) => write!(
+                f,
+                "plugin `{plugin}` runs in another process and cannot feed a frame sink"
+            ),
         }
     }
 }
@@ -99,6 +125,25 @@ impl std::error::Error for IstmoError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Codec(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl IstmoError {
+    /// The plugin's domain error, decoded as `E`: `Some` for a
+    /// [`PluginError`](Self::PluginError) whose bytes are an `E`.
+    ///
+    /// ```
+    /// # use istmo_core::{IstmoError, codec};
+    /// let err = IstmoError::PluginError { bytes: codec::encode(&7u32).unwrap() };
+    /// assert_eq!(err.domain_error::<u32>(), Some(7));
+    /// assert_eq!(IstmoError::ChannelClosed.domain_error::<u32>(), None);
+    /// ```
+    #[must_use]
+    pub fn domain_error<E: crate::message::Message>(&self) -> Option<E> {
+        match self {
+            Self::PluginError { bytes } => crate::codec::decode_exact::<E>(bytes).ok(),
             _ => None,
         }
     }
