@@ -1,7 +1,7 @@
 [package]
 name = "bench-android"
 version = "0.1.1-alpha.7"
-description = "On-device istmo call-overhead benchmark (Isolated / Inline / Typed)."
+description = "On-device istmo latency benchmark: Rust <-> Kotlin crossings, streams, frame sinks and thread hand-offs."
 publish = false
 edition.workspace = true
 rust-version.workspace = true
@@ -15,13 +15,23 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 istmo = { path = "../.." }
 pollster = { workspace = true }
+flume = { workspace = true }
+tracing = { workspace = true }
+libc = "0.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.14"
 log = "0.4"
 jni = { workspace = true }
+# Only the bench turns the transport's stage stamps on.
+istmo-android = { workspace = true, features = ["native-activity", "latency-probe"] }
+
+[build-dependencies]
+istmo-build = { workspace = true }
 
 [lints.rust]
+# Toolchains older than clippy 1.100 do not know `unused_async_trait_impl`.
+unknown_lints = { level = "allow", priority = -2 }
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
 unsafe_code = "allow"
@@ -34,3 +44,5 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 missing_safety_doc = "allow"
 redundant_pub_crate = "allow"
+# Plugin traits are async; the echo hosts implement them with `async fn`.
+unused_async_trait_impl = "allow"

@@ -47,9 +47,6 @@ android {
 }
 
 dependencies {
-    // No istmo-gradle wiring here: the benchmark bypasses the plugin
-    // system entirely and talks to a tiny Rust harness through the
-    // JNI bridge defined in `BenchNative.kt`. The cdylib must be built
-    // separately (see README) and dropped into
-    // `app/src/main/jniLibs/<abi>/libbench_android.so`.
+    implementation("io.github.sergioribera:istmo-runtime:0.1.1-alpha.7")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }

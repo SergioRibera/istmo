@@ -1,9 +1,27 @@
-//! Smoke test: desktop host can boot the bench runtime and get sensible
-//! per-iter timings. Confirms the harness isn't broken before we build
-//! it for Android.
+//! Desktop smoke test: the bench runtime boots and the cells that need
+//! no Kotlin peer produce one sample per iteration.
 
 #[cfg(not(target_os = "android"))]
 #[test]
-fn desktop_smoke_runs_all_modes() {
-    bench_android::smoke();
+fn desktop_cells_produce_samples() {
+    use bench_android::cells::Cell;
+
+    let init = istmo::Runtime::init(istmo::RuntimeConfig::inline()).expect("init runtime");
+    let init = bench_android::__istmo_configure_runtime(init);
+    let rt = init.runtime;
+    for cell in [
+        Cell::IsolatedRaw,
+        Cell::InlineRaw,
+        Cell::Typed,
+        Cell::FlumePingPong,
+        Cell::CondvarPingPong,
+        Cell::FutexPingPong,
+        Cell::SpinThenPark,
+        Cell::ThreadSpawnStart,
+        Cell::ClockOverhead,
+    ] {
+        let run = cell.run(&rt, 50, 64).expect("cell runs");
+        assert_eq!(run.samples.len(), 50, "{cell:?}");
+    }
+    assert!(bench_android::run_iterations(1, 10, 64).expect("legacy inline") > 0);
 }
