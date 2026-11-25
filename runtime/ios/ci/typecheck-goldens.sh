@@ -26,7 +26,7 @@ module() {
 module Foundation "$ci/FoundationStub.swift"
 module BackgroundTasks "$ci/BackgroundTasksStub.swift"
 module IstmoRuntime "$src/Bincode.swift" "$src/PluginException.swift" \
-    "$src/PluginHandler.swift" "$src/IstmoRuntime.swift" "$src/IstmoFrameSink.swift"
+    "$src/PluginHandler.swift" "$src/IstmoRuntime.swift" "$src/IstmoFrameSender.swift"
 
 typecheck() {
     label=$1

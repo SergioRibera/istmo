@@ -164,21 +164,67 @@ void istmo_ios_submit_early_queue(
     size_t payload_len);
 
 /*
- * Frame sinks. Both submits return a status code: 0 accepted, 1
- * displaced (accepted, an older frame was dropped), 2 closed (stop
- * producing), 3 unknown sink, 4 bad metadata, 5 unsupported, 6 runtime
- * not started, 7 invalid argument, 8 full (refused).
- *
- * `istmo_ios_submit_native_buffer` takes over the +1 reference in
- * `object` whatever the status, releasing it through `release` (on any
- * thread) once the frame drops or at once when it is refused. Only a NULL
- * `object` or `release` leaves ownership with the caller (status 7).
- * kind: 0 other, 1 CVPixelBufferRef, 2 IOSurfaceRef, 3 CMSampleBufferRef.
+ * Native entry version (`NATIVE_ABI_VERSION`); the Swift runtime refuses
+ * to start against a library reporting another one.
  */
+uint32_t istmo_abi_version(void);
+
+/*
+ * Frame sinks. Submits return an `IstmoSubmitStatus` code; the values
+ * mirror Rust's `SubmitStatus` (a test keeps them in sync).
+ */
+enum {
+    ISTMO_SUBMIT_ACCEPTED = 0,
+    ISTMO_SUBMIT_DISPLACED = 1,
+    ISTMO_SUBMIT_CLOSED = 2,
+    ISTMO_SUBMIT_UNKNOWN_SINK = 3,
+    ISTMO_SUBMIT_BAD_META = 4,
+    ISTMO_SUBMIT_UNSUPPORTED = 5,
+    ISTMO_SUBMIT_NOT_STARTED = 6,
+    ISTMO_SUBMIT_INVALID = 7,
+    ISTMO_SUBMIT_FULL = 8,
+    ISTMO_SUBMIT_INTERNAL = 9,
+    ISTMO_SUBMIT_TYPE_MISMATCH = 10,
+};
+
+/* `kind` of a retained object. */
+enum {
+    ISTMO_RETAINED_OTHER = 0,
+    ISTMO_RETAINED_CV_PIXEL_BUFFER = 1,
+    ISTMO_RETAINED_IO_SURFACE = 2,
+    ISTMO_RETAINED_CM_SAMPLE_BUFFER = 3,
+};
+
+/* One producer session on a sink, owned by Swift's `IstmoFrameSender`. */
+typedef struct IstmoFrameProducer IstmoFrameProducer;
+
 typedef void (*IstmoReleaseFn)(void *object);
 
-int32_t istmo_ios_submit_native_buffer(
+/* Open a producer; NULL with the reason in `*status` on failure.
+ * `fingerprint` names the metadata type (0: unchecked). */
+IstmoFrameProducer * istmo_ios_open_frame_producer(
     uint64_t sink,
+    uint64_t fingerprint,
+    int32_t *status);
+
+/* End the stream: completed when `error` is NULL, failed with the UTF-8
+ * message otherwise. The handle stays valid until freed. */
+void istmo_ios_end_frame_producer(
+    const IstmoFrameProducer *producer,
+    const uint8_t *error,
+    size_t error_len);
+
+/* Free the handle; never use it afterwards. */
+void istmo_ios_free_frame_producer(IstmoFrameProducer *producer);
+
+/*
+ * Takes over the +1 reference in `object` whatever the status, releasing
+ * it through `release` (on any thread) once the frame drops or at once
+ * when it is refused. Only a NULL `object` or `release` leaves ownership
+ * with the caller (status INVALID).
+ */
+int32_t istmo_ios_submit_native_buffer(
+    const IstmoFrameProducer *producer,
     uint32_t kind,
     void *object,
     IstmoReleaseFn release,
@@ -187,15 +233,11 @@ int32_t istmo_ios_submit_native_buffer(
 
 /* Copies `(bytes, len)` into a frame. */
 int32_t istmo_ios_submit_frame_bytes(
-    uint64_t sink,
+    const IstmoFrameProducer *producer,
     const uint8_t *bytes,
     size_t len,
     const uint8_t *meta,
     size_t meta_len);
-
-/* Producer-side close: the consumer gets what is queued, then the end.
- * False when no such sink is open. */
-bool istmo_ios_close_frame_sink(uint64_t sink);
 
 #ifdef __cplusplus
 }

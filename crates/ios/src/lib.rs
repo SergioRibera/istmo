@@ -27,11 +27,14 @@ mod state;
 
 pub use cdecl_exports::{
     IstmoIosCallbacks, OnCallFn, OnCancelFn, OnCreateInstanceFn, OnDestroyInstanceFn, OnEventFn,
-    OnNotifyFn, OnReleaseNativeHandleFn, OnRespondFn, OnStreamEndFn, istmo_ios_close_frame_sink,
-    istmo_ios_shutdown, istmo_ios_start, istmo_ios_submit_call, istmo_ios_submit_cancel,
-    istmo_ios_submit_early_latest, istmo_ios_submit_early_queue, istmo_ios_submit_event,
-    istmo_ios_submit_frame_bytes, istmo_ios_submit_native_buffer, istmo_ios_submit_notify,
+    OnNotifyFn, OnReleaseNativeHandleFn, OnRespondFn, OnStreamEndFn, istmo_ios_shutdown,
+    istmo_ios_start, istmo_ios_submit_call, istmo_ios_submit_cancel, istmo_ios_submit_early_latest,
+    istmo_ios_submit_early_queue, istmo_ios_submit_event, istmo_ios_submit_notify,
     istmo_ios_submit_response, istmo_ios_submit_stream_end,
 };
 pub use error::IosRuntimeError;
-pub use native_buffer::{ReleaseFn, RetainedBuffer, RetainedKind};
+pub use native_buffer::{
+    IstmoFrameProducer, ReleaseFn, RetainedBuffer, RetainedKind, istmo_abi_version,
+    istmo_ios_end_frame_producer, istmo_ios_free_frame_producer, istmo_ios_open_frame_producer,
+    istmo_ios_submit_frame_bytes, istmo_ios_submit_native_buffer,
+};

@@ -35,6 +35,7 @@ public final class IstmoRuntime: @unchecked Sendable {
     private var hostedTasks: [UInt64: Task<Void, Never>] = [:]
 
     private var handleOwners: [UInt64: String] = [:]
+    private var appObjects: [UInt64: AnyObject] = [:]
     private var nextGlobalHandleId: UInt64 = 1
 
     private init() {}
@@ -52,6 +53,30 @@ public final class IstmoRuntime: @unchecked Sendable {
         queue.sync { _ = self.handleOwners.removeValue(forKey: handleId) }
     }
 
+    /// Register a platform object app code hands to a plugin (an
+    /// `AVSampleBufferDisplayLayer` for a preview, a consent grant) and get
+    /// the `NativeHandleId` to pass as the plugin argument. The plugin's
+    /// backend reads it back with `object(for:)`; it is released when
+    /// Rust drops its `NativeHandle`, or with `releaseObject(_:)`.
+    public func registerObject(_ object: AnyObject) -> UInt64 {
+        queue.sync {
+            let id = self.nextGlobalHandleId
+            self.nextGlobalHandleId += 1
+            self.appObjects[id] = object
+            return id
+        }
+    }
+
+    /// The object `registerObject(_:)` stored under `handleId`, if it is a `T`.
+    public func object<T: AnyObject>(for handleId: UInt64, as type: T.Type = T.self) -> T? {
+        queue.sync { self.appObjects[handleId] as? T }
+    }
+
+    /// Forget an object `registerObject(_:)` stored.
+    public func releaseObject(_ handleId: UInt64) {
+        queue.sync { _ = self.appObjects.removeValue(forKey: handleId) }
+    }
+
     public func registerHandler(_ pluginId: String, _ handler: PluginHandler) {
         queue.sync { self.handlers[pluginId] = handler }
     }
@@ -59,6 +84,9 @@ public final class IstmoRuntime: @unchecked Sendable {
     public func start() throws {
         try queue.sync {
             guard !started else { return }
+            if let found = IstmoFrames.abiMismatch() {
+                throw IstmoRuntimeError.abiMismatch(found: found, expected: IstmoFrames.abiVersion)
+            }
             let retained = Unmanaged.passRetained(self)
             let cb = IstmoIosCallbacks(
                 ctx: retained.toOpaque(),
@@ -399,6 +427,7 @@ public final class IstmoRuntime: @unchecked Sendable {
     }
 
     fileprivate func handleReleaseNativeHandle(handleId: UInt64) {
+        if queue.sync(execute: { self.appObjects.removeValue(forKey: handleId) }) != nil { return }
         let owner = queue.sync { self.handleOwners.removeValue(forKey: handleId) }
         guard let ownerId = owner, let handler = queue.sync(execute: { self.handlers[ownerId] }) else {
             return

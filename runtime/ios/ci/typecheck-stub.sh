@@ -1,6 +1,6 @@
 #!/bin/sh
 # Type-check the UIKit-free core of the Swift runtime (`IstmoRuntime`,
-# `PluginHandler`, `PluginException`, `IstmoFrameSink`) on any host with a Swift toolchain,
+# `PluginHandler`, `PluginException`, `IstmoFrameSender`) on any host with a Swift toolchain,
 # Linux included. `FoundationStub.swift` stands in for the small slice of
 # Foundation / Dispatch these files use, so no Apple SDK is needed.
 #
@@ -13,7 +13,7 @@ src="$root/runtime/ios/Sources/IstmoRuntime"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-for f in IstmoRuntime PluginHandler PluginException IstmoFrameSink; do
+for f in IstmoRuntime PluginHandler PluginException IstmoFrameSender; do
     grep -v '^import Foundation' "$src/$f.swift" > "$work/$f.swift"
 done
 
@@ -22,5 +22,5 @@ done
     -module-name IstmoRuntime \
     "$root/runtime/ios/ci/FoundationStub.swift" \
     "$work/IstmoRuntime.swift" "$work/PluginHandler.swift" "$work/PluginException.swift" \
-    "$work/IstmoFrameSink.swift"
+    "$work/IstmoFrameSender.swift"
 echo "IstmoRuntime core type-checks"

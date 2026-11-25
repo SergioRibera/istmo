@@ -2,7 +2,7 @@
 // and the code `istmo-build` generates use, so the sources can be
 // type-checked on a host without them. `Data` keeps slice indices like
 // the real type (a slice's startIndex is its offset in the parent).
-public struct Data: Equatable, Sequence, CustomStringConvertible {
+public struct Data: Equatable, Sequence, CustomStringConvertible, Sendable {
     public typealias Index = Int
     var bytes: [UInt8]
     public private(set) var startIndex: Int

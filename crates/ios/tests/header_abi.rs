@@ -77,6 +77,9 @@ fn c_to_rust(ty: &str) -> String {
         "uint64_t" => "u64",
         "size_t" => "usize",
         "IstmoIosCallbacks" => "IstmoIosCallbacks",
+        "IstmoFrameProducer *" => "*mut IstmoFrameProducer",
+        "const IstmoFrameProducer *" => "*const IstmoFrameProducer",
+        "int32_t *" => "*mut i32",
         other => panic!("C type `{other}` has no Rust mapping in this test"),
     }
     .to_owned()
@@ -241,6 +244,7 @@ fn header_matches_rust_exports() {
     }
     let header = strip_comments(&read(&header_path));
     let rust = strip_comments(&read(&manifest_dir().join("src/cdecl_exports.rs")));
+    let frames = strip_comments(&read(&manifest_dir().join("src/native_buffer.rs")));
 
     assert_eq!(
         header_fields(&header),
@@ -248,7 +252,8 @@ fn header_matches_rust_exports() {
         "IstmoIosCallbacks fields (name, type) differ between istmo_ffi.h and cdecl_exports.rs",
     );
 
-    let exports = rust_exports(&rust);
+    let mut exports = rust_exports(&rust);
+    exports.extend(rust_exports(&frames));
     assert!(!exports.is_empty(), "no #[unsafe(no_mangle)] exports found");
     for (name, rust_sig) in &exports {
         let header_sig = header_function(&header, name)
@@ -259,7 +264,9 @@ fn header_matches_rust_exports() {
     let declared = header
         .lines()
         .filter_map(|line| {
-            let start = line.find("istmo_ios_")?;
+            let start = line
+                .find("istmo_ios_")
+                .or_else(|| line.find("istmo_abi_"))?;
             let len = line[start..].find('(')?;
             Some(line[start..start + len].to_owned())
         })
@@ -267,7 +274,7 @@ fn header_matches_rust_exports() {
     for name in declared {
         assert!(
             exports.iter().any(|(n, _)| *n == name),
-            "`{name}` is declared in istmo_ffi.h but not exported by cdecl_exports.rs",
+            "`{name}` is declared in istmo_ffi.h but not exported by the crate",
         );
     }
 }
