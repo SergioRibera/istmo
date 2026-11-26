@@ -6,6 +6,7 @@
 #
 # usage: runtime/android/ci/compile-goldens.sh
 #   KOTLINC           compiler command (default `kotlinc`)
+#   KOTLIN            runner command (default `kotlin`)
 #   KOTLIN_CLASSPATH  extra classpath, at least kotlinx-coroutines-core-jvm
 set -eu
 
@@ -52,6 +53,16 @@ for contract in coverage live_activity permissions; do
     done
     compile "$contract-client" "$client"/*.kt
 done
+
+# Rust's bytes for the coverage values (unknown variants of its
+# `#[non_exhaustive]` enums included) decode and write back unchanged.
+mkdir "$work/coverage-wire"
+for part in types codecs host; do
+    stage "$work/coverage-wire" "coverage_$part"
+done
+compile coverage-wire "$work/coverage-wire"/*.kt "$ci/wire/CoverageWire.kt"
+${KOTLIN:-kotlin} -classpath "$work/out-coverage-wire${KOTLIN_CLASSPATH:+:$KOTLIN_CLASSPATH}" \
+    dev.istmo.runtime.CoverageWireKt "$golden/coverage_wire.hex.expected"
 
 # What an app outside `dev.istmo.runtime` receives: package line and
 # runtime imports included, one contract in its plugin's own package.
