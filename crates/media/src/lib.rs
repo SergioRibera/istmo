@@ -3,9 +3,10 @@
 //!
 //! A plugin re-exports what it uses (`pub use istmo_media::AccessStatus`)
 //! and its contract references the type; `istmo-build` generates each
-//! type once per app (Kotlin package `dev.istmo.media`, Swift file
-//! `Plugins/IstmoMedia/Generated/IstmoMediaTypes.swift`) however many
-//! plugins use it, while every plugin's codecs read and write it.
+//! type once per app (Kotlin package `dev.istmo.media`, Swift namespace
+//! `IstmoMedia` in `Plugins/IstmoMedia/Generated/IstmoMediaTypes.swift`)
+//! however many plugins use it, while every plugin's codecs read and
+//! write it. Swift code spells them `IstmoMedia.AccessStatus`.
 //!
 //! A type lives here only when its meaning is identical in every plugin
 //! that uses it. Look-alikes that differ (camera's `PixelFormat` carries

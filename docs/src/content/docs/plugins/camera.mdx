@@ -75,6 +75,9 @@ match camera.request_access().await.map_err(CameraError::from)? {
         // Explain why, link to the system settings, …
     }
     AccessStatus::NotDetermined => {}
+    // `AccessStatus` is shared with the other media plugins, which report
+    // more states; a camera reports only the four above.
+    _ => {}
 }
 ```
 
@@ -293,6 +296,9 @@ types and codecs into that package, next to the plugin's Kotlin
 sources, whatever `[app] android_package` your app uses. On iOS the
 generated Swift and the plugin's `native/ios/` sources both land in
 the app target through `istmo-plugins.yml`.
+Swift names the message types `Camera.<Type>` (`Camera.SessionConfig`)
+and the shared permission state `IstmoMedia.AccessStatus`; Kotlin
+imports it from `dev.istmo.media`.
 :::
 
 **Android** — the generated `IstmoPluginRegistry` builds

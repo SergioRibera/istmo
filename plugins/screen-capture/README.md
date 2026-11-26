@@ -198,6 +198,10 @@ Methods that take a frame sink are Rust-only. `ScreenCaptureDefaults`
 in `native/android` and `native/ios` builds configs with the same
 defaults as Rust's `Default`.
 
+Swift names the message types `ScreenCapture.<Type>`
+(`ScreenCapture.SessionConfig`) and the shared permission state
+`IstmoMedia.AccessStatus`; Kotlin imports it from `dev.istmo.media`.
+
 ## Testing
 
 Unit tests run on fake backends. The real backends have gated live
