@@ -285,9 +285,13 @@ Kotlin en main llegó a un host de Rust que vuelve a llamar. Así que, como
 en cualquier `suspend fun`, no bloquees el hilo: mueve el trabajo
 bloqueante (escrituras a disco como `SharedPreferences.Editor.commit()`,
 aperturas de content providers, llamadas binder que pueden trabarse) a
-`withContext(Dispatchers.IO)`. `withContext(Dispatchers.Default)` no
-salta si el hilo ya es un worker de `Default`, así que no protege de
-eso. Un backend que no pueda cumplirlo se registra con
+`withContext(Dispatchers.IO)`. `withContext(Dispatchers.Default)` nunca lo
+mueve: la corrutina ya corre bajo `Default` (arrancada en el sitio, pero
+con el dispatcher de `Default`), y `withContext` solo salta cuando cambia
+el dispatcher, sea cual sea el hilo. Para sacar trabajo pesado de CPU
+del hilo de Rust usa `withContext(Dispatchers.IO)` o un dispatcher
+propio (o `yield()`, que reanuda en un worker de `Default`). Un backend
+que no pueda cumplirlo se registra con
 `IstmoRuntime.registerHandler(id, handler, startInPlace = false)` (o,
 en un plugin empaquetado, pone `android_start_in_place = false` en su
 `istmo.toml`) y cada llamada arranca en `Dispatchers.Default`.

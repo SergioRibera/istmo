@@ -59,9 +59,12 @@ object IstmoRuntime {
      * Like any `suspend fun`, a backend method must not block the thread:
      * wrap blocking work (disk, binder calls that can stall, content
      * providers) in `withContext(Dispatchers.IO)`. `withContext(Dispatchers.Default)`
-     * does not move work off a Rust thread started in place only when
-     * that thread already is a `Default` worker; pass [startInPlace]
-     * `false` to start every call on `Dispatchers.Default`.
+     * never moves work off a Rust thread started in place: the call
+     * already runs under `Default`'s dispatcher, and `withContext` only
+     * hops when the dispatcher changes. Use `Dispatchers.IO`, a
+     * dispatcher of your own or `yield()` (which resumes on a `Default`
+     * worker) to leave it, or pass [startInPlace] `false` to start every
+     * call on `Dispatchers.Default`.
      */
     @JvmOverloads
     fun registerHandler(pluginId: String, handler: PluginHandler, startInPlace: Boolean = true) {
@@ -489,30 +492,31 @@ object IstmoRuntime {
 
     private suspend fun pumpStream(callId: Long, flow: kotlinx.coroutines.flow.Flow<ByteArray>) {
         try {
-            // A stream opened in place runs on the Rust caller's thread:
-            // collect it on `Default` instead (a no-op hop when already
-            // there), since a flow may emit for as long as it likes.
-            kotlinx.coroutines.withContext(Dispatchers.Default) {
-                // `Unconfined` keeps the collector on the thread that
-                // emitted the item instead of hopping onto a `Default`
-                // worker per sample: for high-rate streams (stylus input,
-                // pen hover) the per-event hop added tens of ms of visible
-                // latency. Item by item, on the emitting thread: a backend
-                // that emits without suspending (a sensor callback, a busy
-                // loop) gets every item across at once; Rust holds it back
-                // when its consumer falls behind.
-                kotlinx.coroutines.withContext(Dispatchers.Unconfined) {
-                    flow.collect { bytes ->
-                        // Holding an item back blocks the emitting thread.
-                        // An upstream fed by a Rust stream resumes on a
-                        // Rust thread that must never block (the pump, an
-                        // async worker): Rust says which, and the item
-                        // waits on an IO thread instead, in order.
-                        if (nativeMayBlock()) {
-                            nativeSubmitEvent(callId, bytes)
-                        } else {
-                            kotlinx.coroutines.withContext(Dispatchers.IO) { nativeSubmitEvent(callId, bytes) }
-                        }
+            // A stream opened in place runs on the Rust caller's thread,
+            // and a flow may emit for as long as it likes: move to a
+            // `Default` worker first. `yield()` does (the coroutine runs
+            // under `Default`'s dispatcher); `withContext(Dispatchers.Default)`
+            // would not, for the same reason.
+            kotlinx.coroutines.yield()
+            // `Unconfined` keeps the collector on the thread that
+            // emitted the item instead of hopping onto a `Default`
+            // worker per sample: for high-rate streams (stylus input,
+            // pen hover) the per-event hop added tens of ms of visible
+            // latency. Item by item, on the emitting thread: a backend
+            // that emits without suspending (a sensor callback, a busy
+            // loop) gets every item across at once; Rust holds it back
+            // when its consumer falls behind.
+            kotlinx.coroutines.withContext(Dispatchers.Unconfined) {
+                flow.collect { bytes ->
+                    // Holding an item back blocks the emitting thread.
+                    // An upstream fed by a Rust stream resumes on a
+                    // Rust thread that must never block (the pump, an
+                    // async worker): Rust says which, and the item
+                    // waits on an IO thread instead, in order.
+                    if (nativeMayBlock()) {
+                        nativeSubmitEvent(callId, bytes)
+                    } else {
+                        kotlinx.coroutines.withContext(Dispatchers.IO) { nativeSubmitEvent(callId, bytes) }
                     }
                 }
             }

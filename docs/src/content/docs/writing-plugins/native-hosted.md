@@ -280,8 +280,12 @@ Rust host that calls back. So, as for any `suspend fun`, do not block
 the thread: move blocking work (disk writes such as
 `SharedPreferences.Editor.commit()`, content-provider opens, binder
 calls that can stall) into `withContext(Dispatchers.IO)`.
-`withContext(Dispatchers.Default)` is no hop when the thread already is
-a `Default` worker, so it does not protect against that. A backend that
+`withContext(Dispatchers.Default)` never moves it: the coroutine already
+runs under `Default` (started in place, but on `Default`'s dispatcher),
+and `withContext` only hops when the dispatcher changes, whatever thread
+it is on. To move CPU-heavy work off the Rust thread, use
+`withContext(Dispatchers.IO)` or a dispatcher of your own (or `yield()`,
+which resumes on a `Default` worker). A backend that
 cannot follow that registers with
 `IstmoRuntime.registerHandler(id, handler, startInPlace = false)` (or,
 for a packaged plugin, sets `android_start_in_place = false` in its
