@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::app_icon::IconConfig;
+use crate::autostart::AutostartConfig;
 use crate::document_types::DocumentTypes;
 use crate::manifest::{
     AndroidPermission, InfoPlistEntry, ManifestError, expect_bool, expect_integer, expect_string,
@@ -50,6 +51,7 @@ const KNOWN_APP_KEYS: &[&str] = &[
     "document_type",
     "url_scheme",
     "single_instance",
+    "autostart",
 ];
 
 const KNOWN_APP_PLUGIN_KEYS: &[&str] = &["id", "type", "role", "platforms", "auto_register"];
@@ -190,6 +192,9 @@ pub struct AppConfig {
     /// running instance. Unset means "on when `document_types` or
     /// `url_schemes` is not empty"; see [`Self::single_instance`].
     pub single_instance: Option<bool>,
+    /// `[app.autostart]`: login-start marker and MSIX task id for the
+    /// `istmo-autostart` plugin.
+    pub autostart: AutostartConfig,
 }
 
 impl AppConfig {
@@ -291,6 +296,11 @@ impl AppConfig {
                 .transpose()?
                 .unwrap_or_default(),
             single_instance: boolean("single_instance", "app.single_instance")?,
+            autostart: table
+                .get("autostart")
+                .map(AutostartConfig::parse)
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 }

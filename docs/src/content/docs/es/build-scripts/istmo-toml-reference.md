@@ -432,6 +432,33 @@ Los documentos abiertos llegan por el plugin `istmo.documents`
 (`Documents::stream()`); los shells de Android e iOS publican en el
 mismo canal desde sus handlers de intents / URLs.
 
+### `[app.autostart]`
+
+Ajustes del plugin [`istmo-autostart`](/istmo/es/plugins/autostart/).
+Nada de esto activa el inicio automático: la app lo activa en tiempo
+de ejecución, a partir de una acción del usuario.
+
+```toml
+[app.autostart]
+marker          = "--autostart"   # por defecto: ninguno (sin marcador)
+windows_task_id = "MyStartup"     # id del StartupTask MSIX (por defecto: "IstmoAutostart")
+```
+
+- `marker` — un argumento que el plugin añade a la línea de comandos
+  registrada, para distinguir un inicio de sesión donde el sistema no lo
+  indica (clave `Run` de Windows, Linux sin sesión gestionada por
+  systemd, Flatpak, LaunchAgent de macOS). Debe empezar por `-`, tener
+  un carácter después de los guiones, ser ASCII imprimible sin `"`,
+  `'`, `\`, `` ` ``, `$` ni `%`, y tener como mucho 64 caracteres.
+- `windows_task_id` — el `TaskId` de la extensión `uap5:StartupTask` del
+  manifiesto del paquete MSIX: de 1 a 64 letras ASCII, dígitos, `.`,
+  `_` o `-`.
+
+Una clave desconocida hace fallar el build. El build emite
+`ISTMO_AUTOSTART_MARKER` e `ISTMO_AUTOSTART_TASK_ID` para el crate de la
+app (solo las claves presentes), junto a `ISTMO_APP_BUNDLE_ID`;
+`istmo_autostart::autostart_config!()` lee las tres.
+
 ## `[[remote_override]]`
 
 Sobrescribe el `default_deployment` de un plugin desde la app:

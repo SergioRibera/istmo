@@ -424,6 +424,33 @@ Opened documents arrive on the `istmo.documents` plugin
 (`Documents::stream()`); Android and iOS shells publish to the same
 channel from their intent / URL handlers.
 
+### `[app.autostart]`
+
+Settings of the [`istmo-autostart`](/istmo/plugins/autostart/) plugin.
+Nothing here turns autostart on: the app enables it at run time, from a
+user action.
+
+```toml
+[app.autostart]
+marker          = "--autostart"   # default: none (no marker)
+windows_task_id = "MyStartup"     # MSIX StartupTask id (default: "IstmoAutostart")
+```
+
+- `marker` — an argument the plugin appends to the registered command
+  line, so a login start can be told apart where the OS does not say so
+  (Windows `Run` key, Linux without a systemd-managed session, Flatpak,
+  macOS LaunchAgent). It must start with `-`, have a character after
+  the dashes, be printable ASCII without `"`, `'`, `\`, `` ` ``, `$` or
+  `%`, and be at most 64 characters.
+- `windows_task_id` — the `TaskId` of the `uap5:StartupTask` extension
+  in the MSIX package manifest: 1 to 64 ASCII letters, digits, `.`, `_`
+  or `-`.
+
+Unknown keys fail the build. The build emits `ISTMO_AUTOSTART_MARKER`
+and `ISTMO_AUTOSTART_TASK_ID` for the app crate (only the keys that are
+set), next to `ISTMO_APP_BUNDLE_ID`;
+`istmo_autostart::autostart_config!()` reads all three.
+
 ## `[[remote_override]]`
 
 Override a plugin's `default_deployment` from the app:

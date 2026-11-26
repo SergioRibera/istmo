@@ -77,6 +77,7 @@ pub mod app_config;
 pub mod app_icon;
 pub mod apple_plist;
 pub mod assets;
+pub mod autostart;
 pub mod builtins;
 mod codegen;
 pub mod contract;
