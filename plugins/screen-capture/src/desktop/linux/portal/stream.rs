@@ -237,6 +237,18 @@ enum Backing {
     Mapped(Arc<Mapping>),
 }
 
+/// A change to a stream's buffer pool, in the order PipeWire reported it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PoolChange {
+    Added(BufferKey),
+    Removed(BufferKey),
+}
+
+/// Pool changes reported while the stream's leases were borrowed (PipeWire
+/// calling back from inside a call made under that borrow), applied in
+/// order before the leases are used next.
+type PendingChanges = Rc<RefCell<Vec<PoolChange>>>;
+
 /// The lease side of one stream. Separate from [`StreamData`]: PipeWire
 /// adds and removes buffers from inside `update_params`, which runs
 /// while the stream data is borrowed.
@@ -255,9 +267,8 @@ struct Leases {
     tx: pw::channel::Sender<Release>,
     /// This stream's index in the loop.
     stream: usize,
-    /// Buffers removed while the leases were borrowed, applied first
-    /// thing by every re-queue.
-    gone: Rc<RefCell<Vec<BufferKey>>>,
+    /// Pool changes reported while the leases were borrowed.
+    pending: PendingChanges,
     /// The current exhaustion episode (reported once).
     exhausted: bool,
     episodes: u32,
@@ -267,7 +278,7 @@ impl Leases {
     fn new(
         tx: pw::channel::Sender<Release>,
         stream: usize,
-        gone: Rc<RefCell<Vec<BufferKey>>>,
+        pending: PendingChanges,
         sync: ExplicitSync,
     ) -> Self {
         Self {
@@ -280,9 +291,37 @@ impl Leases {
             removed: false,
             tx,
             stream,
-            gone,
+            pending,
             exhausted: false,
             episodes: 0,
+        }
+    }
+
+    /// Apply the pool changes reported while the leases were borrowed.
+    fn catch_up(&mut self) {
+        let changes = std::mem::take(&mut *self.pending.borrow_mut());
+        for change in changes {
+            match change {
+                PoolChange::Added(key) => self.added(key),
+                PoolChange::Removed(key) => self.removed(key),
+            }
+        }
+    }
+
+    /// Record `change`: applied now (after any pending ones), or queued when
+    /// the leases are borrowed.
+    fn report(leases: &RefCell<Self>, pending: &PendingChanges, change: PoolChange) {
+        match leases.try_borrow_mut() {
+            Ok(mut leases) => {
+                leases.catch_up();
+                match change {
+                    PoolChange::Added(key) => leases.added(key),
+                    PoolChange::Removed(key) => leases.removed(key),
+                }
+            }
+            // A freed buffer must never be re-queued, and an added one
+            // must count towards the pool: neither may be lost.
+            Err(_) => pending.borrow_mut().push(change),
         }
     }
 
@@ -340,10 +379,7 @@ impl Leases {
 
     /// Re-queue the buffer behind `release`, unless it is gone.
     fn release(&mut self, stream: &Stream, release: &Release) {
-        let gone = std::mem::take(&mut *self.gone.borrow_mut());
-        for key in gone {
-            self.removed(key);
-        }
+        self.catch_up();
         let Some(_key) = self.book.release(release.id) else {
             return;
         };
@@ -487,11 +523,11 @@ fn run(
             mode,
             skipped: 0,
         }));
-        let gone: Rc<RefCell<Vec<BufferKey>>> = Rc::default();
+        let pending = PendingChanges::default();
         let leases = Rc::new(RefCell::new(Leases::new(
             release_tx.clone(),
             index,
-            Rc::clone(&gone),
+            Rc::clone(&pending),
             ExplicitSync::new(setup.producer),
         )));
         let out = match &data.borrow().mode {
@@ -517,27 +553,18 @@ fn run(
                 }
             })
             .add_buffer({
-                let leases = Rc::clone(&leases);
+                let (leases, pending) = (Rc::clone(&leases), Rc::clone(&pending));
                 move |_, _, buffer| {
-                    if let Some(key) = BufferKey::of(buffer)
-                        && let Ok(mut leases) = leases.try_borrow_mut()
-                    {
-                        leases.added(key);
+                    if let Some(key) = BufferKey::of(buffer) {
+                        Leases::report(&leases, &pending, PoolChange::Added(key));
                     }
                 }
             })
             .remove_buffer({
-                let leases = Rc::clone(&leases);
-                let gone = Rc::clone(&gone);
+                let (leases, pending) = (Rc::clone(&leases), Rc::clone(&pending));
                 move |_, _, buffer| {
-                    let Some(key) = BufferKey::of(buffer) else {
-                        return;
-                    };
-                    match leases.try_borrow_mut() {
-                        Ok(mut leases) => leases.removed(key),
-                        // Recorded for the next release: a freed buffer must
-                        // never be re-queued.
-                        Err(_) => gone.borrow_mut().push(key),
+                    if let Some(key) = BufferKey::of(buffer) {
+                        Leases::report(&leases, &pending, PoolChange::Removed(key));
                     }
                 }
             })
@@ -547,6 +574,7 @@ fn run(
                     if let (Ok(mut data), Ok(mut leases)) =
                         (data.try_borrow_mut(), leases.try_borrow_mut())
                     {
+                        leases.catch_up();
                         on_process(stream, &mut data, &mut leases);
                     }
                 }
@@ -594,14 +622,22 @@ fn run(
             .iter()
             .map(|(s, d, l)| (s.clone(), Rc::clone(d), Rc::clone(l)))
             .collect();
+        let retry = release_tx.clone();
         move |release: Release| {
             let Some((stream, data, leases)) = streams.get(release.stream) else {
                 return;
             };
-            if let (Ok(mut data), Ok(mut leases)) = (data.try_borrow_mut(), leases.try_borrow_mut())
-            {
-                leases.release(stream, &release);
-                on_process(stream, &mut data, &mut leases);
+            match (data.try_borrow_mut(), leases.try_borrow_mut()) {
+                (Ok(mut data), Ok(mut leases)) => {
+                    leases.release(stream, &release);
+                    on_process(stream, &mut data, &mut leases);
+                }
+                // Dispatched from inside a callback that holds the
+                // stream's state: posted again for the next loop
+                // iteration, so the hold is never leaked.
+                _ => {
+                    let _sent = retry.send(release);
+                }
             }
         }
     });
@@ -1142,7 +1178,65 @@ fn deliver(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiat
 
 #[cfg(test)]
 mod tests {
-    use super::{HeldBuffers, RowLayout};
+    use std::cell::RefCell;
+
+    use super::{
+        BufferKey, ExplicitSync, HeldBuffers, Leases, PendingChanges, PoolChange, RowLayout,
+    };
+
+    fn key(addr: usize) -> BufferKey {
+        BufferKey::of(std::ptr::without_provenance_mut(addr)).expect("non-null")
+    }
+
+    fn leases() -> (RefCell<Leases>, PendingChanges) {
+        let (tx, _rx) = pipewire::channel::channel();
+        let pending = PendingChanges::default();
+        let leases = Leases::new(tx, 0, pending.clone(), ExplicitSync::new(None));
+        (RefCell::new(leases), pending)
+    }
+
+    #[test]
+    fn pool_changes_reported_while_borrowed_are_applied_in_order() {
+        let (leases, pending) = leases();
+        Leases::report(&leases, &pending, PoolChange::Added(key(0x10)));
+        {
+            let _busy = leases.borrow_mut();
+            Leases::report(&leases, &pending, PoolChange::Added(key(0x20)));
+            Leases::report(&leases, &pending, PoolChange::Removed(key(0x10)));
+            // A new buffer at the freed address.
+            Leases::report(&leases, &pending, PoolChange::Added(key(0x10)));
+        }
+        assert_eq!(pending.borrow().len(), 3, "queued, not dropped");
+        // The next report applies the queue first.
+        Leases::report(&leases, &pending, PoolChange::Added(key(0x30)));
+        let leases = leases.borrow();
+        assert!(pending.borrow().is_empty());
+        assert_eq!(leases.book.limit(), 2, "three live buffers");
+        for addr in [0x10, 0x20, 0x30] {
+            assert_ne!(
+                leases.identity(key(addr)).slot,
+                u32::MAX,
+                "{addr:#x} has a slot"
+            );
+        }
+        assert_eq!(
+            leases.generation,
+            crate::types::BufferIdentity::default().pool_generation + 2,
+            "the removal started a new generation"
+        );
+    }
+
+    #[test]
+    fn catch_up_applies_a_removal_queued_behind_an_addition() {
+        let (leases, pending) = leases();
+        pending
+            .borrow_mut()
+            .extend([PoolChange::Added(key(0x10)), PoolChange::Removed(key(0x10))]);
+        let mut leases = leases.borrow_mut();
+        leases.catch_up();
+        assert_eq!(leases.book.limit(), 0);
+        assert_eq!(leases.identity(key(0x10)).slot, u32::MAX);
+    }
 
     const LAYOUT: RowLayout = RowLayout {
         stride: 64,
