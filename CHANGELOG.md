@@ -15,6 +15,15 @@
   Android and iOS backends answer `NoBackendCompiled` for now.
   `scripts/check-plugin-native.sh` compiles a plugin's `native/`
   backends against its generated Kotlin / Swift.
+- `istmo-media` crate: message types that mean the same in several media
+  plugins (for now `AccessStatus`, used by camera and screen capture).
+  Each shared type is generated once per app (Kotlin package
+  `dev.istmo.media`, Swift `Plugins/IstmoMedia/Generated/IstmoMediaTypes.swift`)
+  however many plugins use it. A shared crate calls
+  `istmo_build::emit_shared_types` from its build script; plugins that
+  disagree on a shared type's shape fail the app build.
+- `NativeBuffer::into_dmabuf`: moves the `Arc<DmaBuf>` out together with
+  the `BufferLease` that holds the release hooks.
 - Native frame sinks (`istmo_core::native_frame`): `FrameSink` /
   `FrameSender` / `NativeBuffer` move buffers (DMA-BUF,
   `AHardwareBuffer`, `CVPixelBuffer` / `IOSurface` / `CMSampleBuffer`,
@@ -79,6 +88,28 @@
   Kotlin / Swift clients have no methods taking frame sinks.
 - The contract handover (`ISTMO_CONTRACTS`) starts with a format byte
   (`CONTRACTS_FORMAT`); a contract that does not decode fails the build.
+  The format is now 3 (contracts carry the shared types they use): a
+  format 2 handover is refused, so every plugin crate of an app must be
+  built with the same `istmo-build` version.
+- **Camera `AccessStatus` moved to `istmo-media`** and grew three states:
+  - Rust: `istmo_camera::AccessStatus` is a re-export of
+    `istmo_media::AccessStatus`, now `#[non_exhaustive]`, with
+    `RequiresRestart`, `PerSession` and `NotApplicable` added. A `match`
+    on it needs a wildcard arm.
+  - Wire values 0..3 (`Granted`, `Denied`, `NotDetermined`, `Restricted`)
+    are unchanged; the new states are 4..6.
+  - Kotlin: `dev.istmo.camera.AccessStatus` is now
+    `dev.istmo.media.AccessStatus` (update the imports); an exhaustive
+    `when` gains three branches.
+  - Swift: the type is generated in
+    `Plugins/IstmoMedia/Generated/IstmoMediaTypes.swift`; an exhaustive
+    `switch` gains three cases.
+  - Generated Kotlin and Swift decoders reject a discriminant they do not
+    know: an app generated against an older `istmo-media` fails to decode
+    a state added later instead of seeing an unknown value.
+- `NativeBuffer::downcast_ref::<Arc<DmaBuf>>()` now returns `None`: a
+  DMA-BUF backing is only borrowed (`dmabuf()`) or moved out with its
+  lease (`into_dmabuf()`), so its fds cannot outlive the release hooks.
 - **No thread per hosted call.** `DispatchMode::OnCallerExecutor` is
   removed (it was never implemented; `DispatchMode` is not
   `#[non_exhaustive]`, so a `match` on it breaks). `Inline` work starts
