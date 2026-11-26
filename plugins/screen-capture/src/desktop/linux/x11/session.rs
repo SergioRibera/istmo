@@ -25,8 +25,10 @@ use super::conn::{ID, Target, X11, x_err};
 use super::grab::Grabber;
 use super::{CursorPlan, capture, cursor_modes, meta_for, negotiated};
 
-/// How often the thread looks at events and its stop flag.
-const TICK: Duration = Duration::from_millis(4);
+/// Longest a capture thread sleeps before it looks at its stop flag.
+const IDLE_WAIT: Duration = Duration::from_millis(100);
+/// How often a window's visibility is re-read (one round trip).
+const VISIBILITY_CHECK: Duration = Duration::from_millis(250);
 /// How often monitors are re-read to notice hot-plug and resizes.
 const MONITOR_CHECK: Duration = Duration::from_secs(1);
 /// More damage rectangles than this become a full-frame damage.
@@ -242,7 +244,11 @@ enum Visibility {
 impl Worker {
     fn period(&self) -> Duration {
         match self.out.fps() {
-            FrameRate::Native => Duration::from_millis(16),
+            // The monitor's refresh (60 Hz when unknown).
+            FrameRate::Native => {
+                Duration::from_secs(1000)
+                    / self.source.refresh_mhz.filter(|r| *r > 0).unwrap_or(60_000)
+            }
             FrameRate::Max(n) | FrameRate::Exact(n) | FrameRate::OnDamage(n) => {
                 Duration::from_secs(1) / n.max(1)
             }
@@ -309,6 +315,37 @@ impl Worker {
         Ok(())
     }
 
+    /// [`window_visibility`](Self::window_visibility) when `check`, else
+    /// the last known one (no round trip).
+    fn window_visibility_if(
+        &self,
+        check: bool,
+        last: Visibility,
+    ) -> Result<Visibility, CaptureError> {
+        if check {
+            self.window_visibility()
+        } else {
+            Ok(last)
+        }
+    }
+
+    /// Sleep until the server sends something (damage), at most
+    /// `timeout`.
+    fn wait_for_events(&self, timeout: Duration) {
+        use std::os::fd::AsFd as _;
+        let fd = self.x.conn.stream().as_fd();
+        let mut fds = [rustix::event::PollFd::new(
+            &fd,
+            rustix::event::PollFlags::IN,
+        )];
+        let timeout = rustix::event::Timespec {
+            tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
+            tv_nsec: i64::from(timeout.subsec_nanos()),
+        };
+        // An interrupted or failed wait only means looking again sooner.
+        let _ready = rustix::event::poll(&mut fds, Some(&timeout));
+    }
+
     /// Windows only: unmapped windows give no frames; destroyed ones end
     /// the session.
     fn window_visibility(&self) -> Result<Visibility, CaptureError> {
@@ -328,6 +365,7 @@ impl Worker {
         let mut visibility = Visibility::Visible;
         let mut last_capture: Option<Instant> = None;
         let mut last_monitor_check = Instant::now();
+        let mut last_visibility_check: Option<Instant> = None;
         let mut skipped: u32 = 0;
         loop {
             if self.shared.stop.load(Ordering::SeqCst) || self.out.is_stopped() {
@@ -341,7 +379,12 @@ impl Worker {
                     break;
                 }
             }
-            match self.window_visibility() {
+            let check_visibility =
+                last_visibility_check.is_none_or(|at| at.elapsed() >= VISIBILITY_CHECK);
+            if check_visibility {
+                last_visibility_check = Some(Instant::now());
+            }
+            match self.window_visibility_if(check_visibility, visibility) {
                 Ok(now) if now != visibility => {
                     visibility = now;
                     self.out.event(match now {
@@ -358,10 +401,25 @@ impl Worker {
                     break;
                 }
             }
-            let due = last_capture.is_none_or(|at| at.elapsed() >= self.period());
+            let until_due = last_capture.map_or(Duration::ZERO, |at| {
+                self.period().saturating_sub(at.elapsed())
+            });
             let wanted = damage.is_none() || !pending.is_empty();
-            if visibility == Visibility::Hidden || !self.out.wants_frames() || !due || !wanted {
-                std::thread::sleep(TICK);
+            if !self.out.wants_frames() {
+                self.out.wait_while_paused(IDLE_WAIT);
+                continue;
+            }
+            if visibility == Visibility::Hidden {
+                self.wait_for_events(VISIBILITY_CHECK);
+                continue;
+            }
+            if !until_due.is_zero() {
+                std::thread::sleep(until_due.min(IDLE_WAIT));
+                continue;
+            }
+            if !wanted {
+                // Nothing changed: sleep until the server reports damage.
+                self.wait_for_events(IDLE_WAIT);
                 continue;
             }
             last_capture = Some(Instant::now());
@@ -371,13 +429,13 @@ impl Worker {
                 Err(CaptureError::SourceLost) if self.source.kind == SourceKind::Window => {
                     // Unmapped between the check and the read: next tick
                     // tells hidden from destroyed.
+                    last_visibility_check = None;
                 }
                 Err(err) => {
                     self.out.fail(err);
                     break;
                 }
             }
-            std::thread::sleep(TICK);
         }
         if let Some(damage) = damage {
             let _destroyed = self.x.conn.damage_destroy(damage);
