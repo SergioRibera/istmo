@@ -1477,12 +1477,20 @@ impl Runtime {
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         {
             let _ = wait;
-            let sent = self.push_outbound_now(envelope);
-            if matches!(sent, Ok(true)) {
-                self.outbound_backlog.fetch_add(1, Ordering::AcqRel);
-            }
-            sent
+            let in_flight = self.count_outbound();
+            in_flight.settle(self.push_outbound_now(envelope))
         }
+    }
+
+    /// Count a frame as in flight before it can reach the channel. A
+    /// transport may take it and report it delivered before a late
+    /// increment, which would lose that decrement for good; and while it
+    /// sat queued but uncounted, a direct call could overtake it. The
+    /// count is given back unless the attempt is settled as sent, also
+    /// when the attempt is dropped half way.
+    fn count_outbound(&self) -> InFlight<'_> {
+        self.outbound_backlog.fetch_add(1, Ordering::AcqRel);
+        InFlight(Some(&self.outbound_backlog))
     }
 
     /// Put `envelope` on the outbound channel. `Ok(false)` when `wait`
@@ -1492,11 +1500,8 @@ impl Runtime {
         envelope: Envelope,
         wait: Wait<'_>,
     ) -> Result<bool, IstmoError> {
-        let sent = self.push_outbound_waiting(envelope, wait).await;
-        if matches!(sent, Ok(true)) {
-            self.outbound_backlog.fetch_add(1, Ordering::AcqRel);
-        }
-        sent
+        let in_flight = self.count_outbound();
+        in_flight.settle(self.push_outbound_waiting(envelope, wait).await)
     }
 
     async fn push_outbound_waiting(
@@ -2337,6 +2342,28 @@ impl Runtime {
         lock(&self.peer_credits).clear();
         if count > 0 {
             tracing::info!(count, "istmo runtime shutdown cancelled pending operations");
+        }
+    }
+}
+
+/// A frame counted in [`Runtime::outbound_backlog`] while it is being
+/// sent; see [`Runtime::count_outbound`].
+struct InFlight<'a>(Option<&'a AtomicUsize>);
+
+impl InFlight<'_> {
+    /// Keep the count when `sent` put the frame on the channel.
+    fn settle(mut self, sent: Result<bool, IstmoError>) -> Result<bool, IstmoError> {
+        if matches!(sent, Ok(true)) {
+            self.0 = None;
+        }
+        sent
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        if let Some(count) = self.0 {
+            count.fetch_sub(1, Ordering::AcqRel);
         }
     }
 }
