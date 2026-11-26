@@ -75,7 +75,13 @@ impl StoredValue {
 #[derive(Debug)]
 struct SharedFile {
     path: PathBuf,
-    values: Mutex<HashMap<String, StoredValue>>,
+    /// What the file holds. Swapped whole once a write is on disk, and
+    /// locked only to read or swap the pointer, so a read never waits
+    /// for a write's `fsync`.
+    values: Mutex<Arc<HashMap<String, StoredValue>>>,
+    /// Held across a whole write: writes of one namespace serialise and
+    /// none is persisted from a stale copy.
+    writer: Mutex<()>,
 }
 
 /// Live files by path. Weak, so a namespace nobody holds is reloaded
@@ -130,7 +136,8 @@ impl DesktopDataStore {
         let values = load(&path)?;
         let file = Arc::new(SharedFile {
             path: path.clone(),
-            values: Mutex::new(values),
+            values: Mutex::new(Arc::new(values)),
+            writer: Mutex::default(),
         });
         files.retain(|_, weak| weak.strong_count() > 0);
         files.insert(path, Arc::downgrade(&file));
@@ -147,6 +154,7 @@ impl DesktopDataStore {
             file: Arc::new(SharedFile {
                 path,
                 values: Mutex::default(),
+                writer: Mutex::default(),
             }),
             failure: Some(failure),
         }
@@ -165,7 +173,8 @@ impl DesktopDataStore {
         if let Some(failure) = &self.failure {
             return Err(failure.clone());
         }
-        Ok(f(&lock(&self.file.values)))
+        let values = Arc::clone(&lock(&self.file.values));
+        Ok(f(&values))
     }
 
     fn mutate<T>(
@@ -175,15 +184,12 @@ impl DesktopDataStore {
         if let Some(failure) = &self.failure {
             return Err(failure.clone());
         }
-        // The guard is held across the write so concurrent mutations of
-        // the same namespace serialise and none is persisted from a
-        // stale copy.
-        let mut values = lock(&self.file.values);
-        let mut next = values.clone();
+        let writing = lock(&self.file.writer);
+        let mut next = HashMap::clone(&lock(&self.file.values));
         let out = f(&mut next);
         persist(&self.file.path, &next)?;
-        *values = next;
-        drop(values);
+        *lock(&self.file.values) = Arc::new(next);
+        drop(writing);
         Ok(out)
     }
 }
@@ -550,6 +556,23 @@ mod tests {
             vec!["from_a".to_owned(), "from_b".to_owned()]
         );
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_never_wait_for_a_write() {
+        let dir = temp_dir("read-during-write");
+        let store = DesktopDataStore::open_path(dir.join("rw.bin")).unwrap();
+        pollster::block_on(store.set_i64("n".to_owned(), 1)).unwrap();
+        // A write in progress holds the writer lock across its fsync.
+        let writing = lock(&store.file.writer);
+        let reader = std::thread::scope(|scope| {
+            scope
+                .spawn(|| pollster::block_on(store.get_i64("n".to_owned())))
+                .join()
+        });
+        drop(writing);
+        assert_eq!(reader.unwrap().unwrap(), Some(1));
         let _ = fs::remove_dir_all(&dir);
     }
 

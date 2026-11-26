@@ -80,29 +80,25 @@ impl DataStoreConfig {
     crate = "::istmo_core",
 )]
 pub trait DataStore {
-    // The desktop backend fsyncs every write under the namespace lock, and
-    // reads take that lock: any method may block.
-    #[istmo_macros::blocking]
+    // The desktop backend writes and fsyncs the namespace file before a
+    // set returns: writes block. Reads only look at the in-memory copy
+    // (never waiting for a write), so they stay inline.
     async fn get_string(&self, key: String) -> Result<Option<String>, DataStoreError>;
     #[istmo_macros::blocking]
     async fn set_string(&self, key: String, value: String) -> Result<(), DataStoreError>;
 
-    #[istmo_macros::blocking]
     async fn get_i64(&self, key: String) -> Result<Option<i64>, DataStoreError>;
     #[istmo_macros::blocking]
     async fn set_i64(&self, key: String, value: i64) -> Result<(), DataStoreError>;
 
-    #[istmo_macros::blocking]
     async fn get_f64(&self, key: String) -> Result<Option<f64>, DataStoreError>;
     #[istmo_macros::blocking]
     async fn set_f64(&self, key: String, value: f64) -> Result<(), DataStoreError>;
 
-    #[istmo_macros::blocking]
     async fn get_bool(&self, key: String) -> Result<Option<bool>, DataStoreError>;
     #[istmo_macros::blocking]
     async fn set_bool(&self, key: String, value: bool) -> Result<(), DataStoreError>;
 
-    #[istmo_macros::blocking]
     async fn get_bytes(&self, key: String) -> Result<Option<Vec<u8>>, DataStoreError>;
     #[istmo_macros::blocking]
     async fn set_bytes(&self, key: String, value: Vec<u8>) -> Result<(), DataStoreError>;
@@ -110,10 +106,8 @@ pub trait DataStore {
     #[istmo_macros::blocking]
     async fn remove(&self, key: String) -> Result<bool, DataStoreError>;
 
-    #[istmo_macros::blocking]
     async fn contains(&self, key: String) -> Result<bool, DataStoreError>;
 
-    #[istmo_macros::blocking]
     async fn keys(&self) -> Result<Vec<String>, DataStoreError>;
 
     #[istmo_macros::blocking]
