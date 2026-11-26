@@ -17,10 +17,11 @@
 //!   [`CaptureError::NoBackendCompiled`]. Windows GPU frames carry a
 //!   `D3d11Frame` backing; on macOS, frames are `IoSurfaceFrame` backings
 //!   (retained `IOSurface` + `CVPixelBuffer`).
+//! - Android: the Kotlin MediaProjection backend in `native/android`
+//!   (`BackendId::AndroidProjection`), registered by the app's generated
+//!   plugin registry; Rust reaches it through [`ScreenCaptureClient`].
 //! - iOS / iPadOS: the Swift backend in `native/ios` (ScreenCaptureKit on
 //!   27, ReplayKit in-app before), frames as retained `CVPixelBuffer`s.
-//! - Android: the Kotlin backend in `native/android` (not capturing yet:
-//!   it answers `NoBackendCompiled`).
 //!
 //! # Threads
 //!

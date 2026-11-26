@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  istmo.screen_capture — merged into every variant's manifest by the istmo
+  Gradle plugin `io.github.sergioribera.istmo`. Only adds a component; the
+  permissions come from the plugin's `istmo.toml`.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Every MediaProjection runs under this foreground service
+             (type mediaProjection, required from API 29; started only
+             after the person consented on API 34+). Not exported:
+             only the plugin starts it. -->
+        <service
+            android:name="dev.istmo.plugins.screencapture.IstmoProjectionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+    </application>
+</manifest>

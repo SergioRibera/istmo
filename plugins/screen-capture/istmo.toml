@@ -3,15 +3,30 @@ id = "istmo.screen_capture"
 client_type = "::istmo_screen_capture::ScreenCaptureClient"
 android_package = "dev.istmo.plugins.screencapture"
 default_deployment = "local"
-# The MediaProjection backend is not implemented yet: the reference
-# backend answers `NoBackendCompiled`, so it needs no Activity, no
-# foreground service and no permission until it captures.
+# The consent dialog goes through the host activity's
+# `ActivityResultRegistry`, so the backend takes the `ComponentActivity`
+# (built once per process: grants and sessions outlive a recreation).
 android_backend = "dev.istmo.plugins.screencapture.ScreenCaptureBackendImpl"
-android_backend_arg = "context"
+android_backend_arg = "activity"
+# The `mediaProjection` foreground service (`native/android/AndroidManifest.xml`)
+# and its notification. `RECORD_AUDIO` is left to apps that capture
+# audio: a screen-only app should not ask for the microphone.
+android_permissions = [
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION",
+    "android.permission.POST_NOTIFICATIONS",
+]
+
+# `ComponentActivity.activityResultRegistry` for the consent dialog and
+# the runtime permission prompts.
+[[gradle]]
+group = "androidx.activity"
+artifact = "activity"
+version = "1.8.1"
 
 [min_versions]
-# Nothing newer than the runtime floors until the capturing backends
-# land (MediaProjection needs API 21, iOS 27 ScreenCaptureKit is
-# behind `#available`).
+# MediaProjection needs API 21; HardwareBuffer frames (29), playback
+# audio (29) and app sharing (34) are gated at run time and reported in
+# the capability report. iOS 27 ScreenCaptureKit is behind `#available`.
 android = 21
 ios = "14.0"
