@@ -13,6 +13,7 @@
     reason = "Objective-C / Core Foundation calls into ScreenCaptureKit, Core Media, Core Video and IOSurface: the FFI this module wraps"
 )]
 
+mod audio;
 mod buffer;
 mod content;
 mod picker;
@@ -29,13 +30,14 @@ use crate::types::{CaptureError, OsVersion};
 
 use super::super::sck_map::{self, ID};
 
+pub(crate) use self::audio::AudioChunk;
 pub use self::buffer::IoSurfaceFrame;
 pub(crate) use self::buffer::{PixelBuffer, Sample};
 pub(crate) use self::content::{
     AppInfo, Content, DisplayInfo, Exclusions, Filter, FilterInfo, FilterStyle, WindowInfo,
 };
 pub(crate) use self::picker::pick;
-pub(crate) use self::stream::{Kind, Settings, Sink, Stream, screenshot};
+pub(crate) use self::stream::{AudioSettings, Kind, Settings, Sink, Stream, screenshot};
 
 /// A retained Objective-C object the plugin moves between its threads.
 ///

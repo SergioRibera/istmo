@@ -2,9 +2,11 @@
 //!
 //! The Rust desktop host owns macOS: `ffi` wraps the framework calls,
 //! `sck` is the video backend, `session` turns sample buffers into
-//! frames. Without the feature the host
+//! frames, `audio` the audio-only backend. Without the feature the host
 //! answers `NoBackendCompiled`.
 
+#[cfg(feature = "macos-sck")]
+mod audio;
 #[cfg(feature = "macos-sck")]
 mod ffi;
 #[cfg(feature = "macos-sck")]
@@ -37,9 +39,17 @@ pub(crate) fn backends() -> Vec<Arc<dyn Backend>> {
     }
 }
 
-/// The compiled audio backend: none yet.
-pub(crate) const fn audio() -> Option<Arc<dyn AudioBackend>> {
-    None
+/// The compiled audio backend.
+#[allow(clippy::unnecessary_wraps, reason = "`None` when `macos-sck` is off")]
+pub(crate) fn audio() -> Option<Arc<dyn AudioBackend>> {
+    #[cfg(feature = "macos-sck")]
+    {
+        Some(audio::backend())
+    }
+    #[cfg(not(feature = "macos-sck"))]
+    {
+        None
+    }
 }
 
 /// The host time clock now, in nanoseconds (what sample buffers are
