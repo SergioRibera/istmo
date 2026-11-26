@@ -507,6 +507,10 @@ impl<S: FrameSource> Engine<S> {
             self.source.abandon();
             return Err(CaptureError::FormatLost);
         };
+        if let Err(why) = super::check_shm_layout(code, size, stride) {
+            self.source.abandon();
+            return Err(CaptureError::protocol(backend, "wl_shm layout", why));
+        }
         self.shm.reconfigure((size, code, stride));
         let (slot, readback) = match self.shm.pick() {
             Pick::Free(slot) => (Some(slot), false),

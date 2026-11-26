@@ -102,6 +102,33 @@ pub(crate) const fn shm_format(code: u32) -> Option<PixelFormat> {
     }
 }
 
+/// Largest useful `linux-dmabuf` format table: 2^16 entries of 16 bytes.
+const MAX_FORMAT_TABLE: usize = (1 << 16) * 16;
+
+/// The largest `wl_shm` frame the plugin maps or reads (1 GiB).
+const MAX_SHM_BYTES: u64 = 1 << 30;
+
+/// Whether a compositor-chosen `wl_shm` layout is one the plugin can
+/// trust: a known format, rows that hold `size.width` pixels, and a
+/// bounded total.
+///
+/// # Errors
+/// What is wrong with the layout.
+pub(crate) fn check_shm_layout(code: u32, size: Size, stride: u32) -> Result<(), String> {
+    let format = shm_format(code).ok_or_else(|| format!("unknown wl_shm format 0x{code:08x}"))?;
+    let row = u64::from(size.width) * u64::from(format.bytes_per_pixel());
+    if u64::from(stride) < row {
+        return Err(format!("stride {stride} is shorter than a {row}-byte row"));
+    }
+    if u64::from(stride) * u64::from(size.height) > MAX_SHM_BYTES {
+        return Err(format!(
+            "{}x{} with stride {stride} is too large",
+            size.width, size.height
+        ));
+    }
+    Ok(())
+}
+
 /// The `wl_shm` code of a pixel format.
 #[cfg(test)]
 const fn shm_code(format: PixelFormat) -> u32 {
@@ -590,7 +617,10 @@ impl Client {
         if let (Some((fd, size)), Some(main)) = (progress.table.as_ref(), progress.main_device) {
             // The table is read with `pread`, not mapped: no unsafe
             // mapping of a compositor-owned fd.
-            let mut table = vec![0u8; usize::try_from(*size).unwrap_or(0)];
+            // Indices are 16-bit: a table never needs more than 65536
+            // 16-byte entries, whatever size the compositor announces.
+            let len = usize::try_from(*size).unwrap_or(0).min(MAX_FORMAT_TABLE);
+            let mut table = vec![0u8; len];
             let read = rustix::io::pread(fd, &mut table[..], 0)
                 .map_err(|e| CaptureError::protocol(self.backend, "dmabuf format table", e))?;
             table.truncate(read);
@@ -1194,6 +1224,21 @@ ignore_events!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compositor_shm_layouts_are_checked() {
+        let size = Size::new(100, 10);
+        assert!(check_shm_layout(1, size, 400).is_ok());
+        assert!(check_shm_layout(1, size, 399).is_err(), "short rows");
+        assert!(
+            check_shm_layout(0xdead_beef, size, 400).is_err(),
+            "unknown format"
+        );
+        assert!(
+            check_shm_layout(1, Size::new(16_384, 16_384), u32::MAX).is_err(),
+            "too large"
+        );
+    }
 
     #[test]
     fn compositor_damage_never_leaves_the_buffer() {
