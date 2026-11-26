@@ -103,12 +103,12 @@ impl Engine {
             super::linux::session_kind(),
         );
         #[cfg(not(target_os = "linux"))]
-        let (backends, audio, known, kind): (
-            Vec<Arc<dyn Backend>>,
-            Option<Arc<dyn AudioBackend>>,
-            Vec<BackendId>,
-            select::SessionKind,
-        ) = (Vec::new(), None, Vec::new(), select::SessionKind::Unknown);
+        let (backends, audio, known, kind) = (
+            Vec::<Arc<dyn Backend>>::new(),
+            None::<Arc<dyn AudioBackend>>,
+            Vec::<BackendId>::new(),
+            select::SessionKind::Unknown,
+        );
         let env = std::env::var(select::BACKEND_ENV)
             .ok()
             .and_then(|v| select::parse_override(&v));

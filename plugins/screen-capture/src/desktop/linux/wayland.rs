@@ -924,8 +924,10 @@ impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for WlState {
                 let current = progress.current.get_or_insert_with(Default::default);
                 current.1.extend(
                     indices
-                        .chunks_exact(2)
-                        .map(|c| u16::from_ne_bytes([c[0], c[1]])),
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|c| u16::from_ne_bytes(*c)),
                 );
             }
             Event::TrancheDone => {
@@ -1040,8 +1042,10 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ()> for WlState {
             Event::DmabufDevice { device } => pending.dmabuf_device = decode_dev_t(&device),
             Event::DmabufFormat { format, modifiers } => {
                 let modifiers = modifiers
-                    .chunks_exact(8)
-                    .filter_map(|c| <[u8; 8]>::try_from(c).ok())
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .copied()
                     .map(u64::from_ne_bytes)
                     .collect();
                 pending.dmabuf_formats.push((format, modifiers));

@@ -207,7 +207,7 @@ fn unknown_sections_never_reject() {
         damage: Strength::Require,
         ..Requirements::default()
     };
-    assert!(req.unmet(&caps).is_empty());
+    assert_eq!(req.unmet(&caps), []);
 }
 
 fn offers() -> Vec<Offer> {

@@ -20,7 +20,7 @@ fn portal_reports_without_a_dialog() {
     }
     let live = common::live();
     let caps = common::caps(&live, PORTAL);
-    assert!(!caps.source_kinds.is_empty());
+    assert_ne!(caps.source_kinds.len(), 0);
     assert!(
         caps.video
             .iter()

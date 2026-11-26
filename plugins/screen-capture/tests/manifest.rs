@@ -11,8 +11,8 @@ fn manifest() -> Manifest {
 #[test]
 fn declares_no_permissions_before_the_backends_capture() {
     let manifest = manifest();
-    assert!(manifest.plugins[0].android_permissions.is_empty());
-    assert!(manifest.plugins[0].info_plist.is_empty());
+    assert_eq!(manifest.plugins[0].android_permissions.len(), 0);
+    assert_eq!(manifest.plugins[0].info_plist.len(), 0);
 }
 
 #[test]

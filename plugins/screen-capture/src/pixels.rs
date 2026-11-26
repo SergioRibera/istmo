@@ -393,7 +393,13 @@ mod tests {
     }
 
     fn reds(pixels: &Pixels) -> Vec<u8> {
-        pixels.bytes.chunks_exact(4).map(|px| px[0]).collect()
+        pixels
+            .bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|px| px[0])
+            .collect()
     }
 
     fn convert(orientation: Orientation, crop: Rect) -> Pixels {
@@ -436,7 +442,7 @@ mod tests {
     #[test]
     fn y_invert_flips_rows_and_drops_stride_padding() {
         let mut padded = Vec::new();
-        for row in pattern().chunks_exact(12) {
+        for row in pattern().as_chunks::<12>().0 {
             padded.extend_from_slice(row);
             padded.extend_from_slice(&[0xff; 4]);
         }

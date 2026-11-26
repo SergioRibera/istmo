@@ -548,6 +548,6 @@ mod tests {
         assert_eq!(bytes.as_ref(), [1, 2, 3]);
         drop(bytes);
         assert_eq!(recycler.take(), vec![1, 2, 3]);
-        assert!(recycler.take().is_empty());
+        assert_eq!(recycler.take().len(), 0);
     }
 }

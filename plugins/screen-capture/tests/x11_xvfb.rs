@@ -152,7 +152,10 @@ fn shot(request: ScreenshotRequest) -> istmo_screen_capture::RawImage {
 }
 
 #[test]
-#[expect(clippy::too_many_lines, reason = "one Xvfb server, every check in sequence")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one Xvfb server, every check in sequence"
+)]
 fn x11_under_xvfb() {
     if !enabled(GATE) {
         return;

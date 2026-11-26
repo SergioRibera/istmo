@@ -138,7 +138,7 @@ mod tests {
         ];
         let out = compose(&layout, &parts, CompositeFill::Transparent);
         assert_eq!(out.size, Size::new(4, 2));
-        let red: Vec<u8> = out.bytes.chunks_exact(4).map(|p| p[2]).collect();
+        let red: Vec<u8> = out.bytes.as_chunks::<4>().0.iter().map(|p| p[2]).collect();
         assert_eq!(red, [10, 10, 20, 20, 10, 10, 0, 0]);
         assert_eq!(out.bytes[4 * 7 + 3], 0, "the gap is transparent");
     }
@@ -178,7 +178,7 @@ mod tests {
             },
         ];
         let out = compose(&layout, &parts, CompositeFill::Black);
-        let red: Vec<u8> = out.bytes.chunks_exact(4).map(|p| p[2]).collect();
+        let red: Vec<u8> = out.bytes.as_chunks::<4>().0.iter().map(|p| p[2]).collect();
         assert_eq!(red, [99, 1, 50, 50, 1, 1, 50, 50]);
     }
 }

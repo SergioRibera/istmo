@@ -328,7 +328,7 @@ mod tests {
                 Vec::new(),
             )])],
         };
-        assert!(shm_tiers(&request).is_empty());
+        assert_eq!(shm_tiers(&request).len(), 0);
     }
 
     #[test]
