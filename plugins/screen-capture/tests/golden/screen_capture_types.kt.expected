@@ -80,7 +80,8 @@ enum class CopyStage {
     LiveBufferSnapshot,
     WebCopyTo,
     PreviewFanOut,
-    LegacyRing
+    LegacyRing,
+    GpuReadback
 }
 
 data class FormatCaps(

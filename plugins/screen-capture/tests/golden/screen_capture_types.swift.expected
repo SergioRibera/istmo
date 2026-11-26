@@ -118,6 +118,7 @@ extension ScreenCapture {
         case webCopyTo = 8
         case previewFanOut = 9
         case legacyRing = 10
+        case gpuReadback = 11
     }
 
     public struct FormatCaps: Sendable {

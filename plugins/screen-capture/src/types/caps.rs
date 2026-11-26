@@ -275,6 +275,9 @@ pub enum CopyStage {
     PreviewFanOut,
     /// iOS legacy extension ring.
     LegacyRing,
+    /// A GPU texture read back into CPU memory through the GPU API
+    /// (Windows: copied into a staging texture, mapped, copied out).
+    GpuReadback,
 }
 
 /// One format a backend can deliver.

@@ -112,8 +112,10 @@ impl FormatTier {
         self
     }
 
-    /// A CPU tier of the 8-bit RGB formats, accepting shared-memory
-    /// transport.
+    /// A CPU tier of the 8-bit RGB formats, accepting the copy that
+    /// brings the pixels into CPU memory on each platform: shared-memory
+    /// transport (Wayland, X11, GDI), a GPU readback (Windows
+    /// Graphics Capture) and DXGI's mandatory copy.
     #[must_use]
     pub fn cpu_rgb() -> Self {
         Self::new(
@@ -128,6 +130,8 @@ impl FormatTier {
             .collect(),
         )
         .allowing(CopyStage::ShmTransport)
+        .allowing(CopyStage::GpuReadback)
+        .allowing(CopyStage::DxgiMandatory)
     }
 }
 
