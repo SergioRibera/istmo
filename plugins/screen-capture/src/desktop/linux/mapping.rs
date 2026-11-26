@@ -8,6 +8,11 @@
 //! back to the producer once every frame cut from it dropped, and a
 //! frame keeps its mapping alive. The bytes a consumer reads therefore
 //! never change under it.
+//!
+//! A short file would make the first read past its end `SIGBUS` the
+//! process, so every mapping checks the file's size first, and the
+//! plugin's own memfds ([`SealedMemfd`]) are sealed against resizing: a
+//! peer holding the descriptor can neither shrink nor grow them.
 
 #![allow(
     unsafe_code,
@@ -18,7 +23,7 @@
     reason = "each shared-memory backend uses a different part; which depends on the enabled features"
 )]
 
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -48,6 +53,9 @@ unsafe impl Sync for Mapping {}
 pub(crate) enum MapError {
     /// Zero bytes, or a range that overflows.
     BadRange { offset: u64, len: usize },
+    /// The file ends before the range does (`size < end`): reading the
+    /// tail would `SIGBUS`.
+    ShortFile { size: u64, end: u64 },
     /// The OS refused (`errno`).
     Os(i32),
 }
@@ -56,6 +64,9 @@ impl std::fmt::Display for MapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::BadRange { offset, len } => write!(f, "cannot map {len} bytes at {offset}"),
+            Self::ShortFile { size, end } => {
+                write!(f, "the file holds {size} bytes, the mapping needs {end}")
+            }
             Self::Os(errno) => write!(f, "mmap failed (errno {errno})"),
         }
     }
@@ -69,9 +80,8 @@ impl Mapping {
     /// The fd may be closed afterwards; the mapping keeps the memory.
     ///
     /// # Errors
-    /// An empty or overflowing range, or the OS refusing the mapping
-    /// (a short file is caught by the kernel only on access: callers map
-    /// sizes the producer guaranteed, `ftruncate`d or announced).
+    /// An empty or overflowing range, a file shorter than `offset + len`
+    /// (checked with `fstat`), or the OS refusing the mapping.
     pub(crate) fn new(fd: impl AsFd, offset: u64, len: usize) -> Result<Self, MapError> {
         Self::map(fd, offset, len, false)
     }
@@ -94,6 +104,17 @@ impl Mapping {
         let aligned = offset - offset % page;
         let skip = usize::try_from(offset - aligned).map_err(|_| bad())?;
         let mapped = skip.checked_add(len).ok_or_else(bad)?;
+        let end = u64::try_from(len)
+            .ok()
+            .and_then(|len| offset.checked_add(len))
+            .ok_or_else(bad)?;
+        let size = rustix::fs::fstat(&fd)
+            .map_err(|err| MapError::Os(err.raw_os_error()))?
+            .st_size;
+        let size = u64::try_from(size).unwrap_or(0);
+        if size < end {
+            return Err(MapError::ShortFile { size, end });
+        }
         // SAFETY: a fresh mapping chosen by the kernel (null hint), not
         // aliasing any Rust allocation; `fd` is a live descriptor for the
         // duration of the call. The memory is only read through `&[u8]`
@@ -114,8 +135,8 @@ impl Mapping {
         }
         .map_err(|err| MapError::Os(err.raw_os_error()))?;
         let base = NonNull::new(base.cast::<u8>()).ok_or_else(bad)?;
-        // SAFETY: `skip < page <= mapped`, so the offset stays inside the
-        // mapping just created.
+        // SAFETY: `mapped = skip + len` with `len > 0`, so `skip < mapped`
+        // and the offset stays inside the mapping just created.
         let start = unsafe { base.add(skip) };
         Ok(Self {
             writable,
@@ -155,6 +176,42 @@ impl Drop for Mapping {
         if let Err(err) = unmapped {
             tracing::warn!(%err, "screen-capture: munmap failed");
         }
+    }
+}
+
+/// A memfd the plugin creates and shares with a producer (a compositor's
+/// `wl_shm` pool, an X server's MIT-SHM segment), sized once and sealed
+/// with `F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL`: the peer cannot
+/// truncate it under a live mapping.
+#[derive(Debug)]
+pub(crate) struct SealedMemfd(OwnedFd);
+
+impl SealedMemfd {
+    /// A fresh close-on-exec memfd of `len` zero bytes, sealed.
+    ///
+    /// # Errors
+    /// `memfd_create`, `ftruncate` or adding the seals failed; the step
+    /// and its `errno`.
+    pub(crate) fn new(name: &str, len: u64) -> Result<Self, (&'static str, rustix::io::Errno)> {
+        use rustix::fs::{MemfdFlags, SealFlags};
+        let fd = rustix::fs::memfd_create(name, MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING)
+            .map_err(|e| ("memfd_create", e))?;
+        rustix::fs::ftruncate(&fd, len).map_err(|e| ("ftruncate", e))?;
+        rustix::fs::fcntl_add_seals(&fd, SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL)
+            .map_err(|e| ("seal memfd", e))?;
+        Ok(Self(fd))
+    }
+}
+
+impl AsFd for SealedMemfd {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.0.as_fd()
+    }
+}
+
+impl From<SealedMemfd> for OwnedFd {
+    fn from(memfd: SealedMemfd) -> Self {
+        memfd.0
     }
 }
 
@@ -222,5 +279,36 @@ mod tests {
             Mapping::new(&fd, 0, 0),
             Err(MapError::BadRange { .. })
         ));
+    }
+
+    #[test]
+    fn a_range_past_the_end_of_the_file_is_refused() {
+        let page = rustix::param::page_size();
+        let fd = memfd(&vec![7; page + 16]);
+        let short = Err(MapError::ShortFile {
+            size: (page + 16) as u64,
+            end: (page + 17) as u64,
+        });
+        assert_eq!(Mapping::new(&fd, 0, page + 17).map(|_| ()), short);
+        assert_eq!(Mapping::new(&fd, 8, page + 9).map(|_| ()), short);
+        assert!(Mapping::new(&fd, 8, page + 8).is_ok(), "exactly to the end");
+        assert!(matches!(
+            Mapping::new(&fd, u64::MAX, 2),
+            Err(MapError::BadRange { .. })
+        ));
+    }
+
+    #[test]
+    fn a_sealed_memfd_cannot_be_resized() {
+        use rustix::fs::SealFlags;
+        let memfd = SealedMemfd::new("sealed-test", 4096).expect("sealed memfd");
+        assert_eq!(rustix::fs::fstat(&memfd).expect("fstat").st_size, 4096);
+        assert!(rustix::fs::ftruncate(&memfd, 16).is_err(), "cannot shrink");
+        assert!(rustix::fs::ftruncate(&memfd, 8192).is_err(), "cannot grow");
+        let seals = rustix::fs::fcntl_get_seals(&memfd).expect("seals");
+        assert!(seals.contains(SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL));
+        let mut mapping = Mapping::new_writable(&memfd, 4096).expect("map");
+        mapping.bytes_mut().expect("writable")[0] = 9;
+        assert_eq!(mapping.bytes()[0], 9);
     }
 }

@@ -711,13 +711,9 @@ impl Client {
                 format!("format 0x{format:08x}"),
             )
         })?;
-        let fd = rustix::fs::memfd_create("istmo-screen-capture", rustix::fs::MemfdFlags::CLOEXEC)
-            .map_err(|e| {
-                CaptureError::os(self.backend, "memfd_create", i64::from(e.raw_os_error()))
-            })?;
-        rustix::fs::ftruncate(&fd, bytes).map_err(|e| {
-            CaptureError::os(self.backend, "ftruncate", i64::from(e.raw_os_error()))
-        })?;
+        let fd = super::mapping::SealedMemfd::new("istmo-screen-capture", bytes).map_err(
+            |(step, e)| CaptureError::os(self.backend, step, i64::from(e.raw_os_error())),
+        )?;
         let pool = self.shm.create_pool(fd.as_fd(), len, &self.qh, ());
         let buffer = pool.create_buffer(
             0,

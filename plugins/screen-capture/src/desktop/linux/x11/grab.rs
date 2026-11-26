@@ -4,10 +4,10 @@
 //! mapping (one per pool slot), so that is the only copy. Window content
 //! comes from a Composite pixmap, so occluded parts read correctly.
 
+use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
 use istmo_core::NativeBuffer;
-use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
 use x11rb::connection::Connection as _;
 use x11rb::protocol::composite::{self, ConnectionExt as _};
 use x11rb::protocol::shm::{self, ConnectionExt as _};
@@ -16,7 +16,7 @@ use x11rb::protocol::xproto::{self, ConnectionExt as _, ImageFormat, ImageOrder}
 
 use crate::types::{CaptureError, PixelFormat, Point, Rect, Size};
 
-use super::super::mapping::{MappedFrame, Mapping};
+use super::super::mapping::{MappedFrame, Mapping, SealedMemfd};
 use super::conn::{X11, lost_or, x_err};
 
 /// The packed format X delivers for a pixmap depth and layout, if the
@@ -147,13 +147,12 @@ impl Grabber {
 
     fn attach(x: &X11, len: usize) -> Result<Segment, CaptureError> {
         let fd =
-            memfd_create("istmo-x11-shm", MemfdFlags::CLOEXEC).map_err(|e| x_err("memfd", e))?;
-        ftruncate(&fd, len as u64).map_err(|e| x_err("memfd size", e))?;
+            SealedMemfd::new("istmo-x11-shm", len as u64).map_err(|(step, e)| x_err(step, e))?;
         let mapping = Mapping::new_writable(&fd, len).map_err(|e| x_err("map segment", e))?;
         let id = x.conn.generate_id().map_err(|e| x_err("shm id", e))?;
         // The server takes the descriptor; the mapping keeps the memory.
         x.conn
-            .shm_attach_fd(id, fd, false)
+            .shm_attach_fd(id, OwnedFd::from(fd), false)
             .map_err(|e| x_err("shm attach", e))?
             .check()
             .map_err(|e| x_err("shm attach", e))?;
