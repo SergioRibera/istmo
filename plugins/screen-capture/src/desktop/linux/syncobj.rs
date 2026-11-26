@@ -4,9 +4,9 @@
 //! timeline syncobj to every buffer. The plugin waits for the acquire
 //! point on the CPU before a frame leaves (so frames are `Ready` and no
 //! consumer handles syncobjs: the data plane never carries a timeline)
-//! and signals the release point when the buffer goes back. This is the
-//! only synchronisation that holds on NVIDIA, whose driver attaches no
-//! implicit fences.
+//! and signals the release point every time the buffer goes back, read
+//! or not. This is the only synchronisation that holds on NVIDIA, whose
+//! driver attaches no implicit fences.
 //!
 //! The ioctls are core DRM, so any render node waits on a syncobj
 //! another process exported; the producer's node is preferred.
@@ -96,7 +96,7 @@ impl SyncDevice {
 
     /// A new timeline syncobj (tests stand in for a producer with it).
     #[cfg(test)]
-    fn create(&self) -> std::io::Result<Syncobj> {
+    pub(crate) fn create(&self) -> std::io::Result<Syncobj> {
         let handle = self.node.create_syncobj(false)?;
         Ok(Syncobj {
             node: Arc::clone(&self.node),
@@ -144,7 +144,7 @@ impl Syncobj {
     }
 
     #[cfg(test)]
-    fn export(&self) -> std::io::Result<std::os::fd::OwnedFd> {
+    pub(crate) fn export(&self) -> std::io::Result<std::os::fd::OwnedFd> {
         self.node.syncobj_to_fd(self.handle, false)
     }
 }
@@ -176,16 +176,17 @@ pub(crate) struct ExplicitSync {
     device: Option<SyncDevice>,
 }
 
-/// Why a synchronised buffer cannot be read.
+/// Why a synchronised buffer cannot be read, or handed back.
 #[derive(Debug)]
-pub(crate) enum AcquireError {
+pub(crate) enum SyncError {
     Device(std::io::Error),
     Import(std::io::Error),
     Wait(std::io::Error),
     TimedOut,
+    Signal(std::io::Error),
 }
 
-impl std::fmt::Display for AcquireError {
+impl std::fmt::Display for SyncError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Device(err) => write!(f, "no DRM node to wait on syncobjs: {err}"),
@@ -195,22 +196,7 @@ impl std::fmt::Display for AcquireError {
                 f,
                 "the acquire point did not signal within {ACQUIRE_TIMEOUT:?}"
             ),
-        }
-    }
-}
-
-/// The release point of one buffer, signalled when it goes back.
-#[derive(Debug)]
-pub(crate) struct ReleasePoint {
-    syncobj: Syncobj,
-    point: u64,
-}
-
-impl ReleasePoint {
-    /// Tell the producer nothing reads the buffer any more.
-    pub(crate) fn signal(self) {
-        if let Err(err) = self.syncobj.signal(self.point) {
-            tracing::warn!(%err, point = self.point, "screen-capture: signalling a release point");
+            Self::Signal(err) => write!(f, "signalling the release point: {err}"),
         }
     }
 }
@@ -224,42 +210,41 @@ impl ExplicitSync {
         }
     }
 
-    fn device(&mut self) -> Result<&SyncDevice, AcquireError> {
+    fn device(&mut self) -> Result<&SyncDevice, SyncError> {
         if self.device.is_none() {
-            self.device = Some(SyncDevice::open(self.producer).map_err(AcquireError::Device)?);
+            self.device = Some(SyncDevice::open(self.producer).map_err(SyncError::Device)?);
         }
         self.device
             .as_ref()
-            .ok_or_else(|| AcquireError::Device(std::io::ErrorKind::NotFound.into()))
+            .ok_or_else(|| SyncError::Device(std::io::ErrorKind::NotFound.into()))
     }
 
-    /// Wait for `acquire` at `point`, then return the release point to
-    /// signal once the buffer goes back.
+    /// Wait for `acquire` at `point`: the producer finished rendering.
     ///
     /// # Errors
     /// The node, the import or the wait failed, or the point did not
     /// signal in time.
-    pub(crate) fn acquire(
-        &mut self,
-        acquire: BorrowedFd<'_>,
-        acquire_point: u64,
-        release: BorrowedFd<'_>,
-        release_point: u64,
-    ) -> Result<ReleasePoint, AcquireError> {
-        let device = self.device()?.clone();
-        let syncobj = device.import(acquire).map_err(AcquireError::Import)?;
+    pub(crate) fn acquire(&mut self, acquire: BorrowedFd<'_>, point: u64) -> Result<(), SyncError> {
+        let syncobj = self.device()?.import(acquire).map_err(SyncError::Import)?;
         match syncobj
-            .wait(acquire_point, ACQUIRE_TIMEOUT)
-            .map_err(AcquireError::Wait)?
+            .wait(point, ACQUIRE_TIMEOUT)
+            .map_err(SyncError::Wait)?
         {
-            Waited::Signalled => {}
-            Waited::TimedOut => return Err(AcquireError::TimedOut),
+            Waited::Signalled => Ok(()),
+            Waited::TimedOut => Err(SyncError::TimedOut),
         }
-        let release = device.import(release).map_err(AcquireError::Import)?;
-        Ok(ReleasePoint {
-            syncobj: release,
-            point: release_point,
-        })
+    }
+
+    /// Signal `release` at `point`: nothing reads the buffer any more.
+    ///
+    /// # Errors
+    /// The node, the import or the signal failed.
+    pub(crate) fn release(&mut self, release: BorrowedFd<'_>, point: u64) -> Result<(), SyncError> {
+        self.device()?
+            .import(release)
+            .map_err(SyncError::Import)?
+            .signal(point)
+            .map_err(SyncError::Signal)
     }
 }
 
@@ -269,7 +254,7 @@ mod tests {
 
     use super::*;
 
-    fn device() -> Option<SyncDevice> {
+    pub(crate) fn device() -> Option<SyncDevice> {
         SyncDevice::open(None)
             .map_err(|err| eprintln!("skipping syncobj test: {err}"))
             .ok()
@@ -302,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn acquire_waits_then_hands_back_a_release_point() {
+    fn acquire_waits_and_release_reaches_the_producer() {
         let Some(device) = device() else { return };
         let (Ok(acquire), Ok(release)) = (device.create(), device.create()) else {
             return;
@@ -310,16 +295,16 @@ mod tests {
         acquire.signal(3).expect("producer finished");
         let (a, r) = (acquire.export().expect("a"), release.export().expect("r"));
         let mut sync = ExplicitSync::new(None);
-        let point = sync.acquire(a.as_fd(), 3, r.as_fd(), 4).expect("acquired");
-        point.signal();
+        sync.acquire(a.as_fd(), 3).expect("acquired");
+        sync.release(r.as_fd(), 4).expect("released");
         assert_eq!(
             release.wait(4, Duration::from_millis(100)).expect("wait"),
             Waited::Signalled,
             "the release point reaches the producer"
         );
         assert!(matches!(
-            sync.acquire(a.as_fd(), 9, r.as_fd(), 10),
-            Err(AcquireError::TimedOut)
+            sync.acquire(a.as_fd(), 9),
+            Err(SyncError::TimedOut)
         ));
     }
 }

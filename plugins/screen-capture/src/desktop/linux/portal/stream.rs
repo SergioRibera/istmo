@@ -39,7 +39,7 @@ use super::super::super::clock::monotonic_ns;
 use super::super::super::output::{Delivery, FrameOut};
 use super::super::mapping::{MappedFrame, Mapping};
 use super::super::pipewire::{self as pwx, LoopCtx, LoopThread, Remote, StreamEnd};
-use super::super::syncobj::{ExplicitSync, ReleasePoint};
+use super::super::syncobj::ExplicitSync;
 use super::pods::{self, PortalTier};
 use super::raw::{self, Buffer, BufferKey};
 
@@ -242,8 +242,10 @@ enum Backing {
 /// while the stream data is borrowed.
 struct Leases {
     book: HeldBuffers<BufferKey>,
-    /// Buffers held for the consumer, with their release points.
-    dequeued: HashMap<LeaseId, (Buffer, Option<ReleasePoint>)>,
+    /// Buffers held for the consumer.
+    dequeued: HashMap<LeaseId, Buffer>,
+    /// Acquire waits and release signals of this stream's buffers.
+    sync: ExplicitSync,
     /// Slot of each live buffer, for `BufferIdentity`.
     slots: Vec<Option<BufferKey>>,
     backings: HashMap<BufferKey, Backing>,
@@ -266,10 +268,12 @@ impl Leases {
         tx: pw::channel::Sender<Release>,
         stream: usize,
         gone: Rc<RefCell<Vec<BufferKey>>>,
+        sync: ExplicitSync,
     ) -> Self {
         Self {
             book: HeldBuffers::default(),
             dequeued: HashMap::new(),
+            sync,
             slots: Vec::new(),
             backings: HashMap::new(),
             generation: BufferIdentity::default().pool_generation + 1,
@@ -299,7 +303,7 @@ impl Leases {
             tracing::debug!("screen-capture portal: a held buffer was removed; its lease is inert");
         }
         // PipeWire frees the buffer: never re-queue it.
-        self.dequeued.retain(|_, (buffer, _)| buffer.key() != key);
+        self.dequeued.retain(|_, buffer| buffer.key() != key);
         for slot in &mut self.slots {
             if *slot == Some(key) {
                 *slot = None;
@@ -343,14 +347,11 @@ impl Leases {
         let Some(_key) = self.book.release(release.id) else {
             return;
         };
-        let Some((buffer, point)) = self.dequeued.remove(&release.id) else {
+        let Some(buffer) = self.dequeued.remove(&release.id) else {
             return;
         };
         // Nothing reads the buffer any more: the producer may render.
-        if let Some(point) = point {
-            point.signal();
-        }
-        buffer.requeue(stream);
+        buffer.requeue(stream, &mut self.sync);
     }
 }
 
@@ -368,7 +369,6 @@ struct StreamData {
     negotiated: Option<Negotiated>,
     shared: Rc<RefCell<Shared>>,
     mode: Mode,
-    sync: ExplicitSync,
     /// Frames dropped since the last delivered one.
     skipped: u32,
 }
@@ -485,7 +485,6 @@ fn run(
             negotiated: None,
             shared: Rc::clone(&shared),
             mode,
-            sync: ExplicitSync::new(setup.producer),
             skipped: 0,
         }));
         let gone: Rc<RefCell<Vec<BufferKey>>> = Rc::default();
@@ -493,6 +492,7 @@ fn run(
             release_tx.clone(),
             index,
             Rc::clone(&gone),
+            ExplicitSync::new(setup.producer),
         )));
         let out = match &data.borrow().mode {
             Mode::Live(live) => Some(live.out.clone()),
@@ -730,21 +730,21 @@ fn on_param(stream: &Stream, data: &mut StreamData, id: u32, param: Option<&pw::
 }
 
 /// Re-queue every ready buffer; how many there were.
-fn drain(stream: &Stream) -> u32 {
+fn drain(stream: &Stream, sync: &mut ExplicitSync) -> u32 {
     let mut dropped = 0;
     while let Some(buffer) = Buffer::dequeue(stream) {
-        buffer.requeue(stream);
+        buffer.requeue(stream, sync);
         dropped += 1;
     }
     dropped
 }
 
 /// The newest ready buffer; older ones go straight back (`skipped`).
-fn newest(stream: &Stream, skipped: &mut u32) -> Option<Buffer> {
+fn newest(stream: &Stream, sync: &mut ExplicitSync, skipped: &mut u32) -> Option<Buffer> {
     let mut newest: Option<Buffer> = None;
     while let Some(buffer) = Buffer::dequeue(stream) {
         if let Some(older) = newest.replace(buffer) {
-            older.requeue(stream);
+            older.requeue(stream, sync);
             *skipped = skipped.saturating_add(1);
         }
     }
@@ -755,7 +755,6 @@ fn newest(stream: &Stream, skipped: &mut u32) -> Option<Buffer> {
 struct Cut {
     meta: FrameMeta,
     backing: FrameBacking,
-    release: Option<ReleasePoint>,
 }
 
 enum FrameBacking {
@@ -847,7 +846,7 @@ fn backing(
 /// read its metas, share its backing. `copy` reads shared memory out
 /// instead (a lease-free `CopyToCpu` frame).
 fn cut(
-    data: &mut StreamData,
+    data: &StreamData,
     leases: &mut Leases,
     buffer: &Buffer,
     negotiated: Negotiated,
@@ -861,21 +860,16 @@ fn cut(
         // The producer has not rendered into it yet.
         return Ok(None);
     }
-    let (sync, release) = match buffer.timeline() {
+    let sync = match buffer.timeline() {
         Some(timeline) => {
-            let point = data
+            leases
                 .sync
-                .acquire(
-                    timeline.acquire,
-                    timeline.acquire_point,
-                    timeline.release,
-                    timeline.release_point,
-                )
+                .acquire(timeline.acquire, timeline.acquire_point)
                 .map_err(|e| e.to_string())?;
-            (SyncKind::Ready, Some(point))
+            SyncKind::Ready
         }
-        None if negotiated.modifier.is_some() => (SyncKind::Implicit, None),
-        None => (SyncKind::Ready, None),
+        None if negotiated.modifier.is_some() => SyncKind::Implicit,
+        None => SyncKind::Ready,
     };
     let row_bytes = negotiated
         .size
@@ -976,16 +970,12 @@ fn cut(
         protected_content: false,
         composite: None,
     };
-    Ok(Some(Cut {
-        meta,
-        backing,
-        release,
-    }))
+    Ok(Some(Cut { meta, backing }))
 }
 
 fn on_process(stream: &Stream, data: &mut StreamData, leases: &mut Leases) {
     let Some(negotiated) = data.negotiated else {
-        drain(stream);
+        drain(stream, &mut leases.sync);
         return;
     };
     if matches!(data.mode, Mode::Shot { .. }) {
@@ -1003,22 +993,22 @@ fn shot(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiated:
         .get(data.index)
         .is_none_or(Option::is_some);
     if done {
-        drain(stream);
+        drain(stream, &mut leases.sync);
         return;
     }
     let mut skipped = 0;
-    let Some(buffer) = newest(stream, &mut skipped) else {
+    let Some(buffer) = newest(stream, &mut leases.sync, &mut skipped) else {
         return;
     };
     let cut = match cut(data, leases, &buffer, negotiated, false) {
         Ok(Some(cut)) => cut,
         Ok(None) => {
-            buffer.requeue(stream);
+            buffer.requeue(stream, &mut leases.sync);
             return;
         }
         Err(why) => {
             tracing::warn!(%why, "screen-capture portal: frame dropped");
-            buffer.requeue(stream);
+            buffer.requeue(stream, &mut leases.sync);
             return;
         }
     };
@@ -1027,7 +1017,6 @@ fn shot(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiated:
     if let Mode::Shot { kept } = &mut data.mode {
         kept.push(buffer);
     }
-    drop(cut.release);
     let buffer = match cut.backing {
         FrameBacking::DmaBuf(dmabuf) => NativeBuffer::from_dmabuf(dmabuf),
         FrameBacking::Mapped(frame) => NativeBuffer::from_bytes(frame),
@@ -1063,12 +1052,12 @@ fn deliver(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiat
     };
     let (out, exhaustion, pool_depth) = (live.out.clone(), live.exhaustion, live.pool_depth);
     if out.is_stopped() {
-        drain(stream);
+        drain(stream, &mut leases.sync);
         data.shared.borrow().mainloop.quit();
         return;
     }
     if !out.wants_frames() {
-        data.skipped = data.skipped.saturating_add(drain(stream));
+        data.skipped = data.skipped.saturating_add(drain(stream, &mut leases.sync));
         return;
     }
     let full = !leases.book.has_room();
@@ -1080,7 +1069,7 @@ fn deliver(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiat
         return;
     }
     let mut skipped = data.skipped;
-    let Some(buffer) = newest(stream, &mut skipped) else {
+    let Some(buffer) = newest(stream, &mut leases.sync, &mut skipped) else {
         data.skipped = skipped;
         return;
     };
@@ -1090,7 +1079,7 @@ fn deliver(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiat
         // DropNewest (or CopyToCpu on DMA-BUF, refused at open).
         let exhausted = leases.exhausted();
         out.exhausted(exhausted, pool_depth, exhaustion);
-        buffer.requeue(stream);
+        buffer.requeue(stream, &mut leases.sync);
         data.skipped = data.skipped.saturating_add(1);
         return;
     }
@@ -1103,42 +1092,32 @@ fn deliver(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiat
     let cut = match cut(data, leases, &buffer, negotiated, copy) {
         Ok(Some(cut)) => cut,
         Ok(None) => {
-            buffer.requeue(stream);
+            buffer.requeue(stream, &mut leases.sync);
             return;
         }
         Err(why) => {
             tracing::debug!(%why, "screen-capture portal: frame dropped");
-            buffer.requeue(stream);
+            buffer.requeue(stream, &mut leases.sync);
             data.skipped = data.skipped.saturating_add(1);
             return;
         }
     };
-    let Cut {
-        mut meta,
-        backing,
-        release,
-    } = cut;
+    let Cut { mut meta, backing } = cut;
     let buffer = match backing {
         FrameBacking::Copied(bytes) => {
             // Read out: the buffer goes back at once.
-            if let Some(release) = release {
-                release.signal();
-            }
-            buffer.requeue(stream);
+            buffer.requeue(stream, &mut leases.sync);
             NativeBuffer::from_bytes(bytes)
         }
         FrameBacking::DmaBuf(_) | FrameBacking::Mapped(_) => {
             let key = buffer.key();
             let Some(id) = leases.book.hold(key) else {
-                if let Some(release) = release {
-                    release.signal();
-                }
-                buffer.requeue(stream);
+                buffer.requeue(stream, &mut leases.sync);
                 return;
             };
             let identity = leases.identity(key);
             meta.buffer = identity;
-            leases.dequeued.insert(id, (buffer, release));
+            leases.dequeued.insert(id, buffer);
             let (tx, stream_index) = (leases.tx.clone(), leases.stream);
             let native = match backing {
                 FrameBacking::DmaBuf(dmabuf) => NativeBuffer::from_dmabuf(dmabuf),

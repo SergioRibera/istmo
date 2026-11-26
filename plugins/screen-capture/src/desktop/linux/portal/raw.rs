@@ -26,6 +26,8 @@ use pw::stream::Stream;
 
 use crate::types::{CursorState, Point, Rect};
 
+use super::super::syncobj::ExplicitSync;
+
 // `spa/buffer/meta.h` and `buffer.h` ids, kept here rather than taken from
 // the bindings, which follow whatever headers the build machine has
 // (VideoTransform and SyncTimeline are PipeWire 1.2).
@@ -38,6 +40,11 @@ pub(super) const META_SYNC_TIMELINE: u32 = 9;
 pub(super) const DATA_MEM_FD: u32 = 2;
 pub(super) const DATA_DMA_BUF: u32 = 3;
 pub(super) const DATA_SYNC_OBJ: u32 = 5;
+/// `SPA_META_SYNC_TIMELINE_UNSCHEDULED_RELEASE`: set by the producer when
+/// it queues a buffer, cleared by the consumer once it scheduled the
+/// release point. A producer that finds it still set does not wait on
+/// the release point.
+pub(super) const SYNC_TIMELINE_UNSCHEDULED_RELEASE: u32 = 1 << 0;
 
 /// `struct spa_meta_sync_timeline`.
 #[repr(C)]
@@ -61,9 +68,10 @@ impl BufferKey {
 }
 
 /// A buffer dequeued from a stream. It goes back with
-/// [`Buffer::requeue`]; dropping it without that keeps it dequeued until
-/// the stream is destroyed (a screenshot keeps its frame stable that
-/// way). It never leaves the loop thread (`!Send`: raw pointer).
+/// [`Buffer::requeue`], which also hands its explicit-sync release point
+/// back; dropping it without that keeps it dequeued until the stream is
+/// destroyed (a screenshot keeps its frame stable that way). It never
+/// leaves the loop thread (`!Send`: raw pointer).
 #[derive(Debug)]
 pub(super) struct Buffer {
     raw: NonNull<pw::sys::pw_buffer>,
@@ -76,6 +84,8 @@ pub(super) struct Timeline<'b> {
     pub(super) acquire_point: u64,
     pub(super) release: BorrowedFd<'b>,
     pub(super) release_point: u64,
+    /// The producer set [`SYNC_TIMELINE_UNSCHEDULED_RELEASE`].
+    pub(super) unscheduled_release: bool,
 }
 
 /// One data plane, as the producer described it.
@@ -100,12 +110,48 @@ impl Buffer {
         NonNull::new(raw).map(|raw| Self { raw })
     }
 
-    /// Hand the buffer back to the producer.
-    pub(super) fn requeue(self, stream: &Stream) {
+    /// Hand the buffer back to the producer, its release point signalled
+    /// first when it carries a timeline (whether it was read or not: a
+    /// producer that waits on the point would wait forever otherwise).
+    pub(super) fn requeue(self, stream: &Stream, sync: &mut ExplicitSync) {
+        self.settle_release(sync);
         // SAFETY: `raw` was dequeued from `stream` (the caller passes the
         // stream it dequeued from) and, `self` being consumed, is queued
         // back exactly once.
         unsafe { stream.queue_raw_buffer(self.raw.as_ptr()) };
+    }
+
+    /// Signal the release point, and once it is, clear the producer's
+    /// "unscheduled" flag. When signalling fails the flag stays set, so a
+    /// producer that reads it reuses the buffer without waiting.
+    fn settle_release(&self, sync: &mut ExplicitSync) {
+        let Some(timeline) = self.timeline() else {
+            return;
+        };
+        let (unscheduled, point) = (timeline.unscheduled_release, timeline.release_point);
+        match sync.release(timeline.release, point) {
+            Ok(()) if unscheduled => self.mark_release_scheduled(),
+            Ok(()) => {}
+            Err(err) => {
+                tracing::warn!(%err, point, "screen-capture portal: release point not signalled");
+            }
+        }
+    }
+
+    /// Clear [`SYNC_TIMELINE_UNSCHEDULED_RELEASE`] in the buffer's timeline
+    /// meta.
+    fn mark_release_scheduled(&self) {
+        let Some(data) = self.meta_data(META_SYNC_TIMELINE, size_of::<MetaSyncTimeline>()) else {
+            return;
+        };
+        let flags = data.cast::<u32>();
+        // SAFETY: the meta holds a whole `spa_meta_sync_timeline` (checked
+        // by `meta_data`), whose first field is the `u32` flags; the
+        // consumer owns the dequeued buffer's metas, which PipeWire maps
+        // writable for it. Unaligned access: shared memory.
+        let current = unsafe { flags.read_unaligned() };
+        // SAFETY: as above.
+        unsafe { flags.write_unaligned(current & !SYNC_TIMELINE_UNSCHEDULED_RELEASE) };
     }
 
     pub(super) fn key(&self) -> BufferKey {
@@ -145,16 +191,21 @@ impl Buffer {
         unsafe { std::slice::from_raw_parts(spa.datas, n) }
     }
 
+    /// The data of the first meta of `kind` holding at least `size` bytes.
+    fn meta_data(&self, kind: u32, size: usize) -> Option<*mut std::ffi::c_void> {
+        self.metas()
+            .iter()
+            .find(|m| m.type_ == kind && !m.data.is_null() && m.size as usize >= size)
+            .map(|m| m.data)
+    }
+
     /// The first meta of `kind` holding at least `T`, read unaligned.
     fn meta<T: Copy>(&self, kind: u32) -> Option<T> {
-        let meta = self
-            .metas()
-            .iter()
-            .find(|m| m.type_ == kind && !m.data.is_null() && m.size as usize >= size_of::<T>())?;
+        let data = self.meta_data(kind, size_of::<T>())?;
         // SAFETY: the meta's data holds at least `size_of::<T>()` bytes
-        // (checked above) of a plain-data C struct; shared memory may be
-        // unaligned, hence `read_unaligned`.
-        Some(unsafe { meta.data.cast::<T>().read_unaligned() })
+        // (checked by `meta_data`) of a plain-data C struct; shared memory
+        // may be unaligned, hence `read_unaligned`.
+        Some(unsafe { data.cast::<T>().read_unaligned() })
     }
 
     /// Every element of the array meta of `kind` (e.g. damage regions).
@@ -246,6 +297,7 @@ impl Buffer {
             acquire_point: meta.acquire_point,
             release,
             release_point: meta.release_point,
+            unscheduled_release: meta.flags & SYNC_TIMELINE_UNSCHEDULED_RELEASE != 0,
         })
     }
 
@@ -284,4 +336,110 @@ fn borrowed<'b>(fd: i64) -> Option<BorrowedFd<'b>> {
     // keeps them open while the buffer exists; callers only use the
     // borrow while the buffer is dequeued (it is tied to a `&Buffer`).
     Some(unsafe { BorrowedFd::borrow_raw(fd) })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd};
+    use std::time::Duration;
+
+    use super::*;
+    use crate::desktop::linux::syncobj::{SyncDevice, Waited};
+
+    /// A `pw_buffer` as a producer hands it over: a timeline meta and the
+    /// acquire / release syncobj data blocks, in memory the test owns.
+    struct FakeBuffer {
+        timeline: Box<MetaSyncTimeline>,
+        metas: Box<[spa_meta; 1]>,
+        datas: Box<[spa_data; 2]>,
+        spa: Box<spa_buffer>,
+        pw: Box<pw::sys::pw_buffer>,
+    }
+
+    impl FakeBuffer {
+        fn new(acquire: &OwnedFd, release: &OwnedFd, release_point: u64, flags: u32) -> Self {
+            // SAFETY: plain C structs, all-zero is a valid (empty) value.
+            let zeroed_data = || unsafe { std::mem::zeroed::<spa_data>() };
+            let mut this = Self {
+                timeline: Box::new(MetaSyncTimeline {
+                    flags,
+                    padding: 0,
+                    acquire_point: 1,
+                    release_point,
+                }),
+                // SAFETY: as above.
+                metas: Box::new([unsafe { std::mem::zeroed() }]),
+                datas: Box::new([zeroed_data(), zeroed_data()]),
+                // SAFETY: as above.
+                spa: Box::new(unsafe { std::mem::zeroed() }),
+                // SAFETY: as above.
+                pw: Box::new(unsafe { std::mem::zeroed() }),
+            };
+            this.metas[0].type_ = META_SYNC_TIMELINE;
+            this.metas[0].size = u32::try_from(size_of::<MetaSyncTimeline>()).expect("small");
+            this.metas[0].data = std::ptr::from_mut(&mut *this.timeline).cast();
+            for (data, fd) in this.datas.iter_mut().zip([acquire, release]) {
+                data.type_ = DATA_SYNC_OBJ;
+                data.fd = i64::from(fd.as_raw_fd());
+            }
+            this.spa.n_metas = 1;
+            this.spa.metas = this.metas.as_mut_ptr();
+            this.spa.n_datas = 2;
+            this.spa.datas = this.datas.as_mut_ptr();
+            this.pw.buffer = std::ptr::from_mut(&mut *this.spa);
+            this
+        }
+
+        fn buffer(&mut self) -> Buffer {
+            Buffer {
+                raw: NonNull::from(&mut *self.pw),
+            }
+        }
+
+        fn flags(&self) -> u32 {
+            // SAFETY: the meta points at `self.timeline`, alive here; the
+            // flags are its first field. Read through the pointer the
+            // buffer wrote through.
+            unsafe { self.metas[0].data.cast::<u32>().read() }
+        }
+    }
+
+    #[test]
+    fn a_requeued_timeline_buffer_signals_its_release_point_and_clears_the_flag() {
+        let Some(device) = SyncDevice::open(None).ok() else {
+            eprintln!("skipping: no render node");
+            return;
+        };
+        let (Ok(acquire), Ok(release)) = (device.create(), device.create()) else {
+            eprintln!("skipping: no timeline syncobjs on this node");
+            return;
+        };
+        let (a, r) = (acquire.export().expect("a"), release.export().expect("r"));
+        let mut fake = FakeBuffer::new(&a, &r, 7, SYNC_TIMELINE_UNSCHEDULED_RELEASE | 1 << 4);
+        let mut sync = ExplicitSync::new(None);
+        // Never read (an older buffer `newest` skipped, an acquire timeout):
+        // still released.
+        fake.buffer().settle_release(&mut sync);
+        assert_eq!(
+            release.wait(7, Duration::from_millis(100)).expect("wait"),
+            Waited::Signalled,
+            "a producer waiting on the release point is not stuck"
+        );
+        assert_eq!(fake.flags(), 1 << 4, "only the unscheduled flag is cleared");
+    }
+
+    #[test]
+    fn an_unsignalled_release_point_keeps_the_unscheduled_flag() {
+        // A memfd is no syncobj: the import (or the device) fails.
+        let not_syncobj = rustix::fs::memfd_create("not-syncobj", rustix::fs::MemfdFlags::CLOEXEC)
+            .expect("memfd");
+        let other = rustix::io::fcntl_dupfd_cloexec(not_syncobj.as_fd(), 0).expect("dup");
+        let mut fake = FakeBuffer::new(&not_syncobj, &other, 3, SYNC_TIMELINE_UNSCHEDULED_RELEASE);
+        fake.buffer().settle_release(&mut ExplicitSync::new(None));
+        assert_eq!(
+            fake.flags(),
+            SYNC_TIMELINE_UNSCHEDULED_RELEASE,
+            "the producer must not wait on a point nobody signals"
+        );
+    }
 }
