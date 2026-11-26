@@ -76,11 +76,29 @@ copies left are the declared ones:
 - Buffers stay dequeued while leased: all but one, as in
   ferricast `lease.rs`. A late release of a removed buffer is inert.
 - Explicit sync: when the producer negotiates `SyncTimeline`, the
-  plugin waits for the acquire point on the CPU through a DRM syncobj,
-  bounded at 100 ms, then marks the frame `Ready`. The release point is
-  signalled when the buffer is re-queued. Without explicit sync,
-  DMA-BUF frames are `Implicit` (with `NvidiaImplicitSyncBestEffort` on
-  NVIDIA).
+  plugin checks the acquire point through a DRM syncobj without
+  blocking; one not yet signalled is waited for (at most 100 ms) on a
+  per-stream thread while the buffer stays parked, so a slow producer
+  never stalls the loop's other streams. The frame is then `Ready`.
+  Each buffer's syncobjs are imported once. The release point is
+  signalled on every re-queue, read or not (skipped older buffers,
+  drains, errors, acquire timeouts), and
+  `SPA_META_SYNC_TIMELINE_UNSCHEDULED_RELEASE` is cleared once it is;
+  a failed signal leaves the flag set so the producer does not wait.
+  Without explicit sync, DMA-BUF frames are `Implicit` (with
+  `NvidiaImplicitSyncBestEffort` on NVIDIA).
+- A `MemFd` is mapped only when `fstat` shows it holds
+  `mapoffset + maxsize` bytes (a short one would `SIGBUS`). The
+  plugin's own `wl_shm` / XShm memfds are sealed against shrinking and
+  growing.
+- A screenshot's `MemFd` frame is copied out
+  (`CopyStage::LiveBufferSnapshot`): it holds none of the producer's
+  memory once the stream ends. A DMA-BUF screenshot keeps its fd
+  duplicates (no CPU readback of DMA-BUFs), as does a live frame held
+  past its session; the producer frees a destroyed stream's buffers.
+- The consent handshake (`SelectSources` / `Start`) is given up, and
+  the portal session closed with its dialog, once the caller's future
+  is dropped or after 120 s.
 - Read metas: transform (into `FrameMeta.orientation`), cursor (with
   `CursorMode::Metadata`), crop, and damage (clipped).
 - Verified on niri against its Mutter ScreenCast producer, without a
@@ -121,12 +139,20 @@ copies left are the declared ones:
 - A remote caller sees no titles, app ids, pids or tokens.
 - An `open` whose caller gave up tears its session down, including when
   portal consent arrives late.
-- Dropping a session handle never blocks: teardown runs on the plugin's
-  worker pool (at most 8 threads, 64 queued calls), and the PipeWire
-  loop join is bounded.
+- Dropping a session handle never blocks: teardown runs on a thread of
+  its own (never queued behind host calls in the worker pool), and the
+  PipeWire loop join is bounded.
+- Host calls run on a worker pool (at most 8 threads, 64 queued calls);
+  a worker starts whenever every idle one is already promised to a
+  queued call. `backends` and `capabilities`, open to every origin, run
+  at most 4 at a time; more are refused at once.
 - Wayland damage is clipped and capped at 32 rects, like X11 and the
   portal.
 - Picker-only backends refuse `Region`, `Focused` and `UnderCursor`.
+  For `Id` and `Monitors(ids)` the pick must be the named sources
+  (`SourceNotFound` / `Unsatisfiable(SourceSelector)` otherwise; portal
+  ids persist across token-restored sessions). `PrimaryMonitor` cannot be
+  checked: the negotiated source never claims `primary` there.
 - `wl_shm` layouts from the compositor are validated.
 - GBM planes are exported with `DRM_CLOEXEC`.
 
