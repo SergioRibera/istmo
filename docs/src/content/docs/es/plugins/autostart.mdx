@@ -1,0 +1,193 @@
+---
+title: Autostart
+description: Inicia la app cuando el usuario entra en su sesión, y dice si este lanzamiento fue un inicio de sesión, en macOS, Windows y Linux.
+sidebar:
+  order: 13
+---
+
+import PluginTypes from '../../../../generated/plugins/autostart-types.mdx';
+
+`istmo-autostart` registra la app para que arranque al iniciar sesión y
+le dice si el lanzamiento actual fue uno de esos, para que pueda abrirse
+oculta en la bandeja en lugar de mostrar su ventana.
+
+Solo escritorio. Android no tiene "arrancar mi interfaz al iniciar
+sesión" (lo más parecido, `BOOT_COMPLETED`, es trabajo en segundo plano:
+ver el planificador de tareas), e iOS y la web no tienen nada. El
+`istmo.toml` del plugin declara `targets = ["desktop"]`, así que no se
+genera Kotlin ni Swift; los builds móviles y web registran
+`UnavailableAutostart`.
+
+| Plataforma | Registro | Estado |
+| ---------- | -------- | ------ |
+| macOS 13+, dentro de un `.app` | `SMAppService.mainApp` | `.enabled`, `.requiresApproval`, `.notRegistered` |
+| macOS < 13, o un binario suelto | `~/Library/LaunchAgents/<id>.istmo-autostart.plist` | el archivo existe |
+| Windows, MSIX | `StartupTask` (`[app.autostart] windows_task_id`) | `StartupTaskState` |
+| Windows, sin paquete | valor `<id>` de `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` | el valor existe; `StartupApproved\Run` para el interruptor del usuario |
+| Linux, Flatpak | `org.freedesktop.portal.Background` | última respuesta del portal, en caché |
+| Linux | `$XDG_CONFIG_HOME/autostart/<id>.desktop` | el archivo existe; `Hidden=true` o `X-GNOME-Autostart-enabled=false` es el interruptor del usuario |
+
+`<id>` es el id de la app (`[app] id`, si no el nombre del paquete Cargo).
+
+## Instalación
+
+```toml
+[dependencies]
+istmo-autostart = "0.1.1-alpha.7"
+```
+
+La feature `linux-portal` (por defecto) trae `ashpd` para Flatpak. Sin
+ella, un build Flatpak informa `Unsupported`.
+
+## Reglas
+
+- Nunca se activa sin una acción del usuario. No existe
+  `autostart = true` en `istmo.toml`: llama a `enable` desde un
+  interruptor "Iniciar al entrar". Las tiendas de apps lo exigen, y una
+  app que se añade sola a los elementos de inicio parece malware.
+- Nunca se reactiva a espaldas del usuario. Si el usuario la desactivó
+  en los ajustes del sistema (`DisabledByUser`, o `RequiresApproval` en
+  macOS), `enable` abre la página de ajustes y devuelve el estado sin
+  cambiarlo. Linux no tiene esa página: allí `enable` reescribe la
+  entrada, porque solo se ejecuta tras una acción del usuario.
+
+## Conectar el host y el publicador
+
+```rust
+use istmo_autostart::{AutostartHost, AutostartPublisher, DesktopAutostart};
+
+let config = istmo_autostart::autostart_config!();
+// Pronto, en el hilo principal, antes de que nada lea la línea de comandos.
+let args = AutostartPublisher::install(&runtime, &config, std::env::args_os().skip(1))?;
+runtime.register_host(AutostartHost::new(DesktopAutostart::new(config)));
+// Pasa `args` (sin el marcador) a DocumentsPublisher::start o a tu parser.
+```
+
+`autostart_config!()` lee `ISTMO_APP_BUNDLE_ID`,
+`ISTMO_AUTOSTART_MARKER` e `ISTMO_AUTOSTART_TASK_ID`, que `istmo-build`
+emite para el crate de la app desde `istmo.toml`.
+`AutostartConfig::new("com.example.notes").with_marker("--autostart")`
+construye lo mismo a mano.
+
+`install` además reescribe una entrada activa cuya ruta del ejecutable
+o cuyo marcador quedaron desactualizados (`Exec=` en Linux, valor `Run`
+en Windows, LaunchAgent en macOS), así una actualización que movió el
+binario sigue funcionando. Nunca crea una entrada.
+
+En Android, iOS y la web:
+
+```rust
+use istmo_autostart::{AutostartHost, UnavailableAutostart};
+
+runtime.register_host(AutostartHost::new(UnavailableAutostart));
+```
+
+## Activar y desactivar
+
+```rust
+use istmo_autostart::{AutostartClient, AutostartError, AutostartOptions, AutostartState};
+
+let autostart = AutostartClient::from_runtime(&runtime)?;
+let state = autostart.status().await.map_err(AutostartError::from)?;
+let state = autostart
+    .enable(AutostartOptions { args: vec!["--tray".into()] })
+    .await
+    .map_err(AutostartError::from)?;
+if state == AutostartState::RequiresApproval {
+    // macOS: esperando en Ajustes del Sistema > General > Ítems de inicio.
+}
+autostart.disable().await.map_err(AutostartError::from)?;
+autostart.open_settings().await.map_err(AutostartError::from)?;
+```
+
+`AutostartOptions::args` van después del ejecutable; el plugin añade el
+marcador. `SMAppService` y `StartupTask` arrancan la app sin argumentos
+y los ignoran.
+
+| Error | Cuándo |
+| ----- | ------ |
+| `Unsupported` | no hay inicio automático aquí (móvil, web, Flatpak sin `linux-portal`, `open_settings` en Linux) |
+| `Denied` | el diálogo del portal o el aviso de `StartupTask` dijo que no |
+| `Backend(message)` | cualquier otro fallo de la plataforma |
+
+## ¿Fue un inicio de sesión?
+
+`install` publica un `LaunchReason` en el canal de último valor
+`istmo.autostart.launch`:
+
+```rust
+use istmo_autostart::{LaunchReason, LaunchReasonClient};
+
+let launch = LaunchReasonClient::from_runtime(&runtime)?;
+// `current()` es None hasta que se publica; `stream()` lo espera.
+if launch.stream().recv()?.is_login() {
+    // Arrancar oculta en la bandeja.
+}
+```
+
+Primero se pregunta al sistema. El marcador solo se usa donde el
+sistema no dice nada, y solo si la app configura uno:
+
+| Plataforma | Señal |
+| ---------- | ----- |
+| macOS, ítem de inicio | el Apple Event `oapp` lleva `keyAELaunchedAsLogInItem`, leído en `NSApplicationDidFinishLaunchingNotification` |
+| Windows MSIX | `AppInstance.GetActivatedEventArgs().Kind() == StartupTask` |
+| Linux con sesión gestionada por systemd (GNOME 3.34+, Plasma 5.20+) | `/proc/self/cgroup` termina en `@autostart.service` |
+| Windows `Run`, otras sesiones Linux, Flatpak, LaunchAgent de macOS | solo el marcador |
+
+- `Login(System)`: lo dijo el sistema. `Login(Marker)`: el marcador
+  estaba en la línea de comandos.
+- `User`: esta plataforma tiene una señal (o hay un marcador
+  configurado) y no estaba.
+- `Unknown`: sin señal aquí y sin marcador configurado.
+
+Sin heurísticas (hora de arranque, proceso padre). En macOS la razón se
+publica cuando `NSApplication` termina de arrancar, así que `install`
+debe ejecutarse antes del bucle de eventos; una app sin bucle de
+eventos de `NSApplication` recibe enseguida la respuesta basada solo en
+el marcador.
+
+```toml
+[app.autostart]
+marker = "--autostart"        # opcional; sin clave no hay marcador
+windows_task_id = "MyStartup" # opcional, solo MSIX
+```
+
+Las reglas de ambas claves están en la
+[referencia de istmo.toml](/istmo/es/build-scripts/istmo-toml-reference/#appautostart).
+
+## Notas por plataforma
+
+**macOS.** `SMAppService.mainApp` necesita que la app sea un bundle
+`.app` firmado; un binario suelto (`cargo run`) y macOS 12 o anterior
+usan un LaunchAgent (`RunAtLoad`, `ProcessType = Interactive`).
+`open_settings` abre Ítems de inicio en Ajustes del Sistema.
+
+**Windows.** Un paquete MSIX debe declarar la tarea de inicio en su
+manifiesto:
+
+```xml
+<Extensions>
+  <uap5:Extension Category="windows.startupTask">
+    <uap5:StartupTask TaskId="IstmoAutostart" Enabled="false" DisplayName="My App" />
+  </uap5:Extension>
+</Extensions>
+```
+
+Las apps sin paquete escriben un valor `Run` con el ejecutable entre
+comillas y los argumentos. El plugin nunca toca `StartupApproved\Run`:
+el interruptor del Administrador de tareas es del usuario.
+`open_settings` abre `ms-settings:startupapps`.
+
+**Linux.** El `Exec=` de la entrada `.desktop` se entrecomilla según la
+Desktop Entry Specification. Las AppImage registran `$APPIMAGE`, no el
+punto de montaje; un ejecutable del store de Nix registra el enlace de
+perfil que apunta a él (`~/.nix-profile/bin`,
+`/etc/profiles/per-user/$USER/bin`, `/run/current-system/sw/bin`), así
+las actualizaciones no rompen la entrada. En Flatpak el portal
+Background escribe la entrada del host; el portal no se puede consultar,
+así que `status` informa su última respuesta.
+
+## Tipos de wire
+
+<PluginTypes />

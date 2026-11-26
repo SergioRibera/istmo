@@ -1,0 +1,8 @@
+[plugin]
+id = "istmo.autostart"
+client_type = "::istmo_autostart::AutostartClient"
+default_deployment = "local"
+# Android has no "start my UI at login" and iOS / the web have nothing:
+# no Kotlin / Swift is generated; mobile apps register
+# `UnavailableAutostart` from Rust.
+targets = ["desktop"]
