@@ -691,3 +691,153 @@ fn a_backend_outside_auto_is_reachable_only_by_name() {
     let fixed = ScreenshotRequest::default().backend(BackendSelection::Fixed(WLR));
     block(rig.client.screenshot_cpu(fixed, PixelLayout::default())).expect("by name");
 }
+
+fn secret_token() -> RestoreToken {
+    RestoreToken {
+        value: "secret-portal-token".into(),
+        backend: WLR,
+        plugin_version: crate::types::RESTORE_TOKEN_VERSION,
+    }
+}
+
+/// An engine over one fake backend that hands out a restore token.
+fn token_engine() -> (Arc<Runtime>, Engine) {
+    let mut fake = Fake::new(WLR, two_monitors());
+    fake.restore_token = Some(secret_token());
+    let engine = Engine::new(
+        vec![Arc::new(fake)],
+        None,
+        Vec::new(),
+        vec![WLR],
+        None,
+        CapturePolicy::default(),
+    );
+    (Runtime::mock().runtime, engine)
+}
+
+fn open_on(
+    runtime: &Arc<Runtime>,
+    engine: &Engine,
+    origin: CallOrigin,
+) -> (
+    crate::types::CaptureSession,
+    istmo_core::FrameSink<crate::types::FrameMeta>,
+) {
+    let sink = runtime.open_frame_sink(SinkPolicy::queue(2)).expect("sink");
+    let sender = runtime.frame_sender(sink.id()).expect("sender");
+    let session = engine
+        .open(
+            runtime,
+            &SessionConfig::default().fps(FrameRate::Native),
+            &sender,
+            None,
+            origin,
+        )
+        .expect("open");
+    (session, sink)
+}
+
+fn drain_events(
+    rx: &flume::Receiver<Result<CaptureEvent, CaptureError>>,
+) -> Vec<Result<CaptureEvent, CaptureError>> {
+    std::iter::from_fn(|| rx.recv_timeout(Duration::from_millis(50)).ok()).collect()
+}
+
+#[test]
+fn restore_tokens_never_travel_in_events() {
+    let (runtime, engine) = token_engine();
+    let (session, _sink) = open_on(&runtime, &engine, CallOrigin::Local);
+    assert!(
+        session.negotiated.restore_token.is_some(),
+        "the opener gets its token once"
+    );
+    engine
+        .update(session.session, &SessionUpdate::Pause, CallOrigin::Local)
+        .expect("update");
+    let events = drain_events(&engine.events(session.session, CallOrigin::Local));
+    assert!(!events.is_empty());
+    for event in events {
+        match event.expect("event") {
+            CaptureEvent::Started(stream) | CaptureEvent::Renegotiated(stream) => {
+                assert!(stream.restore_token.is_none(), "{stream:?}");
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn sessions_answer_only_the_origin_that_opened_them() {
+    let (runtime, engine) = token_engine();
+    let (session, _sink) = open_on(&runtime, &engine, CallOrigin::Local);
+    let id = session.session;
+    for origin in [CallOrigin::Peer, CallOrigin::Remote] {
+        assert_eq!(
+            engine
+                .update(id, &SessionUpdate::Pause, origin)
+                .expect_err("foreign update"),
+            CaptureError::OriginRefused
+        );
+        assert_eq!(
+            engine.close(id, origin).expect_err("foreign close"),
+            CaptureError::OriginRefused
+        );
+        let refused = drain_events(&engine.events(id, origin));
+        assert_eq!(refused, vec![Err(CaptureError::OriginRefused)]);
+    }
+    engine
+        .close(id, CallOrigin::Local)
+        .expect("the opener closes");
+}
+
+#[test]
+fn events_stay_local_whatever_the_policy() {
+    let policy = CapturePolicy::default().with_remote_method("events");
+    assert!(!policy.admits_remote("events"));
+}
+
+#[test]
+fn session_ids_are_not_sequential() {
+    let (runtime, engine) = token_engine();
+    let (a, _sa) = open_on(&runtime, &engine, CallOrigin::Local);
+    let (b, _sb) = open_on(&runtime, &engine, CallOrigin::Local);
+    assert!(a.session.is_rust_allocated() && b.session.is_rust_allocated());
+    assert_ne!(a.session.0.abs_diff(b.session.0), 1, "{a:?} {b:?}");
+    let next = runtime.alloc_native_handle_id();
+    assert!(
+        a.session.0 > next.0 && b.session.0 > next.0,
+        "away from the runtime counter"
+    );
+}
+
+#[test]
+fn remote_streams_carry_no_titles_or_tokens() {
+    let (runtime, engine) = token_engine();
+    let (session, _sink) = open_on(&runtime, &engine, CallOrigin::Remote);
+    let stream = session.negotiated;
+    assert!(stream.restore_token.is_none());
+    assert!(stream.source.name.is_empty());
+    assert!(stream.source.app_id.is_none() && stream.source.pid.is_none());
+    let (local, _sink) = open_on(&runtime, &engine, CallOrigin::Local);
+    assert_eq!(local.negotiated.source.name, "OUT-0");
+}
+
+#[test]
+fn every_subscriber_learns_the_negotiated_stream() {
+    let (runtime, engine) = token_engine();
+    let (session, _sink) = open_on(&runtime, &engine, CallOrigin::Local);
+    let first = drain_events(&engine.events(session.session, CallOrigin::Local));
+    assert!(matches!(first.first(), Some(Ok(CaptureEvent::Started(_)))));
+    // Push the `Started` out of the replay window.
+    for _ in 0..100 {
+        engine
+            .update(session.session, &SessionUpdate::Pause, CallOrigin::Local)
+            .expect("update");
+    }
+    let second = drain_events(&engine.events(session.session, CallOrigin::Local));
+    assert!(
+        matches!(second.first(), Some(Ok(CaptureEvent::Started(stream))) if stream.restore_token.is_none()),
+        "{:?}",
+        second.first()
+    );
+}

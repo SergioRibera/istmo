@@ -46,6 +46,8 @@ pub(crate) struct Fake {
     /// After `frames`, fail with `SourceLost` (else go idle).
     pub(crate) lose_source: bool,
     pub(crate) joins_auto: bool,
+    /// Returned in every negotiated stream, like a portal token.
+    pub(crate) restore_token: Option<crate::types::RestoreToken>,
 }
 
 pub(crate) fn monitor(id: BackendId, index: usize, geometry: Rect, scale: u32) -> Source {
@@ -75,6 +77,7 @@ impl Fake {
             frames: 0,
             lose_source: true,
             joins_auto: true,
+            restore_token: None,
         }
     }
 
@@ -112,7 +115,7 @@ impl Fake {
             consent: ConsentModel::NoneNeeded,
             indicator: IndicatorState::NotApplicable,
             border: BorderState::NotApplicable,
-            restore_token: None,
+            restore_token: self.restore_token.clone(),
             restored: false,
             audio: None,
         }

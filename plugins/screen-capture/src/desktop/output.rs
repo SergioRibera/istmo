@@ -21,7 +21,7 @@ use crate::pixels::OrientationMap;
 use crate::pool::Exhausted;
 use crate::types::{
     AudioMeta, BackendId, CaptureError, CaptureEvent, Damage, Exhaustion, ExhaustionReport,
-    FrameMeta, FrameRate, Rect, StopReason,
+    FrameMeta, FrameRate, NegotiatedStream, Rect, StopReason,
 };
 
 use super::clock;
@@ -31,7 +31,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Events kept for a session nobody subscribed to yet.
+/// Events kept for replay to every new subscriber (the newest ones).
 const BACKLOG: usize = 64;
 /// Events queued per subscriber before new ones are dropped.
 const SUBSCRIBER_DEPTH: usize = 256;
@@ -40,31 +40,43 @@ type EventItem = Result<CaptureEvent, CaptureError>;
 
 #[derive(Debug, Default)]
 struct HubState {
+    /// The stream as last announced by an event that already left the
+    /// backlog, replayed as `Started` so a late subscriber still learns
+    /// what the session negotiated.
+    baseline: Option<NegotiatedStream>,
     backlog: VecDeque<CaptureEvent>,
     subscribers: Vec<flume::Sender<EventItem>>,
     ended: bool,
 }
 
-/// A session's event fan-out. Events emitted before the first
-/// subscriber are kept (the newest [`BACKLOG`]) and replayed to it.
+/// A session's event fan-out. Every subscriber first receives the
+/// session's state so far (the newest [`BACKLOG`] events, preceded by
+/// `Started` with the last stream announced before them), then live
+/// events.
+///
+/// Restore tokens never travel in events: they are returned once, by
+/// the `open` call that produced them.
 #[derive(Debug, Default)]
 pub(crate) struct EventHub {
     state: Mutex<HubState>,
 }
 
 impl EventHub {
-    pub(crate) fn emit(&self, event: CaptureEvent) {
+    pub(crate) fn emit(&self, mut event: CaptureEvent) {
+        if let CaptureEvent::Started(stream) | CaptureEvent::Renegotiated(stream) = &mut event {
+            stream.restore_token = None;
+        }
         let mut state = lock(&self.state);
         if state.ended {
             return;
         }
-        if state.subscribers.is_empty() {
-            if state.backlog.len() == BACKLOG {
-                state.backlog.pop_front();
-            }
-            state.backlog.push_back(event);
-            return;
+        if state.backlog.len() == BACKLOG
+            && let Some(CaptureEvent::Started(stream) | CaptureEvent::Renegotiated(stream)) =
+                state.backlog.pop_front()
+        {
+            state.baseline = Some(stream);
         }
+        state.backlog.push_back(event.clone());
         state
             .subscribers
             .retain(|tx| match tx.try_send(Ok(event.clone())) {
@@ -77,13 +89,16 @@ impl EventHub {
             });
     }
 
-    /// A new subscriber, starting with the backlog. After the session
-    /// ended the stream completes once the backlog is read.
+    /// A new subscriber, starting with the session's state so far. After
+    /// the session ended the stream completes once that is read.
     pub(crate) fn subscribe(&self) -> flume::Receiver<EventItem> {
         let (tx, rx) = flume::bounded(SUBSCRIBER_DEPTH);
         let mut state = lock(&self.state);
-        for event in state.backlog.drain(..) {
-            let _queued = tx.try_send(Ok(event));
+        if let Some(stream) = &state.baseline {
+            let _queued = tx.try_send(Ok(CaptureEvent::Started(stream.clone())));
+        }
+        for event in &state.backlog {
+            let _queued = tx.try_send(Ok(event.clone()));
         }
         if !state.ended {
             state.subscribers.push(tx);

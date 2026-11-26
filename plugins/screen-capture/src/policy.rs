@@ -4,8 +4,9 @@
 use crate::types::BackendId;
 
 /// Methods that stay same-process whatever the policy says: they move
-/// sinks, grants or restore tokens.
-const ALWAYS_LOCAL: [&str; 6] = [
+/// sinks, grants or restore tokens, or watch a session (`events`).
+const ALWAYS_LOCAL: [&str; 7] = [
+    "events",
     "screenshot",
     "open",
     "open_with_audio",

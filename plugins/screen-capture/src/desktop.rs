@@ -239,7 +239,8 @@ impl ScreenCapture for DesktopCapture {
     async fn close(&self, ctx: HostCtx, session: NativeHandleId) -> Result<(), CaptureError> {
         self.admit(&ctx, "close")?;
         let engine = self.engine();
-        offload("close", move || engine.close(session)).await
+        let origin = ctx.origin();
+        offload("close", move || engine.close(session, origin)).await
     }
 
     fn events(
@@ -252,6 +253,6 @@ impl ScreenCapture for DesktopCapture {
             let _queued = tx.try_send(Err(err));
             return rx;
         }
-        self.engine.events(session)
+        self.engine.events(session, ctx.origin())
     }
 }

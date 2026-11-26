@@ -3,6 +3,9 @@
 //! the session table.
 
 use std::collections::HashMap;
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher as _;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -40,6 +43,9 @@ const PROBE_TTL: Duration = Duration::from_secs(5);
 
 struct SessionEntry {
     backend: BackendId,
+    /// Who opened the session: only callers of the same origin may
+    /// update, close or watch it.
+    opener: CallOrigin,
     out: FrameOut,
     events: Arc<EventHub>,
     state: Mutex<EntryState>,
@@ -77,6 +83,10 @@ pub(crate) struct Engine {
     sessions: Arc<Mutex<HashMap<NativeHandleId, Arc<SessionEntry>>>>,
     hook_installed: OnceLock<()>,
     probed: Mutex<Option<(Instant, Vec<Candidate>)>>,
+    /// Keyed hash session ids are drawn from: random per engine, so ids
+    /// cannot be guessed from the ones a caller already saw.
+    ids: RandomState,
+    draws: AtomicU64,
 }
 
 impl std::fmt::Debug for Engine {
@@ -140,6 +150,8 @@ impl Engine {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             hook_installed: OnceLock::new(),
             probed: Mutex::new(None),
+            ids: RandomState::new(),
+            draws: AtomicU64::new(0),
         }
     }
 
@@ -796,9 +808,7 @@ impl Engine {
     ) -> Result<ScreenshotInfo, CaptureError> {
         let (shot, region, _) = self.shoot(request, false)?;
         let (frames, mut negotiated) = Self::finish(request, shot, region)?;
-        if origin == CallOrigin::Remote {
-            negotiated.restore_token = None;
-        }
+        redact_for(origin, &mut negotiated);
         let count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
         for frame in frames {
             let mut meta = frame.meta;
@@ -918,14 +928,12 @@ impl Engine {
                 }
             }
         }
-        if origin == CallOrigin::Remote {
-            negotiated.restore_token = None;
-        }
+        redact_for(origin, &mut negotiated);
         self.install_release_hook(runtime);
-        let id = runtime.alloc_native_handle_id();
         out.event(CaptureEvent::Started(negotiated.clone()));
         let entry = Arc::new(SessionEntry {
             backend: backend_id,
+            opener: origin,
             out,
             events,
             state: Mutex::new(EntryState {
@@ -935,7 +943,7 @@ impl Engine {
                 source,
             }),
         });
-        lock(&self.sessions).insert(id, entry);
+        let id = self.insert(entry);
         Ok(CaptureSession {
             session: id,
             negotiated,
@@ -1081,11 +1089,39 @@ impl Engine {
         Ok((id, session, negotiated, out, events, captured))
     }
 
-    fn entry(&self, id: NativeHandleId) -> Result<Arc<SessionEntry>, CaptureError> {
-        lock(&self.sessions)
+    /// Store `entry` under a fresh unguessable id: random, with the two
+    /// high bits set so it stays in the Rust-allocated range and away
+    /// from the runtime's own counter.
+    fn insert(&self, entry: Arc<SessionEntry>) -> NativeHandleId {
+        const HIGH: u64 = 0b11 << 62;
+        let mut sessions = lock(&self.sessions);
+        let id = loop {
+            let draw = self.draws.fetch_add(1, Ordering::Relaxed);
+            let id = NativeHandleId(self.ids.hash_one(draw) | HIGH);
+            if let std::collections::hash_map::Entry::Vacant(slot) = sessions.entry(id) {
+                slot.insert(entry);
+                break id;
+            }
+        };
+        drop(sessions);
+        id
+    }
+
+    /// The session `id`, for a caller of the origin that opened it.
+    fn entry(
+        &self,
+        id: NativeHandleId,
+        origin: CallOrigin,
+    ) -> Result<Arc<SessionEntry>, CaptureError> {
+        let entry = lock(&self.sessions)
             .get(&id)
             .cloned()
-            .ok_or(CaptureError::SessionNotFound)
+            .ok_or(CaptureError::SessionNotFound)?;
+        if entry.opener == origin {
+            Ok(entry)
+        } else {
+            Err(CaptureError::OriginRefused)
+        }
     }
 
     pub(crate) fn update(
@@ -1094,7 +1130,7 @@ impl Engine {
         update: &SessionUpdate,
         origin: CallOrigin,
     ) -> Result<NegotiatedStream, CaptureError> {
-        let entry = self.entry(id)?;
+        let entry = self.entry(id, origin)?;
         let mut state = lock(&entry.state);
         match update {
             SessionUpdate::Fps(fps) => {
@@ -1164,16 +1200,13 @@ impl Engine {
         entry
             .out
             .event(CaptureEvent::Renegotiated(negotiated.clone()));
-        if origin == CallOrigin::Remote {
-            negotiated.restore_token = None;
-        }
+        redact_for(origin, &mut negotiated);
         Ok(negotiated)
     }
 
-    pub(crate) fn close(&self, id: NativeHandleId) -> Result<(), CaptureError> {
-        let entry = lock(&self.sessions)
-            .remove(&id)
-            .ok_or(CaptureError::SessionNotFound)?;
+    pub(crate) fn close(&self, id: NativeHandleId, origin: CallOrigin) -> Result<(), CaptureError> {
+        self.entry(id, origin)?;
+        let entry = lock(&self.sessions).remove(&id);
         drop(entry);
         Ok(())
     }
@@ -1181,8 +1214,9 @@ impl Engine {
     pub(crate) fn events(
         &self,
         id: NativeHandleId,
+        origin: CallOrigin,
     ) -> flume::Receiver<Result<CaptureEvent, CaptureError>> {
-        match self.entry(id) {
+        match self.entry(id, origin) {
             Ok(entry) => entry.events.subscribe(),
             Err(err) => {
                 let (tx, rx) = flume::bounded(1);
@@ -1197,5 +1231,21 @@ impl Drop for Engine {
     fn drop(&mut self) {
         let sessions: Vec<_> = lock(&self.sessions).drain().collect();
         drop(sessions);
+    }
+}
+
+/// What a caller of `origin` may see of a negotiated stream: restore
+/// tokens and the captured source's title, app id and pid stay in this
+/// process (titles and pids are why `sources` is local by default).
+fn redact_for(origin: CallOrigin, negotiated: &mut NegotiatedStream) {
+    match origin {
+        CallOrigin::Local | CallOrigin::Peer => {}
+        // Remote, and any origin added later.
+        _ => {
+            negotiated.restore_token = None;
+            negotiated.source.name.clear();
+            negotiated.source.app_id = None;
+            negotiated.source.pid = None;
+        }
     }
 }
