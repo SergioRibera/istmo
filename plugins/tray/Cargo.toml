@@ -1,0 +1,54 @@
+[package]
+name = "istmo-tray"
+version = "0.1.1-alpha.7"
+description = "Desktop tray icons for the istmo framework: status items with menus and static or animated icons on Linux (StatusNotifierItem), Windows and macOS, and the favicon on the web."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+include = ["/src", "/build.rs", "/istmo.toml", "/README.md", "/LICENSE*"]
+keywords = ["istmo", "tray", "systray", "status-icon", "menu"]
+categories = ["gui", "os"]
+links = "istmo_tray"
+
+[features]
+default = ["svg", "jpeg"]
+# SVG icons, rasterised at the size each host asks for.
+svg = ["dep:resvg"]
+# JPEG icons.
+jpeg = ["dep:zune-jpeg"]
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+istmo-menu = { workspace = true }
+flume = { workspace = true }
+oneshot = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# PNG is always on: dbusmenu item icons are PNG bytes.
+png = "0.18"
+flume = { workspace = true }
+# No text (fontdb) and no embedded raster images: icons are shapes.
+resvg = { version = "0.47", default-features = false, optional = true }
+zune-jpeg = { version = "0.5", default-features = false, features = ["std"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+pollster = { workspace = true }
+png = "0.18"
+flume = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+
+[lints]
+workspace = true

@@ -14,6 +14,14 @@
   (SVG / PNG / JPEG / platform names, inline or registered), patches,
   validation, automatic check toggling and radio exclusivity, and a diff
   that turns a replacement menu into property patches when nothing moved.
+- `istmo-tray` plugin (`istmo.tray`, desktop and web targets): tray items
+  with an `istmo-menu` menu, static or animated SVG / PNG / JPEG icons
+  (decoded once with `register_icon`), title, tooltip, visibility and an
+  event stream (clicks, scroll, menu open / close, item activation,
+  check / radio changes, tray host presence). Changes coalesce per item.
+  Linux backend: `StatusNotifierItem` + `com.canonical.dbusmenu` over
+  zbus, one bus connection per item, re-registration when the watcher
+  comes back. `UnavailableTray` for Android / iOS.
 - `istmo-screen-capture` plugin (`istmo.screen_capture`): screenshots
   (frames into a sink, or raw pixels with `screenshot_pixels`, never
   encoded; multi-monitor CPU composite) and live sessions into frame

@@ -1,0 +1,7 @@
+[plugin]
+id = "istmo.tray"
+client_type = "::istmo_tray::TrayClient"
+default_deployment = "local"
+# Hosted in Rust on every target it runs on: nothing to generate for
+# Android or iOS.
+targets = ["desktop", "web"]
