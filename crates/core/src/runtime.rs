@@ -1641,8 +1641,8 @@ impl Runtime {
             Either::Left(Ok(sent)) => sent,
             Either::Left(Err(_)) => Err(IstmoError::ChannelClosed),
             Either::Right(()) if self.spill.withdraw(&ticket) => on_stop,
-            // Already taken by the queue's drain, which gives up at
-            // shutdown too: its verdict comes right away.
+            // Already taken by the queue's drain, which after shutdown
+            // only tries for a short flush window: its verdict comes soon.
             Either::Right(()) if matches!(wait, Wait::Block) => {
                 ticket.done.await.unwrap_or(Err(IstmoError::ChannelClosed))
             }
@@ -2451,7 +2451,9 @@ impl Runtime {
     /// closes (queued frames are released), and the remote and
     /// instance tables are cleared. The outbound channel itself stays
     /// open until the runtime is dropped, so frames already queued still
-    /// reach a transport that keeps draining.
+    /// reach a transport that keeps draining; frames queued behind a
+    /// full channel (see the type's `# Threads`) get half a second more to
+    /// go out, then are dropped.
     ///
     /// Host threads still running finish on their own: their responses
     /// to other runtimes are discarded, and their streams stop at the

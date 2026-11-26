@@ -328,3 +328,62 @@ fn a_cancel_is_never_dropped_on_a_full_channel() {
     drop(call);
     assert_eq!(drained_after_fill(&init, 2), ["dropped", "cancel"]);
 }
+
+#[test]
+fn frames_queued_before_shutdown_reach_a_transport_that_keeps_draining() {
+    let init = Runtime::mock();
+    fill(&init);
+    let queued = 100;
+    let runtime = Arc::clone(&init.runtime);
+    on_thread(move || {
+        let _scope = DeliveryScope::enter();
+        for _ in 0..queued {
+            runtime
+                .notify("peer.p", None, "queued", Vec::new())
+                .expect("queued");
+        }
+    });
+    init.runtime.shutdown();
+    let order = drained_after_fill(&init, queued);
+    assert!(order.iter().all(|method| method == "queued"));
+    assert_eq!(init.runtime.outbound_spill().queued, 0);
+}
+
+#[test]
+fn shutdown_lets_the_channel_close_once_queued_frames_had_their_chance() {
+    let RuntimeInit { runtime, outbound } = Runtime::mock();
+    for _ in 0..DEFAULT_OUTBOUND_CAPACITY {
+        runtime
+            .notify("peer.p", None, "fill", Vec::new())
+            .expect("room");
+    }
+    let sender = Arc::clone(&runtime);
+    on_thread(move || {
+        let _scope = DeliveryScope::enter();
+        for _ in 0..10 {
+            sender
+                .notify("peer.p", None, "queued", Vec::new())
+                .expect("queued");
+        }
+    });
+    // The transport takes nothing for longer than the flush window.
+    runtime.shutdown();
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        runtime.outbound_spill().queued,
+        0,
+        "dropped after the window"
+    );
+    drop(runtime);
+    let mut frames = 0;
+    loop {
+        match outbound.recv_timeout(Duration::from_secs(5)) {
+            Ok(_) => frames += 1,
+            Err(flume::RecvTimeoutError::Disconnected) => break,
+            Err(flume::RecvTimeoutError::Timeout) => {
+                panic!("the queue's drain kept the channel open")
+            }
+        }
+    }
+    assert_eq!(frames, DEFAULT_OUTBOUND_CAPACITY);
+}

@@ -22,6 +22,13 @@
 //! worth of frames it logs a warning (at most every [`WARN_EVERY`]), and
 //! [`SpillStats`] counts what it holds.
 //!
+//! At shutdown, frames queued without a waiting sender (whose send
+//! already returned) get [`SHUTDOWN_FLUSH`] more to reach a transport
+//! that keeps draining; whatever is left then is dropped and the drain
+//! exits, so it never holds the channel open after shutdown. A sender
+//! still waiting on its frame takes it back and fails, as any blocking
+//! send does at shutdown.
+//!
 //! [`DeliveryScope`]: super::DeliveryScope
 
 use std::collections::VecDeque;
@@ -52,6 +59,10 @@ const FIRST_SLICE: Duration = Duration::from_millis(5);
 /// The longest slice of a wait for room.
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 const MAX_SLICE: Duration = Duration::from_millis(250);
+
+/// How long queued frames may still wait for room after shutdown.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+const SHUTDOWN_FLUSH: Duration = Duration::from_millis(500);
 
 /// Queued frames, in channel capacities, from which the queue warns.
 const HIGH_WATER: usize = 4;
@@ -100,6 +111,9 @@ struct Queue {
     /// A drain runs, or lingers for more frames.
     draining: bool,
     last_warning: Option<Instant>,
+    /// Shut down: until when queued frames may still wait for room.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    flush_until: Option<Instant>,
 }
 
 struct Queued {
@@ -209,13 +223,36 @@ impl Spill {
         true
     }
 
-    /// The runtime shut down: wake a lingering drain so it exits now
-    /// instead of holding the channel open.
+    /// The runtime shut down (its token is cancelled): start the flush
+    /// window, and wake a lingering drain so it exits now instead of
+    /// holding the channel open.
     pub(super) fn stop(&self) {
         // Under the lock: a drain about to wait has either seen the
         // shutdown or is waiting already.
-        let _queue = lock(&self.queue);
+        #[cfg_attr(
+            all(target_arch = "wasm32", target_os = "unknown"),
+            allow(unused_mut, reason = "the flush window needs the drain thread")
+        )]
+        let mut queue = lock(&self.queue);
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        queue
+            .flush_until
+            .get_or_insert_with(|| Instant::now() + SHUTDOWN_FLUSH);
         self.wake.notify_all();
+        drop(queue);
+    }
+
+    /// Shut down: until when queued frames may still wait for room.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    fn flush_deadline(&self) -> Option<Instant> {
+        if !self.stopped.is_cancelled() {
+            return None;
+        }
+        Some(
+            *lock(&self.queue)
+                .flush_until
+                .get_or_insert_with(|| Instant::now() + SHUTDOWN_FLUSH),
+        )
     }
 
     fn start_drain(self: &Arc<Self>) {
@@ -290,7 +327,7 @@ impl Spill {
     }
 
     /// Like a blocking send: room first, shut down or not; then wait for
-    /// room until shutdown.
+    /// room, after shutdown only until the flush window closes.
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     fn send_waiting(&self, envelope: Envelope) -> Sent {
         let mut envelope = match self.outbound.try_send(envelope) {
@@ -300,10 +337,13 @@ impl Spill {
         };
         let mut slice = FIRST_SLICE;
         loop {
-            if self.stopped.is_cancelled() {
-                return Err(IstmoError::RuntimeShutDown);
-            }
-            match self.outbound.send_timeout(envelope, slice) {
+            let now = Instant::now();
+            let until = match self.flush_deadline() {
+                Some(closed) if closed <= now => return Err(IstmoError::RuntimeShutDown),
+                Some(closes) => closes.min(now + slice),
+                None => now + slice,
+            };
+            match self.outbound.send_deadline(envelope, until) {
                 Ok(()) => return Ok(true),
                 Err(SendTimeoutError::Disconnected(_)) => return Err(IstmoError::ChannelClosed),
                 Err(SendTimeoutError::Timeout(back)) => envelope = back,
