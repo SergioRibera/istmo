@@ -17,7 +17,7 @@ use istmo_core::{
 };
 use istmo_screen_capture::{
     BackendCaps, BackendId, BackendSelection, CapabilityQuery, CaptureError, CaptureEvent,
-    CopyStage, DesktopCapture, Exhaustion, FrameRate, PixelLayout, Requirement, RestoreToken,
+    CopyStage, DesktopCapture, Exhaustion, FrameRate, PixelLayout, RestoreToken,
     ScreenCaptureClient, ScreenCaptureClientExt, ScreenCaptureHost, ScreenshotRequest,
     SessionConfig, SourceFilter,
 };

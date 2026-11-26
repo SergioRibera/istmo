@@ -255,9 +255,12 @@ fn dma_buf_stream(live: &common::Live, backend: BackendId, sync: SyncKind, poke:
     );
     block(session.close()).expect("close");
     assert!(!negotiated.copies.contains(&CopyStage::ShmTransport));
+    dma_buf_readback(live, backend, poke);
+}
 
-    // CopyToCpu on DMA-BUF: past the hold limit the compositor reads the
-    // frame back into `wl_shm`; nothing maps the tiled buffer.
+/// `CopyToCpu` on DMA-BUF: past the hold limit the compositor reads the
+/// frame back into `wl_shm`; nothing maps the tiled buffer.
+fn dma_buf_readback(live: &common::Live, backend: BackendId, poke: &dyn Fn()) {
     let config = SessionConfig::default()
         .backend(fixed(backend))
         .fps(FrameRate::Native)
