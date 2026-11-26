@@ -17,7 +17,7 @@ use istmo_core::{
 };
 use istmo_screen_capture::{
     BackendCaps, BackendId, BackendSelection, CapabilityQuery, CaptureError, CaptureEvent,
-    DesktopCapture, Exhaustion, FrameRate, PixelLayout, Requirement, RestoreToken,
+    CopyStage, DesktopCapture, Exhaustion, FrameRate, PixelLayout, Requirement, RestoreToken,
     ScreenCaptureClient, ScreenCaptureClientExt, ScreenCaptureHost, ScreenshotRequest,
     SessionConfig, SourceFilter,
 };
@@ -200,41 +200,39 @@ pub fn checklist(live: &Live, scene: &Scene) {
         assert!(resumed, "Stall resumes on release");
     }
 
-    // CopyToCpu keeps frames flowing, or is refused by name.
+    // CopyToCpu keeps frames flowing while the consumer holds every
+    // buffer it may: past the hold limit, frames are read back.
     {
         let config = SessionConfig::default()
             .backend(fixed(backend))
             .fps(FrameRate::Native)
             .pool_depth(3)
             .exhaustion(Exhaustion::CopyToCpu);
-        match block(
+        let session = block(
             live.client
                 .open_session(&live.runtime, config, SinkPolicy::queue(64)),
-        ) {
-            Ok(session) => {
-                let mut held = Vec::new();
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while held.len() < 6 && Instant::now() < deadline {
-                    (scene.poke)();
-                    if let Some(frame) = session.video().try_recv() {
-                        held.push(frame);
-                    }
-                    std::thread::sleep(Duration::from_millis(20));
+        )
+        .expect("CopyToCpu");
+        {
+            let mut held = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while held.len() < 6 && Instant::now() < deadline {
+                (scene.poke)();
+                if let Some(frame) = session.video().try_recv() {
+                    held.push(frame);
                 }
-                assert_eq!(
-                    held.len(),
-                    6,
-                    "frames keep flowing while every buffer is held"
-                );
-                assert!(
-                    held.iter().any(|f| f.meta.copied.is_some()),
-                    "read-back frames are marked"
-                );
+                std::thread::sleep(Duration::from_millis(20));
             }
-            Err(CaptureError::Unsatisfiable(unmet)) => {
-                assert_eq!(unmet.requirements, [Requirement::ExhaustionReadback]);
-            }
-            Err(err) => panic!("CopyToCpu: {err}"),
+            assert_eq!(
+                held.len(),
+                6,
+                "frames keep flowing while every buffer is held"
+            );
+            assert!(
+                held.iter()
+                    .any(|f| f.meta.copied == Some(CopyStage::ExhaustionReadback)),
+                "read-back frames are marked"
+            );
         }
     }
 

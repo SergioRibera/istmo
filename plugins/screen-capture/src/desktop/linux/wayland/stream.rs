@@ -158,6 +158,8 @@ pub(crate) struct Engine<S> {
     shm: Slots<ShmKey, ShmBuffer>,
     /// The reused `CopyToCpu` target at the hold limit.
     scratch: Option<(ShmKey, ShmBuffer)>,
+    /// The `wl_shm` format a DMA-BUF session reads back through.
+    readback_code: Option<u32>,
     rejected: u32,
     /// A `CopyToCpu` exhaustion to report (frames still flowed).
     pub(crate) readback_episode: Option<crate::pool::Exhausted>,
@@ -221,12 +223,30 @@ impl<S: FrameSource> Engine<S> {
         let candidates = offers.as_select(allocator.is_some() && !cpu_only);
         let chosen = select::negotiate(&settings.formats, &candidates, 0)
             .ok_or_else(|| CaptureError::unsatisfiable(Some(backend), Requirement::Formats))?;
-        if chosen.memory == BufferMemory::DmaBuf && settings.exhaustion == Exhaustion::CopyToCpu {
-            return Err(CaptureError::unsatisfiable(
-                Some(backend),
-                Requirement::ExhaustionReadback,
-            ));
-        }
+        let readback_code = if chosen.memory == BufferMemory::DmaBuf
+            && settings.exhaustion == Exhaustion::CopyToCpu
+        {
+            // The compositor reads the frame back into `wl_shm`: same
+            // format when it offers it, else any format the CPU reads.
+            let code = offers
+                .shm
+                .iter()
+                .map(|(code, _)| *code)
+                .find(|code| shm_format(*code) == Some(chosen.format))
+                .or_else(|| {
+                    offers
+                        .shm
+                        .iter()
+                        .map(|(code, _)| *code)
+                        .find(|code| shm_format(*code).is_some())
+                })
+                .ok_or_else(|| {
+                    CaptureError::unsatisfiable(Some(backend), Requirement::ExhaustionReadback)
+                })?;
+            Some(code)
+        } else {
+            None
+        };
         let transport = chosen_transport(&chosen, &offers)
             .ok_or_else(|| CaptureError::unsatisfiable(Some(backend), Requirement::Formats))?;
         let depth = usize::from(settings.pool_depth.max(2));
@@ -238,6 +258,7 @@ impl<S: FrameSource> Engine<S> {
             dma: Slots::new(depth),
             shm: Slots::new(depth),
             scratch: None,
+            readback_code,
             settings,
             transport,
             chosen,
@@ -375,9 +396,8 @@ impl<S: FrameSource> Engine<S> {
         if self.source.lost(&self.client) {
             return Err(CaptureError::SourceLost);
         }
-        let readback = matches!(self.transport, Transport::Shm { .. })
-            && self.settings.exhaustion == Exhaustion::CopyToCpu;
-        if !readback {
+        // CopyToCpu reads back at the hold limit instead of stalling.
+        if self.settings.exhaustion != Exhaustion::CopyToCpu {
             let accounting = match self.transport {
                 Transport::Dmabuf { .. } => self.dma.accounting(),
                 Transport::Shm { .. } => self.shm.accounting(),
@@ -416,6 +436,9 @@ impl<S: FrameSource> Engine<S> {
         let slot = match self.dma.pick() {
             Pick::Free(slot) => slot,
             Pick::Exhausted(exhausted) => {
+                if let Some(code) = self.readback_code {
+                    return self.readback_frame(offers, code, exhausted, with_damage, stop);
+                }
                 self.source.abandon();
                 return Ok(Step::Exhausted(exhausted));
             }

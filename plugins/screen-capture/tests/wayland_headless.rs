@@ -255,6 +255,54 @@ fn dma_buf_stream(live: &common::Live, backend: BackendId, sync: SyncKind, poke:
     );
     block(session.close()).expect("close");
     assert!(!negotiated.copies.contains(&CopyStage::ShmTransport));
+
+    // CopyToCpu on DMA-BUF: past the hold limit the compositor reads the
+    // frame back into `wl_shm`; nothing maps the tiled buffer.
+    let config = SessionConfig::default()
+        .backend(fixed(backend))
+        .fps(FrameRate::Native)
+        .pool_depth(3)
+        .exhaustion(istmo_screen_capture::Exhaustion::CopyToCpu)
+        .formats(FormatRequest {
+            tiers: vec![FormatTier::new(
+                [PixelFormat::Bgrx8, PixelFormat::Bgra8]
+                    .into_iter()
+                    .map(|f| FormatChoice::dmabuf(f, Vec::new()))
+                    .collect(),
+            )],
+        });
+    let session = block(
+        live.client
+            .open_session(&live.runtime, config, SinkPolicy::queue(64)),
+    )
+    .expect("DMA-BUF with CopyToCpu");
+    let mut held = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while held.len() < 6 && std::time::Instant::now() < deadline {
+        poke();
+        if let Some(frame) = session.video().try_recv() {
+            held.push(frame);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        held.len(),
+        6,
+        "{backend}: frames flow while every buffer is held"
+    );
+    assert!(
+        held.iter()
+            .take(2)
+            .all(|f| f.buffer.kind() == MemoryKind::DmaBuf)
+    );
+    let readback = held
+        .iter()
+        .find(|f| f.meta.copied == Some(CopyStage::ExhaustionReadback))
+        .expect("read-back frames past the limit");
+    assert_eq!(readback.buffer.kind(), MemoryKind::Cpu);
+    assert_eq!(readback.meta.memory, BufferMemory::Cpu);
+    drop(held);
+    block(session.close()).expect("close");
 }
 
 #[test]
