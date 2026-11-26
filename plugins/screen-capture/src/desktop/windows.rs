@@ -27,6 +27,8 @@ mod common;
     )
 )]
 pub(crate) mod d3d;
+#[cfg(feature = "windows-gdi")]
+mod gdi;
 #[cfg_attr(
     not(all(
         feature = "windows-wgc",
@@ -87,6 +89,8 @@ pub(crate) fn backends() -> Vec<Arc<dyn Backend>> {
     os::ensure_mta();
     #[allow(unused_mut, reason = "empty when no Windows video feature is enabled")]
     let mut backends: Vec<Arc<dyn Backend>> = Vec::new();
+    #[cfg(feature = "windows-gdi")]
+    backends.push(gdi::backend());
     backends
 }
 
