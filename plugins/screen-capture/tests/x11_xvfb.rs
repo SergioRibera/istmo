@@ -280,7 +280,7 @@ fn x11_under_xvfb() {
 
     // The window goes away mid-stream: the sink ends with the reason.
     {
-        let config = SessionConfig::monitor(SourceSelector::Id(id))
+        let config = SessionConfig::monitor(id)
             .backend(fixed(X11))
             .fps(FrameRate::Native);
         let session = block(

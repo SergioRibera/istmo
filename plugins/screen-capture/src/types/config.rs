@@ -461,17 +461,31 @@ pub struct SessionConfig {
 impl SessionConfig {
     /// A session on `source`, defaults otherwise.
     #[must_use]
-    pub fn monitor(source: SourceSelector) -> Self {
+    pub fn of(source: SourceSelector) -> Self {
         Self {
             source,
             ..Self::default()
         }
     }
 
+    /// A session on the monitor `id` (from `sources`). An id that names a
+    /// window or an application is refused with
+    /// `Unsatisfiable(Kind(..))`.
+    #[must_use]
+    pub fn monitor(id: SourceId) -> Self {
+        Self::of(SourceSelector::Monitors(vec![id]))
+    }
+
+    /// A session on the primary monitor (the default source).
+    #[must_use]
+    pub fn primary_monitor() -> Self {
+        Self::of(SourceSelector::PrimaryMonitor)
+    }
+
     /// A session on whatever the person picks.
     #[must_use]
     pub fn picker() -> Self {
-        let mut config = Self::monitor(SourceSelector::Picker(PickerOptions::default()));
+        let mut config = Self::of(SourceSelector::Picker(PickerOptions::default()));
         config.consent.allow_picker = true;
         config
     }
@@ -479,7 +493,7 @@ impl SessionConfig {
     /// A session on a global-space region.
     #[must_use]
     pub fn region(rect: Rect) -> Self {
-        Self::monitor(SourceSelector::Region(RegionSelector {
+        Self::of(SourceSelector::Region(RegionSelector {
             rect,
             space: RegionSpace::Global,
         }))
@@ -536,6 +550,52 @@ impl SessionConfig {
         self.audio = Some(audio);
         self
     }
+
+    #[must_use]
+    pub fn source(mut self, source: SourceSelector) -> Self {
+        self.source = source;
+        self
+    }
+
+    /// CPU frames (packed RGB in shared memory, the producer's copy
+    /// allowed): what a consumer that reads `as_bytes` wants. The default
+    /// (an empty request) takes the backend's native memory, often a
+    /// DMA-BUF that only a GPU consumer can read.
+    #[must_use]
+    pub fn cpu_frames(mut self) -> Self {
+        self.video.formats = FormatRequest::cpu();
+        self
+    }
+
+    #[must_use]
+    pub const fn size(mut self, size: OutputSize) -> Self {
+        self.video.size = size;
+        self
+    }
+
+    #[must_use]
+    pub const fn damage(mut self, damage: Strength) -> Self {
+        self.video.damage = damage;
+        self
+    }
+
+    #[must_use]
+    pub const fn orientation(mut self, orientation: OrientationHandling) -> Self {
+        self.video.orientation = orientation;
+        self
+    }
+
+    #[must_use]
+    pub const fn gpu(mut self, gpu: GpuPreference) -> Self {
+        self.video.gpu = gpu;
+        self
+    }
+
+    #[must_use]
+    pub fn consent(mut self, consent: ConsentConfig) -> Self {
+        self.consent = consent;
+        self
+    }
 }
 
 /// A change to a running session.
@@ -588,6 +648,32 @@ impl ScreenshotRequest {
             source,
             ..Self::default()
         }
+    }
+
+    #[must_use]
+    pub fn formats(mut self, formats: FormatRequest) -> Self {
+        self.formats = formats;
+        self
+    }
+
+    #[must_use]
+    pub const fn cursor(mut self, cursor: CursorRequest) -> Self {
+        self.cursor = cursor;
+        self
+    }
+
+    #[must_use]
+    pub fn consent(mut self, consent: ConsentConfig) -> Self {
+        self.consent = consent;
+        self
+    }
+
+    /// Several monitors as one composite (`true`, the default) or one
+    /// frame each.
+    #[must_use]
+    pub const fn composite(mut self, composite: bool) -> Self {
+        self.composite = composite;
+        self
     }
 
     #[must_use]

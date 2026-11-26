@@ -362,7 +362,7 @@ fn an_unplugged_output_ends_the_session_with_source_lost() {
             .find(|s| s.id.value != "HEADLESS-1" && s.id.value != "HEADLESS-2")
             .expect("the created output")
             .clone();
-        let config = SessionConfig::monitor(SourceSelector::Id(extra.id.clone()))
+        let config = SessionConfig::monitor(extra.id.clone())
             .backend(fixed(backend))
             .fps(FrameRate::Native);
         let session = block(

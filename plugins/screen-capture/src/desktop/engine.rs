@@ -539,6 +539,12 @@ impl Engine {
                             .ok_or_else(|| CaptureError::SourceNotFound(wanted.clone()))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                if let Some(other) = sources.iter().find(|s| s.kind != SourceKind::Monitor) {
+                    return Err(CaptureError::unsatisfiable(
+                        Some(id),
+                        Requirement::Kind(other.kind),
+                    ));
+                }
                 Ok(Target::Sources {
                     sources,
                     region: None,

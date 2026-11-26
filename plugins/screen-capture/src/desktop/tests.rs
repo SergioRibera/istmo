@@ -450,7 +450,7 @@ fn a_lost_source_ends_the_sink_with_the_reason() {
 #[test]
 fn multi_monitor_streams_are_unsatisfiable_for_now() {
     let rig = rig();
-    let config = SessionConfig::monitor(SourceSelector::AllMonitors);
+    let config = SessionConfig::of(SourceSelector::AllMonitors);
     let err = block(
         rig.client
             .open_session(&rig.runtime, config, SinkPolicy::latest()),
@@ -464,7 +464,7 @@ fn multi_monitor_streams_are_unsatisfiable_for_now() {
         crate::types::AttemptFailure::Unsatisfiable(r) if r == &[Requirement::CompositeStreaming]
     ));
     let fixed =
-        SessionConfig::monitor(SourceSelector::AllMonitors).backend(BackendSelection::Fixed(WLR));
+        SessionConfig::of(SourceSelector::AllMonitors).backend(BackendSelection::Fixed(WLR));
     let err = block(
         rig.client
             .open_session(&rig.runtime, fixed, SinkPolicy::latest()),
@@ -1175,4 +1175,34 @@ fn a_vanished_source_invalidates_the_probe_cache() {
         2,
         "probed again after the outputs changed"
     );
+}
+
+#[test]
+fn monitor_sessions_refuse_a_window_id() {
+    let mut sources = two_monitors();
+    sources[1].kind = crate::types::SourceKind::Window;
+    let window = sources[1].id.clone();
+    let monitor = sources[0].id.clone();
+    let rig = rig_with(vec![Fake::new(WLR, sources)], CapturePolicy::default());
+    let err = block(rig.client.open_session(
+        &rig.runtime,
+        SessionConfig::monitor(window),
+        SinkPolicy::latest(),
+    ))
+    .expect_err("a window is not a monitor");
+    assert_eq!(
+        err,
+        CaptureError::unsatisfiable(
+            Some(WLR),
+            Requirement::Kind(crate::types::SourceKind::Window)
+        )
+    );
+    let session = block(rig.client.open_session(
+        &rig.runtime,
+        SessionConfig::monitor(monitor.clone()).cpu_frames(),
+        SinkPolicy::latest(),
+    ))
+    .expect("a monitor");
+    assert_eq!(session.negotiated().source.id, monitor);
+    assert_eq!(session.negotiated().memory, crate::types::BufferMemory::Cpu);
 }
