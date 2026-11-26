@@ -119,11 +119,11 @@ frames mean:
   Rust sends only against credit (a window, then `nativeStreamCredit`
   grants as the Kotlin collector takes items). Swift streams have no
   credit yet.
-- **Thread check.** `nativeMayBlock()` answers whether the calling
-  thread may block on Rust: `false` on the pump and on Rust's async
-  workers. A Kotlin stream relaying items that arrive on such a thread
-  moves its `nativeSubmitEvent` (which can wait for a slow consumer) to
-  `Dispatchers.IO`.
+- **Items that cannot wait.** `nativeSubmitEvent` returns `false`, and
+  delivers nothing, when the consumer's buffer is full and the calling
+  thread must never block (the pump, Rust's async workers). A Kotlin
+  stream relaying items that arrive on such a thread submits that item
+  again from `Dispatchers.IO`.
 
 Every argument is a plain id, string or payload byte buffer. Envelope
 wrapping, version stamping and frame serialization happen Rust-side.

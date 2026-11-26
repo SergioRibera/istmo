@@ -511,11 +511,10 @@ object IstmoRuntime {
                     // Holding an item back blocks the emitting thread.
                     // An upstream fed by a Rust stream resumes on a
                     // Rust thread that must never block (the pump, an
-                    // async worker): Rust says which, and the item
-                    // waits on an IO thread instead, in order.
-                    if (nativeMayBlock()) {
-                        nativeSubmitEvent(callId, bytes)
-                    } else {
+                    // async worker): there Rust only offers the item and
+                    // answers `false` when the consumer is full, and the
+                    // item waits on an IO thread instead, in order.
+                    if (!nativeSubmitEvent(callId, bytes)) {
                         kotlinx.coroutines.withContext(Dispatchers.IO) { nativeSubmitEvent(callId, bytes) }
                     }
                 }
@@ -681,8 +680,7 @@ object IstmoRuntime {
         payload: ByteArray,
     )
     external fun nativeSubmitResponse(callId: Long, ok: Boolean, payload: ByteArray)
-    external fun nativeSubmitEvent(streamId: Long, payload: ByteArray)
-    external fun nativeMayBlock(): Boolean
+    external fun nativeSubmitEvent(streamId: Long, payload: ByteArray): Boolean
     external fun nativeSubmitStream(
         callId: Long,
         pluginId: String,

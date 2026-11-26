@@ -321,37 +321,33 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitResponse<
     });
 }
 
+/// One item of a Kotlin-hosted stream.
+///
+/// `false`: not delivered, because the consumer's buffer is full and the
+/// calling thread must not wait for it (the pump, an async worker; see
+/// [`DeliveryScope::may_block`](istmo_core::DeliveryScope::may_block)):
+/// Kotlin submits it again from a thread that may.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent<'local>(
     mut env: JNIEnv<'local>,
     _caller: JClass<'local>,
     stream_id: jlong,
     payload: JByteArray<'local>,
-) {
-    probe!(SubmitEventEntered);
-    guarded(&mut env, "nativeSubmitEvent", (), |env| {
-        let bytes = read_array(env, &payload)?;
-        Runtime::global()?.dispatch_inbound(Envelope::new(Frame::Event {
-            stream_id: StreamId(wire_id(stream_id)),
-            payload: bytes,
-        }))?;
-        Ok(())
-    });
-}
-
-/// Whether the calling thread may block on Rust.
-///
-/// `false` on the pump and on the runtime's async workers (see
-/// [`DeliveryScope::may_block`](istmo_core::DeliveryScope::may_block)):
-/// Kotlin moves a `nativeSubmitEvent`, which can wait for the consumer,
-/// off such a thread.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeMayBlock<'local>(
-    mut env: JNIEnv<'local>,
-    _caller: JClass<'local>,
 ) -> jboolean {
-    guarded(&mut env, "nativeMayBlock", JNI_FALSE, |_env| {
-        Ok(if istmo_core::DeliveryScope::may_block() {
+    probe!(SubmitEventEntered);
+    // An error is reported (or logged for a late item): no retry.
+    guarded(&mut env, "nativeSubmitEvent", JNI_TRUE, |env| {
+        let bytes = read_array(env, &payload)?;
+        let runtime = Runtime::global()?;
+        let stream_id = StreamId(wire_id(stream_id));
+        if istmo_core::DeliveryScope::may_block() {
+            runtime.dispatch_inbound(Envelope::new(Frame::Event {
+                stream_id,
+                payload: bytes,
+            }))?;
+            return Ok(JNI_TRUE);
+        }
+        Ok(if runtime.offer_peer_event(stream_id, bytes)? {
             JNI_TRUE
         } else {
             JNI_FALSE

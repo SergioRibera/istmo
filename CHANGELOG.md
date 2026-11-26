@@ -31,9 +31,11 @@
   `outbound_delivered`, `track_outbound_deliveries` (Rust → Kotlin calls
   and stream items on the caller's thread); `DeliveryScope` (a thread
   that must never block on the outbound channel).
-- JNI `nativeCall`, `nativeSubmitStream`, `nativeStreamCredit`,
-  `nativeMayBlock`; Kotlin callbacks `onCallDirect` and `onEvents`; C
-  `istmo_ios_call` + `IstmoIosReply` + `istmo_ios_free_reply`.
+- JNI `nativeCall`, `nativeSubmitStream`, `nativeStreamCredit`; Kotlin
+  callbacks `onCallDirect` and `onEvents`; C `istmo_ios_call` +
+  `IstmoIosReply` + `istmo_ios_free_reply`. `nativeSubmitEvent` returns
+  `false` for an item a thread that must not block could not deliver
+  (Kotlin resubmits it from `Dispatchers.IO`).
 - `istmo_core::spin::SpinWait` (bounded adaptive spinning before a park,
   `spin::set_enabled` for A/B); `native_frame::BytePool` (recycled CPU
   frame buffers); Kotlin `IstmoBytesOut`.
@@ -41,8 +43,8 @@
   registers that plugin's backend with `startInPlace = false`.
 - `Runtime::outbound_spill()` (`SpillStats`: frames queued behind a full
   outbound channel), `BlockingThreads::now()` (blocking workers alive
-  and their peak; a warning past 256), `DeliveryScope::may_block()` and
-  JNI `nativeMayBlock`.
+  and their peak; a warning past 256), `DeliveryScope::may_block()`,
+  `Runtime::offer_peer_event`.
 
 ### Changed (breaking)
 

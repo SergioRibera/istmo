@@ -429,3 +429,33 @@ fn trailing_bytes_after_an_envelope_are_rejected() {
         }))
     ));
 }
+
+#[test]
+fn offering_a_peer_event_never_waits_for_a_full_consumer() {
+    let init = Runtime::mock();
+    let stream = init
+        .runtime
+        .stream("peer.p", None, "s", Vec::new(), 8)
+        .expect("stream");
+    let id = stream.stream_id();
+    let mut offered = 0u32;
+    while init
+        .runtime
+        .offer_peer_event(id, offered.to_le_bytes().to_vec())
+        .expect("offer")
+    {
+        offered += 1;
+        assert!(offered < 1_000, "the consumer's buffer never filled");
+    }
+    // Full: nothing was delivered; once the consumer takes one, there is
+    // room again.
+    assert!(matches!(
+        stream.recv().expect("recv"),
+        istmo_core::StreamMessage::Event(first) if first == 0u32.to_le_bytes()
+    ));
+    assert!(
+        init.runtime
+            .offer_peer_event(id, offered.to_le_bytes().to_vec())
+            .expect("offer")
+    );
+}

@@ -1931,6 +1931,37 @@ impl Runtime {
         }
     }
 
+    /// Hand the consumer of `stream_id` an item from the platform peer
+    /// without waiting: `Ok(false)` when its buffer is full and nothing
+    /// was delivered.
+    ///
+    /// For a transport on a thread that must not block (see
+    /// [`DeliveryScope::may_block`]): it offers the item first and moves
+    /// the blocking [`dispatch_inbound`](Self::dispatch_inbound) of the
+    /// same item to a thread that may only when the offer fails, so the
+    /// common case costs one call.
+    ///
+    /// # Errors
+    ///
+    /// As [`dispatch_inbound`](Self::dispatch_inbound) for a
+    /// [`Frame::Event`]: [`IstmoError::UnknownStreamId`],
+    /// [`IstmoError::RoutingMismatch`], [`IstmoError::ChannelClosed`].
+    pub fn offer_peer_event(
+        &self,
+        stream_id: StreamId,
+        payload: Vec<u8>,
+    ) -> Result<bool, IstmoError> {
+        match self
+            .routing
+            .stream_sender(stream_id)?
+            .try_send(StreamMessage::Event(payload))
+        {
+            Ok(()) => Ok(true),
+            Err(TrySendError::Full(_)) => Ok(false),
+            Err(TrySendError::Disconnected(_)) => Err(IstmoError::ChannelClosed),
+        }
+    }
+
     /// The peer's consumer of `stream_id` took `items` more: let that
     /// many more go out. Ignored for streams that ended or were not
     /// opened with [`serve_peer_stream`](Self::serve_peer_stream).
