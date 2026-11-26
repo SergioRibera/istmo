@@ -2388,9 +2388,11 @@ impl Runtime {
         peer.event(stream_id, payload)
     }
 
-    /// Send a hosted stream's end. Once the stream is cancelled the end
-    /// is best effort and never blocks: its issuer left, or the runtime
-    /// shut down and the transport may have stopped draining.
+    /// Send a hosted stream's end, behind its items. A full local
+    /// consumer is awaited like for an item, so the async worker serves
+    /// other tasks meanwhile. Once the stream is cancelled the end is
+    /// best effort and never waits: its issuer left, or the runtime shut
+    /// down and the transport may have stopped draining.
     async fn end_stream(
         &self,
         origin: Origin,
@@ -2399,10 +2401,20 @@ impl Runtime {
         cancel: &CancelToken,
     ) {
         let delivered = match origin {
-            Origin::Local => self
-                .routing
-                .deliver_stream_end(stream_id, reason)
-                .map(|()| true),
+            Origin::Local => match self.routing.take_stream_sender(stream_id) {
+                Ok(tx) => {
+                    let end = StreamMessage::End(reason);
+                    Ok(if cancel.is_cancelled() {
+                        tx.try_send(end).is_ok()
+                    } else {
+                        matches!(
+                            send_unless_cancelled(&tx, end, cancel).await,
+                            Delivery::Sent
+                        )
+                    })
+                }
+                Err(err) => Err(err),
+            },
             Origin::Peer | Origin::Remote => {
                 let wait = if cancel.is_cancelled() {
                     Wait::Never
