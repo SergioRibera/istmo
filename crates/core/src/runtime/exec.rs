@@ -52,8 +52,6 @@ pub(super) fn spawn(task: impl Future<Output = ()> + Send + 'static) {
 /// it to the async workers. `true` when it finished before returning.
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub(super) fn run_here(task: impl Future<Output = ()> + Send + 'static) -> bool {
-    // An inline host must not block whatever thread delivered it.
-    let _delivering = DeliveryScope::enter();
     tasks::run_here(task)
 }
 
@@ -80,9 +78,14 @@ mod delivery {
 /// outbound channel depends on, such as its pump, so a send made from
 /// there (by code the pump calls into) can never wait for the pump
 /// itself. Frames that would have to wait are queued in order behind
-/// the channel instead. The runtime opens one itself while it polls an
-/// inline host on the thread that delivered the call, and while it
-/// handles inbound frames.
+/// the channel instead. The runtime opens one itself while a process
+/// bridge's reader injects a frame and while a thread submits a frame
+/// to a sink.
+///
+/// Open one only for threads that must never wait: what it queues has
+/// no bound but the memory, so an ordinary thread (one polling an
+/// inline host included) is better off keeping the channel's
+/// backpressure.
 ///
 /// Scopes nest; the thread is unmarked when the outermost one drops.
 #[derive(Debug)]

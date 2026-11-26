@@ -394,14 +394,18 @@ struct RemoteCalls {
 /// reading nor a transport that stopped draining after
 /// [`shutdown`](Self::shutdown) pins it forever.
 ///
-/// A thread that delivers work never waits on a full outbound channel:
-/// an async worker, a thread polling an inline host it delivered, a
-/// thread handling inbound frames, or one the transport marked with a
-/// [`DeliveryScope`] (its pump). Its sends queue behind the channel in
-/// order and a task moves them on as room frees up, so a host cannot
-/// deadlock waiting for the very thread that drains the channel. Any
-/// other thread still waits for room, as the backpressure the channel
-/// gives; while frames are queued that way, it waits for its own frame
+/// A few threads never wait on a full outbound channel, because the
+/// channel's progress may depend on them: the async workers (for a
+/// synchronous send; async code awaits room instead), and any thread
+/// inside a [`DeliveryScope`] — the transports' pumps, a process
+/// bridge's reader ([`inject_wire_envelope`](Self::inject_wire_envelope)),
+/// a thread submitting frames to a sink, and whatever they run in
+/// place, inline hosts included. Their sends queue behind the channel
+/// in order and a task moves them on as room frees up, so a host cannot
+/// deadlock waiting for the very thread that drains the channel. Every
+/// other thread, an app thread or a Kotlin / Swift caller polling an
+/// inline host included, waits for room: the backpressure the channel
+/// gives. While frames are queued that way, it waits for its own frame
 /// to leave the queue.
 ///
 /// # Locking
@@ -1097,7 +1101,15 @@ impl Runtime {
     ///
     /// Any variant of [`IstmoError`] surfaced by
     /// [`Envelope::from_wire_bytes`] or [`Runtime::dispatch_inbound`].
+    ///
+    /// # Threads
+    ///
+    /// The bridge's reader calls this, and the other process may be
+    /// waiting for that reader: the call runs inside a
+    /// [`DeliveryScope`], so nothing it sends (an inline host's frames,
+    /// an error answer) waits for room on the outbound channel.
     pub fn inject_wire_envelope(self: &Arc<Self>, bytes: &[u8]) -> Result<(), IstmoError> {
+        let _reader = DeliveryScope::enter();
         let envelope = Envelope::from_wire_bytes(bytes)?;
         self.dispatch_from(Origin::Remote, envelope)
     }
@@ -1131,9 +1143,6 @@ impl Runtime {
         origin: Origin,
         envelope: Envelope,
     ) -> Result<(), IstmoError> {
-        // Inbound frames arrive on the transport's threads: an error
-        // answer sent from here must not wait for them to drain.
-        let _delivering = DeliveryScope::enter();
         if envelope.version != PROTOCOL_VERSION {
             return Err(IstmoError::ProtocolVersionMismatch {
                 expected: PROTOCOL_VERSION,
@@ -1834,8 +1843,6 @@ impl Runtime {
         method: String,
         payload: Vec<u8>,
     ) -> Option<CallResult> {
-        // The peer's thread delivers the call: see `dispatch_from`.
-        let _delivering = DeliveryScope::enter();
         let call = HostedCall {
             origin: Origin::Peer,
             call_id,
@@ -1880,7 +1887,6 @@ impl Runtime {
         payload: Vec<u8>,
         window: u32,
     ) {
-        let _delivering = DeliveryScope::enter();
         let stream_id = StreamId(call_id.get());
         let (tx, rx) = flume::unbounded();
         // Unbounded and still connected: the send cannot fail.

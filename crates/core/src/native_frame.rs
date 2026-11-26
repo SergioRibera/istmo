@@ -215,8 +215,12 @@ impl NativeProducer {
     /// Push a frame whose metadata is still wire-encoded. `meta` must
     /// decode as exactly the sink's metadata type. Whatever the status,
     /// `buffer` is either queued or released before this returns.
+    ///
+    /// Runs inside a [`DeliveryScope`](crate::DeliveryScope): a camera or
+    /// capture callback thread must never wait on the outbound channel.
     #[must_use]
     pub fn submit(&self, meta: &[u8], buffer: NativeBuffer) -> SubmitStatus {
+        let _ingress = crate::DeliveryScope::enter();
         self.sink.submit(meta, buffer)
     }
 

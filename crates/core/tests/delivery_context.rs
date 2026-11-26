@@ -1,5 +1,6 @@
-//! Sends from a thread that delivers work never wait on a full outbound
-//! channel; they queue behind it in order. Other threads still wait.
+//! Sends from a delivery thread (inside a `DeliveryScope`) never wait on
+//! a full outbound channel; they queue behind it in order. Other
+//! threads, inline hosts polled on them included, still wait.
 
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
@@ -86,12 +87,13 @@ fn on_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T 
 }
 
 #[test]
-fn an_inline_host_on_the_delivering_thread_never_waits_for_room() {
+fn an_inline_host_on_a_delivery_thread_never_waits_for_room() {
     let init = Runtime::mock();
     init.runtime.register_host(Chatty::default());
     fill(&init);
     let runtime = Arc::clone(&init.runtime);
     let reply = on_thread(move || {
+        let _pump = DeliveryScope::enter();
         runtime.serve_peer_call(CallId(1), "test.chatty", None, "go".into(), Vec::new())
     });
     // Everything it sent waited behind the full channel, in order: the
@@ -100,6 +102,79 @@ fn an_inline_host_on_the_delivering_thread_never_waits_for_room() {
     assert_eq!(order, ["first", "second", "cancel"]);
     // The answer itself may come in place or as a frame behind them.
     assert!(matches!(reply, Some(Ok(_)) | None));
+}
+
+/// An inline host that notifies the peer once per call.
+#[derive(Default)]
+struct Notifier {
+    runtime: OnceLock<Weak<Runtime>>,
+}
+
+impl Dispatch for Notifier {
+    fn plugin_id(&self) -> &'static str {
+        "test.notifier"
+    }
+
+    fn mode(&self) -> DispatchMode {
+        DispatchMode::Inline
+    }
+
+    fn runtime_attached(&self, runtime: Weak<Runtime>) {
+        let _ = self.runtime.set(runtime);
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        _instance: Option<InstanceId>,
+        _method: &'a str,
+        payload: &'a [u8],
+        _cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        let runtime = self.runtime.get().and_then(Weak::upgrade).expect("runtime");
+        let payload = payload.to_vec();
+        Box::pin(async move {
+            runtime
+                .notify("peer.p", None, "tick", payload)
+                .expect("notify");
+            Ok(Outcome::Ok(Vec::new()))
+        })
+    }
+}
+
+#[test]
+fn a_plain_thread_calling_inline_hosts_keeps_the_backpressure() {
+    let init = Runtime::mock();
+    init.runtime.register_host(Notifier::default());
+    let calls = 3 * DEFAULT_OUTBOUND_CAPACITY;
+    let runtime = Arc::clone(&init.runtime);
+    // A Kotlin or app thread calling an inline host in a loop, while the
+    // transport does not drain.
+    let caller = std::thread::spawn(move || {
+        for n in 0..calls {
+            let id = u64::try_from(n).expect("id") + 1;
+            let bytes = u32::try_from(n).expect("n").to_le_bytes().to_vec();
+            runtime.serve_peer_call(CallId(id), "test.notifier", None, "go".into(), bytes);
+        }
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !caller.is_finished(),
+        "the caller waits for room instead of queueing without bound"
+    );
+    assert!(init.outbound.is_full());
+    // Draining lets it through, every tick in order.
+    let mut next = 0u32;
+    while next < u32::try_from(calls).expect("calls") {
+        let envelope = init
+            .outbound
+            .recv_timeout(Duration::from_secs(5))
+            .expect("frame");
+        if let Frame::Notify { payload, .. } = envelope.frame {
+            assert_eq!(payload, next.to_le_bytes());
+            next += 1;
+        }
+    }
+    caller.join().expect("caller");
 }
 
 #[test]
