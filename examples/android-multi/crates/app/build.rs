@@ -76,6 +76,7 @@ fn app_control_contract() -> Contract {
             error: Some(TypeRef::Named("MultiError".to_owned())),
         }],
         init: None,
+        shared: Vec::new(),
         types: vec![TypeDef::Struct(StructDef {
             name: "MultiError".to_owned(),
             fields: vec![Field {

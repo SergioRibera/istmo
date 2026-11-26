@@ -7,7 +7,7 @@ use wincode::len::BincodeLen;
 use wincode::{ReadError as DecodeError, WriteError as EncodeError};
 
 use crate::assets::AssetsPayload;
-use crate::contract::Contract;
+use crate::contract::{Contract, SharedTypes};
 use crate::manifest::Manifest;
 use crate::native_deps::NativeDeps;
 
@@ -29,6 +29,11 @@ pub const NATIVE_DEPS_KEY: &str = "ISTMO_NATIVE_DEPS";
 pub const MANIFEST_KEY: &str = "ISTMO_MANIFEST";
 
 pub const ASSETS_KEY: &str = "ISTMO_ASSETS";
+
+/// Key of the payload a shared types crate (`istmo-media`) hands to the
+/// plugins that depend on it: [`SharedTypes`], encoded like contracts
+/// (same format byte).
+pub const SHARED_TYPES_KEY: &str = "ISTMO_SHARED_TYPES";
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -73,8 +78,9 @@ impl std::error::Error for HandoverError {
 }
 
 /// Format of a [`CONTRACTS_KEY`] payload: its first byte. Bumped whenever
-/// the encoding of [`Contract`] changes (2: `TypeRef::FrameSink`).
-pub const CONTRACTS_FORMAT: u8 = 2;
+/// the encoding of [`Contract`] changes (2: `TypeRef::FrameSink`, 3:
+/// `Contract::shared`).
+pub const CONTRACTS_FORMAT: u8 = 3;
 
 /// Hex payload for [`CONTRACTS_KEY`]: every contract of one crate.
 ///
@@ -135,6 +141,76 @@ pub fn contracts_handover_line(contracts: &[Contract]) -> Result<String, Handove
         "cargo:{CONTRACTS_KEY}={}",
         serialize_contracts(contracts)?
     ))
+}
+
+/// Hex payload for [`SHARED_TYPES_KEY`].
+///
+/// # Errors
+///
+/// [`HandoverError::Encode`] when the types exceed the codec limit.
+pub fn serialize_shared_types(shared: &SharedTypes) -> Result<String, HandoverError> {
+    let mut bytes = vec![CONTRACTS_FORMAT];
+    bytes.extend(wincode::config::serialize(shared, codec()).map_err(HandoverError::Encode)?);
+    Ok(hex_encode(&bytes))
+}
+
+/// Inverse of [`serialize_shared_types`].
+///
+/// # Errors
+///
+/// A payload of another format, or one that does not decode.
+pub fn deserialize_shared_types(hex: &str) -> Result<SharedTypes, HandoverError> {
+    let bytes = hex_decode(hex)?;
+    match bytes.split_first() {
+        Some((&CONTRACTS_FORMAT, body)) => {
+            wincode::config::deserialize_exact::<SharedTypes, _>(body, codec())
+                .map_err(HandoverError::Decode)
+        }
+        Some((&found, _)) => Err(HandoverError::ContractFormat {
+            found,
+            expected: CONTRACTS_FORMAT,
+        }),
+        None => Err(HandoverError::ContractFormat {
+            found: 0,
+            expected: CONTRACTS_FORMAT,
+        }),
+    }
+}
+
+/// For the build script of a shared types crate (one with a `links` key).
+///
+/// Hands the `#[istmo::message]` types of `src/lib.rs` (and its modules)
+/// to dependent plugins as group `group`, generated in Kotlin package
+/// `kotlin_package`.
+///
+/// # Panics
+///
+/// When the types cannot be extracted or encoded, which fails the build.
+pub fn emit_shared_types(group: &str, kotlin_package: &str) {
+    let root = PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR")
+            .expect("CARGO_MANIFEST_DIR is set for build scripts"),
+    );
+    let source = root.join("src/lib.rs");
+    let shared = crate::extract::extract_shared_types(&source, group, kotlin_package)
+        .unwrap_or_else(|err| panic!("istmo-build emit_shared_types(): {err}"));
+    crate::directive::rerun_if_changed(&root.join("src"));
+    let payload = serialize_shared_types(&shared).expect("serialize istmo shared types");
+    println!("cargo:{SHARED_TYPES_KEY}={payload}");
+}
+
+/// The shared type groups of every dependency, by `links` name. A
+/// payload that does not decode fails the build: a plugin would
+/// otherwise lose types its contract needs.
+#[must_use]
+pub fn collect_dep_shared_types() -> Vec<SharedTypes> {
+    collect_env_payloads(SHARED_TYPES_KEY)
+        .into_iter()
+        .map(|(var, payload)| {
+            deserialize_shared_types(&payload)
+                .unwrap_or_else(|err| panic!("istmo: cannot read {var}: {err}"))
+        })
+        .collect()
 }
 
 /// Hands `contracts` over to dependent build scripts as
@@ -419,6 +495,7 @@ mod tests {
                 error: None,
             }],
             init: None,
+            shared: Vec::new(),
             types: vec![],
         }
     }

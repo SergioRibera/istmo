@@ -83,6 +83,7 @@ fn expected_contract() -> Contract {
             },
         ],
         init: Some(named("SignInConfig")),
+        shared: Vec::new(),
         types: vec![
             TypeDef::Enum(EnumDef {
                 name: "SignInMode".to_owned(),

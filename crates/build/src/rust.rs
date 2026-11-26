@@ -234,6 +234,7 @@ mod tests {
             type_name: "X".to_owned(),
             methods: vec![],
             init: None,
+            shared: Vec::new(),
             types,
         }
     }

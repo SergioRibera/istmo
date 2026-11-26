@@ -64,6 +64,7 @@ fn expected_contract() -> Contract {
         type_name: "Biometric".to_owned(),
         methods: expected_methods(),
         init: None,
+        shared: Vec::new(),
         types: expected_types(),
     }
 }

@@ -16,6 +16,7 @@ fn demo_types_contract() -> Contract {
         type_name: "Demo".to_owned(),
         methods: vec![],
         init: None,
+        shared: Vec::new(),
         types: vec![
             TypeDef::Struct(StructDef {
                 name: "TimerAttributes".to_owned(),

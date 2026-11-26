@@ -8,16 +8,20 @@ use std::path::Path;
 use super::{remove_generated, write_if_changed};
 use crate::app_config::Role;
 use crate::codegen::{kt_string, swift_string};
-use crate::contract::Contract;
+use crate::contract::{Contract, SharedTypes};
 use crate::kotlin_client::generate_kotlin_client;
 use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
-use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
+use crate::kotlin_types::{
+    generate_kotlin_codecs, generate_kotlin_shared_types, generate_kotlin_types,
+};
 use crate::plugin_registry::{
     KOTLIN_REGISTRY_PACKAGE, RegistryEntry, generate_kotlin_plugin_registry,
 };
 use crate::swift::generate_swift_client;
 use crate::swift_host::generate_swift_host;
-use crate::swift_types::{generate_swift_codecs, generate_swift_types};
+use crate::swift_types::{
+    generate_swift_codecs, generate_swift_shared_types, generate_swift_types,
+};
 pub(super) fn emit_kotlin_registry(
     android_root: &Path,
     codegen_package: &str,
@@ -44,6 +48,7 @@ pub(super) fn emit_kotlin(
     seed_backends: bool,
 ) {
     let full_package = package.to_owned();
+    let with_shared = kotlin_with_shared_imports;
     let pkg_path = full_package.replace('.', "/");
     let gen_dir = java_root.join(pkg_path);
     let ty = &contract.type_name;
@@ -52,7 +57,11 @@ pub(super) fn emit_kotlin(
         Role::Host => {
             write_if_changed(
                 &gen_dir.join(format!("{ty}Dispatcher.kt")),
-                &kotlin_with_package(&full_package, &generate_kotlin_host(contract)),
+                &with_shared(
+                    &full_package,
+                    &generate_kotlin_host(contract),
+                    &contract.shared,
+                ),
             );
             // Left over from the client role.
             for stale in ["Codecs", "Client"] {
@@ -65,11 +74,19 @@ pub(super) fn emit_kotlin(
         Role::Client => {
             write_if_changed(
                 &gen_dir.join(format!("{ty}Codecs.kt")),
-                &kotlin_with_package(&full_package, &generate_kotlin_codecs_interface(contract)),
+                &with_shared(
+                    &full_package,
+                    &generate_kotlin_codecs_interface(contract),
+                    &contract.shared,
+                ),
             );
             write_if_changed(
                 &gen_dir.join(format!("{ty}Client.kt")),
-                &kotlin_with_package(&full_package, &generate_kotlin_client(contract)),
+                &with_shared(
+                    &full_package,
+                    &generate_kotlin_client(contract),
+                    &contract.shared,
+                ),
             );
             // Left over from the host role.
             remove_generated(&gen_dir.join(format!("{ty}Dispatcher.kt")));
@@ -77,11 +94,19 @@ pub(super) fn emit_kotlin(
     }
     write_if_changed(
         &gen_dir.join(format!("{ty}Types.kt")),
-        &kotlin_with_package(&full_package, &generate_kotlin_types(contract)),
+        &with_shared(
+            &full_package,
+            &generate_kotlin_types(contract),
+            &contract.shared,
+        ),
     );
     write_if_changed(
         &gen_dir.join(format!("{ty}CodecsImpl.kt")),
-        &kotlin_with_package(&full_package, &generate_kotlin_codecs(contract)),
+        &with_shared(
+            &full_package,
+            &generate_kotlin_codecs(contract),
+            &contract.shared,
+        ),
     );
 }
 
@@ -147,6 +172,64 @@ pub(super) fn mark_codegen_dir(dir: &Path) {
     } else {
         crate::fsx::mark_generated_dir(dir);
     }
+}
+
+/// A shared type group's Kotlin declarations, in their own package.
+pub(super) fn emit_kotlin_shared(java_root: &Path, group: &SharedTypes) {
+    let gen_dir = java_root.join(group.kotlin_package.replace('.', "/"));
+    write_if_changed(
+        &gen_dir.join(format!("{}Types.kt", group.group)),
+        &kotlin_with_package(&group.kotlin_package, &generate_kotlin_shared_types(group)),
+    );
+    mark_codegen_dir(&gen_dir);
+}
+
+/// A shared type group's Swift declarations, one file under
+/// `<plugins>/<group>/Generated/`.
+pub(super) fn emit_swift_shared(
+    ios_root: &Path,
+    app_dir: &str,
+    plugins_subdir: &str,
+    group: &SharedTypes,
+) {
+    let generated = ios_root
+        .join(app_dir)
+        .join(plugins_subdir)
+        .join(&group.group)
+        .join("Generated");
+    write_if_changed(
+        &generated.join(format!("{}Types.swift", group.group)),
+        &generate_swift_shared_types(group),
+    );
+    mark_codegen_dir(&generated);
+}
+
+/// [`kotlin_with_package`] plus an import of every shared type `body`
+/// names from another package.
+fn kotlin_with_shared_imports(package: &str, body: &str, shared: &[SharedTypes]) -> String {
+    let mut imports = String::new();
+    for group in shared.iter().filter(|g| g.kotlin_package != package) {
+        for ty in &group.types {
+            if kotlin_code_names(body, ty.name()) {
+                let _ = writeln!(imports, "import {}.{}", group.kotlin_package, ty.name());
+            }
+        }
+    }
+    let with_runtime = kotlin_with_package(package, body);
+    if imports.is_empty() {
+        return with_runtime;
+    }
+    // After the package line (and the runtime imports, if any).
+    let header = format!("package {package}\n\n");
+    let Some(rest) = with_runtime.strip_prefix(&header) else {
+        return with_runtime;
+    };
+    let gap = if rest.starts_with("import ") {
+        ""
+    } else {
+        "\n"
+    };
+    format!("{header}{imports}{gap}{rest}")
 }
 
 /// Runtime types generated Kotlin may name unqualified.
@@ -318,6 +401,7 @@ mod tests {
                 error: None,
             }],
             init: None,
+            shared: Vec::new(),
             types: Vec::new(),
         };
         seed_kotlin_backend_impl(&dir, "com.example", &contract);

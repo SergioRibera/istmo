@@ -12,8 +12,8 @@ use syn::{
 };
 
 use crate::contract::{
-    Arg, Contract, ContractError, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef,
-    TypeDef, TypeRef,
+    Arg, Contract, ContractError, EnumDef, EnumVariant, Field, Method, MethodKind, SharedTypes,
+    StructDef, TypeDef, TypeRef,
 };
 
 #[derive(Debug)]
@@ -86,6 +86,65 @@ pub fn extract_contract(
     Ok(contract)
 }
 
+/// [`extract_contract`] for a plugin that also uses message types of
+/// shared crates (`istmo-media`): a type the crate does not declare
+/// resolves in `shared`, and the contract carries the groups it uses.
+///
+/// # Errors
+/// As [`extract_contract`]; a type declared both here and in a group is
+/// a duplicate.
+pub fn extract_contract_with_shared(
+    source_path: impl AsRef<Path>,
+    trait_name: &str,
+    shared: &[SharedTypes],
+) -> Result<Contract, ExtractError> {
+    let path = source_path.as_ref();
+    let source = fs::read_to_string(path)?;
+    let file: File = syn::parse_file(&source)?;
+    let mut contract = lower_contract(&file, trait_name, &ModuleDirs::of_file(path, false))?;
+    let used = contract.referenced_names();
+    contract.shared = shared
+        .iter()
+        .filter(|group| group.types.iter().any(|t| used.contains(t.name())))
+        .cloned()
+        .collect();
+    contract.validate()?;
+    Ok(contract)
+}
+
+/// The `#[istmo::message]` types of a shared crate whose root is
+/// `source_path`, as group `group` (Swift file, later namespace) in Kotlin
+/// package `kotlin_package`. They may reference only each other.
+///
+/// # Errors
+/// Reading or parsing the source, or a type outside the group.
+pub fn extract_shared_types(
+    source_path: impl AsRef<Path>,
+    group: &str,
+    kotlin_package: &str,
+) -> Result<SharedTypes, ExtractError> {
+    let path = source_path.as_ref();
+    let source = fs::read_to_string(path)?;
+    let file: File = syn::parse_file(&source)?;
+    let mut types = Vec::new();
+    collect_message_types(&file.items, &ModuleDirs::of_file(path, false), &mut types)?;
+    // Checked as a contract of its own: every reference resolves inside.
+    Contract {
+        plugin_id: group.to_owned(),
+        type_name: group.to_owned(),
+        methods: Vec::new(),
+        init: None,
+        shared: Vec::new(),
+        types: types.clone(),
+    }
+    .validate()?;
+    Ok(SharedTypes {
+        group: group.to_owned(),
+        kotlin_package: kotlin_package.to_owned(),
+        types,
+    })
+}
+
 /// Where rustc looks for the files of `mod foo;` items at one nesting
 /// level of a source file.
 #[derive(Debug, Clone)]
@@ -151,6 +210,7 @@ fn lower_contract(
         type_name,
         methods,
         init: attr_args.init,
+        shared: Vec::new(),
         types,
     })
 }

@@ -327,6 +327,7 @@ fn dummy_contract() -> istmo_build::Contract {
             error: None,
         }],
         init: None,
+        shared: Vec::new(),
         types: vec![],
     }
 }

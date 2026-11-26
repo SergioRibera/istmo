@@ -19,6 +19,7 @@ fn contract(plugin_id: &str, type_name: &str) -> Contract {
             error: None,
         }],
         init: None,
+        shared: Vec::new(),
         types: vec![],
     }
 }

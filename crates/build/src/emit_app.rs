@@ -52,7 +52,10 @@ mod detect;
 mod native_patch;
 
 use assets::sync_assets;
-use codegen::{emit_kotlin, emit_kotlin_registry, emit_swift, mark_codegen_dir};
+use codegen::{
+    emit_kotlin, emit_kotlin_registry, emit_kotlin_shared, emit_swift, emit_swift_shared,
+    mark_codegen_dir,
+};
 pub use detect::{detect_android_package, detect_ios_app_dir};
 use native_patch::{
     ServiceEmitOpts, emit_ios_plist_fragments, emit_service_and_background,
@@ -418,7 +421,25 @@ impl<'a> AppPass<'a> {
                 }
             }
         }
+        self.emit_shared_sources(&contracts);
         registries
+    }
+
+    /// The shared type groups the contracts use (`istmo-media`), each
+    /// generated once: one Kotlin file in the group's package, one Swift
+    /// file under `<plugins>/<group>/Generated/`.
+    fn emit_shared_sources(&self, contracts: &[Contract]) {
+        let groups = merge_shared(contracts).unwrap_or_else(|err| panic!("istmo-build: {err}"));
+        for group in &groups {
+            if self.android_active {
+                emit_kotlin_shared(&self.android_root.join("app/src/main/java"), group);
+            }
+            if self.ios_active
+                && let Some(app_dir) = self.ios_app_dir.as_deref()
+            {
+                emit_swift_shared(&self.ios_root, app_dir, &self.ios_plugins_subdir, group);
+            }
+        }
     }
 
     fn active_platforms(&self) -> Vec<Platform> {
@@ -901,6 +922,54 @@ fn plugins_shipping<'a>(
 /// `handed_over` plus `extra`, where an extra contract replaces any
 /// earlier one with its plugin id, so each id generates one set of
 /// sources.
+/// Every shared type group the contracts use, merged by group: plugins
+/// built against the same shared crate bring the same types, each
+/// generated once.
+///
+/// # Errors
+/// Two contracts giving one type of a group different shapes (plugins
+/// built against different versions of the shared crate).
+pub(crate) fn merge_shared(
+    contracts: &[Contract],
+) -> Result<Vec<crate::contract::SharedTypes>, String> {
+    let mut groups: std::collections::BTreeMap<String, crate::contract::SharedTypes> =
+        std::collections::BTreeMap::new();
+    for contract in contracts {
+        for group in &contract.shared {
+            let merged =
+                groups
+                    .entry(group.group.clone())
+                    .or_insert_with(|| crate::contract::SharedTypes {
+                        group: group.group.clone(),
+                        kotlin_package: group.kotlin_package.clone(),
+                        types: Vec::new(),
+                    });
+            if merged.kotlin_package != group.kotlin_package {
+                return Err(format!(
+                    "shared types `{}` come in Kotlin packages `{}` and `{}`",
+                    group.group, merged.kotlin_package, group.kotlin_package
+                ));
+            }
+            for ty in &group.types {
+                match merged.types.iter().find(|t| t.name() == ty.name()) {
+                    None => merged.types.push(ty.clone()),
+                    Some(existing) if existing == ty => {}
+                    Some(_) => {
+                        return Err(format!(
+                            "shared type `{}::{}` differs between plugins (`{}` among them): \
+                             build them against the same version of the shared crate",
+                            group.group,
+                            ty.name(),
+                            contract.plugin_id
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(groups.into_values().collect())
+}
+
 fn with_extra_contracts(mut handed_over: Vec<Contract>, extra: &[Contract]) -> Vec<Contract> {
     for contract in extra {
         if let Some(slot) = handed_over
@@ -929,6 +998,7 @@ mod tests {
             type_name: type_name.to_owned(),
             methods: vec![],
             init: None,
+            shared: Vec::new(),
             types: vec![],
         }
     }

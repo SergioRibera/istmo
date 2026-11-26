@@ -11,7 +11,34 @@ pub struct Contract {
     pub type_name: String,
     pub methods: Vec<Method>,
     pub init: Option<TypeRef>,
+    /// The message types this crate declares.
     pub types: Vec<TypeDef>,
+    /// Message types declared once in a shared crate (`istmo-media`) that
+    /// this contract uses: generated once per app, in their own Kotlin
+    /// package and Swift file, while this contract's codecs still read and
+    /// write them.
+    pub shared: Vec<SharedTypes>,
+}
+
+/// The message types of one shared crate, handed over by its build
+/// script (`istmo_build::emit_shared_types`).
+#[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
+pub struct SharedTypes {
+    /// The group name: the Swift file (and later namespace) the types
+    /// live in, e.g. `IstmoMedia`.
+    pub group: String,
+    /// The Kotlin package the types are generated in, e.g.
+    /// `dev.istmo.media`.
+    pub kotlin_package: String,
+    pub types: Vec<TypeDef>,
+}
+
+impl SharedTypes {
+    /// Whether the group declares `name`.
+    #[must_use]
+    pub fn declares(&self, name: &str) -> bool {
+        self.types.iter().any(|t| t.name() == name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]

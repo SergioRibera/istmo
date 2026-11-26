@@ -96,6 +96,7 @@ fn echo_contract() -> Contract {
             },
         ],
         init: None,
+        shared: Vec::new(),
         types: vec![TypeDef::Struct(StructDef {
             name: "EchoError".to_owned(),
             fields: vec![Field {
@@ -121,6 +122,7 @@ fn notifier_contract() -> Contract {
             error: Some(TypeRef::Named("EchoError".to_owned())),
         }],
         init: None,
+        shared: Vec::new(),
 
         types: vec![],
     }

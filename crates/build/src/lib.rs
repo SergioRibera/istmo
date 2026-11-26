@@ -121,8 +121,8 @@ pub use crate::apple_plist::{
 };
 pub use crate::assets::{AssetResolveError, AssetsPayload, ResolvedAsset, resolve_assets};
 pub use crate::contract::{
-    Arg, Contract, ContractError, EnumDef, EnumVariant, Field, Method, MethodKind, StructDef,
-    TypeDef, TypeRef,
+    Arg, Contract, ContractError, EnumDef, EnumVariant, Field, Method, MethodKind, SharedTypes,
+    StructDef, TypeDef, TypeRef,
 };
 pub use crate::desktop::{
     DesktopAppContract, DesktopServiceContract, RestartPolicy, ServiceScope, StartType,
@@ -137,15 +137,18 @@ pub use crate::emit_app::{
     AppOpts, detect_android_package, detect_ios_app_dir, emit_app, emit_app_with,
 };
 pub use crate::entitlements::{EntitlementValue, IosEntitlements};
-pub use crate::extract::{ExtractError, extract_contract};
+pub use crate::extract::{
+    ExtractError, extract_contract, extract_contract_with_shared, extract_shared_types,
+};
 pub use crate::handover::{
     ASSETS_KEY, CONTRACTS_FORMAT, CONTRACTS_KEY, HandoverError, MANIFEST_KEY, NATIVE_DEPS_KEY,
-    NativePlatform, collect_contracts_from, collect_dep_assets, collect_dep_contracts,
-    collect_dep_manifests, collect_dep_manifests_by_links, collect_dep_native_deps,
-    collect_dep_native_dirs, contracts_handover_line, deserialize_assets, deserialize_contracts,
-    deserialize_manifest, deserialize_native_deps, emit_assets, emit_contracts, emit_manifest,
-    emit_native_deps, serialize_assets, serialize_contracts, serialize_manifest,
-    serialize_native_deps,
+    NativePlatform, SHARED_TYPES_KEY, collect_contracts_from, collect_dep_assets,
+    collect_dep_contracts, collect_dep_manifests, collect_dep_manifests_by_links,
+    collect_dep_native_deps, collect_dep_native_dirs, collect_dep_shared_types,
+    contracts_handover_line, deserialize_assets, deserialize_contracts, deserialize_manifest,
+    deserialize_native_deps, deserialize_shared_types, emit_assets, emit_contracts, emit_manifest,
+    emit_native_deps, emit_shared_types, serialize_assets, serialize_contracts, serialize_manifest,
+    serialize_native_deps, serialize_shared_types,
 };
 pub use crate::ios::{
     BackgroundKind, ContinuousMode, IosBackgroundArtifacts, IosBackgroundContract,
@@ -154,7 +157,9 @@ pub use crate::ios::{
 pub use crate::kotlin::generate_kotlin;
 pub use crate::kotlin_client::generate_kotlin_client;
 pub use crate::kotlin_host::{generate_kotlin_codecs_interface, generate_kotlin_host};
-pub use crate::kotlin_types::{generate_kotlin_codecs, generate_kotlin_types};
+pub use crate::kotlin_types::{
+    generate_kotlin_codecs, generate_kotlin_shared_types, generate_kotlin_types,
+};
 pub use crate::manifest::{
     AndroidBackendArg, AndroidQuery, AndroidServiceSpec, AssetEntry, Deployment, InfoPlistEntry,
     InfoPlistValue, IosBackgroundKindSpec, IosBackgroundSpec, IosContinuousModeSpec, Manifest,
@@ -176,5 +181,7 @@ pub use crate::rust::generate_rust_types;
 pub use crate::service::{AndroidServiceArtifacts, ServiceContract, generate_android_service};
 pub use crate::swift::{generate_swift, generate_swift_client};
 pub use crate::swift_host::generate_swift_host;
-pub use crate::swift_types::{generate_swift_codecs, generate_swift_types};
+pub use crate::swift_types::{
+    generate_swift_codecs, generate_swift_shared_types, generate_swift_types,
+};
 pub use crate::worker::{WorkerContract, generate_android_worker};

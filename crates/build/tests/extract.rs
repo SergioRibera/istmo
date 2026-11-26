@@ -51,6 +51,7 @@ fn stateless_unary_trait_with_primitive_arg() {
             error: None,
         }],
         init: None,
+        shared: Vec::new(),
         types: vec![TypeDef::Struct(StructDef {
             name: "EchoReply".to_owned(),
             fields: vec![Field {

@@ -98,6 +98,7 @@ pub fn permissions() -> Contract {
             },
         ],
         init: None,
+        shared: Vec::new(),
         types: vec![
             enum_of(
                 "PermissionStatus",
@@ -162,6 +163,7 @@ pub fn notifications() -> Contract {
             },
         ],
         init: None,
+        shared: Vec::new(),
         types: vec![
             enum_of(
                 "NotificationImportance",
@@ -295,6 +297,7 @@ pub fn service_control() -> Contract {
             },
         ],
         init: None,
+        shared: Vec::new(),
         types: vec![
             struct_of(
                 "NotificationSpec",
@@ -369,6 +372,7 @@ pub fn task_scheduler() -> Contract {
             },
         ],
         init: None,
+        shared: Vec::new(),
         types: vec![
             enum_of(
                 "NetworkKind",
@@ -509,6 +513,7 @@ pub fn admob() -> Contract {
             },
         ],
         init: Some(named("AdMobConfig")),
+        shared: Vec::new(),
         types: vec![
             struct_of(
                 "AdMobConfig",

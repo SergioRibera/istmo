@@ -82,7 +82,7 @@ impl Contract {
     /// The first [`ContractError`] found, in declaration order.
     pub fn validate(&self) -> Result<(), ContractError> {
         let mut declared = BTreeSet::new();
-        for def in &self.types {
+        for def in self.codec_types() {
             if !declared.insert(def.name()) {
                 return Err(ContractError::DuplicateType {
                     name: def.name().to_owned(),
@@ -114,7 +114,7 @@ impl Contract {
                 check(format!("method `{}` error type", m.name), err)?;
             }
         }
-        for def in &self.types {
+        for def in self.codec_types() {
             match def {
                 TypeDef::Struct(s) => {
                     let mut seen = BTreeSet::new();
@@ -227,6 +227,7 @@ mod tests {
                 error: None,
             }],
             init: None,
+            shared: Vec::new(),
             types,
         }
     }

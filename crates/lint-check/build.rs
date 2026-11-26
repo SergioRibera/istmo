@@ -17,6 +17,7 @@ fn main() {
         type_name: "Generated".to_owned(),
         methods: Vec::new(),
         init: None,
+        shared: Vec::new(),
         types: vec![
             TypeDef::Struct(StructDef {
                 name: "Sample".to_owned(),

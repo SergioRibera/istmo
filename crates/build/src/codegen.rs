@@ -169,10 +169,17 @@ impl Contract {
             .chain(self.init.as_ref())
     }
 
-    /// Every type reference inside the declared message types.
-    fn member_types(&self) -> impl Iterator<Item = &TypeRef> {
+    /// The declared message types and the shared ones this contract uses:
+    /// every type its codecs read and write.
+    pub(crate) fn codec_types(&self) -> impl Iterator<Item = &TypeDef> {
         self.types
             .iter()
+            .chain(self.shared.iter().flat_map(|group| group.types.iter()))
+    }
+
+    /// Every type reference inside the declared and shared message types.
+    fn member_types(&self) -> impl Iterator<Item = &TypeRef> {
+        self.codec_types()
             .flat_map(|def| -> Box<dyn Iterator<Item = &TypeRef> + '_> {
                 match def {
                     TypeDef::Struct(s) => Box::new(s.fields.iter().map(|f| &f.ty)),
@@ -196,7 +203,7 @@ impl Contract {
     /// everything referenced plus every declared type, sorted.
     pub(crate) fn codec_type_names(&self) -> BTreeSet<&str> {
         let mut set = self.referenced_names();
-        set.extend(self.types.iter().map(TypeDef::name));
+        set.extend(self.codec_types().map(TypeDef::name));
         set
     }
 
@@ -350,6 +357,7 @@ mod tests {
             type_name: "Foo".to_owned(),
             methods: vec![method("a", "AError"), method("b", "AError")],
             init: None,
+            shared: Vec::new(),
             types: vec![],
         };
         let a = TypeRef::Named("AError".to_owned());

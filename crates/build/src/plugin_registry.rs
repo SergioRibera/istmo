@@ -356,6 +356,7 @@ mod tests {
                 error: None,
             }],
             init: None,
+            shared: Vec::new(),
             types: vec![] as Vec<TypeDef>,
         }
     }

@@ -182,20 +182,26 @@ fn plugin_contracts_line(manifest: &Manifest, source_path: &Path) -> Option<Stri
 /// Contracts of the plugin entries with a `client_type`, in manifest
 /// order.
 fn plugin_contracts(manifest: &Manifest, source_path: &Path) -> Vec<crate::Contract> {
+    // Types of shared crates (`istmo-media`) this plugin depends on.
+    let shared = crate::handover::collect_dep_shared_types();
     manifest
         .plugins
         .iter()
         .filter_map(|plugin| {
             let client_type = plugin.client_type.as_deref()?;
             let trait_name = trait_from_client_type(client_type);
-            let contract =
-                crate::extract_contract(source_path, &trait_name).unwrap_or_else(|err| {
-                    panic!(
-                        "istmo-build emit(): extract `{trait_name}` for plugin `{}` from `{}`: {err}",
-                        plugin.id,
-                        source_path.display(),
-                    )
-                });
+            let contract = crate::extract::extract_contract_with_shared(
+                source_path,
+                &trait_name,
+                &shared,
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "istmo-build emit(): extract `{trait_name}` for plugin `{}` from `{}`: {err}",
+                    plugin.id,
+                    source_path.display(),
+                )
+            });
             Some(contract)
         })
         .collect()

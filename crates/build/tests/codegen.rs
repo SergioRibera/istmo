@@ -67,6 +67,7 @@ fn unary_only() -> Contract {
             },
         ],
         init: None,
+        shared: Vec::new(),
         types: vec![],
     }
 }
@@ -108,6 +109,7 @@ fn mixed_with_init() -> Contract {
             },
         ],
         init: Some(TypeRef::Named("WatchConfig".to_owned())),
+        shared: Vec::new(),
         types: vec![],
     }
 }
@@ -195,6 +197,7 @@ fn permissions() -> Contract {
             },
         ],
         init: None,
+        shared: Vec::new(),
         types: vec![],
     }
 }
@@ -214,6 +217,7 @@ fn activity_results() -> Contract {
             error: Some(TypeRef::Named("ActivityLaunchError".to_owned())),
         }],
         init: None,
+        shared: Vec::new(),
         types: vec![],
     }
 }
@@ -493,6 +497,7 @@ fn admob() -> Contract {
             },
         ],
         init: Some(TypeRef::Named("AdMobConfig".to_owned())),
+        shared: Vec::new(),
         types: vec![],
     }
 }
@@ -555,6 +560,7 @@ fn google_sign_in() -> Contract {
             },
         ],
         init: Some(TypeRef::Named("SignInConfig".to_owned())),
+        shared: Vec::new(),
         types: vec![],
     }
 }
@@ -600,6 +606,7 @@ fn notifications() -> Contract {
             },
         ],
         init: None,
+        shared: Vec::new(),
         types: vec![],
     }
 }
@@ -1105,6 +1112,7 @@ fn live_activity() -> Contract {
             },
         ],
         init: None,
+        shared: Vec::new(),
         types: vec![
             TypeDef::Enum(EnumDef {
                 name: "ActivityStyle".to_owned(),
@@ -1382,6 +1390,7 @@ fn multi_payload_contract() -> Contract {
         type_name: "Multi".to_owned(),
         methods: vec![],
         init: None,
+        shared: Vec::new(),
         types: vec![TypeDef::Enum(EnumDef {
             name: "Frame".to_owned(),
             variants: vec![
@@ -1649,6 +1658,7 @@ fn coverage() -> Contract {
         type_name: "Coverage".to_owned(),
         methods: coverage_methods(),
         init: None,
+        shared: Vec::new(),
         types: coverage_types(),
     }
 }
@@ -1791,6 +1801,7 @@ fn types_only_contract_stays_out_of_plugin_registries() {
         type_name: "Shared".to_owned(),
         methods: vec![],
         init: None,
+        shared: Vec::new(),
         types: vec![TypeDef::Struct(StructDef {
             name: "Payload".to_owned(),
             fields: vec![Field {
