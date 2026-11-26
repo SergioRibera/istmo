@@ -36,7 +36,9 @@ use super::super::backend::{
 };
 use super::super::output::FrameOut;
 use super::wayland::stream::{self, Engine, FrameSource, Offers, Settings};
-use super::wayland::{Client, EVENT_TIMEOUT, FrameEvents, orientation_of, shm_format};
+use super::wayland::{
+    Client, EVENT_TIMEOUT, FrameEvents, TOPLEVEL_PREFIX, orientation_of, shm_format,
+};
 use super::wayland::{shm_caps, sync_facts};
 
 const ID: BackendId = BackendId::LinuxExtImageCopy;
@@ -44,8 +46,6 @@ const MANAGER: &str = "ext_image_copy_capture_manager_v1";
 const OUTPUTS: &str = "ext_output_image_capture_source_manager_v1";
 const TOPLEVELS: &str = "ext_foreign_toplevel_image_capture_source_manager_v1";
 const TOPLEVEL_LIST: &str = "ext_foreign_toplevel_list_v1";
-/// Window source ids are prefixed so they never collide with outputs.
-const WINDOW_PREFIX: &str = "toplevel:";
 
 pub(crate) fn backend() -> Arc<dyn Backend> {
     Arc::new(ExtImageCopy)
@@ -54,26 +54,18 @@ pub(crate) fn backend() -> Arc<dyn Backend> {
 #[derive(Debug)]
 struct ExtImageCopy;
 
+/// Whether this compositor captures ext toplevels by id.
+fn captures_windows(client: &Client) -> bool {
+    client.has_global(TOPLEVELS, 1) && client.has_global(TOPLEVEL_LIST, 1)
+}
+
+/// The compositor's windows: capturable by id when it offers toplevel
+/// capture, listed only otherwise.
 fn windows(client: &mut Client) -> Result<Vec<Source>, CaptureError> {
-    if !client.has_global(TOPLEVELS, 1) || !client.list_toplevels()? {
+    if !client.list_toplevels()? {
         return Ok(Vec::new());
     }
-    Ok(client
-        .state
-        .toplevels
-        .iter()
-        .filter(|t| !t.closed)
-        .filter_map(|t| {
-            let identifier = t.identifier.as_ref()?;
-            let mut source = Source::new(
-                SourceId::new(ID, format!("{WINDOW_PREFIX}{identifier}")),
-                SourceKind::Window,
-                t.title.clone().unwrap_or_default(),
-            );
-            source.app_id.clone_from(&t.app_id);
-            Some(source)
-        })
-        .collect())
+    Ok(client.windows(captures_windows(client)))
 }
 
 impl Backend for ExtImageCopy {
@@ -104,7 +96,7 @@ impl Backend for ExtImageCopy {
         let mut client = Client::connect(ID)?;
         let mut caps = BackendCaps::new(ID);
         caps.source_kinds = vec![SourceKind::Monitor];
-        if client.has_global(TOPLEVELS, 1) && client.has_global(TOPLEVEL_LIST, 1) {
+        if captures_windows(&client) {
             caps.source_kinds.push(SourceKind::Window);
         }
         caps.provenance.source_kinds = Provenance::Probe;
@@ -226,18 +218,24 @@ fn engine_for(id: &SourceId, settings: Settings) -> Result<Engine<ExtSource>, Ca
         .image_copy_manager()
         .ok_or_else(|| CaptureError::protocol(ID, "bind", format!("no {MANAGER} global")))?;
     let (capture_source, info, global) =
-        if let Some(identifier) = id.value.strip_prefix(WINDOW_PREFIX) {
+        if let Some(identifier) = id.value.strip_prefix(TOPLEVEL_PREFIX) {
             let windows = windows(&mut client)?;
             let info = windows
                 .into_iter()
                 .find(|w| w.id == *id)
                 .ok_or_else(|| CaptureError::SourceNotFound(id.clone()))?;
+            if !info.capturable_by_id() {
+                return Err(CaptureError::unsatisfiable(
+                    Some(ID),
+                    Requirement::WindowById,
+                ));
+            }
             let handle = client
                 .state
                 .toplevels
                 .iter()
-                .find(|t| t.identifier.as_deref() == Some(identifier))
-                .map(|t| t.handle.clone())
+                .filter(|t| t.identifier.as_deref() == Some(identifier))
+                .find_map(|t| t.ext_handle().cloned())
                 .ok_or_else(|| CaptureError::SourceNotFound(id.clone()))?;
             let manager = client.toplevel_source_manager().ok_or_else(|| {
                 CaptureError::unsatisfiable(Some(ID), Requirement::Kind(SourceKind::Window))

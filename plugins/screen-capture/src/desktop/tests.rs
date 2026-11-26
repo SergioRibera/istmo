@@ -15,7 +15,8 @@ use crate::types::{
     Availability, BackendId, BackendSelection, CaptureError, CaptureEvent, CompositeConfig,
     CompositeScale, ConsentConfig, CopyStage, CpuPixelFormat, Exhaustion, FrameRate, PixelLayout,
     Rect, RegionSelector, RegionSpace, Requirement, RestoreToken, ScreenshotRequest, SessionConfig,
-    SessionUpdate, SourceFilter, SourceListing, SourceSelector, StopReason,
+    SessionUpdate, SourceCapture, SourceFilter, SourceKind, SourceListing, SourceSelector,
+    StopReason,
 };
 use crate::{ScreenCaptureClient, ScreenCaptureClientExt, ScreenCaptureHost};
 
@@ -261,6 +262,68 @@ fn sources_and_unknown_ids() {
     ))
     .expect_err("unknown");
     assert_eq!(err, CaptureError::SourceNotFound(id));
+}
+
+#[test]
+fn listed_only_windows_name_their_pickers_and_refuse_ids() {
+    let mut window = crate::types::Source::new(
+        crate::types::SourceId::new(WLR, "toplevel:abc"),
+        SourceKind::Window,
+        "a window",
+    );
+    window.capture = SourceCapture::PickerOnly(Vec::new());
+    let wlr = || {
+        let mut sources = two_monitors();
+        sources.push(window.clone());
+        Fake::new(WLR, sources)
+    };
+    let portal = || {
+        let mut portal = Fake::new(BackendId::LinuxPortal, Vec::new());
+        portal.listing = SourceListing::PickerOnly;
+        portal.kinds = vec![SourceKind::Monitor, SourceKind::Window];
+        portal
+    };
+    let rig = rig_with(vec![wlr(), portal()], CapturePolicy::default());
+    let list = block(rig.client.sources(SourceFilter::default())).expect("sources");
+    let listed = list
+        .sources
+        .iter()
+        .find(|s| s.id == window.id)
+        .expect("the window is listed");
+    assert_eq!(
+        listed.capture,
+        SourceCapture::PickerOnly(vec![BackendId::LinuxPortal])
+    );
+    assert!(
+        list.sources
+            .iter()
+            .filter(|s| s.kind == SourceKind::Monitor)
+            .all(crate::types::Source::capturable_by_id)
+    );
+    let err = block(rig.client.screenshot_cpu(
+        ScreenshotRequest::of(SourceSelector::Id(window.id.clone())),
+        PixelLayout::default(),
+    ))
+    .expect_err("listed only");
+    assert_eq!(
+        err,
+        CaptureError::unsatisfiable(Some(WLR), Requirement::WindowById)
+    );
+    // A policy without the portal leaves no picker to name.
+    let rig = rig_with(
+        vec![wlr(), portal()],
+        CapturePolicy::default().with_allowed_backends(vec![WLR]),
+    );
+    let list = block(rig.client.sources(SourceFilter {
+        kinds: vec![SourceKind::Window],
+        ..SourceFilter::default()
+    }))
+    .expect("sources");
+    assert_eq!(list.sources.len(), 1);
+    assert_eq!(
+        list.sources[0].capture,
+        SourceCapture::PickerOnly(Vec::new())
+    );
 }
 
 #[test]

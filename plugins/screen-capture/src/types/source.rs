@@ -397,6 +397,20 @@ pub struct SourceFlags {
     pub own_process: bool,
 }
 
+/// How a listed source can be captured.
+#[message(crate = "::istmo_core")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub enum SourceCapture {
+    /// By id (`SourceSelector::Id`) on the backend that issued it.
+    #[default]
+    ById,
+    /// Listed from the compositor's window list only: no backend here
+    /// captures it by id (`Unsatisfiable(WindowById)`). A picker of one
+    /// of these backends can (`ConsentConfig::allow_picker`); empty when
+    /// no picker backend runs in this session.
+    PickerOnly(Vec<BackendId>),
+}
+
 /// A capturable monitor, window or application.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -426,6 +440,7 @@ pub struct Source {
     pub connector: Option<String>,
     /// Monitors: the platform's human-readable description.
     pub description: Option<String>,
+    pub capture: SourceCapture,
 }
 
 impl Source {
@@ -448,7 +463,14 @@ impl Source {
             model: None,
             connector: None,
             description: None,
+            capture: SourceCapture::ById,
         }
+    }
+
+    /// Whether `SourceSelector::Id` can name it.
+    #[must_use]
+    pub const fn capturable_by_id(&self) -> bool {
+        matches!(self.capture, SourceCapture::ById)
     }
 
     /// Scale, defaulting to 1.0 when the backend does not know it.

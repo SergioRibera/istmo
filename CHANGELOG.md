@@ -18,6 +18,12 @@
 - Screen capture `Source`: `make`, `model`, `connector` and
   `description` of monitors (Wayland `wl_output` / xdg-output, X11
   `RandR` output names and `EDID`).
+- Screen capture lists Wayland windows from the compositor's toplevel
+  list (`ext_foreign_toplevel_list_v1`, else
+  `zwlr_foreign_toplevel_manager_v1`), also on backends that capture
+  outputs only (wlr-screencopy, niri). `Source::capture`
+  (`SourceCapture::ById` / `PickerOnly(backends)`) says whether an id
+  captures it or only a picker of those backends can.
 - `istmo-media` crate: message types that mean the same in several media
   plugins (for now `AccessStatus`, used by camera and screen capture).
   Each shared type is generated once per app (Kotlin package

@@ -52,6 +52,8 @@ pub(crate) struct Fake {
     pub(crate) restore_token: Option<crate::types::RestoreToken>,
     /// How long stopping a session takes (a slow PipeWire or X11 join).
     pub(crate) teardown: Duration,
+    /// What `caps` reports in `source_kinds`.
+    pub(crate) kinds: Vec<SourceKind>,
 }
 
 pub(crate) fn monitor(id: BackendId, index: usize, geometry: Rect, scale: u32) -> Source {
@@ -83,6 +85,7 @@ impl Fake {
             joins_auto: true,
             restore_token: None,
             teardown: Duration::ZERO,
+            kinds: vec![SourceKind::Monitor],
         }
     }
 
@@ -201,6 +204,7 @@ impl Backend for Fake {
     fn caps(&self) -> Result<BackendCaps, CaptureError> {
         let mut caps = BackendCaps::new(self.id);
         caps.listing = self.listing;
+        caps.source_kinds.clone_from(&self.kinds);
         caps.video = vec![FormatCaps {
             format: PixelFormat::Bgrx8,
             memory: BufferMemory::Cpu,

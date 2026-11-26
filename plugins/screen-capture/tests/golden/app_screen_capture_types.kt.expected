@@ -910,6 +910,11 @@ data class SourceFlags(
     val ownProcess: Boolean
 )
 
+sealed class SourceCapture {
+    object ById : SourceCapture()
+    data class PickerOnly(val value: List<BackendId>) : SourceCapture()
+}
+
 data class Source(
     val id: SourceId,
     val kind: SourceKind,
@@ -925,7 +930,8 @@ data class Source(
     val make: String?,
     val model: String?,
     val connector: String?,
-    val description: String?
+    val description: String?,
+    val capture: SourceCapture
 )
 
 sealed class RegionSpace {

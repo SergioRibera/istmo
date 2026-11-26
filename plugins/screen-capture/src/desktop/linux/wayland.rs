@@ -51,6 +51,10 @@ use wayland_protocols::xdg::xdg_output::zv1::client::{
     zxdg_output_manager_v1::ZxdgOutputManagerV1,
     zxdg_output_v1::{self, ZxdgOutputV1},
 };
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+    zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
+    zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1},
+};
 use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_frame_v1::{self, ZwlrScreencopyFrameV1},
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
@@ -61,7 +65,8 @@ use super::gbm::is_nvidia;
 use crate::select::MOD_INVALID;
 use crate::types::{
     BackendId, BufferMemory, CapabilityNote, CaptureError, CopyStage, Damage, FormatCaps,
-    Orientation, PixelFormat, Rect, Rotation, Size, Source, SourceId, SourceKind, SyncKind,
+    Orientation, PixelFormat, Rect, Rotation, Size, Source, SourceCapture, SourceId, SourceKind,
+    SyncKind,
 };
 
 /// How long one protocol exchange may take before it counts as lost.
@@ -316,14 +321,127 @@ impl OutputInfo {
     }
 }
 
-/// A toplevel from `ext_foreign_toplevel_list_v1`.
+/// Prefix of window source ids from `ext_foreign_toplevel_list_v1`: its
+/// identifiers are stable across connections and name the windows
+/// ext-image-copy captures.
+pub(crate) const TOPLEVEL_PREFIX: &str = "toplevel:";
+/// Prefix of window source ids from `zwlr_foreign_toplevel_manager_v1`,
+/// which has no identifier: the handle's protocol id, stable only on one
+/// connection (one listing, or one watch).
+const WLR_TOPLEVEL_PREFIX: &str = "wlr-toplevel:";
+
+/// `zwlr_foreign_toplevel_handle_v1.state` values.
+const WLR_STATE_MINIMIZED: u32 = 1;
+const WLR_STATE_ACTIVATED: u32 = 2;
+
+/// A toplevel handle of either foreign-toplevel protocol.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ToplevelHandle {
+    Ext(ExtForeignToplevelHandleV1),
+    Wlr(ZwlrForeignToplevelHandleV1),
+}
+
+/// A bound foreign-toplevel list.
+#[derive(Debug)]
+pub(crate) enum ToplevelList {
+    Ext(ExtForeignToplevelListV1),
+    Wlr(ZwlrForeignToplevelManagerV1),
+}
+
+impl ToplevelList {
+    /// No more toplevel events (the objects stay until the connection
+    /// goes).
+    pub(crate) fn stop(&self) {
+        match self {
+            Self::Ext(list) => list.stop(),
+            Self::Wlr(manager) => manager.stop(),
+        }
+    }
+}
+
+/// Where a toplevel is in its protocol life.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToplevelPhase {
+    /// Announced, its first `done` not yet received.
+    Announced,
+    /// Fully described at least once.
+    Described,
+    Closed,
+}
+
+/// A toplevel as a foreign-toplevel list describes it.
 #[derive(Debug, Clone)]
 pub(crate) struct ToplevelInfo {
-    pub(crate) handle: ExtForeignToplevelHandleV1,
+    pub(crate) handle: ToplevelHandle,
     pub(crate) identifier: Option<String>,
     pub(crate) title: Option<String>,
     pub(crate) app_id: Option<String>,
-    pub(crate) closed: bool,
+    /// wlr only: the `state` array.
+    pub(crate) minimised: bool,
+    pub(crate) activated: bool,
+    pub(crate) phase: ToplevelPhase,
+}
+
+impl ToplevelInfo {
+    const fn new(handle: ToplevelHandle) -> Self {
+        Self {
+            handle,
+            identifier: None,
+            title: None,
+            app_id: None,
+            minimised: false,
+            activated: false,
+            phase: ToplevelPhase::Announced,
+        }
+    }
+
+    /// A `done` arrived (a closed toplevel stays closed).
+    fn described(&mut self) {
+        if self.phase == ToplevelPhase::Announced {
+            self.phase = ToplevelPhase::Described;
+        }
+    }
+
+    /// The ext handle, which ext-image-copy captures.
+    pub(crate) const fn ext_handle(&self) -> Option<&ExtForeignToplevelHandleV1> {
+        match &self.handle {
+            ToplevelHandle::Ext(handle) => Some(handle),
+            ToplevelHandle::Wlr(_) => None,
+        }
+    }
+
+    /// The source id value, once the toplevel can be named.
+    pub(crate) fn id_value(&self) -> Option<String> {
+        match &self.handle {
+            ToplevelHandle::Ext(_) => self
+                .identifier
+                .as_ref()
+                .map(|id| format!("{TOPLEVEL_PREFIX}{id}")),
+            ToplevelHandle::Wlr(handle) => Some(format!(
+                "{WLR_TOPLEVEL_PREFIX}{}",
+                handle.id().protocol_id()
+            )),
+        }
+    }
+
+    /// The window as `backend` lists it; `None` until described, and
+    /// once closed.
+    pub(crate) fn source(&self, backend: BackendId, capture: SourceCapture) -> Option<Source> {
+        if self.phase != ToplevelPhase::Described {
+            return None;
+        }
+        let mut source = Source::new(
+            SourceId::new(backend, self.id_value()?),
+            SourceKind::Window,
+            self.title.clone().unwrap_or_default(),
+        );
+        source.app_id.clone_from(&self.app_id);
+        source.flags.minimised = self.minimised;
+        // As on X11: the focused window is the "primary" one.
+        source.flags.primary = self.activated;
+        source.capture = capture;
+        Some(source)
+    }
 }
 
 /// `linux-dmabuf` feedback: the compositor's main device and the
@@ -766,23 +884,63 @@ impl Client {
         self.globals.bind(&self.qh, 1..=1, ()).ok()
     }
 
-    #[cfg(feature = "linux-ext-image-copy")]
-    /// Bind `ext_foreign_toplevel_list_v1` and collect the toplevels;
-    /// `false` without the global.
+    /// Bind a foreign-toplevel list and collect the toplevels:
+    /// `ext_foreign_toplevel_list_v1` when advertised (stable
+    /// identifiers, the handles ext-image-copy captures), else
+    /// `zwlr_foreign_toplevel_manager_v1` (wlroots without the ext list).
+    /// `None` without either (GNOME).
+    ///
+    /// # Errors
+    /// A protocol or socket error.
+    pub(crate) fn bind_toplevels(&mut self) -> Result<Option<ToplevelList>, CaptureError> {
+        let list = if let Ok(list) =
+            self.globals
+                .bind::<ExtForeignToplevelListV1, _, _>(&self.qh, 1..=1, ())
+        {
+            ToplevelList::Ext(list)
+        } else if let Ok(manager) =
+            self.globals
+                .bind::<ZwlrForeignToplevelManagerV1, _, _>(&self.qh, 1..=3, ())
+        {
+            ToplevelList::Wlr(manager)
+        } else {
+            return Ok(None);
+        };
+        self.roundtrip("toplevels")?;
+        self.roundtrip("toplevel details")?;
+        Ok(Some(list))
+    }
+
+    /// One listing of the toplevels ([`bind_toplevels`](Self::bind_toplevels),
+    /// then stop); `false` without a list.
     ///
     /// # Errors
     /// A protocol or socket error.
     pub(crate) fn list_toplevels(&mut self) -> Result<bool, CaptureError> {
-        let Ok(list) = self
-            .globals
-            .bind::<ExtForeignToplevelListV1, _, _>(&self.qh, 1..=1, ())
-        else {
+        let Some(list) = self.bind_toplevels()? else {
             return Ok(false);
         };
-        self.roundtrip("toplevels")?;
-        self.roundtrip("toplevel details")?;
         list.stop();
         Ok(true)
+    }
+
+    /// The listed toplevels as window sources of this client's backend.
+    /// With `by_id`, ext toplevels are capturable by id; every other one
+    /// is listed only (`SourceCapture::PickerOnly`, pickers filled in by
+    /// the host).
+    pub(crate) fn windows(&self, by_id: bool) -> Vec<Source> {
+        self.state
+            .toplevels
+            .iter()
+            .filter_map(|t| {
+                let capture = if by_id && t.ext_handle().is_some() {
+                    SourceCapture::ById
+                } else {
+                    SourceCapture::PickerOnly(Vec::new())
+                };
+                t.source(self.backend, capture)
+            })
+            .collect()
     }
 }
 
@@ -1152,13 +1310,9 @@ impl Dispatch<ExtForeignToplevelListV1, ()> for WlState {
         _: &QueueHandle<Self>,
     ) {
         if let ext_foreign_toplevel_list_v1::Event::Toplevel { toplevel } = event {
-            state.toplevels.push(ToplevelInfo {
-                handle: toplevel,
-                identifier: None,
-                title: None,
-                app_id: None,
-                closed: false,
-            });
+            state
+                .toplevels
+                .push(ToplevelInfo::new(ToplevelHandle::Ext(toplevel)));
         }
     }
 
@@ -1176,16 +1330,76 @@ impl Dispatch<ExtForeignToplevelHandleV1, ()> for WlState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let Some(info) = state.toplevels.iter_mut().find(|t| &t.handle == handle) else {
+        use ext_foreign_toplevel_handle_v1::Event;
+        let Some(info) = state
+            .toplevels
+            .iter_mut()
+            .find(|t| t.ext_handle() == Some(handle))
+        else {
             return;
         };
         match event {
-            ext_foreign_toplevel_handle_v1::Event::Identifier { identifier } => {
-                info.identifier = Some(identifier);
+            Event::Identifier { identifier } => info.identifier = Some(identifier),
+            Event::Title { title } => info.title = Some(title),
+            Event::AppId { app_id } => info.app_id = Some(app_id),
+            Event::Done => info.described(),
+            Event::Closed => info.phase = ToplevelPhase::Closed,
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for WlState {
+    fn event(
+        state: &mut Self,
+        _: &ZwlrForeignToplevelManagerV1,
+        event: zwlr_foreign_toplevel_manager_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } = event {
+            state
+                .toplevels
+                .push(ToplevelInfo::new(ToplevelHandle::Wlr(toplevel)));
+        }
+    }
+
+    event_created_child!(WlState, ZwlrForeignToplevelManagerV1, [
+        zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ()),
+    ]);
+}
+
+impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for WlState {
+    fn event(
+        state: &mut Self,
+        handle: &ZwlrForeignToplevelHandleV1,
+        event: zwlr_foreign_toplevel_handle_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use zwlr_foreign_toplevel_handle_v1::Event;
+        let wanted = ToplevelHandle::Wlr(handle.clone());
+        let Some(info) = state.toplevels.iter_mut().find(|t| t.handle == wanted) else {
+            return;
+        };
+        match event {
+            Event::Title { title } => info.title = Some(title),
+            Event::AppId { app_id } => info.app_id = Some(app_id),
+            Event::State { state: values } => {
+                let values: Vec<u32> = values
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| u32::from_ne_bytes(*c))
+                    .collect();
+                info.minimised = values.contains(&WLR_STATE_MINIMIZED);
+                info.activated = values.contains(&WLR_STATE_ACTIVATED);
             }
-            ext_foreign_toplevel_handle_v1::Event::Title { title } => info.title = Some(title),
-            ext_foreign_toplevel_handle_v1::Event::AppId { app_id } => info.app_id = Some(app_id),
-            ext_foreign_toplevel_handle_v1::Event::Closed => info.closed = true,
+            Event::Done => info.described(),
+            Event::Closed => info.phase = ToplevelPhase::Closed,
+            // Output enter / leave and parents are not reported.
             _ => {}
         }
     }

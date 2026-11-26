@@ -186,6 +186,25 @@ safe `drm` crate.
   - X11: the `RandR` output name of the monitor's first active output,
     and the PNP id and monitor-name descriptor of its `EDID` property
     (Xvfb and most virtual outputs have none).
+- Wayland windows come from the compositor's toplevel list, ported
+  from ferricast's `wlroots_enum`, on both direct backends:
+  - `ext_foreign_toplevel_list_v1` first: its identifiers are stable
+    and are what ext-image-copy captures (`toplevel:<identifier>`).
+  - `zwlr_foreign_toplevel_manager_v1` otherwise
+    (`wlr-toplevel:<protocol id>`, stable only on one connection; adds
+    `minimised` and the activated window as `flags.primary`, as on X11).
+  - A toplevel is listed once its first `done` arrived.
+  - `Source::capture` (`SourceCapture`): `ById` where the backend
+    captures it (ext-image-copy with
+    `ext_foreign_toplevel_image_capture_source_manager_v1`);
+    `PickerOnly(backends)` otherwise (wlr-screencopy, which captures
+    outputs only; ext-image-copy without toplevel capture). The host
+    fills `backends` with the ready picker-only backends offering
+    windows (the portal), empty when none runs. An `Id` naming such a
+    source is `Unsatisfiable(WindowById)`. `caps.source_kinds` keeps
+    saying what the backend captures, not what it lists.
+  - Origin rule unchanged: `sources` is local unless the policy opens
+    it.
 
 ## Goals
 

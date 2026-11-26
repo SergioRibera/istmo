@@ -22,8 +22,8 @@ use crate::types::{
     CopyStage, CpuPixelFormat, DamageSupport, FormatRequest, FrameMeta, IndicatorState,
     NegotiatedStream, OrientationHandling, PauseReason, Persistence, PixelFormat, PixelLayout,
     PlaneLayout, Provenance, RawImage, Rect, Requirement, ScreenshotInfo, ScreenshotRequest,
-    SessionConfig, SessionUpdate, Source, SourceFilter, SourceId, SourceKind, SourceList,
-    SourceListing, SourceSelector, StopReason, Strength,
+    SessionConfig, SessionUpdate, Source, SourceCapture, SourceFilter, SourceId, SourceKind,
+    SourceList, SourceListing, SourceSelector, StopReason, Strength,
 };
 
 use super::backend::{
@@ -312,7 +312,34 @@ impl Engine {
         };
         let mut list = backend.sources()?;
         list.sources.retain(|s| filter.admits(s.kind));
+        self.name_pickers(&mut list.sources);
         Ok(list)
+    }
+
+    /// Fill in, for every listed-only source, the ready picker backends
+    /// that offer its kind (probed only when such a source is listed).
+    fn name_pickers(&self, sources: &mut [Source]) {
+        if sources.iter().all(Source::capturable_by_id) {
+            return;
+        }
+        let pickers: Vec<(BackendId, Vec<SourceKind>)> = self
+            .candidates()
+            .into_iter()
+            .filter_map(|c| {
+                let caps = c.caps?;
+                (caps.listing == SourceListing::PickerOnly)
+                    .then_some((c.backend, caps.source_kinds))
+            })
+            .collect();
+        for source in sources {
+            if let SourceCapture::PickerOnly(backends) = &mut source.capture {
+                *backends = pickers
+                    .iter()
+                    .filter(|(_, kinds)| kinds.contains(&source.kind))
+                    .map(|(backend, _)| *backend)
+                    .collect();
+            }
+        }
     }
 
     fn ready(&self, backend: &dyn Backend) -> Result<(), CaptureError> {
@@ -536,11 +563,21 @@ impl Engine {
             region: None,
         };
         match selector {
-            SourceSelector::Id(wanted) => list()?
-                .into_iter()
-                .find(|s| &s.id == wanted)
-                .map(single)
-                .ok_or_else(|| CaptureError::SourceNotFound(wanted.clone())),
+            SourceSelector::Id(wanted) => {
+                let source = list()?
+                    .into_iter()
+                    .find(|s| &s.id == wanted)
+                    .ok_or_else(|| CaptureError::SourceNotFound(wanted.clone()))?;
+                // Listed from the compositor's window list: only a picker
+                // backend can capture it.
+                if !source.capturable_by_id() {
+                    return Err(CaptureError::unsatisfiable(
+                        Some(id),
+                        Requirement::WindowById,
+                    ));
+                }
+                Ok(single(source))
+            }
             SourceSelector::PrimaryMonitor => {
                 let monitors = monitors(list()?);
                 monitors

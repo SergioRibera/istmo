@@ -2002,6 +2002,25 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeBool(&out, value.ownProcess)
     }
 
+    public func readSourceCapture(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceCapture {
+        let disc = try Bincode.readVarintU32(&c)
+        switch disc {
+        case 0: return .byId
+        case 1: return .pickerOnly(try Bincode.readVec(&c) { c1 in try self.readBackendId(&c1) })
+        default: throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
+        }
+    }
+
+    public func writeSourceCapture(_ out: inout Data, _ value: ScreenCapture.SourceCapture) {
+        switch value {
+        case .byId:
+            Bincode.writeVarintU32(&out, 0)
+        case .pickerOnly(let payload):
+            Bincode.writeVarintU32(&out, 1)
+            Bincode.writeVec(&out, payload) { o1, v1 in self.writeBackendId(&o1, v1) }
+        }
+    }
+
     public func readSource(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Source {
         let id = try self.readSourceId(&c)
         let kind = try self.readSourceKind(&c)
@@ -2018,7 +2037,8 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let model = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let connector = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let description = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
-        return ScreenCapture.Source(id: id, kind: kind, name: name, appId: appId, pid: pid, geometry: geometry, physicalSize: physicalSize, scalePermille: scalePermille, refreshMhz: refreshMhz, orientation: orientation, flags: flags, make: make, model: model, connector: connector, description: description)
+        let capture = try self.readSourceCapture(&c)
+        return ScreenCapture.Source(id: id, kind: kind, name: name, appId: appId, pid: pid, geometry: geometry, physicalSize: physicalSize, scalePermille: scalePermille, refreshMhz: refreshMhz, orientation: orientation, flags: flags, make: make, model: model, connector: connector, description: description, capture: capture)
     }
 
     public func writeSource(_ out: inout Data, _ value: ScreenCapture.Source) {
@@ -2037,6 +2057,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeOption(&out, value.model) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.connector) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.description) { o1, v1 in Bincode.writeString(&o1, v1) }
+        self.writeSourceCapture(&out, value.capture)
     }
 
     public func readRegionSpace(_ c: inout Bincode.Cursor) throws -> ScreenCapture.RegionSpace {

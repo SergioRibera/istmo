@@ -394,6 +394,9 @@ interface ScreenCaptureCodecs {
     fun readSource(bytes: ByteArray, offset: Int): Bincode.Decoded<Source>
     fun writeSource(out: ByteArrayOutputStream, value: Source)
 
+    fun readSourceCapture(bytes: ByteArray, offset: Int): Bincode.Decoded<SourceCapture>
+    fun writeSourceCapture(out: ByteArrayOutputStream, value: SourceCapture)
+
     fun readSourceFilter(bytes: ByteArray, offset: Int): Bincode.Decoded<SourceFilter>
     fun writeSourceFilter(out: ByteArrayOutputStream, value: SourceFilter)
 

@@ -131,9 +131,15 @@ impl Backend for WlrScreencopy {
     }
 
     fn sources(&self) -> Result<SourceList, CaptureError> {
-        let client = Client::connect(ID)?;
+        let mut client = Client::connect(ID)?;
+        let mut sources = client.monitors();
+        // wlr-screencopy captures outputs only; the compositor's windows
+        // are listed so a picker can be offered for them.
+        if client.list_toplevels()? {
+            sources.extend(client.windows(false));
+        }
         Ok(SourceList {
-            sources: client.monitors(),
+            sources,
             listing: SourceListing::Enumerable,
         })
     }

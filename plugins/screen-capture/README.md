@@ -167,6 +167,23 @@ subscriber, then streams these events:
 - `Exhausted`
 - `Stopped`, which says why the session ended
 
+## Sources
+
+`sources` lists monitors and windows, for local callers only by default
+(titles and app ids are sensitive). Monitors carry `make`, `model`,
+`connector` and `description` where the platform reports them.
+
+On Wayland the windows come from the compositor's toplevel list
+(`ext_foreign_toplevel_list_v1`, else
+`zwlr_foreign_toplevel_manager_v1`), also when the backend that lists
+them cannot capture windows (wlr-screencopy, niri). `Source::capture`
+says which is which:
+
+- `ById`: `SourceSelector::Id` captures it.
+- `PickerOnly(backends)`: listed only. An `Id` is
+  `Unsatisfiable(WindowById)`; a picker of one of `backends` (the
+  portal, with `allow_picker`) can capture it.
+
 ## Consent
 
 Direct Wayland and X11 capture need no consent. The portal shows its

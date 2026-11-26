@@ -266,6 +266,8 @@ public protocol ScreenCaptureCodecs {
     func writeSize(_ out: inout Data, _ value: ScreenCapture.Size)
     func readSource(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Source
     func writeSource(_ out: inout Data, _ value: ScreenCapture.Source)
+    func readSourceCapture(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceCapture
+    func writeSourceCapture(_ out: inout Data, _ value: ScreenCapture.SourceCapture)
     func readSourceFilter(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceFilter
     func writeSourceFilter(_ out: inout Data, _ value: ScreenCapture.SourceFilter)
     func readSourceFlags(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceFlags

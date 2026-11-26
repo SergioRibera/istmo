@@ -1348,6 +1348,11 @@ extension ScreenCapture {
         }
     }
 
+    public enum SourceCapture: Sendable {
+        case byId
+        case pickerOnly([BackendId])
+    }
+
     public struct Source: Sendable {
         public let id: SourceId
         public let kind: SourceKind
@@ -1364,8 +1369,9 @@ extension ScreenCapture {
         public let model: String?
         public let connector: String?
         public let description: String?
+        public let capture: SourceCapture
 
-        public init(id: SourceId, kind: SourceKind, name: String, appId: String?, pid: UInt32?, geometry: Rect?, physicalSize: Size?, scalePermille: UInt32?, refreshMhz: UInt32?, orientation: Orientation, flags: SourceFlags, make: String?, model: String?, connector: String?, description: String?) {
+        public init(id: SourceId, kind: SourceKind, name: String, appId: String?, pid: UInt32?, geometry: Rect?, physicalSize: Size?, scalePermille: UInt32?, refreshMhz: UInt32?, orientation: Orientation, flags: SourceFlags, make: String?, model: String?, connector: String?, description: String?, capture: SourceCapture) {
             self.id = id
             self.kind = kind
             self.name = name
@@ -1381,6 +1387,7 @@ extension ScreenCapture {
             self.model = model
             self.connector = connector
             self.description = description
+            self.capture = capture
         }
     }
 

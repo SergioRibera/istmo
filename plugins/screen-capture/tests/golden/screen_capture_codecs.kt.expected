@@ -2494,6 +2494,31 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
         Bincode.writeBool(out, value.ownProcess)
     }
 
+    override fun readSourceCapture(bytes: ByteArray, offset: Int): Bincode.Decoded<SourceCapture> {
+        var cursor = offset
+        val disc = Bincode.readEnumDiscriminant(bytes, cursor)
+        cursor = disc.consumed
+        return when (disc.value) {
+            0 -> Bincode.Decoded(SourceCapture.ById, cursor)
+            1 -> {
+                val d_inner = Bincode.readVec(bytes, cursor) { b1, c1 -> readBackendId(b1, c1) }; cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(SourceCapture.PickerOnly(inner) as SourceCapture, cursor)
+            }
+            else -> throw Bincode.DecodeException("SourceCapture: unknown discriminant ${disc.value}")
+        }
+    }
+
+    override fun writeSourceCapture(out: ByteArrayOutputStream, value: SourceCapture) {
+        when (value) {
+            SourceCapture.ById -> Bincode.writeEnumDiscriminant(out, 0)
+            is SourceCapture.PickerOnly -> {
+                Bincode.writeEnumDiscriminant(out, 1)
+                Bincode.writeVec(out, value.value) { s1, v1 -> writeBackendId(s1, v1) }
+            }
+        }
+    }
+
     override fun readSource(bytes: ByteArray, offset: Int): Bincode.Decoded<Source> {
         var cursor = offset
         val d_id = readSourceId(bytes, cursor); cursor = d_id.consumed
@@ -2526,7 +2551,9 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
         val connector = d_connector.value
         val d_description = Bincode.readOption(bytes, cursor) { b1, c1 -> Bincode.readString(b1, c1) }; cursor = d_description.consumed
         val description = d_description.value
-        return Bincode.Decoded(Source(id = id, kind = kind, name = name, appId = appId, pid = pid, geometry = geometry, physicalSize = physicalSize, scalePermille = scalePermille, refreshMhz = refreshMhz, orientation = orientation, flags = flags, make = make, model = model, connector = connector, description = description), cursor)
+        val d_capture = readSourceCapture(bytes, cursor); cursor = d_capture.consumed
+        val capture = d_capture.value
+        return Bincode.Decoded(Source(id = id, kind = kind, name = name, appId = appId, pid = pid, geometry = geometry, physicalSize = physicalSize, scalePermille = scalePermille, refreshMhz = refreshMhz, orientation = orientation, flags = flags, make = make, model = model, connector = connector, description = description, capture = capture), cursor)
     }
 
     override fun writeSource(out: ByteArrayOutputStream, value: Source) {
@@ -2545,6 +2572,7 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
         Bincode.writeOption(out, value.model) { s1, v1 -> Bincode.writeString(s1, v1) }
         Bincode.writeOption(out, value.connector) { s1, v1 -> Bincode.writeString(s1, v1) }
         Bincode.writeOption(out, value.description) { s1, v1 -> Bincode.writeString(s1, v1) }
+        writeSourceCapture(out, value.capture)
     }
 
     override fun readRegionSpace(bytes: ByteArray, offset: Int): Bincode.Decoded<RegionSpace> {

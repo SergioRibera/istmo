@@ -12,12 +12,15 @@
 #![cfg(target_os = "linux")]
 
 mod common;
+#[cfg(feature = "wayland")]
+mod probe_window;
 
 use istmo_core::{MemoryKind, SinkPolicy};
 use istmo_screen_capture::{
-    BackendId, BufferMemory, CaptureEvent, CopyStage, FormatChoice, FormatRequest, FormatTier,
-    FrameRate, PixelFormat, PixelLayout, ScreenCaptureClientExt, ScreenshotRequest, SessionConfig,
-    SourceFilter, SourceSelector, SyncKind,
+    BackendId, BufferMemory, CaptureError, CaptureEvent, CopyStage, FormatChoice, FormatRequest,
+    FormatTier, FrameRate, PixelFormat, PixelLayout, Requirement, ScreenCaptureClientExt,
+    ScreenshotRequest, SessionConfig, SourceCapture, SourceFilter, SourceKind, SourceSelector,
+    SyncKind,
 };
 
 use common::{Probe, Scene, block, checklist, fixed, live};
@@ -163,6 +166,101 @@ fn monitors_compose_and_turn_on_headless_sway() {
             "first output covers its full height"
         );
     }
+}
+
+/// The probe window's app id.
+#[cfg(feature = "wayland")]
+const PROBE_APP: &str = "dev.istmo.screen-capture.probe";
+
+/// The probe window as `backend` lists it, waiting for it to appear.
+#[cfg(feature = "wayland")]
+fn listed_probe(live: &common::Live, backend: BackendId) -> istmo_screen_capture::Source {
+    let mut found = None;
+    let appeared = common::wait_until(
+        "the probe window",
+        std::time::Duration::from_secs(5),
+        || {
+            let list = block(live.client.sources(SourceFilter {
+                backend: Some(backend),
+                kinds: vec![SourceKind::Window],
+            }))
+            .expect("sources");
+            found = list
+                .sources
+                .into_iter()
+                .find(|s| s.app_id.as_deref() == Some(PROBE_APP));
+            found.is_some()
+        },
+    );
+    assert!(appeared, "{backend} lists the probe window");
+    found.expect("listed")
+}
+
+/// Windows come from the compositor's toplevel list. wlr-screencopy
+/// never captures them; ext-image-copy does only where the compositor
+/// offers toplevel capture.
+#[cfg(feature = "wayland")]
+#[test]
+fn compositor_windows_are_listed_on_headless_sway() {
+    if !common::enabled(SWAY) {
+        return;
+    }
+    let live = live();
+    let window = probe_window::ProbeWindow::open("istmo probe", PROBE_APP);
+    for backend in [BackendId::LinuxWlrScreencopy, BackendId::LinuxExtImageCopy] {
+        let listed = listed_probe(&live, backend);
+        eprintln!("{backend}: {listed:?}");
+        assert_eq!(listed.name, "istmo probe");
+        assert_eq!(listed.id.backend, backend);
+        let captures = common::caps(&live, backend)
+            .source_kinds
+            .contains(&SourceKind::Window);
+        if captures {
+            assert_eq!(listed.capture, SourceCapture::ById, "{backend}");
+            continue;
+        }
+        assert!(
+            matches!(listed.capture, SourceCapture::PickerOnly(_)),
+            "{backend}: {listed:?}"
+        );
+        let err = block(live.client.screenshot_cpu(
+            ScreenshotRequest::of(SourceSelector::Id(listed.id.clone())).backend(fixed(backend)),
+            PixelLayout::default(),
+        ))
+        .expect_err("a listed-only window");
+        assert_eq!(
+            err,
+            CaptureError::unsatisfiable(Some(backend), Requirement::WindowById),
+            "{backend}"
+        );
+    }
+    window.set_title("istmo probe, renamed");
+    let renamed = common::wait_until("the new title", std::time::Duration::from_secs(5), || {
+        listed_probe(&live, BackendId::LinuxWlrScreencopy).name == "istmo probe, renamed"
+    });
+    assert!(renamed, "a new listing shows the new title");
+    drop(window);
+}
+
+#[test]
+fn niri_lists_windows() {
+    if !common::enabled(NIRI) {
+        return;
+    }
+    let live = live();
+    let list = block(live.client.sources(SourceFilter {
+        kinds: vec![SourceKind::Window],
+        ..SourceFilter::default()
+    }))
+    .expect("sources");
+    eprintln!("{} windows: {:#?}", list.sources.len(), list.sources);
+    assert!(!list.sources.is_empty(), "niri lists its windows");
+    assert!(
+        list.sources
+            .iter()
+            .all(|s| matches!(s.capture, SourceCapture::PickerOnly(_))),
+        "wlr-screencopy captures no window"
+    );
 }
 
 #[test]
