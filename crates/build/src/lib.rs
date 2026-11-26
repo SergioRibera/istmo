@@ -182,6 +182,7 @@ pub use crate::service::{AndroidServiceArtifacts, ServiceContract, generate_andr
 pub use crate::swift::{generate_swift, generate_swift_client};
 pub use crate::swift_host::generate_swift_host;
 pub use crate::swift_types::{
-    generate_swift_codecs, generate_swift_shared_types, generate_swift_types,
+    check_swift_namespaces, generate_swift_codecs, generate_swift_shared_types,
+    generate_swift_types,
 };
 pub use crate::worker::{WorkerContract, generate_android_worker};

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use crate::codegen::{
@@ -130,6 +130,133 @@ pub fn generate_swift_codecs(contract: &Contract) -> String {
     }
     let _ = writeln!(out, "}}");
     out
+}
+
+/// Module-scope names generated Swift spells unqualified (runtime,
+/// standard library, app-wide generated symbols): a namespace with one of
+/// these names would shadow it everywhere, a message type inside its own
+/// namespace.
+const RESERVED_NAMES: &[&str] = &[
+    "AsyncThrowingStream",
+    "Bincode",
+    "Bool",
+    "Data",
+    "Double",
+    "Error",
+    "Float",
+    "Foundation",
+    "HandleReleaser",
+    "Int16",
+    "Int32",
+    "Int64",
+    "Int8",
+    "IstmoApp",
+    "IstmoFrameSender",
+    "IstmoPluginRegistry",
+    "IstmoRuntime",
+    "IstmoRuntimeError",
+    "NSLock",
+    "NativeHandleId",
+    "PluginException",
+    "PluginHandler",
+    "PluginResult",
+    "PluginRuntimeError",
+    "Sendable",
+    "String",
+    "Swift",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "UInt8",
+    "Void",
+];
+
+/// Top-level Swift symbols generated for `contract`: its namespace, the
+/// classes and protocols around it and its exceptions.
+fn top_level_symbols(contract: &Contract) -> Vec<String> {
+    let ty = &contract.type_name;
+    let mut out = vec![ty.clone()];
+    out.extend(
+        ["Backend", "Client", "Codecs", "CodecsImpl", "Dispatcher"]
+            .iter()
+            .map(|suffix| format!("{ty}{suffix}")),
+    );
+    if contract.init.is_some() {
+        out.push(format!("{ty}Factory"));
+    }
+    out.extend(
+        contract
+            .error_types()
+            .into_iter()
+            .map(|err| contract.exception_name(err)),
+    );
+    out
+}
+
+/// Checks that the Swift one app generates for `contracts` cannot clash.
+///
+/// Plugin namespaces, shared group namespaces and the symbols generated
+/// around each plugin must be distinct and must not shadow a name the
+/// generated code relies on; no message type may be named like a name
+/// spelled unqualified inside its namespace.
+///
+/// # Errors
+/// The first clash, naming both sides and what to rename.
+pub fn check_swift_namespaces(contracts: &[&Contract]) -> Result<(), String> {
+    const RUNTIME: &str = "the istmo runtime or the Swift standard library";
+    let mut owners: BTreeMap<String, String> = RESERVED_NAMES
+        .iter()
+        .map(|name| ((*name).to_owned(), RUNTIME.to_owned()))
+        .collect();
+    let mut declare = |name: String, owner: String| -> Result<(), String> {
+        match owners.get(&name) {
+            Some(existing) if *existing == owner => Ok(()),
+            Some(existing) => Err(format!(
+                "Swift name `{name}` is declared by {owner} and by {existing}: \
+                 rename the plugin trait or the shared group"
+            )),
+            None => {
+                owners.insert(name, owner);
+                Ok(())
+            }
+        }
+    };
+    for contract in contracts {
+        let owner = format!("plugin `{}`", contract.plugin_id);
+        for symbol in top_level_symbols(contract) {
+            declare(symbol, owner.clone())?;
+        }
+    }
+    for group in contracts.iter().flat_map(|c| c.shared.iter()) {
+        declare(
+            group.group.clone(),
+            format!("shared types `{}`", group.group),
+        )?;
+    }
+    for contract in contracts {
+        let groups: Vec<&str> = contract.shared.iter().map(|g| g.group.as_str()).collect();
+        let nested = contract
+            .types
+            .iter()
+            .map(|ty| (contract.type_name.as_str(), ty))
+            .chain(
+                contract
+                    .shared
+                    .iter()
+                    .flat_map(|g| g.types.iter().map(move |ty| (g.group.as_str(), ty))),
+            );
+        for (namespace, ty) in nested {
+            let name = ty.name();
+            if RESERVED_NAMES.contains(&name) || groups.contains(&name) {
+                return Err(format!(
+                    "message type `{namespace}.{name}` (plugin `{}`) shadows `{name}` inside \
+                     its Swift namespace: rename the type",
+                    contract.plugin_id
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Declared types some method throws: they must conform to `Error` for
@@ -366,4 +493,91 @@ fn write_native_handle_codec(out: &mut String) {
     );
     let _ = writeln!(out, "        Bincode.writeVarintU64(&out, value)");
     let _ = writeln!(out, "    }}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::{Method, MethodKind};
+
+    fn unit_enum(name: &str) -> TypeDef {
+        TypeDef::Enum(EnumDef {
+            name: name.to_owned(),
+            variants: Vec::new(),
+        })
+    }
+
+    fn media() -> SharedTypes {
+        SharedTypes {
+            group: "IstmoMedia".to_owned(),
+            kotlin_package: "dev.istmo.media".to_owned(),
+            types: vec![unit_enum("AccessStatus")],
+        }
+    }
+
+    fn contract(type_name: &str, types: &[&str]) -> Contract {
+        Contract {
+            plugin_id: format!("test.{}", type_name.to_lowercase()),
+            type_name: type_name.to_owned(),
+            methods: vec![Method {
+                name: "fail".to_owned(),
+                kind: MethodKind::Unary,
+                args: Vec::new(),
+                returns: TypeRef::Unit,
+                error: Some(TypeRef::Named(format!("{type_name}Error"))),
+            }],
+            init: None,
+            shared: vec![media()],
+            types: types.iter().map(|name| unit_enum(name)).collect(),
+        }
+    }
+
+    #[test]
+    fn plugins_declaring_the_same_type_names_share_an_app() {
+        let camera = contract("Camera", &["SessionConfig", "PixelFormat", "Camera"]);
+        let capture = contract(
+            "ScreenCapture",
+            &["SessionConfig", "PixelFormat", "Availability"],
+        );
+        let biometric = contract("Biometric", &["Availability"]);
+        assert_eq!(
+            check_swift_namespaces(&[&camera, &capture, &biometric]),
+            Ok(())
+        );
+        let types = generate_swift_types(&camera);
+        assert!(types.contains("public enum Camera {}\n"), "{types}");
+        assert!(
+            types.contains("extension Camera {\n    public enum SessionConfig"),
+            "{types}"
+        );
+    }
+
+    #[test]
+    fn clashing_namespaces_fail_naming_both_plugins() {
+        let clash = |a: &Contract, b: &Contract| {
+            check_swift_namespaces(&[a, b]).expect_err("clash expected")
+        };
+        let camera = contract("Camera", &[]);
+        let mut other = contract("Camera", &[]);
+        other.plugin_id = "test.other".to_owned();
+        let err = clash(&camera, &other);
+        assert!(
+            err.contains("`test.camera`") && err.contains("`test.other`"),
+            "{err}"
+        );
+        // A namespace named like a symbol generated for another plugin.
+        assert!(clash(&camera, &contract("CameraClient", &[])).contains("`CameraClient`"));
+        assert!(clash(&camera, &contract("IstmoMedia", &[])).contains("shared types"));
+        let err = check_swift_namespaces(&[&contract("Data", &[])]).expect_err("reserved");
+        assert!(err.contains("runtime"), "{err}");
+    }
+
+    #[test]
+    fn message_types_shadowing_names_inside_their_namespace_fail() {
+        for name in ["Error", "Data", "IstmoMedia"] {
+            let err = check_swift_namespaces(&[&contract("Camera", &[name])])
+                .expect_err("shadowing expected");
+            assert!(err.contains(&format!("`Camera.{name}`")), "{err}");
+        }
+    }
 }

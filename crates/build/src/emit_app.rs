@@ -361,6 +361,8 @@ impl<'a> AppPass<'a> {
         let ships_swift = self.plugins_with_native(Platform::Ios);
 
         let mut registries = Registries::default();
+        // Contracts with Swift in this app: their namespaces share one module.
+        let mut swift_contracts: Vec<&Contract> = Vec::new();
         for contract in &contracts {
             let overrides = per_plugin
                 .get(contract.plugin_id.as_str())
@@ -401,6 +403,9 @@ impl<'a> AppPass<'a> {
                     Platform::Ios => {
                         let ships = ships_swift.contains(id);
                         let emitted = self.emit_swift_sources(contract, role, ships);
+                        if emitted {
+                            swift_contracts.push(contract);
+                        }
                         let declared = plugin_entry.is_some_and(|p| p.ios_backend.is_some());
                         (emitted, declared || self.opts.seed_backends || ships)
                     }
@@ -421,6 +426,8 @@ impl<'a> AppPass<'a> {
                 }
             }
         }
+        crate::swift_types::check_swift_namespaces(&swift_contracts)
+            .unwrap_or_else(|err| panic!("istmo-build: {err}"));
         self.emit_shared_sources(&contracts);
         registries
     }
