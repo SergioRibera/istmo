@@ -30,6 +30,8 @@
   image, section headers / subtitles / badges where macOS 14 has them,
   template images, SF Symbol names, and `run_event_loop` for tray-only
   apps.
+  Web backend (`WebTray`): the favicon, one item per document, images
+  passed to the browser as Blob URLs, animations on `setTimeout`.
   `UnavailableTray` for Android / iOS.
 - `istmo-screen-capture` plugin (`istmo.screen_capture`): screenshots
   (frames into a sink, or raw pixels with `screenshot_pixels`, never

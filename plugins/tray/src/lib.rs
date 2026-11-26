@@ -32,7 +32,19 @@
 
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 mod desktop;
-#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "windows",
+    target_os = "macos",
+    target_arch = "wasm32"
+))]
+#[cfg_attr(
+    target_arch = "wasm32",
+    allow(
+        dead_code,
+        reason = "the favicon backend uses only the icon half of the host"
+    )
+)]
 #[expect(
     clippy::redundant_pub_crate,
     reason = "`pub(crate)` marks crate-internal items; plain `pub` in private modules trips `unreachable_pub`"
@@ -46,6 +58,12 @@ mod host;
 mod image;
 mod types;
 mod unavailable;
+#[cfg(target_arch = "wasm32")]
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "`pub(crate)` marks crate-internal items; plain `pub` in private modules trips `unreachable_pub`"
+)]
+mod web;
 
 use istmo_core::{HostCtx, NativeHandleId};
 use istmo_macros::{owned, plugin, stream};
@@ -58,6 +76,8 @@ pub use desktop::run_event_loop;
 pub use istmo_menu;
 pub use types::*;
 pub use unavailable::UnavailableTray;
+#[cfg(target_arch = "wasm32")]
+pub use web::WebTray;
 
 /// Wire identifier of the plugin.
 pub const TRAY_PLUGIN_ID: &str = "istmo.tray";

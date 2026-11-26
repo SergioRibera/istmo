@@ -13,7 +13,10 @@ use istmo_menu::{
     ActivationEffect, IconImage, IconRef, ItemChange, ItemId, ItemPatch, Menu, MenuDiff, MenuNode,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::image::{DecodedIcon, MAX_FRAMES};
+#[cfg(target_arch = "wasm32")]
+use crate::web::{DecodedIcon, MAX_FRAMES};
 use crate::{
     CheckChange, HostState, LimitKind, PrimaryAction, RadioChange, RegisteredIcon, Repeat, Support,
     Tooltip, TrayCapabilities, TrayError, TrayEvent, TrayIcon, TrayItem, TraySpec,
@@ -51,7 +54,10 @@ pub(crate) struct IconState {
 impl IconState {
     fn new(frames: Vec<(Arc<DecodedIcon>, Duration)>, repeat: Repeat) -> Self {
         let animated = frames.len() > 1 && repeat != Repeat::Times(0);
-        let next_at = animated.then(|| Instant::now() + frames[0].1);
+        // On the web the browser runs animations (`Instant::now` panics
+        // on wasm32-unknown-unknown).
+        let next_at =
+            (animated && !cfg!(target_arch = "wasm32")).then(|| Instant::now() + frames[0].1);
         Self {
             frames,
             repeat,
@@ -102,8 +108,8 @@ impl IconState {
 pub(crate) struct TrayState {
     /// Creation order, for backends that need a small number.
     #[cfg_attr(
-        target_os = "macos",
-        expect(dead_code, reason = "status items need no number")
+        any(target_os = "macos", target_arch = "wasm32"),
+        expect(dead_code, reason = "status items and the favicon need no number")
     )]
     pub(crate) serial: u32,
     pub(crate) id: String,
