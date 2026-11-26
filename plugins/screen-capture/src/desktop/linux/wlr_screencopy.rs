@@ -88,9 +88,9 @@ impl Backend for WlrScreencopy {
         let device = feedback.as_ref().and_then(|f| f.main_device);
         let allocator = feedback.as_ref().map(|_| Allocator::open(device));
         caps.video = match (&feedback, &allocator) {
-            (Some(feedback), Some(Ok(_))) => {
+            (Some(feedback), Some(Ok(allocator))) => {
                 caps.provenance.video = Provenance::Probe;
-                dmabuf_caps(feedback)
+                dmabuf_caps(feedback, super::gbm::is_nvidia(allocator.dev_t))
             }
             _ => Vec::new(),
         };

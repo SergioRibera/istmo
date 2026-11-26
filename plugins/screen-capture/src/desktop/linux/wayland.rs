@@ -145,7 +145,7 @@ pub(crate) fn shm_caps() -> Vec<FormatCaps> {
 
 #[cfg(feature = "linux-wlr-screencopy")]
 /// The DMA-BUF formats `feedback` lists, without the implicit modifier.
-pub(crate) fn dmabuf_caps(feedback: &Feedback) -> Vec<FormatCaps> {
+pub(crate) fn dmabuf_caps(feedback: &Feedback, nvidia: bool) -> Vec<FormatCaps> {
     let mut caps: Vec<FormatCaps> = feedback
         .accepted
         .iter()
@@ -154,6 +154,9 @@ pub(crate) fn dmabuf_caps(feedback: &Feedback) -> Vec<FormatCaps> {
                 .iter()
                 .copied()
                 .filter(|m| *m != MOD_INVALID)
+                // NVIDIA's GBM refuses LINEAR render targets: listing it would
+                // claim a layout that cannot be allocated.
+                .filter(|m| !(nvidia && *m == crate::select::MOD_LINEAR))
                 .collect();
             (!modifiers.is_empty()).then_some(FormatCaps {
                 format: PixelFormat::from_drm_fourcc(*fourcc)?,
