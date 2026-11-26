@@ -1341,17 +1341,6 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
         writeAccessScope(out, value.scope)
     }
 
-    override fun readAccessStatus(bytes: ByteArray, offset: Int): Bincode.Decoded<AccessStatus> {
-        val d = Bincode.readEnumDiscriminant(bytes, offset)
-        val variant = AccessStatus.entries.getOrNull(d.value)
-            ?: throw Bincode.DecodeException("AccessStatus: unknown discriminant ${d.value}")
-        return Bincode.Decoded(variant, d.consumed)
-    }
-
-    override fun writeAccessStatus(out: ByteArrayOutputStream, value: AccessStatus) {
-        Bincode.writeEnumDiscriminant(out, value.ordinal)
-    }
-
     override fun readConsentModel(bytes: ByteArray, offset: Int): Bincode.Decoded<ConsentModel> {
         val d = Bincode.readEnumDiscriminant(bytes, offset)
         val variant = ConsentModel.entries.getOrNull(d.value)
@@ -2690,6 +2679,17 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
     override fun writeSourceFilter(out: ByteArrayOutputStream, value: SourceFilter) {
         Bincode.writeVec(out, value.kinds) { s1, v1 -> writeSourceKind(s1, v1) }
         Bincode.writeOption(out, value.backend) { s1, v1 -> writeBackendId(s1, v1) }
+    }
+
+    override fun readAccessStatus(bytes: ByteArray, offset: Int): Bincode.Decoded<AccessStatus> {
+        val d = Bincode.readEnumDiscriminant(bytes, offset)
+        val variant = AccessStatus.entries.getOrNull(d.value)
+            ?: throw Bincode.DecodeException("AccessStatus: unknown discriminant ${d.value}")
+        return Bincode.Decoded(variant, d.consumed)
+    }
+
+    override fun writeAccessStatus(out: ByteArrayOutputStream, value: AccessStatus) {
+        Bincode.writeEnumDiscriminant(out, value.ordinal)
     }
 
     override fun readNativeHandleId(bytes: ByteArray, offset: Int): Bincode.Decoded<NativeHandleId> {

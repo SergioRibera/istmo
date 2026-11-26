@@ -497,16 +497,6 @@ data class AccessRequest(
     val scope: AccessScope
 )
 
-enum class AccessStatus {
-    Granted,
-    Denied,
-    NotDetermined,
-    Restricted,
-    RequiresRestart,
-    PerSession,
-    NotApplicable
-}
-
 enum class ConsentModel {
     NoneNeeded,
     SystemSetting,

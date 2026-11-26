@@ -9,14 +9,17 @@
 use std::path::PathBuf;
 
 use istmo_build::{
-    Contract, extract_contract, generate_kotlin_client, generate_kotlin_codecs,
-    generate_kotlin_host, generate_kotlin_types, generate_swift_client, generate_swift_codecs,
-    generate_swift_host, generate_swift_types,
+    Contract, extract_contract_with_shared, extract_shared_types, generate_kotlin_client,
+    generate_kotlin_codecs, generate_kotlin_host, generate_kotlin_types, generate_swift_client,
+    generate_swift_codecs, generate_swift_host, generate_swift_types,
 };
 
 fn contract() -> Contract {
     let src = concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs");
-    extract_contract(src, "ScreenCapture").expect("extract ScreenCapture contract")
+    let media = concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/media/src/lib.rs");
+    let media = extract_shared_types(media, "IstmoMedia", "dev.istmo.media").expect("istmo-media");
+    extract_contract_with_shared(src, "ScreenCapture", &[media])
+        .expect("extract ScreenCapture contract")
 }
 
 fn assert_golden(file: &str, actual: &str) {

@@ -18,6 +18,7 @@ plugin=$root/plugins/$1
 package=$2
 prefix=$3
 golden=$plugin/tests/golden
+shared=$root/crates/media/tests/golden
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -34,10 +35,15 @@ if [ -z "${SKIP_KOTLIN:-}" ]; then
                 IstmoGeneratedApi NativeHandleId PluginException PluginHandler PluginResult; do
                 echo "import dev.istmo.runtime.$name"
             done
+            # Shared media types live in their own package.
+            echo "import dev.istmo.media.*"
             echo
             cat "$golden/${prefix}_$part.kt.expected"
         } > "$work/kt/${prefix}_$part.kt"
     done
+    # The shared media types, generated once per app in their package.
+    { echo "package dev.istmo.media"; echo; cat "$shared/istmo_media_types.kt.expected"; } \
+        > "$work/kt/istmo_media_types.kt"
     echo "compiling $1 native/android against its generated Kotlin"
     # shellcheck disable=SC2086 # KOTLINC may carry its own arguments.
     ${KOTLINC:-kotlinc} -Werror ${KOTLIN_CLASSPATH:+-classpath "$KOTLIN_CLASSPATH"} -d "$work/kt-out" \
@@ -63,6 +69,7 @@ if [ -z "${SKIP_SWIFT:-}" ]; then
     for part in types codecs host; do
         cp "$golden/${prefix}_$part.swift.expected" "$work/swift/${prefix}_$part.swift"
     done
+    cp "$shared/istmo_media_types.swift.expected" "$work/swift/istmo_media_types.swift"
     echo "type-checking $1 native/ios against its generated Swift"
     "$swiftc" -typecheck -warnings-as-errors -I "$work" -I "$ffi" -module-name App \
         "$work/swift"/*.swift "$plugin"/native/ios/*.swift

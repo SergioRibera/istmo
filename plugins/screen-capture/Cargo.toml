@@ -42,6 +42,7 @@ pipewire = ["dep:pipewire", "dep:libspa"]
 [dependencies]
 istmo-core = { workspace = true }
 istmo-macros = { workspace = true }
+istmo-media = { workspace = true }
 flume = { workspace = true }
 oneshot = { workspace = true }
 tracing = { workspace = true }

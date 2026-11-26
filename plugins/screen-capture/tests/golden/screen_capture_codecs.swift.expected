@@ -1092,18 +1092,6 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         self.writeAccessScope(&out, value.scope)
     }
 
-    public func readAccessStatus(_ c: inout Bincode.Cursor) throws -> AccessStatus {
-        let disc = try Bincode.readVarintU32(&c)
-        guard let value = AccessStatus(rawValue: disc) else {
-            throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
-        }
-        return value
-    }
-
-    public func writeAccessStatus(_ out: inout Data, _ value: AccessStatus) {
-        Bincode.writeVarintU32(&out, value.rawValue)
-    }
-
     public func readConsentModel(_ c: inout Bincode.Cursor) throws -> ConsentModel {
         let disc = try Bincode.readVarintU32(&c)
         guard let value = ConsentModel(rawValue: disc) else {
@@ -2150,6 +2138,18 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
     public func writeSourceFilter(_ out: inout Data, _ value: SourceFilter) {
         Bincode.writeVec(&out, value.kinds) { o1, v1 in self.writeSourceKind(&o1, v1) }
         Bincode.writeOption(&out, value.backend) { o1, v1 in self.writeBackendId(&o1, v1) }
+    }
+
+    public func readAccessStatus(_ c: inout Bincode.Cursor) throws -> AccessStatus {
+        let disc = try Bincode.readVarintU32(&c)
+        guard let value = AccessStatus(rawValue: disc) else {
+            throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
+        }
+        return value
+    }
+
+    public func writeAccessStatus(_ out: inout Data, _ value: AccessStatus) {
+        Bincode.writeVarintU32(&out, value.rawValue)
     }
 
     public func readNativeHandleId(_ c: inout Bincode.Cursor) throws -> NativeHandleId {

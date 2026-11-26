@@ -26,20 +26,8 @@ pub struct AccessRequest {
     pub scope: AccessScope,
 }
 
-/// The state of a standing grant.
-#[message(crate = "::istmo_core")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AccessStatus {
-    Granted,
-    Denied,
-    NotDetermined,
-    Restricted,
-    /// Granted, but only a relaunched process gets it (macOS).
-    RequiresRestart,
-    /// No standing grant exists; consent is asked per session.
-    PerSession,
-    NotApplicable,
-}
+/// The state of a standing grant: shared with the other media plugins.
+pub use istmo_media::AccessStatus;
 
 /// How a backend asks for consent.
 #[message(crate = "::istmo_core")]

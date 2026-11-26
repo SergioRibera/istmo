@@ -716,16 +716,6 @@ public struct AccessRequest: Sendable {
     }
 }
 
-public enum AccessStatus: UInt32, Sendable {
-    case granted = 0
-    case denied = 1
-    case notDetermined = 2
-    case restricted = 3
-    case requiresRestart = 4
-    case perSession = 5
-    case notApplicable = 6
-}
-
 public enum ConsentModel: UInt32, Sendable {
     case noneNeeded = 0
     case systemSetting = 1
