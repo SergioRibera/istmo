@@ -17,17 +17,17 @@ use crate::types::BufferIdentity;
 
 /// The pool is full: the consumer holds every buffer it may.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Exhausted {
+pub(crate) struct Exhausted {
     /// The first refusal since the last successful hold: the start of a
     /// new episode, which the session reports once.
-    pub new_episode: bool,
+    pub(crate) new_episode: bool,
     /// Episodes so far, this one included.
-    pub episode: u32,
+    pub(crate) episode: u32,
 }
 
 /// Why [`PoolAccounting::hold`] refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HoldError {
+pub(crate) enum HoldError {
     /// The consumer already holds every buffer it may.
     Exhausted(Exhausted),
     /// `slot` is not a slot of this pool (`slot >= depth`): a producer
@@ -104,14 +104,14 @@ impl Inner {
 
 /// Accounting for one producer pool. Cheap to clone; clones share it.
 #[derive(Debug, Clone)]
-pub struct PoolAccounting {
+pub(crate) struct PoolAccounting {
     inner: Arc<Inner>,
 }
 
 impl PoolAccounting {
     /// A pool of `depth` buffers, generation 1.
     #[must_use]
-    pub fn new(depth: usize) -> Self {
+    pub(crate) fn new(depth: usize) -> Self {
         let (released_tx, released_rx) = flume::bounded(1);
         Self {
             inner: Arc::new(Inner {
@@ -129,37 +129,29 @@ impl PoolAccounting {
         }
     }
 
-    /// Buffers the consumer may hold at once.
+    #[cfg(test)]
     #[must_use]
-    pub fn limit(&self) -> usize {
-        self.inner.lock().limit()
-    }
-
-    #[must_use]
-    pub fn depth(&self) -> usize {
-        self.inner.lock().depth
-    }
-
-    #[must_use]
-    pub fn in_flight(&self) -> usize {
+    pub(crate) fn in_flight(&self) -> usize {
         self.inner.lock().in_flight
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn generation(&self) -> u64 {
+    pub(crate) fn generation(&self) -> u64 {
         self.inner.lock().generation
     }
 
     /// Exhaustion episodes so far.
+    #[cfg(test)]
     #[must_use]
-    pub fn episodes(&self) -> u32 {
+    pub(crate) fn episodes(&self) -> u32 {
         self.inner.lock().episodes
     }
 
     /// Whether `slot` of the current generation is out with the
     /// consumer (the producer must not render into it).
     #[must_use]
-    pub fn is_held(&self, slot: u32) -> bool {
+    pub(crate) fn is_held(&self, slot: u32) -> bool {
         let state = self.inner.lock();
         usize::try_from(slot)
             .ok()
@@ -167,11 +159,10 @@ impl PoolAccounting {
             .is_some_and(|n| *n > 0)
     }
 
-    /// Whether a hold would be granted now. A query only: a producer
-    /// about to skip a frame for want of room calls
-    /// [`check_room`](Self::check_room), which records the episode.
+    /// Whether a hold would be granted now, without recording anything.
+    #[cfg(test)]
     #[must_use]
-    pub fn has_room(&self) -> bool {
+    pub(crate) fn has_room(&self) -> bool {
         let state = self.inner.lock();
         state.in_flight < state.limit()
     }
@@ -183,7 +174,7 @@ impl PoolAccounting {
     ///
     /// # Errors
     /// [`Exhausted`] when the consumer already holds every buffer it may.
-    pub fn check_room(&self) -> Result<(), Exhausted> {
+    pub(crate) fn check_room(&self) -> Result<(), Exhausted> {
         self.inner.lock().refuse_if_full()
     }
 
@@ -193,7 +184,7 @@ impl PoolAccounting {
     /// [`HoldError::Exhausted`] when the consumer already holds every
     /// buffer it may, [`HoldError::SlotOutOfRange`] when `slot` is not
     /// below the pool depth.
-    pub fn hold(&self, slot: u32) -> Result<SlotLease, HoldError> {
+    pub(crate) fn hold(&self, slot: u32) -> Result<SlotLease, HoldError> {
         let mut state = self.inner.lock();
         state.refuse_if_full().map_err(HoldError::Exhausted)?;
         let depth = state.depth;
@@ -223,7 +214,7 @@ impl PoolAccounting {
     /// the generation and forget every hold. Late releases of older
     /// leases become inert.
     #[must_use = "the new generation tags the reallocated buffers"]
-    pub fn reallocate(&self, depth: usize) -> u64 {
+    pub(crate) fn reallocate(&self, depth: usize) -> u64 {
         let mut state = self.inner.lock();
         state.generation += 1;
         state.depth = depth;
@@ -236,14 +227,15 @@ impl PoolAccounting {
     /// The producer changed its pool size without reallocating the
     /// buffers still out: the limit follows at once, even below the
     /// current holds (new holds wait until enough come back).
-    pub fn resize(&self, depth: usize) {
+    #[cfg(test)]
+    pub(crate) fn resize(&self, depth: usize) {
         self.inner.lock().depth = depth;
     }
 
     /// A channel that receives a unit (coalesced) whenever a hold
     /// returns.
     #[must_use]
-    pub fn released(&self) -> flume::Receiver<()> {
+    pub(crate) fn released(&self) -> flume::Receiver<()> {
         self.inner.released_rx.clone()
     }
 }
@@ -251,7 +243,7 @@ impl PoolAccounting {
 /// One hold on a pooled slot. Drop it (usually as a `NativeBuffer`
 /// release hook) to return the slot.
 #[derive(Debug)]
-pub struct SlotLease {
+pub(crate) struct SlotLease {
     pool: Arc<Inner>,
     identity: BufferIdentity,
 }
@@ -259,7 +251,7 @@ pub struct SlotLease {
 impl SlotLease {
     /// The buffer this lease holds.
     #[must_use]
-    pub const fn identity(&self) -> BufferIdentity {
+    pub(crate) const fn identity(&self) -> BufferIdentity {
         self.identity
     }
 }

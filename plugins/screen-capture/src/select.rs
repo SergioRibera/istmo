@@ -15,16 +15,16 @@ use crate::types::{
 
 /// `DRM_FORMAT_MOD_INVALID`: the implicit modifier. Chosen only when the
 /// caller listed it.
-pub const MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
+pub(crate) const MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
 /// `DRM_FORMAT_MOD_LINEAR`.
-pub const MOD_LINEAR: u64 = 0;
+pub(crate) const MOD_LINEAR: u64 = 0;
 
 /// The environment override of `Auto`.
-pub const BACKEND_ENV: &str = "ISTMO_SCREEN_CAPTURE_BACKEND";
+pub(crate) const BACKEND_ENV: &str = "ISTMO_SCREEN_CAPTURE_BACKEND";
 
 /// The kind of desktop session, which decides the `Auto` order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionKind {
+pub(crate) enum SessionKind {
     /// A Wayland session, not sandboxed.
     Wayland,
     /// Flatpak / Snap: only the portal.
@@ -38,7 +38,7 @@ pub enum SessionKind {
 impl SessionKind {
     /// The `Auto` order on Linux for this session.
     #[must_use]
-    pub const fn linux_order(self) -> &'static [BackendId] {
+    pub(crate) const fn linux_order(self) -> &'static [BackendId] {
         match self {
             Self::Wayland => &[
                 BackendId::LinuxExtImageCopy,
@@ -58,24 +58,24 @@ impl SessionKind {
     clippy::struct_excessive_bools,
     reason = "each flag is one independent requirement of the call"
 )]
-pub struct Requirements {
+pub(crate) struct Requirements {
     /// Kinds of the sources the call names.
-    pub kinds: Vec<SourceKind>,
+    pub(crate) kinds: Vec<SourceKind>,
     /// A window / application named by id.
-    pub by_id: bool,
-    pub allow_picker: bool,
+    pub(crate) by_id: bool,
+    pub(crate) allow_picker: bool,
     /// Several monitors (or a region spanning them).
-    pub multi_monitor: bool,
+    pub(crate) multi_monitor: bool,
     /// A live session rather than a screenshot.
-    pub streaming: bool,
-    pub formats: FormatRequest,
-    pub cursor: CursorRequest,
-    pub damage: Strength,
-    pub hdr: HdrPolicy,
-    pub exhaustion: Exhaustion,
-    pub size: OutputSize,
-    pub orientation: OrientationHandling,
-    pub audio: bool,
+    pub(crate) streaming: bool,
+    pub(crate) formats: FormatRequest,
+    pub(crate) cursor: CursorRequest,
+    pub(crate) damage: Strength,
+    pub(crate) hdr: HdrPolicy,
+    pub(crate) exhaustion: Exhaustion,
+    pub(crate) size: OutputSize,
+    pub(crate) orientation: OrientationHandling,
+    pub(crate) audio: bool,
 }
 
 impl Default for Requirements {
@@ -106,7 +106,7 @@ impl Requirements {
     /// Requirements `caps` cannot meet. Sections marked
     /// `UnknownUntilNegotiated` count as "maybe": they never reject.
     #[must_use]
-    pub fn unmet(&self, caps: &BackendCaps) -> Vec<Requirement> {
+    pub(crate) fn unmet(&self, caps: &BackendCaps) -> Vec<Requirement> {
         let p = caps.provenance;
         let mut unmet = Vec::new();
         if known(p.source_kinds) {
@@ -171,27 +171,27 @@ impl Requirements {
 
 /// One backend as the host sees it before choosing.
 #[derive(Debug, Clone)]
-pub struct Candidate {
-    pub backend: BackendId,
-    pub availability: Availability,
+pub(crate) struct Candidate {
+    pub(crate) backend: BackendId,
+    pub(crate) availability: Availability,
     /// `None` when the backend could not report (it is then not ready).
-    pub caps: Option<BackendCaps>,
+    pub(crate) caps: Option<BackendCaps>,
 }
 
 /// The backends to try, best first. A host tries them in order and
 /// stops at the first that serves the call.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Choice {
-    pub backends: Vec<BackendId>,
+pub(crate) struct Choice {
+    pub(crate) backends: Vec<BackendId>,
     /// Why each passed-over backend was skipped (for `NoBackend`).
-    pub skipped: Vec<BackendAttempt>,
+    pub(crate) skipped: Vec<BackendAttempt>,
 }
 
 /// Parse the environment override: `auto` (or empty) is no override,
 /// otherwise a comma list of backend ids. Unknown ids are logged and
 /// dropped.
 #[must_use]
-pub fn parse_override(value: &str) -> Option<Vec<BackendId>> {
+pub(crate) fn parse_override(value: &str) -> Option<Vec<BackendId>> {
     let value = value.trim();
     if value.is_empty() || value.eq_ignore_ascii_case("auto") {
         return None;
@@ -288,7 +288,7 @@ fn check(
 /// `Fixed`: that backend's error. `Ordered` / `Auto`: `NoBackend` with
 /// every attempt, or [`CaptureError::NoBackendCompiled`] when nothing is
 /// compiled for this platform.
-pub fn choose(
+pub(crate) fn choose(
     selection: &BackendSelection,
     order: &[BackendId],
     env: Option<&[BackendId]>,
@@ -351,20 +351,20 @@ fn warn_ignored_override(env: Option<&[BackendId]>) {
 /// One format a producer offers right now (linux-dmabuf tranches,
 /// session constraints, PipeWire `EnumFormat`, or the table).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Offer {
-    pub format: PixelFormat,
-    pub memory: BufferMemory,
+pub(crate) struct Offer {
+    pub(crate) format: PixelFormat,
+    pub(crate) memory: BufferMemory,
     /// Producer preference order (tranche order). Empty for CPU memory,
     /// or for DMA-BUF when the producer does not say (the caller's list
     /// is then used as is).
-    pub modifiers: Vec<u64>,
+    pub(crate) modifiers: Vec<u64>,
     /// Copies needed to deliver it.
-    pub copies: Vec<CopyStage>,
+    pub(crate) copies: Vec<CopyStage>,
 }
 
 /// The offers a capability report implies.
 #[must_use]
-pub fn offers_of(caps: &BackendCaps) -> Vec<Offer> {
+pub(crate) fn offers_of(caps: &BackendCaps) -> Vec<Offer> {
     caps.video
         .iter()
         .map(|f| Offer {
@@ -378,15 +378,15 @@ pub fn offers_of(caps: &BackendCaps) -> Vec<Offer> {
 
 /// What negotiation picked.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Chosen {
+pub(crate) struct Chosen {
     /// Index of the tier in the request (0 for an empty request).
-    pub tier: u8,
-    pub format: PixelFormat,
-    pub memory: BufferMemory,
+    pub(crate) tier: u8,
+    pub(crate) format: PixelFormat,
+    pub(crate) memory: BufferMemory,
     /// DMA-BUF: the modifiers to allocate with, caller order first.
     /// Empty for CPU memory.
-    pub modifiers: Vec<u64>,
-    pub copies: Vec<CopyStage>,
+    pub(crate) modifiers: Vec<u64>,
+    pub(crate) copies: Vec<CopyStage>,
 }
 
 fn modifiers_for(wanted: &[u64], offered: &[u64]) -> Vec<u64> {
@@ -415,7 +415,11 @@ fn modifiers_for(wanted: &[u64], offered: &[u64]) -> Vec<u64> {
 /// win; the producer's order breaks the remaining ties. An empty request
 /// takes the producer's first copy-free offer (else its first offer).
 #[must_use]
-pub fn negotiate(request: &FormatRequest, offers: &[Offer], start_tier: usize) -> Option<Chosen> {
+pub(crate) fn negotiate(
+    request: &FormatRequest,
+    offers: &[Offer],
+    start_tier: usize,
+) -> Option<Chosen> {
     if request.tiers.is_empty() {
         if start_tier > 0 {
             return None;
@@ -473,7 +477,7 @@ pub fn negotiate(request: &FormatRequest, offers: &[Offer], start_tier: usize) -
 ///
 /// # Errors
 /// [`CaptureError::FormatLost`] when no lower listed tier can be served.
-pub fn downgrade(
+pub(crate) fn downgrade(
     request: &FormatRequest,
     offers: &[Offer],
     current: u8,
@@ -492,7 +496,7 @@ pub fn downgrade(
 /// The cursor mode a backend delivers for `request` given what it can
 /// do: the requested mode when available, else embedded, else hidden.
 #[must_use]
-pub fn cursor_mode(request: CursorRequest, available: &[CursorMode]) -> CursorMode {
+pub(crate) fn cursor_mode(request: CursorRequest, available: &[CursorMode]) -> CursorMode {
     if available.contains(&request.mode) {
         request.mode
     } else if request.mode != CursorMode::Hidden && available.contains(&CursorMode::Embedded) {

@@ -42,11 +42,19 @@ pub mod composite;
     clippy::redundant_pub_crate,
     reason = "`pub(crate)` marks crate-internal items; plain `pub` in private modules trips `unreachable_pub`"
 )]
-pub mod desktop;
+mod desktop;
 pub mod pixels;
 mod policy;
-pub mod pool;
-pub mod select;
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "`pub(crate)` marks crate-internal items; plain `pub` in private modules trips `unreachable_pub`"
+)]
+mod pool;
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "`pub(crate)` marks crate-internal items; plain `pub` in private modules trips `unreachable_pub`"
+)]
+mod select;
 mod types;
 
 use istmo_core::{FrameSinkId, HostCtx, NativeHandleId};
