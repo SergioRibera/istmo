@@ -85,4 +85,20 @@ extension Coverage {
             self.code = code
         }
     }
+
+    public enum Level: Hashable, Sendable {
+        case low
+        case high
+        /// A case added after this code was generated: its discriminant and the
+        /// rest of the message after it, written back as they came.
+        case unknown(discriminant: UInt32, payload: Data)
+    }
+
+    public enum Signal: Sendable {
+        case quiet
+        case loud(Level)
+        /// A case added after this code was generated: its discriminant and the
+        /// rest of the message after it, written back as they came.
+        case unknown(discriminant: UInt32, payload: Data)
+    }
 }

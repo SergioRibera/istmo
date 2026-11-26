@@ -113,14 +113,32 @@
   - Wire values 0..3 (`Granted`, `Denied`, `NotDetermined`, `Restricted`)
     are unchanged; the new states are 4..6.
   - Kotlin: `dev.istmo.camera.AccessStatus` is now
-    `dev.istmo.media.AccessStatus` (update the imports); an exhaustive
-    `when` gains three branches.
-  - Swift: the type is generated in
-    `Plugins/IstmoMedia/Generated/IstmoMediaTypes.swift`; an exhaustive
-    `switch` gains three cases.
-  - Generated Kotlin and Swift decoders reject a discriminant they do not
-    know: an app generated against an older `istmo-media` fails to decode
-    a state added later instead of seeing an unknown value.
+    `dev.istmo.media.AccessStatus` (update the imports), a `sealed class`
+    (see `#[non_exhaustive]` below); an exhaustive `when` gains three
+    branches and `is AccessStatus.Unknown`.
+  - Swift: the type is `IstmoMedia.AccessStatus`, generated in
+    `Plugins/IstmoMedia/Generated/IstmoMediaTypes.swift`, without a raw
+    value; an exhaustive `switch` gains three cases and `.unknown`.
+  - An app generated against an older `istmo-media` decodes a state added
+    later as `Unknown` / `.unknown` instead of failing.
+- **`#[non_exhaustive]` message enums keep variants they do not know.**
+  Generated Kotlin and Swift give such an enum one more variant, Kotlin
+  `Unknown(discriminant: Int, payload: ByteArray)` and Swift
+  `.unknown(discriminant: UInt32, payload: Data)`, which an unknown
+  discriminant decodes into (instead of a `DecodeException` /
+  `DecodeError.invalidTag`) and which writes back the same bytes. The
+  payload is the rest of the message, so a value read after it fails to
+  decode: this helps where the enum is the last value of its message (a
+  return value, an error, a stream item, a last field). Such an enum is a
+  Kotlin `sealed class` (unit variants are `object`s; no `entries`,
+  `ordinal` or `valueOf`) and a Swift enum without raw values (no
+  `rawValue`; unit-only ones stay `Hashable`) even when every variant is a
+  unit. Affects `AccessStatus`, `BarcodeFormat` and `CaptureError`: an
+  exhaustive `when` / `switch` on them needs the new branch. Generated
+  Rust types carry `#[non_exhaustive]` too. `EnumDef` gained
+  `non_exhaustive`; a `#[non_exhaustive]` enum with a variant named
+  `Unknown`, or carrying a type named `Unknown`, fails the build
+  (`ContractError::ReservedUnknown`).
 - `NativeBuffer::downcast_ref::<Arc<DmaBuf>>()` now returns `None`: a
   DMA-BUF backing is only borrowed (`dmabuf()`) or moved out with its
   lease (`into_dmabuf()`), so its fds cannot outlive the release hooks.

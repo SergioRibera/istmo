@@ -657,6 +657,7 @@ fn lower_enum(e: &ItemEnum) -> Result<EnumDef, ExtractError> {
     Ok(EnumDef {
         name: enum_name,
         variants,
+        non_exhaustive: e.attrs.iter().any(|a| a.path().is_ident("non_exhaustive")),
     })
 }
 

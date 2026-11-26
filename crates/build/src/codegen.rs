@@ -369,6 +369,7 @@ mod tests {
             group: "IstmoMedia".to_owned(),
             kotlin_package: "dev.istmo.media".to_owned(),
             types: vec![TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "AccessStatus".to_owned(),
                 variants: Vec::new(),
             })],

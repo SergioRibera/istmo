@@ -517,3 +517,56 @@ fn frame_sinks_outside_method_arguments_are_rejected() {
     let err = extract_contract(&path, "Capture").expect_err("a sink in a struct");
     assert!(err.to_string().contains("FrameSinkId"), "{err}");
 }
+
+#[test]
+fn non_exhaustive_enums_are_marked() {
+    let path = write_source(
+        r#"
+        use istmo::{message, plugin};
+
+        #[message]
+        #[non_exhaustive]
+        pub enum Level { Low, High }
+
+        #[message]
+        pub enum Mode { Fast, Slow }
+
+        #[plugin(name = "istmo.level", crate = "::istmo_core")]
+        pub trait Levels {
+            async fn level(&self, mode: Mode) -> Level;
+        }
+        "#,
+    );
+
+    let got = extract_contract(&path, "Levels").expect("extract");
+    let flags: Vec<(&str, bool)> = got
+        .types
+        .iter()
+        .filter_map(|ty| match ty {
+            TypeDef::Enum(e) => Some((e.name.as_str(), e.non_exhaustive)),
+            TypeDef::Struct(_) => None,
+        })
+        .collect();
+    assert_eq!(flags, [("Level", true), ("Mode", false)]);
+}
+
+#[test]
+fn non_exhaustive_enums_may_not_use_the_unknown_name() {
+    for body in ["Unknown, Known", "Known(Unknown)"] {
+        let path = write_source(&format!(
+            r#"
+            #[istmo::message]
+            pub struct Unknown {{ pub raw: u32 }}
+
+            #[istmo::message]
+            #[non_exhaustive]
+            pub enum Level {{ {body} }}
+
+            #[istmo::plugin(name = "p")]
+            pub trait P {{ async fn go(&self) -> Level; }}
+            "#
+        ));
+        let err = extract_contract(&path, "P").expect_err(body);
+        assert!(err.to_string().contains("`Unknown`"), "{body}: {err}");
+    }
+}

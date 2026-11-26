@@ -82,7 +82,10 @@ class BarcodeScannerBackendImpl(
         }
     }
 
-    /** `null` for `Other`, which names no ML Kit format to ask for. */
+    /**
+     * `null` for `Other`, which names no ML Kit format to ask for, and for
+     * a format added after this backend was written.
+     */
     private fun toMlKit(format: BarcodeFormat): Int? = when (format) {
         BarcodeFormat.Qr -> Barcode.FORMAT_QR_CODE
         BarcodeFormat.Aztec -> Barcode.FORMAT_AZTEC
@@ -98,6 +101,7 @@ class BarcodeScannerBackendImpl(
         BarcodeFormat.Itf -> Barcode.FORMAT_ITF
         BarcodeFormat.Codabar -> Barcode.FORMAT_CODABAR
         BarcodeFormat.Other -> null
+        is BarcodeFormat.Unknown -> null
     }
 
     private fun fromMlKit(format: Int): BarcodeFormat = when (format) {

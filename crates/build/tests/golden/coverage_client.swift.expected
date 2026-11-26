@@ -12,6 +12,8 @@ public protocol CoverageCodecs {
     func writeEverything(_ out: inout Data, _ value: Coverage.Everything)
     func readFirstError(_ c: inout Bincode.Cursor) throws -> Coverage.FirstError
     func writeFirstError(_ out: inout Data, _ value: Coverage.FirstError)
+    func readLevel(_ c: inout Bincode.Cursor) throws -> Coverage.Level
+    func writeLevel(_ out: inout Data, _ value: Coverage.Level)
     func readMode(_ c: inout Bincode.Cursor) throws -> Coverage.Mode
     func writeMode(_ out: inout Data, _ value: Coverage.Mode)
     func readNativeHandleId(_ c: inout Bincode.Cursor) throws -> NativeHandleId
@@ -20,6 +22,8 @@ public protocol CoverageCodecs {
     func writeSecondError(_ out: inout Data, _ value: Coverage.SecondError)
     func readShape(_ c: inout Bincode.Cursor) throws -> Coverage.Shape
     func writeShape(_ out: inout Data, _ value: Coverage.Shape)
+    func readSignal(_ c: inout Bincode.Cursor) throws -> Coverage.Signal
+    func writeSignal(_ out: inout Data, _ value: Coverage.Signal)
 }
 
 /// Rust-hosted `Coverage` plugin. Ships each call across the frame
@@ -125,6 +129,14 @@ public final class CoverageClient {
             guard try await events.next() != nil else { return nil }
             return ()
         })
+    }
+
+    public func tune(signal: Coverage.Signal) async throws -> Coverage.Level {
+        var payload = Data()
+        codecs.writeSignal(&payload, signal)
+        let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "tune", payload: payload)
+        var c = Bincode.Cursor(bytes)
+        return try codecs.readLevel(&c)
     }
 }
 

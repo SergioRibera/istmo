@@ -48,6 +48,7 @@ fn payload_variant(name: &str, payload: TypeRef) -> EnumVariant {
 
 fn enum_of(name: &str, variants: Vec<EnumVariant>) -> TypeDef {
     TypeDef::Enum(EnumDef {
+        non_exhaustive: false,
         name: name.to_owned(),
         variants,
     })

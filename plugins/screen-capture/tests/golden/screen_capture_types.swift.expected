@@ -911,6 +911,9 @@ extension ScreenCapture {
         case `protocol`(BackendDetail)
         case os(OsFailure)
         case sinkFull
+        /// A case added after this code was generated: its discriminant and the
+        /// rest of the message after it, written back as they came.
+        case unknown(discriminant: UInt32, payload: Data)
     }
 
     public enum PtsClock: UInt32, Sendable {

@@ -173,6 +173,57 @@ class CoverageCodecsImpl : CoverageCodecs {
         Bincode.writeU32(out, value.code)
     }
 
+    override fun readLevel(bytes: ByteArray, offset: Int): Bincode.Decoded<Level> {
+        var cursor = offset
+        val disc = Bincode.readEnumDiscriminant(bytes, cursor)
+        cursor = disc.consumed
+        return when (disc.value) {
+            0 -> Bincode.Decoded(Level.Low, cursor)
+            1 -> Bincode.Decoded(Level.High, cursor)
+            else -> Bincode.Decoded(Level.Unknown(disc.value, bytes.copyOfRange(cursor, bytes.size)) as Level, bytes.size)
+        }
+    }
+
+    override fun writeLevel(out: ByteArrayOutputStream, value: Level) {
+        when (value) {
+            Level.Low -> Bincode.writeEnumDiscriminant(out, 0)
+            Level.High -> Bincode.writeEnumDiscriminant(out, 1)
+            is Level.Unknown -> {
+                Bincode.writeEnumDiscriminant(out, value.discriminant)
+                out.write(value.payload, 0, value.payload.size)
+            }
+        }
+    }
+
+    override fun readSignal(bytes: ByteArray, offset: Int): Bincode.Decoded<Signal> {
+        var cursor = offset
+        val disc = Bincode.readEnumDiscriminant(bytes, cursor)
+        cursor = disc.consumed
+        return when (disc.value) {
+            0 -> Bincode.Decoded(Signal.Quiet, cursor)
+            1 -> {
+                val d_inner = readLevel(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(Signal.Loud(inner) as Signal, cursor)
+            }
+            else -> Bincode.Decoded(Signal.Unknown(disc.value, bytes.copyOfRange(cursor, bytes.size)) as Signal, bytes.size)
+        }
+    }
+
+    override fun writeSignal(out: ByteArrayOutputStream, value: Signal) {
+        when (value) {
+            Signal.Quiet -> Bincode.writeEnumDiscriminant(out, 0)
+            is Signal.Loud -> {
+                Bincode.writeEnumDiscriminant(out, 1)
+                writeLevel(out, value.value)
+            }
+            is Signal.Unknown -> {
+                Bincode.writeEnumDiscriminant(out, value.discriminant)
+                out.write(value.payload, 0, value.payload.size)
+            }
+        }
+    }
+
     override fun readNativeHandleId(bytes: ByteArray, offset: Int): Bincode.Decoded<NativeHandleId> {
         return Bincode.readVarintU64(bytes, offset)
     }

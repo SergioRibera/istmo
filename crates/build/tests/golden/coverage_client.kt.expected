@@ -92,6 +92,14 @@ class CoverageClient(
             Unit
         }
     }
+
+    suspend fun tune(signal: Signal): Level {
+        val payloadBuf = IstmoBytesOut()
+        codecs.writeSignal(payloadBuf, signal)
+        val payload = payloadBuf.toExactArray()
+        val bytes = IstmoRuntime.call(PLUGIN_ID, "tune", payload)
+        return codecs.readLevel(bytes, 0).value
+    }
 }
 
 /// Kotlin-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.

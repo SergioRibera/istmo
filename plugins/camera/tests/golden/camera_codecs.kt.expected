@@ -515,14 +515,35 @@ class CameraCodecsImpl : CameraCodecs {
     }
 
     override fun readAccessStatus(bytes: ByteArray, offset: Int): Bincode.Decoded<AccessStatus> {
-        val d = Bincode.readEnumDiscriminant(bytes, offset)
-        val variant = AccessStatus.entries.getOrNull(d.value)
-            ?: throw Bincode.DecodeException("AccessStatus: unknown discriminant ${d.value}")
-        return Bincode.Decoded(variant, d.consumed)
+        var cursor = offset
+        val disc = Bincode.readEnumDiscriminant(bytes, cursor)
+        cursor = disc.consumed
+        return when (disc.value) {
+            0 -> Bincode.Decoded(AccessStatus.Granted, cursor)
+            1 -> Bincode.Decoded(AccessStatus.Denied, cursor)
+            2 -> Bincode.Decoded(AccessStatus.NotDetermined, cursor)
+            3 -> Bincode.Decoded(AccessStatus.Restricted, cursor)
+            4 -> Bincode.Decoded(AccessStatus.RequiresRestart, cursor)
+            5 -> Bincode.Decoded(AccessStatus.PerSession, cursor)
+            6 -> Bincode.Decoded(AccessStatus.NotApplicable, cursor)
+            else -> Bincode.Decoded(AccessStatus.Unknown(disc.value, bytes.copyOfRange(cursor, bytes.size)) as AccessStatus, bytes.size)
+        }
     }
 
     override fun writeAccessStatus(out: ByteArrayOutputStream, value: AccessStatus) {
-        Bincode.writeEnumDiscriminant(out, value.ordinal)
+        when (value) {
+            AccessStatus.Granted -> Bincode.writeEnumDiscriminant(out, 0)
+            AccessStatus.Denied -> Bincode.writeEnumDiscriminant(out, 1)
+            AccessStatus.NotDetermined -> Bincode.writeEnumDiscriminant(out, 2)
+            AccessStatus.Restricted -> Bincode.writeEnumDiscriminant(out, 3)
+            AccessStatus.RequiresRestart -> Bincode.writeEnumDiscriminant(out, 4)
+            AccessStatus.PerSession -> Bincode.writeEnumDiscriminant(out, 5)
+            AccessStatus.NotApplicable -> Bincode.writeEnumDiscriminant(out, 6)
+            is AccessStatus.Unknown -> {
+                Bincode.writeEnumDiscriminant(out, value.discriminant)
+                out.write(value.payload, 0, value.payload.size)
+            }
+        }
     }
 
     override fun readNativeHandleId(bytes: ByteArray, offset: Int): Bincode.Decoded<NativeHandleId> {

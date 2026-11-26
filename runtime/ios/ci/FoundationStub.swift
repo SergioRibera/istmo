@@ -2,7 +2,7 @@
 // and the code `istmo-build` generates use, so the sources can be
 // type-checked on a host without them. `Data` keeps slice indices like
 // the real type (a slice's startIndex is its offset in the parent).
-public struct Data: Equatable, Sequence, CustomStringConvertible, Sendable {
+public struct Data: Hashable, Sequence, CustomStringConvertible, Sendable {
     public typealias Index = Int
     var bytes: [UInt8]
     public private(set) var startIndex: Int
@@ -37,6 +37,7 @@ public struct Data: Equatable, Sequence, CustomStringConvertible, Sendable {
     }
     public func makeIterator() -> IndexingIterator<[UInt8]> { bytes.makeIterator() }
     public static func == (a: Data, b: Data) -> Bool { a.bytes == b.bytes }
+    public func hash(into hasher: inout Hasher) { hasher.combine(bytes) }
     public var description: String { "\(count) bytes" }
 }
 

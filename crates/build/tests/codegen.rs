@@ -720,6 +720,7 @@ fn permissions_with_types() -> Contract {
     let mut c = permissions();
     c.types = vec![
         TypeDef::Enum(EnumDef {
+            non_exhaustive: false,
             name: "PermissionStatus".to_owned(),
             variants: vec![
                 EnumVariant {
@@ -1115,6 +1116,7 @@ fn live_activity() -> Contract {
         shared: Vec::new(),
         types: vec![
             TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "ActivityStyle".to_owned(),
                 variants: vec![
                     EnumVariant {
@@ -1128,6 +1130,7 @@ fn live_activity() -> Contract {
                 ],
             }),
             TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "AlertSound".to_owned(),
                 variants: vec![
                     EnumVariant {
@@ -1162,6 +1165,7 @@ fn live_activity() -> Contract {
                 ],
             }),
             TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "DismissalPolicy".to_owned(),
                 variants: vec![
                     EnumVariant {
@@ -1179,6 +1183,7 @@ fn live_activity() -> Contract {
                 ],
             }),
             TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "AndroidTierHint".to_owned(),
                 variants: vec![
                     EnumVariant {
@@ -1238,6 +1243,7 @@ fn live_activity() -> Contract {
                 ],
             }),
             TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "PlatformCapabilities".to_owned(),
                 variants: vec![
                     EnumVariant {
@@ -1276,6 +1282,7 @@ fn live_activity() -> Contract {
                 ],
             }),
             TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "ActivityError".to_owned(),
                 variants: vec![
                     EnumVariant {
@@ -1392,6 +1399,7 @@ fn multi_payload_contract() -> Contract {
         init: None,
         shared: Vec::new(),
         types: vec![TypeDef::Enum(EnumDef {
+            non_exhaustive: false,
             name: "Frame".to_owned(),
             variants: vec![
                 EnumVariant {
@@ -1586,6 +1594,13 @@ fn coverage_methods() -> Vec<Method> {
             returns: TypeRef::Unit,
             error: None,
         },
+        Method {
+            name: "tune".to_owned(),
+            kind: MethodKind::Unary,
+            args: vec![arg("signal", named("Signal"))],
+            returns: named("Level"),
+            error: None,
+        },
     ]
 }
 
@@ -1621,6 +1636,7 @@ fn coverage_types() -> Vec<TypeDef> {
             ],
         }),
         TypeDef::Enum(EnumDef {
+            non_exhaustive: false,
             name: "Shape".to_owned(),
             variants: vec![
                 variant("Default", vec![]),
@@ -1632,10 +1648,12 @@ fn coverage_types() -> Vec<TypeDef> {
             ],
         }),
         TypeDef::Enum(EnumDef {
+            non_exhaustive: false,
             name: "Mode".to_owned(),
             variants: vec![variant("In", vec![]), variant("Out", vec![])],
         }),
         TypeDef::Enum(EnumDef {
+            non_exhaustive: false,
             name: "FirstError".to_owned(),
             variants: vec![
                 variant("Denied", vec![]),
@@ -1646,12 +1664,27 @@ fn coverage_types() -> Vec<TypeDef> {
             name: "SecondError".to_owned(),
             fields: vec![field("code", TypeRef::U32)],
         }),
+        // `#[non_exhaustive]`: a later version's variants decode as `Unknown`.
+        TypeDef::Enum(EnumDef {
+            non_exhaustive: true,
+            name: "Level".to_owned(),
+            variants: vec![variant("Low", vec![]), variant("High", vec![])],
+        }),
+        TypeDef::Enum(EnumDef {
+            non_exhaustive: true,
+            name: "Signal".to_owned(),
+            variants: vec![
+                variant("Quiet", vec![]),
+                variant("Loud", vec![named("Level")]),
+            ],
+        }),
     ]
 }
 
 /// Every `TypeRef`, three-level nesting, Kotlin/Swift keywords as type,
 /// field, argument and method names, a hosted stream, names that clash
-/// with generated locals and two distinct domain errors.
+/// with generated locals, two distinct domain errors and two
+/// `#[non_exhaustive]` enums (unit-only and with a payload).
 fn coverage() -> Contract {
     Contract {
         plugin_id: "com.example.\"cov$\"".to_owned(),

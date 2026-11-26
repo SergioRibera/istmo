@@ -28,6 +28,8 @@ interface CoverageBackend {
     fun pulse(gap: Unit, hz: UInt): kotlinx.coroutines.flow.Flow<Unit>
 
     suspend fun feed(frames: IstmoFrameSender<Everything>, levels: IstmoFrameSender<UInt>, ticks: IstmoFrameSender<Unit>, audio: IstmoFrameSender<ByteArray>?)
+
+    suspend fun tune(signal: Signal): Level
 }
 
 /// Reader / writer per `Named` type referenced by the `Coverage` contract.
@@ -40,6 +42,9 @@ interface CoverageCodecs {
     fun readFirstError(bytes: ByteArray, offset: Int): Bincode.Decoded<FirstError>
     fun writeFirstError(out: ByteArrayOutputStream, value: FirstError)
 
+    fun readLevel(bytes: ByteArray, offset: Int): Bincode.Decoded<Level>
+    fun writeLevel(out: ByteArrayOutputStream, value: Level)
+
     fun readMode(bytes: ByteArray, offset: Int): Bincode.Decoded<Mode>
     fun writeMode(out: ByteArrayOutputStream, value: Mode)
 
@@ -51,6 +56,9 @@ interface CoverageCodecs {
 
     fun readShape(bytes: ByteArray, offset: Int): Bincode.Decoded<Shape>
     fun writeShape(out: ByteArrayOutputStream, value: Shape)
+
+    fun readSignal(bytes: ByteArray, offset: Int): Bincode.Decoded<Signal>
+    fun writeSignal(out: ByteArrayOutputStream, value: Signal)
 }
 
 /// Decodes wire calls, invokes `CoverageBackend`, encodes the response.
@@ -173,6 +181,13 @@ class CoverageDispatcher(
                 val audio = Bincode.readOption(payload, cursor) { b1, c1 -> Bincode.readVarintU64(b1, c1).let { d2 -> Bincode.Decoded(@OptIn(IstmoGeneratedApi::class) IstmoFrameSender.open<ByteArray>(d2.value, 0xfddda3e6018940d8UL.toLong()) { s2, v2 -> Bincode.writeBytes(s2, v2) }, d2.consumed) } }.value
                 backend.feed(frames, levels, ticks, audio)
                 PluginResult.Unary(ByteArray(0))
+            }
+            "tune" -> {
+                val signal = codecs.readSignal(payload, 0).value
+                val result = backend.tune(signal)
+                val out = IstmoBytesOut()
+                codecs.writeLevel(out, result)
+                PluginResult.Unary(out.toExactArray())
             }
             else -> error("unknown Coverage method: $method")
         }

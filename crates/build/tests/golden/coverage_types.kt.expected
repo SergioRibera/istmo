@@ -47,3 +47,37 @@ sealed class FirstError {
 data class SecondError(
     val code: UInt
 )
+
+sealed class Level {
+    object Low : Level()
+    object High : Level()
+    /**
+     * A variant added after this code was generated: its [discriminant] and
+     * the rest of the message after it, written back as they came.
+     */
+    class Unknown(val discriminant: Int, val payload: ByteArray) : Level() {
+        override fun equals(other: Any?): Boolean =
+            other is Unknown && discriminant == other.discriminant && payload.contentEquals(other.payload)
+
+        override fun hashCode(): Int = 31 * discriminant + payload.contentHashCode()
+
+        override fun toString(): String = "Level.Unknown(discriminant=$discriminant, ${payload.size} bytes)"
+    }
+}
+
+sealed class Signal {
+    object Quiet : Signal()
+    data class Loud(val value: Level) : Signal()
+    /**
+     * A variant added after this code was generated: its [discriminant] and
+     * the rest of the message after it, written back as they came.
+     */
+    class Unknown(val discriminant: Int, val payload: ByteArray) : Signal() {
+        override fun equals(other: Any?): Boolean =
+            other is Unknown && discriminant == other.discriminant && payload.contentEquals(other.payload)
+
+        override fun hashCode(): Int = 31 * discriminant + payload.contentHashCode()
+
+        override fun toString(): String = "Signal.Unknown(discriminant=$discriminant, ${payload.size} bytes)"
+    }
+}

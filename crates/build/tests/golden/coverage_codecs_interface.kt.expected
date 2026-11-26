@@ -13,6 +13,9 @@ interface CoverageCodecs {
     fun readFirstError(bytes: ByteArray, offset: Int): Bincode.Decoded<FirstError>
     fun writeFirstError(out: ByteArrayOutputStream, value: FirstError)
 
+    fun readLevel(bytes: ByteArray, offset: Int): Bincode.Decoded<Level>
+    fun writeLevel(out: ByteArrayOutputStream, value: Level)
+
     fun readMode(bytes: ByteArray, offset: Int): Bincode.Decoded<Mode>
     fun writeMode(out: ByteArrayOutputStream, value: Mode)
 
@@ -24,4 +27,7 @@ interface CoverageCodecs {
 
     fun readShape(bytes: ByteArray, offset: Int): Bincode.Decoded<Shape>
     fun writeShape(out: ByteArrayOutputStream, value: Shape)
+
+    fun readSignal(bytes: ByteArray, offset: Int): Bincode.Decoded<Signal>
+    fun writeSignal(out: ByteArrayOutputStream, value: Signal)
 }

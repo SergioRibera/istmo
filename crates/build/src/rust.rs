@@ -48,6 +48,9 @@ fn write_enum(out: &mut String, e: &EnumDef, derives: &[&str]) {
     let _ = writeln!(out, "#[::istmo_macros::message(wincode = \"::wincode\")]");
     write_allow_missing_docs(out);
     let _ = writeln!(out, "#[derive({})]", derives.join(", "));
+    if e.non_exhaustive {
+        let _ = writeln!(out, "#[non_exhaustive]");
+    }
     let _ = writeln!(out, "pub enum {} {{", e.name);
     for v in &e.variants {
         if v.payload.is_empty() {
@@ -261,6 +264,7 @@ mod tests {
     #[test]
     fn multi_payload_variants_keep_every_field() {
         let e = TypeDef::Enum(EnumDef {
+            non_exhaustive: false,
             name: "E".to_owned(),
             variants: vec![EnumVariant {
                 name: "Pair".to_owned(),

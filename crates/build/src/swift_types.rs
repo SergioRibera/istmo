@@ -302,15 +302,18 @@ fn write_struct(out: &mut String, names: SwiftNames<'_>, s: &StructDef, is_error
 }
 
 fn write_enum(out: &mut String, names: SwiftNames<'_>, e: &EnumDef, is_error: bool) {
-    if e.variants.iter().all(|v| v.payload.is_empty()) {
+    if e.is_plain() {
         let conform = if is_error { ", Error" } else { ", Sendable" };
         let _ = writeln!(out, "public enum {}: UInt32{conform} {{", e.name);
         for (i, v) in e.variants.iter().enumerate() {
             let _ = writeln!(out, "    case {} = {i}", to_swift_case(&v.name));
         }
     } else {
-        let conform = if is_error { ": Error" } else { ": Sendable" };
-        let _ = writeln!(out, "public enum {}{conform} {{", e.name);
+        // Unit cases plus `.unknown` keep the `Hashable` a raw-value enum
+        // has.
+        let hashable = if e.has_payload() { "" } else { "Hashable, " };
+        let conform = if is_error { "Error" } else { "Sendable" };
+        let _ = writeln!(out, "public enum {}: {hashable}{conform} {{", e.name);
         for v in &e.variants {
             let case_name = to_swift_case(&v.name);
             if v.payload.is_empty() {
@@ -324,6 +327,17 @@ fn write_enum(out: &mut String, names: SwiftNames<'_>, e: &EnumDef, is_error: bo
                     .join(", ");
                 let _ = writeln!(out, "    case {case_name}({tys})");
             }
+        }
+        if e.non_exhaustive {
+            let _ = writeln!(
+                out,
+                "    /// A case added after this code was generated: its discriminant and the"
+            );
+            let _ = writeln!(
+                out,
+                "    /// rest of the message after it, written back as they came."
+            );
+            let _ = writeln!(out, "    case unknown(discriminant: UInt32, payload: Data)");
         }
     }
     let _ = writeln!(out, "}}");
@@ -381,7 +395,7 @@ fn write_struct_codec(out: &mut String, wire: SwiftWire<'_>, names: SwiftNames<'
 
 fn write_enum_codec(out: &mut String, wire: SwiftWire<'_>, names: SwiftNames<'_>, e: &EnumDef) {
     let ty = names.named(&e.name);
-    let has_payload = e.variants.iter().any(|v| !v.payload.is_empty());
+    let cases = !e.is_plain();
 
     let _ = writeln!(
         out,
@@ -389,7 +403,7 @@ fn write_enum_codec(out: &mut String, wire: SwiftWire<'_>, names: SwiftNames<'_>
         e.name, ty,
     );
     let _ = writeln!(out, "        let disc = try Bincode.readVarintU32(&c)");
-    if has_payload {
+    if cases {
         let _ = writeln!(out, "        switch disc {{");
         for (i, v) in e.variants.iter().enumerate() {
             let case_name = to_swift_case(&v.name);
@@ -420,10 +434,26 @@ fn write_enum_codec(out: &mut String, wire: SwiftWire<'_>, names: SwiftNames<'_>
                 }
             }
         }
-        let _ = writeln!(
-            out,
-            "        default: throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))",
-        );
+        if e.non_exhaustive {
+            // The payload's shape is unknown, so the case keeps the rest
+            // of the message: a value read after it fails to decode
+            // instead of reading the payload's bytes.
+            let _ = writeln!(out, "        default:");
+            let _ = writeln!(
+                out,
+                "            let payload = c.data.subdata(in: (c.data.endIndex - c.remaining) ..< c.data.endIndex)"
+            );
+            let _ = writeln!(out, "            c.offset += payload.count");
+            let _ = writeln!(
+                out,
+                "            return .unknown(discriminant: disc, payload: payload)"
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "        default: throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))",
+            );
+        }
         let _ = writeln!(out, "        }}");
     } else {
         let _ = writeln!(
@@ -439,13 +469,16 @@ fn write_enum_codec(out: &mut String, wire: SwiftWire<'_>, names: SwiftNames<'_>
     }
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
+    write_enum_writer(out, wire, e, &ty, cases);
+}
 
+fn write_enum_writer(out: &mut String, wire: SwiftWire<'_>, e: &EnumDef, ty: &str, cases: bool) {
     let _ = writeln!(
         out,
         "    public func write{}(_ out: inout Data, _ value: {}) {{",
         e.name, ty,
     );
-    if has_payload {
+    if cases {
         let _ = writeln!(out, "        switch value {{");
         for (i, v) in e.variants.iter().enumerate() {
             let case_name = to_swift_case(&v.name);
@@ -471,6 +504,14 @@ fn write_enum_codec(out: &mut String, wire: SwiftWire<'_>, names: SwiftNames<'_>
                     }
                 }
             }
+        }
+        if e.non_exhaustive {
+            let _ = writeln!(out, "        case .unknown(let discriminant, let payload):");
+            let _ = writeln!(
+                out,
+                "            Bincode.writeVarintU32(&out, discriminant)"
+            );
+            let _ = writeln!(out, "            out.append(payload)");
         }
         let _ = writeln!(out, "        }}");
     } else {
@@ -502,6 +543,7 @@ mod tests {
 
     fn unit_enum(name: &str) -> TypeDef {
         TypeDef::Enum(EnumDef {
+            non_exhaustive: false,
             name: name.to_owned(),
             variants: Vec::new(),
         })

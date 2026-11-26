@@ -128,6 +128,55 @@ public final class CoverageCodecsImpl: CoverageCodecs {
         Bincode.writeVarintU32(&out, value.code)
     }
 
+    public func readLevel(_ c: inout Bincode.Cursor) throws -> Coverage.Level {
+        let disc = try Bincode.readVarintU32(&c)
+        switch disc {
+        case 0: return .low
+        case 1: return .high
+        default:
+            let payload = c.data.subdata(in: (c.data.endIndex - c.remaining) ..< c.data.endIndex)
+            c.offset += payload.count
+            return .unknown(discriminant: disc, payload: payload)
+        }
+    }
+
+    public func writeLevel(_ out: inout Data, _ value: Coverage.Level) {
+        switch value {
+        case .low:
+            Bincode.writeVarintU32(&out, 0)
+        case .high:
+            Bincode.writeVarintU32(&out, 1)
+        case .unknown(let discriminant, let payload):
+            Bincode.writeVarintU32(&out, discriminant)
+            out.append(payload)
+        }
+    }
+
+    public func readSignal(_ c: inout Bincode.Cursor) throws -> Coverage.Signal {
+        let disc = try Bincode.readVarintU32(&c)
+        switch disc {
+        case 0: return .quiet
+        case 1: return .loud(try self.readLevel(&c))
+        default:
+            let payload = c.data.subdata(in: (c.data.endIndex - c.remaining) ..< c.data.endIndex)
+            c.offset += payload.count
+            return .unknown(discriminant: disc, payload: payload)
+        }
+    }
+
+    public func writeSignal(_ out: inout Data, _ value: Coverage.Signal) {
+        switch value {
+        case .quiet:
+            Bincode.writeVarintU32(&out, 0)
+        case .loud(let payload):
+            Bincode.writeVarintU32(&out, 1)
+            self.writeLevel(&out, payload)
+        case .unknown(let discriminant, let payload):
+            Bincode.writeVarintU32(&out, discriminant)
+            out.append(payload)
+        }
+    }
+
     public func readNativeHandleId(_ c: inout Bincode.Cursor) throws -> NativeHandleId {
         return try Bincode.readVarintU64(&c)
     }

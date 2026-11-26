@@ -6,3 +6,9 @@ Mode 01
 FirstError 00
 FirstError 0102c3b1
 SecondError fb2c01
+Level 01
+Signal 00
+Signal 0100
+Level+ 02
+Signal+ 0202c3a907
+Signal 0102

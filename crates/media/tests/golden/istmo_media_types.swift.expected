@@ -7,13 +7,16 @@ import Foundation
 public enum IstmoMedia {}
 
 extension IstmoMedia {
-    public enum AccessStatus: UInt32, Sendable {
-        case granted = 0
-        case denied = 1
-        case notDetermined = 2
-        case restricted = 3
-        case requiresRestart = 4
-        case perSession = 5
-        case notApplicable = 6
+    public enum AccessStatus: Hashable, Sendable {
+        case granted
+        case denied
+        case notDetermined
+        case restricted
+        case requiresRestart
+        case perSession
+        case notApplicable
+        /// A case added after this code was generated: its discriminant and the
+        /// rest of the message after it, written back as they came.
+        case unknown(discriminant: UInt32, payload: Data)
     }
 }

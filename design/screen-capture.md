@@ -46,6 +46,11 @@ they disagree, this section wins.
 - `AccessStatus` is defined once in `istmo-media`, shared with the
   camera plugin. It has the camera's four states plus `RequiresRestart`,
   `PerSession` and `NotApplicable`, and is `#[non_exhaustive]`.
+- Kotlin and Swift keep a variant of a `#[non_exhaustive]` enum that
+  they do not know (`AccessStatus`, `CaptureError`) as `Unknown` /
+  `.unknown` with its discriminant and the rest of the message, and write
+  it back unchanged. An older app thus reads a newer `CaptureError`
+  (always the whole error payload) without failing.
 
 **Copies.** No `CopyStage` was added: the plugin no longer makes a second
 CPU copy anywhere.

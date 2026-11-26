@@ -20,8 +20,30 @@ mod coverage {
     include!("golden/coverage_types.rs.expected");
 }
 
-use coverage::{Everything, FirstError, Mode, SecondError, Shape};
+use coverage::{Everything, FirstError, Level, Mode, SecondError, Shape, Signal};
 use istmo_core::NativeHandleId;
+
+/// The `#[non_exhaustive]` enums of `coverage` as a later version sends
+/// them, one variant appended to each. Kotlin and Swift codecs generated
+/// from `coverage` decode those variants as `Unknown` and write them back
+/// byte for byte.
+mod later {
+    #[::istmo_macros::message(wincode = "::wincode")]
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) enum Level {
+        Low,
+        High,
+        Max,
+    }
+
+    #[::istmo_macros::message(wincode = "::wincode")]
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) enum Signal {
+        Quiet,
+        Loud(Level),
+        Burst(String, u8),
+    }
+}
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut out, b| {
@@ -122,6 +144,18 @@ fn coverage_values_match_golden_bytes() {
     line(&mut out, "FirstError", &FirstError::Denied);
     line(&mut out, "FirstError", &FirstError::Failed("ñ".to_owned()));
     line(&mut out, "SecondError", &SecondError { code: 300 });
+    line(&mut out, "Level", &Level::High);
+    line(&mut out, "Signal", &Signal::Quiet);
+    line(&mut out, "Signal", &Signal::Loud(Level::Low));
+    // Values this contract's codecs do not know: `Unknown` on the native
+    // side, and the same bytes back.
+    line(&mut out, "Level+", &later::Level::Max);
+    line(
+        &mut out,
+        "Signal+",
+        &later::Signal::Burst("é".to_owned(), 7),
+    );
+    line(&mut out, "Signal", &later::Signal::Loud(later::Level::Max));
 
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/coverage_wire.hex.expected");

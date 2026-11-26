@@ -13,6 +13,10 @@ use super::{Contract, TypeDef, TypeRef};
 /// Named type the runtime provides on every platform.
 const BUILTIN_NAMED: &[&str] = &["NativeHandleId"];
 
+/// The Kotlin / Swift variant a `#[non_exhaustive]` enum decodes an
+/// unknown discriminant into.
+const UNKNOWN_VARIANT: &str = "Unknown";
+
 /// Why a [`Contract`] cannot be generated. `site` names the offending
 /// item, e.g. ``method `m` argument `x` ``.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +37,10 @@ pub enum ContractError {
     DuplicateField { ty: String, field: String },
     /// A `FrameSinkId<M>` anywhere but as a method argument itself.
     FrameSinkPlacement { site: String },
+    /// A `#[non_exhaustive]` enum with a variant named `Unknown`, or one
+    /// carrying a type named `Unknown`: Kotlin and Swift spell the variant
+    /// they keep for later versions' variants that way.
+    ReservedUnknown { ty: String },
 }
 
 impl fmt::Display for ContractError {
@@ -67,6 +75,12 @@ impl fmt::Display for ContractError {
                 f,
                 "{site} uses `FrameSinkId<_>` outside a method argument; a frame sink \
                  is only passed to a method (optionally as an `Option`), never stored, returned or nested"
+            ),
+            Self::ReservedUnknown { ty } => write!(
+                f,
+                "`#[non_exhaustive]` enum `{ty}` has a variant named `Unknown` or carries a type \
+                 named `Unknown`; Kotlin and Swift keep a variant added later as `Unknown`, so \
+                 rename it"
             ),
         }
     }
@@ -132,6 +146,14 @@ impl Contract {
                     }
                 }
                 TypeDef::Enum(e) => {
+                    if e.non_exhaustive
+                        && e.variants.iter().any(|v| {
+                            v.name == UNKNOWN_VARIANT
+                                || v.payload.iter().any(|ty| ty.names(UNKNOWN_VARIANT))
+                        })
+                    {
+                        return Err(ContractError::ReservedUnknown { ty: e.name.clone() });
+                    }
                     for v in &e.variants {
                         for ty in &v.payload {
                             check(format!("type `{}` variant `{}`", e.name, v.name), ty)?;

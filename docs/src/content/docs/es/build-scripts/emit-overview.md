@@ -168,6 +168,18 @@ comparten varios plugins viven en el namespace de su grupo
 Dos namespaces, o un namespace y un símbolo generado como `<T>Client`, con
 el mismo nombre hacen fallar el build.
 
+Un enum de mensaje `#[non_exhaustive]` recibe una variante más en ambos
+lados, Kotlin `Unknown(discriminant, payload)` y Swift
+`.unknown(discriminant:payload:)`: una app generada contra una versión
+anterior conserva una variante añadida después en lugar de fallar al
+decodificar, y la escribe de vuelta tal como llegó. El payload es el resto
+del mensaje, así que esto funciona donde el enum es el último valor de su
+mensaje (un valor de retorno, un error, un ítem de stream, un último
+campo); en cualquier otro lugar ese valor sigue sin decodificarse. Un enum
+así es una `sealed class` en Kotlin y un enum Swift sin raw values aunque
+todas sus variantes sean unitarias, y una variante llamada `Unknown` se
+rechaza en el build.
+
 ## Omitir una plataforma
 
 Si sólo publicas para Android o sólo para iOS, dile a `emit()` que omita

@@ -62,3 +62,21 @@ pub enum FirstError {
 pub struct SecondError {
     pub code: u32,
 }
+
+#[::istmo_macros::message(wincode = "::wincode")]
+#[allow(missing_docs, reason = "generated from a contract, which carries no docs")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+#[non_exhaustive]
+pub enum Level {
+    Low,
+    High,
+}
+
+#[::istmo_macros::message(wincode = "::wincode")]
+#[allow(missing_docs, reason = "generated from a contract, which carries no docs")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+#[non_exhaustive]
+pub enum Signal {
+    Quiet,
+    Loud(Level),
+}

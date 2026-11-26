@@ -30,6 +30,7 @@ fn arg(name: &str, ty: TypeRef) -> Arg {
 
 fn unit_enum(name: &str, variants: &[&str]) -> TypeDef {
     TypeDef::Enum(EnumDef {
+        non_exhaustive: false,
         name: name.to_owned(),
         variants: variants
             .iter()
@@ -161,6 +162,7 @@ fn expected_types() -> Vec<TypeDef> {
             &["Biometric", "DeviceCredential", "Unspecified"],
         ),
         TypeDef::Enum(EnumDef {
+            non_exhaustive: false,
             name: "BiometricError".to_owned(),
             variants: vec![
                 variant("UserCancelled", vec![]),

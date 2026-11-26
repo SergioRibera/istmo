@@ -83,7 +83,7 @@ fn write_struct(out: &mut String, s: &StructDef) {
 }
 
 fn write_enum(out: &mut String, e: &EnumDef) {
-    if e.variants.iter().all(|v| v.payload.is_empty()) {
+    if e.is_plain() {
         let _ = writeln!(out, "enum class {} {{", e.name);
         for (i, v) in e.variants.iter().enumerate() {
             let comma = if i + 1 == e.variants.len() { "" } else { "," };
@@ -116,8 +116,47 @@ fn write_enum(out: &mut String, e: &EnumDef) {
                 }
             }
         }
+        if e.non_exhaustive {
+            write_unknown_variant(out, &e.name);
+        }
     }
     let _ = writeln!(out, "}}");
+}
+
+/// The variant a `#[non_exhaustive]` enum keeps a later version's variant
+/// in. A `ByteArray` property compares by identity, so `equals` and
+/// `hashCode` compare its contents.
+fn write_unknown_variant(out: &mut String, name: &str) {
+    let _ = writeln!(out, "    /**");
+    let _ = writeln!(
+        out,
+        "     * A variant added after this code was generated: its [discriminant] and"
+    );
+    let _ = writeln!(
+        out,
+        "     * the rest of the message after it, written back as they came."
+    );
+    let _ = writeln!(out, "     */");
+    let _ = writeln!(
+        out,
+        "    class Unknown(val discriminant: Int, val payload: ByteArray) : {name}() {{"
+    );
+    let _ = writeln!(out, "        override fun equals(other: Any?): Boolean =");
+    let _ = writeln!(
+        out,
+        "            other is Unknown && discriminant == other.discriminant && payload.contentEquals(other.payload)"
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "        override fun hashCode(): Int = 31 * discriminant + payload.contentHashCode()"
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "        override fun toString(): String = \"{name}.Unknown(discriminant=$discriminant, ${{payload.size}} bytes)\""
+    );
+    let _ = writeln!(out, "    }}");
 }
 
 fn write_struct_codec(out: &mut String, s: &StructDef) {
@@ -161,14 +200,14 @@ fn write_struct_codec(out: &mut String, s: &StructDef) {
 }
 
 fn write_enum_codec(out: &mut String, e: &EnumDef) {
-    let has_payload = e.variants.iter().any(|v| !v.payload.is_empty());
+    let sealed = !e.is_plain();
 
     let _ = writeln!(
         out,
         "    override fun read{}(bytes: ByteArray, offset: Int): Bincode.Decoded<{}> {{",
         e.name, e.name,
     );
-    if has_payload {
+    if sealed {
         let _ = writeln!(out, "        var cursor = offset");
         let _ = writeln!(
             out,
@@ -205,11 +244,22 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
             );
             let _ = writeln!(out, "            }}");
         }
-        let _ = writeln!(
-            out,
-            "            else -> throw Bincode.DecodeException(\"{}: unknown discriminant ${{disc.value}}\")",
-            e.name,
-        );
+        if e.non_exhaustive {
+            // The payload's shape is unknown, so the variant keeps the
+            // rest of the message: a value read after it fails to decode
+            // instead of reading the payload's bytes.
+            let _ = writeln!(
+                out,
+                "            else -> Bincode.Decoded({0}.Unknown(disc.value, bytes.copyOfRange(cursor, bytes.size)) as {0}, bytes.size)",
+                e.name,
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "            else -> throw Bincode.DecodeException(\"{}: unknown discriminant ${{disc.value}}\")",
+                e.name,
+            );
+        }
         let _ = writeln!(out, "        }}");
     } else {
         let _ = writeln!(
@@ -230,16 +280,16 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
     }
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
-    write_enum_writer(out, e, has_payload);
+    write_enum_writer(out, e, sealed);
 }
 
-fn write_enum_writer(out: &mut String, e: &EnumDef, has_payload: bool) {
+fn write_enum_writer(out: &mut String, e: &EnumDef, sealed: bool) {
     let _ = writeln!(
         out,
         "    override fun write{}(out: ByteArrayOutputStream, value: {}) {{",
         e.name, e.name,
     );
-    if has_payload {
+    if sealed {
         let _ = writeln!(out, "        when (value) {{");
         for (i, v) in e.variants.iter().enumerate() {
             let variant = format!("{}.{}", e.name, kt_ident(&v.name));
@@ -262,6 +312,18 @@ fn write_enum_writer(out: &mut String, e: &EnumDef, has_payload: bool) {
                     WIRE.write_stmt(out, "                ", ty, "out", &format!("value.f{idx}"));
                 }
             }
+            let _ = writeln!(out, "            }}");
+        }
+        if e.non_exhaustive {
+            let _ = writeln!(out, "            is {}.Unknown -> {{", e.name);
+            let _ = writeln!(
+                out,
+                "                Bincode.writeEnumDiscriminant(out, value.discriminant)"
+            );
+            let _ = writeln!(
+                out,
+                "                out.write(value.payload, 0, value.payload.size)"
+            );
             let _ = writeln!(out, "            }}");
         }
         let _ = writeln!(out, "        }}");

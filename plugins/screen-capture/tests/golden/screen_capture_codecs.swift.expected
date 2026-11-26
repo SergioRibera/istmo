@@ -1395,7 +1395,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         case 18: return .`protocol`(try self.readBackendDetail(&c))
         case 19: return .os(try self.readOsFailure(&c))
         case 20: return .sinkFull
-        default: throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
+        default:
+            let payload = c.data.subdata(in: (c.data.endIndex - c.remaining) ..< c.data.endIndex)
+            c.offset += payload.count
+            return .unknown(discriminant: disc, payload: payload)
         }
     }
 
@@ -1452,6 +1455,9 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
             self.writeOsFailure(&out, payload)
         case .sinkFull:
             Bincode.writeVarintU32(&out, 20)
+        case .unknown(let discriminant, let payload):
+            Bincode.writeVarintU32(&out, discriminant)
+            out.append(payload)
         }
     }
 
@@ -2142,14 +2148,41 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
 
     public func readAccessStatus(_ c: inout Bincode.Cursor) throws -> IstmoMedia.AccessStatus {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = IstmoMedia.AccessStatus(rawValue: disc) else {
-            throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
+        switch disc {
+        case 0: return .granted
+        case 1: return .denied
+        case 2: return .notDetermined
+        case 3: return .restricted
+        case 4: return .requiresRestart
+        case 5: return .perSession
+        case 6: return .notApplicable
+        default:
+            let payload = c.data.subdata(in: (c.data.endIndex - c.remaining) ..< c.data.endIndex)
+            c.offset += payload.count
+            return .unknown(discriminant: disc, payload: payload)
         }
-        return value
     }
 
     public func writeAccessStatus(_ out: inout Data, _ value: IstmoMedia.AccessStatus) {
-        Bincode.writeVarintU32(&out, value.rawValue)
+        switch value {
+        case .granted:
+            Bincode.writeVarintU32(&out, 0)
+        case .denied:
+            Bincode.writeVarintU32(&out, 1)
+        case .notDetermined:
+            Bincode.writeVarintU32(&out, 2)
+        case .restricted:
+            Bincode.writeVarintU32(&out, 3)
+        case .requiresRestart:
+            Bincode.writeVarintU32(&out, 4)
+        case .perSession:
+            Bincode.writeVarintU32(&out, 5)
+        case .notApplicable:
+            Bincode.writeVarintU32(&out, 6)
+        case .unknown(let discriminant, let payload):
+            Bincode.writeVarintU32(&out, discriminant)
+            out.append(payload)
+        }
     }
 
     public func readNativeHandleId(_ c: inout Bincode.Cursor) throws -> NativeHandleId {

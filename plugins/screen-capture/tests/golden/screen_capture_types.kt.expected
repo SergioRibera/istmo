@@ -631,6 +631,18 @@ sealed class CaptureError {
     data class Protocol(val value: BackendDetail) : CaptureError()
     data class Os(val value: OsFailure) : CaptureError()
     object SinkFull : CaptureError()
+    /**
+     * A variant added after this code was generated: its [discriminant] and
+     * the rest of the message after it, written back as they came.
+     */
+    class Unknown(val discriminant: Int, val payload: ByteArray) : CaptureError() {
+        override fun equals(other: Any?): Boolean =
+            other is Unknown && discriminant == other.discriminant && payload.contentEquals(other.payload)
+
+        override fun hashCode(): Int = 31 * discriminant + payload.contentHashCode()
+
+        override fun toString(): String = "CaptureError.Unknown(discriminant=$discriminant, ${payload.size} bytes)"
+    }
 }
 
 enum class PtsClock {

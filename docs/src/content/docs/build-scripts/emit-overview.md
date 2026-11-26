@@ -164,6 +164,17 @@ Types shared by several plugins live in their group's namespace
 Two namespaces, or a namespace and a generated symbol such as
 `<T>Client`, with the same name fail the build.
 
+A `#[non_exhaustive]` message enum gets one more variant on both sides,
+Kotlin `Unknown(discriminant, payload)` and Swift
+`.unknown(discriminant:payload:)`: an app generated against an older
+version keeps a variant added later instead of failing to decode, and
+writes it back as it came. The payload is the rest of the message, so
+this works where the enum is the last value of its message (a return
+value, an error, a stream item, a last field); anywhere else such a value
+still fails to decode. Such an enum is a Kotlin `sealed class` and a Swift
+enum without raw values even when every variant is a unit, and a variant
+named `Unknown` is refused at build time.
+
 ## Skip a platform
 
 If you only ship Android or only ship iOS, tell `emit()` to skip the

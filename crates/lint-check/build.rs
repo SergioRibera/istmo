@@ -37,6 +37,7 @@ fn main() {
                 ],
             }),
             TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "Kind".to_owned(),
                 variants: vec![
                     EnumVariant {

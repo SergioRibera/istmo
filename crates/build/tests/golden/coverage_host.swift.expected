@@ -19,6 +19,7 @@ public protocol CoverageBackend: AnyObject {
     func `default`() async throws -> Void
     func pulse(gap: Void, hz: UInt32) -> AsyncThrowingStream<Void, Error>
     func feed(frames: IstmoFrameSender<Coverage.Everything>, levels: IstmoFrameSender<UInt32>, ticks: IstmoFrameSender<Void>, audio: IstmoFrameSender<Data>?) async throws -> Void
+    func tune(signal: Coverage.Signal) async throws -> Coverage.Level
 }
 
 /// Reader / writer per `Named` type referenced by the `Coverage` contract.
@@ -29,6 +30,8 @@ public protocol CoverageCodecs {
     func writeEverything(_ out: inout Data, _ value: Coverage.Everything)
     func readFirstError(_ c: inout Bincode.Cursor) throws -> Coverage.FirstError
     func writeFirstError(_ out: inout Data, _ value: Coverage.FirstError)
+    func readLevel(_ c: inout Bincode.Cursor) throws -> Coverage.Level
+    func writeLevel(_ out: inout Data, _ value: Coverage.Level)
     func readMode(_ c: inout Bincode.Cursor) throws -> Coverage.Mode
     func writeMode(_ out: inout Data, _ value: Coverage.Mode)
     func readNativeHandleId(_ c: inout Bincode.Cursor) throws -> NativeHandleId
@@ -37,6 +40,8 @@ public protocol CoverageCodecs {
     func writeSecondError(_ out: inout Data, _ value: Coverage.SecondError)
     func readShape(_ c: inout Bincode.Cursor) throws -> Coverage.Shape
     func writeShape(_ out: inout Data, _ value: Coverage.Shape)
+    func readSignal(_ c: inout Bincode.Cursor) throws -> Coverage.Signal
+    func writeSignal(_ out: inout Data, _ value: Coverage.Signal)
 }
 
 /// Decodes wire calls, invokes `CoverageBackend`, encodes the response.
@@ -138,6 +143,13 @@ public final class CoverageDispatcher: PluginHandler, HandleReleaser {
             let audio = try Bincode.readOption(&c) { c1 in IstmoFrameSender<Data>.open(sinkId: try Bincode.readVarintU64(&c1), fingerprint: 0xfddda3e6018940d8, encode: { v2 in var o2 = Data(); Bincode.writeData(&o2, v2); return o2 }) }
             try await backend.feed(frames: frames, levels: levels, ticks: ticks, audio: audio)
             return .unary(Data())
+        case "tune":
+            var c = Bincode.Cursor(payload)
+            let signal = try codecs.readSignal(&c)
+            let result = try await backend.tune(signal: signal)
+            var out = Data()
+            codecs.writeLevel(&out, result)
+            return .unary(out)
         default:
             throw PluginRuntimeError.unknownMethod(plugin: "Coverage", method: method)
         }

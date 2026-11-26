@@ -212,7 +212,8 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
         dismiss(animated: true) { finish(result) }
     }
 
-    /// AVFoundation types to ask for; empty when the platform has none.
+    /// AVFoundation types to ask for; empty when the platform has none or
+    /// the format was added after this backend was written.
     private static func metadataTypes(_ format: BarcodeScanner.BarcodeFormat) -> [AVMetadataObject.ObjectType] {
         switch format {
         case .qr: return [.qr]
@@ -232,7 +233,7 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
                 return [.codabar]
             }
             return []
-        case .other: return []
+        case .other, .unknown: return []
         }
     }
 

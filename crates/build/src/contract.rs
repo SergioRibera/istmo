@@ -73,6 +73,28 @@ pub struct Field {
 pub struct EnumDef {
     pub name: String,
     pub variants: Vec<EnumVariant>,
+    /// The Rust enum is `#[non_exhaustive]`: a later version may add
+    /// variants, so the Kotlin / Swift side keeps a variant it does not
+    /// know (`Unknown` / `.unknown`: its discriminant and the rest of the
+    /// message) instead of failing to decode, and writes it back as it
+    /// came.
+    pub non_exhaustive: bool,
+}
+
+impl EnumDef {
+    /// Whether a variant carries data.
+    #[must_use]
+    pub fn has_payload(&self) -> bool {
+        self.variants.iter().any(|v| !v.payload.is_empty())
+    }
+
+    /// Unit variants only and no `#[non_exhaustive]`: a Kotlin `enum class`
+    /// and a Swift `UInt32` raw-value enum. Any other enum is a Kotlin
+    /// `sealed class` and a Swift enum with cases.
+    #[must_use]
+    pub fn is_plain(&self) -> bool {
+        !self.non_exhaustive && !self.has_payload()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
@@ -177,6 +199,29 @@ impl TypeRef {
             .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
                 (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
             })
+    }
+
+    /// Whether the type is, or contains, the named type `name`.
+    #[must_use]
+    pub fn names(&self, name: &str) -> bool {
+        match self {
+            Self::Named(own) => own == name,
+            Self::Vec(inner) | Self::Option(inner) | Self::FrameSink(inner) => inner.names(name),
+            Self::Unit
+            | Self::Bool
+            | Self::U8
+            | Self::I8
+            | Self::U16
+            | Self::I16
+            | Self::U32
+            | Self::I32
+            | Self::U64
+            | Self::I64
+            | Self::F32
+            | Self::F64
+            | Self::String
+            | Self::Bytes => false,
+        }
     }
 
     /// Whether this is a frame sink argument (`FrameSinkId<M>` or an

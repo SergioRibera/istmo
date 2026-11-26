@@ -45,6 +45,7 @@ fn demo_types_contract() -> Contract {
                 ],
             }),
             TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "TimerCodecMarker".to_owned(),
                 variants: vec![
                     EnumVariant {

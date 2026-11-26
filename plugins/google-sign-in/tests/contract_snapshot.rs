@@ -86,6 +86,7 @@ fn expected_contract() -> Contract {
         shared: Vec::new(),
         types: vec![
             TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "SignInMode".to_owned(),
                 variants: vec![unit_variant("Interactive"), unit_variant("SilentOnly")],
             }),
@@ -112,6 +113,7 @@ fn expected_contract() -> Contract {
                 ],
             }),
             TypeDef::Enum(EnumDef {
+                non_exhaustive: false,
                 name: "SignInError".to_owned(),
                 variants: vec![
                     unit_variant("UserCancelled"),
