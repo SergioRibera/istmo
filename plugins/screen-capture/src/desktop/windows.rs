@@ -56,6 +56,8 @@ pub(crate) mod listing;
     )
 )]
 pub(crate) mod os;
+#[cfg(feature = "windows-audio")]
+mod wasapi;
 #[cfg_attr(
     not(any(
         feature = "windows-wgc",
@@ -102,9 +104,20 @@ pub(crate) fn backends() -> Vec<Arc<dyn Backend>> {
     backends
 }
 
-/// The compiled audio backend: none yet.
-pub(crate) const fn audio() -> Option<Arc<dyn AudioBackend>> {
-    None
+/// The compiled audio backend.
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "`None` when `windows-audio` is off"
+)]
+pub(crate) fn audio() -> Option<Arc<dyn AudioBackend>> {
+    #[cfg(feature = "windows-audio")]
+    {
+        Some(wasapi::backend())
+    }
+    #[cfg(not(feature = "windows-audio"))]
+    {
+        None
+    }
 }
 
 /// A NUL-terminated (or full) UTF-16 buffer as a `String`.
