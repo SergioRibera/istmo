@@ -562,8 +562,9 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
             try {
                 withTimeout(SHOT_TIMEOUT_MS) { delivered.await() }
             } catch (e: TimeoutCancellationException) {
-                session.close()
-                fail(CaptureError.Protocol(BackendDetail(PROJECTION, "screenshot", "no frame within 5 s")))
+                val error = CaptureError.Protocol(BackendDetail(PROJECTION, "screenshot", "no frame within 5 s"))
+                handler.call { session.end(StopReason.Failed, error.toString()) }
+                fail(error)
             }
             // Ends the stream after the queued frame; a held
             // `HardwareBuffer` keeps its reader until Rust drops it.
