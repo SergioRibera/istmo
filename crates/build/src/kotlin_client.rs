@@ -10,14 +10,13 @@ pub fn generate_kotlin_client(contract: &Contract) -> String {
     let mut out = String::new();
     write_header(&mut out, contract);
     let _ = writeln!(out);
-    let _ = writeln!(out, "import java.io.ByteArrayOutputStream");
     if contract.has_stream() {
         if contract.has_failing_stream() {
             let _ = writeln!(out, "import kotlinx.coroutines.flow.catch");
         }
         let _ = writeln!(out, "import kotlinx.coroutines.flow.map");
+        let _ = writeln!(out);
     }
-    let _ = writeln!(out);
     let name = &contract.type_name;
     let _ = writeln!(
         out,
