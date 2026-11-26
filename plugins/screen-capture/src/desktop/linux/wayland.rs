@@ -337,12 +337,13 @@ pub(crate) struct FrameEvents {
 }
 
 impl FrameEvents {
-    /// The damage as the frame meta carries it.
-    pub(crate) fn damage(&self, full: bool) -> Damage {
-        if full || self.damage.is_empty() {
+    /// The damage as the frame meta carries it: clipped to the `size`
+    /// buffer and capped like every backend's.
+    pub(crate) fn damage(&self, full: bool, size: Size) -> Damage {
+        if full {
             Damage::Full
         } else {
-            Damage::Rects(self.damage.clone())
+            Damage::clipped(self.damage.iter().copied(), size)
         }
     }
 }
@@ -1193,6 +1194,24 @@ ignore_events!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compositor_damage_never_leaves_the_buffer() {
+        let events = FrameEvents {
+            damage: vec![
+                // wlr: u32 coordinates past i32 saturate far outside.
+                Rect::new(i32::MAX, i32::MAX, 10, 10),
+                // ext: negative coordinates.
+                Rect::new(-4, -4, 8, 8),
+            ],
+            ..FrameEvents::default()
+        };
+        assert_eq!(
+            events.damage(false, Size::new(64, 64)),
+            Damage::Rects(vec![Rect::new(0, 0, 4, 4)])
+        );
+        assert_eq!(events.damage(true, Size::new(64, 64)), Damage::Full);
+    }
 
     #[test]
     fn transforms_map_to_mirror_then_turn() {

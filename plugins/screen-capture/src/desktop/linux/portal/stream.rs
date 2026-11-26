@@ -473,23 +473,17 @@ fn take_newest(stream: &Stream, negotiated: Negotiated, skipped: &mut u32) -> Op
     let damage = buffer
         .find_meta::<MetaVideoDamage>()
         .map_or(Damage::Full, |meta| {
-            let rects: Vec<Rect> = meta
-                .iter()
-                .filter_map(|region| {
+            Damage::clipped(
+                meta.iter().map(|region| {
                     Rect::new(
                         region.position().x,
                         region.position().y,
                         region.size().width,
                         region.size().height,
                     )
-                    .intersect(bounds)
-                })
-                .collect();
-            if rects.is_empty() {
-                Damage::Full
-            } else {
-                Damage::Rects(rects)
-            }
+                }),
+                bounds.size(),
+            )
         });
     let plane = buffer.datas_mut().first_mut()?;
     if !matches!(plane.type_(), DataType::MemFd | DataType::MemPtr) {

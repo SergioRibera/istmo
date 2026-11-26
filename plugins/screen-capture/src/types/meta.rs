@@ -75,6 +75,33 @@ pub enum Damage {
 }
 
 impl Damage {
+    /// Rectangles a frame carries at most; more become [`Damage::Full`].
+    pub const MAX_RECTS: usize = 32;
+
+    /// Producer-reported rectangles clipped to a `size` buffer. Nothing
+    /// left after clipping (or nothing reported), or more than
+    /// [`MAX_RECTS`](Self::MAX_RECTS), is [`Damage::Full`]: a consumer can
+    /// index the buffer by every rectangle it receives.
+    #[must_use]
+    pub fn clipped(rects: impl IntoIterator<Item = Rect>, size: Size) -> Self {
+        let bounds = Rect::from_size(size);
+        let mut kept = Vec::new();
+        for rect in rects {
+            let Some(inside) = rect.intersect(bounds) else {
+                continue;
+            };
+            if kept.len() == Self::MAX_RECTS {
+                return Self::Full;
+            }
+            kept.push(inside);
+        }
+        if kept.is_empty() {
+            Self::Full
+        } else {
+            Self::Rects(kept)
+        }
+    }
+
     /// `self` followed by `next`: what changed across both.
     #[must_use]
     pub fn merge(self, next: Self) -> Self {
@@ -82,6 +109,9 @@ impl Damage {
             (Self::Full, _) | (_, Self::Full) => Self::Full,
             (Self::Unchanged, other) | (other, Self::Unchanged) => other,
             (Self::Rects(mut a), Self::Rects(b)) => {
+                if a.len() + b.len() > Self::MAX_RECTS {
+                    return Self::Full;
+                }
                 a.extend(b);
                 Self::Rects(a)
             }
@@ -345,4 +375,38 @@ pub enum CaptureEvent {
     SourceLost,
     Failed(CaptureError),
     Stopped(StopReason),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn producer_damage_is_clipped_to_the_buffer() {
+        let size = Size::new(100, 50);
+        let damage = Damage::clipped(
+            [
+                Rect::new(90, 40, 20, 20),
+                Rect::new(-10, -10, 5, 5),
+                Rect::new(i32::MAX, i32::MAX, u32::MAX, u32::MAX),
+            ],
+            size,
+        );
+        assert_eq!(damage, Damage::Rects(vec![Rect::new(90, 40, 10, 10)]));
+        assert_eq!(
+            Damage::clipped([Rect::new(-5, 0, 2, 2)], size),
+            Damage::Full
+        );
+        assert_eq!(Damage::clipped([], size), Damage::Full);
+    }
+
+    #[test]
+    fn too_many_rects_become_full() {
+        let size = Size::new(1000, 1000);
+        let many = (0..=33).map(|i| Rect::new(i, i, 1, 1));
+        assert_eq!(Damage::clipped(many, size), Damage::Full);
+        let half: Vec<Rect> = (0..20).map(|i| Rect::new(i, 0, 1, 1)).collect();
+        let merged = Damage::Rects(half.clone()).merge(Damage::Rects(half));
+        assert_eq!(merged, Damage::Full, "merging is capped too");
+    }
 }

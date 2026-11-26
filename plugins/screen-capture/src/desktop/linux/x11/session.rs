@@ -31,7 +31,7 @@ const TICK: Duration = Duration::from_millis(4);
 /// How often monitors are re-read to notice hot-plug and resizes.
 const MONITOR_CHECK: Duration = Duration::from_secs(1);
 /// More damage rectangles than this become a full-frame damage.
-const MAX_RECTS: usize = 32;
+const MAX_RECTS: usize = Damage::MAX_RECTS;
 /// How long dropping a session waits for its thread.
 const JOIN_WAIT: Duration = Duration::from_secs(2);
 

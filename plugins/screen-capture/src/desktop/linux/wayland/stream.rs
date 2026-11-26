@@ -324,7 +324,7 @@ impl<S: FrameSource> Engine<S> {
             colour: Colour::SRGB,
             hdr: None,
             orientation: self.source.orientation(&self.client, events),
-            damage: events.damage(!with_damage),
+            damage: events.damage(!with_damage, size),
             cursor: None,
             sync: if dmabuf { self.sync } else { SyncKind::Ready },
             scale_permille: self.info.scale(),
