@@ -157,7 +157,7 @@ Istmo es **agnóstico al executor**. Usa canales `flume` y
   workers asíncronos persistentes (`istmo-worker-*`); los métodos
   `#[istmo::blocking]` y los hosts escritos a mano con
   `DispatchMode::Isolated` corren en workers bloqueantes persistentes
-  (`istmo-blocking-*`, como mucho 64). Las esperas calientes giran hasta
+  (`istmo-blocking-*`: uno libre, o uno nuevo si todos están ocupados). Las esperas calientes giran hasta
   20 µs antes de dormir y lo dejan de hacer cuando no rinde.
 
 ## Siguiente

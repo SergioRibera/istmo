@@ -152,7 +152,7 @@ Istmo is **executor-agnostic**. It uses `flume` channels and
   the call until their first wait, then on a few persistent async
   workers (`istmo-worker-*`); `#[istmo::blocking]` methods and
   hand-written `DispatchMode::Isolated` hosts run on persistent blocking
-  workers (`istmo-blocking-*`, at most 64). Hot waits spin for up to
+  workers (`istmo-blocking-*`: an idle one, or a new one when all are busy). Hot waits spin for up to
   20 µs before parking, backing off when spinning does not pay.
 
 ## Next

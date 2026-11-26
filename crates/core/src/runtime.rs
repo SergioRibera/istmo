@@ -377,9 +377,9 @@ struct RemoteCalls {
 /// persistent async workers that never block (a waiting future does not
 /// hold one, so their number cannot deadlock anything);
 /// [`DispatchMode::Isolated`] work runs on persistent blocking workers,
-/// started while every one is busy up to 64 and reused afterwards. Hosts
-/// on blocking workers may block and call back into the runtime; past
-/// 64 such calls blocked on each other at once, new ones queue.
+/// reused when idle and started when none is, so no call waits behind
+/// busy ones. Hosts on blocking workers may block and call back into the
+/// runtime and wait, nested as deep as they like.
 ///
 /// A host thread that would wait on a full channel (the outbound
 /// envelope channel, or a local consumer's bounded stream) gives up as

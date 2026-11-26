@@ -214,8 +214,9 @@ pub type DispatchFuture<'a> =
 ///   thread. Breaking that stalls the caller, or one of the async workers
 ///   every waiting call shares.
 /// - [`Isolated`](Self::Isolated): the future runs on one of the
-///   runtime's blocking workers, a pool of persistent threads that grows
-///   while every thread is busy (up to 64) and is reused afterwards. The
+///   runtime's blocking workers: an idle one when there is one, a new
+///   one otherwise (no call waits behind busy ones), kept and reused
+///   afterwards. The
 ///   future may block, call synchronous platform SDKs, hold locks or
 ///   re-enter the runtime and wait for the answer. Costs one thread
 ///   hand-off per call. The default for hand-written dispatchers;
