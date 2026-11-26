@@ -21,7 +21,7 @@ links = "istmo_screen_capture"
 default = ["linux-portal", "linux-ext-image-copy", "linux-wlr-screencopy", "linux-x11", "linux-audio"]
 # xdg-desktop-portal ScreenCast + PipeWire video. Needs libpipewire at
 # build time (pkg-config, bindgen) and at run time.
-linux-portal = ["dep:ashpd", "pipewire"]
+linux-portal = ["dep:ashpd", "dep:pollster", "pipewire"]
 # ext-image-copy-capture-v1 (Sway 1.11, Hyprland, COSMIC, ...).
 linux-ext-image-copy = ["wayland", "dmabuf-alloc"]
 # zwlr_screencopy_manager_v1 (wlroots compositors, niri).
@@ -50,6 +50,8 @@ rustix = { version = "1.1", default-features = false, features = ["std", "time",
 # `async-io` (not tokio): zbus must never need a tokio reactor, the
 # host runs on whatever executor polls it.
 ashpd = { version = "0.14", default-features = false, features = ["async-io", "screencast"], optional = true }
+# Blocks on the portal's D-Bus futures on the backend's own threads.
+pollster = { workspace = true, optional = true }
 drm-fourcc = { version = "2.2", optional = true }
 gbm = { version = "0.18", default-features = false, features = ["drm-support"], optional = true }
 libspa = { version = "0.10", optional = true }
