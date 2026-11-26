@@ -716,6 +716,57 @@ fn auto_register_false_still_wins_over_a_declared_backend() {
 }
 
 #[test]
+fn desktop_only_plugin_generates_no_mobile_sources() {
+    let (root, android_root, ios_root) = registry_roots("targets-desktop");
+    emit_app_with(AppOpts {
+        root: Some(root.clone()),
+        android_root: Some(android_root.clone()),
+        ios_root: Some(ios_root.clone()),
+        ios_app_dir: Some("MyApp".to_owned()),
+        extra_manifests: vec![
+            Manifest::parse(
+                "[plugin]\nid = \"myapp.dummy\"\ntargets = [\"desktop\", \"web\"]\n\
+                 android_backend = \"dev.acme.DummyImpl\"\nios_backend = \"AcmeDummy\"\n",
+            )
+            .unwrap(),
+        ],
+        extra_contracts: vec![dummy_contract()],
+        seed_backends: true,
+        ..AppOpts::default()
+    });
+    let kotlin_dir = android_root.join("app/src/main/java/com/example/app/gen");
+    assert!(!kotlin_dir.join("DummyDispatcher.kt").exists());
+    assert!(!kotlin_dir.join("DummyBackendImpl.kt").exists());
+    assert!(!ios_root.join("MyApp/Plugins/Dummy").exists());
+    let kotlin = fs::read_to_string(
+        android_root.join("app/src/main/java/dev/istmo/generated/IstmoPluginRegistry.kt"),
+    )
+    .unwrap();
+    let swift =
+        fs::read_to_string(ios_root.join("MyApp/Plugins/IstmoPluginRegistry.swift")).unwrap();
+    assert!(!kotlin.contains("Dummy"), "{kotlin}");
+    assert!(!swift.contains("Dummy"), "{swift}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn android_target_only_skips_swift() {
+    let (kotlin, swift) = registries(
+        "targets-android",
+        Some(
+            "[plugin]\nid = \"myapp.dummy\"\ntargets = [\"android\", \"desktop\"]\n\
+             android_backend = \"dev.acme.DummyImpl\"\nios_backend = \"AcmeDummy\"\n",
+        ),
+        AppOpts::default(),
+    );
+    assert!(
+        kotlin.contains("dev.acme.DummyImpl(appContext)"),
+        "{kotlin}"
+    );
+    assert!(!swift.contains("Dummy"), "{swift}");
+}
+
+#[test]
 fn app_swift_packages_land_in_the_xcodegen_fragment() {
     let root = scratch_root("ios-swift-packages");
     fs::write(

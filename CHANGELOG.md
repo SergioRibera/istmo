@@ -4,6 +4,10 @@
 
 ### Added
 
+- `istmo.toml` `[plugin] targets = ["android", "ios", "desktop", "web"]`:
+  an app generates a plugin's Kotlin / Swift sources, registry entries
+  and shared type groups only for the mobile targets it lists. Default:
+  every target.
 - `istmo-screen-capture` plugin (`istmo.screen_capture`): screenshots
   (frames into a sink, or raw pixels with `screenshot_pixels`, never
   encoded; multi-monitor CPU composite) and live sessions into frame

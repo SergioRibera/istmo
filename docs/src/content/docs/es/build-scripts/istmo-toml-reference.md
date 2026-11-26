@@ -71,6 +71,13 @@ from_version = "1.5.0"
   `false` cuando la construcción del backend varía por app (una API key,
   una vista que es de la app) y el autor de la app debe registrar el
   dispatcher a mano. Ver [Auto-registro](/istmo/es/build-scripts/auto-register/).
+- **`targets`** *(opcional, array, default todos los targets)* — los
+  targets donde corre el plugin, entre `"android"`, `"ios"`, `"desktop"`
+  y `"web"`, cada uno una sola vez. La app genera fuentes Kotlin y una
+  entrada de registro para el plugin solo si figura `"android"`, Swift
+  solo si figura `"ios"`, y grupos de tipos compartidos solo para plugins
+  que corren en un target móvil. Un plugin solo de escritorio pone
+  `targets = ["desktop"]`. El auto-wiring no cambia.
 - **`android_package`** *(opcional, string)* — paquete Kotlin en el que
   la app genera el dispatcher, la interfaz `<T>Backend`, los tipos y los
   codecs de este plugin (un paquete Kotlin con puntos, p. ej.

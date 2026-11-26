@@ -163,9 +163,9 @@ pub use crate::kotlin_types::{
 pub use crate::manifest::{
     AndroidBackendArg, AndroidQuery, AndroidServiceSpec, AssetEntry, Deployment, InfoPlistEntry,
     InfoPlistValue, IosBackgroundKindSpec, IosBackgroundSpec, IosContinuousModeSpec, Manifest,
-    ManifestError, PluginEntry, RemoteOverride, ResolvedWiring, WindowsManifestFragment, emit,
-    emit_from, emit_manifest_metadata, emit_manifest_metadata_with_contracts, emit_wiring_env,
-    emit_with, resolve_wiring,
+    ManifestError, PluginEntry, PluginTargets, RemoteOverride, ResolvedWiring,
+    WindowsManifestFragment, emit, emit_from, emit_manifest_metadata,
+    emit_manifest_metadata_with_contracts, emit_wiring_env, emit_with, resolve_wiring,
 };
 pub use crate::min_versions::{
     FloorSource, InvalidOsVersion, MinVersionPlatform, MinVersionViolation, MinVersions, OsVersion,

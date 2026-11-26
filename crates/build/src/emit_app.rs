@@ -368,10 +368,11 @@ impl<'a> AppPass<'a> {
                 .get(contract.plugin_id.as_str())
                 .or_else(|| per_plugin.get(contract.type_name.as_str()));
             let role = overrides.and_then(|o| o.role).unwrap_or(Role::Host);
-            let platforms = overrides
+            let plugin_entry = plugin_entries.get(contract.plugin_id.as_str()).copied();
+            let mut platforms = overrides
                 .and_then(|o| o.platforms.clone())
                 .unwrap_or_else(|| self.active_platforms());
-            let plugin_entry = plugin_entries.get(contract.plugin_id.as_str()).copied();
+            platforms.retain(|&platform| plugin_entry.is_none_or(|p| p.targets.includes(platform)));
             let registry_entry =
                 RegistryEntry::from_contract(contract).map(|entry| match plugin_entry {
                     Some(plugin) => entry.with_plugin(plugin),
@@ -428,14 +429,21 @@ impl<'a> AppPass<'a> {
         }
         crate::swift_types::check_swift_namespaces(&swift_contracts)
             .unwrap_or_else(|err| panic!("istmo-build: {err}"));
-        self.emit_shared_sources(&contracts);
+        // A shared group only a desktop / web plugin uses has nothing to
+        // compile against on mobile.
+        let mobile = |contract: &&Contract| {
+            plugin_entries
+                .get(contract.plugin_id.as_str())
+                .is_none_or(|p| p.targets.android || p.targets.ios)
+        };
+        self.emit_shared_sources(contracts.iter().filter(mobile));
         registries
     }
 
     /// The shared type groups the contracts use (`istmo-media`), each
     /// generated once: one Kotlin file in the group's package, one Swift
     /// file under `<plugins>/<group>/Generated/`.
-    fn emit_shared_sources(&self, contracts: &[Contract]) {
+    fn emit_shared_sources<'c>(&self, contracts: impl IntoIterator<Item = &'c Contract>) {
         let groups = merge_shared(contracts).unwrap_or_else(|err| panic!("istmo-build: {err}"));
         for group in &groups {
             if self.android_active {
@@ -936,8 +944,8 @@ fn plugins_shipping<'a>(
 /// # Errors
 /// Two contracts giving one type of a group different shapes (plugins
 /// built against different versions of the shared crate).
-pub(crate) fn merge_shared(
-    contracts: &[Contract],
+pub(crate) fn merge_shared<'a>(
+    contracts: impl IntoIterator<Item = &'a Contract>,
 ) -> Result<Vec<crate::contract::SharedTypes>, String> {
     let mut groups: std::collections::BTreeMap<String, crate::contract::SharedTypes> =
         std::collections::BTreeMap::new();

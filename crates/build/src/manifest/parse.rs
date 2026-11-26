@@ -9,7 +9,7 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 use super::{
     AndroidBackendArg, AndroidPermission, AndroidQuery, AndroidServiceSpec, AssetEntry, Deployment,
     InfoPlistEntry, IosBackgroundKindSpec, IosBackgroundSpec, IosContinuousModeSpec, Manifest,
-    ManifestError, PluginEntry, RemoteOverride, WindowsManifestFragment,
+    ManifestError, PluginEntry, PluginTargets, RemoteOverride, WindowsManifestFragment,
 };
 use crate::min_versions::{MinVersions, OsVersion};
 use crate::native_deps::{GradleCoord, GradleDep, GradleScope, NativeDeps, SwiftPackageDep};
@@ -48,6 +48,7 @@ const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "android_backend_arg",
     "android_start_in_place",
     "ios_backend",
+    "targets",
 ];
 
 const KNOWN_ANDROID_SERVICE_KEYS: &[&str] = &[
@@ -301,7 +302,59 @@ fn parse_plugin_entry(
         ios_backend: optional_string("ios_backend", "plugin.ios_backend")?,
         android_permissions,
         android_queries,
+        targets: parse_targets(table)?,
     })
+}
+
+/// `targets = ["android", "ios", "desktop", "web"]`: a non-empty list,
+/// each target at most once. Every target when absent.
+fn parse_targets(table: &Table) -> Result<PluginTargets, ManifestError> {
+    const KEY: &str = "plugin.targets";
+    let mismatch = || ManifestError::TypeMismatch {
+        key: KEY.to_owned(),
+        expected: "non-empty array of `android`, `ios`, `desktop`, `web`",
+    };
+    let Some(item) = table.get("targets") else {
+        return Ok(PluginTargets::default());
+    };
+    let array = item.as_array().ok_or_else(mismatch)?;
+    if array.is_empty() {
+        return Err(mismatch());
+    }
+    let mut targets = PluginTargets {
+        android: false,
+        ios: false,
+        desktop: false,
+        web: false,
+    };
+    for value in array {
+        let Value::String(literal) = value else {
+            return Err(mismatch());
+        };
+        let literal = literal.value();
+        let slot = match literal.as_str() {
+            "android" => &mut targets.android,
+            "ios" => &mut targets.ios,
+            "desktop" => &mut targets.desktop,
+            "web" => &mut targets.web,
+            _ => {
+                return Err(ManifestError::InvalidValue {
+                    key: KEY.to_owned(),
+                    value: literal.clone(),
+                    expected: "`android`, `ios`, `desktop` or `web`",
+                });
+            }
+        };
+        if *slot {
+            return Err(ManifestError::InvalidValue {
+                key: KEY.to_owned(),
+                value: literal.clone(),
+                expected: "each target listed once",
+            });
+        }
+        *slot = true;
+    }
+    Ok(targets)
 }
 
 /// Plugin ids end up in asset directory names, Kotlin/Swift registry

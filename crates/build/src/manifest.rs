@@ -61,6 +61,7 @@ impl Default for PluginEntry {
             ios_backend: None,
             android_permissions: Vec::new(),
             android_queries: Vec::new(),
+            targets: PluginTargets::default(),
         }
     }
 }
@@ -145,6 +146,51 @@ pub struct PluginEntry {
     /// needs to resolve other apps, e.g. browsers supporting Custom Tabs.
     /// Merged into the app manifest next to [`Self::android_permissions`].
     pub android_queries: Vec<AndroidQuery>,
+
+    /// Targets the plugin runs on. A consuming app generates Kotlin /
+    /// Swift sources and registry entries for the plugin only on the
+    /// mobile platforms listed here. Every target by default.
+    pub targets: PluginTargets,
+}
+
+/// The `targets` a plugin's `istmo.toml` lists.
+///
+/// ```toml
+/// [plugin]
+/// targets = ["desktop", "web"]
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, SchemaWrite, SchemaRead)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one independent flag per target"
+)]
+pub struct PluginTargets {
+    pub android: bool,
+    pub ios: bool,
+    pub desktop: bool,
+    pub web: bool,
+}
+
+impl Default for PluginTargets {
+    fn default() -> Self {
+        Self {
+            android: true,
+            ios: true,
+            desktop: true,
+            web: true,
+        }
+    }
+}
+
+impl PluginTargets {
+    /// Whether the plugin runs on the given mobile platform.
+    #[must_use]
+    pub const fn includes(self, platform: crate::app_config::Platform) -> bool {
+        match platform {
+            crate::app_config::Platform::Android => self.android,
+            crate::app_config::Platform::Ios => self.ios,
+        }
+    }
 }
 
 /// One `<queries>` child contributed to the consuming app's
@@ -724,6 +770,53 @@ foo = "bar"
         match err {
             ManifestError::UnknownKey { key } => assert_eq!(key, "plugin.foo"),
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn targets_default_to_every_target() {
+        let m = Manifest::parse("[plugin]\nid = \"istmo.example\"\n").expect("parse");
+        assert_eq!(m.plugins[0].targets, PluginTargets::default());
+    }
+
+    #[test]
+    fn targets_list_restricts_the_plugin() {
+        let m =
+            Manifest::parse("[plugin]\nid = \"istmo.example\"\ntargets = [\"desktop\", \"web\"]\n")
+                .expect("parse");
+        assert_eq!(
+            m.plugins[0].targets,
+            PluginTargets {
+                android: false,
+                ios: false,
+                desktop: true,
+                web: true,
+            }
+        );
+    }
+
+    #[test]
+    fn bad_targets_are_rejected() {
+        for (list, expected) in [
+            (
+                "[]",
+                "non-empty array of `android`, `ios`, `desktop`, `web`",
+            ),
+            ("[\"tv\"]", "`android`, `ios`, `desktop` or `web`"),
+            ("[\"web\", \"web\"]", "each target listed once"),
+            (
+                "\"web\"",
+                "non-empty array of `android`, `ios`, `desktop`, `web`",
+            ),
+        ] {
+            let src = format!("[plugin]\nid = \"istmo.example\"\ntargets = {list}\n");
+            let err = Manifest::parse(&src).expect_err("must fail");
+            let got = match err {
+                ManifestError::InvalidValue { expected, .. }
+                | ManifestError::TypeMismatch { expected, .. } => expected,
+                other => panic!("unexpected error: {other:?}"),
+            };
+            assert_eq!(got, expected, "{list}");
         }
     }
 
