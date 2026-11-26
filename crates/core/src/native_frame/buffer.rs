@@ -262,6 +262,14 @@ impl<B: Any + Send + Sync> Backing for Holder<B> {
     }
 }
 
+/// The backing of [`NativeBuffer::from_dmabuf`]. Private, so
+/// [`NativeBuffer::downcast_ref`] cannot hand out the `Arc` (a clone of
+/// it would keep the fds past the release hooks, while the producer
+/// already reuses the memory): [`NativeBuffer::dmabuf`] only borrows, and
+/// [`NativeBuffer::into_dmabuf`] moves it out together with the lease.
+#[cfg(unix)]
+struct DmaBufBacking(Arc<DmaBuf>);
+
 /// A platform buffer whose memory is owned by its producer until the
 /// last reference drops.
 ///
@@ -338,7 +346,7 @@ impl NativeBuffer {
             dmabuf.planes.iter().all(DmaBufPlane::is_cloexec),
             "DMA-BUF plane fds must be close-on-exec"
         );
-        Self::new(MemoryKind::DmaBuf, dmabuf)
+        Self::new(MemoryKind::DmaBuf, DmaBufBacking(dmabuf))
     }
 
     /// Add `release`, run once the buffer and every clone dropped (after
@@ -374,7 +382,8 @@ impl NativeBuffer {
         self.0.kind()
     }
 
-    /// The backing as a `B`, when it is one.
+    /// The backing as a `B`, when it is one. A DMA-BUF backing is not
+    /// reachable this way: [`dmabuf`](Self::dmabuf) borrows it.
     #[must_use]
     pub fn downcast_ref<B: Any>(&self) -> Option<&B> {
         self.0.backing_any()?.downcast_ref()
@@ -394,11 +403,27 @@ impl NativeBuffer {
         self.0.platform_ptr()
     }
 
-    /// The [`DmaBuf`] backing.
+    /// The [`DmaBuf`] backing, borrowed for as long as the buffer: its
+    /// fds are valid only while the producer leaves the memory alone.
+    /// Keep a [`NativeBuffer`] clone, not the fds, to hold on to it.
     #[cfg(unix)]
     #[must_use]
     pub fn dmabuf(&self) -> Option<&DmaBuf> {
-        self.downcast_ref::<Arc<DmaBuf>>().map(|dmabuf| &**dmabuf)
+        self.downcast_ref::<DmaBufBacking>()
+            .map(|backing| &*backing.0)
+    }
+
+    /// Move the [`DmaBuf`] out, keeping the release hooks in the returned
+    /// [`BufferLease`]: hold the lease as long as the planes are read.
+    ///
+    /// # Errors
+    ///
+    /// Gives `self` back in [`IntoBackingError`] when it is shared with
+    /// another clone or holds no DMA-BUF.
+    #[cfg(unix)]
+    pub fn into_dmabuf(self) -> Result<(Arc<DmaBuf>, BufferLease), IntoBackingError> {
+        self.into_backing::<DmaBufBacking>()
+            .map(|(backing, lease)| (backing.0, lease))
     }
 
     /// Whether another clone of this buffer exists.
@@ -681,6 +706,51 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    #[cfg_attr(miri, ignore = "opens /dev/null")]
+    fn a_dmabuf_leaves_only_together_with_its_lease() {
+        let fd: OwnedFd = std::fs::File::open("/dev/null")
+            .expect("open /dev/null")
+            .into();
+        let dmabuf = DmaBuf {
+            width: 1,
+            height: 1,
+            fourcc: u32::from_le_bytes(*b"XR24"),
+            modifier: 0,
+            planes: vec![DmaBufPlane {
+                fd,
+                offset: 0,
+                stride: 4,
+                size: None,
+            }],
+        };
+        let released = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&released);
+        let buffer = NativeBuffer::from_dmabuf(dmabuf).with_release(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        let clone = buffer.clone();
+        let buffer = match buffer.into_dmabuf() {
+            Err(IntoBackingError::Shared(buffer)) => buffer,
+            other => panic!("a shared buffer stays: {other:?}"),
+        };
+        drop(clone);
+        let (dmabuf, lease) = buffer.into_dmabuf().expect("unique");
+        assert_eq!(dmabuf.planes.len(), 1);
+        assert_eq!(
+            released.load(Ordering::SeqCst),
+            0,
+            "the lease holds the hooks"
+        );
+        drop(lease);
+        assert_eq!(released.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            NativeBuffer::from_bytes(vec![0u8]).into_dmabuf(),
+            Err(IntoBackingError::WrongType(_))
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     #[cfg_attr(miri, ignore = "opens /dev/null and reads /proc")]
     fn dmabuf_fds_close_when_the_last_arc_drops() {
         use std::os::fd::AsRawFd;
@@ -702,6 +772,10 @@ mod tests {
         });
         let buffer = NativeBuffer::from_dmabuf(Arc::clone(&pooled));
         assert_eq!(buffer.dmabuf().map(|d| d.planes.len()), Some(1));
+        assert!(
+            buffer.downcast_ref::<Arc<DmaBuf>>().is_none(),
+            "the Arc cannot be cloned past the release hooks"
+        );
         drop(buffer);
         let link = || std::fs::read_link(format!("/proc/self/fd/{raw}"));
         assert_eq!(
