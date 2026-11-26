@@ -432,6 +432,48 @@ Los documentos abiertos llegan por el plugin `istmo.documents`
 (`Documents::stream()`); los shells de Android e iOS publican en el
 mismo canal desde sus handlers de intents / URLs.
 
+### `[[app.launcher_action]]`
+
+Entradas estáticas del menú del icono de la app (accesos directos de
+Android, acciones rápidas de la pantalla de inicio de iOS). Al activar
+una se publica su `url` como deep link a través del plugin
+[`istmo-launcher-actions`](/istmo/es/plugins/launcher-actions/), del que
+la app debe depender.
+
+```toml
+[[app.launcher_action]]
+id         = "compose"              # obligatorio: 1..=64 de [A-Za-z0-9._-], único
+title      = "Nueva nota"           # obligatorio: etiqueta corta
+subtitle   = "Empieza una nota"     # opcional: etiqueta larga en Android, subtítulo en iOS
+url        = "notes://compose"      # obligatorio: un esquema propio de la app, no http(s)
+icon       = "assets/compose.png"   # opcional, Android: .png o un vector drawable .xml
+ios_symbol = "square.and.pencil"    # opcional, iOS: nombre de SF Symbol
+```
+
+Las reglas son las de `LauncherAction::validate` del plugin: la URL
+tiene un esquema RFC 3986 distinto de `http` / `https` y no contiene
+espacios, `"` ni caracteres de control; los títulos tienen como mucho
+128 caracteres y los subtítulos 256. Una clave desconocida hace fallar
+el build.
+
+- **Android**: `res/xml/istmo_launcher_actions.xml` (`<shortcuts>`), las
+  etiquetas y los iconos se escriben en el `android/.istmo/res` generado
+  (el plugin de Gradle de istmo lo añade como directorio de recursos), y
+  el `<meta-data>` `android.app.shortcuts` queda entre los marcadores
+  `istmo:documents` de la actividad de inicio (o en
+  `AndroidManifest.documents.xml`). Los accesos directos apuntan a
+  `[app] id`, que por eso es obligatorio; una variante con
+  `applicationIdSuffix` no coincide, porque los accesos estáticos no
+  admiten placeholders.
+- **iOS**: `UIApplicationShortcutItems` entre los marcadores
+  `istmo:background` de `Info.plist`: `type` = `id`, `userInfo.url` =
+  `url`. Reenvía las acciones rápidas desde el scene delegate con
+  `IstmoLauncherActions.perform(item)`.
+- **Escritorio**: las herramientas de empaquetado leen la tabla
+  (`Actions=` del `.desktop` con `Exec=<app> <url>`). Las Jump Lists de
+  Windows y el menú del Dock de macOS no tienen forma estática:
+  configúralas con `set_actions` al arrancar.
+
 ## `[[remote_override]]`
 
 Sobrescribe el `default_deployment` de un plugin desde la app:

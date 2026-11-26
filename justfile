@@ -258,6 +258,7 @@ docs-types:
         camera=plugins/camera/src/lib.rs \
         file-picker=plugins/file-picker/src/lib.rs \
         opener=plugins/opener/src/lib.rs \
+        launcher-actions=plugins/launcher-actions/src/lib.rs \
         pen=plugins/istmo-pen/src/lib.rs \
         webview=plugins/webview/src/lib.rs \
         web-auth=plugins/web-auth/src/lib.rs \

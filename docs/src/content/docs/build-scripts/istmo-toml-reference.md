@@ -424,6 +424,44 @@ Opened documents arrive on the `istmo.documents` plugin
 (`Documents::stream()`); Android and iOS shells publish to the same
 channel from their intent / URL handlers.
 
+### `[[app.launcher_action]]`
+
+Static entries of the app icon's menu (Android app shortcuts, iOS Home
+Screen quick actions). Activating one publishes its `url` as a deep link
+through the [`istmo-launcher-actions`](/istmo/plugins/launcher-actions/)
+plugin, which the app must depend on.
+
+```toml
+[[app.launcher_action]]
+id         = "compose"              # required: 1..=64 of [A-Za-z0-9._-], unique
+title      = "New note"             # required: short label
+subtitle   = "Start an empty note"  # optional: Android long label, iOS subtitle
+url        = "notes://compose"      # required: a scheme of the app's own, not http(s)
+icon       = "assets/compose.png"   # optional, Android: .png or a vector drawable .xml
+ios_symbol = "square.and.pencil"    # optional, iOS: SF Symbol name
+```
+
+The rules are the plugin's `LauncherAction::validate`: the URL has an
+RFC 3986 scheme other than `http` / `https` and holds no whitespace,
+`"` or control characters; titles are at most 128 characters, subtitles
+256. Unknown keys fail the build.
+
+- **Android** — `res/xml/istmo_launcher_actions.xml` (`<shortcuts>`), the
+  labels and the icons are written into the generated `android/.istmo/res`
+  (added as a resource directory by the istmo Gradle plugin), and the
+  `android.app.shortcuts` `<meta-data>` lands between the
+  `istmo:documents` markers of the launcher activity (or in
+  `AndroidManifest.documents.xml`). Shortcuts target `[app] id`, which is
+  therefore required; a build variant with an `applicationIdSuffix` does
+  not match it, since static shortcuts cannot use placeholders.
+- **iOS** — `UIApplicationShortcutItems` between the `istmo:background`
+  markers of `Info.plist`: `type` = `id`, `userInfo.url` = `url`. Forward
+  quick actions from the scene delegate with
+  `IstmoLauncherActions.perform(item)`.
+- **Desktop** — packaging tools read the table (`.desktop` `Actions=`
+  with `Exec=<app> <url>`). Windows Jump Lists and the macOS Dock menu
+  have no static form: set them with `set_actions` at start.
+
 ## `[[remote_override]]`
 
 Override a plugin's `default_deployment` from the app:

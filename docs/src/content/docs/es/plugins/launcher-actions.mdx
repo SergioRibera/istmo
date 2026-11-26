@@ -1,0 +1,205 @@
+---
+title: Acciones del lanzador
+description: El icono de la app donde el sistema la lanza — accesos directos y acciones rápidas, tareas de la Jump List, el menú del Dock, insignias, progreso, atención y documentos recientes — con cada acción llegando como deep link.
+sidebar:
+  order: 10
+---
+
+import PluginTypes from '../../../../generated/plugins/launcher-actions-types.mdx';
+
+`istmo-launcher-actions` cubre todo lo que cuelga del icono de la app
+donde el sistema la lanza: el launcher de Android, la pantalla de inicio
+de iOS, la barra de tareas de Windows, el Dock de macOS y el dock de
+Linux.
+
+- **Acciones**: entradas del menú del icono. Las estáticas vienen de
+  [`[[app.launcher_action]]`](/istmo/es/build-scripts/istmo-toml-reference/#applauncher_action),
+  las dinámicas de `set_actions` y las fijadas de `request_pin`.
+- **Insignia**: un número o una etiqueta corta sobre el icono.
+- **Progreso**: una barra de progreso sobre el icono.
+- **Atención**: hacer rebotar, parpadear o marcar urgente el icono.
+- **Documentos recientes**: la lista "Recientes" de la Jump List y del
+  menú del Dock.
+
+| | Android | iOS | Windows | macOS | Linux |
+| --- | --- | --- | --- | --- | --- |
+| Acciones dinámicas | `ShortcutManager` (API 25+) | `shortcutItems` | tareas de la Jump List | menú del Dock | solo estáticas |
+| Máximo | `maxShortcutCountPerActivity` | 4 visibles, estáticas incluidas | 10 | 16 | 0 |
+| Fijar | `requestPinShortcut` (API 26+) | — | — | — | — |
+| Insignia | — (es de las notificaciones) | número | — | etiqueta | número |
+| Progreso | — | — | barra de tareas | — | LauncherEntry |
+| Atención | — | — | `FlashWindowEx` | `requestUserAttention` | LauncherEntry `urgent` |
+| Documentos recientes | — | — | Jump List | menú del Dock | — |
+
+Lo que una plataforma no hace falla con `LauncherError::Unsupported`;
+`capabilities()` dice qué soporta el backend en ejecución. Android API
+21 e iOS 14.0 son los `[min_versions]` del plugin; por debajo de la API
+25 toda llamada de acciones responde `Unsupported`.
+
+## Instalación
+
+```toml
+[dependencies]
+istmo-launcher-actions = "0.1.1-alpha.7"
+```
+
+## Activar es un deep link
+
+Una acción es un id, un título, un subtítulo y un icono opcionales, y
+una URL. Al activarla se publica un `DeepLink` en la cola
+`istmo.deeplinks`, así que la app enruta las acciones del lanzador con el
+mismo router que ya usa para los enlaces:
+
+```rust
+use istmo::plugins::DeepLinks;
+use istmo_launcher_actions::action_id_from_source;
+
+let links = DeepLinks::from_runtime(&runtime)?.stream();
+while let Ok(link) = links.recv_async().await {
+    // `Some("compose")` donde la plataforma nombra la acción.
+    let action = link.source.as_deref().and_then(action_id_from_source);
+    route(&link.uri, action);
+}
+```
+
+| Plataforma | Cómo vuelve la URL | `source` |
+| --- | --- | --- |
+| Android | el acceso directo abre `IstmoLauncherActionActivity` del plugin, que publica el enlace y abre la actividad de inicio | `launcher-action:<id>` |
+| iOS | el scene delegate pasa el item a `IstmoLauncherActions.perform` | `launcher-action:<id>` |
+| macOS | los items del menú del Dock publican directamente | `launcher-action:<id>` |
+| Windows | una tarea de la Jump List ejecuta el binario con la URL como único argumento; `DocumentsPublisher` la convierte en enlace | `launch` / `running` |
+| Linux | una acción del `.desktop` ejecuta `<app> <url>`; mismo camino por `DocumentsPublisher` | `launch` / `running` |
+
+Usa el esquema propio de la app (`[[app.url_scheme]]`). Las URLs
+`http(s)` se rechazan: abrir el navegador es trabajo del
+[opener](/istmo/es/plugins/opener/), y un enlace que parece externo
+confunde dentro del router de la propia app.
+
+## Acciones, insignia y progreso
+
+```rust
+use istmo_launcher_actions::{
+    ActionIcon, Badge, LauncherAction, LauncherActionsClient, LauncherError, Progress,
+};
+
+let launcher = LauncherActionsClient::from_runtime(&runtime)?;
+
+// Se comprueba antes en el proceso: un conjunto mal formado no sale de él.
+launcher
+    .set_actions_checked(vec![LauncherAction {
+        id: "compose".into(),
+        title: "Nueva nota".into(),
+        subtitle: Some("Empieza una nota vacía".into()),
+        url: "notes://compose".into(),
+        icon: Some(ActionIcon::Symbol("square.and.pencil".into())),
+    }])
+    .await?;
+
+launcher.set_badge(Badge::Count(3)).await.map_err(LauncherError::from)?;
+launcher
+    .set_progress(Progress::Normal(0.4))
+    .await
+    .map_err(LauncherError::from)?;
+```
+
+`LauncherAction::validate` comprueba el id (`1..=64` de
+`[A-Za-z0-9._-]`), las etiquetas (no vacías, como mucho 128 / 256
+caracteres), la URL (un esquema RFC 3986 distinto de `http(s)`, sin
+espacios, `"`, caracteres de control o de formato invisibles, sin `-`
+inicial) y un icono PNG (un PNG de 1 MiB como mucho);
+`LauncherAction::validate_set` añade ids únicos. Las mismas reglas valen
+para `[[app.launcher_action]]` en el build.
+
+| Error | Cuándo |
+| ----- | ------ |
+| `Unsupported` | la plataforma o el backend no lo hace |
+| `InvalidAction(problem)` | una acción está mal formada; `problem.id` / `problem.reason` |
+| `TooMany(max)` | más acciones de las que muestra la plataforma |
+| `RateLimited` | el límite de frecuencia de accesos directos de Android está activo |
+| `NotPermitted` | insignia en iOS sin permiso de notificaciones |
+| `NoWindow` | una llamada a la barra de tareas de Windows sin ventanas registradas en `istmo-window` |
+| `Backend(message)` | cualquier otro fallo de la plataforma |
+
+## Conectar el backend
+
+:::note[Paquete de Android]
+El plugin declara `android_package = "dev.istmo.plugins.launcher_actions"`,
+así que `LauncherActionsBackend`, `LauncherError`, … se generan junto a
+los fuentes Kotlin del plugin, sea cual sea el `[app] android_package` de
+tu app.
+:::
+
+**Android**: nada que conectar. El registro generado construye
+`LauncherActionsBackendImpl` con el contexto de la aplicación, y el
+manifest del plugin añade la actividad trampolín (no exportada: los
+launchers abren los accesos directos con la identidad de la app). Los
+accesos estáticos necesitan `[app] id`, su `targetPackage`; una variante
+con `applicationIdSuffix` no coincide.
+
+**iOS**: el registro registra `LauncherActionsBackendImpl()`. iOS no
+deja a una librería ver las acciones rápidas, así que pásalas desde el
+scene delegate, con la app abierta y en un arranque en frío:
+
+```swift
+func windowScene(_ scene: UIWindowScene,
+                 performActionFor item: UIApplicationShortcutItem,
+                 completionHandler: @escaping (Bool) -> Void) {
+    completionHandler(IstmoLauncherActions.perform(item))
+}
+
+func scene(_ scene: UIScene, willConnectTo session: UISceneSession,
+           options: UIScene.ConnectionOptions) {
+    if let item = options.shortcutItem { IstmoLauncherActions.perform(item) }
+}
+```
+
+En iOS la insignia es un permiso de notificaciones: sin él `set_badge`
+falla con `NotPermitted`. iOS 16+ usa `setBadgeCount`; las versiones
+anteriores, `applicationIconBadgeNumber`.
+
+**Escritorio**: registra `DesktopLauncherActions`, y `DocumentsPublisher`
+para que las URLs de argv lleguen a `DeepLinks`:
+
+```rust
+use istmo_launcher_actions::{DesktopLauncherActions, LauncherActionsHost};
+
+runtime.register_host(LauncherActionsHost::new(
+    DesktopLauncherActions::default()
+        .with_desktop_id(option_env!("ISTMO_APP_BUNDLE_ID").unwrap_or("com.example.notes")),
+));
+```
+
+- **Linux**: `com.canonical.Unity.LauncherEntry` en el bus de sesión,
+  que leen KDE Plasma, Dash to Dock / Dash to Panel y Plank. La URI de
+  la app es `application://<desktop id>.desktop`; el desktop id es
+  `FLATPAK_ID`, si no `with_desktop_id`, si no el nombre del ejecutable.
+  La conexión se abre en la primera llamada y se conserva; el objeto
+  también responde a `Query` para los docks que arrancan después de la
+  app. Un dock que no escucha ignora las actualizaciones, así que
+  `capabilities` no puede saberlo. El progreso indeterminado y las
+  insignias de texto son `Unsupported`.
+- **Windows**: un hilo COM propio del plugin conserva el `ITaskbarList3`
+  y la lista de destinos, así que cada actualización de progreso es una
+  sola llamada. Las tareas son accesos directos al ejecutable en marcha
+  con la URL como único argumento (los iconos PNG se escriben como
+  `.ico` en `%LOCALAPPDATA%\istmo\launcher-actions`); la lista propia
+  conserva la categoría "Recientes" del shell. El progreso y la atención
+  se aplican a todas las ventanas del registro de `istmo-window`.
+  `clear_recent_documents` borra solo las listas de esta app
+  (`IApplicationDestinations`), no todos los archivos recientes del
+  usuario. La insignia es `Unsupported` (el icono superpuesto es una
+  imagen que el plugin tendría que dibujar).
+- **macOS**: AppKit solo pide el menú del Dock al delegate de la
+  aplicación, así que el primer `set_actions` añade `applicationDockMenu:`
+  a la clase del delegate. Si la clase ya lo tiene (la app hizo su propio
+  menú del Dock), `set_actions` falla con `Unsupported`. Configura las
+  acciones cuando el bucle de eventos ya instaló su delegate. Cada llamada
+  corre en el hilo principal sin bloquear al que llama.
+
+Las acciones estáticas de escritorio vienen del empaquetado: las
+herramientas leen `[[app.launcher_action]]` de `istmo.toml` y escriben
+entradas `Actions=` del `.desktop` con `Exec=<app> <url>`.
+
+## Tipos de wire
+
+<PluginTypes />
