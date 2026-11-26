@@ -1135,3 +1135,24 @@ fn a_paced_producer_landing_a_hair_early_is_not_held_a_period() {
         out.stop(StopReason::Closed);
     }
 }
+
+#[test]
+fn upright_on_an_upright_source_lists_no_copy() {
+    let rig = rig();
+    let mut config = SessionConfig::default().fps(FrameRate::Native);
+    config.video.orientation = crate::types::OrientationHandling::Upright;
+    let session = block(
+        rig.client
+            .open_session(&rig.runtime, config, SinkPolicy::latest()),
+    )
+    .expect("open");
+    assert!(
+        !session
+            .negotiated()
+            .copies
+            .contains(&CopyStage::OrientationUpright),
+        "nothing to turn"
+    );
+    let frame = session.video().recv().expect("frame");
+    assert_eq!(frame.meta.copied, None);
+}

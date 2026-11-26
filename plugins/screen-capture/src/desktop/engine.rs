@@ -1100,7 +1100,12 @@ impl Engine {
         if requirements.damage == Strength::Require && negotiated.damage != DamageSupport::Rects {
             unmet.push(Requirement::Damage);
         }
+        // Frames the plugin has to turn: only a source whose frames arrive
+        // rotated. An upright source needs no turn, whatever its memory.
+        let turns = negotiated.orientation == crate::types::OrientationSupport::InMeta
+            && !negotiated.source.orientation.is_upright();
         if requirements.orientation == OrientationHandling::Upright
+            && turns
             && negotiated.memory != BufferMemory::Cpu
         {
             unmet.push(Requirement::Upright);
@@ -1115,6 +1120,7 @@ impl Engine {
             return Err(err);
         }
         if config.video.orientation == OrientationHandling::Upright
+            && turns
             && !negotiated.copies.contains(&CopyStage::OrientationUpright)
         {
             negotiated.copies.push(CopyStage::OrientationUpright);

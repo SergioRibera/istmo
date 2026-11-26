@@ -162,12 +162,6 @@ impl Requirements {
         if !matches!(self.size, OutputSize::Native) && caps.scaling == Scaling::Unsupported {
             unmet.push(Requirement::Scaling);
         }
-        if self.orientation == OrientationHandling::Upright
-            && known(p.video)
-            && !caps.video.iter().any(|f| f.memory == BufferMemory::Cpu)
-        {
-            unmet.push(Requirement::Upright);
-        }
         if self.audio && known(p.audio) && caps.audio.sources.is_empty() {
             unmet.push(Requirement::Audio);
         }
