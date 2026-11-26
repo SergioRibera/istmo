@@ -155,7 +155,7 @@ pub fn layout(
     let part_pixels: u64 = parts
         .iter()
         .map(|p| u64::from(p.dest.width) * u64::from(p.dest.height))
-        .sum();
+        .fold(0, u64::saturating_add);
     if pixels > MAX_COMPOSITE_PIXELS || pixels > part_pixels.saturating_mul(MAX_GAP_FACTOR) {
         return Err(LayoutError::TooLarge);
     }
@@ -265,6 +265,17 @@ mod tests {
             monitor("a", Rect::new(0, 0, 1920, 1080), 1000),
             monitor("b", Rect::new(60_000, 60_000, 1920, 1080), 1000),
         ];
+        assert_eq!(
+            layout(&sources, None, &CompositeConfig::default()),
+            Err(LayoutError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn huge_parts_saturate_their_area_sum() {
+        let sources: Vec<Source> = (0..4)
+            .map(|i| monitor(&format!("m{i}"), Rect::new(0, 0, u32::MAX, u32::MAX), 1000))
+            .collect();
         assert_eq!(
             layout(&sources, None, &CompositeConfig::default()),
             Err(LayoutError::TooLarge)
