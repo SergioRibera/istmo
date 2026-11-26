@@ -110,7 +110,7 @@ fn a_plugin_resolves_types_of_a_shared_crate() {
         "#,
     );
     let other = extract_contract_with_shared(other, "Other", &[media]).expect("other");
-    assert!(other.shared.is_empty());
+    assert_eq!(other.shared, Vec::new());
 }
 
 fn camera_path(dir: &Path) -> PathBuf {
