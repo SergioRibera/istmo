@@ -8,6 +8,7 @@
 //! # }
 //! ```
 
+mod audio_clock;
 mod backend;
 mod clock;
 mod engine;

@@ -2,34 +2,43 @@
 //! anchor, so deltas are exact in 1 / sample-rate ticks, and re-anchors
 //! to "now" when the counted time strays from the wall clock (the sink
 //! went idle or suspended, an xrun, or the sound card's clock drifting
-//! against the system clock, ~50 ppm ≈ 180 ms / h).
+//! against the system clock, ~50 ppm ≈ 180 ms / h). Shared by every
+//! platform's audio backend.
+
+#![cfg_attr(
+    not(any(
+        all(target_os = "linux", feature = "linux-audio"),
+        all(windows, feature = "windows-audio")
+    )),
+    allow(dead_code, reason = "used by the platform audio backends only")
+)]
 
 /// Largest |counted − wall| tolerated before re-anchoring. Delivery
 /// jitter is well under one ~21 ms quantum; 100 ms is far above that and
 /// below the staleness cuts consumers apply (ferricast's HLS segmenter
 /// drops audio older than 300 ms).
-pub(super) const REANCHOR_THRESHOLD_US: u64 = 100_000;
+pub(crate) const REANCHOR_THRESHOLD_US: u64 = 100_000;
 
 /// The clock of one audio stream.
 #[derive(Debug, Default)]
-pub(super) struct SampleClock {
+pub(crate) struct SampleClock {
     anchor_us: Option<u64>,
     frames_since_anchor: u64,
 }
 
 /// The time of one chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Stamp {
-    pub(super) wall_us: u64,
+pub(crate) struct Stamp {
+    pub(crate) wall_us: u64,
     /// `Some(counted − wall)` in µs when this chunk re-anchored the clock
     /// (positive: the counted time was ahead of the wall clock).
-    pub(super) reanchored_by_us: Option<i64>,
+    pub(crate) reanchored_by_us: Option<i64>,
 }
 
 impl SampleClock {
     /// Time a chunk of `frames` that arrived at `now_us` (UNIX epoch µs),
     /// then advance past it.
-    pub(super) fn stamp(&mut self, frames: u64, rate: u32, now_us: u64) -> Stamp {
+    pub(crate) fn stamp(&mut self, frames: u64, rate: u32, now_us: u64) -> Stamp {
         let rate = u64::from(rate.max(1));
         let mut reanchored_by_us = None;
         let wall_us = if let Some(anchor) = self.anchor_us {

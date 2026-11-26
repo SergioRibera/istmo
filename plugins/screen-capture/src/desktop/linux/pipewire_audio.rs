@@ -11,9 +11,7 @@
 //!
 //! Chunks are interleaved PCM copied into CPU buffers (the PipeWire
 //! buffer goes back at once). `wall_us` follows the sample count
-//! ([`clock`]); `pts_ns` is the same instant on `CLOCK_MONOTONIC`.
-
-mod clock;
+//! (`audio_clock`); `pts_ns` is the same instant on `CLOCK_MONOTONIC`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -35,7 +33,7 @@ use crate::types::{
     CaptureError, Requirement, SampleFormat, StopReason,
 };
 
-use self::clock::SampleClock;
+use super::super::audio_clock::SampleClock;
 use super::super::backend::{AudioBackend, BackendSession};
 use super::super::clock::{monotonic_ns, wall_now_us};
 use super::super::output::AudioOut;
