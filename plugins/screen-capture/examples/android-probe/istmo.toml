@@ -1,0 +1,8 @@
+[app]
+id = "dev.istmo.screencaptureprobe"
+name = "Screen capture probe"
+
+[min_versions]
+# HardwareBuffer frames and playback audio; the backend itself runs
+# from API 21.
+android = 29
