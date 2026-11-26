@@ -121,6 +121,15 @@ pub(crate) struct Caller {
     gone: Arc<AtomicBool>,
 }
 
+/// Two handles are equal when they watch the same call.
+impl PartialEq for Caller {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.gone, &other.gone)
+    }
+}
+
+impl Eq for Caller {}
+
 impl Caller {
     /// A caller that already gave up.
     #[cfg(test)]

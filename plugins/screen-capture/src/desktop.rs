@@ -139,9 +139,11 @@ impl ScreenCapture for DesktopCapture {
             .map_err(|_| CaptureError::SinkUnreachable)?;
         let engine = self.engine();
         let origin = ctx.origin();
-        offload("screenshot", move || {
-            engine.screenshot_into(&request, &sender, origin)
-        })
+        offload_owned(
+            "screenshot",
+            move |caller| engine.screenshot_into(&request, &sender, origin, caller),
+            drop,
+        )
         .await
     }
 
@@ -153,9 +155,11 @@ impl ScreenCapture for DesktopCapture {
     ) -> Result<RawImage, CaptureError> {
         self.admit(&ctx, "screenshot_pixels")?;
         let engine = self.engine();
-        offload("screenshot", move || {
-            engine.screenshot_pixels(&request, layout)
-        })
+        offload_owned(
+            "screenshot",
+            move |caller| engine.screenshot_pixels(&request, layout, caller),
+            drop,
+        )
         .await
     }
 

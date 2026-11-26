@@ -17,7 +17,11 @@ mod pods;
 mod raw;
 mod stream;
 
+use std::future::Future;
+use std::pin::pin;
 use std::sync::Arc;
+use std::task::Poll;
+use std::time::{Duration, Instant};
 
 use ashpd::desktop::screencast::{
     CursorMode as PortalCursor, OpenPipeWireRemoteOptions, Screencast, SelectSourcesOptions,
@@ -41,6 +45,7 @@ use self::stream::{Live, Negotiated, Part, Setup};
 use super::super::backend::{
     Backend, BackendSession, Captured, ScreenshotPlan, Shot, StreamPlan, Target,
 };
+use super::super::offload::Caller;
 use super::super::output::FrameOut;
 use super::pipewire::{LoopThread, Remote};
 
@@ -173,12 +178,103 @@ const fn portal_cursor(mode: CursorMode) -> PortalCursor {
     }
 }
 
+/// How long the consent dialog may stay unanswered before the cast is
+/// abandoned (the dialog closed with it).
+const CONSENT_TIMEOUT: Duration = Duration::from_secs(120);
+/// How often a pending portal call checks whether its caller left.
+const CALLER_POLL: Duration = Duration::from_millis(100);
+
 /// What a cast asks the portal for.
 struct CastRequest<'a> {
     picker: PickerOptions,
     cursor: CursorRequest,
     consent: &'a ConsentConfig,
     connection: PipeWireConnection,
+    caller: &'a Caller,
+}
+
+/// Why a pending portal call was given up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Abandoned {
+    /// The host call's future was dropped.
+    CallerGone,
+    /// [`CONSENT_TIMEOUT`] passed.
+    TimedOut,
+}
+
+impl Abandoned {
+    /// Resolves once `caller` left or `timeout` passed.
+    async fn watch(caller: &Caller, timeout: Duration) -> Self {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if caller.is_gone() {
+                return Self::CallerGone;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Self::TimedOut;
+            }
+            async_io::Timer::after(CALLER_POLL.min(deadline - now)).await;
+        }
+    }
+
+    fn into_error(self) -> CaptureError {
+        match self {
+            // Nobody reads it: the host call is gone.
+            Self::CallerGone => CaptureError::SessionNotFound,
+            Self::TimedOut => CaptureError::protocol(
+                ID,
+                "Start",
+                format!("the consent dialog stayed unanswered for {CONSENT_TIMEOUT:?}"),
+            ),
+        }
+    }
+
+    /// `work`, unless `caller` leaves or `timeout` passes first.
+    async fn race<T>(
+        work: impl Future<Output = T>,
+        caller: &Caller,
+        timeout: Duration,
+    ) -> Result<T, Self> {
+        let mut work = pin!(work);
+        let mut watch = pin!(Self::watch(caller, timeout));
+        std::future::poll_fn(|cx| {
+            if let Poll::Ready(done) = work.as_mut().poll(cx) {
+                return Poll::Ready(Ok(done));
+            }
+            watch.as_mut().poll(cx).map(Err)
+        })
+        .await
+    }
+}
+
+/// What a successful handshake yields, before it owns the session.
+struct CastParts {
+    streams: Vec<PortalStream>,
+    restore_token: Option<RestoreToken>,
+    restored: bool,
+    cursor: CursorMode,
+    remote: Option<Remote>,
+}
+
+impl CastParts {
+    fn with_session(self, session: Session<Screencast>) -> Cast {
+        let Self {
+            streams,
+            restore_token,
+            restored,
+            cursor,
+            remote,
+        } = self;
+        Cast {
+            session,
+            streams,
+            restore_token,
+            restored,
+            cursor,
+            remote,
+        }
+    }
 }
 
 /// A started cast: the session (closed on drop), its streams and the
@@ -193,37 +289,60 @@ struct Cast {
 }
 
 impl Cast {
+    /// Run the portal handshake (the dialog included). Given up, the
+    /// session closed and the dialog with it, once the caller stopped
+    /// waiting or [`CONSENT_TIMEOUT`] passed.
     fn start(probe: Probe, request: &CastRequest<'_>) -> Result<Self, CaptureError> {
         pollster::block_on(async {
-            let proxy = Screencast::new()
-                .await
-                .map_err(|e| portal_error("connect to the ScreenCast portal", &e))?;
-            let session = proxy
-                .create_session(CreateSessionOptions::default())
-                .await
-                .map_err(|e| portal_error("CreateSession", &e))?;
-            match Self::negotiate(proxy, session, probe, request).await {
-                Ok(cast) => Ok(cast),
-                Err((session, err)) => {
-                    // A half-set-up cast must not linger on the compositor.
-                    let _closed = session.close().await;
-                    Err(err)
+            let caller = request.caller;
+            let created = Abandoned::race(
+                async {
+                    let proxy = Screencast::new()
+                        .await
+                        .map_err(|e| portal_error("connect to the ScreenCast portal", &e))?;
+                    let session = proxy
+                        .create_session(CreateSessionOptions::default())
+                        .await
+                        .map_err(|e| portal_error("CreateSession", &e))?;
+                    Ok::<_, CaptureError>((proxy, session))
+                },
+                caller,
+                CONSENT_TIMEOUT,
+            )
+            .await;
+            let (proxy, session) = created.map_err(Abandoned::into_error)??;
+            let negotiated = Abandoned::race(
+                Self::negotiate(&proxy, &session, probe, request),
+                caller,
+                CONSENT_TIMEOUT,
+            )
+            .await;
+            let failed = match negotiated {
+                Ok(Ok(cast)) => return Ok(cast.with_session(session)),
+                Ok(Err(err)) => err,
+                Err(abandoned) => {
+                    tracing::debug!(?abandoned, "screen-capture portal: cast given up");
+                    abandoned.into_error()
                 }
-            }
+            };
+            // A half-set-up cast must not linger on the compositor;
+            // closing the session also ends a dialog still open.
+            let _closed = session.close().await;
+            Err(failed)
         })
     }
 
     async fn negotiate(
-        proxy: Screencast,
-        session: Session<Screencast>,
+        proxy: &Screencast,
+        session: &Session<Screencast>,
         probe: Probe,
         request: &CastRequest<'_>,
-    ) -> Result<Self, (Session<Screencast>, CaptureError)> {
+    ) -> Result<CastParts, CaptureError> {
         let types = source_types(&request.picker, probe);
         if types.is_empty() {
-            return Err((
-                session,
-                CaptureError::unsatisfiable(Some(ID), Requirement::Kind(SourceKind::Window)),
+            return Err(CaptureError::unsatisfiable(
+                Some(ID),
+                Requirement::Kind(SourceKind::Window),
             ));
         }
         let cursor = select::cursor_mode(request.cursor, &probe.cursor_modes());
@@ -239,37 +358,29 @@ impl Cast {
                 .set_persist_mode(persist_mode(request.consent.persist))
                 .set_restore_token(token);
         }
-        let selected = proxy
-            .select_sources(&session, options)
+        proxy
+            .select_sources(session, options)
             .await
-            .and_then(|request| request.response());
-        if let Err(err) = selected {
-            return Err((session, portal_error("SelectSources", &err)));
-        }
-        let started = proxy
-            .start(&session, None, StartCastOptions::default())
+            .and_then(|request| request.response())
+            .map_err(|err| portal_error("SelectSources", &err))?;
+        let streams = proxy
+            .start(session, None, StartCastOptions::default())
             .await
-            .and_then(|request| request.response());
-        let streams = match started {
-            Ok(streams) => streams,
-            Err(err) => return Err((session, portal_error("Start", &err))),
-        };
+            .and_then(|request| request.response())
+            .map_err(|err| portal_error("Start", &err))?;
         if streams.streams().is_empty() {
-            return Err((session, CaptureError::ConsentDenied));
+            return Err(CaptureError::ConsentDenied);
         }
         let remote = match request.connection {
             PipeWireConnection::SessionDaemon => Remote::SessionDaemon,
-            PipeWireConnection::PortalRemote => {
-                match proxy
-                    .open_pipe_wire_remote(&session, OpenPipeWireRemoteOptions::default())
+            PipeWireConnection::PortalRemote => Remote::Fd(
+                proxy
+                    .open_pipe_wire_remote(session, OpenPipeWireRemoteOptions::default())
                     .await
-                {
-                    Ok(fd) => Remote::Fd(fd),
-                    Err(err) => return Err((session, portal_error("OpenPipeWireRemote", &err))),
-                }
-            }
+                    .map_err(|err| portal_error("OpenPipeWireRemote", &err))?,
+            ),
         };
-        Ok(Self {
+        Ok(CastParts {
             restore_token: streams.restore_token().map(|value| RestoreToken {
                 value: value.to_owned(),
                 backend: ID,
@@ -281,7 +392,6 @@ impl Cast {
             streams: streams.streams().to_vec(),
             cursor,
             remote: Some(remote),
-            session,
         })
     }
 
@@ -576,6 +686,7 @@ impl Backend for Portal {
                 cursor: plan.cursor,
                 consent: &plan.consent,
                 connection: plan.linux.pipewire,
+                caller: &plan.caller,
             },
         )?;
         let remote = cast.remote.take().unwrap_or(Remote::SessionDaemon);
@@ -619,6 +730,7 @@ impl Backend for Portal {
                 cursor: plan.cursor,
                 consent: &plan.consent,
                 connection: plan.linux.pipewire,
+                caller: &plan.caller,
             },
         )?;
         let remote = cast.remote.take().unwrap_or(Remote::SessionDaemon);
@@ -837,6 +949,49 @@ mod tests {
         )
         .expect("shm");
         assert!(pods::offers_shm(&cpu.tiers));
+    }
+}
+
+#[cfg(test)]
+mod abandoned_tests {
+    use std::time::{Duration, Instant};
+
+    use super::{Abandoned, Caller};
+
+    #[test]
+    fn a_pending_portal_call_is_given_up_when_its_caller_leaves() {
+        let start = Instant::now();
+        let raced = pollster::block_on(Abandoned::race(
+            std::future::pending::<()>(),
+            &Caller::abandoned(),
+            Duration::from_secs(30),
+        ));
+        assert_eq!(raced, Err(Abandoned::CallerGone));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(matches!(
+            Abandoned::CallerGone.into_error(),
+            crate::types::CaptureError::SessionNotFound
+        ));
+    }
+
+    #[test]
+    fn an_unanswered_portal_call_times_out() {
+        let raced = pollster::block_on(Abandoned::race(
+            std::future::pending::<()>(),
+            &Caller::default(),
+            Duration::from_millis(150),
+        ));
+        assert_eq!(raced, Err(Abandoned::TimedOut));
+    }
+
+    #[test]
+    fn a_finished_portal_call_wins_the_race() {
+        let raced = pollster::block_on(Abandoned::race(
+            std::future::ready(7),
+            &Caller::abandoned(),
+            Duration::ZERO,
+        ));
+        assert_eq!(raced, Ok(7), "work done before the check is kept");
     }
 }
 

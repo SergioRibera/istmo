@@ -662,6 +662,7 @@ impl Engine {
         &self,
         request: &ScreenshotRequest,
         force_cpu: bool,
+        caller: &Caller,
     ) -> Result<(Shot, Option<Rect>, Vec<Source>), CaptureError> {
         let selection = Self::pinned(&request.backend, &request.source);
         let mut requirements =
@@ -699,6 +700,7 @@ impl Engine {
                 hdr: request.hdr,
                 consent: request.consent.clone(),
                 linux: crate::types::LinuxOptions::default(),
+                caller: caller.clone(),
             };
             let shot = backend.screenshot(&plan)?;
             if shot.frames.is_empty() {
@@ -848,8 +850,9 @@ impl Engine {
         request: &ScreenshotRequest,
         sink: &FrameSender<FrameMeta>,
         origin: CallOrigin,
+        caller: &Caller,
     ) -> Result<ScreenshotInfo, CaptureError> {
-        let (shot, region, _) = self.shoot(request, false)?;
+        let (shot, region, _) = self.shoot(request, false, caller)?;
         let (frames, mut negotiated) = Self::finish(request, shot, region)?;
         redact_for(origin, &mut negotiated);
         let count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
@@ -875,8 +878,10 @@ impl Engine {
         &self,
         request: &ScreenshotRequest,
         layout: PixelLayout,
+        caller: &Caller,
     ) -> Result<RawImage, CaptureError> {
-        let (shot, region, _) = self.shoot(request, layout.format != CpuPixelFormat::Rgba16f)?;
+        let cpu = layout.format != CpuPixelFormat::Rgba16f;
+        let (shot, region, _) = self.shoot(request, cpu, caller)?;
         if shot.frames.len() > 1 && !request.composite {
             return Err(CaptureError::unsatisfiable(
                 Some(shot.negotiated.backend),
@@ -961,7 +966,7 @@ impl Engine {
         requirements.audio = config.audio.is_some();
         let (backend_id, session, negotiated, out, events, source) =
             self.walk(&selection, &requirements, |backend, caps| {
-                Self::open_on(backend, caps, config, video, &requirements)
+                Self::open_on(backend, caps, config, video, &requirements, caller)
             })?;
         let mut negotiated = negotiated;
         let mut audio_session = None;
@@ -1026,6 +1031,7 @@ impl Engine {
         config: &SessionConfig,
         video: &FrameSender<FrameMeta>,
         requirements: &Requirements,
+        caller: &Caller,
     ) -> Result<
         (
             BackendId,
@@ -1101,6 +1107,7 @@ impl Engine {
             consent: config.consent.clone(),
             linux: config.linux,
             picker,
+            caller: caller.clone(),
         };
         let (session, mut negotiated) = match backend.open(plan, out.clone()) {
             Ok(opened) => opened,

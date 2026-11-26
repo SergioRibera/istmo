@@ -22,7 +22,7 @@ default = ["linux-portal", "linux-ext-image-copy", "linux-wlr-screencopy", "linu
 # xdg-desktop-portal ScreenCast + PipeWire video (DMA-BUF zero-copy with
 # the compositor's dmabuf feedback, explicit sync through DRM syncobjs).
 # Needs libpipewire at build time (pkg-config, bindgen) and at run time.
-linux-portal = ["dep:ashpd", "dep:pollster", "dep:drm", "pipewire", "wayland", "dmabuf-alloc"]
+linux-portal = ["dep:ashpd", "dep:pollster", "dep:async-io", "dep:drm", "pipewire", "wayland", "dmabuf-alloc"]
 # ext-image-copy-capture-v1 (Sway 1.11, Hyprland, COSMIC, ...).
 linux-ext-image-copy = ["wayland", "dmabuf-alloc"]
 # zwlr_screencopy_manager_v1 (wlroots compositors, niri).
@@ -64,6 +64,8 @@ wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"], optional = true }
 wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
 x11rb = { version = "0.14", default-features = false, features = ["randr", "xfixes", "shm", "composite", "damage"], optional = true }
+# Timers for the portal dialog wait (ashpd already runs on async-io).
+async-io = { version = "2.6", optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }

@@ -13,6 +13,7 @@ use crate::types::{
     Rect, Requirement, SessionUpdate, Source, SourceList, SourceSelector, Strength,
 };
 
+use super::offload::Caller;
 use super::output::{AudioOut, FrameOut};
 
 /// What to capture, resolved against the backend's listing.
@@ -50,6 +51,9 @@ pub(crate) struct ScreenshotPlan {
     pub(crate) hdr: HdrPolicy,
     pub(crate) consent: ConsentConfig,
     pub(crate) linux: LinuxOptions,
+    /// Whether the host call is still awaited: a consent dialog nobody
+    /// waits for is closed.
+    pub(crate) caller: Caller,
 }
 
 /// One captured frame.
@@ -88,6 +92,8 @@ pub(crate) struct StreamPlan {
     pub(crate) linux: LinuxOptions,
     /// For picker-only backends: what the picker offers.
     pub(crate) picker: Option<PickerOptions>,
+    /// Whether the host call is still awaited.
+    pub(crate) caller: Caller,
 }
 
 /// A running backend session. Dropping it stops the capture and
