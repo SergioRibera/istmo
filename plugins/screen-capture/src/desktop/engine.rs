@@ -29,6 +29,7 @@ use crate::types::{
 use super::backend::{
     AudioBackend, Backend, BackendSession, Captured, ScreenshotPlan, Shot, StreamPlan, Target,
 };
+use super::offload::Caller;
 use super::output::{AudioOut, Crop, EventHub, FrameOut};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -888,6 +889,7 @@ impl Engine {
         video: &FrameSender<FrameMeta>,
         audio: Option<FrameSender<AudioMeta>>,
         origin: CallOrigin,
+        caller: &Caller,
     ) -> Result<CaptureSession, CaptureError> {
         if config.audio.is_some() != audio.is_some() {
             // `open` with an audio config, or `open_with_audio` without.
@@ -928,6 +930,15 @@ impl Engine {
                     return Err(err);
                 }
             }
+        }
+        if caller.is_gone() {
+            // Nobody holds the id: a session started now (portal consent
+            // given after the app gave up) could never be stopped.
+            tracing::debug!(backend = %backend_id, "screen-capture: open abandoned; session discarded");
+            drop(audio_session);
+            drop(session);
+            out.stop(StopReason::Closed);
+            return Err(CaptureError::SessionNotFound);
         }
         redact_for(origin, &mut negotiated);
         self.install_release_hook(runtime);

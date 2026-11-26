@@ -34,7 +34,7 @@ use crate::types::{
 };
 
 use self::engine::Engine;
-use self::offload::offload;
+use self::offload::{offload, offload_owned};
 
 /// The desktop host. Register it with
 /// `ScreenCaptureHost::new(DesktopCapture::default())`.
@@ -172,9 +172,12 @@ impl ScreenCapture for DesktopCapture {
         let runtime = ctx.runtime().map_err(CaptureError::from)?;
         let engine = self.engine();
         let origin = ctx.origin();
-        offload("open", move || {
-            engine.open(&runtime, &config, &video, None, origin)
-        })
+        let undo = undo_open(&self.engine, origin);
+        offload_owned(
+            "open",
+            move |caller| engine.open(&runtime, &config, &video, None, origin, caller),
+            undo,
+        )
         .await
     }
 
@@ -195,9 +198,12 @@ impl ScreenCapture for DesktopCapture {
         let runtime = ctx.runtime().map_err(CaptureError::from)?;
         let engine = self.engine();
         let origin = ctx.origin();
-        offload("open", move || {
-            engine.open(&runtime, &config, &video, Some(audio), origin)
-        })
+        let undo = undo_open(&self.engine, origin);
+        offload_owned(
+            "open",
+            move |caller| engine.open(&runtime, &config, &video, Some(audio), origin, caller),
+            undo,
+        )
         .await
     }
 
@@ -254,5 +260,14 @@ impl ScreenCapture for DesktopCapture {
             return rx;
         }
         self.engine.events(session, ctx.origin())
+    }
+}
+
+/// Closes a session whose `open` caller stopped waiting after the
+/// session was stored: nobody else knows its id.
+fn undo_open(engine: &Arc<Engine>, origin: CallOrigin) -> impl FnOnce(CaptureSession) + use<> {
+    let engine = Arc::clone(engine);
+    move |session| {
+        let _closed = engine.close(session.session, origin);
     }
 }

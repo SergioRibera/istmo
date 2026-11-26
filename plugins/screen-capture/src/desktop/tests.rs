@@ -732,6 +732,7 @@ fn open_on(
             &sender,
             None,
             origin,
+            &super::offload::Caller::default(),
         )
         .expect("open");
     (session, sink)
@@ -873,4 +874,36 @@ fn oversized_composites_are_unsatisfiable_not_fatal() {
         (96, 32),
         "4x the highest scale"
     );
+}
+
+#[test]
+fn an_abandoned_open_leaves_no_session_running() {
+    let fake = Fake::new(WLR, two_monitors());
+    let counters = Arc::clone(&fake.counters);
+    let engine = Engine::new(
+        vec![Arc::new(fake)],
+        None,
+        Vec::new(),
+        vec![WLR],
+        None,
+        CapturePolicy::default(),
+    );
+    let runtime = Runtime::mock().runtime;
+    let sink = runtime
+        .open_frame_sink::<crate::types::FrameMeta>(SinkPolicy::queue(2))
+        .expect("sink");
+    let sender = runtime.frame_sender(sink.id()).expect("sender");
+    let err = engine
+        .open(
+            &runtime,
+            &SessionConfig::default(),
+            &sender,
+            None,
+            CallOrigin::Local,
+            &super::offload::Caller::abandoned(),
+        )
+        .expect_err("nobody waits for it");
+    assert_eq!(err, CaptureError::SessionNotFound);
+    assert_eq!(counters.live_threads.load(Ordering::SeqCst), 0);
+    assert!(sink.is_closed(), "sink ended");
 }
