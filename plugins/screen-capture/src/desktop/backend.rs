@@ -15,6 +15,7 @@ use crate::types::{
 
 use super::offload::Caller;
 use super::output::{AudioOut, FrameOut};
+use super::watch::SourceFeed;
 
 /// What to capture, resolved against the backend's listing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +140,22 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// # Errors
     /// Enumeration failed.
     fn sources(&self) -> Result<SourceList, CaptureError>;
+
+    /// Publish the sources into `feed` (what [`sources`](Self::sources)
+    /// lists), then again on every change, until the feed's subscriber
+    /// leaves. Blocks: the host runs it on a thread of its own; waits
+    /// look at [`SourceFeed::is_closed`] at least every
+    /// [`WATCH_POLL`](super::watch::WATCH_POLL).
+    ///
+    /// # Errors
+    /// `Unsatisfiable(Operation)` by default; anything that ended the
+    /// watch (the compositor or server went away).
+    fn watch(&self, _feed: &mut SourceFeed) -> Result<(), CaptureError> {
+        Err(CaptureError::unsatisfiable(
+            Some(self.id()),
+            Requirement::Operation,
+        ))
+    }
 
     /// Resolve `Focused` / `UnderCursor`.
     ///

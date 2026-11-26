@@ -20,6 +20,7 @@ use crate::types::{
 use super::backend::{Backend, BackendSession, Captured, ScreenshotPlan, Shot, StreamPlan, Target};
 use super::clock;
 use super::output::{Delivery, FrameOut};
+use super::watch::{SourceFeed, WATCH_POLL};
 
 /// The red channel of pixel `(x, y)` of monitor `index`.
 pub(crate) fn red(index: usize, x: u32, y: u32) -> u8 {
@@ -54,6 +55,9 @@ pub(crate) struct Fake {
     pub(crate) teardown: Duration,
     /// What `caps` reports in `source_kinds`.
     pub(crate) kinds: Vec<SourceKind>,
+    /// Listings a source watch publishes after the first (`None`: no
+    /// watch); the sender hanging up ends the watch with `SourceLost`.
+    pub(crate) watch: Option<flume::Receiver<Vec<Source>>>,
 }
 
 pub(crate) fn monitor(id: BackendId, index: usize, geometry: Rect, scale: u32) -> Source {
@@ -86,6 +90,7 @@ impl Fake {
             restore_token: None,
             teardown: Duration::ZERO,
             kinds: vec![SourceKind::Monitor],
+            watch: None,
         }
     }
 
@@ -222,6 +227,35 @@ impl Backend for Fake {
             caps.consent = ConsentModel::PerSessionDialog;
         }
         Ok(caps)
+    }
+
+    fn watch(&self, feed: &mut SourceFeed) -> Result<(), CaptureError> {
+        let Some(updates) = &self.watch else {
+            return Err(CaptureError::unsatisfiable(
+                Some(self.id),
+                crate::types::Requirement::Operation,
+            ));
+        };
+        let mut sources = self.monitors.clone();
+        loop {
+            let list = SourceList {
+                sources,
+                listing: self.listing,
+            };
+            if !feed.publish(list) {
+                return Ok(());
+            }
+            sources = loop {
+                match updates.recv_timeout(WATCH_POLL) {
+                    Ok(next) => break next,
+                    Err(flume::RecvTimeoutError::Timeout) if feed.is_closed() => return Ok(()),
+                    Err(flume::RecvTimeoutError::Timeout) => {}
+                    Err(flume::RecvTimeoutError::Disconnected) => {
+                        return Err(CaptureError::SourceLost);
+                    }
+                }
+            };
+        }
     }
 
     fn sources(&self) -> Result<SourceList, CaptureError> {

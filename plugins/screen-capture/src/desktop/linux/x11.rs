@@ -12,7 +12,9 @@ mod edid;
 mod grab;
 mod session;
 
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::select::{self, Offer};
 use crate::types::{
@@ -30,6 +32,7 @@ use super::super::backend::{
 };
 use super::super::clock;
 use super::super::output::FrameOut;
+use super::super::watch::{SourceFeed, WATCH_POLL};
 
 use self::conn::{ID, Target as XTarget, X11};
 use self::grab::{Cursor, Grab, Grabber};
@@ -335,6 +338,18 @@ fn choose_tier(x: &X11, formats: &FormatRequest) -> Result<u8, CaptureError> {
         .ok_or_else(|| CaptureError::unsatisfiable(Some(ID), Requirement::Formats))
 }
 
+/// How long a watch lets one change's events arrive before listing.
+const WATCH_SETTLE: Duration = Duration::from_millis(30);
+
+/// Monitors, then windows.
+fn listing(x: &X11) -> Result<SourceList, CaptureError> {
+    let mut sources = x.monitors()?;
+    sources.extend(x.windows()?);
+    Ok(SourceList {
+        sources,
+        listing: SourceListing::Enumerable,
+    })
+}
 fn not_on_this_session() -> Option<Availability> {
     if super::wayland_session() {
         // XWayland: X11 capture would only see X clients, black elsewhere.
@@ -367,13 +382,38 @@ impl Backend for X11Backend {
     }
 
     fn sources(&self) -> Result<SourceList, CaptureError> {
+        listing(&X11::connect()?)
+    }
+
+    fn watch(&self, feed: &mut SourceFeed) -> Result<(), CaptureError> {
         let x = X11::connect()?;
-        let mut sources = x.monitors()?;
-        sources.extend(x.windows()?);
-        Ok(SourceList {
-            sources,
-            listing: SourceListing::Enumerable,
-        })
+        x.watch_listing()?;
+        let mut followed = HashSet::new();
+        loop {
+            let list = listing(&x)?;
+            let listed: HashSet<_> = list
+                .sources
+                .iter()
+                .filter_map(|s| conn::parse_window(&s.id.value))
+                .collect();
+            for window in listed.difference(&followed) {
+                x.follow(*window);
+            }
+            followed = listed;
+            if !feed.publish(list) {
+                return Ok(());
+            }
+            while !x.drain_events() {
+                if feed.is_closed() {
+                    return Ok(());
+                }
+                x.wait_for_events(WATCH_POLL);
+            }
+            // One change is often several events (map, then properties,
+            // then the client list): take them all before listing again.
+            std::thread::sleep(WATCH_SETTLE);
+            x.drain_events();
+        }
     }
 
     fn resolve_special(&self, selector: &SourceSelector) -> Result<Source, CaptureError> {

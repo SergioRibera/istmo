@@ -31,6 +31,9 @@ interface ScreenCaptureBackend {
     // Throw BackendException(CaptureError) for domain errors.
     suspend fun sources(filter: SourceFilter): SourceList
 
+    // Throw BackendException(CaptureError) from the flow to end it with a domain error.
+    fun watch_sources(filter: SourceFilter): kotlinx.coroutines.flow.Flow<SourceChange>
+
     // Throw BackendException(CaptureError) for domain errors.
     suspend fun access(scope: AccessScope): AccessState
 
@@ -411,6 +414,9 @@ interface ScreenCaptureCodecs {
     fun readSourceCapture(bytes: ByteArray, offset: Int): Bincode.Decoded<SourceCapture>
     fun writeSourceCapture(out: ByteArrayOutputStream, value: SourceCapture)
 
+    fun readSourceChange(bytes: ByteArray, offset: Int): Bincode.Decoded<SourceChange>
+    fun writeSourceChange(out: ByteArrayOutputStream, value: SourceChange)
+
     fun readSourceFilter(bytes: ByteArray, offset: Int): Bincode.Decoded<SourceFilter>
     fun writeSourceFilter(out: ByteArrayOutputStream, value: SourceFilter)
 
@@ -507,6 +513,22 @@ class ScreenCaptureDispatcher(
                     codecs.writeCaptureError(errOut, err)
                     throw PluginException(errOut.toByteArray())
                 }
+            }
+            "watch_sources" -> {
+                val filter = codecs.readSourceFilter(payload, 0).value
+                val __istmo_flow = backend.watch_sources(filter)
+                PluginResult.Stream(
+                    __istmo_flow.map { __istmo_item ->
+                        val out = IstmoBytesOut()
+                        codecs.writeSourceChange(out, __istmo_item)
+                        out.toExactArray()
+                    }.catch { e ->
+                        val err = (e as? BackendException)?.error as? CaptureError ?: throw e
+                        val errOut = ByteArrayOutputStream()
+                        codecs.writeCaptureError(errOut, err)
+                        throw PluginException(errOut.toByteArray())
+                    }
+                )
             }
             "access" -> {
                 try {

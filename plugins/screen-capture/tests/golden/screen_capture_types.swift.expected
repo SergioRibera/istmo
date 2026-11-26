@@ -1443,6 +1443,13 @@ extension ScreenCapture {
         }
     }
 
+    public enum SourceChange: Sendable {
+        case listed(SourceList)
+        case added(Source)
+        case changed(Source)
+        case removed(SourceId)
+    }
+
     public struct SourceFilter: Sendable {
         public let kinds: [SourceKind]
         public let backend: BackendId?

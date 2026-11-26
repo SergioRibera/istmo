@@ -60,13 +60,14 @@ use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
 };
 
+use super::super::watch::{SourceFeed, WATCH_POLL};
 use super::gbm::is_nvidia;
 #[cfg(feature = "linux-wlr-screencopy")]
 use crate::select::MOD_INVALID;
 use crate::types::{
     BackendId, BufferMemory, CapabilityNote, CaptureError, CopyStage, Damage, FormatCaps,
     Orientation, PixelFormat, Rect, Rotation, Size, Source, SourceCapture, SourceId, SourceKind,
-    SyncKind,
+    SourceList, SourceListing, SyncKind,
 };
 
 /// How long one protocol exchange may take before it counts as lost.
@@ -235,10 +236,13 @@ pub(crate) struct OutputInfo {
     pub(crate) scale: i32,
     pub(crate) transform: wl_output::Transform,
     pub(crate) position: (i32, i32),
+    /// `wl_output.done` closed its first batch (v1 outputs send none).
+    pub(crate) done: bool,
 }
 
 impl OutputInfo {
-    const fn new(global: u32, proxy: WlOutput) -> Self {
+    fn new(global: u32, proxy: WlOutput) -> Self {
+        let done = proxy.version() < 2;
         Self {
             global,
             proxy,
@@ -253,7 +257,15 @@ impl OutputInfo {
             scale: 1,
             transform: wl_output::Transform::Normal,
             position: (0, 0),
+            done,
         }
+    }
+
+    /// Whether the compositor finished describing it: `done`, and the
+    /// logical size when xdg-output is bound (a monitor listed earlier
+    /// would be 0×0 or at the wrong place).
+    const fn is_listable(&self, xdg_bound: bool) -> bool {
+        self.done && (self.logical_size.is_some() || !xdg_bound)
     }
 
     /// The source id value: the connector name, else the global.
@@ -539,6 +551,32 @@ pub(crate) struct WlState {
     pending_constraints: Constraints,
     v3_modifiers: HashMap<u32, Vec<u64>>,
     feedback: FeedbackProgress,
+    /// xdg-output, for outputs plugged in later.
+    xdg: Option<ZxdgOutputManagerV1>,
+    /// Bumped by every event that may change the listing (outputs,
+    /// toplevels): a watch waits for it to move.
+    pub(crate) changes: u64,
+}
+
+impl WlState {
+    const fn changed(&mut self) {
+        self.changes = self.changes.wrapping_add(1);
+    }
+
+    /// Forget closed toplevels, destroying their handles (a long-lived
+    /// connection would collect them otherwise).
+    fn prune_toplevels(&mut self) {
+        self.toplevels.retain(|t| {
+            if t.phase != ToplevelPhase::Closed {
+                return true;
+            }
+            match &t.handle {
+                ToplevelHandle::Ext(handle) => handle.destroy(),
+                ToplevelHandle::Wlr(handle) => handle.destroy(),
+            }
+            false
+        });
+    }
 }
 
 /// A connection with its queue and the globals both backends use.
@@ -580,7 +618,10 @@ impl Client {
             .map_err(|e| CaptureError::protocol(backend, "bind wl_shm", e))?;
         let dmabuf: Option<ZwpLinuxDmabufV1> = globals.bind(&qh, 3..=4, ()).ok();
         let xdg: Option<ZxdgOutputManagerV1> = globals.bind(&qh, 2..=3, ()).ok();
-        let mut state = WlState::default();
+        let mut state = WlState {
+            xdg: xdg.clone(),
+            ..WlState::default()
+        };
         for global in globals.contents().clone_list() {
             if global.interface == WlOutput::interface().name {
                 let proxy: WlOutput =
@@ -691,13 +732,15 @@ impl Client {
         }
     }
 
-    /// The outputs as sources, the first one primary (Wayland has no
-    /// notion of a primary output).
+    /// The fully described outputs as sources, the first one primary
+    /// (Wayland has no notion of a primary output).
     pub(crate) fn monitors(&self) -> Vec<Source> {
+        let xdg_bound = self.state.xdg.is_some();
         let mut sources: Vec<Source> = self
             .state
             .outputs
             .iter()
+            .filter(|o| o.is_listable(xdg_bound))
             .map(|o| o.source(self.backend, false))
             .collect();
         // Registry order is arbitrary (sway lists the newest output
@@ -942,6 +985,45 @@ impl Client {
             })
             .collect()
     }
+
+    /// Watch the outputs and toplevels of this connection, publishing
+    /// what the backend's `sources` lists into `feed` until its
+    /// subscriber leaves. `windows_by_id` as in [`windows`](Self::windows).
+    ///
+    /// # Errors
+    /// A protocol or socket error (the compositor went away).
+    pub(crate) fn watch(
+        mut self,
+        windows_by_id: bool,
+        feed: &mut SourceFeed,
+    ) -> Result<(), CaptureError> {
+        // Kept bound: its events are the window changes.
+        let toplevels = self.bind_toplevels()?;
+        loop {
+            self.state.prune_toplevels();
+            let mut sources = self.monitors();
+            if toplevels.is_some() {
+                sources.extend(self.windows(windows_by_id));
+            }
+            let list = SourceList {
+                sources,
+                listing: SourceListing::Enumerable,
+            };
+            if !feed.publish(list) {
+                return Ok(());
+            }
+            let seen = self.state.changes;
+            while !self.dispatch_until("watch", WATCH_POLL, |s| s.changes != seen)? {
+                if feed.is_closed() {
+                    return Ok(());
+                }
+            }
+            // Changes come in batches closed by `done`, and a new output's
+            // xdg-output answers one round trip later: settle first.
+            self.roundtrip("watch")?;
+            self.roundtrip("watch")?;
+        }
+    }
 }
 
 /// A `wl_shm` buffer whose content is read with `pread`.
@@ -977,14 +1059,39 @@ impl Drop for ShmBuffer {
 impl Dispatch<WlRegistry, GlobalListContents> for WlState {
     fn event(
         state: &mut Self,
-        _: &WlRegistry,
+        registry: &WlRegistry,
         event: wl_registry::Event,
         _: &GlobalListContents,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::GlobalRemove { name } = event {
-            state.removed.push(name);
+        match event {
+            // A monitor plugged in after the connection opened.
+            wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } if interface == WlOutput::interface().name => {
+                let proxy: WlOutput = registry.bind(name, version.min(4), qh, name);
+                if let Some(xdg) = &state.xdg {
+                    xdg.get_xdg_output(&proxy, qh, name);
+                }
+                state.outputs.push(OutputInfo::new(name, proxy));
+                state.changed();
+            }
+            wl_registry::Event::GlobalRemove { name } => {
+                state.removed.push(name);
+                if let Some(at) = state.outputs.iter().position(|o| o.global == name) {
+                    let output = state.outputs.remove(at);
+                    // `release` is the v3+ destructor; older proxies just
+                    // go inert.
+                    if output.proxy.version() >= 3 {
+                        output.proxy.release();
+                    }
+                    state.changed();
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -1036,6 +1143,10 @@ impl Dispatch<WlOutput, u32> for WlState {
             wl_output::Event::Scale { factor } => out.scale = factor,
             wl_output::Event::Name { name } => out.name = Some(name),
             wl_output::Event::Description { description } => out.description = Some(description),
+            wl_output::Event::Done => {
+                out.done = true;
+                state.changed();
+            }
             _ => {}
         }
     }
@@ -1057,6 +1168,7 @@ impl Dispatch<ZxdgOutputV1, u32> for WlState {
             zxdg_output_v1::Event::LogicalPosition { x, y } => out.logical_position = Some((x, y)),
             zxdg_output_v1::Event::LogicalSize { width, height } => {
                 out.logical_size = Some((width, height));
+                state.changed();
             }
             // Fills in for wl_output < 4 (no `name` there).
             zxdg_output_v1::Event::Name { name } if out.name.is_none() => out.name = Some(name),
@@ -1313,6 +1425,7 @@ impl Dispatch<ExtForeignToplevelListV1, ()> for WlState {
             state
                 .toplevels
                 .push(ToplevelInfo::new(ToplevelHandle::Ext(toplevel)));
+            state.changed();
         }
     }
 
@@ -1344,8 +1457,9 @@ impl Dispatch<ExtForeignToplevelHandleV1, ()> for WlState {
             Event::AppId { app_id } => info.app_id = Some(app_id),
             Event::Done => info.described(),
             Event::Closed => info.phase = ToplevelPhase::Closed,
-            _ => {}
+            _ => return,
         }
+        state.changed();
     }
 }
 
@@ -1362,6 +1476,7 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for WlState {
             state
                 .toplevels
                 .push(ToplevelInfo::new(ToplevelHandle::Wlr(toplevel)));
+            state.changed();
         }
     }
 
@@ -1400,8 +1515,9 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for WlState {
             Event::Done => info.described(),
             Event::Closed => info.phase = ToplevelPhase::Closed,
             // Output enter / leave and parents are not reported.
-            _ => {}
+            _ => return,
         }
+        state.changed();
     }
 }
 

@@ -2711,6 +2711,56 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
         writeSourceListing(out, value.listing)
     }
 
+    override fun readSourceChange(bytes: ByteArray, offset: Int): Bincode.Decoded<SourceChange> {
+        var cursor = offset
+        val disc = Bincode.readEnumDiscriminant(bytes, cursor)
+        cursor = disc.consumed
+        return when (disc.value) {
+            0 -> {
+                val d_inner = readSourceList(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(SourceChange.Listed(inner) as SourceChange, cursor)
+            }
+            1 -> {
+                val d_inner = readSource(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(SourceChange.Added(inner) as SourceChange, cursor)
+            }
+            2 -> {
+                val d_inner = readSource(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(SourceChange.Changed(inner) as SourceChange, cursor)
+            }
+            3 -> {
+                val d_inner = readSourceId(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(SourceChange.Removed(inner) as SourceChange, cursor)
+            }
+            else -> throw Bincode.DecodeException("SourceChange: unknown discriminant ${disc.value}")
+        }
+    }
+
+    override fun writeSourceChange(out: ByteArrayOutputStream, value: SourceChange) {
+        when (value) {
+            is SourceChange.Listed -> {
+                Bincode.writeEnumDiscriminant(out, 0)
+                writeSourceList(out, value.value)
+            }
+            is SourceChange.Added -> {
+                Bincode.writeEnumDiscriminant(out, 1)
+                writeSource(out, value.value)
+            }
+            is SourceChange.Changed -> {
+                Bincode.writeEnumDiscriminant(out, 2)
+                writeSource(out, value.value)
+            }
+            is SourceChange.Removed -> {
+                Bincode.writeEnumDiscriminant(out, 3)
+                writeSourceId(out, value.value)
+            }
+        }
+    }
+
     override fun readSourceFilter(bytes: ByteArray, offset: Int): Bincode.Decoded<SourceFilter> {
         var cursor = offset
         val d_kinds = Bincode.readVec(bytes, cursor) { b1, c1 -> readSourceKind(b1, c1) }; cursor = d_kinds.consumed

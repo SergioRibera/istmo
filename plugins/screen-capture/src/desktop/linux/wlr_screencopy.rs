@@ -38,6 +38,7 @@ use super::super::backend::{
     Backend, BackendSession, Captured, ScreenshotPlan, Shot, StreamPlan, Target,
 };
 use super::super::output::FrameOut;
+use super::super::watch::SourceFeed;
 use super::gbm::Allocator;
 use super::wayland::stream::{self, Engine, FrameSource, Offers, Settings};
 use super::wayland::{
@@ -142,6 +143,10 @@ impl Backend for WlrScreencopy {
             sources,
             listing: SourceListing::Enumerable,
         })
+    }
+
+    fn watch(&self, feed: &mut SourceFeed) -> Result<(), CaptureError> {
+        Client::connect(ID)?.watch(false, feed)
     }
 
     fn screenshot(&self, plan: &ScreenshotPlan) -> Result<Shot, CaptureError> {

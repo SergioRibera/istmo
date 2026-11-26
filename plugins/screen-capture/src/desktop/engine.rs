@@ -22,7 +22,7 @@ use crate::types::{
     CopyStage, CpuPixelFormat, DamageSupport, FormatRequest, FrameMeta, IndicatorState,
     NegotiatedStream, OrientationHandling, PauseReason, Persistence, PixelFormat, PixelLayout,
     PlaneLayout, Provenance, RawImage, Rect, Requirement, ScreenshotInfo, ScreenshotRequest,
-    SessionConfig, SessionUpdate, Source, SourceCapture, SourceFilter, SourceId, SourceKind,
+    SessionConfig, SessionUpdate, Source, SourceChange, SourceFilter, SourceId, SourceKind,
     SourceList, SourceListing, SourceSelector, StopReason, Strength,
 };
 
@@ -31,6 +31,7 @@ use super::backend::{
 };
 use super::offload::Caller;
 use super::output::{AudioOut, Crop, EventHub, FrameOut};
+use super::watch::{Pickers, SourceFeed};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Short table / state updates only; poisoning leaves them valid.
@@ -300,45 +301,64 @@ impl Engine {
     }
 
     pub(crate) fn sources(&self, filter: &SourceFilter) -> Result<SourceList, CaptureError> {
-        let backend = match filter.backend {
+        let backend = self.lister(filter)?;
+        let mut list = backend.sources()?;
+        list.sources.retain(|s| filter.admits(s.kind));
+        // Probe the picker backends only when a listed-only source needs
+        // them named.
+        if !list.sources.iter().all(Source::capturable_by_id) {
+            self.pickers().name(&mut list.sources);
+        }
+        Ok(list)
+    }
+
+    /// The backend that lists for `filter`: the one it names, else the
+    /// first ready one.
+    fn lister(&self, filter: &SourceFilter) -> Result<Arc<dyn Backend>, CaptureError> {
+        match filter.backend {
             Some(id) => {
                 let backend = self
                     .backend(id)
                     .ok_or(CaptureError::BackendNotCompiled(id))?;
                 self.ready(backend.as_ref())?;
-                Arc::clone(backend)
+                Ok(Arc::clone(backend))
             }
-            None => self.first_lister()?,
-        };
-        let mut list = backend.sources()?;
-        list.sources.retain(|s| filter.admits(s.kind));
-        self.name_pickers(&mut list.sources);
-        Ok(list)
+            None => self.first_lister(),
+        }
     }
 
-    /// Fill in, for every listed-only source, the ready picker backends
-    /// that offer its kind (probed only when such a source is listed).
-    fn name_pickers(&self, sources: &mut [Source]) {
-        if sources.iter().all(Source::capturable_by_id) {
-            return;
-        }
-        let pickers: Vec<(BackendId, Vec<SourceKind>)> = self
-            .candidates()
-            .into_iter()
-            .filter_map(|c| {
-                let caps = c.caps?;
-                (caps.listing == SourceListing::PickerOnly)
-                    .then_some((c.backend, caps.source_kinds))
-            })
-            .collect();
-        for source in sources {
-            if let SourceCapture::PickerOnly(backends) = &mut source.capture {
-                *backends = pickers
-                    .iter()
-                    .filter(|(_, kinds)| kinds.contains(&source.kind))
-                    .map(|(backend, _)| *backend)
-                    .collect();
+    /// The ready picker-only backends and the kinds they offer.
+    fn pickers(&self) -> Pickers {
+        Pickers(
+            self.candidates()
+                .into_iter()
+                .filter_map(|c| {
+                    let caps = c.caps?;
+                    (caps.listing == SourceListing::PickerOnly)
+                        .then_some((c.backend, caps.source_kinds))
+                })
+                .collect(),
+        )
+    }
+
+    /// Watch the sources for `filter` into `tx` until the subscriber
+    /// leaves. Blocks: the host runs it on a thread of its own.
+    pub(crate) fn watch_sources(
+        &self,
+        filter: SourceFilter,
+        tx: flume::Sender<Result<SourceChange, CaptureError>>,
+    ) {
+        let backend = match self.lister(&filter) {
+            Ok(backend) => backend,
+            Err(err) => {
+                // The subscriber may be gone already.
+                let _sent = tx.send(Err(err));
+                return;
             }
+        };
+        let mut feed = SourceFeed::new(tx, filter, self.pickers());
+        if let Err(err) = backend.watch(&mut feed) {
+            feed.fail(err);
         }
     }
 

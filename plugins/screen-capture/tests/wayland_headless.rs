@@ -19,8 +19,8 @@ use istmo_core::{MemoryKind, SinkPolicy};
 use istmo_screen_capture::{
     BackendId, BufferMemory, CaptureError, CaptureEvent, CopyStage, FormatChoice, FormatRequest,
     FormatTier, FrameRate, PixelFormat, PixelLayout, Requirement, ScreenCaptureClientExt,
-    ScreenshotRequest, SessionConfig, SourceCapture, SourceFilter, SourceKind, SourceSelector,
-    SyncKind,
+    ScreenshotRequest, SessionConfig, SourceCapture, SourceChange, SourceFilter, SourceKind,
+    SourceSelector, SyncKind,
 };
 
 use common::{Probe, Scene, block, checklist, fixed, live};
@@ -240,6 +240,105 @@ fn compositor_windows_are_listed_on_headless_sway() {
     });
     assert!(renamed, "a new listing shows the new title");
     drop(window);
+}
+
+/// The next change `pred` accepts, skipping others, within 5 s.
+#[cfg(feature = "wayland")]
+fn change_where(
+    watch: &mut istmo_screen_capture::SourceWatch,
+    what: &str,
+    pred: impl Fn(&SourceChange) -> bool,
+) -> SourceChange {
+    let mut found = None;
+    let arrived = common::wait_until(what, std::time::Duration::from_secs(5), || {
+        while let Some(change) = watch.try_recv() {
+            let change = change.expect("the watch runs");
+            if pred(&change) {
+                found = Some(change);
+                return true;
+            }
+        }
+        false
+    });
+    assert!(arrived, "{what}");
+    found.expect("found")
+}
+
+/// A window opened, retitled and closed, then its id gone, on `backend`'s
+/// watch.
+#[cfg(feature = "wayland")]
+fn watch_a_window(live: &common::Live, backend: Option<BackendId>) {
+    let mut watch = block(live.client.source_watch(SourceFilter {
+        backend,
+        ..SourceFilter::default()
+    }))
+    .expect("watch");
+    let window = probe_window::ProbeWindow::open("istmo watch", PROBE_APP);
+    let probe = |s: &istmo_screen_capture::Source| s.app_id.as_deref() == Some(PROBE_APP);
+    let SourceChange::Added(added) = change_where(
+        &mut watch,
+        "the window opens",
+        |c| matches!(c, SourceChange::Added(s) if probe(s)),
+    ) else {
+        unreachable!("matched Added");
+    };
+    eprintln!("{backend:?}: added {added:?}");
+    window.set_title("istmo watch, renamed");
+    change_where(
+        &mut watch,
+        "the new title",
+        |c| matches!(c, SourceChange::Changed(s) if s.id == added.id && s.name == "istmo watch, renamed"),
+    );
+    drop(window);
+    change_where(
+        &mut watch,
+        "the window closes",
+        |c| matches!(c, SourceChange::Removed(id) if *id == added.id),
+    );
+    assert!(!watch.sources().iter().any(probe));
+}
+
+#[cfg(feature = "wayland")]
+#[test]
+fn source_watch_follows_windows_and_outputs_on_headless_sway() {
+    if !common::enabled(SWAY) {
+        return;
+    }
+    let live = live();
+    for backend in [BackendId::LinuxWlrScreencopy, BackendId::LinuxExtImageCopy] {
+        watch_a_window(&live, Some(backend));
+        // An output plugged in, then unplugged.
+        let mut watch = block(live.client.source_watch(SourceFilter {
+            backend: Some(backend),
+            kinds: vec![SourceKind::Monitor],
+        }))
+        .expect("watch");
+        assert_eq!(watch.sources().len(), 2, "{backend}");
+        swaymsg(&["create_output"]);
+        let SourceChange::Added(output) = change_where(&mut watch, "the new output", |c| {
+            matches!(c, SourceChange::Added(_))
+        }) else {
+            unreachable!("matched Added");
+        };
+        assert!(output.geometry.is_some_and(|g| g.width > 0), "{output:?}");
+        assert_eq!(output.connector.as_deref(), Some(output.id.value.as_str()));
+        swaymsg(&["output", &output.id.value, "unplug"]);
+        change_where(
+            &mut watch,
+            "the output goes",
+            |c| matches!(c, SourceChange::Removed(id) if *id == output.id),
+        );
+        assert_eq!(watch.sources().len(), 2, "{backend}");
+    }
+}
+
+#[cfg(feature = "wayland")]
+#[test]
+fn niri_source_watch_sees_a_window_open_and_close() {
+    if !common::enabled(NIRI) {
+        return;
+    }
+    watch_a_window(&live(), None);
 }
 
 #[test]

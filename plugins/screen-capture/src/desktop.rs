@@ -19,6 +19,7 @@ mod offload;
 mod output;
 #[cfg(test)]
 mod tests;
+mod watch;
 
 use std::sync::Arc;
 
@@ -30,11 +31,15 @@ use crate::types::{
     AccessRequest, AccessScope, AccessState, AudioMeta, BackendStatus, CapabilityQuery,
     CapabilityReport, CaptureError, CaptureEvent, CaptureSession, FrameMeta, NegotiatedStream,
     PixelLayout, PreviewTarget, ProjectionGrant, ProjectionRequest, RawImage, Requirement,
-    ScreenshotInfo, ScreenshotRequest, SessionConfig, SessionUpdate, SourceFilter, SourceList,
+    ScreenshotInfo, ScreenshotRequest, SessionConfig, SessionUpdate, SourceChange, SourceFilter,
+    SourceList,
 };
 
 use self::engine::Engine;
-use self::offload::{offload, offload_open, offload_owned};
+use self::offload::{internal, offload, offload_open, offload_owned};
+
+/// Changes queued per source-watch subscriber before its watcher waits.
+const WATCH_DEPTH: usize = 64;
 
 /// The desktop host. Register it with
 /// `ScreenCaptureHost::new(DesktopCapture::default())`.
@@ -102,6 +107,33 @@ impl ScreenCapture for DesktopCapture {
         self.admit(&ctx, "sources")?;
         let engine = self.engine();
         offload("sources", move || engine.sources(&filter)).await
+    }
+
+    fn watch_sources(
+        &self,
+        ctx: HostCtx,
+        filter: SourceFilter,
+    ) -> flume::Receiver<Result<SourceChange, CaptureError>> {
+        // Bounded: a subscriber that stops reading holds only its own
+        // watch thread.
+        let (tx, rx) = flume::bounded(WATCH_DEPTH);
+        if let Err(err) = self.admit(&ctx, "watch_sources") {
+            let _queued = tx.try_send(Err(err));
+            return rx;
+        }
+        let engine = self.engine();
+        let failed = tx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("istmo-screen-capture-watch".to_owned())
+            .spawn(move || engine.watch_sources(filter, tx));
+        if let Err(err) = spawned {
+            tracing::warn!(%err, "screen-capture: a source watch could not start");
+            let _queued = failed.try_send(Err(internal(
+                "watch_sources",
+                "the watch thread could not start",
+            )));
+        }
+        rx
     }
 
     async fn access(&self, scope: AccessScope) -> Result<AccessState, CaptureError> {

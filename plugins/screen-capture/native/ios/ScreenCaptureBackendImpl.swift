@@ -33,6 +33,12 @@ public final class ScreenCaptureBackendImpl: ScreenCaptureBackend {
         throw ScreenCapture.CaptureError.noBackendCompiled
     }
 
+    public func watch_sources(filter: ScreenCapture.SourceFilter) -> AsyncThrowingStream<ScreenCapture.SourceChange, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish(throwing: ScreenCapture.CaptureError.noBackendCompiled)
+        }
+    }
+
     public func access(scope: ScreenCapture.AccessScope) async throws -> ScreenCapture.AccessState {
         throw ScreenCapture.CaptureError.noBackendCompiled
     }

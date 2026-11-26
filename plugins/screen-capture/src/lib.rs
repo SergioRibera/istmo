@@ -60,7 +60,7 @@ mod types;
 use istmo_core::{FrameSinkId, HostCtx, NativeHandleId};
 use istmo_macros::{owned, plugin, stream};
 
-pub use client::{ScreenCaptureClientExt, SessionHandle};
+pub use client::{ScreenCaptureClientExt, SessionHandle, SourceWatch};
 #[cfg(not(target_arch = "wasm32"))]
 pub use desktop::DesktopCapture;
 pub use policy::CapturePolicy;
@@ -86,10 +86,22 @@ pub trait ScreenCapture {
     /// source kind or a concrete source. Never prompts.
     async fn capabilities(&self, query: CapabilityQuery) -> Result<CapabilityReport, CaptureError>;
 
-    /// Monitors, windows and applications capturable without a picker.
+    /// Monitors, windows and applications: capturable by id, or listed
+    /// only (`Source::capture`, a picker captures those).
     /// Same origin rule as capture (titles and pids are sensitive).
     async fn sources(&self, ctx: HostCtx, filter: SourceFilter)
     -> Result<SourceList, CaptureError>;
+
+    /// The sources `sources` lists, then every change to them: monitors
+    /// plugged, unplugged or reconfigured, windows opened, closed,
+    /// retitled or refocused. The first item is `Listed`. Same-process
+    /// callers only, whatever the policy (titles are sensitive).
+    #[stream]
+    fn watch_sources(
+        &self,
+        ctx: HostCtx,
+        filter: SourceFilter,
+    ) -> Result<SourceChange, CaptureError>;
 
     /// Standing grants (TCC, Windows borderless, Android notifications),
     /// without prompting.

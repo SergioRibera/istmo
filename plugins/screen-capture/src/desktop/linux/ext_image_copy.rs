@@ -35,6 +35,7 @@ use super::super::backend::{
     Backend, BackendSession, Captured, ScreenshotPlan, Shot, StreamPlan, Target,
 };
 use super::super::output::FrameOut;
+use super::super::watch::SourceFeed;
 use super::wayland::stream::{self, Engine, FrameSource, Offers, Settings};
 use super::wayland::{
     Client, EVENT_TIMEOUT, FrameEvents, TOPLEVEL_PREFIX, orientation_of, shm_format,
@@ -149,6 +150,12 @@ impl Backend for ExtImageCopy {
             sources,
             listing: SourceListing::Enumerable,
         })
+    }
+
+    fn watch(&self, feed: &mut SourceFeed) -> Result<(), CaptureError> {
+        let client = Client::connect(ID)?;
+        let by_id = captures_windows(&client);
+        client.watch(by_id, feed)
     }
 
     fn screenshot(&self, plan: &ScreenshotPlan) -> Result<Shot, CaptureError> {

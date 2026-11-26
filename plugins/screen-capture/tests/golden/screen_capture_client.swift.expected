@@ -234,6 +234,8 @@ public protocol ScreenCaptureCodecs {
     func writeSource(_ out: inout Data, _ value: ScreenCapture.Source)
     func readSourceCapture(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceCapture
     func writeSourceCapture(_ out: inout Data, _ value: ScreenCapture.SourceCapture)
+    func readSourceChange(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceChange
+    func writeSourceChange(_ out: inout Data, _ value: ScreenCapture.SourceChange)
     func readSourceFilter(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceFilter
     func writeSourceFilter(_ out: inout Data, _ value: ScreenCapture.SourceFilter)
     func readSourceFlags(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceFlags
@@ -312,6 +314,26 @@ public final class ScreenCaptureClient {
         }
         var c = Bincode.Cursor(bytes)
         return try codecs.readSourceList(&c)
+    }
+
+    public func watch_sources(filter: ScreenCapture.SourceFilter) -> AsyncThrowingStream<ScreenCapture.SourceChange, Error> {
+        let codecs = self.codecs
+        var payload = Data()
+        codecs.writeSourceFilter(&payload, filter)
+        var events = IstmoRuntime.shared.stream(pluginId: Self.PLUGIN_ID, method: "watch_sources", payload: payload).makeAsyncIterator()
+        return AsyncThrowingStream(unfolding: {
+            let next: Data?
+            do {
+                next = try await events.next()
+            } catch IstmoRuntimeError.streamError(let errPayload) {
+                var errCursor = Bincode.Cursor(errPayload)
+                let decoded: ScreenCapture.CaptureError? = try? codecs.readCaptureError(&errCursor)
+                throw ScreenCaptureException(payload: errPayload, decoded: decoded)
+            }
+            guard let bytes = next else { return nil }
+            var c = Bincode.Cursor(bytes)
+            return try codecs.readSourceChange(&c)
+        })
     }
 
     public func access(scope: ScreenCapture.AccessScope) async throws -> ScreenCapture.AccessState {

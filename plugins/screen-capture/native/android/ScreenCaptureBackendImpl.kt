@@ -34,6 +34,10 @@ class ScreenCaptureBackendImpl(context: Context) : ScreenCaptureBackend {
 
     override suspend fun sources(filter: SourceFilter): SourceList = unsupported()
 
+    override fun watch_sources(filter: SourceFilter): Flow<SourceChange> = flow {
+        unsupported()
+    }
+
     override suspend fun access(scope: AccessScope): AccessState = unsupported()
 
     override suspend fun request_access(request: AccessRequest): AccessState = unsupported()

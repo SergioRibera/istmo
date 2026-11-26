@@ -332,18 +332,7 @@ impl Worker {
     /// Sleep until the server sends something (damage), at most
     /// `timeout`.
     fn wait_for_events(&self, timeout: Duration) {
-        use std::os::fd::AsFd as _;
-        let fd = self.x.conn.stream().as_fd();
-        let mut fds = [rustix::event::PollFd::new(
-            &fd,
-            rustix::event::PollFlags::IN,
-        )];
-        let timeout = rustix::event::Timespec {
-            tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
-            tv_nsec: i64::from(timeout.subsec_nanos()),
-        };
-        // An interrupted or failed wait only means looking again sooner.
-        let _ready = rustix::event::poll(&mut fds, Some(&timeout));
+        self.x.wait_for_events(timeout);
     }
 
     /// Windows only: unmapped windows give no frames; destroyed ones end

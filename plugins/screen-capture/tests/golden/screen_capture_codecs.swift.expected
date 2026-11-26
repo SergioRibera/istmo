@@ -2164,6 +2164,34 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         self.writeSourceListing(&out, value.listing)
     }
 
+    public func readSourceChange(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceChange {
+        let disc = try Bincode.readVarintU32(&c)
+        switch disc {
+        case 0: return .listed(try self.readSourceList(&c))
+        case 1: return .added(try self.readSource(&c))
+        case 2: return .changed(try self.readSource(&c))
+        case 3: return .removed(try self.readSourceId(&c))
+        default: throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
+        }
+    }
+
+    public func writeSourceChange(_ out: inout Data, _ value: ScreenCapture.SourceChange) {
+        switch value {
+        case .listed(let payload):
+            Bincode.writeVarintU32(&out, 0)
+            self.writeSourceList(&out, payload)
+        case .added(let payload):
+            Bincode.writeVarintU32(&out, 1)
+            self.writeSource(&out, payload)
+        case .changed(let payload):
+            Bincode.writeVarintU32(&out, 2)
+            self.writeSource(&out, payload)
+        case .removed(let payload):
+            Bincode.writeVarintU32(&out, 3)
+            self.writeSourceId(&out, payload)
+        }
+    }
+
     public func readSourceFilter(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceFilter {
         let kinds = try Bincode.readVec(&c) { c1 in try self.readSourceKind(&c1) }
         let backend = try Bincode.readOption(&c) { c1 in try self.readBackendId(&c1) }

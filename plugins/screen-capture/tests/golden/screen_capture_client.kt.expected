@@ -46,6 +46,19 @@ class ScreenCaptureClient(
         return codecs.readSourceList(bytes, 0).value
     }
 
+    fun watch_sources(filter: SourceFilter): kotlinx.coroutines.flow.Flow<SourceChange> {
+        val payloadBuf = IstmoBytesOut()
+        codecs.writeSourceFilter(payloadBuf, filter)
+        val payload = payloadBuf.toExactArray()
+        return IstmoRuntime.stream(PLUGIN_ID, "watch_sources", payload).map { bytes ->
+            codecs.readSourceChange(bytes, 0).value
+        }.catch { e ->
+            if (e !is PluginException) throw e
+            val decoded = runCatching { codecs.readCaptureError(e.payload, 0).value }.getOrNull()
+            throw ScreenCaptureException(e.payload, decoded)
+        }
+    }
+
     suspend fun access(scope: AccessScope): AccessState {
         val payloadBuf = IstmoBytesOut()
         codecs.writeAccessScope(payloadBuf, scope)

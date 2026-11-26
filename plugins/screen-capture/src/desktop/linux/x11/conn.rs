@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::time::Duration;
 
 use x11rb::connection::Connection as _;
 use x11rb::protocol::composite::ConnectionExt as _;
@@ -11,7 +12,8 @@ use x11rb::protocol::randr::{self, ConnectionExt as _};
 use x11rb::protocol::shm::ConnectionExt as _;
 use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xproto::{
-    self, AtomEnum, ConnectionExt as _, MapState, Window as XWindow, WindowClass,
+    self, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, EventMask, MapState,
+    Window as XWindow, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 
@@ -479,6 +481,77 @@ impl X11 {
             .into_iter()
             .filter_map(|w| self.describe(w, active))
             .collect())
+    }
+
+    /// Sleep until the server sends something, at most `timeout`. Events
+    /// already read into the connection's buffer do not wake it: drain
+    /// them first.
+    pub(super) fn wait_for_events(&self, timeout: Duration) {
+        use std::os::fd::AsFd as _;
+        let fd = self.conn.stream().as_fd();
+        let mut fds = [rustix::event::PollFd::new(
+            &fd,
+            rustix::event::PollFlags::IN,
+        )];
+        let timeout = rustix::event::Timespec {
+            tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
+            tv_nsec: i64::from(timeout.subsec_nanos()),
+        };
+        // An interrupted or failed wait only means looking again sooner.
+        let _ready = rustix::event::poll(&mut fds, Some(&timeout));
+    }
+
+    /// Ask for the events that change the listing: the root window's
+    /// properties (client list, active window) and children (windows
+    /// mapped, unmapped, moved), and `RandR` screen, output and CRTC
+    /// changes.
+    ///
+    /// # Errors
+    /// The server refused the root window's event mask.
+    pub(super) fn watch_listing(&self) -> Result<(), CaptureError> {
+        let mask = EventMask::PROPERTY_CHANGE
+            | EventMask::SUBSTRUCTURE_NOTIFY
+            | EventMask::STRUCTURE_NOTIFY;
+        self.conn
+            .change_window_attributes(
+                self.root,
+                &ChangeWindowAttributesAux::new().event_mask(mask),
+            )
+            .map_err(|e| x_err("watch the root window", e))?
+            .check()
+            .map_err(|e| x_err("watch the root window", e))?;
+        let randr = randr::NotifyMask::SCREEN_CHANGE
+            | randr::NotifyMask::OUTPUT_CHANGE
+            | randr::NotifyMask::CRTC_CHANGE
+            | randr::NotifyMask::OUTPUT_PROPERTY;
+        // Without RandR the screen never changes shape: nothing to watch.
+        if let Ok(cookie) = self.conn.randr_select_input(self.root, randr) {
+            let _watched = cookie.check();
+        }
+        Ok(())
+    }
+
+    /// Ask for `window`'s title and geometry changes. A window that went
+    /// away in the meantime is skipped.
+    pub(super) fn follow(&self, window: XWindow) {
+        let mask = EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY;
+        if let Ok(cookie) = self
+            .conn
+            .change_window_attributes(window, &ChangeWindowAttributesAux::new().event_mask(mask))
+        {
+            // Checked, so a vanished window's error is consumed here
+            // instead of waking the watch.
+            let _followed = cookie.check();
+        }
+    }
+
+    /// Drain the events read so far; `true` when there was any.
+    pub(super) fn drain_events(&self) -> bool {
+        let mut any = false;
+        while let Ok(Some(_event)) = self.conn.poll_for_event() {
+            any = true;
+        }
+        any
     }
 
     /// `_NET_ACTIVE_WINDOW`, else the input focus.

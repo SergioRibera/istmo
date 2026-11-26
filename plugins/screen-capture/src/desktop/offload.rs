@@ -298,7 +298,8 @@ where
     result
 }
 
-fn internal(step: &str, message: &str) -> CaptureError {
+/// A failure of the plugin itself (no backend involved), naming `step`.
+pub(crate) fn internal(step: &str, message: &str) -> CaptureError {
     CaptureError::Protocol(BackendDetail {
         backend: None,
         step: step.to_owned(),

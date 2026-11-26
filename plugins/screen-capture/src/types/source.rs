@@ -547,6 +547,61 @@ pub struct SourceList {
     pub listing: SourceListing,
 }
 
+/// One item of `watch_sources`.
+#[message(crate = "::istmo_core")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SourceChange {
+    /// Every source when the watch starts; always the first item.
+    Listed(SourceList),
+    Added(Source),
+    /// A source with the same id, described differently now (title,
+    /// geometry, mode, focus).
+    Changed(Source),
+    Removed(SourceId),
+}
+
+impl SourceChange {
+    /// Apply this change to `sources`, a list kept since `Listed`.
+    pub fn apply(&self, sources: &mut Vec<Source>) {
+        match self {
+            Self::Listed(list) => sources.clone_from(&list.sources),
+            Self::Added(source) => {
+                sources.retain(|s| s.id != source.id);
+                sources.push(source.clone());
+            }
+            Self::Changed(source) => {
+                if let Some(old) = sources.iter_mut().find(|s| s.id == source.id) {
+                    old.clone_from(source);
+                } else {
+                    sources.push(source.clone());
+                }
+            }
+            Self::Removed(id) => sources.retain(|s| &s.id != id),
+        }
+    }
+
+    /// What turns `before` into `after`: removals, then additions, then
+    /// changes, each in list order. Empty when nothing changed.
+    #[must_use]
+    pub fn between(before: &[Source], after: &[Source]) -> Vec<Self> {
+        let removed = before
+            .iter()
+            .filter(|old| !after.iter().any(|new| new.id == old.id))
+            .map(|old| Self::Removed(old.id.clone()));
+        let added_or_changed =
+            after
+                .iter()
+                .filter_map(|new| match before.iter().find(|old| old.id == new.id) {
+                    None => Some(Self::Added(new.clone())),
+                    Some(old) if old != new => Some(Self::Changed(new.clone())),
+                    Some(_) => None,
+                });
+        let (added, changed): (Vec<Self>, Vec<Self>) =
+            added_or_changed.partition(|c| matches!(c, Self::Added(_)));
+        removed.chain(added).chain(changed).collect()
+    }
+}
+
 /// Which sources `sources` should return.
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
@@ -563,5 +618,49 @@ impl SourceFilter {
     #[must_use]
     pub fn admits(&self, kind: SourceKind) -> bool {
         self.kinds.is_empty() || self.kinds.contains(&kind)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(value: &str, name: &str) -> Source {
+        Source::new(
+            SourceId::new(BackendId::LinuxX11, value),
+            SourceKind::Window,
+            name,
+        )
+    }
+
+    #[test]
+    fn changes_between_lists_replay_onto_the_old_one() {
+        let before = vec![source("a", "A"), source("b", "B"), source("c", "C")];
+        let after = vec![
+            source("c", "C"),
+            source("b", "B, renamed"),
+            source("d", "D"),
+        ];
+        let changes = SourceChange::between(&before, &after);
+        assert_eq!(
+            changes,
+            vec![
+                SourceChange::Removed(before[0].id.clone()),
+                SourceChange::Added(after[2].clone()),
+                SourceChange::Changed(after[1].clone()),
+            ]
+        );
+        let mut mirror = before;
+        for change in &changes {
+            change.apply(&mut mirror);
+        }
+        let ids = |list: &[Source]| {
+            let mut ids: Vec<String> = list.iter().map(|s| s.id.value.clone()).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(ids(&mirror), ids(&after));
+        assert!(mirror.iter().all(|s| after.contains(s)));
+        assert!(SourceChange::between(&after, &after).is_empty());
     }
 }

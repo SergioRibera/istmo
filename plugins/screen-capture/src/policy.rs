@@ -4,9 +4,11 @@
 use crate::types::BackendId;
 
 /// Methods that stay same-process whatever the policy says: they move
-/// sinks, grants or restore tokens, or watch a session (`events`).
-const ALWAYS_LOCAL: [&str; 7] = [
+/// sinks, grants or restore tokens, watch a session (`events`), or watch
+/// the sources (titles as they change, `watch_sources`).
+const ALWAYS_LOCAL: [&str; 8] = [
     "events",
+    "watch_sources",
     "screenshot",
     "open",
     "open_with_audio",
@@ -98,11 +100,16 @@ mod tests {
         assert!(!policy.admits_remote("sources"));
         let policy = policy
             .with_remote_method("sources")
-            .with_remote_method("open");
+            .with_remote_method("open")
+            .with_remote_method("watch_sources");
         assert!(policy.admits_remote("sources"));
         assert!(
             !policy.admits_remote("open"),
             "sink-taking methods stay local"
+        );
+        assert!(
+            !policy.admits_remote("watch_sources"),
+            "source watches stay local"
         );
     }
 

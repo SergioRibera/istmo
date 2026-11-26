@@ -14,11 +14,14 @@ use istmo_core::SinkPolicy;
 use istmo_screen_capture::{
     BackendId, CompositeConfig, CompositeScale, Damage, FrameRate, PixelLayout, Rect,
     RegionSelector, RegionSpace, ScreenCaptureClientExt, ScreenshotRequest, SessionConfig,
-    SourceFilter, SourceKind, SourceSelector,
+    SourceChange, SourceFilter, SourceKind, SourceSelector,
 };
 use x11rb::connection::Connection as _;
-use x11rb::protocol::xproto::{ConnectionExt as _, CreateWindowAux, Window, WindowClass};
+use x11rb::protocol::xproto::{
+    AtomEnum, ConnectionExt as _, CreateWindowAux, PropMode, Window, WindowClass,
+};
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 use common::{Probe, Scene, block, checklist, enabled, fixed, live, wait_until};
 
@@ -305,4 +308,133 @@ fn x11_under_xvfb() {
     assert_eq!(under.height, 480);
     let monitors_of_a = shot(ScreenshotRequest::of(SourceSelector::Id(a.id)));
     assert_eq!((monitors_of_a.width, monitors_of_a.height), (320, 480));
+}
+
+/// The next change `pred` accepts, skipping others, within 5 s.
+fn change_where(
+    watch: &mut istmo_screen_capture::SourceWatch,
+    what: &str,
+    pred: impl Fn(&SourceChange) -> bool,
+) -> SourceChange {
+    let mut found = None;
+    let arrived = wait_until(what, Duration::from_secs(5), || {
+        while let Some(change) = watch.try_recv() {
+            let change = change.expect("the watch runs");
+            if pred(&change) {
+                found = Some(change);
+                return true;
+            }
+        }
+        false
+    });
+    assert!(arrived, "{what}");
+    found.expect("found")
+}
+
+/// Windows mapped, renamed and destroyed, and monitors added, reach a
+/// source watch.
+#[test]
+fn x11_source_watch_under_xvfb() {
+    if !enabled(GATE) {
+        return;
+    }
+    let live = live();
+    let mut watch = block(live.client.source_watch(SourceFilter {
+        backend: Some(X11),
+        ..SourceFilter::default()
+    }))
+    .expect("watch");
+    assert!(
+        watch
+            .sources()
+            .iter()
+            .any(|s| s.kind == SourceKind::Monitor)
+    );
+
+    let (conn, screen) = RustConnection::connect(None).expect("connect to Xvfb");
+    let root = conn.setup().roots[screen].root;
+    let window = conn.generate_id().expect("id");
+    conn.create_window(
+        0,
+        window,
+        root,
+        20,
+        20,
+        50,
+        30,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new()
+            .background_pixel(RED)
+            .override_redirect(1),
+    )
+    .expect("create window");
+    conn.map_window(window).expect("map");
+    conn.flush().expect("flush");
+    let id = istmo_screen_capture::SourceId::new(X11, format!("window:{window:#x}"));
+    change_where(
+        &mut watch,
+        "the window appears",
+        |c| matches!(c, SourceChange::Added(s) if s.id == id),
+    );
+    assert!(watch.sources().iter().any(|s| s.id == id));
+
+    conn.change_property8(
+        PropMode::REPLACE,
+        window,
+        AtomEnum::WM_NAME,
+        AtomEnum::STRING,
+        b"watched",
+    )
+    .expect("title");
+    conn.flush().expect("flush");
+    change_where(
+        &mut watch,
+        "the new title",
+        |c| matches!(c, SourceChange::Changed(s) if s.id == id && s.name == "watched"),
+    );
+
+    conn.destroy_window(window).expect("destroy");
+    conn.flush().expect("flush");
+    change_where(
+        &mut watch,
+        "the window goes",
+        |c| matches!(c, SourceChange::Removed(gone) if *gone == id),
+    );
+    assert!(!watch.sources().iter().any(|s| s.id == id));
+
+    // A RandR monitor added by a client.
+    {
+        use x11rb::protocol::randr::{ConnectionExt as _, MonitorInfo};
+        let name = conn
+            .intern_atom(false, b"WATCHED")
+            .expect("atom")
+            .reply()
+            .expect("atom")
+            .atom;
+        conn.randr_set_monitor(
+            root,
+            MonitorInfo {
+                name,
+                primary: false,
+                automatic: false,
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+                width_in_millimeters: 10,
+                height_in_millimeters: 10,
+                outputs: Vec::new(),
+            },
+        )
+        .expect("set monitor")
+        .check()
+        .expect("set monitor");
+    }
+    change_where(
+        &mut watch,
+        "the new monitor",
+        |c| matches!(c, SourceChange::Added(s) if s.id.value == "monitor:WATCHED"),
+    );
 }

@@ -966,6 +966,13 @@ data class SourceList(
     val listing: SourceListing
 )
 
+sealed class SourceChange {
+    data class Listed(val value: SourceList) : SourceChange()
+    data class Added(val value: Source) : SourceChange()
+    data class Changed(val value: Source) : SourceChange()
+    data class Removed(val value: SourceId) : SourceChange()
+}
+
 data class SourceFilter(
     val kinds: List<SourceKind>,
     val backend: BackendId?

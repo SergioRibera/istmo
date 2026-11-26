@@ -13,6 +13,7 @@ public protocol ScreenCaptureBackend: AnyObject {
     func capabilities(query: ScreenCapture.CapabilityQuery) async throws -> ScreenCapture.CapabilityReport
     /// Throw `ScreenCapture.CaptureError` to surface a typed domain error.
     func sources(filter: ScreenCapture.SourceFilter) async throws -> ScreenCapture.SourceList
+    func watch_sources(filter: ScreenCapture.SourceFilter) -> AsyncThrowingStream<ScreenCapture.SourceChange, Error>
     /// Throw `ScreenCapture.CaptureError` to surface a typed domain error.
     func access(scope: ScreenCapture.AccessScope) async throws -> ScreenCapture.AccessState
     /// Throw `ScreenCapture.CaptureError` to surface a typed domain error.
@@ -268,6 +269,8 @@ public protocol ScreenCaptureCodecs {
     func writeSource(_ out: inout Data, _ value: ScreenCapture.Source)
     func readSourceCapture(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceCapture
     func writeSourceCapture(_ out: inout Data, _ value: ScreenCapture.SourceCapture)
+    func readSourceChange(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceChange
+    func writeSourceChange(_ out: inout Data, _ value: ScreenCapture.SourceChange)
     func readSourceFilter(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceFilter
     func writeSourceFilter(_ out: inout Data, _ value: ScreenCapture.SourceFilter)
     func readSourceFlags(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceFlags
@@ -350,6 +353,20 @@ public final class ScreenCaptureDispatcher: PluginHandler, HandleReleaser {
                 codecs.writeCaptureError(&errOut, err)
                 throw PluginException(payload: errOut)
             }
+        case "watch_sources":
+            var c = Bincode.Cursor(payload)
+            let filter = try codecs.readSourceFilter(&c)
+            let codecs = self.codecs
+            return PluginResult.encoding(backend.watch_sources(filter: filter), encode: { item in
+                var out = Data()
+                codecs.writeSourceChange(&out, item)
+                return out
+            }, mapError: { error in
+                guard let err = error as? ScreenCapture.CaptureError else { return error }
+                var errOut = Data()
+                codecs.writeCaptureError(&errOut, err)
+                return PluginException(payload: errOut)
+            })
         case "access":
             do {
                 var c = Bincode.Cursor(payload)

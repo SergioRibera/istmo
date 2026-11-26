@@ -1,14 +1,17 @@
-//! Rust client sugar: sessions that bundle their sinks and events, and
-//! screenshot helpers.
+//! Rust client sugar: sessions that bundle their sinks and events, a
+//! source watch that keeps the current listing, and screenshot helpers.
 
 use std::sync::Arc;
 
-use istmo_core::{FrameSink, NativeFrame, NativeHandle, Runtime, SinkPolicy, TypedStream};
+use istmo_core::{
+    FrameSink, IstmoError, NativeFrame, NativeHandle, Runtime, SinkPolicy, StreamItem, TypedStream,
+};
 
 use crate::ScreenCaptureClient;
 use crate::types::{
-    AudioMeta, CaptureError, CaptureEvent, CaptureSessionTag, FrameMeta, NegotiatedStream,
-    PixelLayout, RawImage, ScreenshotInfo, ScreenshotRequest, SessionConfig, SessionUpdate,
+    AudioMeta, BackendDetail, CaptureError, CaptureEvent, CaptureSessionTag, FrameMeta,
+    NegotiatedStream, PixelLayout, RawImage, ScreenshotInfo, ScreenshotRequest, SessionConfig,
+    SessionUpdate, Source, SourceChange, SourceFilter,
 };
 
 /// A live session: the owned handle (dropping it closes the session),
@@ -93,6 +96,68 @@ impl SessionHandle {
     }
 }
 
+/// A source watch that keeps the current listing: every change it hands
+/// out is already applied to [`sources`](Self::sources).
+#[derive(Debug)]
+pub struct SourceWatch {
+    stream: TypedStream<SourceChange, CaptureError>,
+    sources: Vec<Source>,
+}
+
+impl SourceWatch {
+    /// The sources as of the last change received.
+    #[must_use]
+    pub fn sources(&self) -> &[Source] {
+        &self.sources
+    }
+
+    /// Block for the next change. `None` once the watch ended (the
+    /// stream completed or was cancelled).
+    ///
+    /// # Errors
+    /// What ended the watch (the compositor or server went away), or a
+    /// transport failure.
+    pub fn recv(&mut self) -> Option<Result<SourceChange, CaptureError>> {
+        let item = self.stream.recv();
+        self.take(item)
+    }
+
+    /// Async variant of [`recv`](Self::recv).
+    ///
+    /// # Errors
+    /// As [`recv`](Self::recv).
+    pub async fn recv_async(&mut self) -> Option<Result<SourceChange, CaptureError>> {
+        let item = self.stream.recv_async().await;
+        self.take(item)
+    }
+
+    /// The next change if one is queued.
+    ///
+    /// # Errors
+    /// As [`recv`](Self::recv).
+    pub fn try_recv(&mut self) -> Option<Result<SourceChange, CaptureError>> {
+        let item = self.stream.try_recv()?;
+        self.take(item)
+    }
+
+    fn take(
+        &mut self,
+        item: Result<StreamItem<SourceChange, CaptureError>, IstmoError>,
+    ) -> Option<Result<SourceChange, CaptureError>> {
+        match item {
+            Ok(StreamItem::Event(change)) => {
+                change.apply(&mut self.sources);
+                Some(Ok(change))
+            }
+            Ok(StreamItem::Failed(err)) => Some(Err(err)),
+            Ok(StreamItem::Completed | StreamItem::Cancelled) | Err(IstmoError::ChannelClosed) => {
+                None
+            }
+            Err(err) => Some(Err(CaptureError::from(err))),
+        }
+    }
+}
+
 /// Session and screenshot helpers on `Arc<ScreenCaptureClient>`.
 pub trait ScreenCaptureClientExt {
     /// Open a video sink with `policy`, then a session feeding it.
@@ -139,6 +204,17 @@ pub trait ScreenCaptureClientExt {
         request: ScreenshotRequest,
         layout: PixelLayout,
     ) -> impl std::future::Future<Output = Result<RawImage, CaptureError>> + Send;
+
+    /// Watch the sources `filter` admits, keeping the current listing.
+    /// Returns once the first listing arrived.
+    ///
+    /// # Errors
+    /// The host's refusal (a remote caller, no backend), or a transport
+    /// failure.
+    fn source_watch(
+        &self,
+        filter: SourceFilter,
+    ) -> impl std::future::Future<Output = Result<SourceWatch, CaptureError>> + Send;
 }
 
 /// Frames a multi-monitor screenshot can return at most (one per
@@ -219,6 +295,25 @@ impl ScreenCaptureClientExt for Arc<ScreenCaptureClient> {
         self.screenshot_pixels(request, layout)
             .await
             .map_err(CaptureError::from)
+    }
+
+    async fn source_watch(&self, filter: SourceFilter) -> Result<SourceWatch, CaptureError> {
+        let stream = self.watch_sources(filter).map_err(CaptureError::from)?;
+        let mut watch = SourceWatch {
+            stream,
+            sources: Vec::new(),
+        };
+        match watch.recv_async().await {
+            Some(Ok(SourceChange::Listed(_))) => Ok(watch),
+            Some(Err(err)) => Err(err),
+            // The host always lists first; anything else is a broken
+            // stream.
+            Some(Ok(_)) | None => Err(CaptureError::Protocol(BackendDetail {
+                backend: None,
+                step: "watch_sources".to_owned(),
+                message: "the watch did not start with a listing".to_owned(),
+            })),
+        }
     }
 }
 

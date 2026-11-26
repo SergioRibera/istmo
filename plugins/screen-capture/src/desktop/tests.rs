@@ -327,6 +327,57 @@ fn listed_only_windows_name_their_pickers_and_refuse_ids() {
 }
 
 #[test]
+fn a_source_watch_lists_then_follows_changes_until_dropped() {
+    let (updates, script) = flume::unbounded();
+    let mut wlr = Fake::new(WLR, two_monitors());
+    wlr.watch = Some(script);
+    let rig = rig_with(vec![wlr], CapturePolicy::default());
+    let mut watch = block(rig.client.source_watch(SourceFilter::default())).expect("watch");
+    assert_eq!(watch.sources(), &two_monitors()[..]);
+    // The second monitor goes, a window opens.
+    let window = crate::types::Source::new(
+        crate::types::SourceId::new(WLR, "toplevel:w"),
+        SourceKind::Window,
+        "w",
+    );
+    let next = vec![two_monitors()[0].clone(), window.clone()];
+    updates.send(next.clone()).expect("script");
+    let removed = watch.recv().expect("a change").expect("no error");
+    assert_eq!(
+        removed,
+        crate::types::SourceChange::Removed(two_monitors()[1].id.clone())
+    );
+    let added = watch.recv().expect("a change").expect("no error");
+    assert_eq!(added, crate::types::SourceChange::Added(window));
+    assert_eq!(watch.sources(), &next[..]);
+    // Dropping the watch ends its thread: only the fake's own receiver
+    // is left.
+    drop(watch);
+    wait_until("the watch thread to end", || updates.receiver_count() == 1);
+}
+
+#[test]
+fn a_source_watch_reports_what_ended_it() {
+    let (updates, script) = flume::unbounded::<Vec<crate::types::Source>>();
+    let mut wlr = Fake::new(WLR, two_monitors());
+    wlr.watch = Some(script.clone());
+    let scripted = rig_with(vec![wlr], CapturePolicy::default());
+    let mut watch = block(scripted.client.source_watch(SourceFilter::default())).expect("watch");
+    drop((updates, script));
+    assert_eq!(
+        watch.recv().expect("the end"),
+        Err(CaptureError::SourceLost)
+    );
+    // A backend that cannot watch says so at once.
+    let rig = rig();
+    let err = block(rig.client.source_watch(SourceFilter::default())).expect_err("no watch");
+    assert_eq!(
+        err,
+        CaptureError::unsatisfiable(Some(WLR), Requirement::Operation)
+    );
+}
+
+#[test]
 fn a_picker_only_backend_needs_allow_picker() {
     let mut portal = Fake::new(BackendId::LinuxPortal, two_monitors());
     portal.listing = SourceListing::PickerOnly;

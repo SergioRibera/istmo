@@ -205,6 +205,29 @@ safe `drm` crate.
     saying what the backend captures, not what it lists.
   - Origin rule unchanged: `sources` is local unless the policy opens
     it.
+- `watch_sources(filter)` (`#[stream]`, always local): `Listed(SourceList)`
+  first, then `Added(Source)`, `Changed(Source)`, `Removed(SourceId)`.
+  - The backend's watcher publishes whole listings on its own thread
+    (`Backend::watch`, one thread per subscriber); the host diffs them
+    by id (`SourceChange::between`: removals, additions, changes) and
+    names the pickers, so every backend shares the same diff and filter.
+    A subscriber that leaves is noticed within 250 ms.
+  - Wayland: one connection keeps the toplevel list bound and binds
+    outputs plugged in later (with their xdg-output); a removed output
+    leaves `outputs` too. Every relevant event bumps a counter; after one,
+    two round trips let the batch (`done`, xdg-output) finish before
+    listing. Outputs are listed only once described (`done`, plus the
+    logical size with xdg-output), so no 0×0 monitor appears mid-plug.
+  - X11: the root window's property, structure and substructure events,
+    property and structure events of every listed window, and `RandR`
+    screen / output / CRTC / output-property notifications. Any event
+    relists after 30 ms; the diff drops no-op relistings.
+  - Backends without a watcher (portal) answer
+    `Unsatisfiable(Operation)`.
+  - Rust sugar: `ScreenCaptureClientExt::source_watch` returns a
+    `SourceWatch` that applies each change to its own list.
+  - Probe-cache invalidation does not use the watch yet (the 5 s bound
+    and the vanished-source drop stay).
 
 ## Goals
 
@@ -304,6 +327,10 @@ pub trait ScreenCapture {
     /// Monitors, windows, applications capturable without a picker.
     /// Same origin rule as capture (titles and pids are sensitive).
     async fn sources(&self, filter: SourceFilter) -> Result<SourceList, CaptureError>;
+
+    /// `sources`, then every change to it (local only).
+    #[stream]
+    fn watch_sources(&self, filter: SourceFilter) -> Result<SourceChange, CaptureError>;
 
     /// Standing grants (TCC, Windows borderless, Android notifications),
     /// without prompting.

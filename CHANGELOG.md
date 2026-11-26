@@ -24,6 +24,12 @@
   outputs only (wlr-screencopy, niri). `Source::capture`
   (`SourceCapture::ById` / `PickerOnly(backends)`) says whether an id
   captures it or only a picker of those backends can.
+- Screen capture `watch_sources` (stream, same-process only): the source
+  listing, then `Added` / `Changed` / `Removed` as monitors are plugged
+  or reconfigured (Wayland `wl_output` / xdg-output, X11 `RandR`) and
+  windows open, close, retitle or refocus. Rust sugar
+  `ScreenCaptureClientExt::source_watch` keeps the current list
+  (`SourceWatch`). Android and iOS answer `NoBackendCompiled`.
 - `istmo-media` crate: message types that mean the same in several media
   plugins (for now `AccessStatus`, used by camera and screen capture).
   Each shared type is generated once per app (Kotlin package

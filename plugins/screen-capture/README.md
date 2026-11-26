@@ -184,6 +184,23 @@ says which is which:
   `Unsatisfiable(WindowById)`; a picker of one of `backends` (the
   portal, with `allow_picker`) can capture it.
 
+`watch_sources` streams the same listing as it changes: `Listed` first,
+then `Added`, `Changed` (title, geometry, mode, focus) and `Removed`.
+It is local-only whatever the policy. `source_watch` keeps the current
+list for you:
+
+```rust,ignore
+let mut watch = client.source_watch(SourceFilter::default()).await?;
+println!("{} sources", watch.sources().len());
+while let Some(change) = watch.recv() {
+    println!("{:?}; now {} sources", change?, watch.sources().len());
+}
+```
+
+Wayland watches follow output hot-plug (`wl_output` / xdg-output) and
+the toplevel list; X11 watches follow the root window, every listed
+window and `RandR`.
+
 ## Consent
 
 Direct Wayland and X11 capture need no consent. The portal shows its
@@ -206,7 +223,7 @@ The generated clients offer the control plane:
 
 - `backends`
 - `capabilities`
-- `sources`
+- `sources`, `watch_sources`
 - `screenshot_pixels`
 - `open_preview`
 - updates and events
