@@ -4,6 +4,8 @@
 //! library (`ISTMO_SC_TEST_PIPEWIRE`), since an audio session through
 //! the public API would also need a video backend.
 
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use istmo_screen_capture::{

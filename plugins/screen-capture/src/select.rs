@@ -2,6 +2,14 @@
 //! against the capability report, and format-tier negotiation with
 //! in-band downgrades. Pure functions, shared by every host.
 
+#![cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "only the Linux backends negotiate tiers and cursors so far"
+    )
+)]
+
 use std::sync::Once;
 
 use crate::policy::CapturePolicy;

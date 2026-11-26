@@ -11,6 +11,11 @@
 //! from an older pool generation are inert: the reallocation already
 //! forgot them.
 
+#![cfg_attr(
+    not(target_os = "linux"),
+    allow(dead_code, reason = "only the Linux backends own buffer pools so far")
+)]
+
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::types::BufferIdentity;

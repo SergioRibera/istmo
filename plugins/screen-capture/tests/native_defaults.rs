@@ -114,12 +114,12 @@ fn kotlin_defaults_match_rust() {
     for text in &expected {
         contains(file, &kotlin, text);
     }
-    assert!(video.formats.tiers.is_empty() && video.exclude.is_empty());
+    assert_eq!(video.formats.tiers.len() + video.exclude.len(), 0);
     contains(file, &kotlin, "formats = FormatRequest(emptyList())");
     let BackendSelection::Auto(AutoSelect { prefer, exclude }) = BackendSelection::default() else {
         panic!("the default selection is Auto");
     };
-    assert!(exclude.is_empty());
+    assert_eq!(exclude.len(), 0);
     contains(
         file,
         &kotlin,

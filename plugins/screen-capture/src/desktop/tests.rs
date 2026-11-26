@@ -756,7 +756,7 @@ fn restore_tokens_never_travel_in_events() {
         .update(session.session, &SessionUpdate::Pause, CallOrigin::Local)
         .expect("update");
     let events = drain_events(&engine.events(session.session, CallOrigin::Local));
-    assert!(!events.is_empty());
+    assert_ne!(events.len(), 0);
     for event in events {
         match event.expect("event") {
             CaptureEvent::Started(stream) | CaptureEvent::Renegotiated(stream) => {
@@ -817,7 +817,7 @@ fn remote_streams_carry_no_titles_or_tokens() {
     let (session, _sink) = open_on(&runtime, &engine, CallOrigin::Remote);
     let stream = session.negotiated;
     assert!(stream.restore_token.is_none());
-    assert!(stream.source.name.is_empty());
+    assert_eq!(stream.source.name, "");
     assert!(stream.source.app_id.is_none() && stream.source.pid.is_none());
     let (local, _sink) = open_on(&runtime, &engine, CallOrigin::Local);
     assert_eq!(local.negotiated.source.name, "OUT-0");

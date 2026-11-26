@@ -54,14 +54,22 @@ impl Workers {
     }
 
     fn grow(&'static self) {
-        let reserved = self
-            .live
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
-                (live < MAX_WORKERS).then_some(live + 1)
-            })
-            .is_ok();
-        if !reserved {
-            return;
+        // Reserve a thread slot (a compare-exchange loop: `fetch_update` is
+        // deprecated on newer toolchains, `try_update` too new for the MSRV).
+        let mut live = self.live.load(Ordering::Acquire);
+        loop {
+            if live >= MAX_WORKERS {
+                return;
+            }
+            match self.live.compare_exchange_weak(
+                live,
+                live + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(now) => live = now,
+            }
         }
         let spawned = std::thread::Builder::new()
             .name("istmo-screen-capture-worker".to_owned())

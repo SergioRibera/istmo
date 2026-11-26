@@ -9,6 +9,8 @@
 //! Both expect `ISTMO_SCREEN_CAPTURE_FULL_COPY=1` so an idle screen still
 //! produces frames.
 
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use istmo_core::{MemoryKind, SinkPolicy};
