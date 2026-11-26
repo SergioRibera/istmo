@@ -14,11 +14,21 @@ links = "istmo_screen_capture"
 
 [features]
 # Every Linux backend except KMS (KMS is opt-in twice: its feature and
-# `CapturePolicy::allow_kms`). The dependencies are gated on
-# `target_os = "linux"`, so these features are inert elsewhere: a build
-# with no backend for its target answers `NoBackendCompiled` at run time
-# instead of failing to compile.
-default = ["linux-portal", "linux-ext-image-copy", "linux-wlr-screencopy", "linux-x11", "linux-audio"]
+# `CapturePolicy::allow_kms`), and every Windows backend. The
+# dependencies are gated on their target OS, so these features are inert
+# elsewhere: a build with no backend for its target answers
+# `NoBackendCompiled` at run time instead of failing to compile.
+default = [
+    "linux-portal",
+    "linux-ext-image-copy",
+    "linux-wlr-screencopy",
+    "linux-x11",
+    "linux-audio",
+    "windows-wgc",
+    "windows-dxgi",
+    "windows-gdi",
+    "windows-audio",
+]
 # xdg-desktop-portal ScreenCast + PipeWire video (DMA-BUF zero-copy with
 # the compositor's dmabuf feedback, explicit sync through DRM syncobjs).
 # Needs libpipewire at build time (pkg-config, bindgen) and at run time.
@@ -38,6 +48,18 @@ wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols
 dmabuf-alloc = ["dep:gbm", "dep:drm", "dep:drm-fourcc"]
 # Internal: the PipeWire client shared by portal video and audio.
 pipewire = ["dep:pipewire", "dep:libspa"]
+# Windows.Graphics.Capture: monitors and windows as D3D11 textures
+# (Windows 10 1903+).
+windows-wgc = ["windows-common"]
+# DXGI Desktop Duplication: monitors, one mandatory GPU copy per frame.
+windows-dxgi = ["windows-common"]
+# GDI `BitBlt` / `PrintWindow`: CPU frames, the last resort.
+windows-gdi = ["windows-common"]
+# System and per-process loopback audio through WASAPI.
+windows-audio = ["windows-common"]
+# Internal: the Win32 / WinRT bindings, D3D11 helpers and the source
+# listing every Windows backend shares.
+windows-common = ["dep:windows", "dep:windows-core", "dep:windows-future", "dep:windows-collections"]
 
 [dependencies]
 istmo-core = { workspace = true }
@@ -66,6 +88,46 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = tru
 x11rb = { version = "0.14", default-features = false, features = ["randr", "xfixes", "shm", "composite", "damage"], optional = true }
 # Timers for the portal dialog wait (ashpd already runs on async-io).
 async-io = { version = "2.6", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+    "Foundation",
+    "Foundation_Metadata",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Security_Authorization_AppCapabilityAccess",
+    "Wdk_System_SystemServices",
+    "Win32_Devices_Display",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = { version = "0.62", optional = true }
+# `IAsyncOperation::get` (the borderless consent prompt).
+windows-future = { version = "0.3", default-features = false, features = ["std"], optional = true }
+# `IVectorView` (WGC dirty regions).
+windows-collections = { version = "0.3", optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }
