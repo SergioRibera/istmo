@@ -46,6 +46,7 @@ const KNOWN_PLUGIN_KEYS: &[&str] = &[
     "android_package",
     "android_backend",
     "android_backend_arg",
+    "android_start_in_place",
     "ios_backend",
 ];
 
@@ -234,10 +235,7 @@ fn parse_plugin_entry(
         }
         None => Deployment::Local,
     };
-    let auto_register = match table.get("auto_register") {
-        Some(item) => expect_bool(item, "plugin.auto_register")?,
-        None => true,
-    };
+    let auto_register = bool_or(table, "auto_register", "plugin.auto_register", true)?;
     if let Some(item) = table.get("gradle") {
         for entry in expect_array_of_tables(item, "plugin.gradle")? {
             native_deps.add_gradle(&parse_gradle(entry, "plugin.gradle")?);
@@ -294,6 +292,12 @@ fn parse_plugin_entry(
             .transpose()?,
         android_backend: optional_string("android_backend", "plugin.android_backend")?,
         android_backend_arg,
+        android_start_in_place: bool_or(
+            table,
+            "android_start_in_place",
+            "plugin.android_start_in_place",
+            true,
+        )?,
         ios_backend: optional_string("ios_backend", "plugin.ios_backend")?,
         android_permissions,
         android_queries,
@@ -931,4 +935,16 @@ fn parse_android_queries(item: &Item) -> Result<Vec<AndroidQuery>, ManifestError
             }
         })
         .collect()
+}
+
+/// `table[key]` as a boolean, `default` when absent.
+fn bool_or(
+    table: &Table,
+    key: &str,
+    full: &'static str,
+    default: bool,
+) -> Result<bool, ManifestError> {
+    table
+        .get(key)
+        .map_or(Ok(default), |item| expect_bool(item, full))
 }

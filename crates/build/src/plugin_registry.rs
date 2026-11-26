@@ -47,6 +47,9 @@ pub struct RegistryEntry {
     /// means `<T>BackendImpl` / `<T>FactoryImpl` in the plugin's package.
     pub android_class: Option<String>,
     pub android_arg: AndroidBackendArg,
+    /// Register with `startInPlace = true` (the runtime default); `false`
+    /// when the plugin sets `android_start_in_place = false`.
+    pub android_start_in_place: bool,
     /// Swift type passed to the dispatcher; `None` means
     /// `<T>BackendImpl` / `<T>FactoryImpl`.
     pub ios_class: Option<String>,
@@ -68,6 +71,7 @@ impl RegistryEntry {
             android_package: None,
             android_class: None,
             android_arg: AndroidBackendArg::Context,
+            android_start_in_place: true,
             ios_class: None,
         })
     }
@@ -79,6 +83,7 @@ impl RegistryEntry {
         self.android_package.clone_from(&plugin.android_package);
         self.android_class.clone_from(&plugin.android_backend);
         self.android_arg = plugin.android_backend_arg.clone();
+        self.android_start_in_place = plugin.android_start_in_place;
         self.ios_class.clone_from(&plugin.ios_backend);
         self
     }
@@ -126,6 +131,9 @@ impl RegistryEntry {
         writeln!(out, "{indent}        {backend},").ok();
         writeln!(out, "{indent}        {package}.{ty}CodecsImpl(),").ok();
         writeln!(out, "{indent}    ),").ok();
+        if !self.android_start_in_place {
+            writeln!(out, "{indent}    startInPlace = false,").ok();
+        }
         writeln!(out, "{indent})").ok();
     }
 
@@ -360,6 +368,7 @@ mod tests {
             android_package: None,
             android_class: None,
             android_arg: AndroidBackendArg::Context,
+            android_start_in_place: true,
             ios_class: None,
         }
     }
@@ -411,6 +420,20 @@ mod tests {
         let src = generate_kotlin_plugin_registry("com.example.gen", &[entry("A", true)]);
         assert!(src.contains("com.example.gen.AFactoryImpl(appContext)"));
         assert!(!src.contains("ABackendImpl"));
+    }
+
+    #[test]
+    fn kotlin_registry_passes_the_start_in_place_opt_out() {
+        let opted_out = RegistryEntry {
+            android_start_in_place: false,
+            ..entry("A", false)
+        };
+        let src =
+            generate_kotlin_plugin_registry("com.example.gen", &[opted_out, entry("B", false)]);
+        assert_eq!(src.matches("startInPlace = false").count(), 1);
+        let at = src.find("startInPlace = false").unwrap();
+        assert!(src[..at].contains("ADispatcher.PLUGIN_ID"));
+        assert!(!src[..at].contains("BDispatcher.PLUGIN_ID"));
     }
 
     #[test]

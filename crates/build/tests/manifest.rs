@@ -408,6 +408,16 @@ fn parses_backend_overrides() {
 }
 
 #[test]
+fn parses_plugin_android_start_in_place() {
+    let default = Manifest::parse("[plugin]\nid = \"a\"\n").unwrap();
+    assert!(default.plugins[0].android_start_in_place);
+    let opted_out =
+        Manifest::parse("[plugin]\nid = \"a\"\nandroid_start_in_place = false\n").unwrap();
+    assert!(!opted_out.plugins[0].android_start_in_place);
+    assert!(Manifest::parse("[plugin]\nid = \"a\"\nandroid_start_in_place = \"no\"\n").is_err());
+}
+
+#[test]
 fn parses_plugin_android_package() {
     let manifest = Manifest::parse(
         "[plugin]\nid = \"istmo.share\"\nandroid_package = \"dev.istmo.plugins.share\"\n",

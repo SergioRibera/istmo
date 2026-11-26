@@ -57,6 +57,7 @@ impl Default for PluginEntry {
             android_package: None,
             android_backend: None,
             android_backend_arg: AndroidBackendArg::default(),
+            android_start_in_place: true,
             ios_backend: None,
             android_permissions: Vec::new(),
             android_queries: Vec::new(),
@@ -116,6 +117,12 @@ pub struct PluginEntry {
 
     /// What that class's constructor receives.
     pub android_backend_arg: AndroidBackendArg,
+
+    /// `android_start_in_place` (default `true`): a unary call Rust
+    /// makes starts the backend on the Rust caller's thread until its
+    /// first suspension. `false` registers it with `startInPlace =
+    /// false`, so every call starts on `Dispatchers.Default`.
+    pub android_start_in_place: bool,
 
     /// Swift type handed to the generated dispatcher. Defaults to
     /// `<T>BackendImpl` / `<T>FactoryImpl`.
