@@ -319,7 +319,9 @@ impl<'a> CpuView<'a> {
         orientation: Orientation,
         layout: PixelLayout,
     ) -> Result<Pixels, PixelError> {
-        if !Rect::from_size(self.size).contains(crop) || crop.x < 0 || crop.y < 0 {
+        // An empty crop has no rows to cut (and a zero stride to walk).
+        if crop.is_empty() || !Rect::from_size(self.size).contains(crop) || crop.x < 0 || crop.y < 0
+        {
             return Err(PixelError::CropOutside {
                 crop,
                 size: self.size,
@@ -380,6 +382,25 @@ impl<'a> CpuView<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_crop_is_refused_not_walked() {
+        let bytes = pattern();
+        let view = CpuView::new(&bytes, Size::new(3, 2), 12, PixelFormat::Bgrx8).expect("view");
+        for crop in [
+            Rect::new(0, 0, 0, 2),
+            Rect::new(1, 1, 2, 0),
+            Rect::new(0, 0, 0, 0),
+        ] {
+            assert!(
+                matches!(
+                    view.convert(crop, Orientation::UPRIGHT, PixelLayout::default()),
+                    Err(PixelError::CropOutside { .. })
+                ),
+                "{crop:?}"
+            );
+        }
+    }
 
     /// A 3×2 Bgrx8 image whose pixel (x, y) has red = 10·y + x.
     fn pattern() -> Vec<u8> {
