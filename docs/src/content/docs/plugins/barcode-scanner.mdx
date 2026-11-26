@@ -75,6 +75,9 @@ from iOS 15.4. A requested format the platform cannot read is ignored.
 variant arrive as `BarcodeFormat::Other`, which never matches anything
 when requested. On Android, a `formats` list made only of `Other`
 fails with `Backend` instead of widening the scan to every format.
+A native backend older than the app's Rust side sees a format added
+later as Kotlin `BarcodeFormat.Unknown` / Swift `.unknown` and treats it
+like `Other`.
 
 ### Payload
 

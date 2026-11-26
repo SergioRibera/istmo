@@ -77,6 +77,9 @@ simbología no tiene variante llegan como `BarcodeFormat::Other`, que
 nunca coincide con nada al pedirlo. En Android, una lista `formats`
 formada solo por `Other` falla con `Backend` en lugar de ampliar el
 escaneo a todos los formatos.
+Un backend nativo más antiguo que el lado Rust de la app ve un formato
+añadido después como `BarcodeFormat.Unknown` en Kotlin / `.unknown` en
+Swift y lo trata como `Other`.
 
 ### Contenido
 
