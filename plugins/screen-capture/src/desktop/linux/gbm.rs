@@ -10,7 +10,7 @@
 //! LINEAR render targets).
 
 use std::fs::File;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -79,8 +79,19 @@ pub(crate) fn is_nvidia(dev_t: u64) -> bool {
         .unwrap_or(false)
 }
 
-/// Every fd the plugin hands out is close-on-exec, whatever the driver
-/// did.
+/// A render node as a DRM device (PRIME export needs the trait).
+pub(crate) struct Node(File);
+
+impl AsFd for Node {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.0.as_fd()
+    }
+}
+
+impl drm::Device for Node {}
+impl drm::control::Device for Node {}
+
+/// Close-on-exec after the fact, for the fallback export path only.
 fn cloexec(fd: &OwnedFd) -> Result<(), AllocError> {
     let flags = rustix::io::fcntl_getfd(fd).map_err(|e| AllocError::Export(e.to_string()))?;
     rustix::io::fcntl_setfd(fd, flags | rustix::io::FdFlags::CLOEXEC)
@@ -89,7 +100,7 @@ fn cloexec(fd: &OwnedFd) -> Result<(), AllocError> {
 
 /// A GBM device on one render node.
 pub(crate) struct Allocator {
-    device: gbm::Device<File>,
+    device: gbm::Device<Node>,
     /// `st_rdev` of the render node: the producer GPU.
     pub(crate) dev_t: u64,
 }
@@ -116,7 +127,7 @@ impl Allocator {
                 .open(node)
                 .ok()?;
             let dev_t = file.metadata().ok()?.rdev();
-            let device = gbm::Device::new(file).ok()?;
+            let device = gbm::Device::new(Node(file)).ok()?;
             Some(Self { device, dev_t })
         };
         let nodes = render_nodes();
@@ -165,13 +176,14 @@ impl Allocator {
             )
             .map_err(|e| refused(e.to_string()))?;
         let modifier = u64::from(bo.modifier());
+        let handles = drm::buffer::PlanarBuffer::handles(&bo);
         let planes = (0..bo.plane_count().max(1))
             .map(|plane| {
                 let index = i32::try_from(plane).unwrap_or(0);
-                let fd = bo
-                    .fd_for_plane(index)
-                    .map_err(|e| AllocError::Export(e.to_string()))?;
-                cloexec(&fd)?;
+                let handle = usize::try_from(plane)
+                    .ok()
+                    .and_then(|i| handles.get(i).copied().flatten());
+                let fd = self.export(&bo, index, handle)?;
                 let size = rustix::fs::seek(&fd, rustix::fs::SeekFrom::End(0)).ok();
                 Ok(DmaBufPlane {
                     fd,
@@ -191,6 +203,36 @@ impl Allocator {
             }),
             _bo: bo,
         })
+    }
+
+    /// One plane of `bo` as a DMA-BUF fd, close-on-exec from creation:
+    /// PRIME export of the GEM handle with `DRM_CLOEXEC`. A driver whose
+    /// GBM handles cannot be exported that way falls back to GBM's own
+    /// export (which Mesa and NVIDIA open with `O_CLOEXEC` too) and the
+    /// flag is set again.
+    fn export(
+        &self,
+        bo: &gbm::BufferObject<()>,
+        plane: i32,
+        handle: Option<drm::buffer::Handle>,
+    ) -> Result<OwnedFd, AllocError> {
+        if let Some(handle) = handle {
+            match drm::control::Device::buffer_to_prime_fd(
+                &*self.device,
+                handle,
+                drm::CLOEXEC | drm::RDWR,
+            ) {
+                Ok(fd) => return Ok(fd),
+                Err(err) => {
+                    tracing::debug!(%err, "screen-capture: PRIME export refused; using GBM's");
+                }
+            }
+        }
+        let fd = bo
+            .fd_for_plane(plane)
+            .map_err(|e| AllocError::Export(e.to_string()))?;
+        cloexec(&fd)?;
+        Ok(fd)
     }
 }
 

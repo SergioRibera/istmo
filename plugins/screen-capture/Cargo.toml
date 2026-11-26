@@ -34,7 +34,7 @@ linux-audio = ["pipewire"]
 wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr"]
 # Internal: GBM DMA-BUF pools for the direct Wayland backends (links
 # libgbm, which every Mesa / NVIDIA desktop install ships).
-dmabuf-alloc = ["dep:gbm", "dep:drm-fourcc"]
+dmabuf-alloc = ["dep:gbm", "dep:drm", "dep:drm-fourcc"]
 # Internal: the PipeWire client shared by portal video and audio.
 pipewire = ["dep:pipewire", "dep:libspa"]
 
@@ -52,6 +52,8 @@ rustix = { version = "1.1", default-features = false, features = ["std", "time",
 ashpd = { version = "0.14", default-features = false, features = ["async-io", "screencast"], optional = true }
 # Blocks on the portal's D-Bus futures on the backend's own threads.
 pollster = { workspace = true, optional = true }
+# PRIME export with DRM_CLOEXEC, so no exported fd ever lacks it.
+drm = { version = "0.14", optional = true }
 drm-fourcc = { version = "2.2", optional = true }
 gbm = { version = "0.18", default-features = false, features = ["drm-support"], optional = true }
 libspa = { version = "0.10", optional = true }

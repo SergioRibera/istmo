@@ -234,6 +234,14 @@ fn dma_buf_stream(live: &common::Live, backend: BackendId, sync: SyncKind, poke:
             continue;
         };
         assert_eq!(frame.buffer.kind(), MemoryKind::DmaBuf);
+        let dmabuf = frame.buffer.dmabuf().expect("DMA-BUF backing");
+        for plane in &dmabuf.planes {
+            let flags = rustix::io::fcntl_getfd(&plane.fd).expect("fd flags");
+            assert!(
+                flags.contains(rustix::io::FdFlags::CLOEXEC),
+                "{backend}: fd without CLOEXEC"
+            );
+        }
         assert!(frame.meta.copied.is_none());
         assert!(frame.meta.modifier.is_some());
         identities.push(frame.meta.buffer);
