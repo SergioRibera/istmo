@@ -1,0 +1,55 @@
+name: screen-capture
+
+# Runs the screen-capture plugin against real display servers: headless
+# sway (wlr-screencopy and ext-image-copy) and Xvfb (X11), plus its unit
+# tests with every Linux backend compiled. Everything comes from nixpkgs
+# through the repo's flake, the same way the scripts run on a dev box.
+# The portal needs a person at a dialog and is not run here.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plugins/screen-capture/**"
+      - "crates/core/**"
+      - "crates/macros/**"
+      - "scripts/test-screen-capture-*.sh"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/screen-capture.yml"
+  pull_request:
+    paths:
+      - "plugins/screen-capture/**"
+      - "crates/core/**"
+      - "crates/macros/**"
+      - "scripts/test-screen-capture-*.sh"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/screen-capture.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: screen-capture-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  headless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy, every Linux backend
+        run: nix develop --command cargo clippy -p istmo-screen-capture --all-targets -- -D warnings
+      - name: Unit and fake-backend tests
+        run: nix develop --command cargo test -p istmo-screen-capture
+      - name: X11 under Xvfb
+        run: scripts/test-screen-capture-x11.sh
+      - name: wlr-screencopy and ext-image-copy under headless sway
+        run: scripts/test-screen-capture-sway.sh
