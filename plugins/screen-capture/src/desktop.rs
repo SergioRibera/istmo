@@ -16,6 +16,8 @@ mod engine;
 mod fake;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 mod offload;
 mod output;
 #[cfg(any(all(target_os = "macos", feature = "macos-sck"), test))]
@@ -41,6 +43,8 @@ use crate::types::{
 };
 
 use self::engine::Engine;
+#[cfg(all(target_os = "macos", feature = "macos-sck"))]
+pub use self::macos::IoSurfaceFrame;
 use self::offload::{internal, offload, offload_open, offload_owned};
 
 /// Changes queued per source-watch subscriber before its watcher waits.

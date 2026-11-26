@@ -138,14 +138,12 @@ impl Engine {
     /// The compiled backends of this platform.
     pub(crate) fn platform(policy: CapturePolicy) -> Self {
         #[cfg(target_os = "linux")]
-        let (backends, audio, known, kind) = (
+        let (backends, audio, known, order) = (
             super::linux::backends(),
             super::linux::audio(),
             super::linux::KNOWN.to_vec(),
-            super::linux::session_kind(),
+            super::linux::session_kind().linux_order().to_vec(),
         );
-        #[cfg(target_os = "linux")]
-        let order = kind.linux_order().to_vec();
         #[cfg(all(windows, feature = "windows-common"))]
         let (backends, audio, known, order) = (
             super::windows::backends(),
@@ -153,7 +151,18 @@ impl Engine {
             super::windows::KNOWN.to_vec(),
             super::windows::ORDER.to_vec(),
         );
-        #[cfg(not(any(target_os = "linux", all(windows, feature = "windows-common"))))]
+        #[cfg(target_os = "macos")]
+        let (backends, audio, known, order) = (
+            super::macos::backends(),
+            super::macos::audio(),
+            super::macos::KNOWN.to_vec(),
+            super::macos::KNOWN.to_vec(),
+        );
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "macos",
+            all(windows, feature = "windows-common")
+        )))]
         let (backends, audio, known, order) = (
             Vec::<Arc<dyn Backend>>::new(),
             None::<Arc<dyn AudioBackend>>,

@@ -37,22 +37,36 @@ pub(crate) fn wall_now_us() -> u64 {
 #[must_use]
 pub(crate) fn wall_us_for(pts_ns: u64, clock: PtsClock) -> u64 {
     let wall = wall_now_us();
+    // A clock this platform cannot read: the frame is as old as its
+    // delivery.
+    clock_now_ns(clock).map_or(wall, |now| {
+        wall.saturating_sub(now.saturating_sub(pts_ns) / 1000)
+    })
+}
+
+/// `clock` now, in nanoseconds, where this platform can read it.
+fn clock_now_ns(clock: PtsClock) -> Option<u64> {
     match clock {
-        PtsClock::Monotonic => {
-            let age_us = monotonic_ns().saturating_sub(pts_ns) / 1000;
-            wall.saturating_sub(age_us)
-        }
+        PtsClock::Monotonic => Some(monotonic_ns()),
+        PtsClock::HostTime => host_time_ns(),
         #[cfg(all(windows, feature = "windows-common"))]
-        PtsClock::Qpc => {
-            let age_us = super::windows::os::qpc_now_ns().saturating_sub(pts_ns) / 1000;
-            wall.saturating_sub(age_us)
-        }
-        // No desktop backend on these clocks here: the frame is as old
-        // as its delivery.
+        PtsClock::Qpc => Some(super::windows::os::qpc_now_ns()),
         #[cfg(not(all(windows, feature = "windows-common")))]
-        PtsClock::Qpc => wall,
-        PtsClock::MachContinuous | PtsClock::HostTime | PtsClock::Performance => wall,
+        PtsClock::Qpc => None,
+        PtsClock::MachContinuous | PtsClock::Performance => None,
     }
+}
+
+/// The host time clock (`mach_absolute_time`) now, in nanoseconds.
+#[cfg(all(target_os = "macos", feature = "macos-sck"))]
+fn host_time_ns() -> Option<u64> {
+    super::macos::host_time_ns()
+}
+
+/// No host time clock on this platform.
+#[cfg(not(all(target_os = "macos", feature = "macos-sck")))]
+const fn host_time_ns() -> Option<u64> {
+    None
 }
 
 #[cfg(test)]

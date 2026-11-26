@@ -80,6 +80,8 @@ pub use client::{AudioSessionHandle, ScreenCaptureClientExt, SessionHandle, Sour
 pub use d3d11::D3d11Frame;
 #[cfg(not(target_arch = "wasm32"))]
 pub use desktop::DesktopCapture;
+#[cfg(all(target_os = "macos", feature = "macos-sck"))]
+pub use desktop::IoSurfaceFrame;
 pub use policy::CapturePolicy;
 pub use types::*;
 
