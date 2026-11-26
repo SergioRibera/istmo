@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import android.util.Base64
 import dev.istmo.runtime.BackendException
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * `SharedPreferences` backend: one preferences file per namespace.
@@ -94,10 +96,12 @@ class DataStoreBackendImpl(context: Context, config: DataStoreConfig) : DataStor
         }
     }
 
-    private inline fun commit(edit: (SharedPreferences.Editor) -> Unit) {
+    // `commit` writes the file synchronously, and a call from Rust starts
+    // this backend on the Rust caller's thread: the disk write goes to IO.
+    private suspend inline fun commit(edit: (SharedPreferences.Editor) -> Unit) {
         val editor = prefs.edit()
         edit(editor)
-        if (!editor.commit()) {
+        if (!withContext(Dispatchers.IO) { editor.commit() }) {
             throw BackendException(DataStoreError.Backend("SharedPreferences commit failed"))
         }
     }

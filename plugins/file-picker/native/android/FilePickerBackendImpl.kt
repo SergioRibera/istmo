@@ -20,9 +20,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Reference SAF backend for `istmo.file_picker`.
@@ -144,17 +146,22 @@ class FilePickerBackendImpl(
 
     override suspend fun open_read(file: NativeHandleId): RawFileHandle {
         val uri = files[file] ?: throw BackendException(FilePickerError.NotFound("handle $file"))
-        val pfd = resolver.openFileDescriptor(uri, "r")
+        val pfd = openDescriptor(uri, "r")
             ?: throw BackendException(FilePickerError.Io("openFileDescriptor returned null for $uri"))
         return RawFileHandle(pfd.detachFd().toLong())
     }
 
     override suspend fun open_write(file: NativeHandleId): RawFileHandle {
         val uri = files[file] ?: throw BackendException(FilePickerError.NotFound("handle $file"))
-        val pfd = resolver.openFileDescriptor(uri, "wt")
+        val pfd = openDescriptor(uri, "wt")
             ?: throw BackendException(FilePickerError.Io("openFileDescriptor returned null for $uri"))
         return RawFileHandle(pfd.detachFd().toLong())
     }
+
+    // A content provider (a cloud document) may take seconds to open, and a
+    // call from Rust starts this backend on the Rust caller's thread.
+    private suspend fun openDescriptor(uri: Uri, mode: String) =
+        withContext(Dispatchers.IO) { resolver.openFileDescriptor(uri, mode) }
 
     override suspend fun path(file: NativeHandleId): String? {
         // SAF `content://` URIs are not filesystem paths since API 29.
