@@ -280,7 +280,17 @@ fn emit_changes(
     Ok(())
 }
 
-const fn capabilities() -> TrayCapabilities {
+/// Wayland panels pass coordinates of their own choosing, often 0, 0:
+/// the point says nothing about where the icon is.
+pub(super) fn anchor_precision() -> AnchorPrecision {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        AnchorPrecision::Unreliable
+    } else {
+        AnchorPrecision::ClickPoint
+    }
+}
+
+fn capabilities() -> TrayCapabilities {
     TrayCapabilities {
         backend: TrayBackend::Sni,
         host: HostState::Available,
@@ -310,6 +320,6 @@ const fn capabilities() -> TrayCapabilities {
             scroll: Support::Native,
             menu_open_close: Support::HostDependent,
         },
-        anchor: Some(AnchorPrecision::ClickPoint),
+        anchor: Some(anchor_precision()),
     }
 }

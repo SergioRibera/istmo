@@ -8,9 +8,7 @@ use zbus::object_server::SignalEmitter;
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::host::{Shared, TrayState};
-use crate::{
-    Anchor, AnchorPrecision, Orientation, Pointer, PrimaryAction, Rect, ScrollDelta, TrayEvent,
-};
+use crate::{Anchor, Orientation, Pointer, PrimaryAction, Rect, ScrollDelta, TrayEvent};
 
 /// Pixmap sizes offered: the panel picks the one that fits.
 const SIZES: [u32; 6] = [16, 22, 24, 32, 48, 64];
@@ -51,13 +49,7 @@ impl Item {
     }
 
     fn pointer(x: i32, y: i32) -> Pointer {
-        // Wayland panels pass coordinates of their own choosing, often
-        // 0, 0: the point says nothing about where the icon is.
-        let precision = if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            AnchorPrecision::Unreliable
-        } else {
-            AnchorPrecision::ClickPoint
-        };
+        let precision = super::anchor_precision();
         Pointer {
             anchor: Some(Anchor {
                 rect: Rect {
