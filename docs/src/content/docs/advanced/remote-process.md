@@ -142,6 +142,15 @@ The classifier routes every frame that belongs to a remote plugin:
 they belong to the process's own native side. No per-frame-variant
 special-casing in Kotlin — it just forwards bytes.
 
+Backpressure: what `inject_wire_envelope` *sends* (an inline host's
+frames, an error answer) never waits for room on the outbound channel.
+What it *delivers* does wait: a stream item or end for a local consumer
+whose buffer is full holds the reader until that consumer takes one, so
+a remote producer can never outrun a slow consumer (the bridge has no
+credit of its own). Read a remote stream from a task that does not, in
+between items, wait for something else that arrives over the same
+bridge, or give it a buffer big enough for what it may leave unread.
+
 ## Testing
 
 The Rust primitives are covered by unit tests without an emulator, in

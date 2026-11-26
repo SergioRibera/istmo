@@ -411,6 +411,15 @@ struct RemoteCalls {
 /// While frames are queued that way, it waits for its own frame to
 /// leave the queue.
 ///
+/// That covers the outbound channel only. An inbound stream item or end
+/// for a local consumer with a full buffer is delivered by the thread
+/// that injects it: a plain thread or a bridge's reader waits for room;
+/// the platform transports offer such items and ends first and move
+/// them to a thread that may wait
+/// ([`offer_peer_event`](Self::offer_peer_event),
+/// [`offer_peer_stream_end`](Self::offer_peer_stream_end)). Rust-hosted
+/// streams await room on the async workers.
+///
 /// # Locking
 ///
 /// No mutex of the runtime is acquired while another one is held: every
@@ -1123,6 +1132,14 @@ impl Runtime {
     /// waiting for that reader: the call runs inside a
     /// [`DeliveryScope`], so nothing it sends (an inline host's frames,
     /// an error answer) waits for room on the outbound channel.
+    ///
+    /// What it delivers does wait: a [`Frame::Event`] or
+    /// [`Frame::StreamEnd`] for a local consumer whose buffer is full
+    /// holds the reader until the consumer takes one. That is the only
+    /// backpressure a remote producer gets (the bridge carries no
+    /// credit). A consumer that, between two items, waits for something
+    /// else coming over the same bridge must therefore not let its
+    /// buffer fill up.
     pub fn inject_wire_envelope(self: &Arc<Self>, bytes: &[u8]) -> Result<(), IstmoError> {
         let _reader = DeliveryScope::enter();
         let envelope = Envelope::from_wire_bytes(bytes)?;

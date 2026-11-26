@@ -142,6 +142,16 @@ El clasificador enruta cada frame que pertenece a un plugin remoto:
 lado nativo del propio proceso. Kotlin no trata ninguna variante de
 frame de forma especial — sólo reenvía bytes.
 
+Contrapresión: lo que `inject_wire_envelope` *envía* (los frames de un
+host inline, una respuesta de error) nunca espera lugar en el canal
+saliente. Lo que *entrega* sí espera: un ítem o el final de un stream
+para un consumidor local con el buffer lleno retiene al lector hasta que
+ese consumidor tome uno, así un productor remoto nunca deja atrás a un
+consumidor lento (el puente no tiene crédito propio). Lee un stream
+remoto desde una tarea que, entre ítems, no espere otra cosa que llegue
+por el mismo puente, o dale un buffer suficiente para lo que pueda dejar
+sin leer.
+
 ## Testing
 
 Las primitivas de Rust están cubiertas por tests unitarios sin
