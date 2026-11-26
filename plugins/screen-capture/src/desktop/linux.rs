@@ -4,7 +4,7 @@
 mod ext_image_copy;
 #[cfg(feature = "dmabuf-alloc")]
 mod gbm;
-#[cfg(any(feature = "pipewire", feature = "wayland", feature = "linux-x11"))]
+#[cfg(any(feature = "linux-portal", feature = "wayland", feature = "linux-x11"))]
 mod mapping;
 #[cfg(feature = "pipewire")]
 mod pipewire;
@@ -12,6 +12,8 @@ mod pipewire;
 mod pipewire_audio;
 #[cfg(feature = "linux-portal")]
 mod portal;
+#[cfg(feature = "linux-portal")]
+mod syncobj;
 #[cfg(feature = "wayland")]
 mod wayland;
 #[cfg(feature = "linux-wlr-screencopy")]

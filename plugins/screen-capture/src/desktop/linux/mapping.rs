@@ -13,6 +13,10 @@
     unsafe_code,
     reason = "mmap / munmap of shared-memory frames: the FFI this module wraps"
 )]
+#![allow(
+    dead_code,
+    reason = "each shared-memory backend uses a different part; which depends on the enabled features"
+)]
 
 use std::os::fd::AsFd;
 use std::ptr::NonNull;

@@ -1,8 +1,16 @@
 //! Wayland plumbing shared by the direct backends (wlr-screencopy,
 //! ext-image-copy): one connection with its globals, the outputs
 //! (`wl_output` + xdg-output), `linux-dmabuf` feedback, `wl_shm` buffers
-//! read back without `mmap`, and one dispatch state that handles every
-//! object either backend creates.
+//! handed out as mappings, and one dispatch state that handles every
+//! object either backend creates. The portal uses its dmabuf feedback.
+
+#![cfg_attr(
+    not(any(feature = "linux-wlr-screencopy", feature = "linux-ext-image-copy")),
+    allow(
+        dead_code,
+        reason = "the portal alone uses only the dmabuf feedback and the driver check"
+    )
+)]
 
 pub(crate) mod stream;
 

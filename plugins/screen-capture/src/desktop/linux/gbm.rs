@@ -9,6 +9,14 @@
 //! unless listed, and LINEAR is never assumed (NVIDIA's GBM refuses
 //! LINEAR render targets).
 
+#![cfg_attr(
+    not(any(feature = "linux-wlr-screencopy", feature = "linux-ext-image-copy")),
+    allow(
+        dead_code,
+        reason = "the portal alone uses only the dmabuf feedback and the driver check"
+    )
+)]
+
 use std::fs::File;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;

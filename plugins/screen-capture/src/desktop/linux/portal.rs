@@ -7,11 +7,14 @@
 //! (`LinuxOptions::pipewire`). The token `Start` returns goes back to the
 //! app in `NegotiatedStream::restore_token`; the plugin never stores it.
 //!
-//! Frames are shared memory only (see [`pods`]): the capability report
-//! lists CPU formats with `CopyStage::ShmTransport`, so a DMA-BUF-only
-//! request is refused up front rather than served with a hidden copy.
+//! Frames leave without a copy of the plugin's: DMA-BUF (modifiers from
+//! the compositor's dmabuf feedback, explicit sync waited through DRM
+//! syncobjs) or `MemFd` shared memory (`CopyStage::ShmTransport`, the
+//! producer's copy), held dequeued while the consumer holds the frame
+//! (see [`stream`]).
 
 mod pods;
+mod raw;
 mod stream;
 
 use std::sync::Arc;
@@ -26,15 +29,15 @@ use crate::select;
 use crate::types::{
     AudioCaps, Availability, BackendCaps, BackendId, BorderState, BufferMemory, CaptureError,
     Colour, ColourCaps, CompositeCaps, CompositeSupport, ConsentConfig, ConsentModel, CopyStage,
-    CursorMode, CursorRequest, DamageSupport, Exhaustion, FormatCaps, FrameRate, IndicatorState,
-    NegotiatedStream, OrientationSupport, PersistMode, Persistence, PickerOptions,
+    CursorMode, CursorRequest, DamageSupport, Exhaustion, FormatCaps, FrameRate, GpuIdentity,
+    IndicatorState, NegotiatedStream, OrientationSupport, PersistMode, Persistence, PickerOptions,
     PipeWireConnection, PoolCaps, ProtectedContent, Provenance, RESTORE_TOKEN_VERSION, Rect,
     RegionCrop, Requirement, RestoreToken, Scaling, Source, SourceId, SourceKind, SourceList,
     SourceListing, SyncKind, WindowCaptureCaps,
 };
 
-use self::pods::ShmTier;
-use self::stream::{Live, Negotiated, Part};
+use self::pods::Imports;
+use self::stream::{Live, Negotiated, Part, Setup};
 use super::super::backend::{
     Backend, BackendSession, Captured, ScreenshotPlan, Shot, StreamPlan, Target,
 };
@@ -100,9 +103,9 @@ impl Probe {
         kinds
     }
 
-    /// Cursor modes this backend delivers: the portal's, minus metadata
-    /// (its cursor meta is not read). Before v2 the portal takes no
-    /// cursor mode and embeds the cursor.
+    /// Cursor modes this backend delivers: the portal's (metadata through
+    /// the PipeWire cursor meta). Before v2 the portal takes no cursor
+    /// mode and embeds the cursor.
     fn cursor_modes(self) -> Vec<CursorMode> {
         if self.version < 2 {
             return vec![CursorMode::Embedded];
@@ -113,6 +116,9 @@ impl Probe {
         }
         if self.cursors.contains(PortalCursor::EMBEDDED) {
             modes.push(CursorMode::Embedded);
+        }
+        if self.cursors.contains(PortalCursor::METADATA) {
+            modes.push(CursorMode::Metadata);
         }
         modes
     }
@@ -321,26 +327,40 @@ fn negotiated(
     source: Source,
     video: Negotiated,
     cast: &Cast,
+    setup: &Setup,
     pool_depth: u8,
     exhaustion: Exhaustion,
 ) -> NegotiatedStream {
+    let dmabuf = video.modifier.is_some();
     NegotiatedStream {
         backend: ID,
         source,
         size: video.size,
         content_rect: Rect::from_size(video.size),
         format: video.format,
-        memory: BufferMemory::Cpu,
-        modifier: None,
+        memory: video.memory(),
+        modifier: video.modifier,
         tier: video.tier,
-        copies: vec![CopyStage::ShmTransport],
+        // DMA-BUF and `MemFd` frames leave without a copy of the plugin's;
+        // shared memory is the producer's copy.
+        copies: if dmabuf {
+            Vec::new()
+        } else {
+            vec![CopyStage::ShmTransport]
+        },
         fps: FrameRate::Native,
         source_rate_mhz: video.rate_mhz,
-        producer: None,
-        sync: SyncKind::Ready,
+        producer: setup.producer.filter(|_| dmabuf).map(GpuIdentity::Drm),
+        // Explicit sync (waited by the plugin, `Ready`) shows per frame;
+        // without it a DMA-BUF is implicitly synchronised.
+        sync: if dmabuf {
+            SyncKind::Implicit
+        } else {
+            SyncKind::Ready
+        },
         pool_depth,
         exhaustion,
-        orientation: OrientationSupport::Unsupported,
+        orientation: OrientationSupport::InMeta,
         crop: RegionCrop::InMeta,
         damage: DamageSupport::Rects,
         cursor: cast.cursor,
@@ -369,13 +389,60 @@ fn picker_of(target: &Target) -> PickerOptions {
     }
 }
 
-fn shm_tiers(request: &crate::types::FormatRequest) -> Result<Vec<ShmTier>, CaptureError> {
-    let tiers = pods::shm_tiers(request);
-    if tiers.is_empty() {
-        Err(CaptureError::unsatisfiable(Some(ID), Requirement::Formats))
-    } else {
-        Ok(tiers)
+/// What the compositor imports and renders with, from its
+/// `linux-dmabuf` feedback: the producer of the portal's DMA-BUFs. `None`
+/// without a Wayland display (an X11 session: shared memory only).
+fn compositor() -> (Imports, Option<u64>) {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return (None, None);
     }
+    let feedback = super::wayland::Client::connect(ID).and_then(|mut client| client.feedback());
+    match feedback {
+        Ok(Some(feedback)) => (Some(feedback.accepted), feedback.main_device),
+        Ok(None) => (None, None),
+        Err(err) => {
+            tracing::debug!(%err, "screen-capture portal: no dmabuf feedback; shared memory only");
+            (None, None)
+        }
+    }
+}
+
+/// The tiers to negotiate and the producer device. Fails before any
+/// dialog when no tier can be served.
+fn setup(
+    request: &crate::types::FormatRequest,
+    exhaustion: Exhaustion,
+    cursor: CursorRequest,
+) -> Result<Setup, CaptureError> {
+    let (imports, producer) = compositor();
+    setup_with(request, exhaustion, cursor, &imports, producer)
+}
+
+fn setup_with(
+    request: &crate::types::FormatRequest,
+    exhaustion: Exhaustion,
+    cursor: CursorRequest,
+    imports: &Imports,
+    producer: Option<u64>,
+) -> Result<Setup, CaptureError> {
+    // CopyToCpu reads shared memory back; an empty request then means it.
+    let cpu_only = exhaustion == Exhaustion::CopyToCpu && request.tiers.is_empty();
+    let tiers = pods::tiers(request, imports, cpu_only);
+    if tiers.is_empty() {
+        return Err(CaptureError::unsatisfiable(Some(ID), Requirement::Formats));
+    }
+    if exhaustion == Exhaustion::CopyToCpu && !pods::offers_shm(&tiers) {
+        // No read-back for DMA-BUF (never mapped, no GPU API here).
+        return Err(CaptureError::unsatisfiable(
+            Some(ID),
+            Requirement::ExhaustionReadback,
+        ));
+    }
+    Ok(Setup {
+        tiers,
+        producer,
+        cursor_meta: cursor.mode == CursorMode::Metadata,
+    })
 }
 
 #[derive(Debug)]
@@ -409,14 +476,27 @@ impl Backend for Portal {
         caps.source_kinds = probe.source_kinds();
         caps.listing = SourceListing::PickerOnly;
         caps.consent = ConsentModel::PerSessionDialog;
-        caps.video = pods::SHM_FORMATS
+        let (imports, producer) = compositor();
+        caps.video = pods::RGB_FORMATS
             .into_iter()
-            .map(|format| FormatCaps {
+            .filter_map(|format| {
+                let modifiers = imports
+                    .as_ref()
+                    .and_then(|i| i.get(&format.drm_fourcc()))
+                    .cloned()?;
+                Some(FormatCaps {
+                    format,
+                    memory: BufferMemory::DmaBuf,
+                    modifiers,
+                    copies: Vec::new(),
+                })
+            })
+            .chain(pods::RGB_FORMATS.into_iter().map(|format| FormatCaps {
                 format,
                 memory: BufferMemory::Cpu,
                 modifiers: Vec::new(),
                 copies: vec![CopyStage::ShmTransport],
-            })
+            }))
             .collect();
         caps.scaling = Scaling::Unsupported;
         caps.region = RegionCrop::InMeta;
@@ -426,14 +506,18 @@ impl Backend for Portal {
         };
         caps.cursor = probe.cursor_modes();
         caps.damage = DamageSupport::Rects;
-        caps.orientation = OrientationSupport::Unsupported;
+        caps.orientation = OrientationSupport::InMeta;
         caps.colour = ColourCaps {
             colours: vec![Colour::SRGB],
             hdr: false,
         };
         caps.audio = AudioCaps::none();
-        caps.producer = None;
-        caps.sync = vec![SyncKind::Ready];
+        caps.producer = producer.map(GpuIdentity::Drm);
+        if producer.is_some_and(super::gbm::is_nvidia) {
+            caps.notes
+                .push(crate::types::CapabilityNote::NvidiaImplicitSyncBestEffort);
+        }
+        caps.sync = vec![SyncKind::Ready, SyncKind::Implicit];
         caps.persistence = if probe.persists() {
             Persistence::Token
         } else {
@@ -449,14 +533,15 @@ impl Backend for Portal {
                 Exhaustion::CopyToCpu,
             ],
         };
+        // Only when the producer picks shared memory.
         caps.copies = vec![CopyStage::ShmTransport];
         caps.protected_content = ProtectedContent::MaskedUndetectable;
         caps.window = WindowCaptureCaps::default();
         caps.provenance.source_kinds = Provenance::Probe;
         caps.provenance.listing = Provenance::Table;
-        // The theoretical set (shared memory, packed RGB). Whether the
-        // producer offers shared memory at all is known only after
-        // `Start`: niri's producer, for one, offers DMA-BUF only.
+        // The theoretical set (DMA-BUF with the compositor's modifiers,
+        // shared memory). What the producer offers is known only after
+        // `Start`: niri's, for one, offers DMA-BUF only.
         caps.provenance.video = Provenance::UnknownUntilNegotiated;
         caps.provenance.cursor = if probe.version >= 2 {
             Provenance::Probe
@@ -466,7 +551,8 @@ impl Backend for Portal {
         caps.provenance.damage = Provenance::Table;
         caps.provenance.colour = Provenance::Table;
         caps.provenance.audio = Provenance::Table;
-        // Shared memory never names its GPU.
+        // The compositor's render device, from its dmabuf feedback; the
+        // stream confirms it only by negotiating DMA-BUF.
         caps.provenance.producer = Provenance::UnknownUntilNegotiated;
         caps.provenance.sync = Provenance::Table;
         caps.provenance.persistence = Provenance::Probe;
@@ -481,7 +567,7 @@ impl Backend for Portal {
     }
 
     fn screenshot(&self, plan: &ScreenshotPlan) -> Result<Shot, CaptureError> {
-        let tiers = shm_tiers(&plan.formats)?;
+        let setup = setup(&plan.formats, Exhaustion::Stall, plan.cursor)?;
         let probe = probe()?;
         let mut cast = Cast::start(
             probe,
@@ -493,7 +579,7 @@ impl Backend for Portal {
             },
         )?;
         let remote = cast.remote.take().unwrap_or(Remote::SessionDaemon);
-        let frames = stream::screenshot(remote, cast.parts(), tiers);
+        let frames = stream::screenshot(remote, cast.parts(), setup.clone());
         cast.close();
         let frames: Vec<Captured> = frames?;
         let first = frames
@@ -504,8 +590,16 @@ impl Backend for Portal {
             size: first.meta.size,
             tier: first.meta.tier,
             rate_mhz: None,
+            modifier: first.meta.modifier,
         };
-        let negotiated = negotiated(first.source.clone(), video, &cast, 0, Exhaustion::Stall);
+        let negotiated = negotiated(
+            first.source.clone(),
+            video,
+            &cast,
+            &setup,
+            0,
+            Exhaustion::Stall,
+        );
         Ok(Shot { frames, negotiated })
     }
 
@@ -514,7 +608,7 @@ impl Backend for Portal {
         plan: StreamPlan,
         out: FrameOut,
     ) -> Result<(Box<dyn BackendSession>, NegotiatedStream), CaptureError> {
-        let tiers = shm_tiers(&plan.formats)?;
+        let setup = setup(&plan.formats, plan.exhaustion, plan.cursor)?;
         let probe = probe()?;
         let mut picker = plan.picker.clone().unwrap_or_default();
         picker.multiple = false;
@@ -538,7 +632,7 @@ impl Backend for Portal {
             exhaustion: plan.exhaustion,
         };
         let mut source = part.source.clone();
-        let opened = stream::open(remote, part, tiers, live);
+        let opened = stream::open(remote, part, setup.clone(), live);
         let (thread, video) = match opened {
             Ok(opened) => opened,
             Err(err) => {
@@ -546,11 +640,28 @@ impl Backend for Portal {
                 return Err(err);
             }
         };
+        if plan.exhaustion == Exhaustion::CopyToCpu && video.modifier.is_some() {
+            // The producer chose DMA-BUF over the listed shared memory:
+            // no read-back exists for it.
+            drop(thread);
+            cast.close();
+            return Err(CaptureError::unsatisfiable(
+                Some(ID),
+                Requirement::ExhaustionReadback,
+            ));
+        }
         source.physical_size = Some(video.size);
         if let Some(geometry) = source.geometry.filter(|g| g.width > 0) {
             source.scale_permille = Some(video.size.width.saturating_mul(1000) / geometry.width);
         }
-        let negotiated = negotiated(source, video, &cast, plan.pool_depth, plan.exhaustion);
+        let negotiated = negotiated(
+            source,
+            video,
+            &cast,
+            &setup,
+            plan.pool_depth,
+            plan.exhaustion,
+        );
         Ok((
             Box::new(PortalSession {
                 thread: Some(thread),
@@ -637,10 +748,14 @@ mod tests {
     }
 
     #[test]
-    fn metadata_cursors_are_not_offered_and_old_portals_embed() {
+    fn cursor_modes_follow_the_portal_and_old_portals_embed() {
         assert_eq!(
             probe(5).cursor_modes(),
-            [CursorMode::Hidden, CursorMode::Embedded]
+            [
+                CursorMode::Hidden,
+                CursorMode::Embedded,
+                CursorMode::Metadata
+            ]
         );
         assert_eq!(probe(1).cursor_modes(), [CursorMode::Embedded]);
         assert!(probe(4).persists());
@@ -683,15 +798,209 @@ mod tests {
     }
 
     #[test]
-    fn dmabuf_only_requests_are_refused_by_name() {
-        let request = crate::types::FormatRequest {
-            tiers: vec![crate::types::FormatTier::new(vec![
-                crate::types::FormatChoice::dmabuf(crate::types::PixelFormat::Bgrx8, Vec::new()),
-            ])],
+    fn unservable_requests_are_refused_before_the_dialog() {
+        use crate::types::{FormatChoice, FormatRequest, FormatTier, PixelFormat};
+        let dmabuf = FormatRequest {
+            tiers: vec![FormatTier::new(vec![FormatChoice::dmabuf(
+                PixelFormat::Bgrx8,
+                Vec::new(),
+            )])],
         };
+        let cursor = CursorRequest::default();
+        // No compositor to name modifiers: nothing to offer.
         assert_eq!(
-            shm_tiers(&request),
+            setup_with(&dmabuf, Exhaustion::Stall, cursor, &None, None).map(|_| ()),
             Err(CaptureError::unsatisfiable(Some(ID), Requirement::Formats))
         );
+        let imports = Some(std::collections::HashMap::from([(
+            PixelFormat::Bgrx8.drm_fourcc(),
+            vec![0x0300_0000_0060_6014],
+        )]));
+        let setup =
+            setup_with(&dmabuf, Exhaustion::Stall, cursor, &imports, Some(7)).expect("dmabuf");
+        assert_eq!(setup.producer, Some(7));
+        // DMA-BUF has no read-back.
+        assert_eq!(
+            setup_with(&dmabuf, Exhaustion::CopyToCpu, cursor, &imports, None).map(|_| ()),
+            Err(CaptureError::unsatisfiable(
+                Some(ID),
+                Requirement::ExhaustionReadback
+            ))
+        );
+        // An empty request with CopyToCpu is shared memory.
+        let cpu = setup_with(
+            &FormatRequest::default(),
+            Exhaustion::CopyToCpu,
+            cursor,
+            &imports,
+            None,
+        )
+        .expect("shm");
+        assert!(pods::offers_shm(&cpu.tiers));
+    }
+}
+
+/// The PipeWire half of the portal against niri, without a dialog: niri's
+/// Mutter ScreenCast API (what its portal calls) hands out a stream node
+/// directly. Runs with `ISTMO_SC_TEST_NIRI_SCREENCAST` set
+/// (`ISTMO_SC_TEST_CONNECTOR` picks the output, default `DP-3`).
+#[cfg(test)]
+mod niri_live {
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    use istmo_core::{Runtime, SinkPolicy};
+    use zbus::{OwnedObjectPath, Variant as Value};
+
+    use super::stream::{self, Live, Part};
+    use super::*;
+    use crate::desktop::output::{EventHub, FrameOut};
+
+    const SERVICE: &str = "org.gnome.Mutter.ScreenCast";
+
+    async fn proxy<'a>(
+        conn: &zbus::Connection,
+        path: &'a str,
+        interface: &'a str,
+    ) -> zbus::proxy::Proxy<'a> {
+        zbus::proxy::Proxy::new(conn, SERVICE, path, interface)
+            .await
+            .expect("proxy")
+    }
+
+    /// A started niri screencast of `connector`: its connection (kept
+    /// alive), session path and PipeWire node.
+    async fn record(connector: &str) -> (zbus::Connection, OwnedObjectPath, u32) {
+        use zbus::export::futures_core::Stream as _;
+        let conn = zbus::Connection::session().await.expect("session bus");
+        let screencast = proxy(&conn, "/org/gnome/Mutter/ScreenCast", SERVICE).await;
+        let session: OwnedObjectPath = screencast
+            .call("CreateSession", &(HashMap::<&str, Value<'_>>::new(),))
+            .await
+            .expect("CreateSession");
+        let session_proxy = proxy(
+            &conn,
+            session.as_str(),
+            "org.gnome.Mutter.ScreenCast.Session",
+        )
+        .await;
+        // cursor-mode 1: embedded.
+        let options = HashMap::from([("cursor-mode", Value::U32(1))]);
+        let stream: OwnedObjectPath = session_proxy
+            .call("RecordMonitor", &(connector, options))
+            .await
+            .expect("RecordMonitor");
+        let stream_proxy =
+            proxy(&conn, stream.as_str(), "org.gnome.Mutter.ScreenCast.Stream").await;
+        let mut added = stream_proxy
+            .receive_signal("PipeWireStreamAdded")
+            .await
+            .expect("subscribe");
+        let () = session_proxy.call("Start", &()).await.expect("Start");
+        let message = std::future::poll_fn(|cx| std::pin::Pin::new(&mut added).poll_next(cx))
+            .await
+            .expect("PipeWireStreamAdded");
+        let (node,): (u32,) = message.body().deserialize().expect("node id");
+        (conn, session, node)
+    }
+
+    fn recv_within(
+        sink: &istmo_core::FrameSink<crate::types::FrameMeta>,
+        timeout: Duration,
+    ) -> Option<istmo_core::NativeFrame<crate::types::FrameMeta>> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if let Some(frame) = sink.try_recv() {
+                return Some(frame);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        None
+    }
+
+    #[test]
+    fn niri_screencast_streams_dma_bufs_without_copies() {
+        if std::env::var_os("ISTMO_SC_TEST_NIRI_SCREENCAST").is_none() {
+            eprintln!("skipped: set ISTMO_SC_TEST_NIRI_SCREENCAST on a niri session");
+            return;
+        }
+        let connector =
+            std::env::var("ISTMO_SC_TEST_CONNECTOR").unwrap_or_else(|_| "DP-3".to_owned());
+        let (conn, session, node) = pollster::block_on(record(&connector));
+        let setup = setup(
+            &crate::types::FormatRequest::default(),
+            Exhaustion::Stall,
+            CursorRequest::default(),
+        )
+        .expect("setup");
+        let runtime = Runtime::mock().runtime;
+        let sink = runtime
+            .open_frame_sink::<crate::types::FrameMeta>(SinkPolicy::queue(8))
+            .expect("sink");
+        let out = FrameOut::new(
+            ID,
+            runtime.frame_sender(sink.id()).expect("sender"),
+            std::sync::Arc::new(EventHub::default()),
+            FrameRate::Native,
+        );
+        let part = Part {
+            node,
+            source: Source::new(
+                SourceId::new(ID, connector.clone()),
+                SourceKind::Monitor,
+                connector,
+            ),
+        };
+        let live = Live {
+            out,
+            pool_depth: 4,
+            exhaustion: Exhaustion::Stall,
+        };
+        let (thread, video) =
+            stream::open(Remote::SessionDaemon, part, setup, live).expect("negotiated");
+        eprintln!("negotiated: {video:?}");
+        assert_eq!(video.memory(), BufferMemory::DmaBuf, "niri offers DMA-BUF");
+        let mut slots = Vec::new();
+        for _ in 0..20 {
+            let frame = recv_within(&sink, Duration::from_secs(5)).expect("a frame");
+            assert_eq!(frame.meta.memory, BufferMemory::DmaBuf);
+            assert!(frame.meta.copied.is_none());
+            assert_eq!(frame.meta.modifier, video.modifier);
+            let dmabuf = frame.buffer.dmabuf().expect("DMA-BUF backing");
+            for plane in &dmabuf.planes {
+                let flags = rustix::io::fcntl_getfd(&plane.fd).expect("flags");
+                assert!(flags.contains(rustix::io::FdFlags::CLOEXEC));
+            }
+            if !slots.contains(&frame.meta.buffer) {
+                slots.push(frame.meta.buffer);
+            }
+            eprintln!(
+                "frame {} sync {:?} orientation {:?} buffer {:?}",
+                frame.meta.seq, frame.meta.sync, frame.meta.orientation, frame.meta.buffer
+            );
+        }
+        assert!(slots.len() <= 16, "frames reuse the pool: {slots:?}");
+        // Holding every frame stalls at the limit (all but one buffer).
+        let mut held = Vec::new();
+        while let Some(frame) = recv_within(&sink, Duration::from_secs(2)) {
+            held.push(frame);
+            assert!(held.len() < 64, "a held pool stalls");
+        }
+        eprintln!("held at the limit: {}", held.len());
+        drop(held);
+        assert!(
+            recv_within(&sink, Duration::from_secs(5)).is_some(),
+            "frames resume once held buffers return"
+        );
+        drop(thread);
+        pollster::block_on(async {
+            let session_proxy = proxy(
+                &conn,
+                session.as_str(),
+                "org.gnome.Mutter.ScreenCast.Session",
+            )
+            .await;
+            let _stopped: zbus::Result<()> = session_proxy.call("Stop", &()).await;
+        });
     }
 }

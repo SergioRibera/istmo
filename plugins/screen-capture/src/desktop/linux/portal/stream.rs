@@ -2,20 +2,24 @@
 //! all on one loop thread. A screenshot takes the first frame of each
 //! and ends; a session delivers frames into its [`FrameOut`].
 //!
-//! Frames are copied out of the shared-memory buffer while it is
-//! dequeued, so the buffer goes straight back to the producer; the copy
-//! sits in a plugin pool slot accounted by [`PoolAccounting`] (never the
-//! last free one), which is what `Exhaustion` applies to.
+//! Frames leave without a copy: a DMA-BUF frame carries duplicates of
+//! the buffer's fds, a `MemFd` frame a mapping of its memory, and the
+//! `pw_buffer` stays dequeued (the producer leaves it alone) until every
+//! clone of the frame dropped. Its lease then posts the buffer back to
+//! the loop thread, which signals the explicit-sync release point and
+//! re-queues it. The consumer holds at most all buffers but one (the
+//! producer always has one to render into): that is what `Exhaustion`
+//! applies to.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
-use istmo_core::NativeBuffer;
+use istmo_core::{DmaBuf, DmaBufPlane, NativeBuffer};
 use pipewire as pw;
 use pw::properties::properties;
-use pw::spa::buffer::DataType;
-use pw::spa::buffer::meta::{MetaHeader, MetaVideoCrop, MetaVideoDamage};
 use pw::spa::param::ParamType;
 use pw::spa::param::format::{MediaSubtype, MediaType};
 use pw::spa::param::format_utils;
@@ -23,19 +27,29 @@ use pw::spa::param::video::VideoInfoRaw;
 use pw::spa::utils::Direction;
 use pw::stream::{Stream, StreamFlags, StreamRc};
 
-use crate::pool::{HoldError, PoolAccounting};
+use crate::pool::Exhausted;
 use crate::types::{
-    BackendId, BufferIdentity, BufferMemory, CaptureError, Colour, CopyStage, Damage, Exhaustion,
-    FrameMeta, Orientation, PixelFormat, PlaneLayout, PtsClock, Rect, Size, Source, SyncKind,
+    BackendId, BufferIdentity, BufferMemory, CaptureError, CaptureEvent, Colour, CopyStage,
+    CursorState, Damage, Exhaustion, FrameMeta, GpuIdentity, Orientation, PixelFormat, PlaneLayout,
+    PtsClock, Rect, Size, Source, SyncKind,
 };
 
 use super::super::super::backend::Captured;
 use super::super::super::clock::monotonic_ns;
 use super::super::super::output::{Delivery, FrameOut};
+use super::super::mapping::{MappedFrame, Mapping};
 use super::super::pipewire::{self as pwx, LoopCtx, LoopThread, Remote, StreamEnd};
-use super::pods::{self, ShmTier};
+use super::super::syncobj::{ExplicitSync, ReleasePoint};
+use super::pods::{self, PortalTier};
+use super::raw::{self, Buffer, BufferKey};
 
 const ID: Option<BackendId> = Some(BackendId::LinuxPortal);
+
+// `SPA_VIDEO_FLAG_*` (`spa/param/video/raw.h`), kept here: the bindings
+// gate them behind version features this crate does not raise its floor
+// for.
+const VIDEO_FLAG_MODIFIER: u32 = 1 << 2;
+const VIDEO_FLAG_MODIFIER_FIXATION_REQUIRED: u32 = 1 << 3;
 
 fn error(step: &str, message: impl std::fmt::Display) -> CaptureError {
     pwx::error(ID, step, message)
@@ -58,6 +72,28 @@ pub(super) struct Negotiated {
     pub(super) size: Size,
     pub(super) tier: u8,
     pub(super) rate_mhz: Option<u32>,
+    /// `Some` for DMA-BUF.
+    pub(super) modifier: Option<u64>,
+}
+
+impl Negotiated {
+    pub(super) const fn memory(&self) -> BufferMemory {
+        if self.modifier.is_some() {
+            BufferMemory::DmaBuf
+        } else {
+            BufferMemory::Cpu
+        }
+    }
+}
+
+/// What the streams are opened with.
+#[derive(Debug, Clone)]
+pub(super) struct Setup {
+    pub(super) tiers: Vec<PortalTier>,
+    /// The compositor's render device (DMA-BUF producer, syncobj node).
+    pub(super) producer: Option<u64>,
+    /// Ask for the cursor meta (`CursorMode::Metadata`).
+    pub(super) cursor_meta: bool,
 }
 
 /// Where a live session's frames go.
@@ -121,31 +157,220 @@ impl Shared {
     }
 }
 
-enum Mode {
-    Shot,
-    Live {
-        live: Live,
-        pool: PoolAccounting,
-        wake: pw::channel::Sender<Wake>,
-    },
+/// Identity of one hold on a dequeued buffer, unique for the loop's life
+/// so a stale release never aliases a newer hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct LeaseId(u64);
+
+/// Posted by a frame's release hook to the loop thread: which stream,
+/// which hold.
+struct Release {
+    stream: usize,
+    id: LeaseId,
 }
 
-/// Sent to the loop when a pool slot came back (a stalled session pulls
-/// again).
-struct Wake;
+/// Which buffers the consumer holds, independent of PipeWire so it can
+/// be unit-tested. A buffer is held only while `held < pool - 1`.
+#[derive(Debug)]
+struct HeldBuffers<B> {
+    pool_size: usize,
+    held: Vec<(LeaseId, B)>,
+    next_id: u64,
+}
+
+impl<B> Default for HeldBuffers<B> {
+    fn default() -> Self {
+        Self {
+            pool_size: 0,
+            held: Vec::new(),
+            next_id: 0,
+        }
+    }
+}
+
+impl<B: Copy + PartialEq> HeldBuffers<B> {
+    const fn buffer_added(&mut self) {
+        self.pool_size += 1;
+    }
+
+    /// `buffer` is about to be freed; whether it was held. Its lease, if
+    /// any, becomes inert.
+    fn buffer_removed(&mut self, buffer: B) -> bool {
+        self.pool_size = self.pool_size.saturating_sub(1);
+        let before = self.held.len();
+        self.held.retain(|&(_, b)| b != buffer);
+        self.held.len() != before
+    }
+
+    /// All but one: the producer always has a buffer to render into.
+    const fn limit(&self) -> usize {
+        self.pool_size.saturating_sub(1)
+    }
+
+    const fn has_room(&self) -> bool {
+        self.held.len() < self.limit()
+    }
+
+    /// Record `buffer` as held, or `None` at the limit.
+    fn hold(&mut self, buffer: B) -> Option<LeaseId> {
+        if !self.has_room() {
+            return None;
+        }
+        let id = LeaseId(self.next_id);
+        self.next_id += 1;
+        self.held.push((id, buffer));
+        Some(id)
+    }
+
+    /// End hold `id`: the buffer to re-queue, `None` when it was removed.
+    fn release(&mut self, id: LeaseId) -> Option<B> {
+        let at = self.held.iter().position(|&(held, _)| held == id)?;
+        Some(self.held.swap_remove(at).1)
+    }
+}
+
+/// What a buffer's frames share across dequeues: its fds duplicated or
+/// its memory mapped once, and its identity.
+#[derive(Debug, Clone)]
+enum Backing {
+    DmaBuf(Arc<DmaBuf>),
+    Mapped(Arc<Mapping>),
+}
+
+/// The lease side of one stream. Separate from [`StreamData`]: PipeWire
+/// adds and removes buffers from inside `update_params`, which runs
+/// while the stream data is borrowed.
+struct Leases {
+    book: HeldBuffers<BufferKey>,
+    /// Buffers held for the consumer, with their release points.
+    dequeued: HashMap<LeaseId, (Buffer, Option<ReleasePoint>)>,
+    /// Slot of each live buffer, for `BufferIdentity`.
+    slots: Vec<Option<BufferKey>>,
+    backings: HashMap<BufferKey, Backing>,
+    generation: u64,
+    /// A buffer was removed: the next added one starts a generation.
+    removed: bool,
+    tx: pw::channel::Sender<Release>,
+    /// This stream's index in the loop.
+    stream: usize,
+    /// Buffers removed while the leases were borrowed, applied first
+    /// thing by every re-queue.
+    gone: Rc<RefCell<Vec<BufferKey>>>,
+    /// The current exhaustion episode (reported once).
+    exhausted: bool,
+    episodes: u32,
+}
+
+impl Leases {
+    fn new(
+        tx: pw::channel::Sender<Release>,
+        stream: usize,
+        gone: Rc<RefCell<Vec<BufferKey>>>,
+    ) -> Self {
+        Self {
+            book: HeldBuffers::default(),
+            dequeued: HashMap::new(),
+            slots: Vec::new(),
+            backings: HashMap::new(),
+            generation: BufferIdentity::default().pool_generation + 1,
+            removed: false,
+            tx,
+            stream,
+            gone,
+            exhausted: false,
+            episodes: 0,
+        }
+    }
+
+    fn added(&mut self, key: BufferKey) {
+        if std::mem::take(&mut self.removed) {
+            self.generation += 1;
+        }
+        self.book.buffer_added();
+        match self.slots.iter().position(Option::is_none) {
+            Some(free) => self.slots[free] = Some(key),
+            None => self.slots.push(Some(key)),
+        }
+    }
+
+    fn removed(&mut self, key: BufferKey) {
+        self.removed = true;
+        if self.book.buffer_removed(key) {
+            tracing::debug!("screen-capture portal: a held buffer was removed; its lease is inert");
+        }
+        // PipeWire frees the buffer: never re-queue it.
+        self.dequeued.retain(|_, (buffer, _)| buffer.key() != key);
+        for slot in &mut self.slots {
+            if *slot == Some(key) {
+                *slot = None;
+            }
+        }
+        self.backings.remove(&key);
+    }
+
+    fn identity(&self, key: BufferKey) -> BufferIdentity {
+        let slot = self
+            .slots
+            .iter()
+            .position(|s| *s == Some(key))
+            .and_then(|i| u32::try_from(i).ok())
+            .unwrap_or(u32::MAX);
+        BufferIdentity {
+            pool_generation: self.generation,
+            slot,
+        }
+    }
+
+    /// The refusal of this episode (`new_episode` the first time).
+    const fn exhausted(&mut self) -> Exhausted {
+        let new_episode = !self.exhausted;
+        if new_episode {
+            self.exhausted = true;
+            self.episodes = self.episodes.saturating_add(1);
+        }
+        Exhausted {
+            new_episode,
+            episode: self.episodes,
+        }
+    }
+
+    /// Re-queue the buffer behind `release`, unless it is gone.
+    fn release(&mut self, stream: &Stream, release: &Release) {
+        let gone = std::mem::take(&mut *self.gone.borrow_mut());
+        for key in gone {
+            self.removed(key);
+        }
+        let Some(_key) = self.book.release(release.id) else {
+            return;
+        };
+        let Some((buffer, point)) = self.dequeued.remove(&release.id) else {
+            return;
+        };
+        // Nothing reads the buffer any more: the producer may render.
+        if let Some(point) = point {
+            point.signal();
+        }
+        buffer.requeue(stream);
+    }
+}
+
+enum Mode {
+    Shot { kept: Vec<Buffer> },
+    Live(Live),
+}
 
 /// One stream's state, on the loop thread.
 struct StreamData {
     index: usize,
     source: Source,
-    tiers: Vec<ShmTier>,
+    setup: Setup,
     info: VideoInfoRaw,
     negotiated: Option<Negotiated>,
     shared: Rc<RefCell<Shared>>,
     mode: Mode,
+    sync: ExplicitSync,
     /// Frames dropped since the last delivered one.
     skipped: u32,
-    slot: u32,
 }
 
 /// One frame per part. Returns the frames in part order.
@@ -155,14 +380,14 @@ struct StreamData {
 pub(super) fn screenshot(
     remote: Remote,
     parts: Vec<Part>,
-    tiers: Vec<ShmTier>,
+    setup: Setup,
 ) -> Result<Vec<Captured>, CaptureError> {
     let (_thread, report) = LoopThread::spawn(
         ID,
         "istmo-screen-capture-portal",
         remote,
         SHOT_TIMEOUT,
-        move |ctx, ready| run(ctx, ready, parts, &tiers, None),
+        move |ctx, ready| run(ctx, ready, parts, &setup, None),
     )?;
     match report {
         Report::Shots(frames) => Ok(frames),
@@ -177,7 +402,7 @@ pub(super) fn screenshot(
 pub(super) fn open(
     remote: Remote,
     part: Part,
-    tiers: Vec<ShmTier>,
+    setup: Setup,
     live: Live,
 ) -> Result<(LoopThread, Negotiated), CaptureError> {
     let (thread, report) = LoopThread::spawn(
@@ -185,7 +410,7 @@ pub(super) fn open(
         "istmo-screen-capture-portal",
         remote,
         pwx::SETUP_TIMEOUT,
-        move |ctx, ready| run(ctx, ready, vec![part], &tiers, Some(live)),
+        move |ctx, ready| run(ctx, ready, vec![part], &setup, Some(live)),
     )?;
     match report {
         Report::Negotiated(negotiated) => Ok((thread, negotiated)),
@@ -196,15 +421,17 @@ pub(super) fn open(
     }
 }
 
+type Pair = (StreamRc, Rc<RefCell<StreamData>>, Rc<RefCell<Leases>>);
+
 #[expect(
     clippy::too_many_lines,
-    reason = "one setup sequence of the loop thread: streams, listeners, wake-ups, then the loop"
+    reason = "one setup sequence of the loop thread: streams, listeners, releases, then the loop"
 )]
 fn run(
     ctx: LoopCtx,
     ready: &flume::Sender<Result<Report, CaptureError>>,
     parts: Vec<Part>,
-    tiers: &[ShmTier],
+    setup: &Setup,
     live: Option<Live>,
 ) {
     let fail = |err| {
@@ -212,7 +439,7 @@ fn run(
         let _unwanted = ready.send(Err(err));
     };
     let enum_formats = match pods::enum_formats(
-        tiers,
+        &setup.tiers,
         parts.first().and_then(|p| p.source.physical_size),
         60,
     ) {
@@ -227,9 +454,9 @@ fn run(
         mainloop: ctx.mainloop.clone(),
         shots: parts.iter().map(|_| None).collect(),
     }));
-    let (wake_tx, wake_rx) = pw::channel::channel::<Wake>();
+    let (release_tx, release_rx) = pw::channel::channel::<Release>();
     let mut live = live;
-    let mut streams = Vec::new();
+    let mut streams: Vec<Pair> = Vec::new();
     let mut listeners = Vec::new();
     for (index, part) in parts.into_iter().enumerate() {
         let stream = match StreamRc::new(
@@ -247,37 +474,83 @@ fn run(
                 return;
             }
         };
-        let mode = match live.take() {
-            Some(live) => Mode::Live {
-                pool: PoolAccounting::new(usize::from(live.pool_depth)),
-                live,
-                wake: wake_tx.clone(),
-            },
-            None => Mode::Shot,
-        };
+        let mode = live
+            .take()
+            .map_or_else(|| Mode::Shot { kept: Vec::new() }, Mode::Live);
         let data = Rc::new(RefCell::new(StreamData {
             index,
             source: part.source,
-            tiers: tiers.to_vec(),
+            setup: setup.clone(),
             info: VideoInfoRaw::default(),
             negotiated: None,
             shared: Rc::clone(&shared),
             mode,
+            sync: ExplicitSync::new(setup.producer),
             skipped: 0,
-            slot: 0,
         }));
+        let gone: Rc<RefCell<Vec<BufferKey>>> = Rc::default();
+        let leases = Rc::new(RefCell::new(Leases::new(
+            release_tx.clone(),
+            index,
+            Rc::clone(&gone),
+        )));
+        let out = match &data.borrow().mode {
+            Mode::Live(live) => Some(live.out.clone()),
+            Mode::Shot { .. } => None,
+        };
+        // Every callback skips a re-entrant call (PipeWire calling back
+        // from inside a call this module made while borrowing) instead of
+        // panicking across the FFI boundary.
         let listener = stream
             .add_local_listener_with_user_data(Rc::clone(&data))
-            .state_changed(|_, data, old, new| {
-                let Some(end) = StreamEnd::of(&old, &new) else {
-                    return;
-                };
-                on_end(&data.borrow(), end_error(end));
+            .state_changed({
+                let shared = Rc::clone(&shared);
+                move |_, _, old, new| {
+                    if let Some(end) = StreamEnd::of(&old, &new) {
+                        on_end(out.as_ref(), &shared, end_error(end));
+                    }
+                }
             })
             .param_changed(|stream, data, id, param| {
-                on_param(stream, &mut data.borrow_mut(), id, param);
+                if let Ok(mut data) = data.try_borrow_mut() {
+                    on_param(stream, &mut data, id, param);
+                }
             })
-            .process(|stream, data| on_process(stream, &mut data.borrow_mut()))
+            .add_buffer({
+                let leases = Rc::clone(&leases);
+                move |_, _, buffer| {
+                    if let Some(key) = BufferKey::of(buffer)
+                        && let Ok(mut leases) = leases.try_borrow_mut()
+                    {
+                        leases.added(key);
+                    }
+                }
+            })
+            .remove_buffer({
+                let leases = Rc::clone(&leases);
+                let gone = Rc::clone(&gone);
+                move |_, _, buffer| {
+                    let Some(key) = BufferKey::of(buffer) else {
+                        return;
+                    };
+                    match leases.try_borrow_mut() {
+                        Ok(mut leases) => leases.removed(key),
+                        // Recorded for the next release: a freed buffer must
+                        // never be re-queued.
+                        Err(_) => gone.borrow_mut().push(key),
+                    }
+                }
+            })
+            .process({
+                let leases = Rc::clone(&leases);
+                move |stream, data| {
+                    if let (Ok(mut data), Ok(mut leases)) =
+                        (data.try_borrow_mut(), leases.try_borrow_mut())
+                    {
+                        on_process(stream, &mut data, &mut leases);
+                    }
+                }
+            })
             .register();
         match listener {
             Ok(listener) => listeners.push(listener),
@@ -310,29 +583,44 @@ fn run(
             fail(err);
             return;
         }
-        streams.push((stream, data));
+        streams.push((stream, data, leases));
     }
-    // A pool slot came back: let a stalled stream pull its newest frame.
+    // A frame dropped its last clone: re-queue its buffer, then let a
+    // stalled stream pull again. Attached after the streams, so it is
+    // detached before them and never re-queues into a destroyed stream.
     let mainloop = ctx.mainloop.clone();
-    let _wakes = wake_rx.attach(mainloop.loop_(), {
-        let streams: Vec<_> = streams
+    let _releases = release_rx.attach(mainloop.loop_(), {
+        let streams: Vec<Pair> = streams
             .iter()
-            .map(|(s, d)| (s.clone(), Rc::clone(d)))
+            .map(|(s, d, l)| (s.clone(), Rc::clone(d), Rc::clone(l)))
             .collect();
-        move |Wake| {
-            for (stream, data) in &streams {
-                on_process(stream, &mut data.borrow_mut());
+        move |release: Release| {
+            let Some((stream, data, leases)) = streams.get(release.stream) else {
+                return;
+            };
+            if let (Ok(mut data), Ok(mut leases)) = (data.try_borrow_mut(), leases.try_borrow_mut())
+            {
+                leases.release(stream, &release);
+                on_process(stream, &mut data, &mut leases);
             }
         }
     });
-    drop(wake_tx);
+    drop(release_tx);
     ctx.run();
-    for (_, data) in &streams {
-        if let Mode::Live { live, .. } = &data.borrow().mode {
+    for (_, data, leases) in &streams {
+        let mut data = data.borrow_mut();
+        if let Mode::Live(live) = &data.mode {
             live.out.stop(crate::types::StopReason::Closed);
         }
+        // Buffers still held by frames go back with the stream itself.
+        leases.borrow_mut().dequeued.clear();
+        if let Mode::Shot { kept } = &mut data.mode {
+            kept.clear();
+        }
     }
+    // Listeners first: tearing the streams down calls back no more.
     drop(listeners);
+    drop(streams);
 }
 
 /// PipeWire's "no more input formats": the producer offers none of the
@@ -340,8 +628,8 @@ fn run(
 const NO_FORMAT: &str = "no more input formats";
 
 /// The session error of a stream end. A producer that offers none of the
-/// shared-memory formats (niri's offers DMA-BUF only) is a format the
-/// backend cannot serve, not a protocol failure.
+/// listed formats is a format the backend cannot serve, not a protocol
+/// failure.
 fn end_error(end: StreamEnd) -> CaptureError {
     match end {
         StreamEnd::Error(message) if message.contains(NO_FORMAT) => {
@@ -351,14 +639,17 @@ fn end_error(end: StreamEnd) -> CaptureError {
     }
 }
 
-fn on_end(data: &StreamData, err: CaptureError) {
-    match &data.mode {
-        Mode::Live { live, .. } => live.out.fail(err.clone()),
-        Mode::Shot => {}
+/// End a stream: fail the session's output, answer a waiting caller,
+/// stop the loop. Takes no stream data: PipeWire may report a state
+/// change from inside a call made while that data is borrowed.
+fn on_end(out: Option<&FrameOut>, shared: &RefCell<Shared>, err: CaptureError) {
+    if let Some(out) = out {
+        out.fail(err.clone());
     }
-    let mut shared = data.shared.borrow_mut();
-    shared.report(Err(err));
-    shared.mainloop.quit();
+    if let Ok(mut shared) = shared.try_borrow_mut() {
+        shared.report(Err(err));
+        shared.mainloop.quit();
+    }
 }
 
 fn on_param(stream: &Stream, data: &mut StreamData, id: u32, param: Option<&pw::spa::pod::Pod>) {
@@ -373,11 +664,23 @@ fn on_param(stream: &Stream, data: &mut StreamData, id: u32, param: Option<&pw::
         tracing::warn!(?err, "screen-capture portal: unreadable video format");
         return;
     }
+    let flags = data.info.flags().bits();
+    if flags & VIDEO_FLAG_MODIFIER_FIXATION_REQUIRED != 0 {
+        // The producer still has to pick a modifier; the fixated format
+        // follows.
+        return;
+    }
     let Some(format) = pods::pixel_format(data.info.format()) else {
         tracing::warn!(format = ?data.info.format(), "screen-capture portal: unexpected video format");
         return;
     };
-    let Some(tier) = pods::tier_of(&data.tiers, format) else {
+    let modifier = (flags & VIDEO_FLAG_MODIFIER != 0).then(|| data.info.modifier());
+    let Some(tier) = pods::tier_of(&data.setup.tiers, format, modifier) else {
+        tracing::warn!(
+            ?format,
+            ?modifier,
+            "screen-capture portal: format outside every tier"
+        );
         return;
     };
     let size = data.info.size();
@@ -389,138 +692,77 @@ fn on_param(stream: &Stream, data: &mut StreamData, id: u32, param: Option<&pw::
         rate_mhz: (rate.denom > 0 && rate.num > 0).then(|| {
             u32::try_from(u64::from(rate.num) * 1000 / u64::from(rate.denom)).unwrap_or(u32::MAX)
         }),
+        modifier,
     };
-    let reallocated = data.negotiated.is_some_and(|old| old != negotiated);
-    data.negotiated = Some(negotiated);
-    if let Mode::Live { pool, live, .. } = &data.mode {
-        if reallocated {
-            let _generation = pool.reallocate(usize::from(live.pool_depth));
-            live.out
-                .event(crate::types::CaptureEvent::SourceResized(negotiated.size));
+    let previous = data.negotiated.replace(negotiated);
+    if let Mode::Live(live) = &data.mode {
+        if previous.is_some_and(|old| old.size != negotiated.size) {
+            live.out.event(CaptureEvent::SourceResized(negotiated.size));
         }
         data.shared
             .borrow_mut()
             .report(Ok(Report::Negotiated(negotiated)));
     }
     let depth = match &data.mode {
-        Mode::Live { live, .. } => live.pool_depth,
-        Mode::Shot => 2,
+        Mode::Live(live) => live.pool_depth,
+        Mode::Shot { .. } => 2,
     };
-    let params =
-        pods::buffers(depth).and_then(|buffers| pods::metas().map(|metas| (buffers, metas)));
+    let dmabuf = modifier.is_some();
+    let params = pods::buffers(depth, dmabuf).and_then(|buffers| {
+        pods::metas(data.setup.cursor_meta, dmabuf).map(|metas| (buffers, metas))
+    });
     let sent = params.and_then(|(buffers, metas)| {
-        let mut pods = vec![pwx::pod(ID, &buffers)?];
-        for meta in &metas {
-            pods.push(pwx::pod(ID, meta)?);
+        let mut pods = Vec::new();
+        for bytes in buffers.iter().chain(&metas) {
+            pods.push(pwx::pod(ID, bytes)?);
         }
         stream
             .update_params(&mut pods)
             .map_err(|err| error("update_params(Buffers, Meta)", err))
     });
     if let Err(err) = sent {
-        on_end(data, err);
+        let out = match &data.mode {
+            Mode::Live(live) => Some(live.out.clone()),
+            Mode::Shot { .. } => None,
+        };
+        on_end(out.as_ref(), &data.shared, err);
     }
 }
 
-/// The newest dequeued buffer copied out (the others go straight back).
-struct Copied {
-    bytes: Vec<u8>,
-    stride: u32,
-    content: Rect,
-    damage: Damage,
-    pts_ns: u64,
-}
-
-/// Drop every queued buffer; how many there were.
+/// Re-queue every ready buffer; how many there were.
 fn drain(stream: &Stream) -> u32 {
     let mut dropped = 0;
-    while stream.dequeue_buffer().is_some() {
+    while let Some(buffer) = Buffer::dequeue(stream) {
+        buffer.requeue(stream);
         dropped += 1;
     }
     dropped
 }
 
-/// Dequeue everything ready, keep the newest, copy it out.
-fn take_newest(stream: &Stream, negotiated: Negotiated, skipped: &mut u32) -> Option<Copied> {
-    let mut newest = None;
-    while let Some(buffer) = stream.dequeue_buffer() {
-        // Replacing re-queues the older one.
-        if newest.replace(buffer).is_some() {
+/// The newest ready buffer; older ones go straight back (`skipped`).
+fn newest(stream: &Stream, skipped: &mut u32) -> Option<Buffer> {
+    let mut newest: Option<Buffer> = None;
+    while let Some(buffer) = Buffer::dequeue(stream) {
+        if let Some(older) = newest.replace(buffer) {
+            older.requeue(stream);
             *skipped = skipped.saturating_add(1);
         }
     }
-    let mut buffer = newest?;
-    let pts_ns = buffer
-        .find_meta::<MetaHeader>()
-        .and_then(|header| u64::try_from(header.pts()).ok())
-        .filter(|pts| plausible_monotonic(*pts))
-        .unwrap_or_else(monotonic_ns);
-    let bounds = Rect::from_size(negotiated.size);
-    let content = buffer
-        .find_meta::<MetaVideoCrop>()
-        .map(|crop| {
-            let region = crop.meta_region();
-            Rect::new(
-                region.position().x,
-                region.position().y,
-                region.size().width,
-                region.size().height,
-            )
-        })
-        .filter(|rect| !rect.is_empty())
-        .and_then(|rect| rect.intersect(bounds))
-        .unwrap_or(bounds);
-    let damage = buffer
-        .find_meta::<MetaVideoDamage>()
-        .map_or(Damage::Full, |meta| {
-            Damage::clipped(
-                meta.iter().map(|region| {
-                    Rect::new(
-                        region.position().x,
-                        region.position().y,
-                        region.size().width,
-                        region.size().height,
-                    )
-                }),
-                bounds.size(),
-            )
-        });
-    let plane = buffer.datas_mut().first_mut()?;
-    if !matches!(plane.type_(), DataType::MemFd | DataType::MemPtr) {
-        return None;
-    }
-    let chunk = plane.chunk();
-    let (offset, size) = (chunk.offset(), chunk.size());
-    let row_bytes = negotiated
-        .size
-        .width
-        .saturating_mul(negotiated.format.bytes_per_pixel());
-    let stride = u32::try_from(chunk.stride())
-        .ok()
-        .filter(|s| *s > 0)
-        .unwrap_or(row_bytes);
-    if size == 0 {
-        // The producer has not rendered into it yet.
-        return None;
-    }
-    let layout = RowLayout {
-        stride,
-        row_bytes,
-        height: negotiated.size.height,
-    };
-    let mapped = plane.data()?;
-    let range = layout.frame_range(mapped.len(), offset)?;
-    let mut bytes = mapped.get(range)?.to_vec();
-    // A trimmed last row is padded back to a full stride, so every row
-    // of the copy is `stride` bytes.
-    bytes.resize(stride as usize * negotiated.size.height as usize, 0);
-    Some(Copied {
-        bytes,
-        stride,
-        content,
-        damage,
-        pts_ns,
-    })
+    newest
+}
+
+/// A frame cut from a dequeued buffer, before it is leased or kept.
+struct Cut {
+    meta: FrameMeta,
+    backing: FrameBacking,
+    release: Option<ReleasePoint>,
+}
+
+enum FrameBacking {
+    DmaBuf(Arc<DmaBuf>),
+    Mapped(MappedFrame),
+    /// Copied out (`ExhaustionReadback`): needs no lease.
+    Copied(Vec<u8>),
 }
 
 /// A header pts within a minute of `CLOCK_MONOTONIC` now is on that
@@ -531,60 +773,229 @@ fn plausible_monotonic(pts: u64) -> bool {
     monotonic_ns().abs_diff(pts) < WINDOW_NS
 }
 
-fn meta_for(
-    data: &StreamData,
+fn orientation(transform: Option<u32>) -> Orientation {
+    use wayland_client::protocol::wl_output::Transform;
+    transform
+        .and_then(|t| Transform::try_from(t).ok())
+        .map_or(Orientation::UPRIGHT, |t| {
+            super::super::wayland::orientation_of(t, false)
+        })
+}
+
+/// The shared backing of `buffer`: its DMA-BUF fds duplicated, or its
+/// `MemFd` mapped, once per buffer.
+fn backing(
+    leases: &mut Leases,
+    buffer: &Buffer,
     negotiated: Negotiated,
-    copied: &Copied,
-    buffer: BufferIdentity,
-) -> FrameMeta {
-    FrameMeta {
+) -> Result<Backing, String> {
+    if let Some(backing) = leases.backings.get(&buffer.key()) {
+        return Ok(backing.clone());
+    }
+    let planes = buffer.planes();
+    let first = planes.first().ok_or("a buffer without planes")?;
+    let backing = if let Some(modifier) = negotiated.modifier {
+        let planes = planes
+            .iter()
+            .map(|plane| {
+                let fd = plane.fd.ok_or("a DMA-BUF plane without an fd")?;
+                // The frame owns its duplicate: PipeWire closes its own
+                // on renegotiation while the frame may still live.
+                let fd = rustix::io::fcntl_dupfd_cloexec(fd, 0)
+                    .map_err(|e| format!("dup a DMA-BUF fd: {e}"))?;
+                let stride = u32::try_from(plane.chunk_stride)
+                    .ok()
+                    .filter(|s| *s > 0)
+                    .ok_or("a DMA-BUF plane without a stride")?;
+                Ok(DmaBufPlane {
+                    fd,
+                    offset: plane.chunk_offset,
+                    stride,
+                    size: (plane.maxsize > 0).then_some(u64::from(plane.maxsize)),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Backing::DmaBuf(Arc::new(DmaBuf {
+            width: negotiated.size.width,
+            height: negotiated.size.height,
+            fourcc: negotiated.format.drm_fourcc(),
+            modifier,
+            planes,
+        }))
+    } else {
+        if first.kind != raw::DATA_MEM_FD {
+            return Err(format!("unexpected shared memory type {}", first.kind));
+        }
+        let fd = first.fd.ok_or("a MemFd plane without an fd")?;
+        let mapping = Mapping::new(
+            fd,
+            u64::from(first.mapoffset),
+            usize::try_from(first.maxsize).unwrap_or(0),
+        )
+        .map_err(|e| e.to_string())?;
+        Backing::Mapped(Arc::new(mapping))
+    };
+    leases.backings.insert(buffer.key(), backing.clone());
+    Ok(backing)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "sync, metas and backing of one frame, read in one pass over the dequeued buffer"
+)]
+/// Cut a frame out of `buffer` (dequeued): wait for its acquire point,
+/// read its metas, share its backing. `copy` reads shared memory out
+/// instead (a lease-free `CopyToCpu` frame).
+fn cut(
+    data: &mut StreamData,
+    leases: &mut Leases,
+    buffer: &Buffer,
+    negotiated: Negotiated,
+    copy: bool,
+) -> Result<Option<Cut>, String> {
+    let planes = buffer.planes();
+    let Some(first) = planes.first().copied() else {
+        return Err("a buffer without planes".to_owned());
+    };
+    if first.chunk_size == 0 && negotiated.modifier.is_none() {
+        // The producer has not rendered into it yet.
+        return Ok(None);
+    }
+    let (sync, release) = match buffer.timeline() {
+        Some(timeline) => {
+            let point = data
+                .sync
+                .acquire(
+                    timeline.acquire,
+                    timeline.acquire_point,
+                    timeline.release,
+                    timeline.release_point,
+                )
+                .map_err(|e| e.to_string())?;
+            (SyncKind::Ready, Some(point))
+        }
+        None if negotiated.modifier.is_some() => (SyncKind::Implicit, None),
+        None => (SyncKind::Ready, None),
+    };
+    let row_bytes = negotiated
+        .size
+        .width
+        .saturating_mul(negotiated.format.bytes_per_pixel());
+    let stride = u32::try_from(first.chunk_stride)
+        .ok()
+        .filter(|s| *s > 0)
+        .unwrap_or(row_bytes);
+    let (backing, planes, copied) = match backing(leases, buffer, negotiated)? {
+        Backing::DmaBuf(dmabuf) => {
+            let planes = dmabuf
+                .planes
+                .iter()
+                .map(|p| PlaneLayout {
+                    offset: p.offset,
+                    stride: p.stride,
+                    size: p
+                        .size
+                        .unwrap_or_else(|| u64::from(p.stride) * u64::from(negotiated.size.height)),
+                })
+                .collect();
+            (FrameBacking::DmaBuf(dmabuf), planes, None)
+        }
+        Backing::Mapped(mapping) => {
+            let layout = RowLayout {
+                stride,
+                row_bytes,
+                height: negotiated.size.height,
+            };
+            let range = layout
+                .frame_range(mapping.bytes().len(), first.chunk_offset)
+                .ok_or("the shared memory is shorter than the frame")?;
+            let planes = vec![PlaneLayout {
+                offset: 0,
+                stride,
+                size: u64::try_from(range.len()).unwrap_or(u64::MAX),
+            }];
+            if copy {
+                let bytes = mapping.bytes().get(range).unwrap_or_default().to_vec();
+                (
+                    FrameBacking::Copied(bytes),
+                    planes,
+                    Some(CopyStage::ExhaustionReadback),
+                )
+            } else {
+                let frame =
+                    MappedFrame::new(mapping, range).ok_or("the frame lies outside the mapping")?;
+                (FrameBacking::Mapped(frame), planes, None)
+            }
+        }
+    };
+    let bounds = Rect::from_size(negotiated.size);
+    let content = buffer
+        .crop()
+        .and_then(|crop| crop.intersect(bounds))
+        .unwrap_or(bounds);
+    let damage = buffer.damage().map_or(Damage::Full, |rects| {
+        Damage::clipped(rects, negotiated.size)
+    });
+    let pts_ns = buffer
+        .pts()
+        .filter(|pts| plausible_monotonic(*pts))
+        .unwrap_or_else(monotonic_ns);
+    let cursor: Option<CursorState> = data.setup.cursor_meta.then(|| buffer.cursor()).flatten();
+    let meta = FrameMeta {
         seq: 0,
-        pts_ns: copied.pts_ns,
+        pts_ns,
         pts_clock: PtsClock::Monotonic,
         wall_us: 0,
         size: negotiated.size,
-        content_rect: copied.content,
+        content_rect: content,
         format: negotiated.format,
-        memory: BufferMemory::Cpu,
-        planes: vec![PlaneLayout {
-            offset: 0,
-            stride: copied.stride,
-            size: copied.bytes.len() as u64,
-        }],
-        modifier: None,
-        buffer,
+        memory: if matches!(backing, FrameBacking::DmaBuf(_)) {
+            BufferMemory::DmaBuf
+        } else {
+            BufferMemory::Cpu
+        },
+        planes,
+        modifier: negotiated.modifier,
+        buffer: BufferIdentity::default(),
         tier: negotiated.tier,
-        copied: None,
-        producer: None,
+        copied,
+        producer: negotiated
+            .modifier
+            .and(data.setup.producer)
+            .map(GpuIdentity::Drm),
         colour: Colour::SRGB,
         hdr: None,
-        // The video-transform meta is not readable through the safe API;
-        // portals of rotated outputs are reported `Unsupported`.
-        orientation: Orientation::UPRIGHT,
-        damage: copied.damage.clone(),
-        cursor: None,
-        sync: SyncKind::Ready,
+        orientation: orientation(buffer.transform()),
+        damage,
+        cursor,
+        sync,
         scale_permille: data.source.scale(),
         source_id: data.source.id.clone(),
         repeat: false,
         skipped_before: data.skipped,
         protected_content: false,
         composite: None,
-    }
+    };
+    Ok(Some(Cut {
+        meta,
+        backing,
+        release,
+    }))
 }
 
-fn on_process(stream: &Stream, data: &mut StreamData) {
+fn on_process(stream: &Stream, data: &mut StreamData, leases: &mut Leases) {
     let Some(negotiated) = data.negotiated else {
         drain(stream);
         return;
     };
-    match &data.mode {
-        Mode::Shot => shot(stream, data, negotiated),
-        Mode::Live { .. } => deliver(stream, data, negotiated),
+    if matches!(data.mode, Mode::Shot { .. }) {
+        shot(stream, data, leases, negotiated);
+    } else {
+        deliver(stream, data, leases, negotiated);
     }
 }
 
-fn shot(stream: &Stream, data: &StreamData, negotiated: Negotiated) {
+fn shot(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiated: Negotiated) {
     let done = data
         .shared
         .borrow()
@@ -596,10 +1007,32 @@ fn shot(stream: &Stream, data: &StreamData, negotiated: Negotiated) {
         return;
     }
     let mut skipped = 0;
-    let Some(copied) = take_newest(stream, negotiated, &mut skipped) else {
+    let Some(buffer) = newest(stream, &mut skipped) else {
         return;
     };
-    let meta = meta_for(data, negotiated, &copied, BufferIdentity::default());
+    let cut = match cut(data, leases, &buffer, negotiated, false) {
+        Ok(Some(cut)) => cut,
+        Ok(None) => {
+            buffer.requeue(stream);
+            return;
+        }
+        Err(why) => {
+            tracing::warn!(%why, "screen-capture portal: frame dropped");
+            buffer.requeue(stream);
+            return;
+        }
+    };
+    // Kept dequeued until the stream ends: the producer never renders
+    // into it again, so the frame stays what it shows.
+    if let Mode::Shot { kept } = &mut data.mode {
+        kept.push(buffer);
+    }
+    drop(cut.release);
+    let buffer = match cut.backing {
+        FrameBacking::DmaBuf(dmabuf) => NativeBuffer::from_dmabuf(dmabuf),
+        FrameBacking::Mapped(frame) => NativeBuffer::from_bytes(frame),
+        FrameBacking::Copied(bytes) => NativeBuffer::from_bytes(bytes),
+    };
     let mut source = data.source.clone();
     source.physical_size = Some(negotiated.size);
     if let Some(geometry) = source.geometry.filter(|g| g.width > 0) {
@@ -608,9 +1041,9 @@ fn shot(stream: &Stream, data: &StreamData, negotiated: Negotiated) {
     let captured = Captured {
         meta: FrameMeta {
             scale_permille: source.scale(),
-            ..meta
+            ..cut.meta
         },
-        buffer: NativeBuffer::from_bytes(copied.bytes),
+        buffer,
         source,
     };
     let mut shared = data.shared.borrow_mut();
@@ -624,74 +1057,103 @@ fn shot(stream: &Stream, data: &StreamData, negotiated: Negotiated) {
     }
 }
 
-fn deliver(stream: &Stream, data: &mut StreamData, negotiated: Negotiated) {
-    let Mode::Live { live, pool, wake } = &data.mode else {
+fn deliver(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiated: Negotiated) {
+    let Mode::Live(live) = &data.mode else {
         return;
     };
-    let (out, pool, wake) = (live.out.clone(), pool.clone(), wake.clone());
-    let (exhaustion, pool_depth) = (live.exhaustion, live.pool_depth);
+    let (out, exhaustion, pool_depth) = (live.out.clone(), live.exhaustion, live.pool_depth);
     if out.is_stopped() {
         drain(stream);
         data.shared.borrow().mainloop.quit();
         return;
     }
     if !out.wants_frames() {
-        drain(stream);
+        data.skipped = data.skipped.saturating_add(drain(stream));
         return;
     }
-    // Stall: leave the buffers queued in PipeWire (the producer stops for
-    // want of buffers) until a slot comes back and wakes the loop.
-    if exhaustion == Exhaustion::Stall
-        && let Err(exhausted) = pool.check_room()
-    {
+    let full = !leases.book.has_room();
+    // Stall: leave the buffers queued (the producer runs out and stops)
+    // until a frame drops and its release pulls again.
+    if full && exhaustion == Exhaustion::Stall {
+        let exhausted = leases.exhausted();
         out.exhausted(exhausted, pool_depth, exhaustion);
         return;
     }
     let mut skipped = data.skipped;
-    let Some(copied) = take_newest(stream, negotiated, &mut skipped) else {
+    let Some(buffer) = newest(stream, &mut skipped) else {
         data.skipped = skipped;
         return;
     };
     data.skipped = skipped;
-    let slot = data.slot % u32::from(pool_depth.max(1));
-    let mut meta = meta_for(data, negotiated, &copied, BufferIdentity::default());
-    let bytes = copied.bytes;
-    let (buffer, identity, copy) = match pool.hold(slot) {
-        Ok(lease) => {
-            let identity = lease.identity();
-            let buffer = NativeBuffer::from_bytes(bytes)
-                .with_identity(identity.into())
-                .with_release(move || {
-                    drop(lease);
-                    // Fails only once the loop ended.
-                    let _ended = wake.send(Wake);
-                });
-            (buffer, identity, None)
+    let copy = full && exhaustion == Exhaustion::CopyToCpu && negotiated.modifier.is_none();
+    if full && !copy {
+        // DropNewest (or CopyToCpu on DMA-BUF, refused at open).
+        let exhausted = leases.exhausted();
+        out.exhausted(exhausted, pool_depth, exhaustion);
+        buffer.requeue(stream);
+        data.skipped = data.skipped.saturating_add(1);
+        return;
+    }
+    if copy {
+        let exhausted = leases.exhausted();
+        out.exhausted(exhausted, pool_depth, exhaustion);
+    } else {
+        leases.exhausted = false;
+    }
+    let cut = match cut(data, leases, &buffer, negotiated, copy) {
+        Ok(Some(cut)) => cut,
+        Ok(None) => {
+            buffer.requeue(stream);
+            return;
         }
-        Err(err @ HoldError::SlotOutOfRange { .. }) => {
-            tracing::error!(%err, "screen-capture: portal frame dropped");
+        Err(why) => {
+            tracing::debug!(%why, "screen-capture portal: frame dropped");
+            buffer.requeue(stream);
             data.skipped = data.skipped.saturating_add(1);
             return;
         }
-        Err(HoldError::Exhausted(exhausted)) => {
-            out.exhausted(exhausted, pool_depth, exhaustion);
-            match exhaustion {
-                Exhaustion::Stall | Exhaustion::DropNewest => {
-                    data.skipped = data.skipped.saturating_add(1);
-                    return;
-                }
-                // Already CPU memory: the frame leaves without a pool slot.
-                Exhaustion::CopyToCpu => (
-                    NativeBuffer::from_bytes(bytes),
-                    BufferIdentity::default(),
-                    Some(CopyStage::ExhaustionReadback),
-                ),
+    };
+    let Cut {
+        mut meta,
+        backing,
+        release,
+    } = cut;
+    let buffer = match backing {
+        FrameBacking::Copied(bytes) => {
+            // Read out: the buffer goes back at once.
+            if let Some(release) = release {
+                release.signal();
             }
+            buffer.requeue(stream);
+            NativeBuffer::from_bytes(bytes)
+        }
+        FrameBacking::DmaBuf(_) | FrameBacking::Mapped(_) => {
+            let key = buffer.key();
+            let Some(id) = leases.book.hold(key) else {
+                if let Some(release) = release {
+                    release.signal();
+                }
+                buffer.requeue(stream);
+                return;
+            };
+            let identity = leases.identity(key);
+            meta.buffer = identity;
+            leases.dequeued.insert(id, (buffer, release));
+            let (tx, stream_index) = (leases.tx.clone(), leases.stream);
+            let native = match backing {
+                FrameBacking::DmaBuf(dmabuf) => NativeBuffer::from_dmabuf(dmabuf),
+                FrameBacking::Mapped(frame) => NativeBuffer::from_bytes(frame),
+                FrameBacking::Copied(bytes) => NativeBuffer::from_bytes(bytes),
+            };
+            native.with_identity(identity.into()).with_release(move || {
+                // Fails only once the loop ended (and the buffers with it).
+                let _sent = tx.send(Release {
+                    stream: stream_index,
+                    id,
+                });
+            })
         }
     };
-    meta.buffer = identity;
-    meta.copied = copy;
-    data.slot = data.slot.wrapping_add(1);
     match out.deliver(meta, buffer) {
         Delivery::Delivered => data.skipped = 0,
         Delivery::Closed => data.shared.borrow().mainloop.quit(),
@@ -701,7 +1163,7 @@ fn deliver(stream: &Stream, data: &mut StreamData, negotiated: Negotiated) {
 
 #[cfg(test)]
 mod tests {
-    use super::RowLayout;
+    use super::{HeldBuffers, RowLayout};
 
     const LAYOUT: RowLayout = RowLayout {
         stride: 64,
@@ -709,8 +1171,71 @@ mod tests {
         height: 3,
     };
 
+    fn pool(n: usize) -> HeldBuffers<u32> {
+        let mut book = HeldBuffers::default();
+        (0..n).for_each(|_| book.buffer_added());
+        book
+    }
+
     #[test]
-    fn a_producer_without_shared_memory_is_a_format_miss() {
+    fn holds_all_but_one_buffer() {
+        let mut book = pool(4);
+        assert_eq!(book.limit(), 3);
+        let ids: Vec<_> = (0..3).map(|b| book.hold(b).expect("under limit")).collect();
+        assert_eq!(book.hold(3), None, "the producer keeps one buffer");
+        assert_eq!(book.release(ids[1]), Some(1));
+        assert!(book.hold(3).is_some());
+    }
+
+    #[test]
+    fn tiny_or_unknown_pool_holds_nothing() {
+        assert_eq!(pool(0).hold(0), None);
+        assert_eq!(pool(1).hold(0), None);
+    }
+
+    #[test]
+    fn release_returns_each_hold_once() {
+        let mut book = pool(3);
+        let id = book.hold(7).expect("under limit");
+        assert_eq!(book.release(id), Some(7));
+        assert_eq!(book.release(id), None);
+        let again = book.hold(7).expect("under limit");
+        assert_ne!(again, id);
+        assert_eq!(book.release(id), None);
+        assert_eq!(book.release(again), Some(7));
+    }
+
+    #[test]
+    fn removed_buffers_make_late_releases_inert() {
+        let mut book = pool(3);
+        let held = book.hold(1).expect("under limit");
+        let kept = book.hold(2).expect("under limit");
+        assert!(book.buffer_removed(1));
+        assert!(book.buffer_removed(2));
+        assert!(!book.buffer_removed(3));
+        assert_eq!(book.limit(), 0);
+        (0..3).for_each(|_| book.buffer_added());
+        let fresh = book.hold(1).expect("under limit");
+        assert_eq!(book.release(held), None);
+        assert_eq!(book.release(kept), None);
+        assert_eq!(book.release(fresh), Some(1));
+    }
+
+    #[test]
+    fn shrinking_pool_lowers_the_limit_below_current_holds() {
+        let mut book = pool(4);
+        let a = book.hold(0).expect("under limit");
+        book.hold(1).expect("under limit");
+        assert!(!book.buffer_removed(3));
+        assert!(!book.buffer_removed(2));
+        assert_eq!(book.limit(), 1);
+        assert_eq!(book.hold(2), None);
+        assert_eq!(book.release(a), Some(0));
+        assert_eq!(book.hold(2), None, "still at the limit with one held");
+    }
+
+    #[test]
+    fn a_producer_without_listed_formats_is_a_format_miss() {
         use super::{StreamEnd, end_error};
         use crate::types::{BackendId, CaptureError, Requirement};
         assert_eq!(
@@ -729,7 +1254,6 @@ mod tests {
 
     #[test]
     fn frame_range_accepts_trimmed_last_row() {
-        // Two full strides and the 40 pixel bytes of the last row.
         assert_eq!(LAYOUT.frame_range(168, 0), Some(0..168));
     }
 
@@ -747,5 +1271,15 @@ mod tests {
             ..LAYOUT
         };
         assert_eq!(empty.frame_range(1024, 0), None);
+    }
+
+    #[test]
+    fn video_transforms_become_orientations() {
+        use crate::types::Rotation;
+        assert!(super::orientation(None).is_upright());
+        assert_eq!(super::orientation(Some(1)).rotation, Rotation::R90);
+        let flipped = super::orientation(Some(7));
+        assert!(flipped.mirrored);
+        assert_eq!(flipped.rotation, Rotation::R270);
     }
 }

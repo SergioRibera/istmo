@@ -19,9 +19,10 @@ links = "istmo_screen_capture"
 # with no backend for its target answers `NoBackendCompiled` at run time
 # instead of failing to compile.
 default = ["linux-portal", "linux-ext-image-copy", "linux-wlr-screencopy", "linux-x11", "linux-audio"]
-# xdg-desktop-portal ScreenCast + PipeWire video. Needs libpipewire at
-# build time (pkg-config, bindgen) and at run time.
-linux-portal = ["dep:ashpd", "dep:pollster", "pipewire"]
+# xdg-desktop-portal ScreenCast + PipeWire video (DMA-BUF zero-copy with
+# the compositor's dmabuf feedback, explicit sync through DRM syncobjs).
+# Needs libpipewire at build time (pkg-config, bindgen) and at run time.
+linux-portal = ["dep:ashpd", "dep:pollster", "dep:drm", "pipewire", "wayland", "dmabuf-alloc"]
 # ext-image-copy-capture-v1 (Sway 1.11, Hyprland, COSMIC, ...).
 linux-ext-image-copy = ["wayland", "dmabuf-alloc"]
 # zwlr_screencopy_manager_v1 (wlroots compositors, niri).
@@ -69,6 +70,11 @@ istmo-build = { workspace = true }
 [dev-dependencies]
 istmo-build = { workspace = true }
 pollster = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# The live PipeWire test asks niri's Mutter ScreenCast API for a stream
+# directly (no portal dialog); same zbus and runtime as ashpd.
+zbus = { version = "6.5", default-features = false, features = ["default-rt", "proxy"] }
 
 [lints.rust]
 # The workspace lints, except `unsafe_code`: denied crate-wide and
