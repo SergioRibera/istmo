@@ -65,6 +65,8 @@ pub(crate) mod os;
     allow(dead_code, reason = "used by the video backends only")
 )]
 mod watch;
+#[cfg(feature = "windows-wgc")]
+mod wgc;
 
 use std::sync::Arc;
 
@@ -91,6 +93,8 @@ pub(crate) fn backends() -> Vec<Arc<dyn Backend>> {
     os::ensure_mta();
     #[allow(unused_mut, reason = "empty when no Windows video feature is enabled")]
     let mut backends: Vec<Arc<dyn Backend>> = Vec::new();
+    #[cfg(feature = "windows-wgc")]
+    backends.push(wgc::backend());
     #[cfg(feature = "windows-dxgi")]
     backends.push(dxgi::backend());
     #[cfg(feature = "windows-gdi")]
