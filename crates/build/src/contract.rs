@@ -24,7 +24,7 @@ pub struct Contract {
 /// script (`istmo_build::emit_shared_types`).
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct SharedTypes {
-    /// The group name: the Swift file (and later namespace) the types
+    /// The group name: the Swift file and namespace the types
     /// live in, e.g. `IstmoMedia`.
     pub group: String,
     /// The Kotlin package the types are generated in, e.g.
