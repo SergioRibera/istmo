@@ -47,6 +47,8 @@ fn pump_loop(
     shutdown: &FlumeReceiver<()>,
 ) {
     static WAIT: istmo_core::spin::SpinWait = istmo_core::spin::SpinWait::new();
+    // Started after `Runtime::init`, so the runtime exists.
+    let runtime = istmo_core::Runtime::global().ok();
     loop {
         // A frame queued right after the last delivery is taken without
         // parking the pump.
@@ -65,6 +67,11 @@ fn pump_loop(
             PumpStep::Deliver(env) => env,
         };
         callbacks.deliver(envelope.frame);
+        // A direct answer may go back to Swift once nothing queued
+        // before it is still on its way.
+        if let Some(runtime) = &runtime {
+            runtime.outbound_delivered();
+        }
     }
     tracing::info!("istmo ios pump thread exiting");
 }

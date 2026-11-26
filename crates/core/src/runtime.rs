@@ -471,6 +471,10 @@ pub struct Runtime {
     /// by the transport ([`outbound_delivered`](Self::outbound_delivered)).
     outbound_backlog: Arc<AtomicUsize>,
 
+    /// The transport reports every delivered frame
+    /// ([`track_outbound_deliveries`](Self::track_outbound_deliveries)).
+    tracks_deliveries: AtomicBool,
+
     /// Frames a thread that must not block could not put on the full
     /// outbound channel, on their way to it in order.
     spill: Arc<spill::Spill>,
@@ -764,9 +768,28 @@ impl Runtime {
     /// outbound channel with [`outbound_delivered`](Self::outbound_delivered)
     /// once delivered; until it does, calls keep the channel.
     pub fn install_direct_peer(&self, peer: Arc<dyn DirectPeer>) {
+        self.track_outbound_deliveries();
         if self.direct_peer.set(peer).is_err() {
             tracing::warn!("a direct peer is already installed; ignored");
         }
+    }
+
+    /// Declare that the transport reports every frame it takes off the
+    /// outbound channel with [`outbound_delivered`](Self::outbound_delivered)
+    /// once delivered, from before the first frame goes out. An answer
+    /// [`serve_peer_call`](Self::serve_peer_call) would hand back directly
+    /// then follows as a frame instead while anything queued before it (a
+    /// notification or event the host sent first) is still on its way.
+    /// Implied by [`install_direct_peer`](Self::install_direct_peer).
+    pub fn track_outbound_deliveries(&self) {
+        self.tracks_deliveries.store(true, Ordering::Release);
+    }
+
+    /// Frames sent and not yet reported delivered, for a transport that
+    /// reports them.
+    fn frames_on_their_way(&self) -> bool {
+        self.tracks_deliveries.load(Ordering::Acquire)
+            && self.outbound_backlog.load(Ordering::Acquire) != 0
     }
 
     /// The transport delivered one frame it took off the outbound
@@ -2055,7 +2078,10 @@ impl Runtime {
         if origin == Origin::Peer {
             self.forget_peer_credit(StreamId(call_id.get()));
         }
-        // A synchronous caller still waiting takes the answer itself.
+        // A synchronous caller still waiting takes the answer itself,
+        // unless a frame queued before it (a notification the host sent)
+        // is still on its way: the answer then follows it as a frame.
+        let direct = direct.filter(|_| !self.frames_on_their_way());
         let result = match direct {
             Some(direct) => match direct.offer(result) {
                 Ok(()) => {
@@ -2720,6 +2746,7 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         frame_sinks: FrameSinks::default(),
         direct_peer: OnceLock::new(),
         outbound_backlog,
+        tracks_deliveries: AtomicBool::new(false),
         spill,
         peer_credits: Mutex::new(HashMap::new()),
     });

@@ -197,6 +197,8 @@ fn start(callbacks: IstmoIosCallbacks) -> Result<(), IosRuntimeError> {
     let init = __istmo_configure_runtime(init);
     crate::assets::install();
     crate::path::install_from_bundle();
+    // The pump reports each frame it delivers.
+    init.runtime.track_outbound_deliveries();
     let handles = pump::spawn(callbacks, init.outbound)?;
     state::install(RuntimeState::new(handles))
 }

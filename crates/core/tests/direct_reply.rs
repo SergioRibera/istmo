@@ -148,3 +148,73 @@ fn a_cancel_after_a_direct_answer_is_harmless() {
             .serve_peer_call(CallId(8), "test.direct", None, "echo".into(), vec![4]);
     assert_eq!(reply, Some(Ok(vec![4])));
 }
+
+/// Notifies the peer, then answers without waiting.
+#[derive(Default)]
+struct NotifyFirst {
+    runtime: std::sync::OnceLock<std::sync::Weak<Runtime>>,
+}
+
+impl Dispatch for NotifyFirst {
+    fn plugin_id(&self) -> &'static str {
+        "test.notify_first"
+    }
+
+    fn mode(&self) -> DispatchMode {
+        DispatchMode::Inline
+    }
+
+    fn runtime_attached(&self, runtime: std::sync::Weak<Runtime>) {
+        let _ = self.runtime.set(runtime);
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        _instance: Option<InstanceId>,
+        _method: &'a str,
+        _payload: &'a [u8],
+        _cancel: CancelToken,
+    ) -> DispatchFuture<'a> {
+        let runtime = self
+            .runtime
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .expect("runtime");
+        Box::pin(async move {
+            runtime
+                .notify("peer.p", None, "before", Vec::new())
+                .expect("notify");
+            Ok(Outcome::Ok(b"after".to_vec()))
+        })
+    }
+}
+
+#[test]
+fn a_direct_answer_never_overtakes_a_frame_the_host_sent_first() {
+    let init = Runtime::mock();
+    init.runtime.track_outbound_deliveries();
+    init.runtime.register_host(NotifyFirst::default());
+    let reply = init.runtime.serve_peer_call(
+        CallId(7),
+        "test.notify_first",
+        None,
+        "go".into(),
+        Vec::new(),
+    );
+    assert_eq!(reply, None, "the notification is still on its way");
+    assert!(matches!(
+        init.outbound.try_recv().expect("notify").frame,
+        Frame::Notify { method, .. } if method == "before"
+    ));
+    assert_eq!(respond(&init.outbound), (CallId(7), Ok(b"after".to_vec())));
+    init.runtime.outbound_delivered();
+    init.runtime.outbound_delivered();
+    // Both delivered: a host that sends nothing first answers directly.
+    init.runtime.register_host(Host {
+        mode: DispatchMode::Inline,
+    });
+    let reply =
+        init.runtime
+            .serve_peer_call(CallId(8), "test.direct", None, "echo".into(), vec![3]);
+    assert_eq!(reply, Some(Ok(vec![3])));
+}
