@@ -221,11 +221,17 @@ bloqueante, marca la entrada
 `runtime!(hosts: [#[wire_only] Picker => DesktopPicker])` (o llama a
 `Runtime::register_host_wire_only`).
 
-El runtime nunca bloquea un hilo que entrega trabajo (uno que hace poll
-de un host inline, un worker asíncrono, el pump de un transporte) con el
-canal saliente lleno: lo que ese hilo envía se encola detrás del canal,
-en orden. Un hilo tuyo cualquiera sí espera lugar, que es la
-contrapresión que da el canal.
+El runtime nunca bloquea con el canal saliente lleno un hilo del que
+puede depender el avance de ese canal (el pump de un transporte, el
+lector de un puente entre procesos, un hilo que entrega frames a un
+sink, un envío síncrono en un worker asíncrono): lo que ese hilo envía,
+incluido un host inline al que hace poll, se encola detrás del canal en
+orden, y un hilo de drenaje lo mueve. Cualquier otro hilo, tuyo o un
+llamador de Kotlin / Swift que hace poll de un host inline, espera
+lugar: la contrapresión que da el canal. La cola no tiene límite;
+`Runtime::outbound_spill()` la cuenta y el runtime avisa cuando pasa de
+cuatro canales. Un transporte marca un hilo así con
+`istmo::DeliveryScope`.
 
 ### Quién llamó
 

@@ -39,6 +39,10 @@
   frame buffers); Kotlin `IstmoBytesOut`.
 - `istmo.toml` `android_start_in_place = false`: the generated registry
   registers that plugin's backend with `startInPlace = false`.
+- `Runtime::outbound_spill()` (`SpillStats`: frames queued behind a full
+  outbound channel), `BlockingThreads::now()` (blocking workers alive
+  and their peak; a warning past 256), `DeliveryScope::may_block()` and
+  JNI `nativeMayBlock`.
 
 ### Changed (breaking)
 
@@ -80,10 +84,15 @@
   only removes the shortcut.
 - **Notifications follow `method_mode`** (inline for generated hosts)
   instead of always getting a thread of their own.
-- A thread that delivers work (an async worker, a thread polling an
-  inline host, inbound frame handling, a transport pump) never blocks on
-  a full outbound channel: its frames queue behind the channel in order.
-  Other threads keep the backpressure.
+- The desktop data-store serves reads inline (they never wait for a
+  write); writes stay `#[istmo::blocking]`.
+- A thread the outbound channel may depend on (a transport pump, a
+  process bridge's reader, frame-sink ingress, a synchronous send on an
+  async worker) never blocks on a full outbound channel: its frames
+  queue behind the channel in order and a drain thread moves them on;
+  cancels and releases queue the same way instead of being dropped.
+  Other threads, callers polling an inline host included, keep the
+  backpressure. `Runtime::outbound_spill()` counts the queue.
 - `NATIVE_ABI_VERSION` 1 → 2 (`PROTOCOL_VERSION` stays 4): new JNI and C
   entries above; the Kotlin and Swift runtimes must match.
 - **Android:** a unary call Rust makes reaches Kotlin on the Rust
@@ -95,7 +104,7 @@
   instance creation the pump delivers start on `Dispatchers.Default`. A
   `CancellationException` that is not the call's own cancellation (an
   uncaught `withTimeout`) answers Rust with an error instead of leaving
-  the call pending. `IstmoRuntime.call` throws `CancellationException`
+  the call pending, and ends a stream with an error. `IstmoRuntime.call` throws `CancellationException`
   for a cancelled caller even when the host answered in place, and takes
   `(payload, payloadLen)` (`@JvmOverloads`).
 - **Android streams:** `IstmoRuntime.stream` opens a credit-based stream
@@ -107,8 +116,9 @@
   frame queued before it (a notification the host sent first) is on its
   way; the iOS pump now reports deliveries too.
 - **iOS:** `IstmoRuntime.call` calls `istmo_ios_call` from the caller's
-  task, off the runtime's serial queue, and stream submits run on a
-  global queue; `istmo_ios_call` answers `ERR` (with an encoded message)
+  task, off the runtime's serial queue, and `stream` submits on the
+  caller's thread too (so streams and calls reach Rust in the order they
+  were made); `istmo_ios_call` answers `ERR` (with an encoded message)
   for a call it could not submit, so the continuation always resumes.
 
 ### Release notes

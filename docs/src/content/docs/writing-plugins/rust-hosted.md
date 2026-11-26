@@ -213,11 +213,16 @@ To run every call of one registration on a blocking worker, mark the
 entry `runtime!(hosts: [#[wire_only] Picker => DesktopPicker])` (or call
 `Runtime::register_host_wire_only`).
 
-The runtime itself never blocks a thread that delivers work (one polling
-an inline host, an async worker, a transport's pump) on a full outbound
-channel: what such a thread sends queues behind the channel in order.
-A plain thread of yours still waits for room, which is the
-backpressure the channel gives.
+The runtime never blocks a thread whose progress the outbound channel
+may depend on (a transport's pump, a process bridge's reader, a thread
+submitting frames to a sink, a synchronous send on an async worker) on
+a full outbound channel: what such a thread sends, an inline host it
+polls included, queues behind the channel in order, and a drain thread
+moves it on. Any other thread, yours or a Kotlin / Swift caller polling
+an inline host, waits for room: the backpressure the channel gives.
+The queue has no bound; `Runtime::outbound_spill()` counts it and the
+runtime warns when it passes four channels' worth. A transport marks
+such a thread with `istmo::DeliveryScope`.
 
 ### Who called
 
