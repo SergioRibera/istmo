@@ -41,10 +41,17 @@ if [ -z "${SKIP_KOTLIN:-}" ]; then
     # The shared media types, generated once per app in their package.
     { echo "package dev.istmo.media"; echo; cat "$shared/istmo_media_types.kt.expected"; } \
         > "$work/kt/istmo_media_types.kt"
+    # SDK surface a backend uses beyond the shared stubs: the plugin's own
+    # `tests/kotlin-stubs`, compiled with it and never shipped.
+    stubs=
+    if [ -d "$plugin/tests/kotlin-stubs" ]; then
+        stubs=$(find "$plugin/tests/kotlin-stubs" -name '*.kt' | sort)
+    fi
     echo "compiling $1 native/android against its generated Kotlin"
     # shellcheck disable=SC2086 # KOTLINC may carry its own arguments.
     ${KOTLINC:-kotlinc} -Werror ${KOTLIN_CLASSPATH:+-classpath "$KOTLIN_CLASSPATH"} -d "$work/kt-out" \
-        "$runtime/Bincode.kt" "$runtime/PluginHandler.kt" "$runtime/IstmoFrameSender.kt" "$ci"/*.kt \
+        "$runtime/Bincode.kt" "$runtime/PluginHandler.kt" "$runtime/IstmoFrameSender.kt" \
+        "$runtime/IstmoActivityBound.kt" "$ci"/*.kt $stubs \
         "$work/kt"/*.kt "$plugin"/native/android/*.kt
 fi
 

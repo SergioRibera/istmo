@@ -1,5 +1,6 @@
-// The `IstmoRuntime` surface generated clients, services and workers
-// call; the real object needs the Android SDK and the Rust library.
+// The `IstmoRuntime` surface generated clients, services, workers and
+// plugin backends call; the real object needs the Android SDK and the
+// Rust library.
 @file:Suppress("UNUSED_PARAMETER")
 
 package dev.istmo.runtime
@@ -15,4 +16,9 @@ object IstmoRuntime {
     fun start(): Boolean = true
     fun registerService(pluginId: String, service: android.app.Service) {}
     fun unregisterService(pluginId: String) {}
+    fun allocHandleId(pluginId: String): Long = 1L
+    fun forgetHandle(handleId: Long) {}
+    fun registerObject(obj: Any): Long = 1L
+    fun objectAny(handleId: Long): Any? = null
+    fun releaseObject(handleId: Long) {}
 }
