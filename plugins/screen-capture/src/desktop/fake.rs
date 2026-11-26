@@ -45,6 +45,7 @@ pub(crate) struct Fake {
     pub(crate) frames: usize,
     /// After `frames`, fail with `SourceLost` (else go idle).
     pub(crate) lose_source: bool,
+    pub(crate) joins_auto: bool,
 }
 
 pub(crate) fn monitor(id: BackendId, index: usize, geometry: Rect, scale: u32) -> Source {
@@ -73,6 +74,7 @@ impl Fake {
             counters: Arc::new(Counters::default()),
             frames: 0,
             lose_source: true,
+            joins_auto: true,
         }
     }
 
@@ -181,6 +183,10 @@ impl Backend for Fake {
 
     fn availability(&self) -> Availability {
         self.availability.clone()
+    }
+
+    fn joins_auto(&self) -> bool {
+        self.joins_auto
     }
 
     fn caps(&self) -> Result<BackendCaps, CaptureError> {

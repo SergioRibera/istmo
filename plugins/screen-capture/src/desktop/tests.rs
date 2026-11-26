@@ -676,3 +676,18 @@ fn policy_denied_backends_are_reported() {
     .expect_err("denied");
     assert!(matches!(err, CaptureError::NoBackend(_)));
 }
+
+#[test]
+fn a_backend_outside_auto_is_reachable_only_by_name() {
+    let mut fake = Fake::new(WLR, two_monitors());
+    fake.joins_auto = false;
+    let rig = rig_with(vec![fake], CapturePolicy::default());
+    let err = block(
+        rig.client
+            .screenshot_cpu(ScreenshotRequest::default(), PixelLayout::default()),
+    )
+    .expect_err("not in Auto");
+    assert!(matches!(err, CaptureError::NoBackend(_)), "{err:?}");
+    let fixed = ScreenshotRequest::default().backend(BackendSelection::Fixed(WLR));
+    block(rig.client.screenshot_cpu(fixed, PixelLayout::default())).expect("by name");
+}

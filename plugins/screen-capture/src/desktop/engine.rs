@@ -143,6 +143,16 @@ impl Engine {
         }
     }
 
+    /// The platform `Auto` order without the backends that have not
+    /// joined `Auto` yet.
+    fn auto_order(&self) -> Vec<BackendId> {
+        self.order
+            .iter()
+            .copied()
+            .filter(|id| self.backend(*id).is_some_and(|b| b.joins_auto()))
+            .collect()
+    }
+
     pub(crate) const fn policy(&self) -> &CapturePolicy {
         &self.policy
     }
@@ -543,9 +553,10 @@ impl Engine {
         mut attempt: impl FnMut(&Arc<dyn Backend>, Option<&BackendCaps>) -> Result<T, CaptureError>,
     ) -> Result<T, CaptureError> {
         let candidates = self.candidates();
+        let order = self.auto_order();
         let choice = select::choose(
             selection,
-            &self.order,
+            &order,
             self.env.as_deref(),
             &candidates,
             &self.policy,

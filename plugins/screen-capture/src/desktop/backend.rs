@@ -112,6 +112,15 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// Whether it can run in this session. May connect to the display.
     fn availability(&self) -> Availability;
 
+    /// Whether `Auto` may pick it. A backend joins `Auto` only once its
+    /// checklist (open, frames, close without leaks, exhaustion, sink
+    /// drop, pixel checks) passed on a real session; until then it is
+    /// reachable through `Fixed`, `Ordered` and the environment
+    /// override only.
+    fn joins_auto(&self) -> bool {
+        true
+    }
+
     /// The capability report, probed where possible, each section with
     /// its provenance.
     ///
