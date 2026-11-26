@@ -4,6 +4,17 @@
 
 ### Added
 
+- `istmo-screen-capture` plugin (`istmo.screen_capture`): screenshots
+  (frames into a sink, or raw pixels with `screenshot_pixels`, never
+  encoded; multi-monitor CPU composite) and live sessions into frame
+  sinks, with a capability report that says per section whether a fact
+  was probed, comes from a table or is known only after consent.
+  Linux backends behind features: `linux-wlr-screencopy` (GBM DMA-BUF
+  zero-copy), `linux-ext-image-copy`, `linux-x11`, `linux-portal`
+  (PipeWire, shared memory only for now) and `linux-audio` (PipeWire).
+  Android and iOS backends answer `NoBackendCompiled` for now.
+  `scripts/check-plugin-native.sh` compiles a plugin's `native/`
+  backends against its generated Kotlin / Swift.
 - Native frame sinks (`istmo_core::native_frame`): `FrameSink` /
   `FrameSender` / `NativeBuffer` move buffers (DMA-BUF,
   `AHardwareBuffer`, `CVPixelBuffer` / `IOSurface` / `CMSampleBuffer`,

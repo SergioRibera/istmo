@@ -6,7 +6,10 @@ or spanning several monitors), with an honest capability report,
 explicit backend and format selection, consent modelled as state, a
 control plane over istmo and a data plane over native frame sinks
 (`design/native-frames.md`) or straight into a platform surface.
-Not implemented yet.
+Implemented so far: the contract, selection, pools, pixel helper,
+desktop host and the Linux backends (wlr-screencopy, ext-image-copy,
+X11, portal over PipeWire shared memory, PipeWire audio). Later steps
+are listed under "Implementation order".
 
 Per-platform facts, version tables and official sources live in
 `design/screen-capture-platforms.md`; this document refers to them by
