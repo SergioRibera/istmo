@@ -1065,3 +1065,33 @@ fn a_frame_that_cannot_be_turned_ends_an_upright_session() {
     let reason = sink.end_reason().expect("ended");
     assert!(format!("{reason:?}").contains("Upright"), "{reason:?}");
 }
+
+#[test]
+fn exact_pacing_with_a_shallow_pool_keeps_flowing() {
+    let rig = rig();
+    let config = SessionConfig::default()
+        .fps(FrameRate::Exact(60))
+        .pool_depth(2);
+    let session = block(
+        rig.client
+            .open_session(&rig.runtime, config, SinkPolicy::latest()),
+    )
+    .expect("open");
+    assert!(
+        session.negotiated().pool_depth >= 4,
+        "the pacer's pending and repeated frames on top: {}",
+        session.negotiated().pool_depth
+    );
+    let mut fresh = 0;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while fresh < 10 && Instant::now() < deadline {
+        if let Some(frame) = session.video().try_recv() {
+            if !frame.meta.repeat {
+                fresh += 1;
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+    assert_eq!(fresh, 10, "new frames keep coming, not only repeats");
+}

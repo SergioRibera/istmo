@@ -1055,12 +1055,11 @@ impl Engine {
                 (placeholder, Some(options), None)
             }
         };
-        let pool = caps.map(|c| c.pool.clone());
-        let pool_depth = match (config.video.pool_depth, pool) {
-            (0, Some(pool)) => pool.default_depth,
-            (depth, Some(pool)) => depth.clamp(pool.min_depth, pool.max_depth),
-            (depth, None) => depth.max(2),
-        };
+        let pool_depth = Self::pool_depth(
+            config.video.pool_depth,
+            caps.map(|c| &c.pool),
+            config.video.fps,
+        );
         let events = Arc::new(EventHub::default());
         let out = FrameOut::new(id, video.clone(), Arc::clone(&events), config.video.fps);
         out.set_crop(crop);
@@ -1151,6 +1150,39 @@ impl Engine {
     }
 
     /// The session `id`, for a caller of the origin that opened it.
+    /// The pool depth to ask the backend for: the caller's (or the
+    /// backend default) plus the frames the plugin's own pacer keeps (a
+    /// pending one under `Max` / `OnDamage`, plus the repeated one under
+    /// `Exact`), which the caller cannot see; at least one frame for the
+    /// sink and one buffer for the producer; clamped to the backend.
+    fn pool_depth(
+        requested: u8,
+        pool: Option<&crate::types::PoolCaps>,
+        fps: crate::types::FrameRate,
+    ) -> u8 {
+        use crate::types::FrameRate;
+        let kept: u8 = match fps {
+            FrameRate::Native => 0,
+            FrameRate::Max(_) | FrameRate::OnDamage(_) => 1,
+            FrameRate::Exact(_) => 2,
+        };
+        let floor = kept.saturating_add(2);
+        pool.map_or_else(
+            || requested.saturating_add(kept).max(floor),
+            |pool| {
+                let wanted = if requested == 0 {
+                    pool.default_depth
+                } else {
+                    requested
+                };
+                wanted
+                    .saturating_add(kept)
+                    .max(floor)
+                    .clamp(pool.min_depth, pool.max_depth)
+            },
+        )
+    }
+
     fn entry(
         &self,
         id: NativeHandleId,
