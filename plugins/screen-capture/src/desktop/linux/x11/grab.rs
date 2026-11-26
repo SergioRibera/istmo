@@ -72,6 +72,8 @@ pub(super) struct Grabber {
     segment: Option<Segment>,
     /// Attaching failed once (remote display, no fd passing): socket only.
     shm_broken: bool,
+    /// Windows this grabber redirected (once each), undone on release.
+    redirected: Vec<xproto::Window>,
 }
 
 fn layout_of(x: &X11, depth: u8) -> Result<(u8, u8, bool), CaptureError> {
@@ -259,11 +261,20 @@ impl Grabber {
                 reuse,
             );
         }
-        // Automatic redirection keeps the window on screen; a compositing
-        // manager may already redirect it (then this is refused, harmless).
-        let _redirect = x
-            .conn
-            .composite_redirect_window(window, composite::Redirect::AUTOMATIC);
+        // Automatic redirection keeps the window on screen. Once per
+        // window, undone in `release`; a compositing manager may already
+        // redirect it (then this is refused and nothing is to undo).
+        if !self.redirected.contains(&window) {
+            let redirected = x
+                .conn
+                .composite_redirect_window(window, composite::Redirect::AUTOMATIC)
+                .map_err(|e| x_err("redirect window", e))?
+                .check()
+                .is_ok();
+            if redirected {
+                self.redirected.push(window);
+            }
+        }
         let pixmap = x.conn.generate_id().map_err(|e| x_err("pixmap id", e))?;
         x.conn
             .composite_name_window_pixmap(window, pixmap)
@@ -279,6 +290,12 @@ impl Grabber {
     pub(super) fn release(&mut self, x: &X11) {
         if let Some(segment) = self.segment.take() {
             let _detached = x.conn.shm_detach(segment.id);
+        }
+        for window in self.redirected.drain(..) {
+            // Fails only for a window that is already gone.
+            let _undone = x
+                .conn
+                .composite_unredirect_window(window, composite::Redirect::AUTOMATIC);
         }
     }
 }
