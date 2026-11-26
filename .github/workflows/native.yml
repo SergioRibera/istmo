@@ -74,6 +74,8 @@ jobs:
         run: runtime/ios/ci/typecheck-stub.sh
       - name: Type-check generated Swift with warnings as errors
         run: runtime/ios/ci/typecheck-goldens.sh
+      - name: Type-check plugin backends against their generated Swift
+        run: SKIP_KOTLIN=1 scripts/check-plugin-native.sh screen-capture dev.istmo.plugins.screencapture screen_capture
 
   kotlin-goldens:
     runs-on: ubuntu-latest
@@ -98,6 +100,8 @@ jobs:
             "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/$COROUTINES_VERSION/kotlinx-coroutines-core-jvm-$COROUTINES_VERSION.jar"
       - name: Compile generated Kotlin with warnings as errors
         run: KOTLIN_CLASSPATH="$RUNNER_TEMP/coroutines.jar" runtime/android/ci/compile-goldens.sh
+      - name: Compile plugin backends against their generated Kotlin
+        run: KOTLIN_CLASSPATH="$RUNNER_TEMP/coroutines.jar" SKIP_SWIFT=1 scripts/check-plugin-native.sh screen-capture dev.istmo.plugins.screencapture screen_capture
 
   ios:
     runs-on: macos-latest
