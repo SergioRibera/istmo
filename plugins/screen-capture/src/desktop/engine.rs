@@ -659,7 +659,14 @@ impl Engine {
             }
             return Ok(Target::Picker(options.clone()));
         }
-        let list = || backend.sources().map(|l| l.sources);
+        // Sources listed only after a standing grant (macOS TCC): without
+        // it nothing is listed, and the call needs the grant first.
+        let list = || {
+            backend.sources().and_then(|l| match l.listing {
+                SourceListing::AfterGrant => Err(CaptureError::ConsentRequired),
+                SourceListing::Enumerable | SourceListing::PickerOnly => Ok(l.sources),
+            })
+        };
         let monitors = |sources: Vec<Source>| -> Vec<Source> {
             sources
                 .into_iter()

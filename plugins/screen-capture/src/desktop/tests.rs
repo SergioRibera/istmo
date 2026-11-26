@@ -440,6 +440,18 @@ fn a_listing_backend_with_a_picker_shows_it_only_when_allowed() {
 }
 
 #[test]
+fn sources_listed_after_a_grant_need_it_first() {
+    let mut sck = Fake::new(BackendId::MacosSck, two_monitors());
+    sck.listing = SourceListing::AfterGrant;
+    let rig = rig_with(vec![sck], CapturePolicy::default());
+    let err = block(
+        rig.client
+            .screenshot_cpu(ScreenshotRequest::default(), PixelLayout::default()),
+    )
+    .expect_err("no grant");
+    assert_eq!(err, CaptureError::ConsentRequired);
+}
+#[test]
 fn standing_grants_come_from_the_backend_that_has_them() {
     use crate::types::{AccessScope, AccessStatus, ConsentModel};
     let rig = rig();
