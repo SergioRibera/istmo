@@ -9,6 +9,7 @@ members = [
     "crates/plugins",
     "crates/plugins-schema",
     "crates/media",
+    "crates/menu",
     "crates/window",
     "crates/lint-check",
     "examples/android-demo",
@@ -91,6 +92,7 @@ istmo-core = { path = "crates/core", version = "0.1.1-alpha.7" }
 istmo-build = { path = "crates/build", version = "0.1.1-alpha.7" }
 istmo-macros = { path = "crates/macros", version = "0.1.1-alpha.7" }
 istmo-media = { path = "crates/media", version = "0.1.1-alpha.7" }
+istmo-menu = { path = "crates/menu", version = "0.1.1-alpha.7" }
 # Default features off: the facade forwards exactly one activity flavor.
 istmo-android = { path = "crates/android", version = "0.1.1-alpha.7", default-features = false }
 istmo-ios = { path = "crates/ios", version = "0.1.1-alpha.7" }

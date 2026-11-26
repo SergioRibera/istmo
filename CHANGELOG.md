@@ -8,6 +8,12 @@
   an app generates a plugin's Kotlin / Swift sources, registry entries
   and shared type groups only for the mobile targets it lists. Default:
   every target.
+- `istmo-menu`: menu model shared by menu plugins (shared type group
+  `IstmoMenu`). Flat node list with parent links, check / radio / header
+  / separator / submenu items, shortcuts, subtitles, badges, icons
+  (SVG / PNG / JPEG / platform names, inline or registered), patches,
+  validation, automatic check toggling and radio exclusivity, and a diff
+  that turns a replacement menu into property patches when nothing moved.
 - `istmo-screen-capture` plugin (`istmo.screen_capture`): screenshots
   (frames into a sink, or raw pixels with `screenshot_pixels`, never
   encoded; multi-monitor CPU composite) and live sessions into frame

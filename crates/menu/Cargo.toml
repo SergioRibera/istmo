@@ -1,0 +1,26 @@
+[package]
+name = "istmo-menu"
+version = "0.1.1-alpha.7"
+description = "Menu model shared by the istmo menu plugins (tray menus): items, patches, validation and diffing."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["istmo", "menu", "tray", "desktop"]
+categories = ["gui"]
+# The build script hands the types to dependent plugins
+# (`DEP_ISTMO_MENU_ISTMO_SHARED_TYPES`); Cargo passes that only with a
+# `links` key.
+links = "istmo_menu"
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[lints]
+workspace = true
