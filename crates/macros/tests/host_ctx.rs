@@ -175,6 +175,9 @@ fn shortcut_opt_outs_keep_every_call_on_the_wire() {
         pollster::block_on(client.origin()).expect("origin"),
         "Local"
     );
+    // Wire-only also means a blocking worker, inline methods included.
+    let here = thread_name(std::thread::current().id());
+    assert_ne!(pollster::block_on(client.thread()).expect("thread"), here);
 }
 
 #[test]

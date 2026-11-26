@@ -101,7 +101,8 @@ impl RuntimeInit {
         self
     }
 
-    /// [`host`](Self::host) without the typed in-process shortcut: see
+    /// [`host`](Self::host) without the typed in-process shortcut, every
+    /// call on a blocking worker: see
     /// [`Runtime::register_host_wire_only`]. `runtime!` uses it for
     /// entries marked `#[wire_only]`.
     #[must_use]
@@ -1249,10 +1250,14 @@ impl Runtime {
     /// installed as the plugin's typed in-process shortcut
     /// ([`Dispatch::typed_shortcut`]): this process's generated clients
     /// then call the implementation directly, polling its futures on the
-    /// caller's executor, instead of encoding the call and running it on
-    /// a dispatcher thread. Methods marked `#[istmo::blocking]` keep the
-    /// dispatcher path; [`register_host_wire_only`](Self::register_host_wire_only)
-    /// keeps every method on it.
+    /// caller's executor, instead of encoding the call. Calls that take
+    /// the wire path (from Kotlin, Swift or another process, and
+    /// methods marked `#[istmo::blocking]`) run where
+    /// [`Dispatch::method_mode`] says: on the delivering thread for
+    /// [`DispatchMode::Inline`], on a blocking worker for
+    /// [`DispatchMode::Isolated`].
+    /// [`register_host_wire_only`](Self::register_host_wire_only) keeps
+    /// every call on the wire path and on a blocking worker.
     pub fn register_host<D: Dispatch>(self: &Arc<Self>, dispatcher: D) {
         self.register_host_arc(Arc::new(dispatcher));
     }
@@ -1269,11 +1274,13 @@ impl Runtime {
     }
 
     /// Register `dispatcher` for the wire path only: every call, from
-    /// this process too, is encoded and served on a dispatcher thread.
-    /// The opt-out for a host whose methods block or need a particular
-    /// executor or thread throughout.
+    /// this process too, is encoded and served on a blocking worker
+    /// ([`DispatchMode::Isolated`]), whatever modes the dispatcher
+    /// declares; so are its notifications and instance creation. The
+    /// opt-out for a host whose methods block or need a thread of their
+    /// own throughout.
     pub fn register_host_wire_only<D: Dispatch>(self: &Arc<Self>, dispatcher: D) {
-        let dispatcher = Arc::new(dispatcher);
+        let dispatcher = Arc::new(WireOnly(dispatcher));
         lock(&self.typed_hosts).remove(dispatcher.plugin_id());
         self.install_host(dispatcher);
     }
@@ -2927,6 +2934,67 @@ impl Drop for StreamHandle {
         } else if let Err(err) = rt.cancel_stream(self.stream_id) {
             tracing::debug!(?err, stream_id = ?self.stream_id, "drop-cancel not sent");
         }
+    }
+}
+
+/// A dispatcher registered with [`Runtime::register_host_wire_only`]:
+/// served like the one it wraps, always on a blocking worker and never
+/// through a typed shortcut.
+struct WireOnly<D>(D);
+
+impl<D: Dispatch> Dispatch for WireOnly<D> {
+    fn plugin_id(&self) -> &'static str {
+        self.0.plugin_id()
+    }
+
+    fn mode(&self) -> DispatchMode {
+        DispatchMode::Isolated
+    }
+
+    fn method_mode(&self, _method: &str) -> DispatchMode {
+        DispatchMode::Isolated
+    }
+
+    fn runtime_attached(&self, runtime: Weak<Runtime>) {
+        self.0.runtime_attached(runtime);
+    }
+
+    fn admits(&self, origin: CallOrigin) -> bool {
+        self.0.admits(origin)
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        instance_id: Option<InstanceId>,
+        method: &'a str,
+        payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> crate::dispatch::DispatchFuture<'a> {
+        self.0.dispatch(instance_id, method, payload, cancel)
+    }
+
+    fn dispatch_from<'a>(
+        &'a self,
+        origin: CallOrigin,
+        instance_id: Option<InstanceId>,
+        method: &'a str,
+        payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> crate::dispatch::DispatchFuture<'a> {
+        self.0
+            .dispatch_from(origin, instance_id, method, payload, cancel)
+    }
+
+    fn create_instance<'a>(
+        &'a self,
+        config_payload: &'a [u8],
+        cancel: CancelToken,
+    ) -> crate::dispatch::DispatchFuture<'a> {
+        self.0.create_instance(config_payload, cancel)
+    }
+
+    fn destroy_instance(&self, instance_id: InstanceId) {
+        self.0.destroy_instance(instance_id);
     }
 }
 

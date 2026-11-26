@@ -83,9 +83,12 @@ mod worker;
 ///   process are encoded and served through the wire dispatcher too. By
 ///   default `Runtime::register_host` (and so every `runtime!(hosts: …)`
 ///   entry) installs the shortcut of a stateless plugin, and this
-///   process's clients poll the host's futures on their own task; mark
-///   single methods that block or need a particular executor
-///   [`#[blocking]`](macro@blocking) instead.
+///   process's clients poll the host's futures on their own task. The
+///   wire dispatcher runs a method where its mode says, so this alone
+///   moves nothing off the caller's thread: mark single methods that
+///   block or need a thread of their own [`#[blocking]`](macro@blocking),
+///   or register the whole host `#[wire_only]` (see [`runtime!`](macro@runtime)) to run
+///   every call on a blocking worker.
 /// - `native = false` — the plugin never leaves Rust: its signatures are
 ///   not checked against the shapes Kotlin and Swift can map. Otherwise
 ///   every argument and return type that has no mapping (tuples,
@@ -524,7 +527,8 @@ pub fn mobile_app(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   Rust implementations registered as `<Trait>Host::new(expr)`, with
 ///   their typed in-process shortcut (see [`#[plugin]`](macro@plugin)).
 ///   An entry written `#[wire_only] Echo => EchoImpl` is registered for
-///   the wire path only.
+///   the wire path only, every call (its inline methods too) on a
+///   blocking worker.
 /// - `services: [SyncService => Syncer]` / `workers: [Backup => Nightly]` —
 ///   registered as `<Trait>Adapter::new(expr)` /
 ///   `<Trait>WorkerAdapter::new(expr)` for `#[service]` / `#[worker]`
