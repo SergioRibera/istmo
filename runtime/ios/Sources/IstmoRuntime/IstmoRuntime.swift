@@ -254,33 +254,34 @@ public final class IstmoRuntime: @unchecked Sendable {
                 cont.finish(throwing: IstmoRuntimeError.shutdown)
                 return
             }
-            // Off `queue` (see `call`), and off the caller's thread: an
-            // inline Rust host starts its stream inside the submit.
-            DispatchQueue.global(qos: .userInitiated).async {
-                let pidBytes = Array(pluginId.utf8)
-                let mBytes = Array(method.utf8)
-                payload.withUnsafeBytes { payloadPtr in
-                    pidBytes.withUnsafeBufferPointer { pidBuf in
-                        mBytes.withUnsafeBufferPointer { mBuf in
-                            istmo_ios_submit_call(
-                                streamId,
-                                pidBuf.baseAddress, pidBuf.count,
-                                0,
-                                mBuf.baseAddress, mBuf.count,
-                                payloadPtr.bindMemory(to: UInt8.self).baseAddress,
-                                payload.count
-                            )
-                        }
-                    }
-                }
-            }
             cont.onTermination = { @Sendable _ in
                 self.queue.async {
                     // Still registered means the consumer stopped first
                     // (every other end removes the entry before finishing),
-                    // so Rust has to stop producing.
+                    // so Rust has to stop producing. A cancel that beats
+                    // the submit below is kept until the stream arrives.
                     if self.streams.removeValue(forKey: streamId) != nil {
                         istmo_ios_submit_cancel(streamId)
+                    }
+                }
+            }
+            // Off `queue` (see `call`), on the caller's thread like `call`:
+            // an inline Rust host starts its stream inside the submit, and
+            // submitting here keeps the caller's order (a stream opened
+            // before a call or another stream reaches Rust first).
+            let pidBytes = Array(pluginId.utf8)
+            let mBytes = Array(method.utf8)
+            payload.withUnsafeBytes { payloadPtr in
+                pidBytes.withUnsafeBufferPointer { pidBuf in
+                    mBytes.withUnsafeBufferPointer { mBuf in
+                        istmo_ios_submit_call(
+                            streamId,
+                            pidBuf.baseAddress, pidBuf.count,
+                            0,
+                            mBuf.baseAddress, mBuf.count,
+                            payloadPtr.bindMemory(to: UInt8.self).baseAddress,
+                            payload.count
+                        )
                     }
                 }
             }
