@@ -25,6 +25,11 @@ const MAX_SLACK: usize = 4;
 /// Buffers up to this capacity fit any smaller frame.
 const SMALL_BUFFER: usize = 64 << 10;
 
+/// Takes in a row a pooled buffer may be passed over for not fitting
+/// before the pool frees it: after a resolution drop the old, larger
+/// buffers would otherwise stay pinned (and fill the pool) forever.
+const STALE_AFTER: u32 = 64;
+
 /// Recycles the byte buffers of copied frames.
 ///
 /// A frame built with [`copy_of`](Self::copy_of) or [`buffer`](Self::buffer) returns its
@@ -47,9 +52,17 @@ struct Inner {
 
 #[derive(Debug, Default)]
 struct Free {
-    buffers: Vec<Vec<u8>>,
+    buffers: Vec<Spare>,
     /// Capacity of `buffers`, summed.
     bytes: usize,
+}
+
+/// A buffer waiting for reuse.
+#[derive(Debug)]
+struct Spare {
+    bytes: Vec<u8>,
+    /// Takes in a row it did not fit.
+    misses: u32,
 }
 
 impl Default for BytePool {
@@ -73,7 +86,8 @@ impl BytePool {
 
     /// An empty buffer with room for at least `len` bytes: the smallest
     /// pooled one that fits without being much larger (at most
-    /// 4 × `len`, or 64 KiB), or a new one.
+    /// 4 × `len`, or 64 KiB), or a new one. A pooled buffer that did not
+    /// fit 64 takes in a row is freed.
     #[must_use]
     pub fn take(&self, len: usize) -> Vec<u8> {
         let mut free = lock(&self.inner.free);
@@ -81,13 +95,24 @@ impl BytePool {
             .buffers
             .iter()
             .enumerate()
-            .filter(|(_, buffer)| fits(buffer.capacity(), len))
-            .min_by_key(|(_, buffer)| buffer.capacity())
+            .filter(|(_, spare)| fits(spare.bytes.capacity(), len))
+            .min_by_key(|(_, spare)| spare.bytes.capacity())
             .map(|(index, _)| index);
-        let reused = best.map(|index| free.buffers.swap_remove(index));
-        if let Some(buffer) = &reused {
-            free.bytes -= buffer.capacity();
-        }
+        let reused = best.map(|index| free.buffers.swap_remove(index).bytes);
+        let mut freed = reused.as_ref().map_or(0, Vec::capacity);
+        free.buffers.retain_mut(|spare| {
+            if fits(spare.bytes.capacity(), len) {
+                spare.misses = 0;
+                return true;
+            }
+            spare.misses += 1;
+            if spare.misses < STALE_AFTER {
+                return true;
+            }
+            freed += spare.bytes.capacity();
+            false
+        });
+        free.bytes -= freed;
         drop(free);
         reused.map_or_else(
             || Vec::with_capacity(len),
@@ -138,7 +163,7 @@ impl Inner {
         let mut free = lock(&self.free);
         if free.buffers.len() < self.max_buffers && free.bytes + capacity <= self.max_bytes {
             free.bytes += capacity;
-            free.buffers.push(bytes);
+            free.buffers.push(Spare { bytes, misses: 0 });
         }
     }
 }
@@ -205,6 +230,53 @@ mod tests {
         let quarter = pool.take(256 << 10);
         assert!(quarter.capacity() >= 1 << 20, "within 4x: reused");
         assert_eq!(pool.pooled(), 0);
+    }
+
+    #[test]
+    fn buffers_that_stopped_fitting_are_freed() {
+        let pool = BytePool::default();
+        // Six 8 MiB frames, then the resolution drops to 1 MiB: none of
+        // the pooled buffers fits a frame 8 times smaller.
+        drop(
+            (0..6)
+                .map(|_| pool.copy_of(&vec![0u8; 8 << 20]))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(pool.pooled(), 6);
+        for _ in 0..STALE_AFTER {
+            drop(pool.copy_of(&vec![0u8; 1 << 20]));
+        }
+        assert_eq!(pool.pooled(), 1, "the 8 MiB buffers were freed");
+        let bytes = lock(&pool.inner.free).bytes;
+        assert!(bytes < 2 << 20, "{bytes} bytes still pooled");
+        // The smaller size pools again.
+        let first = pool.copy_of(&vec![1u8; 1 << 20]);
+        let address = first.as_bytes().map(<[u8]>::as_ptr);
+        drop(first);
+        let second = pool.copy_of(&vec![2u8; 1 << 20]);
+        assert_eq!(second.as_bytes().map(<[u8]>::as_ptr), address, "reused");
+    }
+
+    #[test]
+    fn a_buffer_that_fits_now_and_then_stays() {
+        let pool = BytePool::default();
+        drop(pool.copy_of(&vec![0u8; 1 << 20]));
+        // Small frames in between pass it over, but a large one every
+        // few frames still takes it.
+        for round in 0..4 * STALE_AFTER {
+            if round % 16 == 0 {
+                let large = pool.take(1 << 20);
+                assert!(large.capacity() >= 1 << 20, "round {round}");
+                drop(pool.buffer(large));
+            } else {
+                drop(pool.copy_of(&[0u8; 1000]));
+            }
+        }
+        let kept = lock(&pool.inner.free)
+            .buffers
+            .iter()
+            .any(|spare| spare.bytes.capacity() >= 1 << 20);
+        assert!(kept, "the 1 MiB buffer kept serving the large frames");
     }
 
     #[test]
