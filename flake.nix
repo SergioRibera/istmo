@@ -42,6 +42,10 @@
           udev
           # Camera plugin desktop backend (nokhwa → v4l2-sys-mit).
           v4l-utils
+          # Screen-capture plugin: portal video + audio (libpipewire,
+          # bindgen at build time) and the GBM DMA-BUF pools.
+          pipewire
+          libgbm
         ];
 
         # ------ Android support shared by both benches -----------------
