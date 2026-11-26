@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use istmo_core::NativeBuffer;
 use wayland_client::protocol::wl_buffer::WlBuffer;
 
+use crate::pool::HoldError;
 use crate::select::{self, Chosen, Offer};
 use crate::types::{
     BorderState, BufferMemory, CaptureError, CaptureEvent, Colour, ConsentModel, CopyStage,
@@ -249,13 +250,6 @@ impl<S: FrameSource> Engine<S> {
         self.client.backend
     }
 
-    fn slots_have_room(&self) -> bool {
-        match self.transport {
-            Transport::Dmabuf { .. } => self.dma.accounting().has_room(),
-            Transport::Shm { .. } => self.shm.accounting().has_room(),
-        }
-    }
-
     /// The tier, format and copies as negotiated now.
     pub(crate) fn negotiated(&self) -> NegotiatedStream {
         let dmabuf = matches!(self.transport, Transport::Dmabuf { .. });
@@ -380,12 +374,12 @@ impl<S: FrameSource> Engine<S> {
         }
         let readback = matches!(self.transport, Transport::Shm { .. })
             && self.settings.exhaustion == Exhaustion::CopyToCpu;
-        if !readback && !self.slots_have_room() {
+        if !readback {
             let accounting = match self.transport {
                 Transport::Dmabuf { .. } => self.dma.accounting(),
                 Transport::Shm { .. } => self.shm.accounting(),
             };
-            if let Err(exhausted) = accounting.hold(u32::MAX) {
+            if let Err(exhausted) = accounting.check_room() {
                 return Ok(Step::Exhausted(exhausted));
             }
         }
@@ -448,7 +442,10 @@ impl<S: FrameSource> Engine<S> {
         };
         let lease = match self.dma.accounting().hold(slot) {
             Ok(lease) => lease,
-            Err(exhausted) => {
+            Err(err @ HoldError::SlotOutOfRange { .. }) => {
+                return Err(CaptureError::protocol(self.backend(), "pool", err));
+            }
+            Err(HoldError::Exhausted(exhausted)) => {
                 self.source.abandon();
                 return Ok(Step::Exhausted(exhausted));
             }
@@ -529,7 +526,10 @@ impl<S: FrameSource> Engine<S> {
         };
         let lease = match slot.map(|s| self.shm.accounting().hold(s)) {
             Some(Ok(lease)) => Some(lease),
-            Some(Err(exhausted)) => {
+            Some(Err(err @ HoldError::SlotOutOfRange { .. })) => {
+                return Err(CaptureError::protocol(self.backend(), "pool", err));
+            }
+            Some(Err(HoldError::Exhausted(exhausted))) => {
                 self.source.abandon();
                 return Ok(Step::Exhausted(exhausted));
             }

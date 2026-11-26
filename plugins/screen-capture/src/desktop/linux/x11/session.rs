@@ -12,7 +12,7 @@ use x11rb::protocol::Event;
 use x11rb::protocol::damage::{self, ConnectionExt as _};
 use x11rb::protocol::xproto;
 
-use crate::pool::PoolAccounting;
+use crate::pool::{HoldError, PoolAccounting};
 use crate::select;
 use crate::types::{
     CaptureError, CaptureEvent, CopyStage, CursorMode, Damage, Exhaustion, FrameRate,
@@ -453,7 +453,10 @@ impl Worker {
             .unwrap_or(0);
         let lease = match self.pool.hold(slot) {
             Ok(lease) => Some(lease),
-            Err(exhausted) => {
+            Err(err @ HoldError::SlotOutOfRange { .. }) => {
+                return Err(CaptureError::protocol(ID, "pool", err));
+            }
+            Err(HoldError::Exhausted(exhausted)) => {
                 self.out
                     .exhausted(exhausted, self.pool_depth, self.exhaustion);
                 *skipped = skipped.saturating_add(1);

@@ -300,7 +300,8 @@ impl Backend for Fake {
                                 NativeBuffer::from_bytes(bytes).with_release(move || drop(lease)),
                             )
                         }
-                        Err(exhausted) => {
+                        Err(crate::pool::HoldError::SlotOutOfRange { .. }) => break,
+                        Err(crate::pool::HoldError::Exhausted(exhausted)) => {
                             out.exhausted(exhausted, depth, policy);
                             match policy {
                                 Exhaustion::Stall => {

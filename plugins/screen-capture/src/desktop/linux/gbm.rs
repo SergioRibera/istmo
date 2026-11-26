@@ -263,11 +263,8 @@ impl<K: PartialEq, T> Slots<K, T> {
     }
 
     pub(crate) fn pick(&self) -> Pick {
-        if !self.accounting.has_room() {
-            // A hold on a full pool only reports the episode.
-            if let Err(exhausted) = self.accounting.hold(u32::MAX) {
-                return Pick::Exhausted(exhausted);
-            }
+        if let Err(exhausted) = self.accounting.check_room() {
+            return Pick::Exhausted(exhausted);
         }
         let free = self.entries.iter().enumerate().find_map(|(i, e)| {
             let slot = u32::try_from(i).ok()?;

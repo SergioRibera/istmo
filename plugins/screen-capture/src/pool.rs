@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::types::BufferIdentity;
 
-/// The pool refused a hold.
+/// The pool is full: the consumer holds every buffer it may.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Exhausted {
     /// The first refusal since the last successful hold: the start of a
@@ -23,6 +23,32 @@ pub struct Exhausted {
     pub new_episode: bool,
     /// Episodes so far, this one included.
     pub episode: u32,
+}
+
+/// Why [`PoolAccounting::hold`] refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldError {
+    /// The consumer already holds every buffer it may.
+    Exhausted(Exhausted),
+    /// `slot` is not a slot of this pool (`slot >= depth`): a producer
+    /// bug, never a reason to grow the accounting.
+    SlotOutOfRange {
+        /// The refused slot.
+        slot: u32,
+        /// The pool depth when it was refused.
+        depth: usize,
+    },
+}
+
+impl std::fmt::Display for HoldError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exhausted(_) => f.write_str("every buffer the consumer may hold is out"),
+            Self::SlotOutOfRange { slot, depth } => {
+                write!(f, "slot {slot} is outside a pool of {depth}")
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -39,6 +65,23 @@ struct State {
 impl State {
     const fn limit(&self) -> usize {
         self.depth.saturating_sub(1)
+    }
+
+    /// Records the refusal when the pool is full, under the same lock as
+    /// the check.
+    const fn refuse_if_full(&mut self) -> Result<(), Exhausted> {
+        if self.in_flight < self.limit() {
+            return Ok(());
+        }
+        let new_episode = !self.exhausted;
+        if new_episode {
+            self.exhausted = true;
+            self.episodes = self.episodes.saturating_add(1);
+        }
+        Err(Exhausted {
+            new_episode,
+            episode: self.episodes,
+        })
     }
 }
 
@@ -124,39 +167,47 @@ impl PoolAccounting {
             .is_some_and(|n| *n > 0)
     }
 
-    /// Whether a hold would be granted now.
+    /// Whether a hold would be granted now. A query only: a producer
+    /// about to skip a frame for want of room calls
+    /// [`check_room`](Self::check_room), which records the episode.
     #[must_use]
     pub fn has_room(&self) -> bool {
         let state = self.inner.lock();
         state.in_flight < state.limit()
     }
 
-    /// Hold `slot` for one delivered frame.
+    /// `Ok` while a hold would be granted; otherwise the refusal,
+    /// recorded as part of the current exhaustion episode. Check and
+    /// record happen under one lock, so a release racing with the call
+    /// can never turn it into a hold.
     ///
     /// # Errors
     /// [`Exhausted`] when the consumer already holds every buffer it may.
-    pub fn hold(&self, slot: u32) -> Result<SlotLease, Exhausted> {
+    pub fn check_room(&self) -> Result<(), Exhausted> {
+        self.inner.lock().refuse_if_full()
+    }
+
+    /// Hold `slot` for one delivered frame.
+    ///
+    /// # Errors
+    /// [`HoldError::Exhausted`] when the consumer already holds every
+    /// buffer it may, [`HoldError::SlotOutOfRange`] when `slot` is not
+    /// below the pool depth.
+    pub fn hold(&self, slot: u32) -> Result<SlotLease, HoldError> {
         let mut state = self.inner.lock();
-        if state.in_flight >= state.limit() {
-            let new_episode = !state.exhausted;
-            if new_episode {
-                state.exhausted = true;
-                state.episodes = state.episodes.saturating_add(1);
-            }
-            return Err(Exhausted {
-                new_episode,
-                episode: state.episodes,
-            });
-        }
+        state.refuse_if_full().map_err(HoldError::Exhausted)?;
+        let depth = state.depth;
+        let index = usize::try_from(slot)
+            .ok()
+            .filter(|index| *index < depth)
+            .ok_or(HoldError::SlotOutOfRange { slot, depth })?;
         state.exhausted = false;
-        let index = usize::try_from(slot).unwrap_or(usize::MAX);
-        if index != usize::MAX {
-            if state.held.len() <= index {
-                state.held.resize(index + 1, 0);
-            }
-            if let Some(count) = state.held.get_mut(index) {
-                *count = count.saturating_add(1);
-            }
+        if state.held.len() <= index {
+            // Bounded by the depth checked above.
+            state.held.resize(index + 1, 0);
+        }
+        if let Some(count) = state.held.get_mut(index) {
+            *count = count.saturating_add(1);
         }
         state.in_flight += 1;
         Ok(SlotLease {
@@ -237,6 +288,13 @@ mod tests {
 
     use super::*;
 
+    fn refused(result: Result<SlotLease, HoldError>) -> Exhausted {
+        match result.expect_err("refused") {
+            HoldError::Exhausted(exhausted) => exhausted,
+            other @ HoldError::SlotOutOfRange { .. } => panic!("not exhaustion: {other}"),
+        }
+    }
+
     #[test]
     fn holds_all_but_one_buffer() {
         let pool = PoolAccounting::new(4);
@@ -244,9 +302,7 @@ mod tests {
         for slot in 0..3 {
             held.push(pool.hold(slot).expect("room"));
         }
-        let refused = pool
-            .hold(3)
-            .expect_err("the last free buffer stays with the producer");
+        let refused = refused(pool.hold(3));
         assert!(refused.new_episode);
         assert_eq!(held.len(), 3);
         assert_eq!(pool.in_flight(), 3);
@@ -295,25 +351,25 @@ mod tests {
             held.push(pool.hold(slot).expect("room"));
         }
         pool.resize(3);
-        assert!(pool.hold(9).is_err());
+        assert!(pool.hold(2).is_err());
         let mut held = held.into_iter();
         drop(held.next());
-        assert!(pool.hold(9).is_err(), "3 still out, limit is 2");
+        assert!(pool.hold(2).is_err(), "3 still out, limit is 2");
         drop(held.next());
-        assert!(pool.hold(9).is_err(), "2 still out, limit is 2");
+        assert!(pool.hold(2).is_err(), "2 still out, limit is 2");
         drop(held.next());
-        assert!(pool.hold(9).is_ok());
+        assert!(pool.hold(2).is_ok());
     }
 
     #[test]
     fn an_episode_is_reported_once() {
         let pool = PoolAccounting::new(2);
         let lease = pool.hold(0).expect("room");
-        assert!(pool.hold(1).expect_err("full").new_episode);
-        assert!(!pool.hold(1).expect_err("full").new_episode);
+        assert!(refused(pool.hold(1)).new_episode);
+        assert!(!refused(pool.hold(1)).new_episode);
         drop(lease);
         let _lease = pool.hold(0).expect("room");
-        let again = pool.hold(1).expect_err("full");
+        let again = refused(pool.hold(1));
         assert!(again.new_episode);
         assert_eq!(again.episode, 2);
     }
@@ -339,6 +395,60 @@ mod tests {
             .join()
             .expect("release thread");
         assert!(!pool.is_held(2));
+        assert_eq!(pool.in_flight(), 0);
+    }
+
+    #[test]
+    fn slots_beyond_the_depth_are_refused_without_growing() {
+        let pool = PoolAccounting::new(3);
+        assert_eq!(
+            pool.hold(u32::MAX).expect_err("not a slot of this pool"),
+            HoldError::SlotOutOfRange {
+                slot: u32::MAX,
+                depth: 3
+            }
+        );
+        assert_eq!(pool.in_flight(), 0);
+        assert!(!pool.is_held(u32::MAX));
+    }
+
+    #[test]
+    fn check_room_records_the_episode_and_never_holds() {
+        let pool = PoolAccounting::new(2);
+        assert!(pool.check_room().is_ok());
+        assert_eq!(pool.in_flight(), 0, "a probe is not a hold");
+        let lease = pool.hold(0).expect("room");
+        let first = pool.check_room().expect_err("full");
+        assert!(first.new_episode);
+        assert!(!pool.check_room().expect_err("full").new_episode);
+        // A release between a check and the next one only reopens room.
+        drop(lease);
+        assert!(pool.check_room().is_ok());
+        assert_eq!(pool.in_flight(), 0);
+        assert_eq!(pool.episodes(), 1);
+    }
+
+    #[test]
+    fn racing_releases_never_turn_a_probe_into_a_hold() {
+        let pool = PoolAccounting::new(3);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let releaser = {
+            let pool = pool.clone();
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Ok(lease) = pool.hold(0) {
+                        drop(lease);
+                    }
+                }
+            })
+        };
+        for _ in 0..20_000 {
+            let _probe = pool.check_room();
+            assert!(pool.in_flight() <= 2);
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        releaser.join().expect("releaser");
         assert_eq!(pool.in_flight(), 0);
     }
 }

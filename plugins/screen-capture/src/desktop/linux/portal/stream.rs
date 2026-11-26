@@ -23,7 +23,7 @@ use pw::spa::param::video::VideoInfoRaw;
 use pw::spa::utils::Direction;
 use pw::stream::{Stream, StreamFlags, StreamRc};
 
-use crate::pool::PoolAccounting;
+use crate::pool::{HoldError, PoolAccounting};
 use crate::types::{
     BackendId, BufferIdentity, BufferMemory, CaptureError, Colour, CopyStage, Damage, Exhaustion,
     FrameMeta, Orientation, PixelFormat, PlaneLayout, PtsClock, Rect, Size, Source, SyncKind,
@@ -647,10 +647,10 @@ fn deliver(stream: &Stream, data: &mut StreamData, negotiated: Negotiated) {
     }
     // Stall: leave the buffers queued in PipeWire (the producer stops for
     // want of buffers) until a slot comes back and wakes the loop.
-    if exhaustion == Exhaustion::Stall && !pool.has_room() {
-        if let Err(exhausted) = pool.hold(data.slot) {
-            out.exhausted(exhausted, pool_depth, exhaustion);
-        }
+    if exhaustion == Exhaustion::Stall
+        && let Err(exhausted) = pool.check_room()
+    {
+        out.exhausted(exhausted, pool_depth, exhaustion);
         return;
     }
     let mut skipped = data.skipped;
@@ -674,7 +674,12 @@ fn deliver(stream: &Stream, data: &mut StreamData, negotiated: Negotiated) {
                 });
             (buffer, identity, None)
         }
-        Err(exhausted) => {
+        Err(err @ HoldError::SlotOutOfRange { .. }) => {
+            tracing::error!(%err, "screen-capture: portal frame dropped");
+            data.skipped = data.skipped.saturating_add(1);
+            return;
+        }
+        Err(HoldError::Exhausted(exhausted)) => {
             out.exhausted(exhausted, pool_depth, exhaustion);
             match exhaustion {
                 Exhaustion::Stall | Exhaustion::DropNewest => {
