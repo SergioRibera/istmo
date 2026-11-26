@@ -98,7 +98,7 @@ pub fn caps(live: &Live, backend: BackendId) -> BackendCaps {
     caps
 }
 
-fn events_of(session: &istmo_screen_capture::SessionHandle) -> Vec<CaptureEvent> {
+pub fn events_of(session: &istmo_screen_capture::SessionHandle) -> Vec<CaptureEvent> {
     let Ok(stream) = session.events() else {
         return Vec::new();
     };

@@ -256,6 +256,17 @@ impl FrameOut {
         self.inner.wake.notify_all();
     }
 
+    /// Block while the session is paused (and not stopped), at most
+    /// `timeout`: a paused producer sleeps instead of polling.
+    pub(crate) fn wait_while_paused(&self, timeout: Duration) {
+        let state = lock(&self.inner.state);
+        let _woken = self
+            .inner
+            .wake
+            .wait_timeout_while(state, timeout, |s| s.paused && !s.stopped)
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+
     pub(crate) fn set_paused(&self, paused: bool) {
         let mut state = lock(&self.inner.state);
         state.paused = paused;

@@ -167,6 +167,10 @@ pub(crate) struct Engine<S> {
     dmabuf_lost: bool,
     size: Size,
     sync: SyncKind,
+    /// The modifier of the DMA-BUFs delivered, once known.
+    modifier: Option<u64>,
+    /// The size of the last delivered frame.
+    noted_size: Size,
 }
 
 fn chosen_transport(chosen: &Chosen, offers: &Offers) -> Option<Transport> {
@@ -267,11 +271,28 @@ impl<S: FrameSource> Engine<S> {
             dmabuf_lost: false,
             size: offers.size,
             sync,
+            modifier: None,
+            noted_size: offers.size,
         })
     }
 
     const fn backend(&self) -> crate::types::BackendId {
         self.client.backend
+    }
+
+    /// Record what a delivered frame shows; `true` when that changes the
+    /// negotiated stream (the first DMA-BUF's modifier, a new size).
+    pub(crate) fn note_frame(&mut self, meta: &FrameMeta) -> bool {
+        let modifier = meta
+            .modifier
+            .filter(|_| meta.memory == BufferMemory::DmaBuf);
+        let changed =
+            (modifier.is_some() && modifier != self.modifier) || meta.size != self.noted_size;
+        if modifier.is_some() {
+            self.modifier = modifier;
+        }
+        self.noted_size = meta.size;
+        changed
     }
 
     /// The tier, format and copies as negotiated now.
@@ -289,7 +310,7 @@ impl<S: FrameSource> Engine<S> {
             content_rect: Rect::from_size(self.size),
             format: self.chosen.format,
             memory: self.chosen.memory,
-            modifier: None,
+            modifier: self.modifier,
             tier: self.chosen.tier,
             copies,
             fps: FrameRate::Native,
@@ -705,6 +726,13 @@ impl Drop for ThreadSession {
     }
 }
 
+/// One refresh of an output refreshing at `refresh_mhz` (60 Hz when
+/// unknown).
+fn refresh_period(refresh_mhz: Option<u32>) -> Duration {
+    let mhz = refresh_mhz.filter(|r| *r > 0).unwrap_or(60_000);
+    Duration::from_secs(1000) / mhz
+}
+
 fn period(fps: FrameRate) -> Option<Duration> {
     match fps {
         FrameRate::Native => None,
@@ -778,14 +806,20 @@ fn run<S: FrameSource>(
     let stopped = || stop.load(Ordering::SeqCst) || out.is_stopped();
     let mut next = Instant::now();
     let mut skipped = 0u32;
+    let mut last_size = None;
     while !stopped() {
         if !out.wants_frames() {
-            std::thread::sleep(STOP_POLL / 2);
+            // Paused: sleep until resumed (bounded, for stop and a gone
+            // sink).
+            out.wait_while_paused(STOP_POLL);
             continue;
         }
         // Throttle at the source: no copy is requested faster than the
-        // session rate.
-        if let Some(period) = period(out.fps()) {
+        // session rate, nor (a full copy, which the compositor answers at
+        // once) faster than the output refreshes.
+        let pace = period(out.fps())
+            .or_else(|| (!with_damage).then(|| refresh_period(engine.info.refresh_mhz)));
+        if let Some(period) = pace {
             let now = Instant::now();
             if now < next {
                 std::thread::sleep(next - now);
@@ -809,6 +843,15 @@ fn run<S: FrameSource>(
             Ok(Step::Frame(meta, buffer)) => {
                 let mut meta = *meta;
                 meta.skipped_before = std::mem::take(&mut skipped);
+                if engine.note_frame(&meta) {
+                    // First DMA-BUF (its modifier) or a new size: say so
+                    // before the frame that shows it.
+                    if last_size.is_some_and(|size| size != meta.size) {
+                        out.event(CaptureEvent::SourceResized(meta.size));
+                    }
+                    out.event(CaptureEvent::Renegotiated(engine.negotiated()));
+                }
+                last_size = Some(meta.size);
                 if out.deliver(meta, buffer) == Delivery::Closed {
                     break;
                 }
@@ -879,6 +922,13 @@ pub(crate) fn damage_driven() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_copies_are_paced_at_the_output_refresh() {
+        assert_eq!(refresh_period(Some(120_000)), Duration::from_secs(1) / 120);
+        assert_eq!(refresh_period(None), Duration::from_secs(1) / 60);
+        assert_eq!(refresh_period(Some(0)), Duration::from_secs(1) / 60);
+    }
 
     fn offers() -> Offers {
         Offers {

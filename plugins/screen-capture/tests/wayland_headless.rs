@@ -13,8 +13,8 @@ mod common;
 
 use istmo_core::{MemoryKind, SinkPolicy};
 use istmo_screen_capture::{
-    BackendId, BufferMemory, CopyStage, FormatChoice, FormatRequest, FormatTier, FrameRate,
-    PixelFormat, PixelLayout, ScreenCaptureClientExt, ScreenshotRequest, SessionConfig,
+    BackendId, BufferMemory, CaptureEvent, CopyStage, FormatChoice, FormatRequest, FormatTier,
+    FrameRate, PixelFormat, PixelLayout, ScreenCaptureClientExt, ScreenshotRequest, SessionConfig,
     SourceFilter, SourceSelector, SyncKind,
 };
 
@@ -247,6 +247,16 @@ fn dma_buf_stream(live: &common::Live, backend: BackendId, sync: SyncKind, poke:
         identities.push(frame.meta.buffer);
     }
     assert_eq!(identities.len(), 10, "{backend}: ten frames");
+    // The first DMA-BUF names its modifier and GPU in the negotiated stream.
+    let renegotiated = common::events_of(&session)
+        .into_iter()
+        .find_map(|e| match e {
+            CaptureEvent::Renegotiated(stream) => Some(stream),
+            _ => None,
+        })
+        .expect("Renegotiated with the first frame");
+    assert!(renegotiated.modifier.is_some(), "{renegotiated:?}");
+    assert!(renegotiated.producer.is_some());
     identities.sort_by_key(|b| b.slot);
     identities.dedup();
     assert!(
