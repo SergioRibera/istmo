@@ -33,9 +33,10 @@
   that must never block on the outbound channel).
 - JNI `nativeCall`, `nativeSubmitStream`, `nativeStreamCredit`; Kotlin
   callbacks `onCallDirect` and `onEvents`; C `istmo_ios_call` +
-  `IstmoIosReply` + `istmo_ios_free_reply`. `nativeSubmitEvent` returns
-  `false` for an item a thread that must not block could not deliver
-  (Kotlin resubmits it from `Dispatchers.IO`).
+  `IstmoIosReply` + `istmo_ios_free_reply`. `nativeSubmitEvent` and
+  `nativeSubmitStreamEnd` return `false` for an item or end that a
+  thread that must not block could not deliver (Kotlin resubmits it
+  from `Dispatchers.IO`).
 - `istmo_core::spin::SpinWait` (bounded adaptive spinning before a park,
   `spin::set_enabled` for A/B); `native_frame::BytePool` (recycled CPU
   frame buffers); Kotlin `IstmoBytesOut`.
@@ -44,7 +45,7 @@
 - `Runtime::outbound_spill()` (`SpillStats`: frames queued behind a full
   outbound channel), `BlockingThreads::now()` (blocking workers alive
   and their peak; a warning past 256), `DeliveryScope::may_block()`,
-  `Runtime::offer_peer_event`.
+  `Runtime::offer_peer_event`, `Runtime::offer_peer_stream_end`.
 
 ### Changed (breaking)
 

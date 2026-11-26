@@ -459,3 +459,34 @@ fn offering_a_peer_event_never_waits_for_a_full_consumer() {
             .expect("offer")
     );
 }
+
+#[test]
+fn offering_a_peer_stream_end_keeps_it_behind_the_items() {
+    let init = Runtime::mock();
+    let stream = init
+        .runtime
+        .stream("peer.p", None, "s", Vec::new(), 1)
+        .expect("stream");
+    let id = stream.stream_id();
+    assert!(init.runtime.offer_peer_event(id, vec![1]).expect("offer"));
+    // Full: the end is not delivered and the stream stays open for it.
+    assert!(
+        !init
+            .runtime
+            .offer_peer_stream_end(id, StreamEndReason::Complete)
+            .expect("offer end")
+    );
+    assert!(matches!(
+        stream.recv().expect("recv"),
+        istmo_core::StreamMessage::Event(item) if item == [1]
+    ));
+    assert!(
+        init.runtime
+            .offer_peer_stream_end(id, StreamEndReason::Complete)
+            .expect("offer end")
+    );
+    assert!(matches!(
+        stream.recv().expect("recv"),
+        istmo_core::StreamMessage::End(StreamEndReason::Complete)
+    ));
+}

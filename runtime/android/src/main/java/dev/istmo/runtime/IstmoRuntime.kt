@@ -519,21 +519,37 @@ object IstmoRuntime {
                     }
                 }
             }
-            nativeSubmitStreamEnd(callId, STREAM_END_COMPLETE, null)
+            submitStreamEnd(callId, STREAM_END_COMPLETE, null)
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Only the call's own cancellation goes on up; any other (an
             // uncaught `withTimeout`, a cancelled task awaited) is the
             // backend failing, and ends the stream as a failure.
             if (!currentCoroutineContext().isActive) {
-                nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
+                submitStreamEnd(callId, STREAM_END_CANCELLED, null)
                 throw e
             }
-            nativeSubmitStreamEnd(callId, STREAM_END_ERROR, null)
+            submitStreamEnd(callId, STREAM_END_ERROR, null)
         } catch (e: PluginException) {
             // Generated dispatchers turn a domain error into its encoded bytes.
-            nativeSubmitStreamEnd(callId, STREAM_END_ERROR, e.payload)
+            submitStreamEnd(callId, STREAM_END_ERROR, e.payload)
         } catch (_: Throwable) {
-            nativeSubmitStreamEnd(callId, STREAM_END_ERROR, null)
+            submitStreamEnd(callId, STREAM_END_ERROR, null)
+        }
+    }
+
+    /**
+     * End a Kotlin stream after its last item, like an item: where the
+     * calling thread must not block (a Rust thread the stream started
+     * on) Rust only offers the end, and a full consumer gets it from an
+     * IO thread instead. Every item went across before (the collector
+     * waits for an item it resubmits), so the end never overtakes one.
+     */
+    private suspend fun submitStreamEnd(callId: Long, reason: Int, errorPayload: ByteArray?) {
+        if (!nativeSubmitStreamEnd(callId, reason, errorPayload)) {
+            // A cancelled stream still owes Rust its end.
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                nativeSubmitStreamEnd(callId, reason, errorPayload)
+            }
         }
     }
 
@@ -691,7 +707,7 @@ object IstmoRuntime {
         window: Int,
     )
     external fun nativeStreamCredit(streamId: Long, items: Int)
-    external fun nativeSubmitStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray?)
+    external fun nativeSubmitStreamEnd(streamId: Long, reason: Int, errorPayload: ByteArray?): Boolean
     external fun nativeSubmitEarlyLatest(channel: String, payload: ByteArray)
     external fun nativeSubmitEarlyQueue(channel: String, capacity: Int, payload: ByteArray)
 

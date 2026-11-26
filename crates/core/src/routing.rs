@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use flume::{Receiver as FlumeReceiver, Sender as FlumeSender};
+use flume::{Receiver as FlumeReceiver, Sender as FlumeSender, TrySendError};
 use oneshot::Sender as OneshotSender;
 
 use crate::error::IstmoError;
@@ -207,7 +207,8 @@ impl RoutingTables {
         }
     }
 
-    /// Close a stream registration with the given `reason`.
+    /// Close a stream registration with the given `reason`, waiting for
+    /// room in the consumer's buffer.
     ///
     /// # Errors
     ///
@@ -220,22 +221,77 @@ impl RoutingTables {
         stream_id: StreamId,
         reason: StreamEndReason,
     ) -> Result<(), IstmoError> {
-        let mut inner = lock(&self.inner);
-        match inner.pending.get(&stream_id.get()) {
-            None => return Err(IstmoError::UnknownStreamId(stream_id)),
-            Some(PendingReceiver::Call(_)) => {
+        // A consumer that is gone has no use for its end.
+        drop(
+            self.take_stream_sender(stream_id)?
+                .send(StreamMessage::End(reason)),
+        );
+        Ok(())
+    }
+
+    /// Close a stream registration with the given `reason` if its
+    /// consumer has room for it right now. `Ok(false)` when its buffer is
+    /// full: nothing was delivered and the registration stays.
+    ///
+    /// # Errors
+    ///
+    /// As [`deliver_stream_end`](Self::deliver_stream_end).
+    pub(crate) fn offer_stream_end(
+        &self,
+        stream_id: StreamId,
+        reason: StreamEndReason,
+    ) -> Result<bool, IstmoError> {
+        let tx = match self.stream_sender(stream_id) {
+            Ok(tx) => tx,
+            Err(IstmoError::RoutingMismatch(_)) => {
                 return Err(IstmoError::RoutingMismatch(
                     "stream-end landed on a call registration",
                 ));
             }
-            Some(PendingReceiver::Stream(_)) => {}
+            Err(err) => return Err(err),
+        };
+        // Without the table lock, like every other delivery. The end comes
+        // from the stream's only producer, so no item of it races the end.
+        match tx.try_send(StreamMessage::End(reason)) {
+            Err(TrySendError::Full(_)) => return Ok(false),
+            // A consumer that is gone has no use for its end.
+            Ok(()) | Err(TrySendError::Disconnected(_)) => {}
         }
-        let entry = inner.pending.remove(&stream_id.get());
+        let mut inner = lock(&self.inner);
+        // The consumer may have cancelled meanwhile, its id already free.
+        let ours = matches!(
+            inner.pending.get(&stream_id.get()),
+            Some(PendingReceiver::Stream(registered)) if registered.same_channel(&tx)
+        );
+        let removed = ours.then(|| inner.pending.remove(&stream_id.get()));
         drop(inner);
-        if let Some(PendingReceiver::Stream(tx)) = entry {
-            drop(tx.send(StreamMessage::End(reason)));
-        }
-        Ok(())
+        drop(removed);
+        Ok(true)
+    }
+
+    /// Remove a stream registration and hand back its sender, so the
+    /// caller delivers the end the way its thread allows (block, await).
+    ///
+    /// # Errors
+    ///
+    /// As [`deliver_stream_end`](Self::deliver_stream_end).
+    pub(crate) fn take_stream_sender(
+        &self,
+        stream_id: StreamId,
+    ) -> Result<FlumeSender<StreamMessage>, IstmoError> {
+        let mut inner = lock(&self.inner);
+        let taken = match inner.pending.remove(&stream_id.get()) {
+            Some(PendingReceiver::Stream(tx)) => Ok(tx),
+            Some(call @ PendingReceiver::Call(_)) => {
+                inner.pending.insert(stream_id.get(), call);
+                Err(IstmoError::RoutingMismatch(
+                    "stream-end landed on a call registration",
+                ))
+            }
+            None => Err(IstmoError::UnknownStreamId(stream_id)),
+        };
+        drop(inner);
+        taken
     }
 
     /// Record that `instance_id` belongs to `plugin_id`.
@@ -320,6 +376,32 @@ mod tests {
         let err = table
             .deliver_event(StreamId(1), vec![])
             .expect_err("stream should no longer be registered");
+        assert!(matches!(err, IstmoError::UnknownStreamId(id) if id == StreamId(1)));
+    }
+
+    #[test]
+    fn an_offered_end_waits_for_room_without_losing_the_stream() {
+        let table = RoutingTables::default();
+        let rx = table.register_stream(StreamId(1), 1);
+        table.deliver_event(StreamId(1), vec![1]).expect("ev1");
+        assert!(
+            !table
+                .offer_stream_end(StreamId(1), StreamEndReason::Complete)
+                .expect("registered")
+        );
+        assert_eq!(rx.recv().unwrap(), StreamMessage::Event(vec![1]));
+        assert!(
+            table
+                .offer_stream_end(StreamId(1), StreamEndReason::Complete)
+                .expect("still registered")
+        );
+        assert_eq!(
+            rx.recv().unwrap(),
+            StreamMessage::End(StreamEndReason::Complete)
+        );
+        let err = table
+            .offer_stream_end(StreamId(1), StreamEndReason::Complete)
+            .expect_err("ended");
         assert!(matches!(err, IstmoError::UnknownStreamId(id) if id == StreamId(1)));
     }
 

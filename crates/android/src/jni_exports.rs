@@ -406,6 +406,11 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeStreamCredit<'l
     });
 }
 
+/// End of a Kotlin-hosted stream.
+///
+/// `false`: not delivered, because the consumer's buffer is full and the
+/// calling thread must not wait for it (as for `nativeSubmitEvent`):
+/// Kotlin submits it again from a thread that may.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitStreamEnd<'local>(
     mut env: JNIEnv<'local>,
@@ -413,15 +418,22 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitStreamEnd
     stream_id: jlong,
     reason: jint,
     error_payload: JByteArray<'local>,
-) {
-    guarded(&mut env, "nativeSubmitStreamEnd", (), |env| {
+) -> jboolean {
+    // An error is reported (or logged for a late end): no retry.
+    guarded(&mut env, "nativeSubmitStreamEnd", JNI_TRUE, |env| {
         let reason = stream_end_reason(env, reason, &error_payload)?;
-        Runtime::global()?.dispatch_inbound(Envelope::new(Frame::StreamEnd {
-            stream_id: StreamId(wire_id(stream_id)),
-            reason,
-        }))?;
-        Ok(())
-    });
+        let runtime = Runtime::global()?;
+        let stream_id = StreamId(wire_id(stream_id));
+        if istmo_core::DeliveryScope::may_block() {
+            runtime.dispatch_inbound(Envelope::new(Frame::StreamEnd { stream_id, reason }))?;
+            return Ok(JNI_TRUE);
+        }
+        Ok(if runtime.offer_peer_stream_end(stream_id, reason)? {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        })
+    })
 }
 
 #[unsafe(no_mangle)]

@@ -119,11 +119,12 @@ frames mean:
   Rust sends only against credit (a window, then `nativeStreamCredit`
   grants as the Kotlin collector takes items). Swift streams have no
   credit yet.
-- **Items that cannot wait.** `nativeSubmitEvent` returns `false`, and
-  delivers nothing, when the consumer's buffer is full and the calling
-  thread must never block (the pump, Rust's async workers). A Kotlin
-  stream relaying items that arrive on such a thread submits that item
-  again from `Dispatchers.IO`.
+- **Items and ends that cannot wait.** `nativeSubmitEvent` and
+  `nativeSubmitStreamEnd` return `false`, and deliver nothing, when the
+  consumer's buffer is full and the calling thread must never block (the
+  pump, Rust's async workers). A Kotlin stream relaying items that
+  arrive on such a thread submits that item, or its end, again from
+  `Dispatchers.IO`, after every item before it.
 
 Every argument is a plain id, string or payload byte buffer. Envelope
 wrapping, version stamping and frame serialization happen Rust-side.

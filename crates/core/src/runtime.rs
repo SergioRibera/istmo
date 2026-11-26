@@ -1962,6 +1962,33 @@ impl Runtime {
         }
     }
 
+    /// End the stream `stream_id` from the platform peer without
+    /// waiting: `Ok(false)` when the consumer's buffer is full and
+    /// nothing was delivered; the stream stays open for a later
+    /// [`dispatch_inbound`](Self::dispatch_inbound) of the same end.
+    ///
+    /// The end's [`offer_peer_event`](Self::offer_peer_event): a
+    /// transport relaying a stream on a thread that must not block
+    /// offers its end too, and moves it to a thread that may when the
+    /// offer fails, behind any item it moved there before.
+    ///
+    /// # Errors
+    ///
+    /// As [`dispatch_inbound`](Self::dispatch_inbound) for a
+    /// [`Frame::StreamEnd`]: [`IstmoError::UnknownStreamId`],
+    /// [`IstmoError::RoutingMismatch`].
+    pub fn offer_peer_stream_end(
+        &self,
+        stream_id: StreamId,
+        reason: StreamEndReason,
+    ) -> Result<bool, IstmoError> {
+        let ended = self.routing.offer_stream_end(stream_id, reason)?;
+        if ended {
+            self.settle_outgoing_remote(stream_id.get(), None);
+        }
+        Ok(ended)
+    }
+
     /// The peer's consumer of `stream_id` took `items` more: let that
     /// many more go out. Ignored for streams that ended or were not
     /// opened with [`serve_peer_stream`](Self::serve_peer_stream).
