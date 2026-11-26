@@ -29,6 +29,13 @@ public protocol ScreenCaptureBackend: AnyObject {
     /// Throw `ScreenCapture.CaptureError` to surface a typed domain error.
     func open_with_audio(config: ScreenCapture.SessionConfig, video: IstmoFrameSender<ScreenCapture.FrameMeta>, audio: IstmoFrameSender<ScreenCapture.AudioMeta>) async throws -> ScreenCapture.CaptureSession
     /// Throw `ScreenCapture.CaptureError` to surface a typed domain error.
+    func open_audio(config: ScreenCapture.AudioConfig, audio: IstmoFrameSender<ScreenCapture.AudioMeta>) async throws -> ScreenCapture.AudioCaptureSession
+    /// Throw `ScreenCapture.CaptureError` to surface a typed domain error.
+    func update_audio(session: NativeHandleId, update: ScreenCapture.AudioUpdate) async throws -> ScreenCapture.AudioNegotiated
+    /// Throw `ScreenCapture.CaptureError` to surface a typed domain error.
+    func close_audio(session: NativeHandleId) async throws -> Void
+    func audio_events(session: NativeHandleId) -> AsyncThrowingStream<ScreenCapture.AudioEvent, Error>
+    /// Throw `ScreenCapture.CaptureError` to surface a typed domain error.
     func open_preview(config: ScreenCapture.SessionConfig, target: ScreenCapture.PreviewTarget) async throws -> ScreenCapture.CaptureSession
     /// Throw `ScreenCapture.CaptureError` to surface a typed domain error.
     func open_preview_with_frames(config: ScreenCapture.SessionConfig, target: ScreenCapture.PreviewTarget, video: IstmoFrameSender<ScreenCapture.FrameMeta>) async throws -> ScreenCapture.CaptureSession
@@ -55,16 +62,24 @@ public protocol ScreenCaptureCodecs {
     func writeAttemptFailure(_ out: inout Data, _ value: ScreenCapture.AttemptFailure)
     func readAudioCaps(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioCaps
     func writeAudioCaps(_ out: inout Data, _ value: ScreenCapture.AudioCaps)
+    func readAudioCaptureSession(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioCaptureSession
+    func writeAudioCaptureSession(_ out: inout Data, _ value: ScreenCapture.AudioCaptureSession)
     func readAudioConfig(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioConfig
     func writeAudioConfig(_ out: inout Data, _ value: ScreenCapture.AudioConfig)
+    func readAudioEvent(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioEvent
+    func writeAudioEvent(_ out: inout Data, _ value: ScreenCapture.AudioEvent)
     func readAudioMeta(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioMeta
     func writeAudioMeta(_ out: inout Data, _ value: ScreenCapture.AudioMeta)
     func readAudioNegotiated(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioNegotiated
     func writeAudioNegotiated(_ out: inout Data, _ value: ScreenCapture.AudioNegotiated)
+    func readAudioReport(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioReport
+    func writeAudioReport(_ out: inout Data, _ value: ScreenCapture.AudioReport)
     func readAudioSource(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioSource
     func writeAudioSource(_ out: inout Data, _ value: ScreenCapture.AudioSource)
     func readAudioSourceKind(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioSourceKind
     func writeAudioSourceKind(_ out: inout Data, _ value: ScreenCapture.AudioSourceKind)
+    func readAudioUpdate(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioUpdate
+    func writeAudioUpdate(_ out: inout Data, _ value: ScreenCapture.AudioUpdate)
     func readAutoPreference(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AutoPreference
     func writeAutoPreference(_ out: inout Data, _ value: ScreenCapture.AutoPreference)
     func readAutoSelect(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AutoSelect
@@ -463,6 +478,59 @@ public final class ScreenCaptureDispatcher: PluginHandler, HandleReleaser {
                 codecs.writeCaptureError(&errOut, err)
                 throw PluginException(payload: errOut)
             }
+        case "open_audio":
+            do {
+                var c = Bincode.Cursor(payload)
+                let config_ = try codecs.readAudioConfig(&c)
+                let audio = IstmoFrameSender<ScreenCapture.AudioMeta>.open(sinkId: try Bincode.readVarintU64(&c), fingerprint: 0x5ea3f68f61510434, encode: { [codecs = codecs] v1 in var o1 = Data(); codecs.writeAudioMeta(&o1, v1); return o1 })
+                let result = try await backend.open_audio(config: config_, audio: audio)
+                var out = Data()
+                codecs.writeAudioCaptureSession(&out, result)
+                return .unary(out)
+            } catch let err as ScreenCapture.CaptureError {
+                var errOut = Data()
+                codecs.writeCaptureError(&errOut, err)
+                throw PluginException(payload: errOut)
+            }
+        case "update_audio":
+            do {
+                var c = Bincode.Cursor(payload)
+                let session = try codecs.readNativeHandleId(&c)
+                let update = try codecs.readAudioUpdate(&c)
+                let result = try await backend.update_audio(session: session, update: update)
+                var out = Data()
+                codecs.writeAudioNegotiated(&out, result)
+                return .unary(out)
+            } catch let err as ScreenCapture.CaptureError {
+                var errOut = Data()
+                codecs.writeCaptureError(&errOut, err)
+                throw PluginException(payload: errOut)
+            }
+        case "close_audio":
+            do {
+                var c = Bincode.Cursor(payload)
+                let session = try codecs.readNativeHandleId(&c)
+                try await backend.close_audio(session: session)
+                return .unary(Data())
+            } catch let err as ScreenCapture.CaptureError {
+                var errOut = Data()
+                codecs.writeCaptureError(&errOut, err)
+                throw PluginException(payload: errOut)
+            }
+        case "audio_events":
+            var c = Bincode.Cursor(payload)
+            let session = try codecs.readNativeHandleId(&c)
+            let codecs = self.codecs
+            return PluginResult.encoding(backend.audio_events(session: session), encode: { item in
+                var out = Data()
+                codecs.writeAudioEvent(&out, item)
+                return out
+            }, mapError: { error in
+                guard let err = error as? ScreenCapture.CaptureError else { return error }
+                var errOut = Data()
+                codecs.writeCaptureError(&errOut, err)
+                return PluginException(payload: errOut)
+            })
         case "open_preview":
             do {
                 var c = Bincode.Cursor(payload)

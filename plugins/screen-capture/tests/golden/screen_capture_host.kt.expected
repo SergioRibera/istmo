@@ -42,6 +42,18 @@ interface ScreenCaptureBackend {
     suspend fun open_with_audio(config: SessionConfig, video: IstmoFrameSender<FrameMeta>, audio: IstmoFrameSender<AudioMeta>): CaptureSession
 
     // Throw BackendException(CaptureError) for domain errors.
+    suspend fun open_audio(config: AudioConfig, audio: IstmoFrameSender<AudioMeta>): AudioCaptureSession
+
+    // Throw BackendException(CaptureError) for domain errors.
+    suspend fun update_audio(session: NativeHandleId, update: AudioUpdate): AudioNegotiated
+
+    // Throw BackendException(CaptureError) for domain errors.
+    suspend fun close_audio(session: NativeHandleId)
+
+    // Throw BackendException(CaptureError) from the flow to end it with a domain error.
+    fun audio_events(session: NativeHandleId): kotlinx.coroutines.flow.Flow<AudioEvent>
+
+    // Throw BackendException(CaptureError) for domain errors.
     suspend fun open_preview(config: SessionConfig, target: PreviewTarget): CaptureSession
 
     // Throw BackendException(CaptureError) for domain errors.
@@ -79,8 +91,14 @@ interface ScreenCaptureCodecs {
     fun readAudioCaps(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioCaps>
     fun writeAudioCaps(out: ByteArrayOutputStream, value: AudioCaps)
 
+    fun readAudioCaptureSession(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioCaptureSession>
+    fun writeAudioCaptureSession(out: ByteArrayOutputStream, value: AudioCaptureSession)
+
     fun readAudioConfig(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioConfig>
     fun writeAudioConfig(out: ByteArrayOutputStream, value: AudioConfig)
+
+    fun readAudioEvent(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioEvent>
+    fun writeAudioEvent(out: ByteArrayOutputStream, value: AudioEvent)
 
     fun readAudioMeta(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioMeta>
     fun writeAudioMeta(out: ByteArrayOutputStream, value: AudioMeta)
@@ -88,11 +106,17 @@ interface ScreenCaptureCodecs {
     fun readAudioNegotiated(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioNegotiated>
     fun writeAudioNegotiated(out: ByteArrayOutputStream, value: AudioNegotiated)
 
+    fun readAudioReport(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioReport>
+    fun writeAudioReport(out: ByteArrayOutputStream, value: AudioReport)
+
     fun readAudioSource(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioSource>
     fun writeAudioSource(out: ByteArrayOutputStream, value: AudioSource)
 
     fun readAudioSourceKind(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioSourceKind>
     fun writeAudioSourceKind(out: ByteArrayOutputStream, value: AudioSourceKind)
+
+    fun readAudioUpdate(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioUpdate>
+    fun writeAudioUpdate(out: ByteArrayOutputStream, value: AudioUpdate)
 
     fun readAutoPreference(bytes: ByteArray, offset: Int): Bincode.Decoded<AutoPreference>
     fun writeAutoPreference(out: ByteArrayOutputStream, value: AutoPreference)
@@ -627,6 +651,68 @@ class ScreenCaptureDispatcher(
                     codecs.writeCaptureError(errOut, err)
                     throw PluginException(errOut.toByteArray())
                 }
+            }
+            "open_audio" -> {
+                try {
+                    var cursor = 0
+                    val d_config_ = codecs.readAudioConfig(payload, cursor); cursor = d_config_.consumed
+                    val config_ = d_config_.value
+                    val audio = Bincode.readVarintU64(payload, cursor).let { d1 -> Bincode.Decoded(@OptIn(IstmoGeneratedApi::class) IstmoFrameSender.open<AudioMeta>(d1.value, 0x5ea3f68f61510434UL.toLong()) { s1, v1 -> codecs.writeAudioMeta(s1, v1) }, d1.consumed) }.value
+                    val result = backend.open_audio(config_, audio)
+                    val out = IstmoBytesOut()
+                    codecs.writeAudioCaptureSession(out, result)
+                    PluginResult.Unary(out.toExactArray())
+                } catch (e: BackendException) {
+                    val err = e.error as? CaptureError ?: throw e
+                    val errOut = ByteArrayOutputStream()
+                    codecs.writeCaptureError(errOut, err)
+                    throw PluginException(errOut.toByteArray())
+                }
+            }
+            "update_audio" -> {
+                try {
+                    var cursor = 0
+                    val d_session = codecs.readNativeHandleId(payload, cursor); cursor = d_session.consumed
+                    val session = d_session.value
+                    val update = codecs.readAudioUpdate(payload, cursor).value
+                    val result = backend.update_audio(session, update)
+                    val out = IstmoBytesOut()
+                    codecs.writeAudioNegotiated(out, result)
+                    PluginResult.Unary(out.toExactArray())
+                } catch (e: BackendException) {
+                    val err = e.error as? CaptureError ?: throw e
+                    val errOut = ByteArrayOutputStream()
+                    codecs.writeCaptureError(errOut, err)
+                    throw PluginException(errOut.toByteArray())
+                }
+            }
+            "close_audio" -> {
+                try {
+                    val session = codecs.readNativeHandleId(payload, 0).value
+                    backend.close_audio(session)
+                    PluginResult.Unary(ByteArray(0))
+                } catch (e: BackendException) {
+                    val err = e.error as? CaptureError ?: throw e
+                    val errOut = ByteArrayOutputStream()
+                    codecs.writeCaptureError(errOut, err)
+                    throw PluginException(errOut.toByteArray())
+                }
+            }
+            "audio_events" -> {
+                val session = codecs.readNativeHandleId(payload, 0).value
+                val __istmo_flow = backend.audio_events(session)
+                PluginResult.Stream(
+                    __istmo_flow.map { __istmo_item ->
+                        val out = IstmoBytesOut()
+                        codecs.writeAudioEvent(out, __istmo_item)
+                        out.toExactArray()
+                    }.catch { e ->
+                        val err = (e as? BackendException)?.error as? CaptureError ?: throw e
+                        val errOut = ByteArrayOutputStream()
+                        codecs.writeCaptureError(errOut, err)
+                        throw PluginException(errOut.toByteArray())
+                    }
+                )
             }
             "open_preview" -> {
                 try {

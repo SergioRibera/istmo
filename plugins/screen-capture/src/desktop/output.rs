@@ -20,8 +20,8 @@ use crate::composite::logical_to_buffer;
 use crate::pixels::OrientationMap;
 use crate::pool::Exhausted;
 use crate::types::{
-    AudioMeta, BackendId, CaptureError, CaptureEvent, Damage, Exhaustion, ExhaustionReport,
-    FrameMeta, FrameRate, NegotiatedStream, Rect, StopReason,
+    AudioEvent, AudioMeta, BackendId, CaptureError, CaptureEvent, Damage, Exhaustion,
+    ExhaustionReport, FrameMeta, FrameRate, PauseReason, Rect, StopReason,
 };
 
 use super::clock;
@@ -39,16 +39,55 @@ const BACKLOG: usize = 64;
 /// Events queued per subscriber before new ones are dropped.
 const SUBSCRIBER_DEPTH: usize = 256;
 
-type EventItem = Result<CaptureEvent, CaptureError>;
+/// A session event the hub fans out.
+pub(crate) trait HubEvent: Clone + Send + 'static {
+    /// The event as it may travel: restore tokens removed.
+    fn sanitized(self) -> Self;
 
-#[derive(Debug, Default)]
-struct HubState {
-    /// The stream as last announced by an event that already left the
-    /// backlog, replayed as `Started` so a late subscriber still learns
-    /// what the session negotiated.
-    baseline: Option<NegotiatedStream>,
-    backlog: VecDeque<CaptureEvent>,
-    subscribers: Vec<flume::Sender<EventItem>>,
+    /// `Started` with the stream this event announces, if it announces
+    /// one: replayed once the event left the backlog, so a late
+    /// subscriber still learns what the session negotiated.
+    fn as_baseline(&self) -> Option<Self>;
+}
+
+impl HubEvent for CaptureEvent {
+    fn sanitized(mut self) -> Self {
+        if let Self::Started(stream) | Self::Renegotiated(stream) = &mut self {
+            stream.restore_token = None;
+        }
+        self
+    }
+
+    fn as_baseline(&self) -> Option<Self> {
+        match self {
+            Self::Started(stream) | Self::Renegotiated(stream) => {
+                Some(Self::Started(stream.clone()))
+            }
+            _ => None,
+        }
+    }
+}
+
+impl HubEvent for AudioEvent {
+    fn sanitized(self) -> Self {
+        self
+    }
+
+    fn as_baseline(&self) -> Option<Self> {
+        match self {
+            Self::Started(negotiated) => Some(Self::Started(negotiated.clone())),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct HubState<E> {
+    /// The newest announcing event that already left the backlog, as
+    /// `Started`.
+    baseline: Option<E>,
+    backlog: VecDeque<E>,
+    subscribers: Vec<flume::Sender<Result<E, CaptureError>>>,
     ended: bool,
 }
 
@@ -59,25 +98,35 @@ struct HubState {
 ///
 /// Restore tokens never travel in events: they are returned once, by
 /// the `open` call that produced them.
-#[derive(Debug, Default)]
-pub(crate) struct EventHub {
-    state: Mutex<HubState>,
+#[derive(Debug)]
+pub(crate) struct EventHub<E = CaptureEvent> {
+    state: Mutex<HubState<E>>,
 }
 
-impl EventHub {
-    pub(crate) fn emit(&self, mut event: CaptureEvent) {
-        if let CaptureEvent::Started(stream) | CaptureEvent::Renegotiated(stream) = &mut event {
-            stream.restore_token = None;
+impl<E> Default for EventHub<E> {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(HubState {
+                baseline: None,
+                backlog: VecDeque::new(),
+                subscribers: Vec::new(),
+                ended: false,
+            }),
         }
+    }
+}
+
+impl<E: HubEvent> EventHub<E> {
+    pub(crate) fn emit(&self, event: E) {
+        let event = event.sanitized();
         let mut state = lock(&self.state);
         if state.ended {
             return;
         }
         if state.backlog.len() == BACKLOG
-            && let Some(CaptureEvent::Started(stream) | CaptureEvent::Renegotiated(stream)) =
-                state.backlog.pop_front()
+            && let Some(baseline) = state.backlog.pop_front().and_then(|e| e.as_baseline())
         {
-            state.baseline = Some(stream);
+            state.baseline = Some(baseline);
         }
         state.backlog.push_back(event.clone());
         state
@@ -94,11 +143,11 @@ impl EventHub {
 
     /// A new subscriber, starting with the session's state so far. After
     /// the session ended the stream completes once that is read.
-    pub(crate) fn subscribe(&self) -> flume::Receiver<EventItem> {
+    pub(crate) fn subscribe(&self) -> flume::Receiver<Result<E, CaptureError>> {
         let (tx, rx) = flume::bounded(SUBSCRIBER_DEPTH);
         let mut state = lock(&self.state);
-        if let Some(stream) = &state.baseline {
-            let _queued = tx.try_send(Ok(CaptureEvent::Started(stream.clone())));
+        if let Some(baseline) = &state.baseline {
+            let _queued = tx.try_send(Ok(baseline.clone()));
         }
         for event in &state.backlog {
             let _queued = tx.try_send(Ok(event.clone()));
@@ -534,31 +583,52 @@ fn crop_rect(meta: &FrameMeta, crop: Crop) -> Rect {
     rect.intersect(meta.content_rect).unwrap_or(rect)
 }
 
-/// A session's audio output.
+/// Switches of an audio output, flipped by `update_audio`.
+#[derive(Debug, Default)]
+struct AudioState {
+    seq: u64,
+    paused: bool,
+    muted: bool,
+    /// Chunks were dropped while paused: the next one is a
+    /// discontinuity.
+    gap: bool,
+}
+
+/// A session's audio output: sequence numbers, pause (chunks dropped),
+/// mute (chunks zeroed, timing kept) and the audio events.
 #[derive(Debug, Clone)]
 pub(crate) struct AudioOut {
     sender: FrameSender<AudioMeta>,
-    events: Arc<EventHub>,
-    seq: Arc<Mutex<u64>>,
+    events: Arc<EventHub<AudioEvent>>,
+    state: Arc<Mutex<AudioState>>,
 }
 
 impl AudioOut {
-    pub(crate) fn new(sender: FrameSender<AudioMeta>, events: Arc<EventHub>) -> Self {
+    pub(crate) fn new(sender: FrameSender<AudioMeta>) -> Self {
         Self {
             sender,
-            events,
-            seq: Arc::new(Mutex::new(0)),
+            events: Arc::default(),
+            state: Arc::default(),
         }
     }
 
     /// Hand a chunk over (`meta.seq` is filled in). `false` once the
     /// sink is gone; a refused chunk (a full `DropNewest` sink) is
     /// counted by the sink and reported as delivered.
-    pub(crate) fn deliver(&self, mut meta: AudioMeta, buffer: NativeBuffer) -> bool {
-        let mut seq = lock(&self.seq);
-        meta.seq = *seq;
-        *seq += 1;
-        match self.sender.push(meta, buffer) {
+    pub(crate) fn deliver(&self, mut meta: AudioMeta, mut pcm: Vec<u8>) -> bool {
+        let mut state = lock(&self.state);
+        if state.paused {
+            state.gap = true;
+            return !self.sender.is_closed();
+        }
+        if state.muted {
+            pcm.fill(0);
+        }
+        meta.discontinuity |= std::mem::take(&mut state.gap);
+        meta.seq = state.seq;
+        state.seq += 1;
+        drop(state);
+        match self.sender.push(meta, NativeBuffer::from_bytes(pcm)) {
             Ok(_) => true,
             Err(err) => !err.is_closed(),
         }
@@ -568,16 +638,50 @@ impl AudioOut {
         self.sender.is_closed()
     }
 
-    pub(crate) fn event(&self, event: CaptureEvent) {
+    pub(crate) fn event(&self, event: AudioEvent) {
         self.events.emit(event);
     }
 
-    pub(crate) fn stop(&self) {
-        self.sender.close();
+    pub(crate) fn events(&self) -> flume::Receiver<Result<AudioEvent, CaptureError>> {
+        self.events.subscribe()
     }
 
+    pub(crate) fn set_paused(&self, paused: bool) {
+        lock(&self.state).paused = paused;
+        self.event(if paused {
+            AudioEvent::Paused(PauseReason::Requested)
+        } else {
+            AudioEvent::Resumed
+        });
+    }
+
+    pub(crate) fn set_muted(&self, muted: bool) {
+        lock(&self.state).muted = muted;
+        self.event(if muted {
+            AudioEvent::Muted
+        } else {
+            AudioEvent::Unmuted
+        });
+    }
+
+    /// End the sink and the events (`Stopped(reason)`); later calls do
+    /// nothing.
+    pub(crate) fn stop(&self, reason: StopReason) {
+        self.sender.close();
+        self.finish(reason);
+    }
+
+    /// End the sink with `error`, and the events with `Failed` then
+    /// `Stopped(Failed)`.
     pub(crate) fn fail(&self, error: CaptureError) {
-        self.sender.close_with(error);
+        self.sender.close_with(error.clone());
+        self.event(AudioEvent::Failed(error));
+        self.finish(StopReason::Failed);
+    }
+
+    fn finish(&self, reason: StopReason) {
+        self.event(AudioEvent::Stopped(reason));
+        self.events.end();
     }
 }
 

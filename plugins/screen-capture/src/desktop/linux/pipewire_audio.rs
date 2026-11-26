@@ -20,7 +20,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use istmo_core::NativeBuffer;
 use pipewire as pw;
 use pw::properties::properties;
 use pw::spa::param::ParamType;
@@ -32,8 +31,8 @@ use pw::spa::utils::{Direction, SpaTypes};
 use pw::stream::{StreamFlags, StreamRc};
 
 use crate::types::{
-    AudioCaps, AudioConfig, AudioMeta, AudioNegotiated, AudioSource, AudioSourceKind, CaptureError,
-    Requirement, SampleFormat,
+    AudioCaps, AudioConfig, AudioMeta, AudioNegotiated, AudioSource, AudioSourceKind, Availability,
+    CaptureError, Requirement, SampleFormat, StopReason,
 };
 
 use self::clock::SampleClock;
@@ -50,6 +49,9 @@ pub(crate) fn backend() -> Arc<dyn AudioBackend> {
 /// names it behind a version feature.
 const TARGET_OBJECT: &str = "target.object";
 
+/// How long the availability probe waits for the session daemon.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
 fn error(step: &str, message: impl std::fmt::Display) -> CaptureError {
     pwx::error(None, &format!("PipeWire audio: {step}"), message)
 }
@@ -58,6 +60,23 @@ fn error(step: &str, message: impl std::fmt::Display) -> CaptureError {
 struct PipeWireAudio;
 
 impl AudioBackend for PipeWireAudio {
+    fn availability(&self) -> Availability {
+        // One connection to the session daemon, closed again at once.
+        match LoopThread::spawn(
+            None,
+            "istmo-screen-capture-audio-probe",
+            Remote::SessionDaemon,
+            PROBE_TIMEOUT,
+            |_ctx, ready| {
+                // The caller gave up waiting when this fails.
+                let _unwanted = ready.send(Ok(()));
+            },
+        ) {
+            Ok((_probe, ())) => Availability::Ready,
+            Err(err) => Availability::NotOnThisSession(err.to_string()),
+        }
+    }
+
     fn caps(&self) -> AudioCaps {
         AudioCaps {
             sources: vec![
@@ -85,17 +104,17 @@ impl AudioBackend for PipeWireAudio {
             pwx::SETUP_TIMEOUT,
             move |ctx, ready| run(ctx, ready, &target, &format_pod, config, out),
         )?;
-        Ok((Box::new(AudioSession { _thread: thread }), negotiated))
+        Ok((Box::new(PipeWireSession { _thread: thread }), negotiated))
     }
 }
 
 /// A running capture; dropping it stops the loop.
 #[derive(Debug)]
-struct AudioSession {
+struct PipeWireSession {
     _thread: LoopThread,
 }
 
-impl BackendSession for AudioSession {}
+impl BackendSession for PipeWireSession {}
 
 /// Where the capture stream links.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,7 +312,7 @@ fn run(
         return;
     }
     ctx.run();
-    data.borrow().out.stop();
+    data.borrow().out.stop(StopReason::Closed);
 }
 
 /// What the capture stream links to.
@@ -385,7 +404,7 @@ fn on_chunk(stream: &pw::stream::Stream, data: &mut StreamData) -> bool {
             "screen-capture audio: re-anchored the chunk clock"
         );
     }
-    data.out.deliver(meta, NativeBuffer::from_bytes(pcm))
+    data.out.deliver(meta, pcm)
 }
 
 /// Output stream nodes of an application (by `application.name` or
@@ -497,7 +516,7 @@ mod tests {
             .open_frame_sink::<AudioMeta>(istmo_core::SinkPolicy::queue(512))
             .expect("sink");
         let sender = runtime.frame_sender(sink.id()).expect("sender");
-        let out = AudioOut::new(sender, std::sync::Arc::default());
+        let out = AudioOut::new(sender);
         let config = AudioConfig {
             rate: Some(48_000),
             channels: Some(2),

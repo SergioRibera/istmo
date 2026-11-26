@@ -10,16 +10,19 @@ use istmo_core::NativeBuffer;
 
 use crate::pool::PoolAccounting;
 use crate::types::{
-    Availability, BackendCaps, BackendId, BorderState, BufferMemory, CaptureError, Colour,
-    ConsentModel, CopyStage, CursorMode, DamageSupport, Exhaustion, FormatCaps, FrameMeta,
-    FrameRate, IndicatorState, NegotiatedStream, Orientation, OrientationSupport, PixelFormat,
-    PlaneLayout, Provenance, PtsClock, Rect, RegionCrop, SessionUpdate, Size, Source, SourceId,
+    AudioCaps, AudioConfig, AudioMeta, AudioNegotiated, AudioSource, AudioSourceKind, Availability,
+    BackendCaps, BackendId, BorderState, BufferMemory, CaptureError, Colour, ConsentModel,
+    CopyStage, CursorMode, DamageSupport, Exhaustion, FormatCaps, FrameMeta, FrameRate,
+    IndicatorState, NegotiatedStream, Orientation, OrientationSupport, PixelFormat, PlaneLayout,
+    Provenance, PtsClock, Rect, RegionCrop, SampleFormat, SessionUpdate, Size, Source, SourceId,
     SourceKind, SourceList, SourceListing, SyncKind,
 };
 
-use super::backend::{Backend, BackendSession, Captured, ScreenshotPlan, Shot, StreamPlan, Target};
+use super::backend::{
+    AudioBackend, Backend, BackendSession, Captured, ScreenshotPlan, Shot, StreamPlan, Target,
+};
 use super::clock;
-use super::output::{Delivery, FrameOut};
+use super::output::{AudioOut, Delivery, FrameOut};
 use super::watch::{SourceFeed, WATCH_POLL};
 
 /// The red channel of pixel `(x, y)` of monitor `index`.
@@ -428,3 +431,116 @@ pub(crate) const ROT90: Orientation = Orientation {
     mirrored: false,
     rotation: crate::types::Rotation::R90,
 };
+
+/// A scripted audio backend: 10 ms chunks of a known ramp at the
+/// requested shape, from a thread of its own.
+#[derive(Debug)]
+pub(crate) struct FakeAudio {
+    pub(crate) availability: Availability,
+    pub(crate) counters: Arc<Counters>,
+}
+
+impl Default for FakeAudio {
+    fn default() -> Self {
+        Self {
+            availability: Availability::Ready,
+            counters: Arc::default(),
+        }
+    }
+}
+
+/// A running fake audio capture.
+#[derive(Debug)]
+struct FakeAudioSession {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl BackendSession for FakeAudioSession {}
+
+impl Drop for FakeAudioSession {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _joined = thread.join();
+        }
+    }
+}
+
+impl AudioBackend for FakeAudio {
+    fn availability(&self) -> Availability {
+        self.counters.probes.fetch_add(1, Ordering::SeqCst);
+        self.availability.clone()
+    }
+
+    fn caps(&self) -> AudioCaps {
+        AudioCaps {
+            sources: vec![AudioSourceKind::System, AudioSourceKind::Node],
+            formats: vec![SampleFormat::S16, SampleFormat::F32],
+            may_be_silent: false,
+        }
+    }
+
+    fn open(
+        &self,
+        config: &AudioConfig,
+        out: AudioOut,
+    ) -> Result<(Box<dyn BackendSession>, AudioNegotiated), CaptureError> {
+        if config.source == AudioSource::ExcludeSelf {
+            return Err(CaptureError::unsatisfiable(
+                None,
+                crate::types::Requirement::Audio,
+            ));
+        }
+        let negotiated = AudioNegotiated {
+            source: config.source.clone(),
+            rate: config.rate.unwrap_or(48_000),
+            channels: config.channels.unwrap_or(2),
+            format: config.format,
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let counters = Arc::clone(&self.counters);
+        let thread = {
+            let stop = Arc::clone(&stop);
+            let (rate, channels, format) =
+                (negotiated.rate, negotiated.channels, negotiated.format);
+            std::thread::Builder::new()
+                .name("fake-audio".to_owned())
+                .spawn(move || {
+                    counters.live_threads.fetch_add(1, Ordering::SeqCst);
+                    let frames = rate / 100;
+                    let bytes = frames as usize * usize::from(channels) * format.bytes() as usize;
+                    while !stop.load(Ordering::SeqCst) {
+                        let meta = AudioMeta {
+                            seq: 0,
+                            pts_ns: clock::monotonic_ns(),
+                            wall_us: clock::wall_now_us(),
+                            rate,
+                            channels,
+                            format,
+                            frames,
+                            discontinuity: false,
+                        };
+                        // A ramp, never all zero.
+                        let pcm = (0..bytes)
+                            .map(|i| u8::try_from(i % 251).unwrap_or(1) | 1)
+                            .collect();
+                        if !out.deliver(meta, pcm) {
+                            break;
+                        }
+                        counters.delivered.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    counters.live_threads.fetch_sub(1, Ordering::SeqCst);
+                })
+                .expect("spawn the fake audio thread")
+        };
+        Ok((
+            Box::new(FakeAudioSession {
+                stop,
+                thread: Some(thread),
+            }),
+            negotiated,
+        ))
+    }
+}

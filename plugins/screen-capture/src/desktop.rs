@@ -28,11 +28,11 @@ use istmo_core::{CallOrigin, FrameSinkId, HostCtx, NativeHandleId};
 use crate::ScreenCapture;
 use crate::policy::CapturePolicy;
 use crate::types::{
-    AccessRequest, AccessScope, AccessState, AudioMeta, BackendStatus, CapabilityQuery,
-    CapabilityReport, CaptureError, CaptureEvent, CaptureSession, FrameMeta, NegotiatedStream,
-    PixelLayout, PreviewTarget, ProjectionGrant, ProjectionRequest, RawImage, Requirement,
-    ScreenshotInfo, ScreenshotRequest, SessionConfig, SessionUpdate, SourceChange, SourceFilter,
-    SourceList,
+    AccessRequest, AccessScope, AccessState, AudioCaptureSession, AudioConfig, AudioEvent,
+    AudioMeta, AudioNegotiated, AudioUpdate, BackendStatus, CapabilityQuery, CapabilityReport,
+    CaptureError, CaptureEvent, CaptureSession, FrameMeta, NegotiatedStream, PixelLayout,
+    PreviewTarget, ProjectionGrant, ProjectionRequest, RawImage, Requirement, ScreenshotInfo,
+    ScreenshotRequest, SessionConfig, SessionUpdate, SourceChange, SourceFilter, SourceList,
 };
 
 use self::engine::Engine;
@@ -241,6 +241,68 @@ impl ScreenCapture for DesktopCapture {
             undo,
         )
         .await
+    }
+
+    async fn open_audio(
+        &self,
+        ctx: HostCtx,
+        config: AudioConfig,
+        audio: FrameSinkId<AudioMeta>,
+    ) -> Result<AudioCaptureSession, CaptureError> {
+        self.admit(&ctx, "open_audio")?;
+        let audio = ctx
+            .frame_sender(audio)
+            .map_err(|_| CaptureError::SinkUnreachable)?;
+        let runtime = ctx.runtime().map_err(CaptureError::from)?;
+        let engine = self.engine();
+        let origin = ctx.origin();
+        let undo = {
+            let engine = Arc::clone(&engine);
+            move |session: AudioCaptureSession| {
+                let _closed = engine.close_audio(session.session, origin);
+            }
+        };
+        offload_owned(
+            "open_audio",
+            move |caller| engine.open_audio(&runtime, &config, audio, origin, caller),
+            undo,
+        )
+        .await
+    }
+
+    async fn update_audio(
+        &self,
+        ctx: HostCtx,
+        session: NativeHandleId,
+        update: AudioUpdate,
+    ) -> Result<AudioNegotiated, CaptureError> {
+        self.admit(&ctx, "update_audio")?;
+        let engine = self.engine();
+        let origin = ctx.origin();
+        offload("update_audio", move || {
+            engine.update_audio(session, update, origin)
+        })
+        .await
+    }
+
+    async fn close_audio(&self, ctx: HostCtx, session: NativeHandleId) -> Result<(), CaptureError> {
+        self.admit(&ctx, "close_audio")?;
+        let engine = self.engine();
+        let origin = ctx.origin();
+        offload("close_audio", move || engine.close_audio(session, origin)).await
+    }
+
+    fn audio_events(
+        &self,
+        ctx: HostCtx,
+        session: NativeHandleId,
+    ) -> flume::Receiver<Result<AudioEvent, CaptureError>> {
+        if let Err(err) = self.admit(&ctx, "audio_events") {
+            let (tx, rx) = flume::bounded(1);
+            let _queued = tx.try_send(Err(err));
+            return rx;
+        }
+        self.engine.audio_events(session, ctx.origin())
     }
 
     async fn open_preview(

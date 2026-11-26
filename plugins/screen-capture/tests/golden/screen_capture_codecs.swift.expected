@@ -488,11 +488,24 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
 
     public func readCapabilityReport(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CapabilityReport {
         let backends = try Bincode.readVec(&c) { c1 in try self.readBackendCaps(&c1) }
-        return ScreenCapture.CapabilityReport(backends: backends)
+        let audio = try Bincode.readOption(&c) { c1 in try self.readAudioReport(&c1) }
+        return ScreenCapture.CapabilityReport(backends: backends, audio: audio)
     }
 
     public func writeCapabilityReport(_ out: inout Data, _ value: ScreenCapture.CapabilityReport) {
         Bincode.writeVec(&out, value.backends) { o1, v1 in self.writeBackendCaps(&o1, v1) }
+        Bincode.writeOption(&out, value.audio) { o1, v1 in self.writeAudioReport(&o1, v1) }
+    }
+
+    public func readAudioReport(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioReport {
+        let availability = try self.readAvailability(&c)
+        let caps = try self.readAudioCaps(&c)
+        return ScreenCapture.AudioReport(availability: availability, caps: caps)
+    }
+
+    public func writeAudioReport(_ out: inout Data, _ value: ScreenCapture.AudioReport) {
+        self.writeAvailability(&out, value.availability)
+        self.writeAudioCaps(&out, value.caps)
     }
 
     public func readAutoPreference(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AutoPreference {
@@ -805,6 +818,18 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeOption(&out, value.rate) { o1, v1 in Bincode.writeVarintU32(&o1, v1) }
         Bincode.writeOption(&out, value.channels) { o1, v1 in Bincode.writeU8(&o1, v1) }
         self.writeSampleFormat(&out, value.format)
+    }
+
+    public func readAudioUpdate(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioUpdate {
+        let disc = try Bincode.readVarintU32(&c)
+        guard let value = ScreenCapture.AudioUpdate(rawValue: disc) else {
+            throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
+        }
+        return value
+    }
+
+    public func writeAudioUpdate(_ out: inout Data, _ value: ScreenCapture.AudioUpdate) {
+        Bincode.writeVarintU32(&out, value.rawValue)
     }
 
     public func readCompositeScale(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CompositeScale {
@@ -1886,6 +1911,54 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
             self.writeCaptureError(&out, payload)
         case .stopped(let payload):
             Bincode.writeVarintU32(&out, 12)
+            self.writeStopReason(&out, payload)
+        }
+    }
+
+    public func readAudioCaptureSession(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioCaptureSession {
+        let session = try self.readNativeHandleId(&c)
+        let negotiated = try self.readAudioNegotiated(&c)
+        return ScreenCapture.AudioCaptureSession(session: session, negotiated: negotiated)
+    }
+
+    public func writeAudioCaptureSession(_ out: inout Data, _ value: ScreenCapture.AudioCaptureSession) {
+        self.writeNativeHandleId(&out, value.session)
+        self.writeAudioNegotiated(&out, value.negotiated)
+    }
+
+    public func readAudioEvent(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioEvent {
+        let disc = try Bincode.readVarintU32(&c)
+        switch disc {
+        case 0: return .started(try self.readAudioNegotiated(&c))
+        case 1: return .paused(try self.readPauseReason(&c))
+        case 2: return .resumed
+        case 3: return .muted
+        case 4: return .unmuted
+        case 5: return .failed(try self.readCaptureError(&c))
+        case 6: return .stopped(try self.readStopReason(&c))
+        default: throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
+        }
+    }
+
+    public func writeAudioEvent(_ out: inout Data, _ value: ScreenCapture.AudioEvent) {
+        switch value {
+        case .started(let payload):
+            Bincode.writeVarintU32(&out, 0)
+            self.writeAudioNegotiated(&out, payload)
+        case .paused(let payload):
+            Bincode.writeVarintU32(&out, 1)
+            self.writePauseReason(&out, payload)
+        case .resumed:
+            Bincode.writeVarintU32(&out, 2)
+        case .muted:
+            Bincode.writeVarintU32(&out, 3)
+        case .unmuted:
+            Bincode.writeVarintU32(&out, 4)
+        case .failed(let payload):
+            Bincode.writeVarintU32(&out, 5)
+            self.writeCaptureError(&out, payload)
+        case .stopped(let payload):
+            Bincode.writeVarintU32(&out, 6)
             self.writeStopReason(&out, payload)
         }
     }

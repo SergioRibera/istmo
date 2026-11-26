@@ -16,7 +16,8 @@ use crate::pixels::CpuView;
 use crate::policy::CapturePolicy;
 use crate::select::{self, Candidate, Requirements};
 use crate::types::{
-    AccessScope, AccessState, AccessStatus, AudioMeta, Availability, BackendCaps, BackendId,
+    AccessScope, AccessState, AccessStatus, AudioCaptureSession, AudioConfig, AudioEvent,
+    AudioMeta, AudioNegotiated, AudioReport, AudioUpdate, Availability, BackendCaps, BackendId,
     BackendReason, BackendStatus, BufferMemory, CapabilityQuery, CapabilityReport, CaptureError,
     CaptureEvent, CaptureSession, CompositeFill, CompositeInfo, CompositePart, ConsentModel,
     CopyStage, CpuPixelFormat, DamageSupport, FormatRequest, FrameMeta, IndicatorState,
@@ -67,12 +68,36 @@ impl Drop for SessionEntry {
         drop(state.video.take());
         if let Some((session, out)) = state.audio.take() {
             drop(session);
-            out.stop();
+            out.stop(StopReason::Closed);
         }
         drop(state);
         self.out.stop(StopReason::Closed);
     }
 }
+
+/// An audio-only session.
+struct AudioEntry {
+    /// Who opened the session: only callers of the same origin may
+    /// update, close or watch it.
+    opener: CallOrigin,
+    out: AudioOut,
+    state: Mutex<AudioEntryState>,
+}
+
+struct AudioEntryState {
+    session: Option<Box<dyn BackendSession>>,
+    negotiated: AudioNegotiated,
+}
+
+impl Drop for AudioEntry {
+    fn drop(&mut self) {
+        // Stop the producer before ending the sink.
+        drop(lock(&self.state).session.take());
+        self.out.stop(StopReason::Closed);
+    }
+}
+
+type Table<T> = Arc<Mutex<HashMap<NativeHandleId, Arc<T>>>>;
 
 pub(crate) struct Engine {
     backends: Vec<Arc<dyn Backend>>,
@@ -82,9 +107,14 @@ pub(crate) struct Engine {
     order: Vec<BackendId>,
     env: Option<Vec<BackendId>>,
     policy: CapturePolicy,
-    sessions: Arc<Mutex<HashMap<NativeHandleId, Arc<SessionEntry>>>>,
+    sessions: Table<SessionEntry>,
+    /// Audio-only sessions. Ids are unique across both tables; locks are
+    /// taken `sessions` first.
+    audio_sessions: Table<AudioEntry>,
     hook_installed: OnceLock<()>,
     probed: Mutex<Option<(Instant, Vec<Candidate>)>>,
+    /// The audio backend's availability, cached like `probed`.
+    audio_probed: Mutex<Option<(Instant, Availability)>>,
     /// Keyed hash session ids are drawn from: random per engine, so ids
     /// cannot be guessed from the ones a caller already saw.
     ids: RandomState,
@@ -149,9 +179,11 @@ impl Engine {
             order,
             env,
             policy,
-            sessions: Arc::new(Mutex::new(HashMap::new())),
+            sessions: Arc::default(),
+            audio_sessions: Arc::default(),
             hook_installed: OnceLock::new(),
             probed: Mutex::new(None),
+            audio_probed: Mutex::new(None),
             ids: RandomState::new(),
             draws: AtomicU64::new(0),
         }
@@ -265,12 +297,13 @@ impl Engine {
         &self,
         query: &CapabilityQuery,
     ) -> Result<CapabilityReport, CaptureError> {
-        if self.backends.is_empty() {
+        if self.backends.is_empty() && self.audio.is_none() {
             return Err(CaptureError::NoBackendCompiled);
         }
         let wanted = query
             .backend
             .or_else(|| query.source.as_ref().map(|s| s.backend));
+        let audio = self.audio_report();
         let candidates = self.candidates();
         if let Some(id) = wanted {
             let candidate = candidates
@@ -297,7 +330,27 @@ impl Engine {
                 })
             })
             .collect();
-        Ok(CapabilityReport { backends })
+        Ok(CapabilityReport { backends, audio })
+    }
+
+    /// The audio backend's report, its availability probed at most once
+    /// per [`PROBE_TTL`]; `None` when none is compiled.
+    fn audio_report(&self) -> Option<AudioReport> {
+        let audio = self.audio.as_ref()?;
+        let mut probed = lock(&self.audio_probed);
+        let availability = match probed.as_ref() {
+            Some((at, availability)) if at.elapsed() < PROBE_TTL => availability.clone(),
+            _ => {
+                let availability = audio.availability();
+                *probed = Some((Instant::now(), availability.clone()));
+                availability
+            }
+        };
+        drop(probed);
+        Some(AudioReport {
+            availability,
+            caps: audio.caps(),
+        })
     }
 
     pub(crate) fn sources(&self, filter: &SourceFilter) -> Result<SourceList, CaptureError> {
@@ -1023,19 +1076,21 @@ impl Engine {
         self.hook_installed.get_or_init(|| {
             let sessions: Weak<Mutex<HashMap<NativeHandleId, Arc<SessionEntry>>>> =
                 Arc::downgrade(&self.sessions);
+            let audio_sessions: Weak<Mutex<HashMap<NativeHandleId, Arc<AudioEntry>>>> =
+                Arc::downgrade(&self.audio_sessions);
             runtime.install_native_handle_release_hook(Arc::new(move |id| {
                 // Every release in the runtime reaches every hook; ids
-                // this host never handed out are not in the table.
-                let Some(sessions) = sessions.upgrade() else {
-                    return;
-                };
-                let Some(entry) = lock(&sessions).remove(&id) else {
-                    return;
-                };
-                // Dropping the entry stops the capture (joins its threads)
+                // this host never handed out are in neither table.
+                // Dropping an entry stops the capture (joins its threads)
                 // and ends the sinks: never on the thread that dropped the
                 // handle, which may be an executor's.
-                super::offload::detach("teardown", move || drop(entry));
+                if let Some(entry) = sessions.upgrade().and_then(|t| lock(&t).remove(&id)) {
+                    super::offload::detach("teardown", move || drop(entry));
+                } else if let Some(entry) =
+                    audio_sessions.upgrade().and_then(|t| lock(&t).remove(&id))
+                {
+                    super::offload::detach("teardown", move || drop(entry));
+                }
             }));
         });
     }
@@ -1076,7 +1131,7 @@ impl Engine {
         if let (Some(audio_config), Some(sender), Some(audio_backend)) =
             (&config.audio, audio, &self.audio)
         {
-            let audio_out = AudioOut::new(sender, Arc::clone(&events));
+            let audio_out = AudioOut::new(sender);
             match audio_backend.open(audio_config, audio_out.clone()) {
                 Ok((session, audio_negotiated)) => {
                     negotiated.audio = Some(audio_negotiated);
@@ -1273,22 +1328,40 @@ impl Engine {
         Ok((id, session, negotiated, out, events, captured))
     }
 
-    /// Store `entry` under a fresh unguessable id: random, with the two
-    /// high bits set so it stays in the Rust-allocated range and away
-    /// from the runtime's own counter.
+    /// Store `entry` under a [fresh id](Self::fresh_id).
     fn insert(&self, entry: Arc<SessionEntry>) -> NativeHandleId {
-        const HIGH: u64 = 0b11 << 62;
         let mut sessions = lock(&self.sessions);
-        let id = loop {
-            let draw = self.draws.fetch_add(1, Ordering::Relaxed);
-            let id = NativeHandleId(self.ids.hash_one(draw) | HIGH);
-            if let std::collections::hash_map::Entry::Vacant(slot) = sessions.entry(id) {
-                slot.insert(entry);
-                break id;
-            }
-        };
+        let audio = lock(&self.audio_sessions);
+        let id = self.fresh_id(|id| sessions.contains_key(&id) || audio.contains_key(&id));
+        drop(audio);
+        sessions.insert(id, entry);
         drop(sessions);
         id
+    }
+
+    /// [`insert`](Self::insert) for an audio-only session.
+    fn insert_audio(&self, entry: Arc<AudioEntry>) -> NativeHandleId {
+        let sessions = lock(&self.sessions);
+        let mut audio = lock(&self.audio_sessions);
+        let id = self.fresh_id(|id| sessions.contains_key(&id) || audio.contains_key(&id));
+        drop(sessions);
+        audio.insert(id, entry);
+        drop(audio);
+        id
+    }
+
+    /// An unguessable id no session holds: random, with the two high bits
+    /// set so it stays in the Rust-allocated range and away from the
+    /// runtime's own counter.
+    fn fresh_id(&self, taken: impl Fn(NativeHandleId) -> bool) -> NativeHandleId {
+        const HIGH: u64 = 0b11 << 62;
+        loop {
+            let draw = self.draws.fetch_add(1, Ordering::Relaxed);
+            let id = NativeHandleId(self.ids.hash_one(draw) | HIGH);
+            if !taken(id) {
+                return id;
+            }
+        }
     }
 
     /// The session `id`, for a caller of the origin that opened it.
@@ -1442,12 +1515,118 @@ impl Engine {
             }
         }
     }
+
+    // ----- audio-only sessions -------------------------------------------
+
+    pub(crate) fn open_audio(
+        &self,
+        runtime: &Arc<Runtime>,
+        config: &AudioConfig,
+        sink: FrameSender<AudioMeta>,
+        origin: CallOrigin,
+        caller: &Caller,
+    ) -> Result<AudioCaptureSession, CaptureError> {
+        let Some(backend) = &self.audio else {
+            sink.close_with(CaptureError::NoBackendCompiled);
+            return Err(CaptureError::NoBackendCompiled);
+        };
+        let out = AudioOut::new(sink);
+        let (session, negotiated) = match backend.open(config, out.clone()) {
+            Ok(opened) => opened,
+            Err(err) => {
+                out.fail(err.clone());
+                return Err(err);
+            }
+        };
+        if caller.is_gone() {
+            // Nobody holds the id: the session could never be stopped.
+            drop(session);
+            out.stop(StopReason::Closed);
+            return Err(CaptureError::SessionNotFound);
+        }
+        self.install_release_hook(runtime);
+        out.event(AudioEvent::Started(negotiated.clone()));
+        let entry = Arc::new(AudioEntry {
+            opener: origin,
+            out,
+            state: Mutex::new(AudioEntryState {
+                session: Some(session),
+                negotiated: negotiated.clone(),
+            }),
+        });
+        let id = self.insert_audio(entry);
+        Ok(AudioCaptureSession {
+            session: id,
+            negotiated,
+        })
+    }
+
+    /// The audio-only session `id`, for a caller of the origin that
+    /// opened it.
+    fn audio_entry(
+        &self,
+        id: NativeHandleId,
+        origin: CallOrigin,
+    ) -> Result<Arc<AudioEntry>, CaptureError> {
+        let entry = lock(&self.audio_sessions)
+            .get(&id)
+            .cloned()
+            .ok_or(CaptureError::SessionNotFound)?;
+        if entry.opener == origin {
+            Ok(entry)
+        } else {
+            Err(CaptureError::OriginRefused)
+        }
+    }
+
+    pub(crate) fn update_audio(
+        &self,
+        id: NativeHandleId,
+        update: AudioUpdate,
+        origin: CallOrigin,
+    ) -> Result<AudioNegotiated, CaptureError> {
+        let entry = self.audio_entry(id, origin)?;
+        match update {
+            AudioUpdate::Pause => entry.out.set_paused(true),
+            AudioUpdate::Resume => entry.out.set_paused(false),
+            AudioUpdate::Mute => entry.out.set_muted(true),
+            AudioUpdate::Unmute => entry.out.set_muted(false),
+        }
+        Ok(lock(&entry.state).negotiated.clone())
+    }
+
+    pub(crate) fn close_audio(
+        &self,
+        id: NativeHandleId,
+        origin: CallOrigin,
+    ) -> Result<(), CaptureError> {
+        self.audio_entry(id, origin)?;
+        let entry = lock(&self.audio_sessions).remove(&id);
+        drop(entry);
+        Ok(())
+    }
+
+    pub(crate) fn audio_events(
+        &self,
+        id: NativeHandleId,
+        origin: CallOrigin,
+    ) -> flume::Receiver<Result<AudioEvent, CaptureError>> {
+        match self.audio_entry(id, origin) {
+            Ok(entry) => entry.out.events(),
+            Err(err) => {
+                let (tx, rx) = flume::bounded(1);
+                let _queued = tx.try_send(Err(err));
+                rx
+            }
+        }
+    }
 }
 
 impl Drop for Engine {
     fn drop(&mut self) {
         let sessions: Vec<_> = lock(&self.sessions).drain().collect();
-        drop(sessions);
+        let audio: Vec<_> = lock(&self.audio_sessions).drain().collect();
+        drop((sessions, audio));
     }
 }
 

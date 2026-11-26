@@ -1,5 +1,6 @@
-//! Rust client sugar: sessions that bundle their sinks and events, a
-//! source watch that keeps the current listing, and screenshot helpers.
+//! Rust client sugar: sessions (video, audio-only) that bundle their
+//! sinks and events, a source watch that keeps the current listing, and
+//! screenshot helpers.
 
 use std::sync::Arc;
 
@@ -9,9 +10,10 @@ use istmo_core::{
 
 use crate::ScreenCaptureClient;
 use crate::types::{
-    AudioMeta, BackendDetail, CaptureError, CaptureEvent, CaptureSessionTag, FrameMeta,
-    NegotiatedStream, PixelLayout, RawImage, ScreenshotInfo, ScreenshotRequest, SessionConfig,
-    SessionUpdate, Source, SourceChange, SourceFilter,
+    AudioConfig, AudioEvent, AudioMeta, AudioNegotiated, AudioSessionTag, AudioUpdate,
+    BackendDetail, CaptureError, CaptureEvent, CaptureSessionTag, FrameMeta, NegotiatedStream,
+    PixelLayout, RawImage, ScreenshotInfo, ScreenshotRequest, SessionConfig, SessionUpdate, Source,
+    SourceChange, SourceFilter,
 };
 
 /// A live session: the owned handle (dropping it closes the session),
@@ -91,6 +93,71 @@ impl SessionHandle {
     pub async fn close(self) -> Result<(), CaptureError> {
         let id = self.session.id();
         self.client.close(id).await.map_err(CaptureError::from)?;
+        let _closed: istmo_core::NativeHandleId = self.session.into_id();
+        Ok(())
+    }
+}
+
+/// An audio-only session: the owned handle (dropping it closes the
+/// session), its sink and what was negotiated.
+#[derive(Debug)]
+pub struct AudioSessionHandle {
+    client: Arc<ScreenCaptureClient>,
+    session: NativeHandle<AudioSessionTag>,
+    negotiated: AudioNegotiated,
+    audio: FrameSink<AudioMeta>,
+}
+
+impl AudioSessionHandle {
+    #[must_use]
+    pub const fn negotiated(&self) -> &AudioNegotiated {
+        &self.negotiated
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> istmo_core::NativeHandleId {
+        self.session.id()
+    }
+
+    /// The chunks: interleaved PCM in CPU buffers, `AudioMeta` each.
+    #[must_use]
+    pub const fn audio(&self) -> &FrameSink<AudioMeta> {
+        &self.audio
+    }
+
+    /// The session's events.
+    ///
+    /// # Errors
+    /// Transport failures, as [`CaptureError`].
+    pub fn events(&self) -> Result<TypedStream<AudioEvent, CaptureError>, CaptureError> {
+        self.client
+            .audio_events(self.session.id())
+            .map_err(CaptureError::from)
+    }
+
+    /// Pause / resume, mute / unmute.
+    ///
+    /// # Errors
+    /// The host's refusal; the session stays as it was.
+    pub async fn update(&self, update: AudioUpdate) -> Result<&AudioNegotiated, CaptureError> {
+        self.client
+            .update_audio(self.session.id(), update)
+            .await
+            .map_err(CaptureError::from)?;
+        Ok(&self.negotiated)
+    }
+
+    /// Close explicitly and get the backend's answer.
+    ///
+    /// # Errors
+    /// The backend's close error; the handle's drop still releases the
+    /// session.
+    pub async fn close(self) -> Result<(), CaptureError> {
+        let id = self.session.id();
+        self.client
+            .close_audio(id)
+            .await
+            .map_err(CaptureError::from)?;
         let _closed: istmo_core::NativeHandleId = self.session.into_id();
         Ok(())
     }
@@ -215,6 +282,20 @@ pub trait ScreenCaptureClientExt {
         &self,
         filter: SourceFilter,
     ) -> impl std::future::Future<Output = Result<SourceWatch, CaptureError>> + Send;
+
+    /// Open an audio sink with `policy`, then an audio-only session
+    /// feeding it. A consumer that treats any drop as a fault uses
+    /// `queue(32)` with `DropNewest` and watches `dropped_before` /
+    /// `SinkStats`.
+    ///
+    /// # Errors
+    /// Sink creation or the backend's refusal.
+    fn open_audio_session(
+        &self,
+        runtime: &Arc<Runtime>,
+        config: AudioConfig,
+        policy: SinkPolicy,
+    ) -> impl std::future::Future<Output = Result<AudioSessionHandle, CaptureError>> + Send;
 }
 
 /// Frames a multi-monitor screenshot can return at most (one per
@@ -295,6 +376,27 @@ impl ScreenCaptureClientExt for Arc<ScreenCaptureClient> {
         self.screenshot_pixels(request, layout)
             .await
             .map_err(CaptureError::from)
+    }
+
+    async fn open_audio_session(
+        &self,
+        runtime: &Arc<Runtime>,
+        config: AudioConfig,
+        policy: SinkPolicy,
+    ) -> Result<AudioSessionHandle, CaptureError> {
+        let audio = runtime
+            .open_frame_sink::<AudioMeta>(policy)
+            .map_err(CaptureError::from)?;
+        let session = self
+            .open_audio_owned(config, audio.id())
+            .await
+            .map_err(CaptureError::from)?;
+        Ok(AudioSessionHandle {
+            client: Self::clone(self),
+            session: session.session,
+            negotiated: session.negotiated,
+            audio,
+        })
     }
 
     async fn source_watch(&self, filter: SourceFilter) -> Result<SourceWatch, CaptureError> {

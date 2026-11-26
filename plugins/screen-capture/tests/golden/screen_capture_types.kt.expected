@@ -249,7 +249,13 @@ data class BackendCaps(
 )
 
 data class CapabilityReport(
-    val backends: List<BackendCaps>
+    val backends: List<BackendCaps>,
+    val audio: AudioReport?
+)
+
+data class AudioReport(
+    val availability: Availability,
+    val caps: AudioCaps
 )
 
 enum class AutoPreference {
@@ -372,6 +378,13 @@ data class AudioConfig(
     val channels: UByte?,
     val format: SampleFormat
 )
+
+enum class AudioUpdate {
+    Pause,
+    Resume,
+    Mute,
+    Unmute
+}
 
 sealed class CompositeScale {
     object HighestScale : CompositeScale()
@@ -839,6 +852,21 @@ sealed class CaptureEvent {
     object SourceLost : CaptureEvent()
     data class Failed(val value: CaptureError) : CaptureEvent()
     data class Stopped(val value: StopReason) : CaptureEvent()
+}
+
+data class AudioCaptureSession(
+    val session: NativeHandleId,
+    val negotiated: AudioNegotiated
+)
+
+sealed class AudioEvent {
+    data class Started(val value: AudioNegotiated) : AudioEvent()
+    data class Paused(val value: PauseReason) : AudioEvent()
+    object Resumed : AudioEvent()
+    object Muted : AudioEvent()
+    object Unmuted : AudioEvent()
+    data class Failed(val value: CaptureError) : AudioEvent()
+    data class Stopped(val value: StopReason) : AudioEvent()
 }
 
 enum class BackendId {

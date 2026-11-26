@@ -20,16 +20,24 @@ public protocol ScreenCaptureCodecs {
     func writeAttemptFailure(_ out: inout Data, _ value: ScreenCapture.AttemptFailure)
     func readAudioCaps(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioCaps
     func writeAudioCaps(_ out: inout Data, _ value: ScreenCapture.AudioCaps)
+    func readAudioCaptureSession(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioCaptureSession
+    func writeAudioCaptureSession(_ out: inout Data, _ value: ScreenCapture.AudioCaptureSession)
     func readAudioConfig(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioConfig
     func writeAudioConfig(_ out: inout Data, _ value: ScreenCapture.AudioConfig)
+    func readAudioEvent(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioEvent
+    func writeAudioEvent(_ out: inout Data, _ value: ScreenCapture.AudioEvent)
     func readAudioMeta(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioMeta
     func writeAudioMeta(_ out: inout Data, _ value: ScreenCapture.AudioMeta)
     func readAudioNegotiated(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioNegotiated
     func writeAudioNegotiated(_ out: inout Data, _ value: ScreenCapture.AudioNegotiated)
+    func readAudioReport(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioReport
+    func writeAudioReport(_ out: inout Data, _ value: ScreenCapture.AudioReport)
     func readAudioSource(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioSource
     func writeAudioSource(_ out: inout Data, _ value: ScreenCapture.AudioSource)
     func readAudioSourceKind(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioSourceKind
     func writeAudioSourceKind(_ out: inout Data, _ value: ScreenCapture.AudioSourceKind)
+    func readAudioUpdate(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioUpdate
+    func writeAudioUpdate(_ out: inout Data, _ value: ScreenCapture.AudioUpdate)
     func readAutoPreference(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AutoPreference
     func writeAutoPreference(_ out: inout Data, _ value: ScreenCapture.AutoPreference)
     func readAutoSelect(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AutoSelect
@@ -395,6 +403,54 @@ public final class ScreenCaptureClient {
         }
         var c = Bincode.Cursor(bytes)
         return try codecs.readRawImage(&c)
+    }
+
+    public func update_audio(session: NativeHandleId, update: ScreenCapture.AudioUpdate) async throws -> ScreenCapture.AudioNegotiated {
+        var payload = Data()
+        codecs.writeNativeHandleId(&payload, session)
+        codecs.writeAudioUpdate(&payload, update)
+        let bytes: Data
+        do {
+            bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "update_audio", payload: payload)
+        } catch let e as PluginException {
+            var errCursor = Bincode.Cursor(e.payload)
+            let decoded: ScreenCapture.CaptureError? = try? codecs.readCaptureError(&errCursor)
+            throw ScreenCaptureException(payload: e.payload, decoded: decoded)
+        }
+        var c = Bincode.Cursor(bytes)
+        return try codecs.readAudioNegotiated(&c)
+    }
+
+    public func close_audio(session: NativeHandleId) async throws -> Void {
+        var payload = Data()
+        codecs.writeNativeHandleId(&payload, session)
+        do {
+            _ = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "close_audio", payload: payload)
+        } catch let e as PluginException {
+            var errCursor = Bincode.Cursor(e.payload)
+            let decoded: ScreenCapture.CaptureError? = try? codecs.readCaptureError(&errCursor)
+            throw ScreenCaptureException(payload: e.payload, decoded: decoded)
+        }
+    }
+
+    public func audio_events(session: NativeHandleId) -> AsyncThrowingStream<ScreenCapture.AudioEvent, Error> {
+        let codecs = self.codecs
+        var payload = Data()
+        codecs.writeNativeHandleId(&payload, session)
+        var events = IstmoRuntime.shared.stream(pluginId: Self.PLUGIN_ID, method: "audio_events", payload: payload).makeAsyncIterator()
+        return AsyncThrowingStream(unfolding: {
+            let next: Data?
+            do {
+                next = try await events.next()
+            } catch IstmoRuntimeError.streamError(let errPayload) {
+                var errCursor = Bincode.Cursor(errPayload)
+                let decoded: ScreenCapture.CaptureError? = try? codecs.readCaptureError(&errCursor)
+                throw ScreenCaptureException(payload: errPayload, decoded: decoded)
+            }
+            guard let bytes = next else { return nil }
+            var c = Bincode.Cursor(bytes)
+            return try codecs.readAudioEvent(&c)
+        })
     }
 
     public func open_preview(config: ScreenCapture.SessionConfig, target: ScreenCapture.PreviewTarget) async throws -> ScreenCapture.CaptureSession {

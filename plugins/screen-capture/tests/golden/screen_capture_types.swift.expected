@@ -359,9 +359,21 @@ extension ScreenCapture {
 
     public struct CapabilityReport: Sendable {
         public let backends: [BackendCaps]
+        public let audio: AudioReport?
 
-        public init(backends: [BackendCaps]) {
+        public init(backends: [BackendCaps], audio: AudioReport?) {
             self.backends = backends
+            self.audio = audio
+        }
+    }
+
+    public struct AudioReport: Sendable {
+        public let availability: Availability
+        public let caps: AudioCaps
+
+        public init(availability: Availability, caps: AudioCaps) {
+            self.availability = availability
+            self.caps = caps
         }
     }
 
@@ -532,6 +544,13 @@ extension ScreenCapture {
             self.channels = channels
             self.format = format
         }
+    }
+
+    public enum AudioUpdate: UInt32, Sendable {
+        case pause = 0
+        case resume = 1
+        case mute = 2
+        case unmute = 3
     }
 
     public enum CompositeScale: Sendable {
@@ -1245,6 +1264,26 @@ extension ScreenCapture {
         case exhausted(ExhaustionReport)
         case consentRevoked
         case sourceLost
+        case failed(CaptureError)
+        case stopped(StopReason)
+    }
+
+    public struct AudioCaptureSession: Sendable {
+        public let session: NativeHandleId
+        public let negotiated: AudioNegotiated
+
+        public init(session: NativeHandleId, negotiated: AudioNegotiated) {
+            self.session = session
+            self.negotiated = negotiated
+        }
+    }
+
+    public enum AudioEvent: Sendable {
+        case started(AudioNegotiated)
+        case paused(PauseReason)
+        case resumed
+        case muted
+        case unmuted
         case failed(CaptureError)
         case stopped(StopReason)
     }

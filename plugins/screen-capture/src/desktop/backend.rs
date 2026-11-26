@@ -188,6 +188,9 @@ pub(crate) trait Backend: Send + Sync + 'static {
 
 /// A desktop audio backend (independent of the video backend).
 pub(crate) trait AudioBackend: Send + Sync + 'static {
+    /// Whether it can run in this session. May connect to the daemon.
+    fn availability(&self) -> Availability;
+
     fn caps(&self) -> AudioCaps;
 
     /// Start capturing audio into `out`.

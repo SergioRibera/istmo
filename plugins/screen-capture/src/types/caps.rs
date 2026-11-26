@@ -576,6 +576,19 @@ pub struct BackendCaps {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CapabilityReport {
     pub backends: Vec<BackendCaps>,
+    /// The audio backend, independent of the video ones (`open_audio`,
+    /// `open_with_audio`); `None` when none is compiled.
+    pub audio: Option<AudioReport>,
+}
+
+/// The audio backend's report.
+#[message(crate = "::istmo_core")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AudioReport {
+    /// Whether it can run here (PipeWire: the session daemon answers).
+    pub availability: Availability,
+    /// From the backend's table: what a session can ask for.
+    pub caps: AudioCaps,
 }
 
 impl BackendCaps {

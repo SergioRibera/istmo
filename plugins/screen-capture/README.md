@@ -22,7 +22,7 @@ regions.
 | wlr-screencopy (wlroots, niri) | `linux-wlr-screencopy` | DMA-BUF, `wl_shm` | none | yes |
 | xdg-desktop-portal + PipeWire | `linux-portal` | DMA-BUF, `MemFd` | dialog per session (restore tokens) | no: by name only |
 | X11 (XShm, Composite, XDamage, XFixes) | `linux-x11` | shared memory | none | yes |
-| PipeWire audio | `linux-audio` | interleaved PCM | none | — |
+| PipeWire audio (alone or with video) | `linux-audio` | interleaved PCM | none | — |
 
 Android, iOS, macOS, Windows and the web are designed
 (`design/screen-capture.md`) but not implemented yet. Their hosts answer
@@ -167,6 +167,35 @@ subscriber, then streams these events:
 - `Exhausted`
 - `Stopped`, which says why the session ended
 
+## Audio only
+
+`open_audio_session` captures audio without a video session. The rate,
+channels and format are asked per open; PipeWire converts what the
+source does not have:
+
+```rust,ignore
+use istmo_core::{Overflow, SinkPolicy};
+use istmo_screen_capture::{AudioConfig, AudioSource, AudioUpdate, SampleFormat};
+
+let config = AudioConfig::of(AudioSource::System)
+    .rate(44_100)
+    .channels(2)
+    .format(SampleFormat::S16);
+let session = client
+    .open_audio_session(&runtime, config, SinkPolicy::queue(32).with_overflow(Overflow::DropNewest))
+    .await?;
+while let Some(chunk) = session.audio().recv() {
+    // chunk.meta.wall_us: UNIX-epoch µs, following the sample count;
+    // chunk.buffer.as_bytes(): interleaved PCM, chunk.meta.frames frames.
+}
+session.update(AudioUpdate::Mute).await?; // on time, silent
+```
+
+The handle has its own `update` (`Pause`, `Resume`, `Mute`,
+`Unmute`), `close` and `events` (`AudioEvent`). Dropping it closes the
+session. `capabilities(..).audio` says whether audio capture runs
+here.
+
 ## Sources
 
 `sources` lists monitors and windows, for local callers only by default
@@ -246,6 +275,7 @@ tests:
 - `ISTMO_SC_TEST_NIRI=1`: a live niri session
 - `ISTMO_SC_TEST_NIRI_SCREENCAST=1`: niri's PipeWire producer, no dialog
 - `ISTMO_SC_TEST_PORTAL_SESSION=1`: one portal dialog
+- `ISTMO_SC_TEST_PIPEWIRE=1`: audio-only sessions at 44.1 and 48 kHz, no dialog
 
 Design: `design/screen-capture.md`. Platform facts:
 `design/screen-capture-platforms.md`.

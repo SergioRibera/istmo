@@ -112,6 +112,45 @@ class ScreenCaptureClient(
         return codecs.readRawImage(bytes, 0).value
     }
 
+    suspend fun update_audio(session: NativeHandleId, update: AudioUpdate): AudioNegotiated {
+        val payloadBuf = IstmoBytesOut()
+        codecs.writeNativeHandleId(payloadBuf, session)
+        codecs.writeAudioUpdate(payloadBuf, update)
+        val payload = payloadBuf.toExactArray()
+        val bytes = try {
+            IstmoRuntime.call(PLUGIN_ID, "update_audio", payload)
+        } catch (e: PluginException) {
+            val decoded = runCatching { codecs.readCaptureError(e.payload, 0).value }.getOrNull()
+            throw ScreenCaptureException(e.payload, decoded)
+        }
+        return codecs.readAudioNegotiated(bytes, 0).value
+    }
+
+    suspend fun close_audio(session: NativeHandleId) {
+        val payloadBuf = IstmoBytesOut()
+        codecs.writeNativeHandleId(payloadBuf, session)
+        val payload = payloadBuf.toExactArray()
+        try {
+            IstmoRuntime.call(PLUGIN_ID, "close_audio", payload)
+        } catch (e: PluginException) {
+            val decoded = runCatching { codecs.readCaptureError(e.payload, 0).value }.getOrNull()
+            throw ScreenCaptureException(e.payload, decoded)
+        }
+    }
+
+    fun audio_events(session: NativeHandleId): kotlinx.coroutines.flow.Flow<AudioEvent> {
+        val payloadBuf = IstmoBytesOut()
+        codecs.writeNativeHandleId(payloadBuf, session)
+        val payload = payloadBuf.toExactArray()
+        return IstmoRuntime.stream(PLUGIN_ID, "audio_events", payload).map { bytes ->
+            codecs.readAudioEvent(bytes, 0).value
+        }.catch { e ->
+            if (e !is PluginException) throw e
+            val decoded = runCatching { codecs.readCaptureError(e.payload, 0).value }.getOrNull()
+            throw ScreenCaptureException(e.payload, decoded)
+        }
+    }
+
     suspend fun open_preview(config: SessionConfig, target: PreviewTarget): CaptureSession {
         val payloadBuf = IstmoBytesOut()
         codecs.writeSessionConfig(payloadBuf, config)

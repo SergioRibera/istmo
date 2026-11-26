@@ -61,6 +61,17 @@ class ScreenCaptureBackendImpl(context: Context) : ScreenCaptureBackend {
         refuse(video)
     }
 
+    override suspend fun open_audio(config: AudioConfig, audio: IstmoFrameSender<AudioMeta>): AudioCaptureSession =
+        refuse(audio)
+
+    override suspend fun update_audio(session: NativeHandleId, update: AudioUpdate): AudioNegotiated = unsupported()
+
+    override suspend fun close_audio(session: NativeHandleId): Unit = unsupported()
+
+    override fun audio_events(session: NativeHandleId): Flow<AudioEvent> = flow {
+        unsupported()
+    }
+
     override suspend fun open_preview(config: SessionConfig, target: PreviewTarget): CaptureSession = unsupported()
 
     override suspend fun open_preview_with_frames(

@@ -36,6 +36,10 @@ fn two_monitors() -> Vec<crate::types::Source> {
 }
 
 fn rig_with(fakes: Vec<Fake>, policy: CapturePolicy) -> Rig {
+    rig_with_audio(fakes, None, policy)
+}
+
+fn rig_with_audio(fakes: Vec<Fake>, audio: Option<fake::FakeAudio>, policy: CapturePolicy) -> Rig {
     let counters = fakes
         .first()
         .map_or_else(Default::default, |f| Arc::clone(&f.counters));
@@ -46,7 +50,7 @@ fn rig_with(fakes: Vec<Fake>, policy: CapturePolicy) -> Rig {
         .collect();
     let engine = Engine::new(
         backends,
-        None,
+        audio.map(|a| Arc::new(a) as Arc<dyn super::backend::AudioBackend>),
         vec![BackendId::LinuxExtImageCopy, WLR, BackendId::LinuxPortal],
         order,
         None,
@@ -1376,4 +1380,200 @@ fn a_pick_other_than_the_named_source_is_refused() {
     .map(|_| ())
     .expect_err("substituted");
     assert_eq!(err, CaptureError::SourceNotFound(other));
+}
+
+fn audio_rig() -> (Rig, Arc<Counters>) {
+    let audio = fake::FakeAudio::default();
+    let counters = Arc::clone(&audio.counters);
+    let rig = rig_with_audio(
+        vec![Fake::new(WLR, two_monitors())],
+        Some(audio),
+        CapturePolicy::default(),
+    );
+    (rig, counters)
+}
+
+/// The next chunk, waiting up to 5 s.
+fn next_chunk(
+    session: &crate::AudioSessionHandle,
+) -> istmo_core::NativeFrame<crate::types::AudioMeta> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(chunk) = session.audio().try_recv() {
+            return chunk;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for a chunk");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn an_audio_only_session_has_its_shape_clock_and_events() {
+    use crate::types::{AudioConfig, AudioEvent, AudioSource, AudioUpdate, SampleFormat};
+    let (rig, counters) = audio_rig();
+    let config = AudioConfig::of(AudioSource::System)
+        .rate(44_100)
+        .channels(2)
+        .format(SampleFormat::S16);
+    let session = block(
+        rig.client
+            .open_audio_session(&rig.runtime, config, SinkPolicy::queue(64)),
+    )
+    .expect("open audio");
+    assert_eq!(session.negotiated().rate, 44_100);
+    assert_eq!(session.negotiated().format, SampleFormat::S16);
+    let first = next_chunk(&session);
+    let second = next_chunk(&session);
+    assert_eq!(first.meta.rate, 44_100);
+    assert!(second.meta.seq > first.meta.seq);
+    let now_us = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after the epoch")
+            .as_micros(),
+    )
+    .expect("fits");
+    assert!(
+        now_us.abs_diff(second.meta.wall_us) < 1_000_000,
+        "wall_us is UNIX-epoch µs"
+    );
+
+    // Mute: chunks keep coming, silent.
+    block(session.update(AudioUpdate::Mute)).expect("mute");
+    let silent = (0..50).map(|_| next_chunk(&session)).find(|c| {
+        c.buffer
+            .as_bytes()
+            .is_some_and(|b| b.iter().all(|v| *v == 0))
+    });
+    assert!(silent.is_some(), "muted chunks are zeroed");
+    block(session.update(AudioUpdate::Unmute)).expect("unmute");
+
+    // Pause: nothing comes; the first chunk after Resume says so.
+    block(session.update(AudioUpdate::Pause)).expect("pause");
+    std::thread::sleep(Duration::from_millis(50));
+    while session.audio().try_recv().is_some() {}
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(session.audio().try_recv().is_none(), "paused");
+    block(session.update(AudioUpdate::Resume)).expect("resume");
+    assert!(next_chunk(&session).meta.discontinuity);
+
+    let events = session.events().expect("events");
+    let mut seen = Vec::new();
+    while let Some(Ok(istmo_core::StreamItem::Event(event))) = events.try_recv() {
+        seen.push(event);
+    }
+    assert_eq!(
+        seen,
+        vec![
+            AudioEvent::Started(session.negotiated().clone()),
+            AudioEvent::Muted,
+            AudioEvent::Unmuted,
+            AudioEvent::Paused(crate::types::PauseReason::Requested),
+            AudioEvent::Resumed,
+        ]
+    );
+    block(session.close()).expect("close");
+    wait_until("the audio thread to stop", || {
+        counters.live_threads.load(Ordering::SeqCst) == 0
+    });
+    let Ok(istmo_core::StreamItem::Event(AudioEvent::Stopped(StopReason::Closed))) = events.recv()
+    else {
+        panic!("the events end with Stopped(Closed)");
+    };
+}
+
+#[test]
+fn dropping_an_audio_handle_stops_it_and_reports_cover_audio() {
+    use crate::types::{AudioConfig, AudioSource};
+    let (rig, counters) = audio_rig();
+    let report = block(
+        rig.client
+            .capabilities(crate::types::CapabilityQuery::default()),
+    )
+    .expect("caps");
+    let audio = report.audio.expect("an audio report");
+    assert_eq!(audio.availability, Availability::Ready);
+    assert!(!audio.caps.sources.is_empty());
+
+    let session = block(rig.client.open_audio_session(
+        &rig.runtime,
+        AudioConfig::of(AudioSource::Node(7)).rate(48_000),
+        SinkPolicy::queue(8),
+    ))
+    .expect("open audio");
+    assert_eq!(session.negotiated().rate, 48_000);
+    let _chunk = next_chunk(&session);
+    drop(session);
+    wait_until("the audio thread to stop", || {
+        counters.live_threads.load(Ordering::SeqCst) == 0
+    });
+
+    let err = block(rig.client.open_audio_session(
+        &rig.runtime,
+        AudioConfig::of(AudioSource::ExcludeSelf),
+        SinkPolicy::queue(8),
+    ))
+    .expect_err("excluding this process");
+    assert_eq!(err, CaptureError::unsatisfiable(None, Requirement::Audio));
+
+    // Without an audio backend.
+    let rig = self::rig();
+    let err = block(rig.client.open_audio_session(
+        &rig.runtime,
+        AudioConfig::default(),
+        SinkPolicy::queue(8),
+    ))
+    .expect_err("no audio backend");
+    assert_eq!(err, CaptureError::NoBackendCompiled);
+    let report = block(
+        rig.client
+            .capabilities(crate::types::CapabilityQuery::default()),
+    )
+    .expect("caps");
+    assert_eq!(report.audio, None);
+}
+
+#[test]
+fn audio_sessions_answer_only_their_opener() {
+    use crate::types::{AudioConfig, AudioUpdate};
+    let (rig, _counters) = audio_rig();
+    let session = block(rig.client.open_audio_session(
+        &rig.runtime,
+        AudioConfig::default(),
+        SinkPolicy::queue(8),
+    ))
+    .expect("open audio");
+    // A video-session call on an audio id finds nothing, and the other
+    // way round.
+    assert_eq!(
+        block(rig.client.close(session.id())).map_err(CaptureError::from),
+        Err(CaptureError::SessionNotFound)
+    );
+    assert_eq!(
+        block(rig.client.update_audio(
+            istmo_core::NativeHandleId(session.id().0 ^ 1),
+            AudioUpdate::Pause
+        ))
+        .map_err(CaptureError::from),
+        Err(CaptureError::SessionNotFound)
+    );
+    // A sink-taking method: the runtime itself refuses remote callers,
+    // whatever the policy opens.
+    let host = ScreenCaptureHost::new(DesktopCapture::from_engine(Engine::new(
+        vec![],
+        Some(Arc::new(fake::FakeAudio::default())),
+        Vec::new(),
+        Vec::new(),
+        None,
+        CapturePolicy::default().with_remote_method("open_audio"),
+    )));
+    let payload = codec::encode(&(AudioConfig::default(), 1_u64)).expect("payload");
+    let refused = block(host.dispatch_from(
+        CallOrigin::Remote,
+        None,
+        "open_audio",
+        &payload,
+        CancelToken::new(),
+    ));
+    assert!(refused.is_err(), "{refused:?}");
 }

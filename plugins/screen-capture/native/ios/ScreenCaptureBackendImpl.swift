@@ -72,6 +72,24 @@ public final class ScreenCaptureBackendImpl: ScreenCaptureBackend {
         throw refuse(video)
     }
 
+    public func open_audio(config: ScreenCapture.AudioConfig, audio: IstmoFrameSender<ScreenCapture.AudioMeta>) async throws -> ScreenCapture.AudioCaptureSession {
+        throw refuse(audio)
+    }
+
+    public func update_audio(session: NativeHandleId, update: ScreenCapture.AudioUpdate) async throws -> ScreenCapture.AudioNegotiated {
+        throw ScreenCapture.CaptureError.noBackendCompiled
+    }
+
+    public func close_audio(session: NativeHandleId) async throws {
+        throw ScreenCapture.CaptureError.noBackendCompiled
+    }
+
+    public func audio_events(session: NativeHandleId) -> AsyncThrowingStream<ScreenCapture.AudioEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish(throwing: ScreenCapture.CaptureError.noBackendCompiled)
+        }
+    }
+
     public func open_preview(config: ScreenCapture.SessionConfig, target: ScreenCapture.PreviewTarget) async throws -> ScreenCapture.CaptureSession {
         throw ScreenCapture.CaptureError.noBackendCompiled
     }

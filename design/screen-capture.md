@@ -229,6 +229,19 @@ safe `drm` crate.
   - Probe-cache invalidation does not use the watch yet (the 5 s bound
     and the vanished-source drop stay).
 
+**Audio.**
+- `open_audio` (audio-only, see "Audio") reuses the PipeWire audio
+  backend and its sample-count clock: `wall_us` is UNIX-epoch µs, never
+  monotonic; `pts_ns` the same instant on `CLOCK_MONOTONIC`.
+- `AudioOut` owns the chunk sequence, pause (drop, then a
+  `discontinuity`), mute (zeroed PCM) and an `EventHub<AudioEvent>`;
+  `EventHub` is generic over the event (`HubEvent`: what a late
+  subscriber replays as `Started`). Inside `open_with_audio` the audio
+  events have no subscriber method; the session's `CaptureEvent`s are
+  unchanged.
+- The audio backend's availability is a connection to the session
+  daemon (`LoopThread` with a no-op body), cached 5 s.
+
 ## Goals
 
 - One API for Linux (Wayland + X11), Windows, macOS, iOS / iPadOS,
@@ -928,6 +941,33 @@ pub struct AudioMeta { pub seq: u64, pub pts_ns: u64, pub wall_us: u64, pub rate
   `AudioCaps.may_be_silent`); iOS SCK / ReplayKit `.audioApp`;
   `getDisplayMedia` audio.
 
+**Audio-only sessions.** `open_audio(config, audio)` (`#[owned]`,
+same-process only) captures audio with no video backend involved:
+
+```rust
+#[owned]
+async fn open_audio(&self, config: AudioConfig, audio: FrameSinkId<AudioMeta>)
+    -> Result<AudioCaptureSession, CaptureError>;          // { #[handle(AudioSessionTag)] session, negotiated: AudioNegotiated }
+async fn update_audio(&self, session: NativeHandleId, update: AudioUpdate)
+    -> Result<AudioNegotiated, CaptureError>;              // Pause | Resume | Mute | Unmute
+async fn close_audio(&self, session: NativeHandleId) -> Result<(), CaptureError>;
+#[stream]
+fn audio_events(&self, session: NativeHandleId) -> Result<AudioEvent, CaptureError>;
+// AudioEvent: Started(AudioNegotiated) | Paused(PauseReason) | Resumed | Muted | Unmuted | Failed | Stopped
+```
+
+- The rate, channel count and format are asked per open; PipeWire
+  converts (ferricast reopens at 44.1 kHz for AirPlay AAC-ELD, 48 kHz
+  otherwise).
+- `Pause` drops chunks and marks the next one `discontinuity`; `Mute`
+  keeps them on time, zeroed.
+- Its own session table and handle tag: `close` / `update` / `events`
+  do not answer an audio id, nor the audio methods a video one.
+- `CapabilityReport.audio: Option<AudioReport { availability, caps }>`
+  says whether audio-only capture runs here (PipeWire: the session
+  daemon answers; probed like the video backends, 5 s), whatever the
+  video backends. A build with audio but no video backend reports it.
+
 ## Preview into a platform surface
 
 For consumers that only show the capture (mobile apps, a Kotlin /
@@ -1344,7 +1384,7 @@ the adapter, then go.
 | readback at the hold limit | `Exhaustion::CopyToCpu` |
 | `Context::connect(None)` | `linux.pipewire = SessionDaemon` |
 | GPU preference | `VideoConfig.gpu` |
-| `PipeWireAudioCapture` | `open_with_audio`, `AudioSource::Node(id)` / `System`, sink `queue(32)` |
+| `PipeWireAudioCapture` | `open_audio` (audio-only, `rate(44_100)` for AAC-ELD) or `open_with_audio`, `AudioSource::Node(id)` / `System`, sink `queue(32)`; mute = `AudioUpdate::Mute` |
 
 ### Frame mapping
 

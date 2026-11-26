@@ -597,11 +597,28 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
         var cursor = offset
         val d_backends = Bincode.readVec(bytes, cursor) { b1, c1 -> readBackendCaps(b1, c1) }; cursor = d_backends.consumed
         val backends = d_backends.value
-        return Bincode.Decoded(CapabilityReport(backends = backends), cursor)
+        val d_audio = Bincode.readOption(bytes, cursor) { b1, c1 -> readAudioReport(b1, c1) }; cursor = d_audio.consumed
+        val audio = d_audio.value
+        return Bincode.Decoded(CapabilityReport(backends = backends, audio = audio), cursor)
     }
 
     override fun writeCapabilityReport(out: ByteArrayOutputStream, value: CapabilityReport) {
         Bincode.writeVec(out, value.backends) { s1, v1 -> writeBackendCaps(s1, v1) }
+        Bincode.writeOption(out, value.audio) { s1, v1 -> writeAudioReport(s1, v1) }
+    }
+
+    override fun readAudioReport(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioReport> {
+        var cursor = offset
+        val d_availability = readAvailability(bytes, cursor); cursor = d_availability.consumed
+        val availability = d_availability.value
+        val d_caps = readAudioCaps(bytes, cursor); cursor = d_caps.consumed
+        val caps = d_caps.value
+        return Bincode.Decoded(AudioReport(availability = availability, caps = caps), cursor)
+    }
+
+    override fun writeAudioReport(out: ByteArrayOutputStream, value: AudioReport) {
+        writeAvailability(out, value.availability)
+        writeAudioCaps(out, value.caps)
     }
 
     override fun readAutoPreference(bytes: ByteArray, offset: Int): Bincode.Decoded<AutoPreference> {
@@ -999,6 +1016,17 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
         Bincode.writeOption(out, value.rate) { s1, v1 -> Bincode.writeU32(s1, v1) }
         Bincode.writeOption(out, value.channels) { s1, v1 -> Bincode.writeU8(s1, v1) }
         writeSampleFormat(out, value.format)
+    }
+
+    override fun readAudioUpdate(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioUpdate> {
+        val d = Bincode.readEnumDiscriminant(bytes, offset)
+        val variant = AudioUpdate.entries.getOrNull(d.value)
+            ?: throw Bincode.DecodeException("AudioUpdate: unknown discriminant ${d.value}")
+        return Bincode.Decoded(variant, d.consumed)
+    }
+
+    override fun writeAudioUpdate(out: ByteArrayOutputStream, value: AudioUpdate) {
+        Bincode.writeEnumDiscriminant(out, value.ordinal)
     }
 
     override fun readCompositeScale(bytes: ByteArray, offset: Int): Bincode.Decoded<CompositeScale> {
@@ -2363,6 +2391,76 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
             }
             is CaptureEvent.Stopped -> {
                 Bincode.writeEnumDiscriminant(out, 12)
+                writeStopReason(out, value.value)
+            }
+        }
+    }
+
+    override fun readAudioCaptureSession(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioCaptureSession> {
+        var cursor = offset
+        val d_session = readNativeHandleId(bytes, cursor); cursor = d_session.consumed
+        val session = d_session.value
+        val d_negotiated = readAudioNegotiated(bytes, cursor); cursor = d_negotiated.consumed
+        val negotiated = d_negotiated.value
+        return Bincode.Decoded(AudioCaptureSession(session = session, negotiated = negotiated), cursor)
+    }
+
+    override fun writeAudioCaptureSession(out: ByteArrayOutputStream, value: AudioCaptureSession) {
+        writeNativeHandleId(out, value.session)
+        writeAudioNegotiated(out, value.negotiated)
+    }
+
+    override fun readAudioEvent(bytes: ByteArray, offset: Int): Bincode.Decoded<AudioEvent> {
+        var cursor = offset
+        val disc = Bincode.readEnumDiscriminant(bytes, cursor)
+        cursor = disc.consumed
+        return when (disc.value) {
+            0 -> {
+                val d_inner = readAudioNegotiated(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(AudioEvent.Started(inner) as AudioEvent, cursor)
+            }
+            1 -> {
+                val d_inner = readPauseReason(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(AudioEvent.Paused(inner) as AudioEvent, cursor)
+            }
+            2 -> Bincode.Decoded(AudioEvent.Resumed, cursor)
+            3 -> Bincode.Decoded(AudioEvent.Muted, cursor)
+            4 -> Bincode.Decoded(AudioEvent.Unmuted, cursor)
+            5 -> {
+                val d_inner = readCaptureError(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(AudioEvent.Failed(inner) as AudioEvent, cursor)
+            }
+            6 -> {
+                val d_inner = readStopReason(bytes, cursor); cursor = d_inner.consumed
+                val inner = d_inner.value
+                Bincode.Decoded(AudioEvent.Stopped(inner) as AudioEvent, cursor)
+            }
+            else -> throw Bincode.DecodeException("AudioEvent: unknown discriminant ${disc.value}")
+        }
+    }
+
+    override fun writeAudioEvent(out: ByteArrayOutputStream, value: AudioEvent) {
+        when (value) {
+            is AudioEvent.Started -> {
+                Bincode.writeEnumDiscriminant(out, 0)
+                writeAudioNegotiated(out, value.value)
+            }
+            is AudioEvent.Paused -> {
+                Bincode.writeEnumDiscriminant(out, 1)
+                writePauseReason(out, value.value)
+            }
+            AudioEvent.Resumed -> Bincode.writeEnumDiscriminant(out, 2)
+            AudioEvent.Muted -> Bincode.writeEnumDiscriminant(out, 3)
+            AudioEvent.Unmuted -> Bincode.writeEnumDiscriminant(out, 4)
+            is AudioEvent.Failed -> {
+                Bincode.writeEnumDiscriminant(out, 5)
+                writeCaptureError(out, value.value)
+            }
+            is AudioEvent.Stopped -> {
+                Bincode.writeEnumDiscriminant(out, 6)
                 writeStopReason(out, value.value)
             }
         }

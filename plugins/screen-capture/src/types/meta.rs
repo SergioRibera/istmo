@@ -377,6 +377,33 @@ pub enum CaptureEvent {
     Stopped(StopReason),
 }
 
+/// Phantom tag of an audio-only session handle.
+#[derive(Debug, Clone, Copy)]
+pub struct AudioSessionTag(std::convert::Infallible);
+
+/// The answer to `open_audio`. `open_audio_owned` wraps `session` in a
+/// handle that closes the session on drop.
+#[message(crate = "::istmo_core")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AudioCaptureSession {
+    #[handle(AudioSessionTag)]
+    pub session: NativeHandleId,
+    pub negotiated: AudioNegotiated,
+}
+
+/// Events of an audio-only session.
+#[message(crate = "::istmo_core")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AudioEvent {
+    Started(AudioNegotiated),
+    Paused(PauseReason),
+    Resumed,
+    Muted,
+    Unmuted,
+    Failed(CaptureError),
+    Stopped(StopReason),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

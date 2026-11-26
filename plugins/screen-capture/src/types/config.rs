@@ -355,7 +355,9 @@ pub enum AudioSource {
     Node(u32),
 }
 
-/// Audio options of a session.
+/// Audio options of a session (`open_with_audio`) or of an audio-only
+/// one (`open_audio`). A rate or channel count the source does not have
+/// is converted by the platform (PipeWire resamples and remixes).
 #[message(crate = "::istmo_core")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct AudioConfig {
@@ -365,6 +367,48 @@ pub struct AudioConfig {
     /// `None` = the source's channel count.
     pub channels: Option<u8>,
     pub format: SampleFormat,
+}
+
+impl AudioConfig {
+    /// `source` at the graph's own rate and channel count, `F32`.
+    #[must_use]
+    pub fn of(source: AudioSource) -> Self {
+        Self {
+            source,
+            ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub const fn rate(mut self, rate: u32) -> Self {
+        self.rate = Some(rate);
+        self
+    }
+
+    #[must_use]
+    pub const fn channels(mut self, channels: u8) -> Self {
+        self.channels = Some(channels);
+        self
+    }
+
+    #[must_use]
+    pub const fn format(mut self, format: SampleFormat) -> Self {
+        self.format = format;
+        self
+    }
+}
+
+/// A change to a running audio-only session.
+#[message(crate = "::istmo_core")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AudioUpdate {
+    /// Stop delivering chunks; the next one after `Resume` is marked
+    /// `discontinuity`.
+    Pause,
+    Resume,
+    /// Keep delivering chunks on time, silent (zeroed PCM).
+    Mute,
+    Unmute,
 }
 
 /// Composite scale.

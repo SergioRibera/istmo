@@ -60,7 +60,7 @@ mod types;
 use istmo_core::{FrameSinkId, HostCtx, NativeHandleId};
 use istmo_macros::{owned, plugin, stream};
 
-pub use client::{ScreenCaptureClientExt, SessionHandle, SourceWatch};
+pub use client::{AudioSessionHandle, ScreenCaptureClientExt, SessionHandle, SourceWatch};
 #[cfg(not(target_arch = "wasm32"))]
 pub use desktop::DesktopCapture;
 pub use policy::CapturePolicy;
@@ -159,6 +159,37 @@ pub trait ScreenCapture {
         video: FrameSinkId<FrameMeta>,
         audio: FrameSinkId<AudioMeta>,
     ) -> Result<CaptureSession, CaptureError>;
+
+    /// An audio-only session, chunks into `audio`, with the rate, channel
+    /// count and sample format of `config` (converted where the source
+    /// differs). Each chunk's `wall_us` is UNIX-epoch µs following the
+    /// sample count. Its own handle: `update_audio`, `close_audio`,
+    /// `audio_events`.
+    #[owned]
+    async fn open_audio(
+        &self,
+        ctx: HostCtx,
+        config: AudioConfig,
+        audio: FrameSinkId<AudioMeta>,
+    ) -> Result<AudioCaptureSession, CaptureError>;
+
+    /// Pause / resume, mute / unmute an audio-only session.
+    async fn update_audio(
+        &self,
+        ctx: HostCtx,
+        session: NativeHandleId,
+        update: AudioUpdate,
+    ) -> Result<AudioNegotiated, CaptureError>;
+
+    async fn close_audio(&self, ctx: HostCtx, session: NativeHandleId) -> Result<(), CaptureError>;
+
+    /// Events of an audio-only session, replayed like `events`.
+    #[stream]
+    fn audio_events(
+        &self,
+        ctx: HostCtx,
+        session: NativeHandleId,
+    ) -> Result<AudioEvent, CaptureError>;
 
     /// A live session rendered straight into a platform surface.
     #[owned]

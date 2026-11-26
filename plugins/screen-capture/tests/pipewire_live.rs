@@ -1,8 +1,7 @@
 //! The portal backend against the live desktop. It shows the portal's
 //! dialog (someone has to pick a monitor), so it runs only with
-//! `ISTMO_SC_TEST_PORTAL` set. Audio has its own live test in the
-//! library (`ISTMO_SC_TEST_PIPEWIRE`), since an audio session through
-//! the public API would also need a video backend.
+//! `ISTMO_SC_TEST_PORTAL` set. Audio has its own live tests
+//! (`tests/audio_live.rs`, `ISTMO_SC_TEST_PIPEWIRE`).
 
 #![cfg(target_os = "linux")]
 

@@ -30,6 +30,15 @@
   windows open, close, retitle or refocus. Rust sugar
   `ScreenCaptureClientExt::source_watch` keeps the current list
   (`SourceWatch`). Android and iOS answer `NoBackendCompiled`.
+- Screen capture audio-only sessions: `open_audio` (sink-taking,
+  same-process only) with the rate, channels and format asked per open,
+  its own handle (`AudioCaptureSession`, `AudioSessionTag`) and
+  `update_audio` (`Pause` / `Resume` / `Mute` / `Unmute`),
+  `close_audio`, `audio_events` (`AudioEvent`). Chunks keep the
+  sample-count UNIX-epoch `wall_us`. `CapabilityReport.audio`
+  (`AudioReport`) says whether audio capture runs here. Rust sugar
+  `open_audio_session` / `AudioSessionHandle`. Android and iOS answer
+  `NoBackendCompiled`.
 - `istmo-media` crate: message types that mean the same in several media
   plugins (for now `AccessStatus`, used by camera and screen capture).
   Each shared type is generated once per app (Kotlin package
