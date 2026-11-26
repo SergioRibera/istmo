@@ -61,9 +61,9 @@ reports whether it does.
 | Method | Typed path |
 |---|---|
 | unary `async fn` | the host future, boxed, polled on the caller's task inside `catch_unwind` (a panic is `PluginError("host panicked")`, as on the wire) |
-| unary taking a `CancelToken` | `typed_call_cancellable`: the call is tracked like a hosted call (shutdown trips its token); dropping it before it finished trips the token and hands the host future (it owns an `Arc` of the host) to a thread of its own that runs it to the end — so a host's cleanup after a cancel runs exactly as it does under the dispatcher |
+| unary taking a `CancelToken` | `typed_call_cancellable`: the call is tracked like a hosted call (shutdown trips its token); dropping it before it finished trips the token and hands the host future (it owns an `Arc` of the host) to the async workers, which run it to the end — so a host's cleanup after a cancel runs exactly as it does under the dispatcher |
 | `#[stream]` | the implementation is called on the caller's thread and its own `flume::Receiver` becomes the `TypedStream` (`open_local{,_fallible}`); no encoder thread, no pump |
-| `#[istmo::blocking]` | not in `<Trait>Typed`: the client takes the wire path, the call runs on a dispatcher thread |
+| `#[istmo::blocking]` | not in `<Trait>Typed`: the client takes the wire path, the call runs on a blocking worker |
 | methods taking `HostCtx` | the client passes `HostCtx::new(rt, CallOrigin::Local)` |
 
 `TypedStream<Item, Err>` keeps its public shape. A local stream ends as
@@ -76,13 +76,26 @@ also yields `Cancelled`), `Failed(e)` at the first `Err`.
 - `#[istmo::blocking]` on a method: blocks a thread (synchronous dialog,
   large `std::fs`, sleeps), hops to the main thread and waits, or only
   runs on a particular executor (one that needs a tokio reactor).
-- `#[plugin(shortcut = false)]`: no `<Trait>Typed` at all.
+- `#[plugin(shortcut = false)]`: no `<Trait>Typed` at all. The wire path
+  then runs each method where its mode says (inline unless
+  `#[istmo::blocking]`), so this alone moves nothing off the caller.
 - `runtime!(hosts: [#[wire_only] T => impl])` /
-  `Runtime::register_host_wire_only`: one registration stays on the wire.
+  `Runtime::register_host_wire_only`: one registration stays on the
+  wire, and every call of it runs on a blocking worker.
 
 Stateful (`init = …`) plugins keep the wire path; an instance-keyed slot
 is a follow-up. Calls from Kotlin, Swift and other processes always take
 the wire path.
+
+Since 2026-11-25 the wire path no longer gives
+a call a thread of its own: a generated host's method is
+`DispatchMode::Inline` (polled on the delivering thread until its first
+wait, then on a few persistent async workers) unless it is
+`#[istmo::blocking]`, which runs it on a persistent blocking worker (an
+idle one, or a new one). That holds for stateful plugins and for calls
+from Kotlin, Swift and other processes too, so the audit below also
+covers stateful hosts and the methods that are only reached over the
+wire.
 
 ### Audit of existing hosts (before enabling it by default)
 
@@ -100,11 +113,16 @@ synchronous runtime re-entry. None depends on a specific executor
 | share | `share` | payload staging with blocking `std::fs`; on Windows, `RoInitialize(MTA)` on the calling thread |
 | share | `capabilities` | `RoInitialize` on the calling thread for packaged Windows apps |
 | dnd | `start_drag` | macOS starts the drag with a synchronous hop to the main thread |
+| camera (stateful) | `devices`, `open`, `close`, `apply_controls`, `capture_still` | synchronous device enumeration / open / stream stop, control ioctls under the session lock, MJPEG/YUYV decoding |
+| data-store (stateful) | every method | desktop writes `fsync` the file and its directory under the namespace lock, and reads take that lock |
+| file-picker | `open_read`, `open_write` | `File::open` (network and FUSE mounts can stall) |
+| share | `staging_dir` | creates and checks the staging directory on disk |
+| biometric | `availability`, `delete_secret`, `has_secret`, `enrollment_state` | synchronous LocalAuthentication / keychain calls on macOS |
+| opener | `open` | a synchronous `Command::spawn` |
 
-Left on the shortcut: biometric (async zbus, WinRT futures; the macOS
-keychain reads `has_secret` / `delete_secret` / `enrollment_state` are
-short synchronous XPC calls), opener (`Command::spawn`, the wait runs on
-its own thread), barcode-scanner, live-activity, the `crates/plugins`
+Left on the shortcut: biometric `authenticate` / `store_secret` /
+`read_secret` (async zbus, WinRT futures, their own threads on macOS),
+barcode-scanner, live-activity, the `crates/plugins`
 `Unavailable*` hosts, every example and test host. The biometric fprintd
 test that drops an `authenticate` call mid-scan passes unchanged on the
 shortcut: the abandoned future finishes `VerifyStop` / `Release` on its

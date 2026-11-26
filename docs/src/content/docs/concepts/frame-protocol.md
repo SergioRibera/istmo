@@ -97,6 +97,29 @@ release.
   and outbound frames arrive through the `IstmoIosCallbacks` table
   passed to `istmo_ios_start`.
 
+Some entries skip a frame where they can, without changing what the
+frames mean:
+
+- **Answers in place.** `nativeCall` (Android) and `istmo_ios_call`
+  (iOS) carry a `Call` and return its answer when an inline Rust host
+  gave it before returning (`nativeCall` returns the bytes or throws
+  `PluginException`; `istmo_ios_call` returns `ISTMO_IOS_CALL_OK` /
+  `_ERR` with the bytes in an `IstmoIosReply` the caller frees with
+  `istmo_ios_free_reply`). Otherwise the answer is a `Respond` frame as
+  usual, and it always is while a frame queued before it is still on its
+  way. `istmo_ios_call` also answers `_ERR` for a call it could not
+  submit.
+- **Rust → Kotlin without the pump.** While nothing waits in the
+  outbound channel, a `Call` from Rust is handed to Kotlin's
+  `onCallDirect` on the calling thread (its return value is the answer,
+  or `null` for a later `Respond`), and a stream item to `onEvent`.
+  Consecutive items of one stream that did queue cross in one
+  `onEvents(streamId, Array<ByteArray>)`.
+- **Credit streams.** `nativeSubmitStream` opens a stream whose items
+  Rust sends only against credit (a window, then `nativeStreamCredit`
+  grants as the Kotlin collector takes items). Swift streams have no
+  credit yet.
+
 Every argument is a plain id, string or payload byte buffer. Envelope
 wrapping, version stamping and frame serialization happen Rust-side.
 

@@ -269,16 +269,34 @@ idiomatic; Istmo does not impose an executor. If your work must land
 on the main thread (UIKit APIs, view-lifecycle work), gate it with
 `MainActor.run` / `withContext(Dispatchers.Main)` as usual.
 
-On Android a call from Rust starts your backend **on the thread that
-made it** (the Rust caller's thread, attached to the JVM on its first
-call), with `CoroutineStart.UNDISPATCHED`: a method that never suspends
-answers before that thread returns, with no thread hop at all; one that
-suspends continues wherever it resumes (`Dispatchers.Default`, or the
-dispatcher it switched to). So, as for any `suspend fun`, do not block
-the thread: move blocking work into `withContext(Dispatchers.IO)`. A
-backend that cannot follow that registers with
-`IstmoRuntime.registerHandler(id, handler, startInPlace = false)` and
-every call starts on `Dispatchers.Default`, as before.
+On Android a unary call Rust makes starts your backend **on the thread
+that made it** (the Rust caller's thread, attached to the JVM on its
+first call), with `CoroutineStart.UNDISPATCHED`: a method that never
+suspends answers before that thread returns, with no thread hop at all;
+one that suspends continues wherever it resumes (`Dispatchers.Default`,
+or the dispatcher it switched to). That thread can be any thread: a
+Rust worker, or the main thread when a Kotlin call on main reached a
+Rust host that calls back. So, as for any `suspend fun`, do not block
+the thread: move blocking work (disk writes such as
+`SharedPreferences.Editor.commit()`, content-provider opens, binder
+calls that can stall) into `withContext(Dispatchers.IO)`.
+`withContext(Dispatchers.Default)` is no hop when the thread already is
+a `Default` worker, so it does not protect against that. A backend that
+cannot follow that registers with
+`IstmoRuntime.registerHandler(id, handler, startInPlace = false)` (or,
+for a packaged plugin, sets `android_start_in_place = false` in its
+`istmo.toml`) and every call starts on `Dispatchers.Default`.
+
+Everything the runtime's delivery thread hands over (calls that went
+through the outbound channel, streams, notifications, instance
+creation) starts on `Dispatchers.Default`, never on that thread.
+
+A backend that throws a `CancellationException` that is not its call's
+own cancellation (an uncaught `withTimeout`, an awaited task that was
+cancelled) answers Rust with an error; only Rust cancelling the call
+leaves it unanswered. On the calling side, `IstmoRuntime.call` throws
+`CancellationException` for a cancelled coroutine even when the Rust
+host would have answered in place.
 
 Calls from Rust reach Kotlin directly only while nothing queued earlier
 is still on its way (a notification, a cancel, a stream item): a call
@@ -286,7 +304,8 @@ never overtakes a frame the same thread sent before it. Calls made from
 different threads were never ordered with each other.
 
 On iOS calls keep arriving on the runtime's delivery thread and run in a
-`Task`.
+`Task`. A Swift call to a Rust host runs the host on the caller's task,
+off the runtime's serial queue.
 
 ## Next
 

@@ -274,17 +274,34 @@ aterrizar en el main thread (APIs de UIKit, trabajo de ciclo de vida
 de vista), protégelo con `MainActor.run` /
 `withContext(Dispatchers.Main)` como siempre.
 
-En Android una llamada desde Rust arranca tu backend **en el hilo que
-la hizo** (el hilo del llamador en Rust, enganchado a la JVM en su
-primera llamada), con `CoroutineStart.UNDISPATCHED`: un método que
+En Android una llamada unaria que hace Rust arranca tu backend **en el
+hilo que la hizo** (el hilo del llamador en Rust, enganchado a la JVM en
+su primera llamada), con `CoroutineStart.UNDISPATCHED`: un método que
 nunca se suspende responde antes de que ese hilo regrese, sin ningún
 salto de hilo; uno que se suspende continúa donde se reanude
-(`Dispatchers.Default`, o el dispatcher al que cambió). Así que, como en
-cualquier `suspend fun`, no bloquees el hilo: mueve el trabajo
-bloqueante a `withContext(Dispatchers.IO)`. Un backend que no pueda
-cumplirlo se registra con
-`IstmoRuntime.registerHandler(id, handler, startInPlace = false)` y cada
-llamada arranca en `Dispatchers.Default`, como antes.
+(`Dispatchers.Default`, o el dispatcher al que cambió). Ese hilo puede
+ser cualquiera: un worker de Rust, o el principal cuando una llamada de
+Kotlin en main llegó a un host de Rust que vuelve a llamar. Así que, como
+en cualquier `suspend fun`, no bloquees el hilo: mueve el trabajo
+bloqueante (escrituras a disco como `SharedPreferences.Editor.commit()`,
+aperturas de content providers, llamadas binder que pueden trabarse) a
+`withContext(Dispatchers.IO)`. `withContext(Dispatchers.Default)` no
+salta si el hilo ya es un worker de `Default`, así que no protege de
+eso. Un backend que no pueda cumplirlo se registra con
+`IstmoRuntime.registerHandler(id, handler, startInPlace = false)` (o,
+en un plugin empaquetado, pone `android_start_in_place = false` en su
+`istmo.toml`) y cada llamada arranca en `Dispatchers.Default`.
+
+Todo lo que entrega el hilo de entrega del runtime (llamadas que pasaron
+por el canal saliente, streams, notificaciones, creación de instancias)
+arranca en `Dispatchers.Default`, nunca en ese hilo.
+
+Un backend que lanza una `CancellationException` que no es la
+cancelación de su propia llamada (un `withTimeout` sin capturar, una
+tarea esperada que se canceló) responde a Rust con un error; solo
+cuando Rust cancela la llamada queda sin respuesta. Del lado que llama,
+`IstmoRuntime.call` lanza `CancellationException` para una corrutina
+cancelada aunque el host de Rust hubiera respondido en el sitio.
 
 Las llamadas desde Rust llegan directo a Kotlin solo mientras no quede
 en camino nada encolado antes (una notificación, un cancel, un ítem de
@@ -293,7 +310,8 @@ antes. Las llamadas de hilos distintos nunca estuvieron ordenadas entre
 sí.
 
 En iOS las llamadas siguen llegando por el hilo de entrega del runtime
-y corren en un `Task`.
+y corren en un `Task`. Una llamada de Swift a un host de Rust ejecuta el
+host en la tarea del llamador, fuera de la cola serial del runtime.
 
 ## Siguiente
 

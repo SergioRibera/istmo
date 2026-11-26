@@ -23,6 +23,22 @@
   surface) to plugins as `NativeHandleId`s.
 - Native entry version check (`nativeAbiVersion` / `istmo_abi_version`):
   the Kotlin and Swift runtimes refuse a mismatched Rust library at start.
+- Direct paths between Rust and the platform:
+  `Dispatch::method_mode`; `Runtime::serve_peer_call` (an inline host's
+  answer comes back from the call itself), `serve_peer_stream` +
+  `grant_stream_credit` (credit-based peer streams);
+  `DirectPeer` / `DirectOutcome` + `Runtime::install_direct_peer`,
+  `outbound_delivered`, `track_outbound_deliveries` (Rust → Kotlin calls
+  and stream items on the caller's thread); `DeliveryScope` (a thread
+  that must never block on the outbound channel).
+- JNI `nativeCall`, `nativeSubmitStream`, `nativeStreamCredit`; Kotlin
+  callbacks `onCallDirect` and `onEvents`; C `istmo_ios_call` +
+  `IstmoIosReply` + `istmo_ios_free_reply`.
+- `istmo_core::spin::SpinWait` (bounded adaptive spinning before a park,
+  `spin::set_enabled` for A/B); `native_frame::BytePool` (recycled CPU
+  frame buffers); Kotlin `IstmoBytesOut`.
+- `istmo.toml` `android_start_in_place = false`: the generated registry
+  registers that plugin's backend with `startInPlace = false`.
 
 ### Changed (breaking)
 
@@ -45,6 +61,55 @@
   Kotlin / Swift clients have no methods taking frame sinks.
 - The contract handover (`ISTMO_CONTRACTS`) starts with a format byte
   (`CONTRACTS_FORMAT`); a contract that does not decode fails the build.
+- **No thread per hosted call.** `DispatchMode::OnCallerExecutor` is
+  removed (it was never implemented; `DispatchMode` is not
+  `#[non_exhaustive]`, so a `match` on it breaks). `Inline` work starts
+  on the thread that delivered it (the Rust caller, the Kotlin / Swift
+  caller, the bridge reader) and continues on a few persistent async
+  workers after its first wait; `Isolated` work runs on persistent
+  blocking workers, an idle one or a new one (no cap, no queueing),
+  `available_parallelism` of them kept, the others exiting after 30 s
+  idle.
+- **Generated hosts are `Inline`** on every path, stateful plugins
+  (`init = …`) and calls from Kotlin, Swift and other processes
+  included: a host method that blocks must be `#[istmo::blocking]` (the
+  in-tree plugins are marked). A stateful plugin's in-process call runs
+  its body inside `Runtime::call` on the caller's thread until it first
+  waits. `register_host_wire_only` / `#[wire_only]` run every call of
+  that host on a blocking worker; `#[plugin(shortcut = false)]` alone
+  only removes the shortcut.
+- **Notifications follow `method_mode`** (inline for generated hosts)
+  instead of always getting a thread of their own.
+- A thread that delivers work (an async worker, a thread polling an
+  inline host, inbound frame handling, a transport pump) never blocks on
+  a full outbound channel: its frames queue behind the channel in order.
+  Other threads keep the backpressure.
+- `NATIVE_ABI_VERSION` 1 → 2 (`PROTOCOL_VERSION` stays 4): new JNI and C
+  entries above; the Kotlin and Swift runtimes must match.
+- **Android:** a unary call Rust makes reaches Kotlin on the Rust
+  caller's thread (`onCallDirect`) while nothing queued before it is on
+  its way, and the backend starts there with `CoroutineStart.UNDISPATCHED`
+  (it must not block before its first suspension; opt out with
+  `registerHandler(id, handler, startInPlace = false)` or
+  `android_start_in_place = false`). Calls, streams, notifications and
+  instance creation the pump delivers start on `Dispatchers.Default`. A
+  `CancellationException` that is not the call's own cancellation (an
+  uncaught `withTimeout`) answers Rust with an error instead of leaving
+  the call pending. `IstmoRuntime.call` throws `CancellationException`
+  for a cancelled caller even when the host answered in place, and takes
+  `(payload, payloadLen)` (`@JvmOverloads`).
+- **Android streams:** `IstmoRuntime.stream` opens a credit-based stream
+  (`bufferCapacity` is the credit window): a Rust producer that runs
+  ahead waits instead of overflowing the Kotlin buffer
+  (`StreamOverflowException` only on a credit overrun). Consecutive
+  items cross in one `onEvents` call.
+- An answer to a peer call comes back from the call itself only while no
+  frame queued before it (a notification the host sent first) is on its
+  way; the iOS pump now reports deliveries too.
+- **iOS:** `IstmoRuntime.call` calls `istmo_ios_call` from the caller's
+  task, off the runtime's serial queue, and stream submits run on a
+  global queue; `istmo_ios_call` answers `ERR` (with an encoded message)
+  for a call it could not submit, so the continuation always resumes.
 
 ### Release notes
 

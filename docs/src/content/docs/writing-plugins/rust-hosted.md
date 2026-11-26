@@ -163,11 +163,21 @@ whether that happens. Calls from Kotlin, Swift or another process keep
 the wire path, so both are live at once.
 
 The wire path does not hop threads either: a call from Kotlin or Swift
-is polled on the thread that submitted it, and one that completes
-without waiting is answered before that thread returns. A method that
-waits (an `.await` on another plugin call, a timer, a channel) frees the
-submitting thread at its first wait and finishes on one of the
-runtime's few async workers. No call creates a thread.
+is polled on the thread that submitted it (the Kotlin caller's thread,
+the main thread included; on iOS the Swift caller's task), and one that
+completes without waiting is answered before that thread returns. A
+method that waits (an `.await` on another plugin call, a timer, a
+channel) frees the submitting thread at its first wait and finishes on
+one of the runtime's few async workers. No call creates a thread. The
+same holds for stateful plugins (`init = …`), which have no shortcut:
+a call from this process runs the method inside `Runtime::call`, on the
+caller's thread, until its first wait. Notifications run like calls.
+
+A call that reaches back into the runtime runs on the same stack: a host
+that calls a Kotlin plugin from inside its body may run that Kotlin
+backend on its own thread before `Runtime::call` returns, and the
+backend may call Rust again. Do not hold a lock across such a call that
+the nested call could take.
 
 The implementation runs where the caller is, which asks two things of
 it:
@@ -178,7 +188,9 @@ it:
   reactor, say) would stall or panic the caller, or an async worker
   every waiting call shares. Mark it `#[istmo::blocking]`: its calls are
   encoded and served on one of the runtime's persistent blocking
-  workers, which may block.
+  workers, which may block, call back into the runtime and wait (an idle
+  worker is reused, a new one started when none is idle, so nested
+  blocking calls never wait for each other's thread).
 
   ```rust
   #[istmo::plugin(name = "acme.picker")]
@@ -195,9 +207,17 @@ it:
   stops at its last `.await`.
 
 To keep a whole plugin on the wire path, declare it
-`#[plugin(name = "…", shortcut = false)]`; to keep one registration on it,
-mark the entry `runtime!(hosts: [#[wire_only] Picker => DesktopPicker])`
-(or call `Runtime::register_host_wire_only`).
+`#[plugin(name = "…", shortcut = false)]`; the wire path still runs each
+method where its mode says, so this alone moves nothing off the caller.
+To run every call of one registration on a blocking worker, mark the
+entry `runtime!(hosts: [#[wire_only] Picker => DesktopPicker])` (or call
+`Runtime::register_host_wire_only`).
+
+The runtime itself never blocks a thread that delivers work (one polling
+an inline host, an async worker, a transport's pump) on a full outbound
+channel: what such a thread sends queues behind the channel in order.
+A plain thread of yours still waits for room, which is the
+backpressure the channel gives.
 
 ### Who called
 

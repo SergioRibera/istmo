@@ -168,11 +168,22 @@ dispatcher — y hace poll de su future en la propia tarea del llamador.
 otro proceso siguen por el wire, así que ambos caminos conviven.
 
 El wire tampoco salta de hilo: una llamada desde Kotlin o Swift se
-ejecuta en el hilo que la envió, y la que termina sin esperar se
-responde antes de que ese hilo regrese. Un método que espera (un
-`.await` sobre otra llamada, un temporizador, un canal) libera ese hilo
-en su primera espera y termina en uno de los pocos workers asíncronos
-del runtime. Ninguna llamada crea un hilo.
+ejecuta en el hilo que la envió (el hilo del llamador en Kotlin, el
+principal incluido; en iOS la tarea del llamador en Swift), y la que
+termina sin esperar se responde antes de que ese hilo regrese. Un
+método que espera (un `.await` sobre otra llamada, un temporizador, un
+canal) libera ese hilo en su primera espera y termina en uno de los
+pocos workers asíncronos del runtime. Ninguna llamada crea un hilo. Lo
+mismo vale para los plugins con estado (`init = …`), que no tienen
+atajo: una llamada desde este proceso ejecuta el método dentro de
+`Runtime::call`, en el hilo del llamador, hasta su primera espera. Las
+notificaciones corren como las llamadas.
+
+Una llamada que vuelve a entrar al runtime corre en la misma pila: un
+host que llama a un plugin de Kotlin desde su cuerpo puede ejecutar ese
+backend de Kotlin en su propio hilo antes de que `Runtime::call`
+regrese, y el backend puede volver a llamar a Rust. No sostengas a
+través de esa llamada un lock que la llamada anidada pueda tomar.
 
 La implementación corre donde está el llamador, lo que le pide dos
 cosas:
@@ -184,7 +195,9 @@ cosas:
   a un worker asíncrono que comparten todas las llamadas en espera.
   Márcalo `#[istmo::blocking]`: sus llamadas se codifican y se atienden
   en uno de los workers bloqueantes persistentes del runtime, que sí
-  pueden bloquear.
+  pueden bloquear, volver a llamar al runtime y esperar (se reusa un
+  worker libre, o se arranca uno nuevo si no hay, así que las llamadas
+  bloqueantes anidadas nunca esperan el hilo de otra).
 
   ```rust
   #[istmo::plugin(name = "acme.picker")]
@@ -201,9 +214,18 @@ cosas:
   simplemente se detiene en su último `.await`.
 
 Para dejar todo un plugin en el wire, declara
-`#[plugin(name = "…", shortcut = false)]`; para dejar un registro,
-marca la entrada `runtime!(hosts: [#[wire_only] Picker => DesktopPicker])`
-(o llama a `Runtime::register_host_wire_only`).
+`#[plugin(name = "…", shortcut = false)]`; el wire igual ejecuta cada
+método donde dice su modo, así que esto solo no saca nada del hilo del
+llamador. Para que todas las llamadas de un registro corran en un worker
+bloqueante, marca la entrada
+`runtime!(hosts: [#[wire_only] Picker => DesktopPicker])` (o llama a
+`Runtime::register_host_wire_only`).
+
+El runtime nunca bloquea un hilo que entrega trabajo (uno que hace poll
+de un host inline, un worker asíncrono, el pump de un transporte) con el
+canal saliente lleno: lo que ese hilo envía se encola detrás del canal,
+en orden. Un hilo tuyo cualquiera sí espera lugar, que es la
+contrapresión que da el canal.
 
 ### Quién llamó
 

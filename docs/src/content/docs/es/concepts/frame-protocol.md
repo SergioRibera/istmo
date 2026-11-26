@@ -97,6 +97,29 @@ mismo release.
   argumentos, y los frames salientes llegan por la tabla
   `IstmoIosCallbacks` que se pasa a `istmo_ios_start`.
 
+Algunas entradas se saltan un frame cuando pueden, sin cambiar lo que
+significan los frames:
+
+- **Respuestas en el sitio.** `nativeCall` (Android) e `istmo_ios_call`
+  (iOS) llevan un `Call` y devuelven su respuesta cuando un host Rust
+  inline la dio antes de regresar (`nativeCall` devuelve los bytes o
+  lanza `PluginException`; `istmo_ios_call` devuelve
+  `ISTMO_IOS_CALL_OK` / `_ERR` con los bytes en un `IstmoIosReply` que
+  quien llama libera con `istmo_ios_free_reply`). Si no, la respuesta es
+  un frame `Respond` como siempre, y siempre lo es mientras siga en
+  camino un frame encolado antes. `istmo_ios_call` también responde
+  `_ERR` a una llamada que no pudo enviar.
+- **Rust → Kotlin sin el pump.** Mientras nada espera en el canal
+  saliente, un `Call` desde Rust se entrega a `onCallDirect` de Kotlin
+  en el hilo que llama (su valor de retorno es la respuesta, o `null`
+  para un `Respond` posterior), y un ítem de stream a `onEvent`. Los
+  ítems consecutivos de un stream que sí se encolaron cruzan en un solo
+  `onEvents(streamId, Array<ByteArray>)`.
+- **Streams con crédito.** `nativeSubmitStream` abre un stream cuyos
+  ítems Rust envía solo contra crédito (una ventana, y luego lo que
+  `nativeStreamCredit` concede a medida que el colector de Kotlin toma
+  ítems). Los streams de Swift aún no tienen crédito.
+
 Cada argumento es un id, un string o un buffer de bytes de payload. El
 envoltorio en envelope, el sello de versión y la serialización del frame
 ocurren del lado de Rust.
