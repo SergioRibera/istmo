@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  istmo.launcher_actions — merged into every variant's manifest by the istmo
+  Gradle plugin `io.github.sergioribera.istmo`. Only adds a component; no
+  application-level attributes.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Target of every launcher shortcut: publishes its URL as a deep
+             link and opens the app. Not exported: launchers start
+             shortcuts with the app's own identity. -->
+        <activity
+            android:name="dev.istmo.plugins.launcher_actions.IstmoLauncherActionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+    </application>
+</manifest>

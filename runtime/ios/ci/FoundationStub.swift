@@ -92,5 +92,7 @@ public final class NSLock {
 
 public typealias TimeInterval = Double
 public struct Date {
+    public init() {}
     public init(timeIntervalSinceNow: TimeInterval) {}
+    public var timeIntervalSince1970: TimeInterval { 0 }
 }

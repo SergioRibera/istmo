@@ -33,6 +33,7 @@ members = [
     "plugins/web-auth",
     "plugins/screen-capture",
     "plugins/tray",
+    "plugins/launcher-actions",
     "examples/camera-demo",
     "examples/data-store-demo",
     "examples/live-activity-demo",
