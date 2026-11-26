@@ -71,9 +71,10 @@ fn threads() -> &'static Mutex<Threads> {
 }
 
 /// Threads that stay alive once started, so a steady caller never pays
-/// for a thread start.
+/// for a thread start. Asked once (see `tasks::worker_target`).
 fn kept_threads() -> usize {
-    std::thread::available_parallelism().map_or(2, std::num::NonZero::get)
+    static KEPT: OnceLock<usize> = OnceLock::new();
+    *KEPT.get_or_init(|| std::thread::available_parallelism().map_or(2, std::num::NonZero::get))
 }
 
 /// Run `job` on a blocking thread: an idle one, or a new one.

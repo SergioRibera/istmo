@@ -216,10 +216,19 @@ fn pool() -> &'static Pool {
 }
 
 /// How many async workers the pool runs on this machine.
+///
+/// Asked once: every push checks it, a push follows every wake from a
+/// thread outside the pool (a stream producer's send, say), and
+/// `available_parallelism` reads the cgroup quota files on Linux and
+/// Android each time it is called, which costs a paced producer far
+/// more than the send itself.
 fn worker_target() -> usize {
-    std::thread::available_parallelism()
-        .map_or(2, std::num::NonZero::get)
-        .clamp(2, MAX_WORKERS)
+    static TARGET: OnceLock<usize> = OnceLock::new();
+    *TARGET.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map_or(2, std::num::NonZero::get)
+            .clamp(2, MAX_WORKERS)
+    })
 }
 
 impl Pool {
