@@ -19,6 +19,7 @@ use serde::Serialize;
 
 use crate::app_config::AppMetadata;
 use crate::app_icon::{ANDROID_ICON_RESOURCE, AdaptiveIconConfig, AppIcon, IconConfig, IconError};
+use crate::launcher_actions::LauncherActions;
 use crate::manifest::Manifest;
 use crate::native_deps::NativeDeps;
 
@@ -95,6 +96,10 @@ struct App<'a> {
     /// Drawable reference for `${istmoIcon}`, when `[app.icon]` gives
     /// Android a launcher icon.
     icon: Option<String>,
+    /// [`ANDROID_RES_DIR`] holds resources the Gradle plugin must add as
+    /// a resource directory: the launcher icon or the
+    /// `[[app.launcher_action]]` shortcuts.
+    generated_res: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -122,13 +127,16 @@ impl AndroidProject {
         self.root.join(ANDROID_METADATA_FILE)
     }
 
-    /// Render [`ANDROID_METADATA_FILE`].
+    /// Render [`ANDROID_METADATA_FILE`]. `launcher_actions`: whether the
+    /// app declares `[[app.launcher_action]]` (their resources live in
+    /// [`ANDROID_RES_DIR`] too).
     #[must_use]
     pub fn render_metadata(
         &self,
         app: &AppMetadata,
         plugins: &[AndroidPlugin],
         deps: &NativeDeps,
+        launcher_actions: bool,
     ) -> String {
         let metadata = Metadata {
             schema: SCHEMA,
@@ -145,6 +153,7 @@ impl AndroidProject {
                     .icon
                     .has_android_launcher()
                     .then(|| format!("@mipmap/{ANDROID_ICON_RESOURCE}")),
+                generated_res: app.icon.has_android_launcher() || launcher_actions,
             },
             plugins,
             gradle: deps
@@ -174,6 +183,17 @@ impl AndroidProject {
             || AdaptiveIconConfig::remove_android(&res_dir),
             |adaptive| adaptive.write_android(&res_dir),
         )
+    }
+
+    /// Write the `[[app.launcher_action]]` shortcuts under
+    /// [`ANDROID_RES_DIR`] (or remove stale ones), targeting the
+    /// application id `target_package`.
+    pub fn write_launcher_actions(
+        &self,
+        actions: &LauncherActions,
+        target_package: &str,
+    ) -> Result<(), IconError> {
+        actions.write_android(&self.root.join(ANDROID_RES_DIR), target_package)
     }
 }
 
@@ -230,6 +250,7 @@ mod tests {
             &app(true),
             &plugins,
             &deps,
+            false,
         );
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["schema"], 1);
@@ -265,6 +286,7 @@ mod tests {
             &app,
             &[],
             &NativeDeps::new(),
+            false,
         );
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["app"]["icon"], "@mipmap/istmo_launcher");
@@ -276,9 +298,24 @@ mod tests {
             &app(false),
             &[],
             &NativeDeps::new(),
+            false,
         );
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(value["app"]["icon"].is_null());
+        assert_eq!(value["app"]["generated_res"], false);
+    }
+
+    #[test]
+    fn launcher_actions_alone_need_the_generated_res_dir() {
+        let json = AndroidProject::new(Path::new("/x/android")).render_metadata(
+            &app(false),
+            &[],
+            &NativeDeps::new(),
+            true,
+        );
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value["app"]["icon"].is_null());
+        assert_eq!(value["app"]["generated_res"], true);
     }
 
     #[test]

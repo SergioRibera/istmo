@@ -97,6 +97,7 @@ pub mod kotlin;
 pub mod kotlin_client;
 pub mod kotlin_host;
 pub mod kotlin_types;
+pub mod launcher_actions;
 pub mod manifest;
 pub mod min_versions;
 pub mod native_deps;

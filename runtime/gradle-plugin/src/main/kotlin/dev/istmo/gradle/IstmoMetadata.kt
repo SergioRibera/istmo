@@ -13,6 +13,11 @@ data class AppIdentity(
     val minSdk: Int?,
     /** Drawable reference (`@mipmap/istmo_launcher`) when `[app] icon` is set. */
     val icon: String?,
+    /**
+     * `.istmo/res` holds generated resources (launcher icon,
+     * `[[app.launcher_action]]` shortcuts) to add as a resource directory.
+     */
+    val generatedRes: Boolean,
 )
 
 /** One `[[gradle]]` dependency aggregated across the app and its plugins. */
@@ -74,6 +79,7 @@ data class IstmoMetadata(
                     versionCode = (app["version_code"] as Number).toInt(),
                     minSdk = (app["min_sdk"] as Number?)?.toInt(),
                     icon = app["icon"] as String?,
+                    generatedRes = app["generated_res"] == true,
                 ),
                 plugins = (root["plugins"] as List<*>).map { raw ->
                     val plugin = raw as Map<*, *>
