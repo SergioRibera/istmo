@@ -48,6 +48,20 @@ for contract in coverage live_activity permissions; do
     done
 done
 
+# One app hosting every plugin with Swift goldens: camera, screen-capture
+# and biometric declare the same type names (`SessionConfig`,
+# `PixelFormat`, `Availability`), each plugin's types in its own
+# namespace, the shared media types once in theirs.
+mkdir "$work/app"
+for host in "$root"/plugins/*/tests/golden/*_host.swift.expected; do
+    prefix=${host%_host.swift.expected}
+    for part in types codecs host; do
+        cp "${prefix}_$part.swift.expected" "$work/app/$(basename "$prefix")_$part.swift"
+    done
+done
+cp "$root/crates/media/tests/golden/istmo_media_types.swift.expected" "$work/app/istmo_media_types.swift"
+typecheck "every plugin in one app" "$work/app"/*.swift
+
 mkdir "$work/background"
 for kind in processing refresh voip; do
     cp "$golden/ios_background_$kind.swift.expected" "$work/background/$kind.swift"

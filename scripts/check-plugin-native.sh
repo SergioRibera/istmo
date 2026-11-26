@@ -4,7 +4,8 @@
 # warnings as errors, on a plain JVM / any Swift toolchain: the runtime
 # sources plus the stubs under `runtime/*/ci` stand in for the Android
 # and Apple SDKs. Catches a backend that drifted from its contract
-# without a device or an SDK.
+# without a device or an SDK. The Swift side also carries every other
+# plugin's generated Swift, as one app enabling them all would.
 #
 # usage: scripts/check-plugin-native.sh <plugin dir name> <kotlin package> <golden prefix>
 #   e.g. scripts/check-plugin-native.sh screen-capture dev.istmo.plugins.screencapture screen_capture
@@ -66,11 +67,17 @@ if [ -z "${SKIP_SWIFT:-}" ]; then
     module IstmoRuntime "$src/Bincode.swift" "$src/PluginException.swift" \
         "$src/PluginHandler.swift" "$src/IstmoRuntime.swift" "$src/IstmoFrameSender.swift"
     mkdir "$work/swift"
-    for part in types codecs host; do
-        cp "$golden/${prefix}_$part.swift.expected" "$work/swift/${prefix}_$part.swift"
+    # Every plugin with Swift goldens (this one included) shares the app
+    # module, as in an app enabling them all: a backend naming another
+    # plugin's type unqualified, or a namespace clash, fails here.
+    for host in "$root"/plugins/*/tests/golden/*_host.swift.expected; do
+        other=${host%_host.swift.expected}
+        for part in types codecs host; do
+            cp "${other}_$part.swift.expected" "$work/swift/$(basename "$other")_$part.swift"
+        done
     done
     cp "$shared/istmo_media_types.swift.expected" "$work/swift/istmo_media_types.swift"
-    echo "type-checking $1 native/ios against its generated Swift"
+    echo "type-checking $1 native/ios against the generated Swift of every plugin"
     "$swiftc" -typecheck -warnings-as-errors -I "$work" -I "$ffi" -module-name App \
         "$work/swift"/*.swift "$plugin"/native/ios/*.swift
 fi
