@@ -60,8 +60,17 @@ if [ -z "${SKIP_SWIFT:-}" ]; then
             -I "$work" -I "$ffi" -emit-module-path "$work/$name.swiftmodule" "$@"
     }
     module Foundation "$ci/FoundationStub.swift"
+    # The Apple frameworks plugin natives import, in dependency order
+    # (each stub imports only the ones before it).
+    for framework in CoreGraphics IOSurface CoreVideo CoreMedia QuartzCore AVFoundation \
+        ReplayKit ScreenCaptureKit UIKit; do
+        module "$framework" "$ci/${framework}Stub.swift"
+    done
+    # With CoreVideo, IOSurface and CoreMedia present, the runtime's Apple
+    # sugar (`submit(_: CVPixelBuffer, meta:)`, ...) is part of it.
     module IstmoRuntime "$src/Bincode.swift" "$src/PluginException.swift" \
-        "$src/PluginHandler.swift" "$src/IstmoRuntime.swift" "$src/IstmoFrameSender.swift"
+        "$src/PluginHandler.swift" "$src/IstmoRuntime.swift" "$src/IstmoFrameSender.swift" \
+        "$src/IstmoFrameSender+Apple.swift"
     mkdir "$work/swift"
     # Every plugin with Swift goldens (this one included) shares the app
     # module, as in an app enabling them all: a backend naming another

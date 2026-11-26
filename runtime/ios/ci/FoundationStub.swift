@@ -94,3 +94,58 @@ public typealias TimeInterval = Double
 public struct Date {
     public init(timeIntervalSinceNow: TimeInterval) {}
 }
+
+// Objective-C / Core Foundation object model, for the Apple framework
+// stubs (CoreMedia, ScreenCaptureKit, ...) that plugin natives use.
+// Core Foundation types are classes on Apple platforms; `AnyObject`
+// keeps the toll-free-bridged casts plugin code writes
+// (`as? [[Key: Any]]`, `as? NSDictionary`) type-checking here.
+public typealias CFTypeRef = AnyObject
+public typealias CFArray = AnyObject
+public typealias CFDictionary = AnyObject
+public typealias CFString = AnyObject
+
+public protocol NSObjectProtocol: AnyObject {}
+
+open class NSObject: NSObjectProtocol {
+    public init() {}
+}
+
+open class NSValue: NSObject {}
+
+open class NSNumber: NSValue {
+    public var intValue: Int { 0 }
+    public var uint32Value: UInt32 { 0 }
+    public var doubleValue: Double { 0 }
+}
+
+open class NSDictionary: NSObject {}
+
+open class NSError: NSObject, Error {
+    public var domain: String { "" }
+    public var code: Int { 0 }
+    public var localizedDescription: String { "" }
+}
+
+public struct Notification {
+    public struct Name: Hashable, Sendable {
+        public let rawValue: String
+        public init(_ rawValue: String) { self.rawValue = rawValue }
+    }
+    public let name: Name
+}
+
+public final class OperationQueue {
+    public static let main = OperationQueue()
+}
+
+public final class NotificationCenter {
+    public static let `default` = NotificationCenter()
+    public func addObserver(forName name: Notification.Name?, object obj: Any?, queue: OperationQueue?,
+                            using block: @escaping @Sendable (Notification) -> Void) -> NSObjectProtocol { NSObject() }
+    public func removeObserver(_ observer: Any) {}
+}
+
+public extension DispatchQueue {
+    static var main: DispatchQueue { DispatchQueue(label: "main", qos: .userInitiated) }
+}
