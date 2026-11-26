@@ -4,13 +4,23 @@
 //! Routing them through one place lets unit tests capture exactly what
 //! a run would have told Cargo, instead of scraping stdout.
 
-use std::cell::RefCell;
 use std::path::Path;
 
-thread_local! {
-    /// `Some` while [`capture`] runs on this thread.
-    static CAPTURED: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+// Already `const`: clippy 1.100 still fires on the expansion when
+// cross-compiling, older toolchains do not.
+#[allow(
+    clippy::missing_const_for_thread_local,
+    reason = "false positive on some toolchains and targets"
+)]
+mod captured {
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// `Some` while [`capture`](super::capture) runs on this thread.
+        pub(super) static CAPTURED: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
 }
+use captured::CAPTURED;
 
 /// Print one directive line, or record it while a capture is active.
 pub(crate) fn emit(line: String) {
