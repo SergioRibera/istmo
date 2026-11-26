@@ -74,7 +74,9 @@ pub const SCREEN_CAPTURE_PLUGIN_ID: &str = "istmo.screen_capture";
 /// Methods taking a `HostCtx` check the caller's origin: capture
 /// methods answer only callers in this process (`Local` Rust, `Peer`
 /// Kotlin / Swift of the same app) unless [`CapturePolicy`] opens them;
-/// `backends`, `capabilities` and `access` are open to all.
+/// `backends`, `capabilities` and `access` are open to all, and only a
+/// few of them run at once (the rest are refused), so remote callers
+/// cannot crowd out the app's own calls.
 #[plugin(name = "istmo.screen_capture", remote = true, crate = "::istmo_core")]
 pub trait ScreenCapture {
     /// Compiled backends, whether each can run here, and why not.

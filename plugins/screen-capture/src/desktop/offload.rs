@@ -22,6 +22,10 @@ const MAX_WORKERS: usize = 8;
 const QUEUE: usize = 64;
 /// How long an idle worker waits for a job before it exits.
 const IDLE_EXIT: Duration = Duration::from_secs(30);
+/// Calls open to every origin (no `HostCtx`, so nothing to admit) that
+/// may be in the pool at once: a remote flood of them keeps the other
+/// workers and most of the queue free for the app's own calls.
+const OPEN_CALLS: usize = MAX_WORKERS / 2;
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
@@ -123,6 +127,85 @@ pub(crate) fn detach(what: &'static str, job: impl FnOnce() + Send + 'static) {
     if let Err(err) = spawned {
         tracing::error!(%err, what, "screen-capture: teardown thread could not start");
     }
+}
+
+/// A cap on concurrent calls of one kind.
+#[derive(Debug)]
+struct Gate {
+    in_flight: AtomicUsize,
+    limit: usize,
+}
+
+/// One admitted call; frees its place on drop.
+struct Pass(&'static Gate);
+
+impl Drop for Pass {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl Gate {
+    const fn new(limit: usize) -> Self {
+        Self {
+            in_flight: AtomicUsize::new(0),
+            limit,
+        }
+    }
+
+    /// A place, or `None` when `limit` calls are in flight.
+    fn enter(&'static self) -> Option<Pass> {
+        let mut now = self.in_flight.load(Ordering::Acquire);
+        loop {
+            if now >= self.limit {
+                return None;
+            }
+            match self.in_flight.compare_exchange_weak(
+                now,
+                now + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Pass(self)),
+                Err(current) => now = current,
+            }
+        }
+    }
+}
+
+/// [`offload`] for methods open to every origin: at most [`OPEN_CALLS`]
+/// of them run or wait at once, the rest are refused at once. The place
+/// is held by the job itself, so a caller that drops its future does not
+/// free it while the work still runs.
+///
+/// # Errors
+/// As [`offload`], and `Protocol` when the cap is reached.
+pub(crate) async fn offload_open<T, F>(what: &'static str, work: F) -> Result<T, CaptureError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, CaptureError> + Send + 'static,
+{
+    static OPEN: Gate = Gate::new(OPEN_CALLS);
+    offload_gated(&OPEN, what, work).await
+}
+
+async fn offload_gated<T, F>(
+    gate: &'static Gate,
+    what: &'static str,
+    work: F,
+) -> Result<T, CaptureError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, CaptureError> + Send + 'static,
+{
+    let pass = gate
+        .enter()
+        .ok_or_else(|| internal(what, "too many calls open to every origin in flight"))?;
+    offload(what, move || {
+        let _pass = pass;
+        work()
+    })
+    .await
 }
 
 /// Whether the caller of an offloaded call is still waiting for it.
@@ -270,6 +353,45 @@ mod tests {
         );
         release_tx.send(()).expect("release");
         long.join().expect("long").expect("long call");
+    }
+
+    #[test]
+    fn calls_open_to_every_origin_are_capped() {
+        static GATE: Gate = Gate::new(2);
+        let (release_tx, release_rx) = flume::unbounded::<()>();
+        let (started_tx, started_rx) = flume::unbounded::<()>();
+        let busy: Vec<_> = (0..2)
+            .map(|_| {
+                let (release_rx, started_tx) = (release_rx.clone(), started_tx.clone());
+                std::thread::spawn(move || {
+                    pollster::block_on(offload_gated(&GATE, "backends", move || {
+                        let _started = started_tx.send(());
+                        let _released = release_rx.recv_timeout(Duration::from_secs(10));
+                        Ok(())
+                    }))
+                })
+            })
+            .collect();
+        for _ in 0..2 {
+            started_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("started");
+        }
+        let refused = pollster::block_on(offload_gated(&GATE, "backends", || Ok(())));
+        assert!(
+            matches!(refused, Err(CaptureError::Protocol(_))),
+            "{refused:?}"
+        );
+        for _ in 0..2 {
+            release_tx.send(()).expect("release");
+        }
+        for call in busy {
+            call.join().expect("call").expect("ran");
+        }
+        assert!(
+            pollster::block_on(offload_gated(&GATE, "backends", || Ok(()))).is_ok(),
+            "places come back when the work ends"
+        );
     }
 
     #[test]

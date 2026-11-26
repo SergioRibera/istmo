@@ -34,7 +34,7 @@ use crate::types::{
 };
 
 use self::engine::Engine;
-use self::offload::{offload, offload_owned};
+use self::offload::{offload, offload_open, offload_owned};
 
 /// The desktop host. Register it with
 /// `ScreenCaptureHost::new(DesktopCapture::default())`.
@@ -84,14 +84,14 @@ impl DesktopCapture {
 impl ScreenCapture for DesktopCapture {
     async fn backends(&self) -> Vec<BackendStatus> {
         let engine = self.engine();
-        offload("backends", move || Ok(engine.statuses()))
+        offload_open("backends", move || Ok(engine.statuses()))
             .await
             .unwrap_or_default()
     }
 
     async fn capabilities(&self, query: CapabilityQuery) -> Result<CapabilityReport, CaptureError> {
         let engine = self.engine();
-        offload("capabilities", move || engine.capabilities(&query)).await
+        offload_open("capabilities", move || engine.capabilities(&query)).await
     }
 
     async fn sources(
