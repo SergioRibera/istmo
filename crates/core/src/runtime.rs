@@ -34,6 +34,7 @@ mod spill;
 
 pub use exec::{BlockingThreads, DeliveryScope};
 pub use peer::{DirectOutcome, DirectPeer};
+pub use spill::SpillStats;
 
 use exec::{CatchUnwind, Delivery, Either, race, send_unless_cancelled};
 
@@ -401,12 +402,14 @@ struct RemoteCalls {
 /// bridge's reader ([`inject_wire_envelope`](Self::inject_wire_envelope)),
 /// a thread submitting frames to a sink, and whatever they run in
 /// place, inline hosts included. Their sends queue behind the channel
-/// in order and a task moves them on as room frees up, so a host cannot
-/// deadlock waiting for the very thread that drains the channel. Every
-/// other thread, an app thread or a Kotlin / Swift caller polling an
-/// inline host included, waits for room: the backpressure the channel
-/// gives. While frames are queued that way, it waits for its own frame
-/// to leave the queue.
+/// in order and a drain thread moves them on as room frees up, so a
+/// host cannot deadlock waiting for the very thread that drains the
+/// channel. That queue has no bound;
+/// [`outbound_spill`](Self::outbound_spill) counts it. Every other
+/// thread, an app thread or a Kotlin / Swift caller polling an inline
+/// host included, waits for room: the backpressure the channel gives.
+/// While frames are queued that way, it waits for its own frame to
+/// leave the queue.
 ///
 /// # Locking
 ///
@@ -792,6 +795,16 @@ impl Runtime {
     /// Implied by [`install_direct_peer`](Self::install_direct_peer).
     pub fn track_outbound_deliveries(&self) {
         self.tracks_deliveries.store(true, Ordering::Release);
+    }
+
+    /// Frames this runtime queued behind its full outbound channel,
+    /// because the thread sending them must never wait (see the
+    /// type's `# Threads`): now, at most, and in all. `queued` growing
+    /// means such a thread sends faster than the transport drains; the
+    /// runtime also logs a warning past four channels' worth.
+    #[must_use]
+    pub fn outbound_spill(&self) -> SpillStats {
+        self.spill.stats()
     }
 
     /// Frames sent and not yet reported delivered, for a transport that
@@ -2445,6 +2458,7 @@ impl Runtime {
     pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
         self.stopped.cancel();
+        self.spill.stop();
         let count = self.routing.clear();
         lock(&self.hosted).cancel_all();
         lock(&self.typed_hosts).clear();

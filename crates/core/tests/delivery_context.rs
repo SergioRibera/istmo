@@ -269,3 +269,43 @@ fn shutdown_frees_a_sender_waiting_behind_queued_frames() {
     let result = waiter.join().expect("waiter");
     assert!(result.is_err(), "the waiting sender gave up at shutdown");
 }
+
+#[test]
+fn the_runtime_counts_what_it_queued() {
+    let init = Runtime::mock();
+    fill(&init);
+    let queued = 5 * DEFAULT_OUTBOUND_CAPACITY;
+    let runtime = Arc::clone(&init.runtime);
+    on_thread(move || {
+        let _scope = DeliveryScope::enter();
+        for _ in 0..queued {
+            runtime
+                .notify("peer.p", None, "queued", Vec::new())
+                .expect("queued");
+        }
+    });
+    let stats = init.runtime.outbound_spill();
+    // The drain may have moved a few already.
+    assert!(
+        stats.queued + DEFAULT_OUTBOUND_CAPACITY >= queued,
+        "{stats:?}"
+    );
+    assert!(stats.peak >= stats.queued, "{stats:?}");
+    assert_eq!(
+        stats.total,
+        u64::try_from(queued).expect("total"),
+        "{stats:?}"
+    );
+    let mut frames = 0;
+    while frames < DEFAULT_OUTBOUND_CAPACITY + queued {
+        init.outbound
+            .recv_timeout(Duration::from_secs(5))
+            .expect("frame");
+        frames += 1;
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while init.runtime.outbound_spill().queued > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(init.runtime.outbound_spill().queued, 0);
+}
