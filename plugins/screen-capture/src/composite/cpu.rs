@@ -51,8 +51,16 @@ pub fn compose(
     bytes
         .try_reserve_exact(len)
         .map_err(|_| LayoutError::TooLarge)?;
-    for _ in 0..pixels {
-        bytes.extend_from_slice(&fill_px);
+    match fill {
+        // One memset.
+        CompositeFill::Transparent => bytes.resize(len, 0),
+        // One row built, then copied row by row.
+        CompositeFill::Black => {
+            let row = fill_px.repeat(size.width as usize);
+            for _ in 0..size.height {
+                bytes.extend_from_slice(&row);
+            }
+        }
     }
     for (plan, part) in layout.parts.iter().zip(parts) {
         let map = OrientationMap {
@@ -159,6 +167,41 @@ mod tests {
         let red: Vec<u8> = out.bytes.as_chunks::<4>().0.iter().map(|p| p[2]).collect();
         assert_eq!(red, [10, 10, 20, 20, 10, 10, 0, 0]);
         assert_eq!(out.bytes[4 * 7 + 3], 0, "the gap is transparent");
+    }
+
+    #[test]
+    fn gaps_are_filled_whole_rows_at_a_time() {
+        let sources = [
+            monitor("a", Rect::new(0, 0, 1, 2), 1000),
+            monitor("b", Rect::new(1, 0, 3, 1), 1000),
+        ];
+        let layout = layout(&sources, None, &CompositeConfig::default()).expect("layout");
+        assert_eq!(layout.size, Size::new(4, 2));
+        let (a, b) = (solid(1, 2, 7), solid(3, 1, 8));
+        let parts = [
+            Part {
+                view: CpuView::new(&a, Size::new(1, 2), 4, PixelFormat::Bgra8).expect("a"),
+                orientation: Orientation::UPRIGHT,
+            },
+            Part {
+                view: CpuView::new(&b, Size::new(3, 1), 12, PixelFormat::Bgra8).expect("b"),
+                orientation: Orientation::UPRIGHT,
+            },
+        ];
+        for (fill, gap) in [
+            (CompositeFill::Black, [0, 0, 0, 255]),
+            (CompositeFill::Transparent, [0, 0, 0, 0]),
+        ] {
+            let out = compose(&layout, &parts, fill).expect("compose");
+            assert_eq!(out.bytes.len(), 4 * 2 * 4);
+            let pixels = out.bytes.as_chunks::<4>().0;
+            let red: Vec<u8> = pixels.iter().map(|p| p[2]).collect();
+            assert_eq!(red, [7, 8, 8, 8, 7, 0, 0, 0]);
+            assert!(
+                pixels[5..].iter().all(|p| *p == gap),
+                "{fill:?}: every gap pixel is {gap:?}"
+            );
+        }
     }
 
     #[test]
