@@ -25,13 +25,14 @@
 //!
 //! The app registers the host for its platform: [`DesktopTray`] on
 //! Linux, Windows and macOS, `WebTray` on the web, [`UnavailableTray`]
-//! elsewhere.
+//! elsewhere. On macOS the main run loop must run; a tray-only app
+//! calls `run_event_loop` from `main`.
 
 #![doc(html_root_url = "https://docs.rs/istmo-tray")]
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 mod desktop;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 #[expect(
     clippy::redundant_pub_crate,
     reason = "`pub(crate)` marks crate-internal items; plain `pub` in private modules trips `unreachable_pub`"
@@ -50,8 +51,10 @@ use istmo_core::{HostCtx, NativeHandleId};
 use istmo_macros::{owned, plugin, stream};
 use istmo_menu::{IconImage, ItemPatch, MenuNode};
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub use desktop::DesktopTray;
+#[cfg(target_os = "macos")]
+pub use desktop::run_event_loop;
 pub use istmo_menu;
 pub use types::*;
 pub use unavailable::UnavailableTray;

@@ -25,6 +25,11 @@
   top-level window, popup menus built when they open (radio items
   native, mixed checks drawn as a dash, default item, shortcut text),
   icons added again on `TaskbarCreated`, optional `windows_guid`.
+  macOS backend: `NSStatusItem` + `NSMenu` driven from the main queue
+  (callers never wait for the main thread), radio items with a dot
+  image, section headers / subtitles / badges where macOS 14 has them,
+  template images, SF Symbol names, and `run_event_loop` for tray-only
+  apps.
   `UnavailableTray` for Android / iOS.
 - `istmo-screen-capture` plugin (`istmo.screen_capture`): screenshots
   (frames into a sink, or raw pixels with `screenshot_pixels`, never

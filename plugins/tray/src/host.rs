@@ -101,6 +101,10 @@ impl IconState {
 #[derive(Debug)]
 pub(crate) struct TrayState {
     /// Creation order, for backends that need a small number.
+    #[cfg_attr(
+        target_os = "macos",
+        expect(dead_code, reason = "status items need no number")
+    )]
     pub(crate) serial: u32,
     pub(crate) id: String,
     pub(crate) icon: IconState,

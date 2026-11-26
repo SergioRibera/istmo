@@ -31,8 +31,8 @@ pub(crate) struct Raster {
 impl Raster {
     /// The pixels as a PNG file.
     #[cfg_attr(
-        not(any(target_os = "linux", test)),
-        expect(dead_code, reason = "dbusmenu is the only consumer of PNG bytes")
+        not(any(target_os = "linux", target_os = "macos", test)),
+        expect(dead_code, reason = "dbusmenu and AppKit take PNG bytes")
     )]
     pub(crate) fn to_png(&self) -> Vec<u8> {
         let mut out = Vec::new();

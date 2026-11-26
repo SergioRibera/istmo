@@ -4,6 +4,12 @@ use crate::host::{Host, delegate_tray};
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+#[allow(
+    unsafe_code,
+    reason = "AppKit calls: target / action wiring and the menu item badge"
+)]
+mod macos;
 #[cfg(target_os = "windows")]
 #[allow(
     unsafe_code,
@@ -13,6 +19,10 @@ mod windows;
 
 #[cfg(target_os = "linux")]
 use linux::start;
+#[cfg(target_os = "macos")]
+pub use macos::run_event_loop;
+#[cfg(target_os = "macos")]
+use macos::start;
 #[cfg(target_os = "windows")]
 use windows::start;
 

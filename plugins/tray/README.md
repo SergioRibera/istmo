@@ -8,6 +8,7 @@ the app swaps at run time.
 | --- | --- |
 | Linux | `StatusNotifierItem` + `com.canonical.dbusmenu` over D-Bus (KDE Plasma, waybar, xfce4-panel, GNOME with the AppIndicator extension) |
 | Windows | The notification area (`Shell_NotifyIconW`, `NOTIFYICON_VERSION_4`); menus built when they open; icons added again when explorer.exe restarts |
+| macOS | The menu bar (`NSStatusItem` + `NSMenu`) on the main thread; radio items drawn with a dot, section headers, subtitles and badges on macOS 14 |
 | Android / iOS | `UnavailableTray`: every call answers `TrayError::Unsupported` |
 
 Everything runs in Rust; the plugin generates no Kotlin or Swift.
@@ -53,7 +54,10 @@ while let Ok(istmo::StreamItem::Event(event)) = events.recv_async().await {
 ```
 
 Register the host for the platform: `TrayHost::new(DesktopTray::default())`
-on desktop, `TrayHost::new(UnavailableTray)` on mobile.
+on desktop, `TrayHost::new(UnavailableTray)` on mobile. On macOS the app must
+run the main run loop (winit and eframe do); an app whose only UI is
+the tray calls `istmo_tray::run_event_loop(false)` from `main`, which
+also keeps it out of the Dock.
 
 ## Icons
 
