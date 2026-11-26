@@ -237,7 +237,7 @@
         # ------ `nix develop .#<name>` --------------------------------
         devShells = {
           default = pkgs.mkShell {
-            buildInputs = runtimeLibs;
+            buildInputs = with pkgs; [ claude-code ] ++ runtimeLibs;
 
             nativeBuildInputs = with pkgs; [
               pkg-config
