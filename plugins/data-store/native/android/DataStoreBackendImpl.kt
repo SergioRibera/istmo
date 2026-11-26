@@ -26,38 +26,55 @@ import kotlinx.coroutines.withContext
  */
 class DataStoreBackendImpl(context: Context, config: DataStoreConfig) : DataStoreBackend {
 
-    private val prefs: SharedPreferences = openPrefs(context, config.namespace)
+    private val file: SharedPreferences = openPrefs(context, config.namespace)
+
+    @Volatile
+    private var loaded = false
+
+    /**
+     * The preferences, once their file is loaded. `getSharedPreferences`
+     * loads it in the background and the first access waits for that
+     * read; a call from Rust starts this backend on the Rust caller's
+     * thread, so that first wait happens on IO instead.
+     */
+    private suspend fun prefs(): SharedPreferences {
+        if (!loaded) {
+            withContext(Dispatchers.IO) { file.contains("") }
+            loaded = true
+        }
+        return file
+    }
 
     override suspend fun get_string(key: String): String? =
-        typed(key, "string") { prefs.getString(key, null) }
+        typed(key, "string") { it.getString(key, null) }
 
     override suspend fun set_string(key: String, value: String) {
         commit { it.putString(key, value) }
     }
 
     override suspend fun get_i64(key: String): Long? =
-        typed(key, "i64") { prefs.getLong(key, 0L) }
+        typed(key, "i64") { it.getLong(key, 0L) }
 
     override suspend fun set_i64(key: String, value: Long) {
         commit { it.putLong(key, value) }
     }
 
     override suspend fun get_f64(key: String): Double? =
-        typed(key, "f64") { Double.fromBits(prefs.getLong(key, 0L)) }
+        typed(key, "f64") { Double.fromBits(it.getLong(key, 0L)) }
 
     override suspend fun set_f64(key: String, value: Double) {
         commit { it.putLong(key, value.toRawBits()) }
     }
 
     override suspend fun get_bool(key: String): Boolean? =
-        typed(key, "bool") { prefs.getBoolean(key, false) }
+        typed(key, "bool") { it.getBoolean(key, false) }
 
     override suspend fun set_bool(key: String, value: Boolean) {
         commit { it.putBoolean(key, value) }
     }
 
     override suspend fun get_bytes(key: String): ByteArray? {
-        val encoded = typed(key, "bytes") { prefs.getString(key, null) } ?: return null
+        val encoded = typed(key, "bytes") { it.getString(key, null) } ?: return null
         return try {
             Base64.decode(encoded, Base64.NO_WRAP)
         } catch (e: IllegalArgumentException) {
@@ -71,24 +88,25 @@ class DataStoreBackendImpl(context: Context, config: DataStoreConfig) : DataStor
     }
 
     override suspend fun remove(key: String): Boolean {
-        if (!prefs.contains(key)) return false
+        if (!prefs().contains(key)) return false
         commit { it.remove(key) }
         return true
     }
 
-    override suspend fun contains(key: String): Boolean = prefs.contains(key)
+    override suspend fun contains(key: String): Boolean = prefs().contains(key)
 
-    override suspend fun keys(): List<String> = prefs.all.keys.toList()
+    override suspend fun keys(): List<String> = prefs().all.keys.toList()
 
     override suspend fun clear() {
         commit { it.clear() }
     }
 
     /** `null` for a missing key; `Corrupted` when the stored value has another type. */
-    private inline fun <T> typed(key: String, wanted: String, read: () -> T): T? {
+    private suspend inline fun <T> typed(key: String, wanted: String, read: (SharedPreferences) -> T): T? {
+        val prefs = prefs()
         if (!prefs.contains(key)) return null
         return try {
-            read()
+            read(prefs)
         } catch (e: ClassCastException) {
             throw BackendException(
                 DataStoreError.Corrupted("key `$key` holds another type but caller asked for $wanted"),
@@ -99,7 +117,7 @@ class DataStoreBackendImpl(context: Context, config: DataStoreConfig) : DataStor
     // `commit` writes the file synchronously, and a call from Rust starts
     // this backend on the Rust caller's thread: the disk write goes to IO.
     private suspend inline fun commit(edit: (SharedPreferences.Editor) -> Unit) {
-        val editor = prefs.edit()
+        val editor = prefs().edit()
         edit(editor)
         if (!withContext(Dispatchers.IO) { editor.commit() }) {
             throw BackendException(DataStoreError.Backend("SharedPreferences commit failed"))
