@@ -522,15 +522,19 @@ object IstmoRuntime {
             }
             nativeSubmitStreamEnd(callId, STREAM_END_COMPLETE, null)
         } catch (e: kotlinx.coroutines.CancellationException) {
-            nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
-            // Only the call's own cancellation goes on up; any other ends
-            // the stream like a failure.
-            if (!currentCoroutineContext().isActive) throw e
+            // Only the call's own cancellation goes on up; any other (an
+            // uncaught `withTimeout`, a cancelled task awaited) is the
+            // backend failing, and ends the stream as a failure.
+            if (!currentCoroutineContext().isActive) {
+                nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
+                throw e
+            }
+            nativeSubmitStreamEnd(callId, STREAM_END_ERROR, null)
         } catch (e: PluginException) {
             // Generated dispatchers turn a domain error into its encoded bytes.
             nativeSubmitStreamEnd(callId, STREAM_END_ERROR, e.payload)
         } catch (_: Throwable) {
-            nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
+            nativeSubmitStreamEnd(callId, STREAM_END_ERROR, null)
         }
     }
 

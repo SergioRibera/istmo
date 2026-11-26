@@ -297,8 +297,8 @@ creation) starts on `Dispatchers.Default`, never on that thread.
 
 A backend that throws a `CancellationException` that is not its call's
 own cancellation (an uncaught `withTimeout`, an awaited task that was
-cancelled) answers Rust with an error; only Rust cancelling the call
-leaves it unanswered. On the calling side, `IstmoRuntime.call` throws
+cancelled) answers Rust with an error, and a stream it feeds ends with
+an error; only Rust cancelling the call leaves it unanswered. On the calling side, `IstmoRuntime.call` throws
 `CancellationException` for a cancelled coroutine even when the Rust
 host would have answered in place.
 

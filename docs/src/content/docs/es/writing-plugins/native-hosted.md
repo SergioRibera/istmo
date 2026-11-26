@@ -302,8 +302,9 @@ arranca en `Dispatchers.Default`, nunca en ese hilo.
 
 Un backend que lanza una `CancellationException` que no es la
 cancelación de su propia llamada (un `withTimeout` sin capturar, una
-tarea esperada que se canceló) responde a Rust con un error; solo
-cuando Rust cancela la llamada queda sin respuesta. Del lado que llama,
+tarea esperada que se canceló) responde a Rust con un error, y un stream
+que alimenta termina con error; solo cuando Rust cancela la llamada queda
+sin respuesta. Del lado que llama,
 `IstmoRuntime.call` lanza `CancellationException` para una corrutina
 cancelada aunque el host de Rust hubiera respondido en el sitio.
 
