@@ -8,12 +8,144 @@ control plane over istmo and a data plane over native frame sinks
 (`design/native-frames.md`) or straight into a platform surface.
 Implemented so far: the contract, selection, pools, pixel helper,
 desktop host and the Linux backends (wlr-screencopy, ext-image-copy,
-X11, portal over PipeWire shared memory, PipeWire audio). Later steps
-are listed under "Implementation order".
+X11, portal over PipeWire with DMA-BUF zero-copy, PipeWire audio). Later
+steps are listed under "Implementation order"; deviations are in
+"Implementation notes" below.
 
 Per-platform facts, version tables and official sources live in
 `design/screen-capture-platforms.md`; this document refers to them by
 backend id.
+
+## Implementation notes (Linux, as built)
+
+This section records where the implementation differs from the text
+below, or makes it more precise. The text below is the design; where
+they disagree, this section wins.
+
+**Wire names**
+- `None`-named variants are renamed:
+  - `Scaling::Unsupported`
+  - `DamageSupport::Unsupported`
+  - `OrientationSupport::Unsupported`
+  - `Persistence::{Unsupported, Token}`
+- `Requirement::Kind(SourceKind)` replaces `SourceKind(SourceKind)`. A
+  variant is never named after its payload type: a Kotlin nested class
+  would shadow that type.
+- Caps and frames share one `SyncKind`; there is no `FrameSync`.
+- `BufferIdentity.pool_generation` is a `u64`, as in core.
+- `Orientation { mirrored, rotation: Rotation }` means mirror first, then
+  quarter turns clockwise.
+- `ProjectionGrant { handle }`.
+- `BackendId` is an enum; `as_str()` is also the feature name and the
+  env-override name.
+- `CaptureError::NoBackend(Vec<BackendAttempt>)` carries
+  `AttemptFailure`, never a nested `CaptureError`.
+- Added: `CaptureError::SinkFull` (a full `DropNewest` sink refused a
+  screenshot frame) and `Requirement::CompositeSize` (see Composite
+  bounds).
+- `AccessStatus` is defined once in `istmo-media`, shared with the
+  camera plugin. It has the camera's four states plus `RequiresRestart`,
+  `PerSession` and `NotApplicable`, and is `#[non_exhaustive]`.
+
+**Copies.** No `CopyStage` was added: the plugin no longer makes a second
+CPU copy anywhere.
+- `wl_shm` frames are the pool memory itself, mapped read-only.
+- X11 frames are the MIT-SHM segment of their pool slot (one segment per
+  slot).
+- Portal `MemFd` frames are a mapping of the PipeWire buffer.
+
+In all three cases the slot stays leased while any clone of the frame
+lives. PipeWire `MemPtr` buffers are never negotiated. The only CPU
+copies left are the declared ones:
+- `ShmTransport`: the producer's own copy.
+- `ExhaustionReadback`: for `CopyToCpu`, the compositor copies into a
+  reused `wl_shm` scratch buffer and the plugin copies that out. This
+  also serves DMA-BUF sessions; a portal DMA-BUF stream has no read-back
+  and is `Unsatisfiable(ExhaustionReadback)`.
+- `Composite`.
+- `OrientationUpright`: listed only when the source really arrives
+  rotated. On an upright source, `Upright` is accepted on any memory.
+
+**Portal.**
+- DMA-BUF modifiers come from the caller's tier, intersected with the
+  compositor's `linux-dmabuf` feedback (main tranche). An empty tier
+  uses the compositor's modifiers. Without a Wayland display only
+  `MemFd` is offered.
+- Modifiers are offered `MANDATORY | DONT_FIXATE`, so the producer
+  fixates one.
+- Buffers stay dequeued while leased: all but one, as in
+  ferricast `lease.rs`. A late release of a removed buffer is inert.
+- Explicit sync: when the producer negotiates `SyncTimeline`, the
+  plugin waits for the acquire point on the CPU through a DRM syncobj,
+  bounded at 100 ms, then marks the frame `Ready`. The release point is
+  signalled when the buffer is re-queued. Without explicit sync,
+  DMA-BUF frames are `Implicit` (with `NvidiaImplicitSyncBestEffort` on
+  NVIDIA).
+- Read metas: transform (into `FrameMeta.orientation`), cursor (with
+  `CursorMode::Metadata`), crop, and damage (clipped).
+- Verified on niri against its Mutter ScreenCast producer, without a
+  dialog:
+  - NVIDIA block-linear DMA-BUFs with no copies
+  - a pool of 8, held at the limit with 7 out
+  - frames resume once the held ones drop
+- The portal stays out of `Auto`: its checklist needs a dialog per
+  session, and its CPU pixel checks cannot pass on a DMA-BUF-only
+  producer.
+
+**Pools and pacing.**
+- The requested pool depth is raised by the frames the pacer keeps: one
+  pending frame under `Max` / `OnDamage`, plus the repeated one under
+  `Exact`. Without that, `Exact` with a shallow pool starves. The
+  negotiated `pool_depth` reports the raised value.
+- A paced frame that arrives within 1/20 of a period of its due time
+  goes out at once.
+- Full copies (no damage) are paced at the output refresh.
+- Paused sessions block instead of polling.
+- X11 sleeps on the server socket instead of a 4 ms tick.
+
+**Negotiated stream and events.**
+- On Wayland, the first DMA-BUF frame fills `NegotiatedStream.modifier`
+  and is preceded by `Renegotiated`, which also names the producer GPU.
+- A size change emits `SourceResized`.
+- The probe cache (5 s) is also dropped when a source vanishes, which is
+  what hot-plug invalidation amounts to.
+- Every `events()` subscriber first gets the session's state so far:
+  `Started`, then the newest 64 events.
+- Restore tokens never travel in events. They are returned once, by
+  `open`.
+
+**Security.**
+- Sessions answer only the `CallOrigin` that opened them. Session ids
+  are random, in the Rust-allocated range above the runtime counter.
+- `events` is always local.
+- A remote caller sees no titles, app ids, pids or tokens.
+- An `open` whose caller gave up tears its session down, including when
+  portal consent arrives late.
+- Dropping a session handle never blocks: teardown runs on the plugin's
+  worker pool (at most 8 threads, 64 queued calls), and the PipeWire
+  loop join is bounded.
+- Wayland damage is clipped and capped at 32 rects, like X11 and the
+  portal.
+- Picker-only backends refuse `Region`, `Focused` and `UnderCursor`.
+- `wl_shm` layouts from the compositor are validated.
+- GBM planes are exported with `DRM_CLOEXEC`.
+
+**Composite bounds.**
+- A composite is refused with `Unsatisfiable(CompositeSize)` above 2^28
+  pixels, or when it would be more than 4 times the area of its parts.
+- `CompositeScale::Permille` is clamped to 4 times the highest monitor
+  scale.
+- Allocation uses `try_reserve`.
+- A part the CPU engine cannot read (`Rgba16f`, `Nv12`, `P010`) is
+  `Unsatisfiable(Formats)` instead of rendering black.
+
+**unsafe.** The crate denies `unsafe_code`. Two FFI modules allow it:
+- `desktop/linux/mapping.rs`: `mmap`.
+- `desktop/linux/portal/raw.rs`: `pw_buffer` / `spa_buffer` access.
+
+Every unsafe block carries a `SAFETY:` comment. `undocumented_unsafe_blocks`
+and `multiple_unsafe_ops_per_block` are denied. Syncobjs go through the
+safe `drm` crate.
 
 ## Goals
 
@@ -418,7 +550,7 @@ pub struct VideoConfig {
 #[istmo::message] pub struct CursorRequest { pub mode: CursorMode, pub strength: Strength }
 ```
 
-Rust sugar: `SessionConfig::monitor(sel).fps(FrameRate::Max(60)).prefer_zero_copy()`,
+Rust sugar: `SessionConfig::monitor(id).fps(FrameRate::Max(60)).prefer_zero_copy()`,
 `SessionConfig::picker()`, `SessionConfig::region(rect)`.
 `SessionConfig::default()` = primary monitor, `Auto(ZeroCopy)`, any
 format, `Max(60)`, cursor embedded (prefer), damage ignored, SDR,
