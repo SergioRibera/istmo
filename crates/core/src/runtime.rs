@@ -1000,8 +1000,9 @@ impl Runtime {
     /// # Errors
     ///
     /// - [`IstmoError::ChannelClosed`] when the outbound pump is gone.
-    /// - [`IstmoError::OutboundFull`] when the outbound channel is full;
-    ///   the release frame is dropped.
+    /// - [`IstmoError::OutboundFull`] on `wasm32` when the outbound
+    ///   channel is full; the release frame is dropped. Elsewhere it
+    ///   queues behind the full channel.
     pub fn release_native_handle(&self, handle_id: NativeHandleId) -> Result<(), IstmoError> {
         let hooks: Vec<NativeHandleReleaseHook> = lock(&self.native_handle_release_hooks).clone();
         for hook in &hooks {
@@ -1070,8 +1071,9 @@ impl Runtime {
     /// # Errors
     ///
     /// - [`IstmoError::ChannelClosed`] if the outbound pump is gone.
-    /// - [`IstmoError::OutboundFull`] when the outbound channel is full;
-    ///   the cancel is dropped.
+    /// - [`IstmoError::OutboundFull`] on `wasm32` when the outbound
+    ///   channel is full; the cancel is dropped. Elsewhere it queues
+    ///   behind the full channel, so the peer always hears it.
     pub fn cancel_call(&self, call_id: CallId) -> Result<(), IstmoError> {
         if !self.routing.remove_pending(call_id.get()) {
             return Ok(());
@@ -1602,8 +1604,7 @@ impl Runtime {
                     Delivery::Disconnected => Err(IstmoError::ChannelClosed),
                 }
             }
-            Wait::Never => self.push_outbound_now(envelope),
-            Wait::Queue => match self.outbound.try_send(envelope) {
+            Wait::Never => match self.outbound.try_send(envelope) {
                 Ok(()) => Ok(true),
                 Err(TrySendError::Disconnected(_)) => Err(IstmoError::ChannelClosed),
                 Err(TrySendError::Full(envelope)) => {
@@ -1628,7 +1629,7 @@ impl Runtime {
         let (stop, on_stop) = match wait {
             Wait::Block => (&self.stopped, Err(IstmoError::RuntimeShutDown)),
             Wait::UnlessCancelled(cancel) => (cancel, Ok(false)),
-            Wait::Never | Wait::Queue => {
+            Wait::Never => {
                 self.spill.push(envelope, false);
                 return Ok(true);
             }
@@ -1652,6 +1653,7 @@ impl Runtime {
     }
 
     /// Put `envelope` on the outbound channel if there is room.
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     fn push_outbound_now(&self, envelope: Envelope) -> Result<bool, IstmoError> {
         self.outbound
             .try_send(envelope)
@@ -2508,11 +2510,10 @@ enum Wait<'a> {
     Block,
     /// Until there is room, or until the call is cancelled.
     UnlessCancelled(&'a CancelToken),
-    /// Not at all: a full channel drops the frame.
-    Never,
     /// Not at all: a full channel queues the frame behind it, in order,
-    /// and the send returns at once.
-    Queue,
+    /// and the send returns at once. Nothing is dropped that way: not a
+    /// cancel, not a release.
+    Never,
 }
 
 impl Wait<'_> {
@@ -2525,7 +2526,7 @@ impl Wait<'_> {
     )]
     fn for_sync(self) -> Self {
         match self {
-            Self::Block | Self::UnlessCancelled(_) if !exec::may_block() => Self::Queue,
+            Self::Block | Self::UnlessCancelled(_) if !exec::may_block() => Self::Never,
             other => other,
         }
     }

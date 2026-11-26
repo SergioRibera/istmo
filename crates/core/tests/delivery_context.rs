@@ -309,3 +309,22 @@ fn the_runtime_counts_what_it_queued() {
     }
     assert_eq!(init.runtime.outbound_spill().queued, 0);
 }
+
+#[test]
+fn a_cancel_is_never_dropped_on_a_full_channel() {
+    let init = Runtime::mock();
+    for _ in 1..DEFAULT_OUTBOUND_CAPACITY {
+        init.runtime
+            .notify("peer.p", None, "fill", Vec::new())
+            .expect("room");
+    }
+    // The call takes the last slot; dropping it sends a cancel that
+    // must not wait and finds the channel full.
+    let call = init
+        .runtime
+        .call("peer.p", None, "dropped", Vec::new())
+        .expect("call");
+    assert!(init.outbound.is_full());
+    drop(call);
+    assert_eq!(drained_after_fill(&init, 2), ["dropped", "cancel"]);
+}
