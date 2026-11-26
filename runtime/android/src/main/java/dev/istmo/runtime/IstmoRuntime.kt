@@ -9,6 +9,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
@@ -43,15 +46,24 @@ object IstmoRuntime {
     /**
      * Serve calls to [pluginId] with [handler].
      *
-     * By default every call starts on the thread that delivers it (the
-     * Rust caller, or the runtime's delivery thread) and runs there until
-     * its first suspension; a backend that never suspends answers before
-     * that thread returns, one that suspends continues wherever it
-     * resumes (its own dispatcher, or `Dispatchers.Default`). Like any
-     * `suspend fun`, a backend method must not block the thread: wrap
-     * blocking work in `withContext(Dispatchers.IO)`, or pass
-     * [startInPlace] `false` to start every call on `Dispatchers.Default`.
+     * A unary call Rust makes from one of its own threads starts on that
+     * thread by default and runs there until its first suspension: a
+     * backend that never suspends answers before the Rust caller's call
+     * returns, one that suspends continues wherever it resumes (its own
+     * dispatcher, or `Dispatchers.Default`). The Rust thread can be any
+     * thread, the main thread included when a Kotlin call on main reached
+     * a Rust host that calls back. Everything else (calls, streams,
+     * notifications and instance creation the runtime's delivery thread
+     * hands over) starts on `Dispatchers.Default`, never on that thread.
+     *
+     * Like any `suspend fun`, a backend method must not block the thread:
+     * wrap blocking work (disk, binder calls that can stall, content
+     * providers) in `withContext(Dispatchers.IO)`. `withContext(Dispatchers.Default)`
+     * does not move work off a Rust thread started in place only when
+     * that thread already is a `Default` worker; pass [startInPlace]
+     * `false` to start every call on `Dispatchers.Default`.
      */
+    @JvmOverloads
     fun registerHandler(pluginId: String, handler: PluginHandler, startInPlace: Boolean = true) {
         if (startInPlace) dispatchedHandlers.remove(pluginId) else dispatchedHandlers.add(pluginId)
         handlers[pluginId] = handler
@@ -233,6 +245,7 @@ object IstmoRuntime {
      * on the calling thread, with no suspension; otherwise the call
      * suspends until the answer arrives. Errors throw [PluginException].
      */
+    @JvmOverloads
     suspend fun call(
         pluginId: String,
         instanceId: Long,
@@ -240,6 +253,9 @@ object IstmoRuntime {
         payload: ByteArray,
         payloadLen: Int = payload.size,
     ): ByteArray {
+        // A cancelled caller gets its CancellationException, whether or
+        // not the host would have answered in place.
+        currentCoroutineContext().ensureActive()
         val callId = nextCallId.getAndIncrement()
         // Registered first: an answer that comes through `onRespond`
         // before this coroutine suspends waits in the entry.
@@ -256,6 +272,8 @@ object IstmoRuntime {
         }
         if (direct != null) {
             outboundCalls.remove(callId)
+            // Cancelled while the host ran in place: the answer is dropped.
+            currentCoroutineContext().ensureActive()
             return direct
         }
         return suspendCancellableCoroutine { cont ->
@@ -373,7 +391,8 @@ object IstmoRuntime {
             nativeSubmitResponse(callId, false, EMPTY_PAYLOAD)
             return
         }
-        launchHosted(callId, pluginId) {
+        // Delivered by the pump: never run a backend on its thread.
+        launchHosted(callId, inPlace = false) {
             when (val result = handler.handleCall(instanceId, method, payload)) {
                 is PluginResult.Unary -> nativeSubmitResponse(callId, true, result.bytes)
                 is PluginResult.Stream -> pumpStream(callId, result.flow)
@@ -401,7 +420,7 @@ object IstmoRuntime {
             return null
         }
         val direct = DirectReply()
-        launchHosted(callId, pluginId) {
+        launchHosted(callId, inPlace = pluginId !in dispatchedHandlers) {
             when (val result = handler.handleCall(instanceId, method, payload)) {
                 is PluginResult.Unary ->
                     if (!direct.offer(result.bytes)) nativeSubmitResponse(callId, true, result.bytes)
@@ -436,24 +455,29 @@ object IstmoRuntime {
 
     /**
      * Run a hosted call as a coroutine registered under [callId] (so
-     * `onCancel` reaches it), started in place unless [pluginId] opted
-     * out. A [PluginException] answers with its payload, anything else
-     * with an empty error.
+     * `onCancel` reaches it): on the calling thread until its first
+     * suspension when [inPlace], on `Dispatchers.Default` otherwise. A
+     * [PluginException] answers with its payload, anything else with an
+     * empty error; only the call's own cancellation answers nothing.
      */
-    private inline fun launchHosted(callId: Long, pluginId: String, crossinline body: suspend () -> Unit) {
+    private inline fun launchHosted(callId: Long, inPlace: Boolean, crossinline body: suspend () -> Unit) {
         // The job exists before the body runs: a body that finishes in
         // place, or a cancel that arrives while it runs, finds it.
         val job = Job(scope.coroutineContext[Job])
         jobs[callId] = job
-        val start = if (pluginId in dispatchedHandlers) CoroutineStart.DEFAULT else CoroutineStart.UNDISPATCHED
+        val start = if (inPlace) CoroutineStart.UNDISPATCHED else CoroutineStart.DEFAULT
         scope.launch(job, start) {
             try {
                 body()
             } catch (e: PluginException) {
                 nativeSubmitResponse(callId, false, e.payload)
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // Rust cancelled the call: nobody waits for an answer.
-                throw e
+                // Rust cancelled the call (or the runtime shut down):
+                // nobody waits for an answer. Any other cancellation (an
+                // uncaught `withTimeout`, a cancelled task awaited) is the
+                // backend failing, and Rust still waits for its answer.
+                if (!isActive) throw e
+                nativeSubmitResponse(callId, false, EMPTY_PAYLOAD)
             } catch (_: Throwable) {
                 nativeSubmitResponse(callId, false, EMPTY_PAYLOAD)
             } finally {
@@ -465,26 +489,37 @@ object IstmoRuntime {
 
     private suspend fun pumpStream(callId: Long, flow: kotlinx.coroutines.flow.Flow<ByteArray>) {
         try {
-            // `Unconfined` keeps the collector on the thread that emitted
-            // the item instead of hopping onto a `Dispatchers.Default`
-            // worker per sample. For high-rate streams (stylus input, pen
-            // hover) the per-event scheduler hop was adding tens of ms of
-            // visible latency on Android — the native-side submit is a
-            // short JNI + bincode push that is safe to run inline from
-            // the emitter's thread. Downstream consumers already run on
-            // dedicated Rust OS threads, so the native call never blocks
-            // on UI work.
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Unconfined) {
-                // Item by item, on the emitting thread: a backend that emits
-                // without suspending (a sensor callback, a busy loop) gets
-                // every item across at once; Rust holds it back when its
-                // consumer falls behind.
-                flow.collect { bytes -> nativeSubmitEvent(callId, bytes) }
+            // A stream opened in place runs on the Rust caller's thread:
+            // collect it on `Default` instead (a no-op hop when already
+            // there), since a flow may emit for as long as it likes.
+            kotlinx.coroutines.withContext(Dispatchers.Default) {
+                // `Unconfined` keeps the collector on the thread that
+                // emitted the item instead of hopping onto a `Default`
+                // worker per sample: for high-rate streams (stylus input,
+                // pen hover) the per-event hop added tens of ms of visible
+                // latency. Item by item, on the emitting thread: a backend
+                // that emits without suspending (a sensor callback, a busy
+                // loop) gets every item across at once; Rust holds it back
+                // when its consumer falls behind.
+                kotlinx.coroutines.withContext(Dispatchers.Unconfined) {
+                    flow.collect { bytes ->
+                        // Holding an item back blocks the emitting thread,
+                        // which must never be the delivery thread (an
+                        // upstream fed by a Rust stream resumes there).
+                        if (onDeliveryThread()) {
+                            kotlinx.coroutines.withContext(Dispatchers.Default) { nativeSubmitEvent(callId, bytes) }
+                        } else {
+                            nativeSubmitEvent(callId, bytes)
+                        }
+                    }
+                }
             }
             nativeSubmitStreamEnd(callId, STREAM_END_COMPLETE, null)
         } catch (e: kotlinx.coroutines.CancellationException) {
             nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
-            throw e
+            // Only the call's own cancellation goes on up; any other ends
+            // the stream like a failure.
+            if (!currentCoroutineContext().isActive) throw e
         } catch (e: PluginException) {
             // Generated dispatchers turn a domain error into its encoded bytes.
             nativeSubmitStreamEnd(callId, STREAM_END_ERROR, e.payload)
@@ -492,6 +527,21 @@ object IstmoRuntime {
             nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
         }
     }
+
+    /** The runtime's delivery thread (Rust's pump), once seen. */
+    @Volatile
+    private var deliveryThread: Thread? = null
+
+    private fun onDeliveryThread(): Boolean {
+        val current = Thread.currentThread()
+        deliveryThread?.let { return it === current }
+        if (current.name != DELIVERY_THREAD_NAME) return false
+        deliveryThread = current
+        return true
+    }
+
+    /** Name of the Rust pump thread (`crates/android/src/pump.rs`). */
+    private const val DELIVERY_THREAD_NAME = "istmo-android-pump"
 
     private const val STREAM_END_COMPLETE = 0
     private const val STREAM_END_CANCELLED = 1
@@ -510,8 +560,8 @@ object IstmoRuntime {
         payload: ByteArray,
     ) {
         val handler = handlers[pluginId] ?: return
-        val start = if (pluginId in dispatchedHandlers) CoroutineStart.DEFAULT else CoroutineStart.UNDISPATCHED
-        scope.launch(start = start) {
+        // Delivered by the pump: never run a backend on its thread.
+        scope.launch {
             runCatching { handler.handleCall(instanceId, method, payload) }
         }
     }
@@ -523,7 +573,7 @@ object IstmoRuntime {
             nativeSubmitResponse(callId, false, EMPTY_PAYLOAD)
             return
         }
-        launchHosted(callId, pluginId) {
+        launchHosted(callId, inPlace = false) {
             nativeSubmitResponse(callId, true, handler.handleCreateInstance(payload))
         }
     }
