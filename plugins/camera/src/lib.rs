@@ -289,19 +289,11 @@ pub enum PixelFormat {
 // Permissions
 // -------------------------------------------------------------------
 
-/// Current camera-access authorisation state.
-#[message(crate = "::istmo_core")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AccessStatus {
-    Granted,
-    Denied,
-    /// User has not been asked yet. Call
-    /// [`CameraClient::request_access`] to prompt.
-    NotDetermined,
-    /// Parental controls / MDM / enterprise policy forbids access.
-    /// A permission prompt will not help.
-    Restricted,
-}
+/// Current camera-access authorisation state, shared with the other media
+/// plugins. Cameras report `Granted`, `Denied`, `NotDetermined` (call
+/// [`CameraClient::request_access`] to prompt) and `Restricted`
+/// (parental controls, MDM or policy: a prompt will not help).
+pub use istmo_media::AccessStatus;
 
 // -------------------------------------------------------------------
 // Session configuration

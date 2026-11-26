@@ -29,6 +29,7 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import dev.istmo.media.AccessStatus
 import dev.istmo.runtime.*
 import java.io.ByteArrayOutputStream
 import java.lang.ref.WeakReference

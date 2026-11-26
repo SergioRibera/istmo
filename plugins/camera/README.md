@@ -61,6 +61,9 @@ match camera.request_access().await? {
         // deep-link to Settings, surface rationale, etc.
     }
     AccessStatus::NotDetermined => { /* the prompt did not resolve */ }
+    // Shared with the other media plugins (`istmo-media`), which report
+    // more states; cameras report only the four above.
+    _ => {}
 }
 ```
 

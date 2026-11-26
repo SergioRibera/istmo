@@ -231,6 +231,20 @@ fn still_photo_roundtrip() {
 }
 
 #[test]
+fn access_status_keeps_the_camera_wire_values() {
+    // Shared with `istmo-media` since; the camera's four states keep
+    // their discriminants.
+    for (status, wire) in [
+        (AccessStatus::Granted, 0u8),
+        (AccessStatus::Denied, 1),
+        (AccessStatus::NotDetermined, 2),
+        (AccessStatus::Restricted, 3),
+    ] {
+        assert_eq!(istmo_core::codec::encode(&status).expect("encode"), [wire]);
+    }
+}
+
+#[test]
 fn access_status_roundtrip() {
     for s in [
         AccessStatus::Granted,
