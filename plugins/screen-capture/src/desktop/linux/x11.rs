@@ -13,8 +13,6 @@ mod session;
 
 use std::sync::Arc;
 
-use istmo_core::NativeBuffer;
-
 use crate::select::{self, Offer};
 use crate::types::{
     Availability, BackendCaps, BackendId, BorderState, BufferIdentity, BufferMemory,
@@ -181,7 +179,13 @@ impl From<CursorMode> for CursorPlan {
 
 /// Apply the cursor plan to a grab whose top-left is `origin` on the
 /// root window.
-fn apply_cursor(x: &X11, plan: CursorPlan, grab: &mut Grab, origin: Point) -> Option<CursorState> {
+fn apply_cursor(
+    x: &X11,
+    plan: CursorPlan,
+    grabber: &mut Grabber,
+    grab: &mut Grab,
+    origin: Point,
+) -> Option<CursorState> {
     if plan == CursorPlan::Hidden {
         return None;
     }
@@ -189,8 +193,12 @@ fn apply_cursor(x: &X11, plan: CursorPlan, grab: &mut Grab, origin: Point) -> Op
     match plan {
         CursorPlan::Hidden => None,
         CursorPlan::Embedded => {
-            if grab.format.bytes_per_pixel() == 4 && grab.format != PixelFormat::Xr30 {
-                cursor.blend_into(&mut grab.bytes, grab.stride, grab.size, origin);
+            let (format, stride, size) = (grab.format, grab.stride, grab.size);
+            if format.bytes_per_pixel() == 4
+                && format != PixelFormat::Xr30
+                && let Some(bytes) = grabber.pixels_mut(grab)
+            {
+                cursor.blend_into(bytes, stride, size, origin);
             }
             None
         }
@@ -211,11 +219,11 @@ fn capture(
     grabber: &mut Grabber,
     source: &Source,
     cursor: CursorPlan,
-    reuse: Vec<u8>,
+    slot: Option<u32>,
 ) -> Result<(Grab, Option<CursorState>), CaptureError> {
     let (mut grab, origin) = match X11::target(source)? {
         XTarget::Monitor(rect) => (
-            grabber.grab(x, x.root, x.root_depth, rect, reuse)?,
+            grabber.grab(x, x.root, x.root_depth, rect, slot)?,
             Point {
                 x: rect.x,
                 y: rect.y,
@@ -224,12 +232,12 @@ fn capture(
         XTarget::Window(window) => {
             let at = x.window_rect(window)?;
             (
-                grabber.grab_window(x, window, reuse)?,
+                grabber.grab_window(x, window, slot)?,
                 Point { x: at.x, y: at.y },
             )
         }
     };
-    let state = apply_cursor(x, cursor, &mut grab, origin);
+    let state = apply_cursor(x, cursor, grabber, &mut grab, origin);
     Ok((grab, state))
 }
 
@@ -390,9 +398,9 @@ impl Backend for X11Backend {
         let mut grabber = Grabber::default();
         let mut frames = Vec::with_capacity(sources.len());
         let mut first = None;
-        for source in sources {
+        for (slot, source) in (0_u32..).zip(sources) {
             let pts = clock::monotonic_ns();
-            let (grab, cursor) = capture(&x, &mut grabber, source, mode.into(), Vec::new())?;
+            let (grab, cursor) = capture(&x, &mut grabber, source, mode.into(), Some(slot))?;
             let mut meta = meta_for(source, &grab, pts, Damage::Full, cursor);
             meta.tier = tier;
             if first.is_none() {
@@ -406,9 +414,12 @@ impl Backend for X11Backend {
                     Exhaustion::Stall,
                 ));
             }
+            let buffer = grabber
+                .buffer(grab)
+                .ok_or_else(|| CaptureError::protocol(ID, "screenshot", "segment went away"))?;
             frames.push(Captured {
                 meta,
-                buffer: NativeBuffer::from_bytes(grab.bytes),
+                buffer,
                 source: source.clone(),
             });
         }
@@ -460,7 +471,7 @@ mod tests {
             size: Size::new(4, 2),
             stride: 16,
             format: PixelFormat::Bgrx8,
-            bytes: vec![0; 32],
+            pixels: grab::Pixels::Owned(vec![0; 32]),
         };
         let meta = meta_for(&source, &grab, 5, Damage::Full, None);
         assert_eq!(meta.planes[0].size, 32);

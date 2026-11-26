@@ -18,9 +18,11 @@ use std::os::fd::AsFd;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-/// One read-only `MAP_SHARED` mapping, unmapped on drop.
+/// One `MAP_SHARED` mapping, unmapped on drop. Read-only, or writable for
+/// the plugin's own segments (an X11 cursor is blended into the frame).
 #[derive(Debug)]
 pub(crate) struct Mapping {
+    writable: bool,
     /// Start of the page-aligned mapping.
     base: NonNull<u8>,
     /// Start of the caller's range (`base + skip`).
@@ -31,10 +33,10 @@ pub(crate) struct Mapping {
     len: usize,
 }
 
-// SAFETY: the mapping is plain read-only memory owned by this value; it
-// carries no thread affinity, and every access goes through `&[u8]`.
+// SAFETY: the mapping is plain memory owned by this value with no thread
+// affinity; shared access is `&[u8]` only, writes need `&mut self`.
 unsafe impl Send for Mapping {}
-// SAFETY: as above: only shared reads, which are fine from any thread.
+// SAFETY: as above: through `&self` only reads happen, from any thread.
 unsafe impl Sync for Mapping {}
 
 /// Why a mapping failed.
@@ -67,6 +69,19 @@ impl Mapping {
     /// (a short file is caught by the kernel only on access: callers map
     /// sizes the producer guaranteed, `ftruncate`d or announced).
     pub(crate) fn new(fd: impl AsFd, offset: u64, len: usize) -> Result<Self, MapError> {
+        Self::map(fd, offset, len, false)
+    }
+
+    /// [`new`](Self::new), writable through [`bytes_mut`](Self::bytes_mut).
+    /// For memory the plugin created (a memfd it shares with a producer).
+    ///
+    /// # Errors
+    /// As [`new`](Self::new).
+    pub(crate) fn new_writable(fd: impl AsFd, len: usize) -> Result<Self, MapError> {
+        Self::map(fd, 0, len, true)
+    }
+
+    fn map(fd: impl AsFd, offset: u64, len: usize, writable: bool) -> Result<Self, MapError> {
         let bad = || MapError::BadRange { offset, len };
         if len == 0 {
             return Err(bad());
@@ -83,7 +98,11 @@ impl Mapping {
             rustix::mm::mmap(
                 std::ptr::null_mut(),
                 mapped,
-                rustix::mm::ProtFlags::READ,
+                if writable {
+                    rustix::mm::ProtFlags::READ | rustix::mm::ProtFlags::WRITE
+                } else {
+                    rustix::mm::ProtFlags::READ
+                },
                 rustix::mm::MapFlags::SHARED,
                 fd,
                 aligned,
@@ -95,6 +114,7 @@ impl Mapping {
         // mapping just created.
         let start = unsafe { base.add(skip) };
         Ok(Self {
+            writable,
             base,
             start,
             mapped,
@@ -108,6 +128,18 @@ impl Mapping {
         // read-only mapping owned by `self`; the borrow cannot outlive
         // `self`, which unmaps on drop.
         unsafe { std::slice::from_raw_parts(self.start.as_ptr(), self.len) }
+    }
+
+    /// The mapped range, writable: `None` for a read-only mapping. `&mut
+    /// self` proves no frame reads it (frames hold `Arc<Mapping>`, so a
+    /// caller reaches this only through `Arc::get_mut`).
+    pub(crate) const fn bytes_mut(&mut self) -> Option<&mut [u8]> {
+        if !self.writable {
+            return None;
+        }
+        // SAFETY: a live writable mapping of `len` bytes from `start`,
+        // owned by `self` and borrowed exclusively for the result's life.
+        Some(unsafe { std::slice::from_raw_parts_mut(self.start.as_ptr(), self.len) })
     }
 }
 
@@ -131,6 +163,12 @@ pub(crate) struct MappedFrame {
 }
 
 impl MappedFrame {
+    /// `range` of `mapping`, or `None` when it does not lie inside.
+    pub(crate) fn new(mapping: Arc<Mapping>, range: std::ops::Range<usize>) -> Option<Self> {
+        mapping.bytes().get(range.clone())?;
+        Some(Self { mapping, range })
+    }
+
     /// The whole mapping.
     pub(crate) fn whole(mapping: Arc<Mapping>) -> Self {
         let range = 0..mapping.bytes().len();

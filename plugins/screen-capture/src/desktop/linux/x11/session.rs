@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use istmo_core::NativeBuffer;
 use x11rb::connection::Connection as _;
 use x11rb::protocol::Event;
 use x11rb::protocol::damage::{self, ConnectionExt as _};
@@ -78,59 +77,6 @@ impl Pending {
     }
 }
 
-/// CPU buffers handed back by consumers, reused for the next frames.
-#[derive(Debug, Clone, Default)]
-struct Recycler(Arc<Mutex<Vec<Vec<u8>>>>);
-
-impl Recycler {
-    fn take(&self) -> Vec<u8> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop()
-            .unwrap_or_default()
-    }
-
-    fn wrap(&self, bytes: Vec<u8>) -> Recycled {
-        Recycled {
-            bytes,
-            home: Arc::downgrade(&self.0),
-        }
-    }
-
-    fn clear(&self) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
-    }
-}
-
-/// A frame's bytes; they go back to the session's free list on drop.
-#[derive(Debug)]
-struct Recycled {
-    bytes: Vec<u8>,
-    home: std::sync::Weak<Mutex<Vec<Vec<u8>>>>,
-}
-
-impl AsRef<[u8]> for Recycled {
-    fn as_ref(&self) -> &[u8] {
-        &self.bytes
-    }
-}
-
-impl Drop for Recycled {
-    fn drop(&mut self) {
-        if let Some(home) = self.home.upgrade() {
-            let mut free = home.lock().unwrap_or_else(PoisonError::into_inner);
-            // One spare per buffer the pool can have out is enough.
-            if free.len() < 8 {
-                free.push(std::mem::take(&mut self.bytes));
-            }
-        }
-    }
-}
-
 /// What the capture thread shares with the session handle.
 #[derive(Debug)]
 struct Shared {
@@ -163,7 +109,7 @@ pub(super) fn start(
 ) -> Result<(Session, NegotiatedStream), CaptureError> {
     let mut grabber = Grabber::default();
     let source = plan.source.clone();
-    let (probe, _) = capture(&x, &mut grabber, &source, CursorPlan::Hidden, Vec::new())?;
+    let (probe, _) = capture(&x, &mut grabber, &source, CursorPlan::Hidden, None)?;
     let depth = usize::from(plan.pool_depth.max(2));
     let negotiated = negotiated(
         &x,
@@ -191,7 +137,6 @@ pub(super) fn start(
         pool_depth: plan.pool_depth.max(2),
         exhaustion: plan.exhaustion,
         tier,
-        recycler: Recycler::default(),
         size: probe.size,
     };
     let thread = std::thread::Builder::new()
@@ -284,7 +229,6 @@ struct Worker {
     pool_depth: u8,
     exhaustion: Exhaustion,
     tier: u8,
-    recycler: Recycler,
     size: Size,
 }
 
@@ -439,7 +383,6 @@ impl Worker {
             let _destroyed = self.x.conn.damage_destroy(damage);
         }
         self.grabber.release(&self.x);
-        self.recycler.clear();
         let _flushed = self.x.conn.flush();
     }
 
@@ -480,23 +423,21 @@ impl Worker {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let pts = clock::monotonic_ns();
-        let reuse = if lease.is_some() {
-            self.recycler.take()
-        } else {
-            Vec::new()
-        };
+        // A lease-free read-back (CopyToCpu) reads over the socket: owned
+        // bytes that never pin a segment.
+        let slot = lease.as_ref().map(|l| l.identity().slot);
         let (grab, state) = capture(
             &self.x,
             &mut self.grabber,
             &self.source,
             cursor.into(),
-            reuse,
+            slot,
         )?;
         if grab.size != self.size {
             self.size = grab.size;
             let generation = self.pool.reallocate(usize::from(self.pool_depth));
             tracing::debug!(generation, "x11 source resized");
-            self.recycler.clear();
+            self.grabber.reset_segments(&self.x);
             self.out.event(CaptureEvent::SourceResized(grab.size));
             *pending = Pending::full();
             // The lease belonged to the old generation; take a fresh one.
@@ -505,14 +446,22 @@ impl Worker {
         let mut meta = meta_for(&self.source, &grab, pts, pending.take(), state);
         meta.tier = self.tier;
         meta.skipped_before = std::mem::take(skipped);
+        let buffer = self
+            .grabber
+            .buffer(grab)
+            .ok_or_else(|| x_err("frame", "the segment went away"))?;
         let delivery = if let Some(lease) = lease {
             meta.buffer = lease.identity();
-            let buffer = NativeBuffer::from_bytes(self.recycler.wrap(grab.bytes))
-                .with_release(move || drop(lease));
-            self.out.deliver(meta, buffer)
+            let identity = lease.identity().into();
+            self.out.deliver(
+                meta,
+                buffer
+                    .with_identity(identity)
+                    .with_release(move || drop(lease)),
+            )
         } else {
             meta.copied = Some(CopyStage::ExhaustionReadback);
-            self.out.deliver(meta, NativeBuffer::from_bytes(grab.bytes))
+            self.out.deliver(meta, buffer)
         };
         Ok(delivery)
     }
@@ -542,15 +491,5 @@ mod tests {
             );
         }
         assert_eq!(pending.take(), Damage::Full);
-    }
-
-    #[test]
-    fn recycled_bytes_come_back() {
-        let recycler = Recycler::default();
-        let bytes = recycler.wrap(vec![1, 2, 3]);
-        assert_eq!(bytes.as_ref(), [1, 2, 3]);
-        drop(bytes);
-        assert_eq!(recycler.take(), vec![1, 2, 3]);
-        assert_eq!(recycler.take().len(), 0);
     }
 }

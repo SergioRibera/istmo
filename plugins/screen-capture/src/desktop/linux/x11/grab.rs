@@ -1,12 +1,13 @@
 //! Reading pixels: MIT-SHM into a memfd segment (no socket copy), else
 //! `GetImage` over the socket; both are the server copying into CPU
-//! memory (`CopyStage::ShmTransport`). Window content comes from a
-//! Composite pixmap, so occluded parts read correctly.
+//! memory (`CopyStage::ShmTransport`). A segment is handed out as a
+//! mapping (one per pool slot), so that is the only copy. Window content
+//! comes from a Composite pixmap, so occluded parts read correctly.
 
-use std::os::fd::OwnedFd;
+use std::sync::Arc;
 
+use istmo_core::NativeBuffer;
 use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
-use rustix::io::{fcntl_dupfd_cloexec, pread};
 use x11rb::connection::Connection as _;
 use x11rb::protocol::composite::{self, ConnectionExt as _};
 use x11rb::protocol::shm::{self, ConnectionExt as _};
@@ -15,6 +16,7 @@ use x11rb::protocol::xproto::{self, ConnectionExt as _, ImageFormat, ImageOrder}
 
 use crate::types::{CaptureError, PixelFormat, Point, Rect, Size};
 
+use super::super::mapping::{MappedFrame, Mapping};
 use super::conn::{X11, lost_or, x_err};
 
 /// The packed format X delivers for a pixmap depth and layout, if the
@@ -49,27 +51,41 @@ pub(super) const fn stride(width: u32, bits_per_pixel: u8, scanline_pad: u8) -> 
     (width * bits_per_pixel as u32).div_ceil(pad) * pad / 8
 }
 
+/// Where a grab's pixels are.
+#[derive(Debug)]
+pub(super) enum Pixels {
+    /// Read over the socket (`GetImage`): owned bytes.
+    Owned(Vec<u8>),
+    /// In the MIT-SHM segment of pool slot `slot`, `len` bytes: handed out
+    /// as a mapping of the segment, no copy.
+    Segment { slot: u32, len: usize },
+}
+
 /// One read image.
 #[derive(Debug)]
 pub(super) struct Grab {
     pub(super) size: Size,
     pub(super) stride: u32,
     pub(super) format: PixelFormat,
-    pub(super) bytes: Vec<u8>,
+    pub(super) pixels: Pixels,
 }
 
-/// A memfd attached to the server as an MIT-SHM segment.
+/// A memfd attached to the server as an MIT-SHM segment, mapped here.
+/// The server writes into it only during a grab of its slot, and a slot
+/// is grabbed only once every frame cut from it dropped (the mapping is
+/// then unique: see [`Grabber::grab`]).
 #[derive(Debug)]
 struct Segment {
     id: shm::Seg,
-    fd: OwnedFd,
+    mapping: Arc<Mapping>,
     capacity: usize,
 }
 
 /// Reads drawables of one connection.
 #[derive(Debug, Default)]
 pub(super) struct Grabber {
-    segment: Option<Segment>,
+    /// One segment per pool slot.
+    segments: Vec<Option<Segment>>,
     /// Attaching failed once (remote display, no fd passing): socket only.
     shm_broken: bool,
     /// Windows this grabber redirected (once each), undone on release.
@@ -96,50 +112,98 @@ fn layout_of(x: &X11, depth: u8) -> Result<(u8, u8, bool), CaptureError> {
 }
 
 impl Grabber {
-    fn segment(&mut self, x: &X11, len: usize) -> Option<&Segment> {
+    /// The segment of `slot`, holding at least `len` bytes and read by no
+    /// frame. A segment some frame still maps (a slot reused across a
+    /// pool reallocation) is replaced, never written under that frame.
+    fn segment(&mut self, x: &X11, slot: u32, len: usize) -> Option<shm::Seg> {
         if self.shm_broken || !x.ext.shm_fd {
             return None;
         }
-        if self.segment.as_ref().is_some_and(|s| s.capacity >= len) {
-            return self.segment.as_ref();
+        let index = usize::try_from(slot).ok()?;
+        if self.segments.len() <= index {
+            self.segments.resize_with(index + 1, || None);
         }
-        if let Some(old) = self.segment.take() {
-            let _detached = x.conn.shm_detach(old.id);
-        }
-        match Self::attach(x, len) {
-            Ok(segment) => {
-                self.segment = Some(segment);
-                self.segment.as_ref()
+        let entry = self.segments.get_mut(index)?;
+        let reusable = entry
+            .as_mut()
+            .is_some_and(|s| s.capacity >= len && Arc::get_mut(&mut s.mapping).is_some());
+        if !reusable {
+            if let Some(old) = entry.take() {
+                // The frames still mapping it keep the memory; the server
+                // no longer writes into it.
+                let _detached = x.conn.shm_detach(old.id);
             }
-            Err(err) => {
-                tracing::debug!(%err, "x11: MIT-SHM attach failed, reading over the socket");
-                self.shm_broken = true;
-                None
+            match Self::attach(x, len) {
+                Ok(segment) => *entry = Some(segment),
+                Err(err) => {
+                    tracing::debug!(%err, "x11: MIT-SHM attach failed, reading over the socket");
+                    self.shm_broken = true;
+                    return None;
+                }
             }
         }
+        entry.as_ref().map(|s| s.id)
     }
 
     fn attach(x: &X11, len: usize) -> Result<Segment, CaptureError> {
         let fd =
             memfd_create("istmo-x11-shm", MemfdFlags::CLOEXEC).map_err(|e| x_err("memfd", e))?;
         ftruncate(&fd, len as u64).map_err(|e| x_err("memfd size", e))?;
-        // The server gets its own descriptor; ours stays for reading.
-        let server = fcntl_dupfd_cloexec(&fd, 0).map_err(|e| x_err("dup segment", e))?;
+        let mapping = Mapping::new_writable(&fd, len).map_err(|e| x_err("map segment", e))?;
         let id = x.conn.generate_id().map_err(|e| x_err("shm id", e))?;
+        // The server takes the descriptor; the mapping keeps the memory.
         x.conn
-            .shm_attach_fd(id, server, false)
+            .shm_attach_fd(id, fd, false)
             .map_err(|e| x_err("shm attach", e))?
             .check()
             .map_err(|e| x_err("shm attach", e))?;
         Ok(Segment {
             id,
-            fd,
+            mapping: Arc::new(mapping),
             capacity: len,
         })
     }
 
-    /// Read `rect` of `drawable` (depth `depth`) into `reuse` (resized as
-    /// needed).
+    /// The pixels of `grab`, writable (cursor blending): a segment is
+    /// read by no frame until [`buffer`](Self::buffer) hands it out.
+    pub(super) fn pixels_mut<'a>(&'a mut self, grab: &'a mut Grab) -> Option<&'a mut [u8]> {
+        match &mut grab.pixels {
+            Pixels::Owned(bytes) => Some(bytes.as_mut_slice()),
+            Pixels::Segment { slot, len } => {
+                let segment = self
+                    .segments
+                    .get_mut(usize::try_from(*slot).ok()?)?
+                    .as_mut()?;
+                Arc::get_mut(&mut segment.mapping)?
+                    .bytes_mut()?
+                    .get_mut(..*len)
+            }
+        }
+    }
+
+    /// The frame's backing: owned bytes, or a mapping of the slot's
+    /// segment (no copy). `None` for a segment that went away.
+    pub(super) fn buffer(&self, grab: Grab) -> Option<NativeBuffer> {
+        match grab.pixels {
+            Pixels::Owned(bytes) => Some(NativeBuffer::from_bytes(bytes)),
+            Pixels::Segment { slot, len } => {
+                let segment = self.segments.get(usize::try_from(slot).ok()?)?.as_ref()?;
+                MappedFrame::new(Arc::clone(&segment.mapping), 0..len).map(NativeBuffer::from_bytes)
+            }
+        }
+    }
+
+    /// Forget every segment: after a pool reallocation, frames of the old
+    /// generation keep theirs while new grabs use fresh ones.
+    pub(super) fn reset_segments(&mut self, x: &X11) {
+        for segment in self.segments.drain(..).flatten() {
+            let _detached = x.conn.shm_detach(segment.id);
+        }
+    }
+
+    /// Read `rect` of `drawable` (depth `depth`) into the segment of
+    /// `slot`, or over the socket when `slot` is `None` (a lease-free
+    /// read-back) or MIT-SHM is unavailable.
     ///
     /// # Errors
     /// `SourceLost` when the drawable is gone, otherwise the failing step.
@@ -149,7 +213,7 @@ impl Grabber {
         drawable: xproto::Drawable,
         depth: u8,
         rect: Rect,
-        mut reuse: Vec<u8>,
+        slot: Option<u32>,
     ) -> Result<Grab, CaptureError> {
         let (bpp, pad, lsb) = layout_of(x, depth)?;
         let format = pixel_format(depth, bpp, lsb).ok_or_else(|| {
@@ -167,8 +231,9 @@ impl Grabber {
             u16::try_from(size.width).map_err(|e| x_err("grab", e))?,
             u16::try_from(size.height).map_err(|e| x_err("grab", e))?,
         );
-        if let Some(segment) = self.segment(x, len) {
-            let (id, fd) = (segment.id, &segment.fd);
+        if let Some(slot) = slot
+            && let Some(id) = self.segment(x, slot, len)
+        {
             let reply = x
                 .conn
                 .shm_get_image(
@@ -191,21 +256,11 @@ impl Grabber {
                     format!("depth {} instead of {depth}", reply.depth),
                 ));
             }
-            reuse.resize(len, 0);
-            let mut read = 0;
-            while read < len {
-                let n = pread(fd, &mut reuse[read..], read as u64)
-                    .map_err(|e| x_err("read segment", e))?;
-                if n == 0 {
-                    return Err(x_err("read segment", "short segment"));
-                }
-                read += n;
-            }
             return Ok(Grab {
                 size,
                 stride,
                 format,
-                bytes: reuse,
+                pixels: Pixels::Segment { slot, len },
             });
         }
         let reply = x
@@ -224,7 +279,7 @@ impl Grabber {
             size,
             stride,
             format,
-            bytes: reply.data,
+            pixels: Pixels::Owned(reply.data),
         })
     }
 
@@ -237,7 +292,7 @@ impl Grabber {
         &mut self,
         x: &X11,
         window: xproto::Window,
-        reuse: Vec<u8>,
+        slot: Option<u32>,
     ) -> Result<Grab, CaptureError> {
         let geometry = x
             .conn
@@ -258,7 +313,7 @@ impl Grabber {
                 window,
                 geometry.depth,
                 Rect::from_size(rect.size()),
-                reuse,
+                slot,
             );
         }
         // Automatic redirection keeps the window on screen. Once per
@@ -281,16 +336,14 @@ impl Grabber {
             .map_err(|e| x_err("name window pixmap", e))?
             .check()
             .map_err(|e| lost_or("name window pixmap", e))?;
-        let grabbed = self.grab(x, pixmap, geometry.depth, rect, reuse);
+        let grabbed = self.grab(x, pixmap, geometry.depth, rect, slot);
         let _freed = x.conn.free_pixmap(pixmap);
         grabbed
     }
 
     /// Detach the segment (also implicit when the connection closes).
     pub(super) fn release(&mut self, x: &X11) {
-        if let Some(segment) = self.segment.take() {
-            let _detached = x.conn.shm_detach(segment.id);
-        }
+        self.reset_segments(x);
         for window in self.redirected.drain(..) {
             // Fails only for a window that is already gone.
             let _undone = x
