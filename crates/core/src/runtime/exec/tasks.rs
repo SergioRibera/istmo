@@ -5,7 +5,7 @@
 //! its worker to the pool and is queued again by its waker. So a handful
 //! of workers serve any number of waiting calls and streams, and nothing
 //! deadlocks on the pool's size — as long as the futures never block the
-//! thread polling them (the [`DispatchMode::Inline`] contract).
+//! thread polling it (the [`DispatchMode::Inline`] contract).
 //!
 //! [`DispatchMode::Inline`]: crate::DispatchMode::Inline
 
@@ -13,7 +13,7 @@ use std::cell::Cell;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering, fence};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll, Wake, Waker};
 
@@ -45,42 +45,44 @@ mod state {
 /// shared queue again.
 const MAX_LOCAL_RUN: u32 = 32;
 
-/// The worker's own slot.
-mod slot {
-    // Both initialisers are `const` blocks already; clippy's
+mod worker {
+    // The initialiser is a `const` block already; clippy's
     // `missing_const_for_thread_local` still fires on some targets
     // (aarch64-linux-android with 1.100).
     #![allow(
         clippy::missing_const_for_thread_local,
-        reason = "false positive on some targets; the initialisers are const"
+        reason = "false positive on some targets; the initialiser is const"
     )]
 
-    use std::cell::{Cell, RefCell};
-    use std::sync::Arc;
+    use std::cell::Cell;
 
     thread_local! {
-        /// Set on async worker threads.
-        pub(super) static ON_WORKER: Cell<bool> = const { Cell::new(false) };
-        /// On a worker: the task it runs next, woken by the task it is
-        /// running (a stream encoder waking its pump). Running it right
-        /// after the current poll saves waking another worker.
-        pub(super) static NEXT: RefCell<Option<Arc<super::Task>>> = const { RefCell::new(None) };
+        /// On an async worker thread: its index in [`super::Pool::slots`].
+        pub(super) static INDEX: Cell<Option<usize>> = const { Cell::new(None) };
     }
 }
 
-use slot::{NEXT, ON_WORKER};
+use worker::INDEX;
 
 /// Queue a woken task: in the current worker's own slot when a worker
 /// woke it, on the shared queue otherwise.
+///
+/// The slot saves waking another worker for a task woken by the one it
+/// is about to follow (a stream encoder waking its pump), but the waker
+/// may keep polling for long after the wake. So the slot is stealable:
+/// a spinning worker takes it, and when none spins and one is parked,
+/// that one is woken to take it unless this worker gets there first.
 fn schedule(task: Arc<Task>) {
-    if ON_WORKER.with(Cell::get) {
-        let displaced = NEXT.with(|next| next.borrow_mut().replace(task));
-        if let Some(displaced) = displaced {
-            pool().push(displaced);
-        }
+    let pool = pool();
+    let Some(index) = INDEX.with(Cell::get) else {
+        pool.push(task);
         return;
+    };
+    let displaced = lock(&pool.slots[index]).replace(task);
+    if let Some(displaced) = displaced {
+        pool.push(displaced);
     }
-    pool().push(task);
+    pool.offer_slots();
 }
 
 /// One spawned future and its scheduling state.
@@ -134,7 +136,6 @@ impl Task {
         let polled = slot
             .as_mut()
             .map(|future| catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx))));
-        drop(slot);
         let finished = match polled {
             Some(Ok(Poll::Pending)) => false,
             Some(Ok(Poll::Ready(()))) | None => true,
@@ -144,11 +145,17 @@ impl Task {
             }
         };
         if finished {
-            // Drop the future (and whatever it holds) before reporting done.
-            *lock(&self.future) = None;
+            // Drop the future (and whatever it holds) before reporting
+            // done; a panicking drop must not take the worker with it.
+            let future = slot.take();
+            drop(slot);
+            if catch_unwind(AssertUnwindSafe(move || drop(future))).is_err() {
+                tracing::error!("dropping a finished istmo task panicked");
+            }
             self.state.store(state::DONE, Ordering::Release);
             return;
         }
+        drop(slot);
         if self
             .state
             .compare_exchange(
@@ -167,13 +174,28 @@ impl Task {
     }
 }
 
+/// What the shared queue carries.
+enum Job {
+    Run(Arc<Task>),
+    /// Wakes a parked worker to look at the other workers' slots.
+    Steal,
+}
+
 /// The persistent async workers, started on first use.
 struct Pool {
-    tx: Sender<Arc<Task>>,
-    rx: Receiver<Arc<Task>>,
+    tx: Sender<Job>,
+    rx: Receiver<Job>,
     workers: AtomicUsize,
     /// Serialises worker starts so the count stays exact.
     starting: Mutex<()>,
+    /// Each worker's own slot: the task it runs next.
+    slots: [Mutex<Option<Arc<Task>>>; MAX_WORKERS],
+    /// Workers polling the queue and the slots before they park.
+    searching: AtomicUsize,
+    /// Workers parked on the shared queue.
+    parked: AtomicUsize,
+    /// A [`Job::Steal`] is on its way; another adds nothing.
+    steal_sent: AtomicBool,
 }
 
 fn pool() -> &'static Pool {
@@ -185,6 +207,10 @@ fn pool() -> &'static Pool {
             rx,
             workers: AtomicUsize::new(0),
             starting: Mutex::new(()),
+            slots: std::array::from_fn(|_| Mutex::new(None)),
+            searching: AtomicUsize::new(0),
+            parked: AtomicUsize::new(0),
+            steal_sent: AtomicBool::new(false),
         }
     })
 }
@@ -200,7 +226,81 @@ impl Pool {
     fn push(&self, task: Arc<Task>) {
         self.ensure_workers();
         // The pool owns both ends for the life of the process.
-        let _ = self.tx.send(task);
+        let _ = self.tx.send(Job::Run(task));
+    }
+
+    /// A slot was just filled: make sure an idle worker can take it.
+    ///
+    /// Pairs with [`park`](Self::park): the filler writes the slot, then
+    /// reads the counters; a parking worker writes the counters, then
+    /// reads the slots, with a sequentially consistent fence between on
+    /// both sides. So either the parking worker sees the slot, or this
+    /// sees it parked and wakes it.
+    fn offer_slots(&self) {
+        fence(Ordering::SeqCst);
+        if self.searching.load(Ordering::SeqCst) == 0
+            && self.parked.load(Ordering::SeqCst) > 0
+            && !self.steal_sent.swap(true, Ordering::AcqRel)
+        {
+            let _ = self.tx.send(Job::Steal);
+        }
+    }
+
+    /// Take a task from any worker's slot.
+    fn steal(&self) -> Option<Arc<Task>> {
+        let started = self.workers.load(Ordering::Acquire).min(MAX_WORKERS);
+        self.slots[..started]
+            .iter()
+            .find_map(|slot| lock(slot).take())
+    }
+
+    /// The next task from the shared queue or a slot, without parking.
+    fn poll_once(&self) -> Option<Arc<Task>> {
+        match self.rx.try_recv() {
+            Ok(Job::Run(task)) => Some(task),
+            Ok(Job::Steal) => {
+                self.steal_sent.store(false, Ordering::Release);
+                self.steal()
+            }
+            Err(_) => self.steal(),
+        }
+    }
+
+    /// The next task for an idle worker: spin briefly, then park. `None`
+    /// once the queue is gone.
+    fn next(&self) -> Option<Arc<Task>> {
+        static WAIT: crate::spin::SpinWait = crate::spin::SpinWait::new();
+        self.searching.fetch_add(1, Ordering::SeqCst);
+        // A task woken right after the last one finished is picked up
+        // without parking the worker.
+        if let Some(task) = WAIT.spin(|| self.poll_once()) {
+            self.searching.fetch_sub(1, Ordering::SeqCst);
+            return Some(task);
+        }
+        self.park()
+    }
+
+    fn park(&self) -> Option<Arc<Task>> {
+        self.parked.fetch_add(1, Ordering::SeqCst);
+        self.searching.fetch_sub(1, Ordering::SeqCst);
+        fence(Ordering::SeqCst);
+        let found = loop {
+            if let Some(task) = self.poll_once() {
+                break Some(task);
+            }
+            match self.rx.recv() {
+                Ok(Job::Run(task)) => break Some(task),
+                Ok(Job::Steal) => {
+                    self.steal_sent.store(false, Ordering::Release);
+                    if let Some(task) = self.steal() {
+                        break Some(task);
+                    }
+                }
+                Err(_) => break None,
+            }
+        };
+        self.parked.fetch_sub(1, Ordering::SeqCst);
+        found
     }
 
     /// Start the workers that are missing. Cheap once they all run.
@@ -212,10 +312,9 @@ impl Pool {
         let _starting = lock(&self.starting);
         while self.workers.load(Ordering::Acquire) < target {
             let index = self.workers.load(Ordering::Acquire);
-            let rx = self.rx.clone();
             let started = std::thread::Builder::new()
                 .name(format!("istmo-worker-{index}"))
-                .spawn(move || worker_loop(&rx));
+                .spawn(move || worker_loop(index));
             match started {
                 Ok(_) => {
                     self.workers.fetch_add(1, Ordering::AcqRel);
@@ -230,15 +329,12 @@ impl Pool {
     }
 }
 
-fn worker_loop(rx: &Receiver<Arc<Task>>) {
-    static WAIT: crate::spin::SpinWait = crate::spin::SpinWait::new();
-    ON_WORKER.with(|on| on.set(true));
-    // A task woken right after the last one finished is picked up
-    // without parking the worker.
-    let shared = || WAIT.spin(|| rx.try_recv().ok()).or_else(|| rx.recv().ok());
+fn worker_loop(index: usize) {
+    let pool = pool();
+    INDEX.with(|slot| slot.set(Some(index)));
     let mut local_run = 0u32;
     loop {
-        let local = NEXT.with(|next| next.borrow_mut().take());
+        let local = lock(&pool.slots[index]).take();
         let task = match local {
             Some(task) if local_run < MAX_LOCAL_RUN => {
                 local_run += 1;
@@ -247,12 +343,12 @@ fn worker_loop(rx: &Receiver<Arc<Task>>) {
             Some(task) => {
                 // Let the shared queue in: the local task waits its turn.
                 local_run = 0;
-                pool().push(task);
+                pool.push(task);
                 continue;
             }
             None => {
                 local_run = 0;
-                let Some(task) = shared() else { return };
+                let Some(task) = pool.next() else { return };
                 task
             }
         };
@@ -361,23 +457,54 @@ mod tests {
     }
 
     #[test]
-    fn a_task_woken_by_a_worker_runs_next_on_that_worker() {
+    fn a_task_woken_by_a_worker_can_run_next_on_that_worker() {
+        // Another worker may steal the woken task; over a few rounds the
+        // waker still runs it itself at least once.
+        let mut same = 0;
+        for _ in 0..20 {
+            let (item_tx, item_rx) = flume::bounded::<()>(1);
+            let (seen_tx, seen_rx) = flume::bounded(2);
+            let consumer_seen = seen_tx.clone();
+            // The consumer waits; the producer wakes it from a worker.
+            spawn(async move {
+                item_rx.recv_async().await.unwrap();
+                consumer_seen.send(std::thread::current().id()).unwrap();
+            });
+            std::thread::sleep(Duration::from_millis(5));
+            spawn(async move {
+                seen_tx.send(std::thread::current().id()).unwrap();
+                item_tx.send_async(()).await.unwrap();
+            });
+            let producer = seen_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let consumer = seen_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            same += usize::from(producer == consumer);
+        }
+        assert!(same > 0, "the waking worker never ran the woken task");
+    }
+
+    #[test]
+    fn a_woken_task_does_not_wait_out_its_wakers_long_poll() {
         let (item_tx, item_rx) = flume::bounded::<()>(1);
-        let (seen_tx, seen_rx) = flume::bounded(2);
-        let consumer_seen = seen_tx.clone();
-        // The consumer waits; the producer wakes it from a worker.
+        let (done_tx, done_rx) = flume::bounded(1);
         spawn(async move {
             item_rx.recv_async().await.unwrap();
-            consumer_seen.send(std::thread::current().id()).unwrap();
+            done_tx.send(std::time::Instant::now()).unwrap();
         });
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(5));
+        let (woke_tx, woke_rx) = flume::bounded(1);
         spawn(async move {
-            seen_tx.send(std::thread::current().id()).unwrap();
-            item_tx.send_async(()).await.unwrap();
+            item_tx.try_send(()).unwrap();
+            woke_tx.send(std::time::Instant::now()).unwrap();
+            // Keeps polling long after the wake.
+            std::thread::sleep(Duration::from_millis(500));
         });
-        let producer = seen_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        let consumer = seen_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!(producer, consumer, "no hand-off to another worker");
+        let woke = woke_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let ran = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            ran.duration_since(woke) < Duration::from_millis(250),
+            "the woken task waited {:?} behind its waker",
+            ran.duration_since(woke)
+        );
     }
 
     #[test]
@@ -390,6 +517,29 @@ mod tests {
                 let _ = tx.try_send(());
             });
         }
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    struct PanicOnDrop;
+
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("drop bug");
+        }
+    }
+
+    #[test]
+    fn a_task_whose_drop_panics_leaves_the_workers_alive() {
+        for _ in 0..MAX_WORKERS * 2 {
+            let guard = PanicOnDrop;
+            spawn(async move {
+                let _guard = guard;
+            });
+        }
+        let (tx, rx) = flume::bounded(1);
+        spawn(async move {
+            let _ = tx.try_send(());
+        });
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 }
