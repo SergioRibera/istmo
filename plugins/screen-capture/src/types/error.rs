@@ -52,6 +52,10 @@ pub enum Requirement {
     Region,
     /// The operation (e.g. preview) is not offered on this platform.
     Operation,
+    /// A composite larger than the plugin allocates (see
+    /// `composite::MAX_COMPOSITE_PIXELS`), or mostly gaps between
+    /// far-apart monitors.
+    CompositeSize,
 }
 
 /// What a backend could not do.
@@ -234,6 +238,7 @@ impl fmt::Display for Requirement {
             Self::Audio => f.write_str("audio"),
             Self::Region => f.write_str("the region"),
             Self::Operation => f.write_str("this operation"),
+            Self::CompositeSize => f.write_str("a composite of this size"),
         }
     }
 }

@@ -4,7 +4,7 @@
 use crate::pixels::{CpuView, OrientationMap};
 use crate::types::{CompositeFill, Orientation, Rect, Size};
 
-use super::{CompositeLayout, logical_to_buffer};
+use super::{CompositeLayout, LayoutError, logical_to_buffer};
 
 /// One captured part, ready to blit.
 #[derive(Debug, Clone, Copy)]
@@ -24,18 +24,36 @@ pub struct Composed {
 /// Compose `parts` (in `layout.parts` order) into one `Bgra8` buffer.
 /// Gaps are transparent or black per `fill`.
 ///
-/// # Panics
-/// Never: a part list shorter than the layout leaves the missing parts
-/// filled.
-#[must_use]
-pub fn compose(layout: &CompositeLayout, parts: &[Part<'_>], fill: CompositeFill) -> Composed {
+/// A part list shorter than the layout leaves the missing parts filled.
+///
+/// # Errors
+/// [`LayoutError::Unreadable`] for a part this engine cannot read (it
+/// would render black), [`LayoutError::TooLarge`] when the buffer cannot
+/// be allocated.
+pub fn compose(
+    layout: &CompositeLayout,
+    parts: &[Part<'_>],
+    fill: CompositeFill,
+) -> Result<Composed, LayoutError> {
+    if let Some(part) = parts.iter().find(|p| !p.view.format().reads_as_rgba8()) {
+        return Err(LayoutError::Unreadable(part.view.format()));
+    }
     let size = layout.size;
     let stride = size.width as usize * 4;
     let fill_px: [u8; 4] = match fill {
         CompositeFill::Transparent => [0, 0, 0, 0],
         CompositeFill::Black => [0, 0, 0, 255],
     };
-    let mut bytes = fill_px.repeat(size.width as usize * size.height as usize);
+    let pixels = usize::try_from(u64::from(size.width) * u64::from(size.height))
+        .map_err(|_| LayoutError::TooLarge)?;
+    let len = pixels.checked_mul(4).ok_or(LayoutError::TooLarge)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|_| LayoutError::TooLarge)?;
+    for _ in 0..pixels {
+        bytes.extend_from_slice(&fill_px);
+    }
     for (plan, part) in layout.parts.iter().zip(parts) {
         let map = OrientationMap {
             size: part.view.size(),
@@ -49,7 +67,7 @@ pub fn compose(layout: &CompositeLayout, parts: &[Part<'_>], fill: CompositeFill
         }
         blit(&mut bytes, stride, size, dest, src, &map, &part.view);
     }
-    Composed { size, bytes }
+    Ok(Composed { size, bytes })
 }
 
 #[expect(
@@ -97,7 +115,7 @@ fn blit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::composite::layout;
+    use crate::composite::{LayoutError, layout};
     use crate::types::{
         BackendId, CompositeConfig, CompositeScale, PixelFormat, Rotation, Source, SourceId,
         SourceKind,
@@ -136,11 +154,36 @@ mod tests {
                 orientation: Orientation::UPRIGHT,
             },
         ];
-        let out = compose(&layout, &parts, CompositeFill::Transparent);
+        let out = compose(&layout, &parts, CompositeFill::Transparent).expect("compose");
         assert_eq!(out.size, Size::new(4, 2));
         let red: Vec<u8> = out.bytes.as_chunks::<4>().0.iter().map(|p| p[2]).collect();
         assert_eq!(red, [10, 10, 20, 20, 10, 10, 0, 0]);
         assert_eq!(out.bytes[4 * 7 + 3], 0, "the gap is transparent");
+    }
+
+    #[test]
+    fn parts_the_engine_cannot_read_are_refused_not_blacked_out() {
+        let sources = [
+            monitor("a", Rect::new(0, 0, 1, 1), 1000),
+            monitor("b", Rect::new(1, 0, 1, 1), 1000),
+        ];
+        let layout = layout(&sources, None, &CompositeConfig::default()).expect("layout");
+        let hdr = vec![0u8; 8];
+        let sdr = solid(1, 1, 5);
+        let parts = [
+            Part {
+                view: CpuView::new(&hdr, Size::new(1, 1), 8, PixelFormat::Rgba16f).expect("hdr"),
+                orientation: Orientation::UPRIGHT,
+            },
+            Part {
+                view: CpuView::new(&sdr, Size::new(1, 1), 4, PixelFormat::Bgra8).expect("sdr"),
+                orientation: Orientation::UPRIGHT,
+            },
+        ];
+        assert_eq!(
+            compose(&layout, &parts, CompositeFill::Black),
+            Err(LayoutError::Unreadable(PixelFormat::Rgba16f))
+        );
     }
 
     #[test]
@@ -177,7 +220,7 @@ mod tests {
                 orientation: Orientation::UPRIGHT,
             },
         ];
-        let out = compose(&layout, &parts, CompositeFill::Black);
+        let out = compose(&layout, &parts, CompositeFill::Black).expect("compose");
         let red: Vec<u8> = out.bytes.as_chunks::<4>().0.iter().map(|p| p[2]).collect();
         assert_eq!(red, [99, 1, 50, 50, 1, 1, 50, 50]);
     }

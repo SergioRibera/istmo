@@ -832,6 +832,7 @@ public enum Requirement: Sendable {
     case audio
     case region
     case operation
+    case compositeSize
 }
 
 public struct Unmet: Sendable {

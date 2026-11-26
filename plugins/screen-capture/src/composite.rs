@@ -9,7 +9,20 @@
 
 pub mod cpu;
 
-use crate::types::{CompositeConfig, CompositeScale, Rect, Size, Source, SourceId};
+use crate::types::{CompositeConfig, CompositeScale, PixelFormat, Rect, Size, Source, SourceId};
+
+/// The largest composite the plugin allocates, in pixels (1 GiB of
+/// `Bgra8`).
+pub const MAX_COMPOSITE_PIXELS: u64 = 1 << 28;
+
+/// How much larger than its parts a composite may be: gaps between
+/// monitors of different sizes are fine, monitors placed far apart are
+/// not worth a mostly-empty buffer.
+const MAX_GAP_FACTOR: u64 = 4;
+
+/// `CompositeScale::Permille` is clamped to this multiple of the
+/// highest monitor scale (and to at least 1 permille).
+const MAX_UPSCALE: u32 = 4;
 
 /// Why a composite cannot be laid out.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,8 +31,12 @@ pub enum LayoutError {
     NoGeometry(SourceId),
     /// The region misses every part.
     Empty,
-    /// The composite would not fit in memory.
+    /// The composite would exceed [`MAX_COMPOSITE_PIXELS`], or be mostly
+    /// gaps between far-apart monitors.
     TooLarge,
+    /// A part is in a format the CPU engine cannot read (it would come
+    /// out black).
+    Unreadable(PixelFormat),
 }
 
 impl std::fmt::Display for LayoutError {
@@ -28,6 +45,9 @@ impl std::fmt::Display for LayoutError {
             Self::NoGeometry(id) => write!(f, "source `{}` has no geometry", id.value),
             Self::Empty => f.write_str("the region covers no monitor"),
             Self::TooLarge => f.write_str("the composite is too large"),
+            Self::Unreadable(format) => {
+                write!(f, "a {format:?} part cannot be composited on the CPU")
+            }
         }
     }
 }
@@ -57,9 +77,11 @@ pub struct CompositeLayout {
     pub parts: Vec<PartLayout>,
 }
 
-fn scale_len(len: i64, permille: u32) -> i64 {
-    // Rounded to nearest.
-    (len * i64::from(permille) + 500).div_euclid(1000)
+/// `len` logical pixels at `permille`, rounded to nearest; `None` when
+/// it does not fit an `i64`.
+fn scale_len(len: i64, permille: u32) -> Option<i64> {
+    let scaled = (i128::from(len) * i128::from(permille) + 500).div_euclid(1000);
+    i64::try_from(scaled).ok()
 }
 
 /// Lay out `sources` (monitors with geometry), cropped to `region`
@@ -92,27 +114,29 @@ pub fn layout(
         .map(|(_, _, visible)| *visible)
         .reduce(Rect::union)
         .ok_or(LayoutError::Empty)?;
+    let highest = placed
+        .iter()
+        .map(|(s, _, _)| s.scale())
+        .max()
+        .unwrap_or(1000);
     let scale_permille = match config.scale {
-        CompositeScale::HighestScale => placed
-            .iter()
-            .map(|(s, _, _)| s.scale())
-            .max()
-            .unwrap_or(1000),
+        CompositeScale::HighestScale => highest,
         CompositeScale::Logical => 1000,
-        CompositeScale::Permille(p) => p.max(1),
+        CompositeScale::Permille(p) => p.clamp(1, highest.saturating_mul(MAX_UPSCALE)),
     };
-    let to_px = |v: i64| scale_len(v, scale_permille);
-    let width = u32::try_from(to_px(i64::from(area.width))).map_err(|_| LayoutError::TooLarge)?;
-    let height = u32::try_from(to_px(i64::from(area.height))).map_err(|_| LayoutError::TooLarge)?;
+    let to_px = |v: i64| scale_len(v, scale_permille).ok_or(LayoutError::TooLarge);
+    let width = u32::try_from(to_px(i64::from(area.width))?).map_err(|_| LayoutError::TooLarge)?;
+    let height =
+        u32::try_from(to_px(i64::from(area.height))?).map_err(|_| LayoutError::TooLarge)?;
     let parts = placed
         .into_iter()
         .map(|(source, geometry, visible)| {
             // Edges are scaled independently so neighbouring parts meet
             // without gaps or overlaps.
-            let x0 = to_px(i64::from(visible.x) - i64::from(area.x));
-            let y0 = to_px(i64::from(visible.y) - i64::from(area.y));
-            let x1 = to_px(visible.right() - i64::from(area.x));
-            let y1 = to_px(visible.bottom() - i64::from(area.y));
+            let x0 = to_px(i64::from(visible.x) - i64::from(area.x))?;
+            let y0 = to_px(i64::from(visible.y) - i64::from(area.y))?;
+            let x1 = to_px(visible.right() - i64::from(area.x))?;
+            let y1 = to_px(visible.bottom() - i64::from(area.y))?;
             let dest = Rect::new(
                 i32::try_from(x0).map_err(|_| LayoutError::TooLarge)?,
                 i32::try_from(y0).map_err(|_| LayoutError::TooLarge)?,
@@ -127,6 +151,14 @@ pub fn layout(
             })
         })
         .collect::<Result<Vec<_>, LayoutError>>()?;
+    let pixels = u64::from(width) * u64::from(height);
+    let part_pixels: u64 = parts
+        .iter()
+        .map(|p| u64::from(p.dest.width) * u64::from(p.dest.height))
+        .sum();
+    if pixels > MAX_COMPOSITE_PIXELS || pixels > part_pixels.saturating_mul(MAX_GAP_FACTOR) {
+        return Err(LayoutError::TooLarge);
+    }
     Ok(CompositeLayout {
         size: Size::new(width, height),
         scale_permille,
@@ -139,7 +171,7 @@ pub fn layout(
 /// `visible` (logical, source-relative) of a source at `scale_permille`.
 #[must_use]
 pub fn logical_to_buffer(visible: Rect, scale_permille: u32, buffer: Size) -> Rect {
-    let px = |v: i64| scale_len(v, scale_permille).max(0);
+    let px = |v: i64| scale_len(v, scale_permille).unwrap_or(i64::MAX).max(0);
     let x0 = px(i64::from(visible.x)).min(i64::from(buffer.width));
     let y0 = px(i64::from(visible.y)).min(i64::from(buffer.height));
     let x1 = px(visible.right()).min(i64::from(buffer.width));
@@ -212,6 +244,60 @@ mod tests {
 
     fn layout_err(region: Rect) -> LayoutError {
         layout(&pair(), Some(region), &CompositeConfig::default()).expect_err("no overlap")
+    }
+
+    #[test]
+    fn a_huge_scale_is_clamped_to_the_monitors() {
+        let config = CompositeConfig {
+            scale: CompositeScale::Permille(1_000_000),
+            ..CompositeConfig::default()
+        };
+        let layout = layout(&pair(), None, &config).expect("clamped");
+        assert_eq!(layout.scale_permille, 1500 * MAX_UPSCALE);
+        assert!(
+            u64::from(layout.size.width) * u64::from(layout.size.height) <= MAX_COMPOSITE_PIXELS
+        );
+    }
+
+    #[test]
+    fn far_apart_monitors_are_refused() {
+        let sources = [
+            monitor("a", Rect::new(0, 0, 1920, 1080), 1000),
+            monitor("b", Rect::new(60_000, 60_000, 1920, 1080), 1000),
+        ];
+        assert_eq!(
+            layout(&sources, None, &CompositeConfig::default()),
+            Err(LayoutError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn extreme_geometry_never_overflows() {
+        let sources = [
+            monitor(
+                "a",
+                Rect::new(i32::MIN, i32::MIN, u32::MAX, u32::MAX),
+                u32::MAX,
+            ),
+            monitor("b", Rect::new(i32::MAX, i32::MAX, u32::MAX, u32::MAX), 1),
+        ];
+        for scale in [
+            CompositeScale::HighestScale,
+            CompositeScale::Logical,
+            CompositeScale::Permille(u32::MAX),
+        ] {
+            let config = CompositeConfig {
+                scale,
+                ..CompositeConfig::default()
+            };
+            assert_eq!(layout(&sources, None, &config), Err(LayoutError::TooLarge));
+        }
+        let rect = logical_to_buffer(
+            Rect::new(i32::MAX, 0, u32::MAX, 1),
+            u32::MAX,
+            Size::new(4, 4),
+        );
+        assert!(rect.is_empty() || rect.right() <= 4);
     }
 
     #[test]

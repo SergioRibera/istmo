@@ -583,6 +583,7 @@ sealed class Requirement {
     object Audio : Requirement()
     object Region : Requirement()
     object Operation : Requirement()
+    object CompositeSize : Requirement()
 }
 
 data class Unmet(

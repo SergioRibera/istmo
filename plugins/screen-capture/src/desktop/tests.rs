@@ -841,3 +841,36 @@ fn every_subscriber_learns_the_negotiated_stream() {
         second.first()
     );
 }
+
+#[test]
+fn oversized_composites_are_unsatisfiable_not_fatal() {
+    let far = vec![
+        fake::monitor(WLR, 0, Rect::new(0, 0, 8, 4), 1000),
+        fake::monitor(WLR, 1, Rect::new(60_000, 60_000, 8, 4), 1000),
+    ];
+    let far_rig = rig_with(vec![Fake::new(WLR, far)], CapturePolicy::default());
+    let err = block(far_rig.client.screenshot_cpu(
+        ScreenshotRequest::of(SourceSelector::AllMonitors),
+        PixelLayout::default(),
+    ))
+    .expect_err("far apart");
+    assert_eq!(
+        err,
+        CaptureError::unsatisfiable(Some(WLR), Requirement::CompositeSize)
+    );
+    // A huge requested scale is clamped, never allocated.
+    let rig = rig();
+    let request = ScreenshotRequest {
+        composite_config: CompositeConfig {
+            scale: CompositeScale::Permille(1_000_000),
+            ..CompositeConfig::default()
+        },
+        ..ScreenshotRequest::of(SourceSelector::AllMonitors)
+    };
+    let image = block(rig.client.screenshot_cpu(request, PixelLayout::default())).expect("clamped");
+    assert_eq!(
+        (image.width, image.height),
+        (96, 32),
+        "4x the highest scale"
+    );
+}

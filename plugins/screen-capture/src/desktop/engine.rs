@@ -707,7 +707,7 @@ impl Engine {
         }
         let sources: Vec<Source> = frames.iter().map(|f| f.source.clone()).collect();
         let layout = composite::layout(&sources, region, &request.composite_config)
-            .map_err(|err| CaptureError::protocol(backend, "composite layout", err))?;
+            .map_err(|err| composite_error(backend, &err))?;
         let views = frames
             .iter()
             .map(|frame| {
@@ -734,7 +734,8 @@ impl Engine {
                     .and_then(|i| views.get(i).copied())
             })
             .collect();
-        let composed = cpu::compose(&layout, &ordered, request.composite_config.fill);
+        let composed = cpu::compose(&layout, &ordered, request.composite_config.fill)
+            .map_err(|err| composite_error(backend, &err))?;
         let first_pts = frames.iter().map(|f| f.meta.pts_ns).min().unwrap_or(0);
         let last_pts = frames.iter().map(|f| f.meta.pts_ns).max().unwrap_or(0);
         let info = CompositeInfo {
@@ -1248,4 +1249,16 @@ fn redact_for(origin: CallOrigin, negotiated: &mut NegotiatedStream) {
             negotiated.source.pid = None;
         }
     }
+}
+
+/// A composite that cannot be built, as the requirement it misses.
+fn composite_error(backend: BackendId, err: &composite::LayoutError) -> CaptureError {
+    let requirement = match err {
+        composite::LayoutError::TooLarge => Requirement::CompositeSize,
+        composite::LayoutError::Empty => Requirement::Region,
+        composite::LayoutError::Unreadable(_) => Requirement::Formats,
+        composite::LayoutError::NoGeometry(_) => Requirement::MultiMonitor,
+    };
+    tracing::debug!(%backend, %err, "screen-capture: composite refused");
+    CaptureError::unsatisfiable(Some(backend), requirement)
 }

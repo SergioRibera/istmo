@@ -1525,6 +1525,7 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
             16 -> Bincode.Decoded(Requirement.Audio, cursor)
             17 -> Bincode.Decoded(Requirement.Region, cursor)
             18 -> Bincode.Decoded(Requirement.Operation, cursor)
+            19 -> Bincode.Decoded(Requirement.CompositeSize, cursor)
             else -> throw Bincode.DecodeException("Requirement: unknown discriminant ${disc.value}")
         }
     }
@@ -1553,6 +1554,7 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
             Requirement.Audio -> Bincode.writeEnumDiscriminant(out, 16)
             Requirement.Region -> Bincode.writeEnumDiscriminant(out, 17)
             Requirement.Operation -> Bincode.writeEnumDiscriminant(out, 18)
+            Requirement.CompositeSize -> Bincode.writeEnumDiscriminant(out, 19)
         }
     }
 

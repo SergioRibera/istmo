@@ -154,6 +154,13 @@ impl PixelFormat {
         }
     }
 
+    /// Whether the format is packed 8- or 10-bit RGB, which reads as
+    /// 8-bit RGBA without tone mapping or a colour conversion.
+    #[must_use]
+    pub const fn reads_as_rgba8(self) -> bool {
+        !matches!(self, Self::Rgba16f | Self::Nv12 | Self::P010)
+    }
+
     /// Whether the format carries meaningful alpha.
     #[must_use]
     pub const fn has_alpha(self) -> bool {

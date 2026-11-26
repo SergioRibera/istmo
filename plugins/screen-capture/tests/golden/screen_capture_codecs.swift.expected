@@ -1249,6 +1249,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         case 16: return .audio
         case 17: return .region
         case 18: return .operation
+        case 19: return .compositeSize
         default: throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
     }
@@ -1294,6 +1295,8 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
             Bincode.writeVarintU32(&out, 17)
         case .operation:
             Bincode.writeVarintU32(&out, 18)
+        case .compositeSize:
+            Bincode.writeVarintU32(&out, 19)
         }
     }
 
