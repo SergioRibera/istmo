@@ -525,12 +525,19 @@ impl Client {
     /// The outputs as sources, the first one primary (Wayland has no
     /// notion of a primary output).
     pub(crate) fn monitors(&self) -> Vec<Source> {
-        self.state
+        let mut sources: Vec<Source> = self
+            .state
             .outputs
             .iter()
-            .enumerate()
-            .map(|(i, o)| o.source(self.backend, i == 0))
-            .collect()
+            .map(|o| o.source(self.backend, false))
+            .collect();
+        // Registry order is arbitrary (sway lists the newest output
+        // first): order by position, the top-left output is primary.
+        sources.sort_by_key(|s| s.geometry.map(|g| (g.y, g.x)));
+        if let Some(first) = sources.first_mut() {
+            first.flags.primary = true;
+        }
+        sources
     }
 
     #[cfg(feature = "linux-wlr-screencopy")]

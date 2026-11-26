@@ -244,18 +244,17 @@ fn engine_for(id: &SourceId, settings: Settings) -> Result<Engine<ExtSource>, Ca
             })?;
             (manager.create_source(&handle, &client.qh, ()), info, None)
         } else {
-            let index = client
-                .state
-                .outputs
-                .iter()
-                .position(|o| o.id_value() == id.value)
+            let info = client
+                .monitors()
+                .into_iter()
+                .find(|s| s.id == *id)
                 .ok_or_else(|| CaptureError::SourceNotFound(id.clone()))?;
             let output = client
                 .state
                 .outputs
-                .get(index)
+                .iter()
+                .find(|o| o.id_value() == id.value)
                 .ok_or_else(|| CaptureError::SourceNotFound(id.clone()))?;
-            let info = output.source(ID, index == 0);
             let proxy = output.proxy.clone();
             let global = output.global;
             let manager = client.output_source_manager().ok_or_else(|| {

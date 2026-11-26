@@ -218,17 +218,7 @@ fn engine_for(
         .screencopy_manager()
         .ok_or_else(|| CaptureError::protocol(ID, "bind", format!("no {MANAGER} v3 global")))?;
     let feedback = client.feedback().ok().flatten();
-    let index = client
-        .state
-        .outputs
-        .iter()
-        .position(|o| o.id_value() == id.value)
-        .ok_or_else(|| CaptureError::SourceNotFound(id.clone()))?;
-    let info = client
-        .state
-        .outputs
-        .get(index)
-        .map(|o| o.source(ID, index == 0));
+    let info = client.monitors().into_iter().find(|s| s.id == *id);
     let output = client
         .output(id)
         .ok_or_else(|| CaptureError::SourceNotFound(id.clone()))?;
