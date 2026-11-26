@@ -931,3 +931,13 @@ fn dropping_a_handle_never_waits_for_the_teardown() {
         rig.counters.live_threads.load(Ordering::SeqCst) == 0
     });
 }
+
+#[test]
+fn repeated_backend_reports_reuse_one_probe() {
+    let rig = rig();
+    for _ in 0..50 {
+        let statuses = block(rig.client.backends()).expect("backends");
+        assert_eq!(statuses[0].availability, Availability::Ready);
+    }
+    assert_eq!(rig.counters.probes.load(Ordering::SeqCst), 1);
+}

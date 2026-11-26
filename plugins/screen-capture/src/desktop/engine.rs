@@ -180,13 +180,16 @@ impl Engine {
             .map_or_else(|| backend.availability(), Availability::PolicyDenied)
     }
 
+    /// Every backend this platform knows and whether it can run, from the
+    /// probe cache: at most one probe per [`PROBE_TTL`] however often
+    /// (and by whom) it is asked.
     pub(crate) fn statuses(&self) -> Vec<BackendStatus> {
         let mut statuses: Vec<BackendStatus> = self
-            .backends
-            .iter()
-            .map(|b| BackendStatus {
-                backend: b.id(),
-                availability: self.availability(b.as_ref()),
+            .candidates()
+            .into_iter()
+            .map(|c| BackendStatus {
+                backend: c.backend,
+                availability: c.availability,
             })
             .collect();
         for id in &self.known {

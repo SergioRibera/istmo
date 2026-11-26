@@ -32,6 +32,8 @@ pub(crate) struct Counters {
     pub(crate) live_threads: AtomicUsize,
     pub(crate) delivered: AtomicUsize,
     pub(crate) readbacks: AtomicUsize,
+    /// Availability probes.
+    pub(crate) probes: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -188,6 +190,7 @@ impl Backend for Fake {
     }
 
     fn availability(&self) -> Availability {
+        self.counters.probes.fetch_add(1, Ordering::SeqCst);
         self.availability.clone()
     }
 
