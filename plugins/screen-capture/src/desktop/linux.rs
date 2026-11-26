@@ -4,6 +4,8 @@
 mod ext_image_copy;
 #[cfg(feature = "dmabuf-alloc")]
 mod gbm;
+#[cfg(any(feature = "pipewire", feature = "wayland", feature = "linux-x11"))]
+mod mapping;
 #[cfg(feature = "pipewire")]
 mod pipewire;
 #[cfg(feature = "linux-audio")]

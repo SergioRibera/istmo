@@ -8,6 +8,7 @@ pub(crate) mod stream;
 
 use std::collections::HashMap;
 use std::os::fd::{AsFd, OwnedFd};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
@@ -720,11 +721,11 @@ impl Client {
             (),
         );
         pool.destroy();
+        let mapping = super::mapping::Mapping::new(&fd, 0, usize::try_from(bytes).unwrap_or(0))
+            .map_err(|e| CaptureError::protocol(self.backend, "map wl_shm buffer", e))?;
         Ok(ShmBuffer {
             buffer,
-            fd,
-            size,
-            stride,
+            mapping: Arc::new(mapping),
         })
     }
 
@@ -774,35 +775,21 @@ impl Client {
 #[derive(Debug)]
 pub(crate) struct ShmBuffer {
     pub(crate) buffer: WlBuffer,
-    fd: OwnedFd,
-    pub(crate) size: Size,
-    pub(crate) stride: u32,
+    /// The pool memory, mapped once; frames share it.
+    mapping: Arc<super::mapping::Mapping>,
 }
 
 impl ShmBuffer {
-    /// Copy the pixels out (the declared `ShmTransport` copy).
-    ///
-    /// # Errors
-    /// The read failed or came up short.
-    pub(crate) fn read(&self, backend: BackendId) -> Result<Vec<u8>, CaptureError> {
-        let len = usize::try_from(u64::from(self.stride) * u64::from(self.size.height))
-            .map_err(|_| CaptureError::protocol(backend, "wl_shm read", "buffer too large"))?;
-        let mut bytes = vec![0u8; len];
-        let mut done = 0;
-        while done < len {
-            let n = rustix::io::pread(&self.fd, &mut bytes[done..], done as u64).map_err(|e| {
-                CaptureError::os(backend, "pread wl_shm", i64::from(e.raw_os_error()))
-            })?;
-            if n == 0 {
-                return Err(CaptureError::protocol(
-                    backend,
-                    "wl_shm read",
-                    "short buffer",
-                ));
-            }
-            done += n;
-        }
-        Ok(bytes)
+    /// The pixels in place: the compositor's copy (`ShmTransport`) is the
+    /// only one. The slot must stay held while the frame lives.
+    pub(crate) fn frame(&self) -> super::mapping::MappedFrame {
+        super::mapping::MappedFrame::whole(Arc::clone(&self.mapping))
+    }
+
+    /// The pixels copied out, for a buffer that is reused at once (the
+    /// `CopyToCpu` scratch buffer: `ExhaustionReadback`).
+    pub(crate) fn copy_out(&self) -> Vec<u8> {
+        self.mapping.bytes().to_vec()
     }
 }
 

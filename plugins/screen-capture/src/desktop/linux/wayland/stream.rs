@@ -156,6 +156,8 @@ pub(crate) struct Engine<S> {
     chosen: Chosen,
     dma: Slots<DmaKey, DmaSlot>,
     shm: Slots<ShmKey, ShmBuffer>,
+    /// The reused `CopyToCpu` target at the hold limit.
+    scratch: Option<(ShmKey, ShmBuffer)>,
     rejected: u32,
     /// A `CopyToCpu` exhaustion to report (frames still flowed).
     pub(crate) readback_episode: Option<crate::pool::Exhausted>,
@@ -235,6 +237,7 @@ impl<S: FrameSource> Engine<S> {
             allocator,
             dma: Slots::new(depth),
             shm: Slots::new(depth),
+            scratch: None,
             settings,
             transport,
             chosen,
@@ -512,11 +515,11 @@ impl<S: FrameSource> Engine<S> {
             return Err(CaptureError::protocol(backend, "wl_shm layout", why));
         }
         self.shm.reconfigure((size, code, stride));
-        let (slot, readback) = match self.shm.pick() {
-            Pick::Free(slot) => (Some(slot), false),
+        let slot = match self.shm.pick() {
+            Pick::Free(slot) => slot,
             Pick::Grow => {
                 let buffer = self.client.shm_buffer(size, stride, code)?;
-                (Some(self.shm.insert(buffer)), false)
+                self.shm.insert(buffer)
             }
             Pick::Exhausted(exhausted) if self.settings.exhaustion != Exhaustion::CopyToCpu => {
                 self.source.abandon();
@@ -524,26 +527,20 @@ impl<S: FrameSource> Engine<S> {
             }
             // CopyToCpu: a lease-free copy keeps frames flowing.
             Pick::Exhausted(exhausted) => {
-                self.readback_episode = Some(exhausted);
-                (None, true)
+                return self.readback_frame(offers, code, exhausted, with_damage, stop);
             }
         };
-        let lease = match slot.map(|s| self.shm.accounting().hold(s)) {
-            Some(Ok(lease)) => Some(lease),
-            Some(Err(err @ HoldError::SlotOutOfRange { .. })) => {
-                return Err(CaptureError::protocol(self.backend(), "pool", err));
+        let lease = match self.shm.accounting().hold(slot) {
+            Ok(lease) => lease,
+            Err(err @ HoldError::SlotOutOfRange { .. }) => {
+                return Err(CaptureError::protocol(backend, "pool", err));
             }
-            Some(Err(HoldError::Exhausted(exhausted))) => {
+            Err(HoldError::Exhausted(exhausted)) => {
                 self.source.abandon();
                 return Ok(Step::Exhausted(exhausted));
             }
-            None => None,
         };
-        let scratch = match slot {
-            Some(_) => None,
-            None => Some(self.client.shm_buffer(size, stride, code)?),
-        };
-        let Some(target) = slot.and_then(|s| self.shm.get(s)).or(scratch.as_ref()) else {
+        let Some(target) = self.shm.get(slot) else {
             self.source.abandon();
             return Ok(Step::Skipped);
         };
@@ -557,28 +554,89 @@ impl<S: FrameSource> Engine<S> {
         if events.status != FrameStatus::Ready {
             return Ok(Step::Skipped);
         }
-        let Some(target) = slot.and_then(|s| self.shm.get(s)).or(scratch.as_ref()) else {
+        let Some(target) = self.shm.get(slot) else {
             return Ok(Step::Skipped);
         };
-        let bytes = target.read(backend)?;
+        // Zero copies on top of the compositor's: the frame is the pool
+        // memory itself, which the compositor does not touch again until
+        // the lease (every clone of the frame) is gone.
+        let pixels = target.frame();
         let planes = vec![PlaneLayout {
             offset: 0,
             stride,
             size: u64::from(stride) * u64::from(size.height),
         }];
         let mut meta = self.meta(&events, size, planes, with_damage);
-        let buffer = NativeBuffer::from_bytes(bytes);
-        let buffer = if let Some(lease) = lease {
-            meta.buffer = lease.identity();
-            buffer.with_release(move || drop(lease))
-        } else {
-            meta.copied = Some(CopyStage::ExhaustionReadback);
-            buffer
-        };
-        if readback {
-            meta.copied = Some(CopyStage::ExhaustionReadback);
-        }
+        meta.buffer = lease.identity();
+        let identity = lease.identity().into();
+        let buffer = NativeBuffer::from_bytes(pixels)
+            .with_identity(identity)
+            .with_release(move || drop(lease));
         Ok(Step::Frame(Box::new(meta), buffer))
+    }
+
+    /// `Exhaustion::CopyToCpu` at the hold limit: the compositor copies the
+    /// frame into one reused `wl_shm` scratch buffer, and the plugin
+    /// copies it out lease-free (`CopyStage::ExhaustionReadback`). Serves
+    /// DMA-BUF sessions too: the readback goes through the compositor,
+    /// never an `mmap` of a tiled buffer.
+    fn readback_frame(
+        &mut self,
+        offers: &Offers,
+        code: u32,
+        exhausted: crate::pool::Exhausted,
+        with_damage: bool,
+        stop: &dyn Fn() -> bool,
+    ) -> Result<Step, CaptureError> {
+        let backend = self.backend();
+        let size = offers.size;
+        let Some(&(_, stride)) = offers.shm.iter().find(|(c, _)| *c == code) else {
+            self.source.abandon();
+            return Ok(Step::Exhausted(exhausted));
+        };
+        if let Err(why) = super::check_shm_layout(code, size, stride) {
+            self.source.abandon();
+            return Err(CaptureError::protocol(backend, "wl_shm layout", why));
+        }
+        let key = (size, code, stride);
+        if self.scratch.as_ref().is_none_or(|(k, _)| *k != key) {
+            self.scratch = Some((key, self.client.shm_buffer(size, stride, code)?));
+        }
+        let Some((_, scratch)) = self.scratch.as_ref() else {
+            return Ok(Step::Skipped);
+        };
+        let wl_buffer = scratch.buffer.clone();
+        // A copy into a buffer the compositor has not seen before carries
+        // no history: ask for the whole frame.
+        let Some(events) = self
+            .source
+            .copy(&mut self.client, &wl_buffer, size, false, stop)?
+        else {
+            return Ok(Step::Stopped);
+        };
+        if events.status != FrameStatus::Ready {
+            return Ok(Step::Skipped);
+        }
+        let Some((_, scratch)) = self.scratch.as_ref() else {
+            return Ok(Step::Skipped);
+        };
+        let bytes = scratch.copy_out();
+        self.readback_episode = Some(exhausted);
+        let planes = vec![PlaneLayout {
+            offset: 0,
+            stride,
+            size: u64::from(stride) * u64::from(size.height),
+        }];
+        let mut meta = self.meta(&events, size, planes, with_damage);
+        if let Some(format) = shm_format(code) {
+            meta.format = format;
+        }
+        meta.memory = BufferMemory::Cpu;
+        meta.modifier = None;
+        meta.producer = None;
+        meta.sync = SyncKind::Ready;
+        meta.copied = Some(CopyStage::ExhaustionReadback);
+        Ok(Step::Frame(Box::new(meta), NativeBuffer::from_bytes(bytes)))
     }
 
     /// One frame, full copy, for a screenshot.
