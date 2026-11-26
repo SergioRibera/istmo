@@ -283,22 +283,43 @@ impl FrameOut {
         }
     }
 
-    /// Hand a finished frame over. `meta.seq`, `meta.wall_us` and the
-    /// in-meta crop are filled in here.
-    pub(crate) fn deliver(&self, meta: FrameMeta, buffer: NativeBuffer) -> Delivery {
+    /// Whether a frame may enter now: `Ok(upright)`, or why not.
+    fn admits(&self) -> Result<bool, Delivery> {
         let mut state = lock(&self.inner.state);
         if state.stopped || self.inner.sender.is_closed() {
             state.stopped = true;
-            return Delivery::Closed;
+            return Err(Delivery::Closed);
         }
         if state.paused {
-            return Delivery::Dropped;
+            return Err(Delivery::Dropped);
         }
-        let (mut meta, buffer) = if state.upright {
-            turn_upright(meta, buffer)
+        Ok(state.upright)
+    }
+
+    /// Hand a finished frame over. `meta.seq`, `meta.wall_us` and the
+    /// in-meta crop are filled in here.
+    pub(crate) fn deliver(&self, meta: FrameMeta, buffer: NativeBuffer) -> Delivery {
+        let upright = match self.admits() {
+            Ok(upright) => upright,
+            Err(delivery) => return delivery,
+        };
+        // Turned outside the lock: a CPU rotation takes milliseconds and
+        // must not stall the pacer or a concurrent update.
+        let (mut meta, buffer) = if upright {
+            match turn_upright(self.inner.backend, meta, buffer) {
+                Ok(turned) => turned,
+                Err(err) => {
+                    self.fail(err);
+                    return Delivery::Closed;
+                }
+            }
         } else {
             (meta, buffer)
         };
+        let mut state = lock(&self.inner.state);
+        if state.stopped {
+            return Delivery::Closed;
+        }
         if let Some(crop) = state.crop {
             meta.content_rect = crop_rect(&meta, crop);
         }
@@ -560,20 +581,29 @@ pub(crate) fn crop_rect_for_size(
 
 /// Turn a CPU frame upright (`CopyStage::OrientationUpright`). Frames
 /// that are already upright, or not in CPU memory, pass unchanged.
-fn turn_upright(meta: FrameMeta, buffer: NativeBuffer) -> (FrameMeta, NativeBuffer) {
+/// `OrientationHandling::Upright`: a turned CPU copy of a rotated frame.
+/// A rotated frame the plugin cannot turn (GPU memory, an unreadable
+/// layout) ends the session: delivering it unturned would break the
+/// requirement silently.
+fn turn_upright(
+    backend: BackendId,
+    meta: FrameMeta,
+    buffer: NativeBuffer,
+) -> Result<(FrameMeta, NativeBuffer), CaptureError> {
     use crate::pixels::CpuView;
-    use crate::types::{BufferMemory, CopyStage, Orientation, PlaneLayout};
-    if meta.orientation.is_upright() || meta.memory != BufferMemory::Cpu {
-        return (meta, buffer);
+    use crate::types::{CopyStage, Orientation, PlaneLayout, Requirement};
+    if meta.orientation.is_upright() {
+        return Ok((meta, buffer));
     }
+    let unmet = || CaptureError::unsatisfiable(Some(backend), Requirement::Upright);
     let stride = meta.planes.first().map_or(0, |p| p.stride);
-    let turned = buffer
-        .as_bytes()
-        .and_then(|bytes| CpuView::new(bytes, meta.size, stride, meta.format).ok())
-        .and_then(|view| view.orient(meta.orientation).ok());
-    let Some((size, stride, bytes)) = turned else {
-        return (meta, buffer);
-    };
+    let bytes = buffer.as_bytes().ok_or_else(unmet)?;
+    let (size, stride, bytes) = CpuView::new(bytes, meta.size, stride, meta.format)
+        .and_then(|view| view.orient(meta.orientation))
+        .map_err(|err| {
+            tracing::warn!(%backend, %err, "screen-capture: frame cannot be turned upright");
+            unmet()
+        })?;
     let mut meta = meta;
     meta.size = size;
     meta.content_rect = Rect::from_size(size);
@@ -586,5 +616,5 @@ fn turn_upright(meta: FrameMeta, buffer: NativeBuffer) -> (FrameMeta, NativeBuff
     // Damage rectangles were in the old buffer's space.
     meta.damage = Damage::Full;
     meta.copied = Some(CopyStage::OrientationUpright);
-    (meta, NativeBuffer::from_bytes(bytes))
+    Ok((meta, NativeBuffer::from_bytes(bytes)))
 }

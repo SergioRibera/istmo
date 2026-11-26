@@ -149,7 +149,7 @@ fn buffer_size(source: &Source) -> Size {
     }
 }
 
-fn meta(source: &Source, size: Size) -> FrameMeta {
+pub(crate) fn meta(source: &Source, size: Size) -> FrameMeta {
     FrameMeta {
         seq: 0,
         pts_ns: clock::monotonic_ns(),

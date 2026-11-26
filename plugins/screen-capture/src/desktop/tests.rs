@@ -1040,3 +1040,28 @@ fn a_region_update_at_the_edge_of_i32_does_not_overflow() {
         CaptureError::unsatisfiable(Some(WLR), Requirement::Region)
     );
 }
+
+#[test]
+fn a_frame_that_cannot_be_turned_ends_an_upright_session() {
+    let runtime = Runtime::mock().runtime;
+    let sink = runtime
+        .open_frame_sink::<crate::types::FrameMeta>(SinkPolicy::queue(2))
+        .expect("sink");
+    let sender = runtime.frame_sender(sink.id()).expect("sender");
+    let out = super::output::FrameOut::new(
+        WLR,
+        sender,
+        Arc::new(super::output::EventHub::default()),
+        FrameRate::Native,
+    );
+    out.set_upright(true);
+    let source = two_monitors().remove(0);
+    let mut meta = fake::meta(&source, crate::types::Size::new(8, 4));
+    meta.orientation = fake::ROT90;
+    // Far shorter than 8x4 pixels: unreadable, so it cannot be turned.
+    let delivery = out.deliver(meta, istmo_core::NativeBuffer::from_bytes(vec![0; 4]));
+    assert_eq!(delivery, super::output::Delivery::Closed);
+    assert!(sink.try_recv().is_none(), "never delivered unturned");
+    let reason = sink.end_reason().expect("ended");
+    assert!(format!("{reason:?}").contains("Upright"), "{reason:?}");
+}
