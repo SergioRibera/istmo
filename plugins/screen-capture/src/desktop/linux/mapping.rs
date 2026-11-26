@@ -12,7 +12,16 @@
 //! A short file would make the first read past its end `SIGBUS` the
 //! process, so every mapping checks the file's size first, and the
 //! plugin's own memfds ([`SealedMemfd`]) are sealed against resizing: a
-//! peer holding the descriptor can neither shrink nor grow them.
+//! peer holding the descriptor can neither shrink nor grow them. A
+//! PipeWire producer's memfd is the producer's: it is checked when first
+//! mapped, but only the producer could seal it.
+//!
+//! A frame may outlive its capture session; it keeps its mapping, so the
+//! memory stays valid. For the plugin's own memfds nobody else writes any
+//! more. For a portal `MemFd` frame of a live session held past its end,
+//! "never changes" then rests on the producer freeing, not reusing, a
+//! destroyed stream's buffers (PipeWire tears them down with the stream);
+//! portal screenshots are copied out instead and hold no mapping.
 
 #![allow(
     unsafe_code,

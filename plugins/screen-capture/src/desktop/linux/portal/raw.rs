@@ -336,71 +336,128 @@ fn borrowed<'b>(fd: i64) -> Option<BorrowedFd<'b>> {
     Some(unsafe { BorrowedFd::borrow_raw(fd) })
 }
 
+/// Hand-built `pw_buffer`s, as a producer would hand them over, in
+/// memory the test owns.
 #[cfg(test)]
-mod tests {
-    use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd};
-    use std::time::Duration;
+pub(super) mod fake {
+    use std::os::fd::{AsRawFd as _, OwnedFd};
 
     use super::*;
-    use crate::desktop::linux::syncobj::{SyncDevice, Waited};
+    use pw::spa::sys::spa_chunk;
 
-    /// A `pw_buffer` as a producer hands it over: a timeline meta and the
-    /// acquire / release syncobj data blocks, in memory the test owns.
-    struct FakeBuffer {
-        timeline: Box<MetaSyncTimeline>,
-        metas: Box<[spa_meta; 1]>,
-        datas: Box<[spa_data; 2]>,
+    pub(in super::super) struct FakeBuffer {
+        timeline: Option<Box<MetaSyncTimeline>>,
+        metas: Vec<spa_meta>,
+        chunk: Option<Box<spa_chunk>>,
+        datas: Vec<spa_data>,
         spa: Box<spa_buffer>,
         pw: Box<pw::sys::pw_buffer>,
     }
 
+    fn zeroed<T>() -> T {
+        // SAFETY: only instantiated with plain C structs of integers and
+        // raw pointers, for which all-zero is a valid (empty) value.
+        unsafe { std::mem::zeroed() }
+    }
+
     impl FakeBuffer {
-        fn new(acquire: &OwnedFd, release: &OwnedFd, release_point: u64, flags: u32) -> Self {
-            // SAFETY: plain C structs, all-zero is a valid (empty) value.
-            let zeroed_data = || unsafe { std::mem::zeroed::<spa_data>() };
-            let mut this = Self {
-                timeline: Box::new(MetaSyncTimeline {
-                    flags,
-                    padding: 0,
-                    acquire_point: 1,
-                    release_point,
-                }),
-                // SAFETY: as above.
-                metas: Box::new([unsafe { std::mem::zeroed() }]),
-                datas: Box::new([zeroed_data(), zeroed_data()]),
-                // SAFETY: as above.
-                spa: Box::new(unsafe { std::mem::zeroed() }),
-                // SAFETY: as above.
-                pw: Box::new(unsafe { std::mem::zeroed() }),
-            };
-            this.metas[0].type_ = META_SYNC_TIMELINE;
-            this.metas[0].size = u32::try_from(size_of::<MetaSyncTimeline>()).expect("small");
-            this.metas[0].data = std::ptr::from_mut(&mut *this.timeline).cast();
-            for (data, fd) in this.datas.iter_mut().zip([acquire, release]) {
+        fn new() -> Self {
+            Self {
+                timeline: None,
+                metas: Vec::new(),
+                chunk: None,
+                datas: Vec::new(),
+                spa: Box::new(zeroed()),
+                pw: Box::new(zeroed()),
+            }
+        }
+
+        /// A buffer whose only data blocks are an acquire and a release
+        /// syncobj.
+        pub(in super::super) fn timeline(
+            acquire: &OwnedFd,
+            release: &OwnedFd,
+            release_point: u64,
+            flags: u32,
+        ) -> Self {
+            let mut this = Self::new();
+            let mut timeline = Box::new(MetaSyncTimeline {
+                flags,
+                padding: 0,
+                acquire_point: 1,
+                release_point,
+            });
+            let mut meta: spa_meta = zeroed();
+            meta.type_ = META_SYNC_TIMELINE;
+            meta.size = u32::try_from(size_of::<MetaSyncTimeline>()).expect("small");
+            meta.data = std::ptr::from_mut(&mut *timeline).cast();
+            this.timeline = Some(timeline);
+            this.metas.push(meta);
+            for fd in [acquire, release] {
+                let mut data: spa_data = zeroed();
                 data.type_ = DATA_SYNC_OBJ;
                 data.fd = i64::from(fd.as_raw_fd());
+                this.datas.push(data);
             }
-            this.spa.n_metas = 1;
-            this.spa.metas = this.metas.as_mut_ptr();
-            this.spa.n_datas = 2;
-            this.spa.datas = this.datas.as_mut_ptr();
-            this.pw.buffer = std::ptr::from_mut(&mut *this.spa);
             this
         }
 
-        fn buffer(&mut self) -> Buffer {
+        /// A `MemFd` buffer: `maxsize` bytes of `fd`, a chunk of `size`
+        /// bytes at `offset` with rows of `stride`.
+        pub(in super::super) fn mem_fd(
+            fd: &OwnedFd,
+            maxsize: u32,
+            offset: u32,
+            size: u32,
+            stride: i32,
+        ) -> Self {
+            let mut this = Self::new();
+            let mut chunk: Box<spa_chunk> = Box::new(zeroed());
+            chunk.offset = offset;
+            chunk.size = size;
+            chunk.stride = stride;
+            let mut data: spa_data = zeroed();
+            data.type_ = DATA_MEM_FD;
+            data.fd = i64::from(fd.as_raw_fd());
+            data.maxsize = maxsize;
+            data.chunk = std::ptr::from_mut(&mut *chunk);
+            this.chunk = Some(chunk);
+            this.datas.push(data);
+            this
+        }
+
+        /// The buffer, as `Buffer::dequeue` would return it. Never queued
+        /// back (there is no stream).
+        pub(in super::super) fn buffer(&mut self) -> Buffer {
+            self.spa.n_metas = u32::try_from(self.metas.len()).expect("few");
+            self.spa.metas = self.metas.as_mut_ptr();
+            self.spa.n_datas = u32::try_from(self.datas.len()).expect("few");
+            self.spa.datas = self.datas.as_mut_ptr();
+            self.pw.buffer = std::ptr::from_mut(&mut *self.spa);
             Buffer {
                 raw: NonNull::from(&mut *self.pw),
             }
         }
 
-        fn flags(&self) -> u32 {
+        /// The timeline meta's flags, read through the pointer the buffer
+        /// writes through.
+        pub(in super::super) fn flags(&self) -> u32 {
+            let data = self.metas.first().expect("a timeline meta").data;
             // SAFETY: the meta points at `self.timeline`, alive here; the
-            // flags are its first field. Read through the pointer the
-            // buffer wrote through.
-            unsafe { self.metas[0].data.cast::<u32>().read() }
+            // flags are its first field.
+            unsafe { data.cast::<u32>().read() }
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::AsFd as _;
+    use std::time::Duration;
+
+    use super::fake::FakeBuffer;
+    use super::*;
+    use crate::desktop::linux::syncobj::{SyncDevice, Waited};
 
     #[test]
     fn a_requeued_timeline_buffer_signals_its_release_point_and_clears_the_flag() {
@@ -413,7 +470,7 @@ mod tests {
             return;
         };
         let (a, r) = (acquire.export().expect("a"), release.export().expect("r"));
-        let mut fake = FakeBuffer::new(&a, &r, 7, SYNC_TIMELINE_UNSCHEDULED_RELEASE | 1 << 4);
+        let mut fake = FakeBuffer::timeline(&a, &r, 7, SYNC_TIMELINE_UNSCHEDULED_RELEASE | 1 << 4);
         let mut sync = ExplicitSync::new(None);
         // Never read (an older buffer `newest` skipped, an acquire timeout):
         // still released.
@@ -432,7 +489,8 @@ mod tests {
         let not_syncobj = rustix::fs::memfd_create("not-syncobj", rustix::fs::MemfdFlags::CLOEXEC)
             .expect("memfd");
         let other = rustix::io::fcntl_dupfd_cloexec(not_syncobj.as_fd(), 0).expect("dup");
-        let mut fake = FakeBuffer::new(&not_syncobj, &other, 3, SYNC_TIMELINE_UNSCHEDULED_RELEASE);
+        let mut fake =
+            FakeBuffer::timeline(&not_syncobj, &other, 3, SYNC_TIMELINE_UNSCHEDULED_RELEASE);
         fake.buffer().settle_release(&mut ExplicitSync::new(None));
         assert_eq!(
             fake.flags(),

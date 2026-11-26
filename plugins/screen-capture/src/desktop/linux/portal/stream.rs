@@ -10,6 +10,14 @@
 //! re-queues it. The consumer holds at most all buffers but one (the
 //! producer always has one to render into): that is what `Exhaustion`
 //! applies to.
+//!
+//! Frames can outlive their stream. A screenshot's `MemFd` frame is
+//! therefore copied out (`CopyStage::LiveBufferSnapshot`): the stream
+//! ends right after it, and the frame holds none of the producer's
+//! memory. A screenshot's DMA-BUF frame cannot be read back on the CPU
+//! (see the decision log), so it keeps its fd duplicates; the producer
+//! frees, never reuses, a destroyed stream's buffers. A live frame held
+//! past the session's end keeps its mapping or fds the same way.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1038,13 +1046,14 @@ fn backing(
 )]
 /// Cut a frame out of `buffer` (dequeued, its acquire point signalled):
 /// read its metas, share its backing. `copy` reads shared memory out
-/// instead (a lease-free `CopyToCpu` frame).
+/// instead, under that stage (a lease-free frame); DMA-BUFs are always
+/// shared.
 fn cut(
     data: &StreamData,
     leases: &mut Leases,
     buffer: &Buffer,
     negotiated: Negotiated,
-    copy: bool,
+    copy: Option<CopyStage>,
 ) -> Result<Option<Cut>, String> {
     let planes = buffer.planes();
     let Some(first) = planes.first().copied() else {
@@ -1097,13 +1106,9 @@ fn cut(
                 stride,
                 size: u64::try_from(range.len()).unwrap_or(u64::MAX),
             }];
-            if copy {
+            if let Some(stage) = copy {
                 let bytes = mapping.bytes().get(range).unwrap_or_default().to_vec();
-                (
-                    FrameBacking::Copied(bytes),
-                    planes,
-                    Some(CopyStage::ExhaustionReadback),
-                )
+                (FrameBacking::Copied(bytes), planes, Some(stage))
             } else {
                 let frame =
                     MappedFrame::new(mapping, range).ok_or("the frame lies outside the mapping")?;
@@ -1189,7 +1194,8 @@ fn shot(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiated:
     let Some(buffer) = leases.next_buffer(stream, &mut skipped) else {
         return;
     };
-    let cut = match cut(data, leases, &buffer, negotiated, false) {
+    let snapshot = Some(CopyStage::LiveBufferSnapshot);
+    let cut = match cut(data, leases, &buffer, negotiated, snapshot) {
         Ok(Some(cut)) => cut,
         Ok(None) => {
             buffer.requeue(stream, &mut leases.sync);
@@ -1201,9 +1207,11 @@ fn shot(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiated:
             return;
         }
     };
-    // Kept dequeued until the stream ends: the producer never renders
-    // into it again, so the frame stays what it shows.
-    if let Mode::Shot { kept } = &mut data.mode {
+    if matches!(cut.backing, FrameBacking::Copied(_)) {
+        buffer.requeue(stream, &mut leases.sync);
+    } else if let Mode::Shot { kept } = &mut data.mode {
+        // A DMA-BUF: kept dequeued until the stream ends, so the producer
+        // never renders into it again and the frame stays what it shows.
         kept.push(buffer);
     }
     let buffer = match cut.backing {
@@ -1284,7 +1292,8 @@ fn deliver(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiat
     } else {
         leases.exhausted = false;
     }
-    let cut = match cut(data, leases, &buffer, negotiated, copy) {
+    let readback = copy.then_some(CopyStage::ExhaustionReadback);
+    let cut = match cut(data, leases, &buffer, negotiated, readback) {
         Ok(Some(cut)) => cut,
         Ok(None) => {
             buffer.requeue(stream, &mut leases.sync);
@@ -1339,9 +1348,17 @@ fn deliver(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiat
 mod tests {
     use std::cell::RefCell;
 
+    use std::rc::Rc;
+
+    use pipewire::spa::param::video::VideoInfoRaw;
+
+    use super::raw::fake::FakeBuffer;
     use super::{
-        BufferKey, ExplicitSync, HeldBuffers, Leases, PendingChanges, PoolChange, RowLayout,
+        BufferKey, CopyStage, ExplicitSync, FrameBacking, HeldBuffers, Leases, Mode, Negotiated,
+        PendingChanges, PixelFormat, PoolChange, RowLayout, Setup, Shared, Size, Source,
+        StreamData, cut,
     };
+    use crate::types::{BackendId, SourceId, SourceKind};
 
     fn key(addr: usize) -> BufferKey {
         BufferKey::of(std::ptr::without_provenance_mut(addr)).expect("non-null")
@@ -1352,6 +1369,85 @@ mod tests {
         let pending = PendingChanges::default();
         let leases = Leases::new(tx, 0, pending.clone(), ExplicitSync::new(None));
         (RefCell::new(leases), pending)
+    }
+
+    fn stream_data() -> StreamData {
+        pipewire::init();
+        let mainloop = pipewire::main_loop::MainLoopRc::new(None).expect("main loop");
+        let id = BackendId::LinuxPortal;
+        StreamData {
+            index: 0,
+            source: Source::new(SourceId::new(id, "test"), SourceKind::Monitor, "test"),
+            setup: Setup {
+                tiers: Vec::new(),
+                producer: None,
+                cursor_meta: false,
+            },
+            info: VideoInfoRaw::default(),
+            negotiated: None,
+            shared: Rc::new(RefCell::new(Shared {
+                ready: None,
+                mainloop,
+                shots: vec![None],
+            })),
+            mode: Mode::Shot { kept: Vec::new() },
+            skipped: 0,
+        }
+    }
+
+    fn memfd(bytes: &[u8]) -> std::os::fd::OwnedFd {
+        let fd = rustix::fs::memfd_create("portal-test", rustix::fs::MemfdFlags::CLOEXEC)
+            .expect("memfd");
+        rustix::io::write(&fd, bytes).expect("write");
+        fd
+    }
+
+    /// 2x2 `Bgrx8`, rows of 8 bytes.
+    const TWO_BY_TWO: Negotiated = Negotiated {
+        format: PixelFormat::Bgrx8,
+        size: Size {
+            width: 2,
+            height: 2,
+        },
+        tier: 0,
+        rate_mhz: None,
+        modifier: None,
+    };
+
+    #[test]
+    fn a_mem_fd_screenshot_is_copied_out_of_the_producers_memory() {
+        let data = stream_data();
+        let mut leases = leases().0.into_inner();
+        let pixels: Vec<u8> = (1..=16).collect();
+        let fd = memfd(&pixels);
+        let mut fake = FakeBuffer::mem_fd(&fd, 16, 0, 16, 8);
+        let buffer = fake.buffer();
+        let snapshot = Some(CopyStage::LiveBufferSnapshot);
+        let copied = cut(&data, &mut leases, &buffer, TWO_BY_TWO, snapshot)
+            .expect("cut")
+            .expect("rendered");
+        assert_eq!(copied.meta.copied, snapshot);
+        let FrameBacking::Copied(bytes) = copied.backing else {
+            panic!("a screenshot holds no producer memory");
+        };
+        assert_eq!(bytes, pixels);
+        let shared = cut(&data, &mut leases, &buffer, TWO_BY_TWO, None)
+            .expect("cut")
+            .expect("rendered");
+        assert_eq!(shared.meta.copied, None);
+        assert!(matches!(shared.backing, FrameBacking::Mapped(_)));
+    }
+
+    #[test]
+    fn a_mem_fd_shorter_than_its_announced_size_is_refused() {
+        let data = stream_data();
+        let mut leases = leases().0.into_inner();
+        let fd = memfd(&[0; 8]);
+        let mut fake = FakeBuffer::mem_fd(&fd, 16, 0, 16, 8);
+        let refused = cut(&data, &mut leases, &fake.buffer(), TWO_BY_TWO, None)
+            .err()
+            .expect("refused");
+        assert!(refused.contains("holds 8 bytes"), "{refused}");
     }
 
     #[test]
