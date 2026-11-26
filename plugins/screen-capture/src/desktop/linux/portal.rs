@@ -420,7 +420,7 @@ impl Cast {
                 } else if let Some((w, h)) = stream.size() {
                     source.geometry = Some(Rect::new(0, 0, w.unsigned_abs(), h.unsigned_abs()));
                 }
-                source.flags.primary = index == 0;
+                // The portal knows no primary monitor: never claimed.
                 Part { node, source }
             })
             .collect()

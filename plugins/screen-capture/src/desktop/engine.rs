@@ -22,8 +22,8 @@ use crate::types::{
     CopyStage, CpuPixelFormat, DamageSupport, FormatRequest, FrameMeta, IndicatorState,
     NegotiatedStream, OrientationHandling, PauseReason, Persistence, PixelFormat, PixelLayout,
     PlaneLayout, Provenance, RawImage, Rect, Requirement, ScreenshotInfo, ScreenshotRequest,
-    SessionConfig, SessionUpdate, Source, SourceFilter, SourceKind, SourceList, SourceListing,
-    SourceSelector, StopReason, Strength,
+    SessionConfig, SessionUpdate, Source, SourceFilter, SourceId, SourceKind, SourceList,
+    SourceListing, SourceSelector, StopReason, Strength,
 };
 
 use super::backend::{
@@ -423,6 +423,45 @@ impl Engine {
         }
     }
 
+    /// What the person picked on a picker-only backend must be what
+    /// `selector` named, as far as ids tell (a portal stream keeps its id
+    /// across sessions restored with a token): never a silent substitution.
+    /// Selectors a picker answers by definition, and `PrimaryMonitor` (no
+    /// primary to compare with), pass.
+    ///
+    /// # Errors
+    /// `SourceNotFound` for a named source that was not picked,
+    /// `Unsatisfiable(SourceSelector)` for a pick outside `Monitors(ids)`.
+    fn check_pick(
+        backend: BackendId,
+        selector: &SourceSelector,
+        picked: &[&Source],
+    ) -> Result<(), CaptureError> {
+        let wanted: &[SourceId] = match selector {
+            SourceSelector::Id(id) => std::slice::from_ref(id),
+            SourceSelector::Monitors(ids) => ids,
+            SourceSelector::Picker(_)
+            | SourceSelector::AllMonitors
+            | SourceSelector::PrimaryMonitor
+            | SourceSelector::Region(_)
+            | SourceSelector::Focused
+            | SourceSelector::UnderCursor => return Ok(()),
+        };
+        if let Some(missing) = wanted
+            .iter()
+            .find(|id| !picked.iter().any(|source| &source.id == *id))
+        {
+            return Err(CaptureError::SourceNotFound(missing.clone()));
+        }
+        if picked.iter().any(|source| !wanted.contains(&source.id)) {
+            return Err(CaptureError::unsatisfiable(
+                Some(backend),
+                Requirement::SourceSelector,
+            ));
+        }
+        Ok(())
+    }
+
     /// Resolve `selector` on `backend`.
     #[expect(
         clippy::too_many_lines,
@@ -461,7 +500,9 @@ impl Engine {
                     crate::types::PickerOptions::default()
                 }
                 // The person picks the monitor: the consent dialog is the
-                // only way to name one here.
+                // only way to name one here. A picker-only backend knows no
+                // primary, so the pick cannot be checked; the negotiated
+                // source says so in band (it does not claim `primary`).
                 SourceSelector::PrimaryMonitor => crate::types::PickerOptions {
                     kinds: vec![SourceKind::Monitor],
                     multiple: false,
@@ -702,6 +743,7 @@ impl Engine {
                 linux: crate::types::LinuxOptions::default(),
                 caller: caller.clone(),
             };
+            let picked = matches!(plan.target, Target::Picker(_));
             let shot = backend.screenshot(&plan)?;
             if shot.frames.is_empty() {
                 return Err(CaptureError::protocol(
@@ -709,6 +751,10 @@ impl Engine {
                     "screenshot",
                     "no frame captured",
                 ));
+            }
+            if picked {
+                let sources: Vec<&Source> = shot.frames.iter().map(|f| &f.source).collect();
+                Self::check_pick(backend.id(), &request.source, &sources)?;
             }
             Ok((shot, region, sources))
         })
@@ -1109,6 +1155,7 @@ impl Engine {
             picker,
             caller: caller.clone(),
         };
+        let from_picker = plan.picker.is_some();
         let (session, mut negotiated) = match backend.open(plan, out.clone()) {
             Ok(opened) => opened,
             Err(err) => {
@@ -1116,6 +1163,12 @@ impl Engine {
                 return Err(err);
             }
         };
+        if from_picker && let Err(err) = Self::check_pick(id, &config.source, &[&negotiated.source])
+        {
+            drop(session);
+            out.fail(err.clone());
+            return Err(err);
+        }
         // Facts that were unknown before consent are checked again.
         let mut unmet = Vec::new();
         if requirements.cursor.strength == Strength::Require

@@ -1206,3 +1206,60 @@ fn monitor_sessions_refuse_a_window_id() {
     assert_eq!(session.negotiated().source.id, monitor);
     assert_eq!(session.negotiated().memory, crate::types::BufferMemory::Cpu);
 }
+
+#[test]
+fn a_pick_other_than_the_named_source_is_refused() {
+    let portal_id = BackendId::LinuxPortal;
+    let monitors = vec![
+        fake::monitor(portal_id, 0, Rect::new(0, 0, 8, 4), 1000),
+        fake::monitor(portal_id, 1, Rect::new(8, 0, 4, 2), 1000),
+    ];
+    let mut portal = Fake::new(portal_id, monitors);
+    portal.listing = SourceListing::PickerOnly;
+    // The fake picker always hands back the first monitor.
+    let picked = portal.monitors[0].id.clone();
+    let other = portal.monitors[1].id.clone();
+    let rig = rig_with(vec![portal], CapturePolicy::default());
+    let consent = ConsentConfig {
+        allow_picker: true,
+        ..ConsentConfig::default()
+    };
+    let shot = |source: SourceSelector| {
+        let request = ScreenshotRequest {
+            consent: consent.clone(),
+            ..ScreenshotRequest::of(source)
+        };
+        block(rig.client.screenshot_cpu(request, PixelLayout::default()))
+    };
+    assert_eq!(
+        shot(SourceSelector::Id(other.clone())).expect_err("substituted"),
+        CaptureError::SourceNotFound(other.clone())
+    );
+    assert_eq!(
+        shot(SourceSelector::Monitors(vec![other.clone()])).expect_err("substituted"),
+        CaptureError::SourceNotFound(other.clone())
+    );
+    assert_eq!(
+        shot(SourceSelector::Monitors(vec![
+            picked.clone(),
+            other.clone()
+        ]))
+        .expect_err("one short"),
+        CaptureError::SourceNotFound(other.clone())
+    );
+    shot(SourceSelector::Id(picked.clone())).expect("the named source was picked");
+    shot(SourceSelector::Monitors(vec![picked])).expect("the named monitor was picked");
+
+    let config = SessionConfig::of(SourceSelector::Id(other.clone())).fps(FrameRate::Native);
+    let config = SessionConfig {
+        consent: consent.clone(),
+        ..config
+    };
+    let err = block(
+        rig.client
+            .open_session(&rig.runtime, config, SinkPolicy::queue(2)),
+    )
+    .map(|_| ())
+    .expect_err("substituted");
+    assert_eq!(err, CaptureError::SourceNotFound(other));
+}
