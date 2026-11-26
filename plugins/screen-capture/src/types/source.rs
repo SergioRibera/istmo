@@ -661,6 +661,6 @@ mod tests {
         };
         assert_eq!(ids(&mirror), ids(&after));
         assert!(mirror.iter().all(|s| after.contains(s)));
-        assert!(SourceChange::between(&after, &after).is_empty());
+        assert_eq!(SourceChange::between(&after, &after), Vec::new());
     }
 }

@@ -1493,7 +1493,7 @@ fn dropping_an_audio_handle_stops_it_and_reports_cover_audio() {
     .expect("caps");
     let audio = report.audio.expect("an audio report");
     assert_eq!(audio.availability, Availability::Ready);
-    assert!(!audio.caps.sources.is_empty());
+    assert_ne!(audio.caps.sources, Vec::new());
 
     let session = block(rig.client.open_audio_session(
         &rig.runtime,
