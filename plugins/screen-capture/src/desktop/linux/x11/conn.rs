@@ -15,6 +15,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 
+use super::edid::Edid;
 use crate::types::{
     BackendId, CaptureError, Orientation, Rect, Size, Source, SourceFlags, SourceId, SourceKind,
 };
@@ -68,6 +69,8 @@ pub(super) struct Atoms {
     pub(super) net_wm_state_hidden: xproto::Atom,
     pub(super) net_active_window: xproto::Atom,
     pub(super) utf8_string: xproto::Atom,
+    /// The `RandR` output property holding the monitor's EDID.
+    pub(super) edid: xproto::Atom,
 }
 
 /// How a source maps to X: a rectangle of the root window or a window.
@@ -162,6 +165,7 @@ impl X11 {
             net_wm_state_hidden: intern(b"_NET_WM_STATE_HIDDEN")?,
             net_active_window: intern(b"_NET_ACTIVE_WINDOW")?,
             utf8_string: intern(b"UTF8_STRING")?,
+            edid: intern(b"EDID")?,
         };
         let ext = Self::extensions(&conn);
         Ok(Self {
@@ -269,10 +273,12 @@ impl X11 {
             .reply()
             .map_err(|e| x_err("randr get monitors", e))?;
         let refresh = self.crtc_refresh();
-        let crtc_of = |outputs: &[randr::Output]| -> Option<randr::Crtc> {
+        // The first output driving the monitor: its CRTC (refresh), name
+        // (connector) and EDID.
+        let output_of = |outputs: &[randr::Output]| {
             outputs.iter().find_map(|o| {
                 let info = self.conn.randr_get_output_info(*o, 0).ok()?.reply().ok()?;
-                (info.crtc != 0).then_some(info.crtc)
+                (info.crtc != 0).then_some((*o, info))
             })
         };
         let monitors: Vec<Source> = reply
@@ -297,7 +303,13 @@ impl X11 {
                 source.physical_size = Some(size);
                 // X11 has no per-monitor scale.
                 source.scale_permille = Some(1000);
-                source.refresh_mhz = crtc_of(&m.outputs).and_then(|c| refresh.get(&c).copied());
+                if let Some((output, info)) = output_of(&m.outputs) {
+                    source.refresh_mhz = refresh.get(&info.crtc).copied();
+                    source.connector = String::from_utf8(info.name).ok();
+                    let edid = self.edid(output).unwrap_or_default();
+                    source.make = edid.make;
+                    source.model = edid.model;
+                }
                 // RandR rotation is already applied in the root window:
                 // a rectangle of it reads upright.
                 source.orientation = Orientation::UPRIGHT;
@@ -309,6 +321,18 @@ impl X11 {
             return Ok(vec![whole_screen()]);
         }
         Ok(monitors)
+    }
+
+    /// The EDID names of `output`, when the driver exposes its EDID
+    /// (Xvfb and most virtual outputs do not).
+    fn edid(&self, output: randr::Output) -> Option<Edid> {
+        let reply = self
+            .conn
+            .randr_get_output_property(output, self.atoms.edid, AtomEnum::ANY, 0, 128, false, false)
+            .ok()?
+            .reply()
+            .ok()?;
+        Edid::parse(&reply.data)
     }
 
     fn property(

@@ -15,6 +15,9 @@
   Android and iOS backends answer `NoBackendCompiled` for now.
   `scripts/check-plugin-native.sh` compiles a plugin's `native/`
   backends against its generated Kotlin / Swift.
+- Screen capture `Source`: `make`, `model`, `connector` and
+  `description` of monitors (Wayland `wl_output` / xdg-output, X11
+  `RandR` output names and `EDID`).
 - `istmo-media` crate: message types that mean the same in several media
   plugins (for now `AccessStatus`, used by camera and screen capture).
   Each shared type is generated once per app (Kotlin package

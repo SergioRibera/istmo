@@ -8,6 +8,7 @@
 //! (`CopyStage::ShmTransport`); DRI3 live buffers are not offered.
 
 mod conn;
+mod edid;
 mod grab;
 mod session;
 

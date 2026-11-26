@@ -2014,7 +2014,11 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let refreshMhz = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU32(&c1) }
         let orientation = try self.readOrientation(&c)
         let flags = try self.readSourceFlags(&c)
-        return ScreenCapture.Source(id: id, kind: kind, name: name, appId: appId, pid: pid, geometry: geometry, physicalSize: physicalSize, scalePermille: scalePermille, refreshMhz: refreshMhz, orientation: orientation, flags: flags)
+        let make = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
+        let model = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
+        let connector = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
+        let description = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
+        return ScreenCapture.Source(id: id, kind: kind, name: name, appId: appId, pid: pid, geometry: geometry, physicalSize: physicalSize, scalePermille: scalePermille, refreshMhz: refreshMhz, orientation: orientation, flags: flags, make: make, model: model, connector: connector, description: description)
     }
 
     public func writeSource(_ out: inout Data, _ value: ScreenCapture.Source) {
@@ -2029,6 +2033,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeOption(&out, value.refreshMhz) { o1, v1 in Bincode.writeVarintU32(&o1, v1) }
         self.writeOrientation(&out, value.orientation)
         self.writeSourceFlags(&out, value.flags)
+        Bincode.writeOption(&out, value.make) { o1, v1 in Bincode.writeString(&o1, v1) }
+        Bincode.writeOption(&out, value.model) { o1, v1 in Bincode.writeString(&o1, v1) }
+        Bincode.writeOption(&out, value.connector) { o1, v1 in Bincode.writeString(&o1, v1) }
+        Bincode.writeOption(&out, value.description) { o1, v1 in Bincode.writeString(&o1, v1) }
     }
 
     public func readRegionSpace(_ c: inout Bincode.Cursor) throws -> ScreenCapture.RegionSpace {

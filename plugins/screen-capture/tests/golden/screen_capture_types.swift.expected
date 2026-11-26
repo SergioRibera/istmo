@@ -1360,8 +1360,12 @@ extension ScreenCapture {
         public let refreshMhz: UInt32?
         public let orientation: Orientation
         public let flags: SourceFlags
+        public let make: String?
+        public let model: String?
+        public let connector: String?
+        public let description: String?
 
-        public init(id: SourceId, kind: SourceKind, name: String, appId: String?, pid: UInt32?, geometry: Rect?, physicalSize: Size?, scalePermille: UInt32?, refreshMhz: UInt32?, orientation: Orientation, flags: SourceFlags) {
+        public init(id: SourceId, kind: SourceKind, name: String, appId: String?, pid: UInt32?, geometry: Rect?, physicalSize: Size?, scalePermille: UInt32?, refreshMhz: UInt32?, orientation: Orientation, flags: SourceFlags, make: String?, model: String?, connector: String?, description: String?) {
             self.id = id
             self.kind = kind
             self.name = name
@@ -1373,6 +1377,10 @@ extension ScreenCapture {
             self.refreshMhz = refreshMhz
             self.orientation = orientation
             self.flags = flags
+            self.make = make
+            self.model = model
+            self.connector = connector
+            self.description = description
         }
     }
 

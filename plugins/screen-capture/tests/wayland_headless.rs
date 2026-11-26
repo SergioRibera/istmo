@@ -130,6 +130,8 @@ fn monitors_compose_and_turn_on_headless_sway() {
         let geometry = second.geometry.expect("geometry");
         assert_eq!((geometry.width, geometry.height), (360, 640), "{backend}");
         assert_eq!(second.scale_permille, Some(2000));
+        assert_eq!(second.connector.as_deref(), Some("HEADLESS-2"), "{backend}");
+        assert!(second.description.is_some(), "{backend}: {second:?}");
 
         let shot = |source| {
             block(live.client.screenshot_cpu(

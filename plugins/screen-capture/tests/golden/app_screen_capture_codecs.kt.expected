@@ -2524,7 +2524,15 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
         val orientation = d_orientation.value
         val d_flags = readSourceFlags(bytes, cursor); cursor = d_flags.consumed
         val flags = d_flags.value
-        return Bincode.Decoded(Source(id = id, kind = kind, name = name, appId = appId, pid = pid, geometry = geometry, physicalSize = physicalSize, scalePermille = scalePermille, refreshMhz = refreshMhz, orientation = orientation, flags = flags), cursor)
+        val d_make = Bincode.readOption(bytes, cursor) { b1, c1 -> Bincode.readString(b1, c1) }; cursor = d_make.consumed
+        val make = d_make.value
+        val d_model = Bincode.readOption(bytes, cursor) { b1, c1 -> Bincode.readString(b1, c1) }; cursor = d_model.consumed
+        val model = d_model.value
+        val d_connector = Bincode.readOption(bytes, cursor) { b1, c1 -> Bincode.readString(b1, c1) }; cursor = d_connector.consumed
+        val connector = d_connector.value
+        val d_description = Bincode.readOption(bytes, cursor) { b1, c1 -> Bincode.readString(b1, c1) }; cursor = d_description.consumed
+        val description = d_description.value
+        return Bincode.Decoded(Source(id = id, kind = kind, name = name, appId = appId, pid = pid, geometry = geometry, physicalSize = physicalSize, scalePermille = scalePermille, refreshMhz = refreshMhz, orientation = orientation, flags = flags, make = make, model = model, connector = connector, description = description), cursor)
     }
 
     override fun writeSource(out: ByteArrayOutputStream, value: Source) {
@@ -2539,6 +2547,10 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
         Bincode.writeOption(out, value.refreshMhz) { s1, v1 -> Bincode.writeU32(s1, v1) }
         writeOrientation(out, value.orientation)
         writeSourceFlags(out, value.flags)
+        Bincode.writeOption(out, value.make) { s1, v1 -> Bincode.writeString(s1, v1) }
+        Bincode.writeOption(out, value.model) { s1, v1 -> Bincode.writeString(s1, v1) }
+        Bincode.writeOption(out, value.connector) { s1, v1 -> Bincode.writeString(s1, v1) }
+        Bincode.writeOption(out, value.description) { s1, v1 -> Bincode.writeString(s1, v1) }
     }
 
     override fun readRegionSpace(bytes: ByteArray, offset: Int): Bincode.Decoded<RegionSpace> {

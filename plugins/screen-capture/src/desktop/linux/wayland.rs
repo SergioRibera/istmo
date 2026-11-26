@@ -301,6 +301,17 @@ impl OutputInfo {
         source.refresh_mhz = self.refresh_mhz;
         source.orientation = orientation;
         source.flags.primary = primary;
+        // Compositors send empty strings (or "Unknown") for what they do
+        // not know.
+        let known = |value: &Option<String>| {
+            value
+                .clone()
+                .filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("unknown"))
+        };
+        source.make = known(&self.make);
+        source.model = known(&self.model);
+        source.connector = known(&self.name);
+        source.description = known(&self.description);
         source
     }
 }

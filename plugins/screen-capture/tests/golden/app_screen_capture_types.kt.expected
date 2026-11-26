@@ -921,7 +921,11 @@ data class Source(
     val scalePermille: UInt?,
     val refreshMhz: UInt?,
     val orientation: Orientation,
-    val flags: SourceFlags
+    val flags: SourceFlags,
+    val make: String?,
+    val model: String?,
+    val connector: String?,
+    val description: String?
 )
 
 sealed class RegionSpace {

@@ -178,6 +178,15 @@ Every unsafe block carries a `SAFETY:` comment. `undocumented_unsafe_blocks`
 and `multiple_unsafe_ops_per_block` are denied. Syncobjs go through the
 safe `drm` crate.
 
+**Sources.**
+- `Source` carries `make`, `model`, `connector` and `description` for
+  monitors, each `None` when the platform does not say:
+  - Wayland: `wl_output` geometry make / model (empty or `Unknown`
+    dropped), `wl_output` / xdg-output name and description.
+  - X11: the `RandR` output name of the monitor's first active output,
+    and the PNP id and monitor-name descriptor of its `EDID` property
+    (Xvfb and most virtual outputs have none).
+
 ## Goals
 
 - One API for Linux (Wayland + X11), Windows, macOS, iOS / iPadOS,
@@ -378,6 +387,10 @@ pub struct Source {
     pub refresh_mhz: Option<u32>,
     pub orientation: Orientation,
     pub flags: SourceFlags,           // struct of bools: primary, minimised, occluded, protected, own_process
+    pub make: Option<String>,         // monitors: wl_output make, EDID PNP id
+    pub model: Option<String>,        // monitors: wl_output model, EDID monitor name
+    pub connector: Option<String>,    // monitors: DP-1, HDMI-A-1
+    pub description: Option<String>,  // monitors: the platform's description
 }
 #[istmo::message] pub struct SourceId { pub backend: BackendId, pub value: String }
 

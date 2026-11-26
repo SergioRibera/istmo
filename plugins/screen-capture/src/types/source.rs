@@ -417,6 +417,15 @@ pub struct Source {
     /// What the backend's buffers need to be shown upright.
     pub orientation: Orientation,
     pub flags: SourceFlags,
+    /// Monitors: the panel's manufacturer as the platform names it
+    /// (Wayland `wl_output` make, the EDID PNP id on X11).
+    pub make: Option<String>,
+    /// Monitors: the panel's model name.
+    pub model: Option<String>,
+    /// Monitors: the connector or output name (`DP-1`, `HDMI-A-1`).
+    pub connector: Option<String>,
+    /// Monitors: the platform's human-readable description.
+    pub description: Option<String>,
 }
 
 impl Source {
@@ -435,6 +444,10 @@ impl Source {
             refresh_mhz: None,
             orientation: Orientation::UPRIGHT,
             flags: SourceFlags::default(),
+            make: None,
+            model: None,
+            connector: None,
+            description: None,
         }
     }
 
