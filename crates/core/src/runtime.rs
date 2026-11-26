@@ -32,7 +32,7 @@ mod exec;
 mod peer;
 mod spill;
 
-pub use exec::DeliveryScope;
+pub use exec::{BlockingThreads, DeliveryScope};
 pub use peer::{DirectOutcome, DirectPeer};
 
 use exec::{CatchUnwind, Delivery, Either, race, send_unless_cancelled};

@@ -82,9 +82,9 @@ pub use crate::protocol::{
 };
 pub use crate::routing::{CallResult, StreamMessage};
 pub use crate::runtime::{
-    CallHandle, DEFAULT_OUTBOUND_CAPACITY, DeliveryScope, DirectOutcome, DirectPeer,
-    NativeHandleReleaseHook, PRE_START_EARLY_EVENT_CAPACITY, RemoteEnvelopeSink, Runtime,
-    RuntimeConfig, RuntimeInit, StreamHandle,
+    BlockingThreads, CallHandle, DEFAULT_OUTBOUND_CAPACITY, DeliveryScope, DirectOutcome,
+    DirectPeer, NativeHandleReleaseHook, PRE_START_EARLY_EVENT_CAPACITY, RemoteEnvelopeSink,
+    Runtime, RuntimeConfig, RuntimeInit, StreamHandle,
 };
 pub use crate::typed_stream::{StreamItem, TypedStream};
 

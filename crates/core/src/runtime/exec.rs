@@ -159,6 +159,37 @@ pub(super) fn spawn_blocking(
     blocking::spawn(move || pollster::block_on(task))
 }
 
+/// The blocking workers of this process: threads running
+/// [`DispatchMode::Isolated`] work and `#[istmo::blocking]` methods.
+///
+/// The pool has no cap (a blocking call waiting on another always gets a
+/// thread), so a burst of blocking calls starts one thread each; past
+/// 256 alive it logs a warning once. `wasm32` has no such threads.
+///
+/// [`DispatchMode::Isolated`]: crate::DispatchMode::Isolated
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlockingThreads {
+    /// Threads alive now, busy or idle.
+    pub alive: usize,
+    /// Most threads ever alive at once.
+    pub peak: usize,
+}
+
+impl BlockingThreads {
+    /// The counts right now.
+    #[must_use]
+    pub fn now() -> Self {
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            let (alive, peak) = blocking::counts();
+            Self { alive, peak }
+        }
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        Self::default()
+    }
+}
+
 /// Run `task` on the browser's event loop: nothing can block there, so
 /// the blocking workers are the event loop too.
 ///

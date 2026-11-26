@@ -4,7 +4,8 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use istmo_core::{
-    CancelToken, Dispatch, DispatchFuture, DispatchMode, InstanceId, Outcome, Runtime,
+    BlockingThreads, CancelToken, Dispatch, DispatchFuture, DispatchMode, InstanceId, Outcome,
+    Runtime,
 };
 
 /// `down(n)` blocks on its own `down(n - 1)` before answering.
@@ -71,4 +72,23 @@ fn blocking_hosts_nested_far_deeper_than_the_core_count_finish() {
         .recv_timeout(Duration::from_secs(60))
         .expect("150 blocking hosts, each waiting on the next, all finish");
     assert_eq!(answer.expect("recv"), Ok(Vec::new()));
+}
+
+#[test]
+fn the_blocking_thread_counts_see_a_nested_chain() {
+    let init = Runtime::mock();
+    init.runtime.register_host(Chain::default());
+    let answer = init
+        .runtime
+        .call("test.chain", None, "down", 20u32.to_le_bytes().to_vec())
+        .expect("call")
+        .recv_blocking()
+        .expect("recv");
+    assert_eq!(answer, Ok(Vec::new()));
+    let counts = BlockingThreads::now();
+    assert!(
+        counts.peak >= 21,
+        "21 nested blocking calls at once: {counts:?}"
+    );
+    assert!(counts.alive <= counts.peak, "{counts:?}");
 }

@@ -26,6 +26,11 @@ use crate::sync::lock;
 /// How long a thread beyond the kept ones waits for work before exiting.
 const IDLE_EXIT: Duration = Duration::from_secs(30);
 
+/// Threads alive above which the pool warns (once, until it shrinks
+/// back below half): that many blocking calls at once usually means a
+/// burst parked on one lock, or blocking calls waiting on each other.
+const HIGH_WATER: usize = 256;
+
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
 /// An idle thread: where to hand it a job, and who it is.
@@ -43,6 +48,10 @@ struct Threads {
     idle: Vec<Idle>,
     /// Names the next thread.
     next_id: u64,
+    /// Most threads ever alive at once.
+    peak: usize,
+    /// Warned about [`HIGH_WATER`] since the pool last shrank below half.
+    warned: bool,
 }
 
 impl Threads {
@@ -79,9 +88,19 @@ pub(super) fn spawn(job: impl FnOnce() + Send + 'static) -> std::io::Result<()> 
         let mut threads = lock(threads());
         let Some(idle) = threads.idle.pop() else {
             threads.alive += 1;
+            threads.peak = threads.peak.max(threads.alive);
+            let alive = threads.alive;
+            let warn = alive > HIGH_WATER && !threads.warned;
+            threads.warned |= warn;
             let id = threads.next_id;
             threads.next_id += 1;
             drop(threads);
+            if warn {
+                tracing::warn!(
+                    alive,
+                    "over {HIGH_WATER} istmo blocking workers alive: that many blocking calls run at once"
+                );
+            }
             return start(id, job);
         };
         drop(threads);
@@ -117,6 +136,9 @@ impl Drop for Alive {
         let mut threads = lock(threads());
         threads.unlist(self.0);
         threads.alive -= 1;
+        if threads.alive < HIGH_WATER / 2 {
+            threads.warned = false;
+        }
     }
 }
 
@@ -154,10 +176,16 @@ fn worker_loop(id: u64, slot: &Sender<Job>, jobs: &Receiver<Job>) {
     }
 }
 
+/// Threads alive now, and the most ever alive at once.
+pub(super) fn counts() -> (usize, usize) {
+    let threads = lock(threads());
+    (threads.alive, threads.peak)
+}
+
 /// Threads alive (tests).
 #[cfg(test)]
 pub(super) fn alive() -> usize {
-    lock(threads()).alive
+    counts().0
 }
 
 #[cfg(test)]
