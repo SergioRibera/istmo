@@ -1,0 +1,29 @@
+[package]
+name = "istmo-media"
+version = "0.1.1-alpha.7"
+description = "Message types shared by the istmo media plugins (camera, screen capture), generated once per app in Kotlin and Swift."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["istmo", "media", "camera", "screen-capture"]
+categories = ["multimedia"]
+# The build script hands the types to dependent plugins
+# (`DEP_ISTMO_MEDIA_ISTMO_SHARED_TYPES`); Cargo passes that only with a
+# `links` key.
+links = "istmo_media"
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+istmo-build = { workspace = true }
+
+[lints]
+workspace = true

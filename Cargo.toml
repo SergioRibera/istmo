@@ -8,6 +8,7 @@ members = [
     "crates/ios",
     "crates/plugins",
     "crates/plugins-schema",
+    "crates/media",
     "crates/window",
     "crates/lint-check",
     "examples/android-demo",
@@ -89,6 +90,7 @@ toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 istmo-core = { path = "crates/core", version = "0.1.1-alpha.7" }
 istmo-build = { path = "crates/build", version = "0.1.1-alpha.7" }
 istmo-macros = { path = "crates/macros", version = "0.1.1-alpha.7" }
+istmo-media = { path = "crates/media", version = "0.1.1-alpha.7" }
 # Default features off: the facade forwards exactly one activity flavor.
 istmo-android = { path = "crates/android", version = "0.1.1-alpha.7", default-features = false }
 istmo-ios = { path = "crates/ios", version = "0.1.1-alpha.7" }
