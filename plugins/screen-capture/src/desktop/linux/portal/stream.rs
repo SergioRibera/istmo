@@ -272,7 +272,7 @@ fn run(
                 let Some(end) = StreamEnd::of(&old, &new) else {
                     return;
                 };
-                on_end(&data.borrow(), end.into_error(ID));
+                on_end(&data.borrow(), end_error(end));
             })
             .param_changed(|stream, data, id, param| {
                 on_param(stream, &mut data.borrow_mut(), id, param);
@@ -333,6 +333,22 @@ fn run(
         }
     }
     drop(listeners);
+}
+
+/// PipeWire's "no more input formats": the producer offers none of the
+/// formats (and memory) the stream listed.
+const NO_FORMAT: &str = "no more input formats";
+
+/// The session error of a stream end. A producer that offers none of the
+/// shared-memory formats (niri's offers DMA-BUF only) is a format the
+/// backend cannot serve, not a protocol failure.
+fn end_error(end: StreamEnd) -> CaptureError {
+    match end {
+        StreamEnd::Error(message) if message.contains(NO_FORMAT) => {
+            CaptureError::unsatisfiable(ID, crate::types::Requirement::Formats)
+        }
+        other => other.into_error(ID),
+    }
 }
 
 fn on_end(data: &StreamData, err: CaptureError) {
@@ -693,6 +709,19 @@ mod tests {
         row_bytes: 40,
         height: 3,
     };
+
+    #[test]
+    fn a_producer_without_shared_memory_is_a_format_miss() {
+        use super::{StreamEnd, end_error};
+        use crate::types::{BackendId, CaptureError, Requirement};
+        assert_eq!(
+            end_error(StreamEnd::Error(
+                "error alloc buffers: no more input formats".into()
+            )),
+            CaptureError::unsatisfiable(Some(BackendId::LinuxPortal), Requirement::Formats)
+        );
+        assert_eq!(end_error(StreamEnd::Disconnected), CaptureError::SourceLost);
+    }
 
     #[test]
     fn frame_range_takes_full_strides_when_available() {

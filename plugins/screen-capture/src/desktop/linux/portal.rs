@@ -454,9 +454,10 @@ impl Backend for Portal {
         caps.window = WindowCaptureCaps::default();
         caps.provenance.source_kinds = Provenance::Probe;
         caps.provenance.listing = Provenance::Table;
-        // The set is the implementation's (shared memory, packed RGB);
-        // which one the producer picks is negotiated.
-        caps.provenance.video = Provenance::Table;
+        // The theoretical set (shared memory, packed RGB). Whether the
+        // producer offers shared memory at all is known only after
+        // `Start`: niri's producer, for one, offers DMA-BUF only.
+        caps.provenance.video = Provenance::UnknownUntilNegotiated;
         caps.provenance.cursor = if probe.version >= 2 {
             Provenance::Probe
         } else {
