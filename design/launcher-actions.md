@@ -219,3 +219,64 @@ modules, as in `istmo-dnd` / `istmo-webview`.
 - macOS Dock progress (custom `NSDockTile` content view: drawing).
 - Linux recent documents (`recently-used.xbel`).
 - Badge images on Windows.
+
+## As implemented (deviations from the text above)
+
+- **Wire names** are the design's (`Capabilities`, `Progress`): Swift
+  message types live in the `LauncherActions` namespace, so
+  `LauncherActions.Progress` does not shadow Foundation's `Progress`, and
+  `check_swift_namespaces` accepts the set (no message type is named
+  `LauncherActions` or a reserved name). Hand-written Swift qualifies
+  every plugin type.
+- **Error variants.** The contract extractor refuses named-field enum
+  variants: `InvalidAction(ActionProblem { id, reason })` and
+  `TooMany(u32)`. `ActionProblem` is not named like its variant.
+- **`validate_set`** is `LauncherAction::validate_set(&[LauncherAction])`:
+  `#[plugin]` traits only carry the wire methods. The rules are stricter
+  than listed: no whitespace, `"`, control or Unicode `Cf` characters and
+  no leading `-` in the URL (it is one unquoted argv entry on Windows and
+  Linux), titles at most 128 characters, subtitles 256, URLs 2048 bytes,
+  PNG icons at most 1 MiB with a PNG signature, SF Symbol names of
+  `[A-Za-z0-9._-]`. `istmo-build` applies the same rules.
+- **`#[non_exhaustive]`** is on `LauncherError`, `Badge`,
+  `Progress`, `BadgeSupport` and `Attention`; codegen gives them
+  `Unknown` cases on the Kotlin / Swift side, which the backends treat as
+  unsupported.
+- **Linux desktop id.** A plugin crate cannot read the app's
+  `ISTMO_APP_BUNDLE_ID` (it is baked into the app crate), so the order is
+  `FLATPAK_ID`, then `DesktopLauncherActions::with_desktop_id` (apps pass
+  `option_env!("ISTMO_APP_BUNDLE_ID")`), then the executable's file stem.
+  Indeterminate progress and badge labels are `Unsupported` there;
+  `Informational` and `Critical` both set `urgent`.
+- **Linux D-Bus.** zbus async API on one kept connection that also serves
+  `Query`; `Update` carries only the changed properties.
+- **Windows.** One STA thread (`istmo-launcher-com`) owns the cached
+  `ITaskbarList3` and `ICustomDestinationList`. The custom list appends
+  `KDC_RECENT` so the shell's Recent category survives; an empty set is
+  `DeleteList`. `clear_recent_documents` uses
+  `IApplicationDestinations::RemoveAllDestinations` (this app only)
+  instead of `SHAddToRecentDocs(…, NULL)`, which empties the user's
+  recent files of every app. Task icons are one-image `.ico` files that
+  embed the PNG, named by FNV-1a of the bytes under
+  `%LOCALAPPDATA%\istmo\launcher-actions`.
+- **macOS.** Dock menu items publish through
+  `DesktopLauncherActions::with_runtime`, else `Runtime::global()`. Calls
+  from other threads are queued on the main queue and awaited
+  (`exec_async` + oneshot), never `exec_sync`. A delegate that is not set
+  yet also fails `Unsupported` (set actions after the event loop starts).
+- **Android.** `max_actions` = `maxShortcutCountPerActivity` minus the
+  manifest shortcuts; iOS `max_actions` = 4 minus the static items in
+  Info.plist. Static PNG icons are copied unchanged to
+  `drawable-nodpi/`. The `DeepLink` encoders live in
+  `LauncherActionLink.{kt,swift}` (no Android / UIKit types) so
+  `tests/native/check-wire.sh` can run them off-device against the bytes
+  `tests/deep_link_wire.rs` pins.
+- **iOS badge.** `NotPermitted` when the notification settings'
+  `badgeSetting` is not enabled.
+- **Gradle.** `.istmo/res` used to be added only with an app icon;
+  `istmo.json` now carries `app.generated_res` (icon or launcher
+  actions) and the Gradle plugin keys on it. Needs a Gradle plugin
+  release before apps on the Maven plugin get static shortcuts.
+- **Static shortcuts need `[app] id`** (their `targetPackage`); without
+  it the build warns and writes none, and also warns when the app does
+  not link `istmo-launcher-actions`.
