@@ -13,7 +13,7 @@ import Foundation
 /// <group>/istmo-share/inbox/<uuid>/<file>…
 /// ```
 ///
-/// `share.bin` is an `IncomingShare` in the istmo wire layout (bincode 2
+/// `share.bin` is a `Share.IncomingShare` in the istmo wire layout (bincode 2
 /// `standard()`), byte for byte what `ShareCodecsImpl.writeIncomingShare`
 /// produces; each file's `path` is its name inside the entry directory.
 /// The extension cannot link `IstmoRuntime`, so ``Manifest`` carries its
@@ -57,7 +57,7 @@ public enum IstmoShareHandoff {
         )
     }
 
-    /// Mirror of `IncomingShare`, field for field and in wire order.
+    /// Mirror of `Share.IncomingShare`, field for field and in wire order.
     public struct Manifest {
         public var text: String?
         public var url: String?
@@ -80,7 +80,7 @@ public enum IstmoShareHandoff {
             self.targetId = targetId
         }
 
-        /// `IncomingShare` wire bytes.
+        /// `Share.IncomingShare` wire bytes.
         public func encode() -> Data {
             var out = Data()
             Wire.writeOption(&out, text, Wire.writeString)
@@ -96,7 +96,7 @@ public enum IstmoShareHandoff {
             return out
         }
 
-        /// Parse `IncomingShare` wire bytes, refusing trailing data.
+        /// Parse `Share.IncomingShare` wire bytes, refusing trailing data.
         public static func decode(_ data: Data) throws -> Manifest {
             var reader = Wire.Reader(Array(data))
             let text = try reader.option { try $0.string() }
@@ -112,9 +112,9 @@ public enum IstmoShareHandoff {
         }
     }
 
-    /// Mirror of `IncomingFile`.
+    /// Mirror of `Share.IncomingFile`.
     public struct File {
-        /// File name inside the entry directory (`IncomingFile.path`).
+        /// File name inside the entry directory (`Share.IncomingFile.path`).
         public var file: String
         /// Original display name.
         public var name: String

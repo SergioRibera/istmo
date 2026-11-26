@@ -15,20 +15,20 @@ import IstmoRuntime
 /// `frames(session:)`; each subscriber owns its own bounded buffer.
 final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
 
-    private let config: CameraInitConfig
+    private let config: Camera.CameraInitConfig
     /// Serialises every access to `sessions`. The async protocol methods
     /// run on arbitrary executors and `releaseNativeHandle` arrives on the
     /// runtime's pump thread.
     private let queue = DispatchQueue(label: "istmo.camera.backend", qos: .userInitiated)
     private var sessions: [NativeHandleId: SessionState] = [:]
 
-    init(config: CameraInitConfig) {
+    init(config: Camera.CameraInitConfig) {
         self.config = config
     }
 
     // MARK: Discovery
 
-    func devices() async throws -> [CameraDevice] {
+    func devices() async throws -> [Camera.CameraDevice] {
         var types: [AVCaptureDevice.DeviceType] = [
             .builtInWideAngleCamera,
             .builtInUltraWideCamera,
@@ -53,9 +53,9 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         return session.devices.map { describe(device: $0) }
     }
 
-    func concurrent_support() async throws -> ConcurrentSupport {
+    func concurrent_support() async throws -> Camera.ConcurrentSupport {
         let supported = AVCaptureMultiCamSession.isMultiCamSupported
-        return ConcurrentSupport(
+        return Camera.ConcurrentSupport(
             maxConcurrent: supported ? UInt32(4) : UInt32(1),
             approvedPairs: [],
             anyCombination: supported
@@ -64,7 +64,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
 
     // MARK: Permissions
 
-    func access_status() async throws -> AccessStatus {
+    func access_status() async throws -> IstmoMedia.AccessStatus {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized: return .granted
         case .denied: return .denied
@@ -74,7 +74,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         }
     }
 
-    func request_access() async throws -> AccessStatus {
+    func request_access() async throws -> IstmoMedia.AccessStatus {
         let granted: Bool = await withCheckedContinuation { cont in
             AVCaptureDevice.requestAccess(for: .video) { cont.resume(returning: $0) }
         }
@@ -83,16 +83,16 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
 
     // MARK: Session lifecycle
 
-    func open(config: SessionConfig) async throws -> CameraSession {
+    func open(config: Camera.SessionConfig) async throws -> Camera.CameraSession {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .denied, .restricted: throw CameraError.permissionDenied
+        case .denied, .restricted: throw Camera.CameraError.permissionDenied
         default: break
         }
         guard let device = AVCaptureDevice(uniqueID: config.deviceId) else {
-            throw CameraError.deviceNotFound(config.deviceId)
+            throw Camera.CameraError.deviceNotFound(config.deviceId)
         }
         guard let captureType = pixelFormatType(for: config.pixelFormat) else {
-            throw CameraError.formatUnsupported
+            throw Camera.CameraError.formatUnsupported
         }
 
         let captureSession: AVCaptureSession = AVCaptureMultiCamSession.isMultiCamSupported
@@ -105,11 +105,11 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             input = try AVCaptureDeviceInput(device: device)
         } catch {
             captureSession.commitConfiguration()
-            throw CameraError.backend("cannot open camera input: \(error.localizedDescription)")
+            throw Camera.CameraError.backend("cannot open camera input: \(error.localizedDescription)")
         }
         guard captureSession.canAddInput(input) else {
             captureSession.commitConfiguration()
-            throw CameraError.backend("cannot add camera input")
+            throw Camera.CameraError.backend("cannot add camera input")
         }
         captureSession.addInput(input)
 
@@ -117,12 +117,12 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         output.alwaysDiscardsLateVideoFrames = true
         guard output.availableVideoPixelFormatTypes.contains(captureType) else {
             captureSession.commitConfiguration()
-            throw CameraError.formatUnsupported
+            throw Camera.CameraError.formatUnsupported
         }
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: captureType]
         guard captureSession.canAddOutput(output) else {
             captureSession.commitConfiguration()
-            throw CameraError.backend("cannot add video output")
+            throw Camera.CameraError.backend("cannot add video output")
         }
         captureSession.addOutput(output)
 
@@ -159,7 +159,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         do {
             try apply(initial: config.initialControls, to: device)
         } catch {
-            throw CameraError.backend("cannot apply initial controls: \(error.localizedDescription)")
+            throw Camera.CameraError.backend("cannot apply initial controls: \(error.localizedDescription)")
         }
 
         captureSession.startRunning()
@@ -176,10 +176,10 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         queue.sync { sessions[handleId] = state }
 
         let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
-        return CameraSession(
+        return Camera.CameraSession(
             session: handleId,
-            negotiated: NegotiatedFormat(
-                resolution: Resolution(width: UInt32(dims.width), height: UInt32(dims.height)),
+            negotiated: Camera.NegotiatedFormat(
+                resolution: Camera.Resolution(width: UInt32(dims.width), height: UInt32(dims.height)),
                 pixelFormat: config.pixelFormat,
                 fps: currentFrameRate(of: device),
                 rotationDegrees: 0
@@ -191,9 +191,9 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         closeSession(session)
     }
 
-    func frames(session: NativeHandleId) -> AsyncThrowingStream<CameraFrame, Error> {
+    func frames(session: NativeHandleId) -> AsyncThrowingStream<Camera.CameraFrame, Error> {
         guard let fanout = queue.sync(execute: { sessions[session]?.fanout }) else {
-            return AsyncThrowingStream { $0.finish(throwing: CameraError.sessionClosed) }
+            return AsyncThrowingStream { $0.finish(throwing: Camera.CameraError.sessionClosed) }
         }
         return fanout.subscribe()
     }
@@ -214,19 +214,19 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
 
     private func lookup(_ id: NativeHandleId) throws -> SessionState {
         guard let state = queue.sync(execute: { sessions[id] }) else {
-            throw CameraError.sessionClosed
+            throw Camera.CameraError.sessionClosed
         }
         return state
     }
 
     // MARK: Controls
 
-    func apply_controls(session: NativeHandleId, controls: CameraControls) async throws -> AppliedControls {
+    func apply_controls(session: NativeHandleId, controls: Camera.CameraControls) async throws -> Camera.AppliedControls {
         let device = try lookup(session).device
         do {
             try device.lockForConfiguration()
         } catch {
-            throw CameraError.backend("cannot lock camera configuration: \(error.localizedDescription)")
+            throw Camera.CameraError.backend("cannot lock camera configuration: \(error.localizedDescription)")
         }
         defer { device.unlockForConfiguration() }
 
@@ -257,7 +257,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             }
         }
 
-        return AppliedControls(
+        return Camera.AppliedControls(
             zoom: Float(device.videoZoomFactor),
             torch: device.torchMode == .on,
             focus: controls.focus ?? .continuousVideo,
@@ -269,12 +269,12 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
 
     // MARK: Stills
 
-    func capture_still(session: NativeHandleId, request: StillCaptureRequest) async throws -> StillPhoto {
+    func capture_still(session: NativeHandleId, request: Camera.StillCaptureRequest) async throws -> Camera.StillPhoto {
         let state = try lookup(session)
         guard let photoOutput = state.photoOutput,
               case .jpeg(let quality) = request.pixelFormat,
               photoOutput.availablePhotoCodecTypes.contains(.jpeg) else {
-            throw CameraError.formatUnsupported
+            throw Camera.CameraError.formatUnsupported
         }
         let settings = AVCapturePhotoSettings(format: [
             AVVideoCodecKey: AVVideoCodecType.jpeg,
@@ -299,11 +299,11 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         withExtendedLifetime(delegate) {}
 
         guard let data = photo.fileDataRepresentation() else {
-            throw CameraError.backend("photo has no JPEG representation")
+            throw Camera.CameraError.backend("photo has no JPEG representation")
         }
         let dims = photo.resolvedSettings.photoDimensions
-        return StillPhoto(
-            resolution: Resolution(width: UInt32(dims.width), height: UInt32(dims.height)),
+        return Camera.StillPhoto(
+            resolution: Camera.Resolution(width: UInt32(dims.width), height: UInt32(dims.height)),
             rotationDegrees: 0,
             pixelFormat: request.pixelFormat,
             bytes: data,
@@ -327,7 +327,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
     /// executor consumes a stream (`onTermination`), hence the lock.
     private final class FrameFanout {
         private struct Subscriber {
-            let continuation: AsyncThrowingStream<CameraFrame, Error>.Continuation
+            let continuation: AsyncThrowingStream<Camera.CameraFrame, Error>.Continuation
             /// Frames lost since the last one this subscriber was handed.
             var dropped: UInt32
         }
@@ -348,10 +348,10 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             return !subscribers.isEmpty
         }
 
-        func subscribe() -> AsyncThrowingStream<CameraFrame, Error> {
+        func subscribe() -> AsyncThrowingStream<Camera.CameraFrame, Error> {
             // `bufferingNewest` drops the oldest buffered frame when the
             // consumer falls behind, matching the Android backend.
-            let (stream, continuation) = AsyncThrowingStream<CameraFrame, Error>.makeStream(
+            let (stream, continuation) = AsyncThrowingStream<Camera.CameraFrame, Error>.makeStream(
                 bufferingPolicy: .bufferingNewest(depth)
             )
             lock.lock()
@@ -368,11 +368,11 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             return stream
         }
 
-        func yield(_ frame: CameraFrame) {
+        func yield(_ frame: Camera.CameraFrame) {
             lock.lock()
             defer { lock.unlock() }
             for (id, sub) in subscribers {
-                let delivered = CameraFrame(
+                let delivered = Camera.CameraFrame(
                     seq: frame.seq,
                     timestampNs: frame.timestampNs,
                     resolution: frame.resolution,
@@ -418,12 +418,12 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
     }
 
     private final class SampleDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-        let pixelFormat: PixelFormat
+        let pixelFormat: Camera.PixelFormat
         let fanout: FrameFanout
         /// Only touched on the sample queue.
         private var seq: UInt64 = 0
 
-        init(pixelFormat: PixelFormat, fanout: FrameFanout) {
+        init(pixelFormat: Camera.PixelFormat, fanout: FrameFanout) {
             self.pixelFormat = pixelFormat
             self.fanout = fanout
         }
@@ -440,10 +440,10 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
                   let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
             let ts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             let (planes, bytes) = extractPlanes(pixelBuffer)
-            fanout.yield(CameraFrame(
+            fanout.yield(Camera.CameraFrame(
                 seq: frameSeq,
                 timestampNs: nanoseconds(ts),
-                resolution: Resolution(
+                resolution: Camera.Resolution(
                     width: UInt32(CVPixelBufferGetWidth(pixelBuffer)),
                     height: UInt32(CVPixelBufferGetHeight(pixelBuffer))
                 ),
@@ -455,7 +455,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             ))
         }
 
-        private func extractPlanes(_ buffer: CVPixelBuffer) -> ([FramePlane], Data) {
+        private func extractPlanes(_ buffer: CVPixelBuffer) -> ([Camera.FramePlane], Data) {
             CVPixelBufferLockBaseAddress(buffer, .readOnly)
             defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
 
@@ -477,7 +477,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
                         }
                     }
                 }
-                let plane = FramePlane(
+                let plane = Camera.FramePlane(
                     offset: 0,
                     rowStride: UInt32(rowStride),
                     pixelStride: 4,
@@ -493,7 +493,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
                     * CVPixelBufferGetHeightOfPlane(buffer, i)
             }
             var data = Data(count: totalSize)
-            var planes: [FramePlane] = []
+            var planes: [Camera.FramePlane] = []
             var offset = 0
             let swapChroma: Bool = { if case .nv21 = pixelFormat { return true } else { return false } }()
             data.withUnsafeMutableBytes { raw in
@@ -517,7 +517,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
                         }
                     }
                     planes.append(
-                        FramePlane(
+                        Camera.FramePlane(
                             offset: UInt32(offset),
                             rowStride: UInt32(rowStride),
                             pixelStride: i == 0 ? 1 : 2,
@@ -543,7 +543,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             guard let continuation else { return }
             self.continuation = nil
             if let error {
-                continuation.resume(throwing: CameraError.backend(error.localizedDescription))
+                continuation.resume(throwing: Camera.CameraError.backend(error.localizedDescription))
             } else {
                 continuation.resume(returning: photo)
             }
@@ -557,7 +557,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
     /// - `nv21` is captured as NV12 and its chroma pairs are swapped.
     /// - `rgba8` is captured as BGRA and swapped per pixel.
     /// - `jpeg` is a still-only format (see `capture_still`).
-    private func pixelFormatType(for format: PixelFormat) -> OSType? {
+    private func pixelFormatType(for format: Camera.PixelFormat) -> OSType? {
         switch format {
         case .nv21, .yuv420:
             return kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
@@ -598,7 +598,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         return UInt32((Double(duration.timescale) / Double(duration.value)).rounded())
     }
 
-    private func apply(initial: CameraControls, to device: AVCaptureDevice) throws {
+    private func apply(initial: Camera.CameraControls, to device: AVCaptureDevice) throws {
         guard initial.zoom != nil || initial.torch != nil else { return }
         try device.lockForConfiguration()
         defer { device.unlockForConfiguration() }
@@ -611,8 +611,8 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
         if let t = initial.torch, device.hasTorch { device.torchMode = t ? .on : .off }
     }
 
-    private func describe(device: AVCaptureDevice) -> CameraDevice {
-        let facing: CameraFacing = {
+    private func describe(device: AVCaptureDevice) -> Camera.CameraDevice {
+        let facing: Camera.CameraFacing = {
             switch device.position {
             case .front: return .front
             case .back: return .back
@@ -620,7 +620,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             @unknown default: return .unknown
             }
         }()
-        let lens: LensKind = {
+        let lens: Camera.LensKind = {
             if #available(iOS 15.4, *), device.deviceType == .builtInLiDARDepthCamera {
                 return .lidar
             }
@@ -634,7 +634,7 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             }
         }()
         let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
-        let caps = CameraCapabilities(
+        let caps = Camera.CameraCapabilities(
             minZoom: Float(device.minAvailableVideoZoomFactor),
             maxZoom: Float(device.maxAvailableVideoZoomFactor),
             opticalZoomSteps: device.virtualDeviceSwitchOverVideoZoomFactors.map { Float(truncating: $0) },
@@ -648,9 +648,9 @@ final class CameraBackendImpl: NSObject, CameraBackend, HandleReleaser {
             supportsHdr: device.activeFormat.isVideoHDRSupported,
             supportsDepth: !device.activeFormat.supportedDepthDataFormats.isEmpty,
             supportsRaw: false,
-            maxStillResolution: Resolution(width: UInt32(dims.width), height: UInt32(dims.height))
+            maxStillResolution: Camera.Resolution(width: UInt32(dims.width), height: UInt32(dims.height))
         )
-        return CameraDevice(
+        return Camera.CameraDevice(
             id: device.uniqueID,
             label: device.localizedName,
             facing: facing,

@@ -5,7 +5,7 @@ import IstmoRuntime
 public final class WebViewFactoryImpl: WebViewFactory {
     public init() {}
 
-    public func create(config: WebViewInitConfig) async throws -> WebViewBackend {
+    public func create(config: WebView.WebViewInitConfig) async throws -> WebViewBackend {
         WebViewBackendImpl(config: config)
     }
 }

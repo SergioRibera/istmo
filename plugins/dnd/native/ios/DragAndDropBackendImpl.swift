@@ -12,13 +12,13 @@ import UniformTypeIdentifiers
 /// scene gets a `UIDropInteraction`, sheets included (it sits on the
 /// window, not on a view controller), and windows of scenes that connect
 /// later get one too. A drag carrying none of the accepted types is not
-/// handled. While one the window takes hovers, `DragState.over` goes on
+/// handled. While one the window takes hovers, `DragAndDrop.DragState.over` goes on
 /// the `istmo.dnd.incoming` channel (with its position, a few dozen times a
 /// second at most); `receiving` while the files load, `idle` after.
 ///
 /// On drop each file is copied, inside its load callback (the system
 /// deletes its own copy right after), into
-/// `<caches>/istmo-dnd/incoming/<uuid>/<n>/`, and one `DroppedFiles`
+/// `<caches>/istmo-dnd/incoming/<uuid>/<n>/`, and one `DragAndDrop.DroppedFiles`
 /// goes on the `istmo.dnd.drops` queue. Folders, text and links (unless
 /// the app takes `text/*`), files above the size limit and unreadable ones
 /// come back as skipped. The copies are the app's: Rust deletes them with
@@ -45,7 +45,7 @@ public final class DragAndDropBackendImpl: NSObject, DragAndDropBackend {
 
     private let codecs = DragAndDropCodecsImpl()
     /// Main thread only, like everything below.
-    private var options: DropOptions?
+    private var options: DragAndDrop.DropOptions?
     #if canImport(UIKit)
     private var accepted: [UTType] = []
     private var interactions: [ObjectIdentifier: UIDropInteraction] = [:]
@@ -72,7 +72,7 @@ public final class DragAndDropBackendImpl: NSObject, DragAndDropBackend {
         #endif
     }
 
-    public func start_drag(request: DragRequest) async throws -> DragResult {
+    public func start_drag(request: DragAndDrop.DragRequest) async throws -> DragAndDrop.DragResult {
         #if canImport(UIKit)
         return try await withCheckedThrowingContinuation { waiting in
             DispatchQueue.main.async {
@@ -80,15 +80,15 @@ public final class DragAndDropBackendImpl: NSObject, DragAndDropBackend {
             }
         }
         #else
-        throw DndError.unsupported
+        throw DragAndDrop.DndError.unsupported
         #endif
     }
 
-    public func listen(options: DropOptions) async throws {
+    public func listen(options: DragAndDrop.DropOptions) async throws {
         #if canImport(UIKit)
         let types = Self.types(for: options.mimeTypes)
         if types.isEmpty {
-            throw DndError.backend("none of \(options.mimeTypes) names a known type")
+            throw DragAndDrop.DndError.backend("none of \(options.mimeTypes) names a known type")
         }
         await MainActor.run {
             self.options = options
@@ -97,7 +97,7 @@ public final class DragAndDropBackendImpl: NSObject, DragAndDropBackend {
             self.followScenes()
         }
         #else
-        throw DndError.unsupported
+        throw DragAndDrop.DndError.unsupported
         #endif
     }
 
@@ -237,17 +237,17 @@ extension DragAndDropBackendImpl: UIDropInteractionDelegate {
     }
 
     @MainActor
-    private func publishState(_ state: DragState) {
+    private func publishState(_ state: DragAndDrop.DragState) {
         var out = Data()
         codecs.writeDragState(&out, state)
         IstmoRuntime.shared.publishEarlyLatest(channel: Self.dragChannel, payload: out)
     }
 
-    private func over(_ session: UIDropSession, in view: UIView?) -> DragState {
+    private func over(_ session: UIDropSession, in view: UIView?) -> DragAndDrop.DragState {
         let point = view.map { session.location(in: $0) }
-        return .over(DragOver(
+        return .over(DragAndDrop.DragOver(
             count: UInt32(session.items.count),
-            position: point.map { DropPoint(x: Float($0.x), y: Float($0.y)) },
+            position: point.map { DragAndDrop.DropPoint(x: Float($0.x), y: Float($0.y)) },
             windowId: nil
         ))
     }
@@ -310,7 +310,7 @@ extension DragAndDropBackendImpl: UIDropInteractionDelegate {
             guard let type = fileType(of: provider) else {
                 let accepted = provider.registeredTypeIdentifiers.compactMap(UTType.init)
                     .contains { $0.conforms(to: .data) && !$0.conforms(to: .text) }
-                collected.skip(index, SkippedFile(
+                collected.skip(index, DragAndDrop.SkippedFile(
                     displayName: Self.safeName(provider.suggestedName, ext: nil),
                     reason: accepted ? .wrongType : .notAFile
                 ))
@@ -325,16 +325,16 @@ extension DragAndDropBackendImpl: UIDropInteractionDelegate {
                 )
                 // The file at `url` is deleted when this returns: copy now.
                 guard let url = url else {
-                    collected.skip(index, SkippedFile(displayName: name, reason: .unreadable))
+                    collected.skip(index, DragAndDrop.SkippedFile(displayName: name, reason: .unreadable))
                     return
                 }
                 let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
                 guard values?.isRegularFile == true else {
-                    collected.skip(index, SkippedFile(displayName: name, reason: .notAFile))
+                    collected.skip(index, DragAndDrop.SkippedFile(displayName: name, reason: .notAFile))
                     return
                 }
                 if let size = values?.fileSize, UInt64(size) > limit {
-                    collected.skip(index, SkippedFile(displayName: name, reason: .tooLarge))
+                    collected.skip(index, DragAndDrop.SkippedFile(displayName: name, reason: .tooLarge))
                     return
                 }
                 // One folder per item: two items may carry the same name.
@@ -347,10 +347,10 @@ extension DragAndDropBackendImpl: UIDropInteractionDelegate {
                     let copied = (try? target.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
                     if UInt64(copied) > limit {
                         try? FileManager.default.removeItem(at: place)
-                        collected.skip(index, SkippedFile(displayName: name, reason: .tooLarge))
+                        collected.skip(index, DragAndDrop.SkippedFile(displayName: name, reason: .tooLarge))
                         return
                     }
-                    collected.add(index, DroppedFile(
+                    collected.add(index, DragAndDrop.DroppedFile(
                         path: target.path,
                         displayName: name,
                         mimeType: type.preferredMIMEType,
@@ -358,17 +358,17 @@ extension DragAndDropBackendImpl: UIDropInteractionDelegate {
                     ))
                 } catch {
                     try? FileManager.default.removeItem(at: place)
-                    collected.skip(index, SkippedFile(displayName: name, reason: .unreadable))
+                    collected.skip(index, DragAndDrop.SkippedFile(displayName: name, reason: .unreadable))
                 }
             }
         }
         group.notify(queue: .main) { [weak self, codecs] in
             let (files, skipped) = collected.take()
             if !files.isEmpty || !skipped.isEmpty {
-                let dropped = DroppedFiles(
+                let dropped = DragAndDrop.DroppedFiles(
                     files: files,
                     skipped: skipped,
-                    position: location.map { DropPoint(x: Float($0.x), y: Float($0.y)) },
+                    position: location.map { DragAndDrop.DropPoint(x: Float($0.x), y: Float($0.y)) },
                     receivedAtMs: UInt64(Date().timeIntervalSince1970 * 1000),
                     windowId: nil
                 )
@@ -390,22 +390,22 @@ extension DragAndDropBackendImpl: UIDropInteractionDelegate {
 /// drag order.
 private final class Collected: @unchecked Sendable {
     private let lock = NSLock()
-    private var files: [(Int, DroppedFile)] = []
-    private var skipped: [(Int, SkippedFile)] = []
+    private var files: [(Int, DragAndDrop.DroppedFile)] = []
+    private var skipped: [(Int, DragAndDrop.SkippedFile)] = []
 
-    func add(_ index: Int, _ file: DroppedFile) {
+    func add(_ index: Int, _ file: DragAndDrop.DroppedFile) {
         lock.lock()
         files.append((index, file))
         lock.unlock()
     }
 
-    func skip(_ index: Int, _ file: SkippedFile) {
+    func skip(_ index: Int, _ file: DragAndDrop.SkippedFile) {
         lock.lock()
         skipped.append((index, file))
         lock.unlock()
     }
 
-    func take() -> ([DroppedFile], [SkippedFile]) {
+    func take() -> ([DragAndDrop.DroppedFile], [DragAndDrop.SkippedFile]) {
         lock.lock()
         defer { lock.unlock() }
         return (
@@ -419,9 +419,9 @@ private final class Collected: @unchecked Sendable {
 #if canImport(UIKit)
 /// A drag out armed for the press in progress.
 private struct Armed {
-    let request: DragRequest
+    let request: DragAndDrop.DragRequest
     let at: Date
-    let waiting: CheckedContinuation<DragResult, Error>
+    let waiting: CheckedContinuation<DragAndDrop.DragResult, Error>
     var lifted = false
 }
 
@@ -430,7 +430,7 @@ extension DragAndDropBackendImpl: UIDragInteractionDelegate {
     private static let liftWindow: TimeInterval = 2.5
 
     @MainActor
-    fileprivate func arm(_ request: DragRequest, _ waiting: CheckedContinuation<DragResult, Error>) {
+    fileprivate func arm(_ request: DragAndDrop.DragRequest, _ waiting: CheckedContinuation<DragAndDrop.DragResult, Error>) {
         // A new press replaces a drag armed for one that never lifted.
         if let previous = armed, !previous.lifted {
             previous.waiting.resume(returning: .cancelled)
@@ -447,7 +447,7 @@ extension DragAndDropBackendImpl: UIDragInteractionDelegate {
         }
     }
 
-    private func dragItems(_ request: DragRequest) -> [UIDragItem] {
+    private func dragItems(_ request: DragAndDrop.DragRequest) -> [UIDragItem] {
         request.items.compactMap { item -> UIDragItem? in
             switch item {
             case .text(let text):

@@ -26,7 +26,7 @@ import Intents
 /// In-memory files are written to `tmp/istmo-share/outgoing/` before
 /// presenting; outgoing copies older than a day are pruned on every
 /// share. On iPad the sheet is a popover anchored on
-/// `ShareRequest.anchor.rect` (key-window points), or on the centre of
+/// `Share.ShareRequest.anchor.rect` (key-window points), or on the centre of
 /// the key window when no anchor is given. Cancelling the Rust call
 /// dismisses the sheet.
 ///
@@ -55,9 +55,9 @@ public final class ShareBackendImpl: ShareBackend {
     /// other donated interactions.
     private static let donationGroup = "dev.istmo.share.targets"
 
-    public func capabilities() async throws -> ShareCapabilities {
+    public func capabilities() async throws -> Share.ShareCapabilities {
         #if canImport(UIKit)
-        ShareCapabilities(
+        Share.ShareCapabilities(
             send: true,
             files: true,
             mixedContent: true,
@@ -69,7 +69,7 @@ public final class ShareBackendImpl: ShareBackend {
             dismissOnCancel: true
         )
         #else
-        ShareCapabilities(
+        Share.ShareCapabilities(
             send: false, files: false, mixedContent: false, richPreview: false,
             reportsCompletion: false, reportsTarget: false, receive: false,
             directShare: false, dismissOnCancel: false
@@ -82,17 +82,17 @@ public final class ShareBackendImpl: ShareBackend {
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         } catch {
-            throw ShareError.io("\(root.path): \(error.localizedDescription)")
+            throw Share.ShareError.io("\(root.path): \(error.localizedDescription)")
         }
         return root.path
     }
 
-    public func set_share_targets(targets: [ShareTarget]) async throws {
+    public func set_share_targets(targets: [Share.ShareTarget]) async throws {
         // Launcher-only targets are Android launcher shortcuts; nothing to donate.
         let targets = targets.filter { !$0.launcherOnly }
         #if canImport(Intents) && canImport(UIKit)
         guard targets.isEmpty || Self.directShareConfigured() else {
-            throw ShareError.unsupported("add INSendMessageIntent to NSUserActivityTypes to donate share targets")
+            throw Share.ShareError.unsupported("add INSendMessageIntent to NSUserActivityTypes to donate share targets")
         }
         do {
             try await INInteraction.delete(with: Self.donationGroup)
@@ -102,13 +102,13 @@ public final class ShareBackendImpl: ShareBackend {
                 interaction.groupIdentifier = Self.donationGroup
                 try await interaction.donate()
             }
-        } catch let error as ShareError {
+        } catch let error as Share.ShareError {
             throw error
         } catch {
-            throw ShareError.backend(error.localizedDescription)
+            throw Share.ShareError.backend(error.localizedDescription)
         }
         #else
-        throw ShareError.unsupported("share-sheet suggestions need UIKit and Intents")
+        throw Share.ShareError.unsupported("share-sheet suggestions need UIKit and Intents")
         #endif
     }
 
@@ -118,7 +118,7 @@ public final class ShareBackendImpl: ShareBackend {
     }
 
     #if canImport(Intents) && canImport(UIKit)
-    private static func messageIntent(for target: ShareTarget) throws -> INSendMessageIntent {
+    private static func messageIntent(for target: Share.ShareTarget) throws -> INSendMessageIntent {
         let name = INSpeakableString(spokenPhrase: target.label)
         let intent: INSendMessageIntent
         if #available(iOS 14.0, *) {
@@ -138,7 +138,7 @@ public final class ShareBackendImpl: ShareBackend {
             switch icon.source {
             case .path(let path):
                 guard let loaded = FileManager.default.contents(atPath: path) else {
-                    throw ShareError.notFound(path)
+                    throw Share.ShareError.notFound(path)
                 }
                 data = loaded
             case .bytes(let bytes):
@@ -150,10 +150,10 @@ public final class ShareBackendImpl: ShareBackend {
     }
     #endif
 
-    public func share(request: ShareRequest) async throws -> ShareOutcome {
+    public func share(request: Share.ShareRequest) async throws -> Share.ShareOutcome {
         #if canImport(UIKit)
         guard request.text != nil || request.url != nil || !request.files.isEmpty else {
-            throw ShareError.invalidRequest("share request has no text, url or files")
+            throw Share.ShareError.invalidRequest("share request has no text, url or files")
         }
         try acquire()
         defer { release() }
@@ -171,20 +171,20 @@ public final class ShareBackendImpl: ShareBackend {
         if let urlString = request.url, let url = URL(string: urlString) {
             items.append(URLItemSource(url: url, subject: request.subject, metadata: metadata))
         } else if let urlString = request.url {
-            throw ShareError.invalidRequest("not a valid URL: \(urlString)")
+            throw Share.ShareError.invalidRequest("not a valid URL: \(urlString)")
         }
         items.append(contentsOf: fileURLs)
 
         return try await present(items: items, anchor: request.anchor)
         #else
-        throw ShareError.unsupported("UIKit unavailable")
+        throw Share.ShareError.unsupported("UIKit unavailable")
         #endif
     }
 
     private func acquire() throws {
         lock.lock()
         defer { lock.unlock() }
-        if busy { throw ShareError.busy }
+        if busy { throw Share.ShareError.busy }
         busy = true
     }
 
@@ -196,9 +196,9 @@ public final class ShareBackendImpl: ShareBackend {
 
     #if canImport(UIKit)
     @MainActor
-    private func present(items: [Any], anchor: ShareAnchor?) async throws -> ShareOutcome {
+    private func present(items: [Any], anchor: Share.ShareAnchor?) async throws -> Share.ShareOutcome {
         guard let host = presenter() as? UIViewController else {
-            throw ShareError.noPresenter("no view controller to present UIActivityViewController from")
+            throw Share.ShareError.noPresenter("no view controller to present UIActivityViewController from")
         }
         let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
         let once = OnceContinuation()
@@ -211,7 +211,7 @@ public final class ShareBackendImpl: ShareBackend {
                 }
                 controller.completionWithItemsHandler = { activityType, completed, _, error in
                     if let error = error {
-                        once.resume(.failure(ShareError.backend(error.localizedDescription)))
+                        once.resume(.failure(Share.ShareError.backend(error.localizedDescription)))
                     } else if completed {
                         once.resume(.success(.shared(activityType?.rawValue)))
                     } else {
@@ -240,7 +240,7 @@ public final class ShareBackendImpl: ShareBackend {
         }
     }
 
-    private func linkMetadata(request: ShareRequest, thumbnailURL: URL?) async -> LPLinkMetadata? {
+    private func linkMetadata(request: Share.ShareRequest, thumbnailURL: URL?) async -> LPLinkMetadata? {
         guard let preview = request.preview else { return nil }
         var metadata = LPLinkMetadata()
         if preview.fetchLinkMetadata, let urlString = request.url, let url = URL(string: urlString) {
@@ -279,15 +279,15 @@ public final class ShareBackendImpl: ShareBackend {
 /// and a cancellation can race.
 final class OnceContinuation: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<ShareOutcome, Error>?
+    private var continuation: CheckedContinuation<Share.ShareOutcome, Error>?
 
-    func install(_ continuation: CheckedContinuation<ShareOutcome, Error>) {
+    func install(_ continuation: CheckedContinuation<Share.ShareOutcome, Error>) {
         lock.lock()
         self.continuation = continuation
         lock.unlock()
     }
 
-    func resume(_ result: Result<ShareOutcome, Error>) {
+    func resume(_ result: Result<Share.ShareOutcome, Error>) {
         lock.lock()
         let continuation = self.continuation
         self.continuation = nil
@@ -349,11 +349,11 @@ struct OutgoingStaging {
     private static let ttl: TimeInterval = 24 * 60 * 60
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("istmo-share/outgoing", isDirectory: true)
 
-    func stage(_ file: ShareFile) throws -> URL {
+    func stage(_ file: Share.ShareFile) throws -> URL {
         switch file.source {
         case .path(let path):
             guard FileManager.default.fileExists(atPath: path) else {
-                throw ShareError.notFound(path)
+                throw Share.ShareError.notFound(path)
             }
             let url = URL(fileURLWithPath: path)
             // A display name different from the on-disk name needs a
@@ -372,7 +372,7 @@ struct OutgoingStaging {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try body(dest)
         } catch {
-            throw ShareError.io("\(dest.path): \(error.localizedDescription)")
+            throw Share.ShareError.io("\(dest.path): \(error.localizedDescription)")
         }
         return dest
     }

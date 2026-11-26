@@ -11,14 +11,14 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
 
     private let locationManager = CLLocationManager()
     private let locationLock = NSLock()
-    private var locationContinuation: CheckedContinuation<PermissionStatus, Never>?
+    private var locationContinuation: CheckedContinuation<Permissions.PermissionStatus, Never>?
 
     public override init() {
         super.init()
         locationManager.delegate = self
     }
 
-    public func check(permission: String) async throws -> PermissionStatus {
+    public func check(permission: String) async throws -> Permissions.PermissionStatus {
         switch permission {
         case "android.permission.POST_NOTIFICATIONS":
             return await notificationStatus()
@@ -43,12 +43,12 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    public func request(permissions: [String]) async throws -> [PermissionOutcome] {
-        var out: [PermissionOutcome] = []
+    public func request(permissions: [String]) async throws -> [Permissions.PermissionOutcome] {
+        var out: [Permissions.PermissionOutcome] = []
         out.reserveCapacity(permissions.count)
         for permission in permissions {
             let status = await requestOne(permission)
-            out.append(PermissionOutcome(permission: permission, status: status))
+            out.append(Permissions.PermissionOutcome(permission: permission, status: status))
         }
         return out
     }
@@ -57,7 +57,7 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         false
     }
 
-    private func requestOne(_ permission: String) async -> PermissionStatus {
+    private func requestOne(_ permission: String) async -> Permissions.PermissionStatus {
         switch permission {
         case "android.permission.POST_NOTIFICATIONS":
             return await requestNotifications()
@@ -82,12 +82,12 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    private func notificationStatus() async -> PermissionStatus {
+    private func notificationStatus() async -> Permissions.PermissionStatus {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         return Self.mapNotifications(settings.authorizationStatus)
     }
 
-    private func requestNotifications() async -> PermissionStatus {
+    private func requestNotifications() async -> Permissions.PermissionStatus {
         do {
             let granted = try await UNUserNotificationCenter.current()
                 .requestAuthorization(options: [.alert, .badge, .sound])
@@ -99,7 +99,7 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    private func requestAVMedia(_ mediaType: AVMediaType) async -> PermissionStatus {
+    private func requestAVMedia(_ mediaType: AVMediaType) async -> Permissions.PermissionStatus {
 
         switch AVCaptureDevice.authorizationStatus(for: mediaType) {
         case .authorized: return .granted
@@ -111,14 +111,14 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         return granted ? .granted : .permanentlyDenied
     }
 
-    private func requestLocation() async -> PermissionStatus {
+    private func requestLocation() async -> Permissions.PermissionStatus {
         switch locationManager.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse: return .granted
         case .denied, .restricted: return .permanentlyDenied
         case .notDetermined: break
         @unknown default: return .notSupported
         }
-        return await withCheckedContinuation { (cont: CheckedContinuation<PermissionStatus, Never>) in
+        return await withCheckedContinuation { (cont: CheckedContinuation<Permissions.PermissionStatus, Never>) in
             locationLock.lock()
             locationContinuation = cont
             locationLock.unlock()
@@ -137,17 +137,17 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         cont?.resume(returning: status)
     }
 
-    private func requestPhotos() async -> PermissionStatus {
+    private func requestPhotos() async -> Permissions.PermissionStatus {
         let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         if current != .notDetermined { return Self.mapPhotos(current) }
         let next = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
         return Self.mapPhotos(next)
     }
 
-    private func requestContacts() async -> PermissionStatus {
+    private func requestContacts() async -> Permissions.PermissionStatus {
         let current = CNContactStore.authorizationStatus(for: .contacts)
         if current != .notDetermined { return Self.mapContacts(current) }
-        return await withCheckedContinuation { (cont: CheckedContinuation<PermissionStatus, Never>) in
+        return await withCheckedContinuation { (cont: CheckedContinuation<Permissions.PermissionStatus, Never>) in
             CNContactStore().requestAccess(for: .contacts) { granted, error in
                 if let error = error {
                     NSLog("PermissionsBackendImpl: contacts request error: \(error)")
@@ -157,10 +157,10 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    private func requestCalendar() async -> PermissionStatus {
+    private func requestCalendar() async -> Permissions.PermissionStatus {
         let current = EKEventStore.authorizationStatus(for: .event)
         if current != .notDetermined { return Self.mapCalendar(current) }
-        return await withCheckedContinuation { (cont: CheckedContinuation<PermissionStatus, Never>) in
+        return await withCheckedContinuation { (cont: CheckedContinuation<Permissions.PermissionStatus, Never>) in
             EKEventStore().requestAccess(to: .event) { granted, error in
                 if let error = error {
                     NSLog("PermissionsBackendImpl: calendar request error: \(error)")
@@ -170,7 +170,7 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    private static func map(_ status: AVAuthorizationStatus) -> PermissionStatus {
+    private static func map(_ status: AVAuthorizationStatus) -> Permissions.PermissionStatus {
         switch status {
         case .authorized: return .granted
         case .denied: return .permanentlyDenied
@@ -180,7 +180,7 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    private static func mapNotifications(_ status: UNAuthorizationStatus) -> PermissionStatus {
+    private static func mapNotifications(_ status: UNAuthorizationStatus) -> Permissions.PermissionStatus {
         switch status {
         case .authorized, .provisional, .ephemeral: return .granted
         case .denied: return .permanentlyDenied
@@ -189,7 +189,7 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    private static func mapLocation(_ status: CLAuthorizationStatus) -> PermissionStatus {
+    private static func mapLocation(_ status: CLAuthorizationStatus) -> Permissions.PermissionStatus {
         switch status {
         case .authorizedAlways, .authorizedWhenInUse: return .granted
         case .denied, .restricted: return .permanentlyDenied
@@ -198,7 +198,7 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    private static func mapPhotos(_ status: PHAuthorizationStatus) -> PermissionStatus {
+    private static func mapPhotos(_ status: PHAuthorizationStatus) -> Permissions.PermissionStatus {
         switch status {
         case .authorized, .limited: return .granted
         case .denied, .restricted: return .permanentlyDenied
@@ -207,7 +207,7 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    private static func mapContacts(_ status: CNAuthorizationStatus) -> PermissionStatus {
+    private static func mapContacts(_ status: CNAuthorizationStatus) -> Permissions.PermissionStatus {
         switch status {
         case .authorized: return .granted
         case .denied, .restricted: return .permanentlyDenied
@@ -216,7 +216,7 @@ public final class PermissionsBackendImpl: NSObject, PermissionsBackend, CLLocat
         }
     }
 
-    private static func mapCalendar(_ status: EKAuthorizationStatus) -> PermissionStatus {
+    private static func mapCalendar(_ status: EKAuthorizationStatus) -> Permissions.PermissionStatus {
         switch status {
         case .authorized, .fullAccess, .writeOnly: return .granted
         case .denied, .restricted: return .permanentlyDenied

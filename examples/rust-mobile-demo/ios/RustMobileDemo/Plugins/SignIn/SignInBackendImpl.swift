@@ -8,23 +8,23 @@ import UIKit
 public final class SignInFactoryImpl: SignInFactory {
     public init() {}
 
-    public func create(config: SignInConfig) async throws -> SignInBackend {
+    public func create(config: SignIn.SignInConfig) async throws -> SignInBackend {
         SignInBackendImpl(config: config)
     }
 }
 
 public final class SignInBackendImpl: SignInBackend, HandleReleaser {
 
-    private let config: SignInConfig
+    private let config: SignIn.SignInConfig
     private let credLock = NSLock()
     private var credentials: [NativeHandleId: Any] = [:]
 
-    public init(config: SignInConfig) {
+    public init(config: SignIn.SignInConfig) {
         self.config = config
         applyConfiguration()
     }
 
-    public func sign_in(mode: SignInMode) async throws -> SignInAccount {
+    public func sign_in(mode: SignIn.SignInMode) async throws -> SignIn.SignInAccount {
         switch mode {
         case .interactive:
             return try await interactive()
@@ -33,19 +33,19 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
         }
     }
 
-    public func silent_sign_in() async throws -> SignInAccount? {
+    public func silent_sign_in() async throws -> SignIn.SignInAccount? {
         do {
             return try await restore(orThrow: .noCredentialAvailable)
-        } catch SignInError.noCredentialAvailable {
+        } catch SignIn.SignInError.noCredentialAvailable {
             return nil
         }
     }
 
-    public func refresh(credential: NativeHandleId) async throws -> SignInAccount {
+    public func refresh(credential: NativeHandleId) async throws -> SignIn.SignInAccount {
         #if canImport(GoogleSignIn)
         let user = credLock.withLock { credentials[credential] as? GIDGoogleUser }
         guard let user = user else {
-            throw SignInError.reauthenticate
+            throw SignIn.SignInError.reauthenticate
         }
         return try await withCheckedThrowingContinuation { cont in
             user.refreshTokensIfNeeded { refreshed, error in
@@ -54,7 +54,7 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
                     return
                 }
                 guard let refreshed = refreshed else {
-                    cont.resume(throwing: SignInError.reauthenticate)
+                    cont.resume(throwing: SignIn.SignInError.reauthenticate)
                     return
                 }
 
@@ -63,7 +63,7 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
             }
         }
         #else
-        throw SignInError.invalidConfiguration("GoogleSignIn SDK not linked")
+        throw SignIn.SignInError.invalidConfiguration("GoogleSignIn SDK not linked")
         #endif
     }
 
@@ -113,11 +113,11 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
         #endif
     }
 
-    private func interactive() async throws -> SignInAccount {
+    private func interactive() async throws -> SignIn.SignInAccount {
         #if canImport(GoogleSignIn)
         let presenter = await Self.topViewController()
         guard let presenter = presenter else {
-            throw SignInError.invalidConfiguration("no presenting UIViewController available")
+            throw SignIn.SignInError.invalidConfiguration("no presenting UIViewController available")
         }
         return try await withCheckedThrowingContinuation { cont in
             GIDSignIn.sharedInstance.signIn(
@@ -130,7 +130,7 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
                     return
                 }
                 guard let user = result?.user else {
-                    cont.resume(throwing: SignInError.backend("empty GIDSignInResult"))
+                    cont.resume(throwing: SignIn.SignInError.backend("empty GIDSignInResult"))
                     return
                 }
                 let id = IstmoRuntime.shared.allocHandleId(pluginId: SignInDispatcher.PLUGIN_ID)
@@ -139,11 +139,11 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
             }
         }
         #else
-        throw SignInError.invalidConfiguration("GoogleSignIn SDK not linked")
+        throw SignIn.SignInError.invalidConfiguration("GoogleSignIn SDK not linked")
         #endif
     }
 
-    private func restore(orThrow err: SignInError) async throws -> SignInAccount {
+    private func restore(orThrow err: SignIn.SignInError) async throws -> SignIn.SignInAccount {
         #if canImport(GoogleSignIn)
         return try await withCheckedThrowingContinuation { cont in
             GIDSignIn.sharedInstance.restorePreviousSignIn { user, error in
@@ -168,15 +168,15 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
             }
         }
         #else
-        throw SignInError.invalidConfiguration("GoogleSignIn SDK not linked")
+        throw SignIn.SignInError.invalidConfiguration("GoogleSignIn SDK not linked")
         #endif
     }
 
     #if canImport(GoogleSignIn)
-    private func account(from user: GIDGoogleUser, credentialId: NativeHandleId) -> SignInAccount {
+    private func account(from user: GIDGoogleUser, credentialId: NativeHandleId) -> SignIn.SignInAccount {
         let profile = user.profile
         let grantedScopes = user.grantedScopes ?? []
-        return SignInAccount(
+        return SignIn.SignInAccount(
             id: user.userID ?? "",
             email: profile?.email,
             displayName: profile?.name,
@@ -187,7 +187,7 @@ public final class SignInBackendImpl: SignInBackend, HandleReleaser {
         )
     }
 
-    private static func mapSignInError(_ error: Error) -> SignInError {
+    private static func mapSignInError(_ error: Error) -> SignIn.SignInError {
         let nserror = error as NSError
         if nserror.domain == kGIDSignInErrorDomain {
             switch GIDSignInError.Code(rawValue: nserror.code) {

@@ -150,14 +150,14 @@ fn swift_defaults_match_rust() {
     let layout = PixelLayout::default();
     let expected = [
         format!(
-            "CursorRequest(mode: {}, strength: {})",
+            "ScreenCapture.CursorRequest(mode: {}, strength: {})",
             sw(&cursor.mode),
             sw(&cursor.strength)
         ),
         format!("allowPicker: Bool = {}", consent.allow_picker),
         format!("persist: {}", sw(&consent.persist)),
         format!(
-            "CompositeConfig(scale: {}, fill: {}, engine: {})",
+            "ScreenCapture.CompositeConfig(scale: {}, fill: {}, engine: {})",
             sw(&composite.scale),
             sw(&composite.fill),
             sw(&composite.engine)
@@ -173,16 +173,16 @@ fn swift_defaults_match_rust() {
         format!("excludeOwnProcess: {}", video.exclude_own_process),
         format!("liveBuffers: {}", video.live_buffers),
         format!(
-            "LinuxOptions(pipewire: {})",
+            "ScreenCapture.LinuxOptions(pipewire: {})",
             sw(&LinuxOptions::default().pipewire)
         ),
         format!(
-            "WindowsOptions(borderless: {})",
+            "ScreenCapture.WindowsOptions(borderless: {})",
             sw(&WindowsOptions::default().borderless)
         ),
         format!("composite: {}", ScreenshotRequest::default().composite),
         format!(
-            "PixelLayout(format: {}, upright: {}, tight: {})",
+            "ScreenCapture.PixelLayout(format: {}, upright: {}, tight: {})",
             sw(&layout.format),
             layout.upright,
             layout.tight
@@ -191,14 +191,14 @@ fn swift_defaults_match_rust() {
     for text in &expected {
         contains(file, &swift, text);
     }
-    contains(file, &swift, "formats: FormatRequest(tiers: [])");
+    contains(file, &swift, "formats: ScreenCapture.FormatRequest(tiers: [])");
     let BackendSelection::Auto(AutoSelect { prefer, .. }) = BackendSelection::default() else {
         panic!("the default selection is Auto");
     };
     contains(
         file,
         &swift,
-        &format!(".auto(AutoSelect(prefer: {}, exclude: []))", sw(&prefer)),
+        &format!(".auto(ScreenCapture.AutoSelect(prefer: {}, exclude: []))", sw(&prefer)),
     );
-    contains(file, &swift, "source: SourceSelector = .primaryMonitor");
+    contains(file, &swift, "source: ScreenCapture.SourceSelector = .primaryMonitor");
 }

@@ -2,8 +2,8 @@
 import UIKit
 
 /// UIView that intercepts Apple Pencil / stylus `UITouch`es and
-/// republishes them as `AsyncThrowingStream<PenEvent, Error>` and
-/// `AsyncThrowingStream<PenHoverEvent, Error>` for consumption by the
+/// republishes them as `AsyncThrowingStream<Pen.PenEvent, Error>` and
+/// `AsyncThrowingStream<Pen.PenHoverEvent, Error>` for consumption by the
 /// `istmo.pen` plugin backend.
 ///
 /// Non-pencil touches are passed to `super` so ordinary finger input
@@ -11,25 +11,25 @@ import UIKit
 /// observer, not a gesture consumer.
 public final class PenCaptureView: UIView {
 
-    public let events: AsyncThrowingStream<PenEvent, Error>
-    public let hover: AsyncThrowingStream<PenHoverEvent, Error>
+    public let events: AsyncThrowingStream<Pen.PenEvent, Error>
+    public let hover: AsyncThrowingStream<Pen.PenHoverEvent, Error>
 
-    private let eventsContinuation: AsyncThrowingStream<PenEvent, Error>.Continuation
-    private let hoverContinuation: AsyncThrowingStream<PenHoverEvent, Error>.Continuation
+    private let eventsContinuation: AsyncThrowingStream<Pen.PenEvent, Error>.Continuation
+    private let hoverContinuation: AsyncThrowingStream<Pen.PenHoverEvent, Error>.Continuation
 
     private var sequence: UInt32 = 0
     private let attachTime: TimeInterval = ProcessInfo.processInfo.systemUptime
     private var predictionEnabled: Bool = true
 
     public override init(frame: CGRect) {
-        var eventsCont: AsyncThrowingStream<PenEvent, Error>.Continuation!
-        self.events = AsyncThrowingStream<PenEvent, Error> { cont in
+        var eventsCont: AsyncThrowingStream<Pen.PenEvent, Error>.Continuation!
+        self.events = AsyncThrowingStream<Pen.PenEvent, Error> { cont in
             eventsCont = cont
         }
         self.eventsContinuation = eventsCont
 
-        var hoverCont: AsyncThrowingStream<PenHoverEvent, Error>.Continuation!
-        self.hover = AsyncThrowingStream<PenHoverEvent, Error> { cont in
+        var hoverCont: AsyncThrowingStream<Pen.PenHoverEvent, Error>.Continuation!
+        self.hover = AsyncThrowingStream<Pen.PenHoverEvent, Error> { cont in
             hoverCont = cont
         }
         self.hoverContinuation = hoverCont
@@ -52,8 +52,8 @@ public final class PenCaptureView: UIView {
         fatalError("PenCaptureView must be constructed programmatically")
     }
 
-    public var capabilities: PenCapabilities {
-        PenCapabilities(
+    public var capabilities: Pen.PenCapabilities {
+        Pen.PenCapabilities(
             pressure: true,
             tilt: true,
             azimuth: true,
@@ -95,7 +95,7 @@ public final class PenCaptureView: UIView {
                 ? (event?.predictedTouches(for: touch)?.map { self.sample(touch: $0) } ?? [])
                 : []
             self.eventsContinuation.yield(
-                .move(PenMove(sample: sample, coalesced: Array(coalesced), predicted: predicted)),
+                .move(Pen.PenMove(sample: sample, coalesced: Array(coalesced), predicted: predicted)),
             )
         }
         super.touchesMoved(touches, with: event)
@@ -146,7 +146,7 @@ public final class PenCaptureView: UIView {
         }
     }
 
-    private func sample(touch: UITouch) -> PenSample {
+    private func sample(touch: UITouch) -> Pen.PenSample {
         let point = touch.preciseLocation(in: self)
         let azimuth = touch.azimuthAngle(in: self)
         let altitude = touch.altitudeAngle
@@ -157,7 +157,7 @@ public final class PenCaptureView: UIView {
         let tiltX = tilt * sinf(Float(azimuth))
         let tiltY = -tilt * cosf(Float(azimuth))
         let time = touch.timestamp - attachTime
-        return PenSample(
+        return Pen.PenSample(
             x: Float(point.x),
             y: Float(point.y),
             pressure: normalizedPressure,
@@ -176,8 +176,8 @@ public final class PenCaptureView: UIView {
         )
     }
 
-    private func hoverSample(location: CGPoint, zOffset: CGFloat) -> PenSample {
-        PenSample(
+    private func hoverSample(location: CGPoint, zOffset: CGFloat) -> Pen.PenSample {
+        Pen.PenSample(
             x: Float(location.x),
             y: Float(location.y),
             pressure: 0,
@@ -196,7 +196,7 @@ public final class PenCaptureView: UIView {
         )
     }
 
-    private func toolKind(_ touch: UITouch) -> PenToolKind {
+    private func toolKind(_ touch: UITouch) -> Pen.PenToolKind {
         // Apple Pencil does not expose an eraser tool type on `UITouch`
         // (ApplePencilPro's eraser mode is surfaced via `UIPencilInteraction`
         // preferences, not per-touch). Reported as `.tip` regardless.
@@ -215,22 +215,22 @@ public final class PenCaptureView: UIView {
 
 #if canImport(UIKit)
 /// Apple Pencil double tap (2nd gen, Pro) and squeeze (Pro) surface as
-/// `PenEvent.gesture`; the app decides what they do.
+/// `Pen.PenEvent.gesture`; the app decides what they do.
 extension PenCaptureView: UIPencilInteractionDelegate {
     @available(iOS, introduced: 12.1, deprecated: 17.5)
     public func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
-        eventsContinuation.yield(.gesture(PenGesture(kind: .doubleTap)))
+        eventsContinuation.yield(.gesture(Pen.PenGesture(kind: .doubleTap)))
     }
 
     @available(iOS 17.5, *)
     public func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
-        eventsContinuation.yield(.gesture(PenGesture(kind: .doubleTap)))
+        eventsContinuation.yield(.gesture(Pen.PenGesture(kind: .doubleTap)))
     }
 
     @available(iOS 17.5, *)
     public func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
         if squeeze.phase == .ended {
-            eventsContinuation.yield(.gesture(PenGesture(kind: .squeeze)))
+            eventsContinuation.yield(.gesture(Pen.PenGesture(kind: .squeeze)))
         }
     }
 }

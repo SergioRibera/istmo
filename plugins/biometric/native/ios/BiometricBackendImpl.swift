@@ -30,7 +30,7 @@ public final class BiometricBackendImpl: BiometricBackend {
 
     // ------------------------------------------------------- Biometric impl
 
-    public func availability(policy: AuthPolicy) async throws -> Availability {
+    public func availability(policy: Biometric.AuthPolicy) async throws -> Biometric.Availability {
         #if canImport(LocalAuthentication)
         let context = LAContext()
         var biometricError: NSError?
@@ -44,7 +44,7 @@ public final class BiometricBackendImpl: BiometricBackend {
         let (evaluated, error) = policy == .biometricOrDeviceCredential
             ? (credential, credentialError)
             : (biometrics, biometricError)
-        return Availability(
+        return Biometric.Availability(
             status: evaluated ? .available : Self.status(for: error),
             kinds: kinds,
             deviceCredentialAvailable: credential,
@@ -52,7 +52,7 @@ public final class BiometricBackendImpl: BiometricBackend {
             vaultAvailable: credential
         )
         #else
-        return Availability(
+        return Biometric.Availability(
             status: .unsupported,
             kinds: [],
             deviceCredentialAvailable: false,
@@ -61,9 +61,9 @@ public final class BiometricBackendImpl: BiometricBackend {
         #endif
     }
 
-    public func authenticate(prompt: AuthPrompt) async throws -> AuthMethod {
+    public func authenticate(prompt: Biometric.AuthPrompt) async throws -> Biometric.AuthMethod {
         guard !prompt.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw BiometricError.invalidPrompt("`reason` must not be empty")
+            throw Biometric.BiometricError.invalidPrompt("`reason` must not be empty")
         }
         #if canImport(LocalAuthentication)
         let context = LAContext()
@@ -101,11 +101,11 @@ public final class BiometricBackendImpl: BiometricBackend {
             return .unspecified
         }
         #else
-        throw BiometricError.notAvailable(.unsupported)
+        throw Biometric.BiometricError.notAvailable(.unsupported)
         #endif
     }
 
-    public func store_secret(alias: String, secret: Data, prompt: AuthPrompt) async throws {
+    public func store_secret(alias: String, secret: Data, prompt: Biometric.AuthPrompt) async throws {
         try Self.checkAlias(alias)
         #if canImport(LocalAuthentication)
         let flags: SecAccessControlCreateFlags = prompt.policy == .biometricOrDeviceCredential
@@ -116,7 +116,7 @@ public final class BiometricBackendImpl: BiometricBackend {
             nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, flags, &error
         ) else {
             let reason = error?.takeRetainedValue().localizedDescription ?? "unknown"
-            throw BiometricError.backend("SecAccessControlCreateWithFlags: \(reason)")
+            throw Biometric.BiometricError.backend("SecAccessControlCreateWithFlags: \(reason)")
         }
         // Update in place so a failed or cancelled store keeps the previous
         // secret; deleting first would lose it. Replacing an access-controlled
@@ -170,14 +170,14 @@ public final class BiometricBackendImpl: BiometricBackend {
         }
         try Self.check(added)
         #else
-        throw BiometricError.unsupportedOperation("the Keychain is unavailable on this platform")
+        throw Biometric.BiometricError.unsupportedOperation("the Keychain is unavailable on this platform")
         #endif
     }
 
-    public func read_secret(alias: String, prompt: AuthPrompt) async throws -> Data {
+    public func read_secret(alias: String, prompt: Biometric.AuthPrompt) async throws -> Data {
         try Self.checkAlias(alias)
         guard !prompt.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw BiometricError.invalidPrompt("`reason` must not be empty")
+            throw Biometric.BiometricError.invalidPrompt("`reason` must not be empty")
         }
         #if canImport(LocalAuthentication)
         let context = LAContext()
@@ -204,7 +204,7 @@ public final class BiometricBackendImpl: BiometricBackend {
                     do {
                         try Self.check(status)
                         guard let data = result as? Data else {
-                            throw BiometricError.backend("Keychain returned no data")
+                            throw Biometric.BiometricError.backend("Keychain returned no data")
                         }
                         cont.resume(returning: data)
                     } catch {
@@ -216,7 +216,7 @@ public final class BiometricBackendImpl: BiometricBackend {
             box.context.invalidate()
         }
         #else
-        throw BiometricError.unsupportedOperation("the Keychain is unavailable on this platform")
+        throw Biometric.BiometricError.unsupportedOperation("the Keychain is unavailable on this platform")
         #endif
     }
 
@@ -279,7 +279,7 @@ public final class BiometricBackendImpl: BiometricBackend {
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
         guard (1...64).contains(alias.utf8.count),
               alias.unicodeScalars.allSatisfy(allowed.contains) else {
-            throw BiometricError.invalidAlias(alias)
+            throw Biometric.BiometricError.invalidAlias(alias)
         }
     }
 
@@ -316,23 +316,23 @@ public final class BiometricBackendImpl: BiometricBackend {
         case errSecSuccess:
             return
         case errSecItemNotFound:
-            throw BiometricError.secretNotFound
+            throw Biometric.BiometricError.secretNotFound
         case errSecUserCanceled:
-            throw BiometricError.userCancelled
+            throw Biometric.BiometricError.userCancelled
         case errSecAuthFailed:
-            throw BiometricError.authFailed
+            throw Biometric.BiometricError.authFailed
         case errSecInteractionNotAllowed:
-            throw BiometricError.systemCancelled
+            throw Biometric.BiometricError.systemCancelled
         case errSecParam where !LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil):
             // Access-controlled items need a device passcode.
-            throw BiometricError.notAvailable(.noneEnrolled)
+            throw Biometric.BiometricError.notAvailable(.noneEnrolled)
         default:
             let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
-            throw BiometricError.backend("Keychain: \(message)")
+            throw Biometric.BiometricError.backend("Keychain: \(message)")
         }
     }
 
-    private static func laPolicy(_ policy: AuthPolicy) -> LAPolicy {
+    private static func laPolicy(_ policy: Biometric.AuthPolicy) -> LAPolicy {
         switch policy {
         case .biometricStrong, .biometricWeak:
             return .deviceOwnerAuthenticationWithBiometrics
@@ -341,7 +341,7 @@ public final class BiometricBackendImpl: BiometricBackend {
         }
     }
 
-    private static func kinds(of context: LAContext) -> [BiometricKind] {
+    private static func kinds(of context: LAContext) -> [Biometric.BiometricKind] {
         switch context.biometryType {
         case .touchID:
             return [.fingerprint]
@@ -363,7 +363,7 @@ public final class BiometricBackendImpl: BiometricBackend {
         return LAError.Code(rawValue: error.code)
     }
 
-    private static func status(for error: Error?) -> BiometricStatus {
+    private static func status(for error: Error?) -> Biometric.BiometricStatus {
         switch code(of: error) {
         case .passcodeNotSet, .biometryNotEnrolled:
             return .noneEnrolled
@@ -376,7 +376,7 @@ public final class BiometricBackendImpl: BiometricBackend {
         }
     }
 
-    private static func error(for error: Error?) -> BiometricError {
+    private static func error(for error: Error?) -> Biometric.BiometricError {
         switch code(of: error) {
         case .authenticationFailed:
             return .authFailed

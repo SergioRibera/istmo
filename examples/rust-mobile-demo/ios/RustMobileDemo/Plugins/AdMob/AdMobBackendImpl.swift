@@ -8,7 +8,7 @@ import UIKit
 public final class AdMobFactoryImpl: AdMobFactory {
     public init() {}
 
-    public func create(config: AdMobConfig) async throws -> AdMobBackend {
+    public func create(config: AdMob.AdMobConfig) async throws -> AdMobBackend {
         #if canImport(GoogleMobileAds)
 
         let cfg = MobileAds.shared.requestConfiguration
@@ -47,21 +47,21 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
             throw Self.mapAdError(error)
         }
         #else
-        throw AdError.notInitialized
+        throw AdMob.AdError.notInitialized
         #endif
     }
 
-    public func show_interstitial(ad: NativeHandleId) async throws -> InterstitialOutcome {
+    public func show_interstitial(ad: NativeHandleId) async throws -> AdMob.InterstitialOutcome {
         #if canImport(GoogleMobileAds)
         let entry = lock.withLock { interstitials[ad] } as? InterstitialAd
-        guard let entry = entry else { throw AdError.unknownAd }
+        guard let entry = entry else { throw AdMob.AdError.unknownAd }
         let presenter = await Self.rootViewController()
         guard let presenter = presenter else {
-            throw AdError.`internal`("no root view controller for interstitial present")
+            throw AdMob.AdError.`internal`("no root view controller for interstitial present")
         }
         let coordinator = InterstitialCoordinator()
         entry.fullScreenContentDelegate = coordinator
-        let outcome = await withCheckedContinuation { (cont: CheckedContinuation<InterstitialOutcome, Never>) in
+        let outcome = await withCheckedContinuation { (cont: CheckedContinuation<AdMob.InterstitialOutcome, Never>) in
             coordinator.continuation = cont
             DispatchQueue.main.async {
                 entry.present(from: presenter)
@@ -71,7 +71,7 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
         IstmoRuntime.shared.forgetHandle(ad)
         return outcome
         #else
-        throw AdError.notInitialized
+        throw AdMob.AdError.notInitialized
         #endif
     }
 
@@ -87,21 +87,21 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
             throw Self.mapAdError(error)
         }
         #else
-        throw AdError.notInitialized
+        throw AdMob.AdError.notInitialized
         #endif
     }
 
-    public func show_rewarded(ad: NativeHandleId) async throws -> RewardedOutcome {
+    public func show_rewarded(ad: NativeHandleId) async throws -> AdMob.RewardedOutcome {
         #if canImport(GoogleMobileAds)
         let entry = lock.withLock { rewardeds[ad] } as? RewardedAd
-        guard let entry = entry else { throw AdError.unknownAd }
+        guard let entry = entry else { throw AdMob.AdError.unknownAd }
         let presenter = await Self.rootViewController()
         guard let presenter = presenter else {
-            throw AdError.`internal`("no root view controller for rewarded present")
+            throw AdMob.AdError.`internal`("no root view controller for rewarded present")
         }
         let coordinator = RewardedCoordinator()
         entry.fullScreenContentDelegate = coordinator
-        let outcome = await withCheckedContinuation { (cont: CheckedContinuation<RewardedOutcome, Never>) in
+        let outcome = await withCheckedContinuation { (cont: CheckedContinuation<AdMob.RewardedOutcome, Never>) in
             coordinator.continuation = cont
             DispatchQueue.main.async {
                 entry.present(from: presenter) {
@@ -116,16 +116,16 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
         IstmoRuntime.shared.forgetHandle(ad)
         return outcome
         #else
-        throw AdError.notInitialized
+        throw AdMob.AdError.notInitialized
         #endif
     }
 
-    public func show_banner(request: BannerRequest) async throws -> NativeHandleId {
+    public func show_banner(request: AdMob.BannerRequest) async throws -> NativeHandleId {
         #if canImport(GoogleMobileAds)
         let id = IstmoRuntime.shared.allocHandleId(pluginId: AdMobDispatcher.PLUGIN_ID)
         return try await MainActor.run { [weak self] in
             guard let self = self, let root = Self.rootViewControllerNow() else {
-                throw AdError.`internal`("no root view controller for banner attach")
+                throw AdMob.AdError.`internal`("no root view controller for banner attach")
             }
             let scale = UIScreen.main.scale
             let frame = CGRect(
@@ -144,11 +144,11 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
             return id
         }
         #else
-        throw AdError.notInitialized
+        throw AdMob.AdError.notInitialized
         #endif
     }
 
-    public func update_banner(banner: NativeHandleId, rect: BannerRect) async throws {
+    public func update_banner(banner: NativeHandleId, rect: AdMob.BannerRect) async throws {
         #if canImport(GoogleMobileAds)
         let view = lock.withLock { banners[banner] } as? BannerView
         guard let view = view else { return }
@@ -192,7 +192,7 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
     }
 
     #if canImport(GoogleMobileAds)
-    private static func mapAdError(_ error: Error) -> AdError {
+    private static func mapAdError(_ error: Error) -> AdMob.AdError {
         let nserror = error as NSError
 
         if nserror.domain == "com.google.admob" || nserror.domain.contains("MobileAdsSDK") {
@@ -229,7 +229,7 @@ public final class AdMobBackendImpl: AdMobBackend, HandleReleaser {
 
 private final class InterstitialCoordinator: NSObject, FullScreenContentDelegate {
 
-    var continuation: CheckedContinuation<InterstitialOutcome, Never>?
+    var continuation: CheckedContinuation<AdMob.InterstitialOutcome, Never>?
 
     func ad(_ ad: FullScreenPresentingAd, didFailToPresentFullScreenContentWithError error: Error) {
         continuation?.resume(returning: .failedToShow)
@@ -244,20 +244,20 @@ private final class InterstitialCoordinator: NSObject, FullScreenContentDelegate
 
 private final class RewardedCoordinator: NSObject, FullScreenContentDelegate {
 
-    var continuation: CheckedContinuation<RewardedOutcome, Never>?
+    var continuation: CheckedContinuation<AdMob.RewardedOutcome, Never>?
     var granted: Bool = false
     var rewardType: String = ""
     var rewardAmount: UInt32 = 0
 
     func ad(_ ad: FullScreenPresentingAd, didFailToPresentFullScreenContentWithError error: Error) {
-        continuation?.resume(returning: RewardedOutcome(
+        continuation?.resume(returning: AdMob.RewardedOutcome(
             granted: false, rewardType: "", rewardAmount: 0,
         ))
         continuation = nil
     }
 
     func adDidDismissFullScreenContent(_ ad: FullScreenPresentingAd) {
-        continuation?.resume(returning: RewardedOutcome(
+        continuation?.resume(returning: AdMob.RewardedOutcome(
             granted: granted, rewardType: rewardType, rewardAmount: rewardAmount,
         ))
         continuation = nil

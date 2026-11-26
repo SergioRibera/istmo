@@ -28,15 +28,15 @@ struct CompiledRules {
         }
     }
 
-    private let defaultAction: RuleAction
-    private let patterns: [(Pattern, RuleAction)]
+    private let defaultAction: WebView.RuleAction
+    private let patterns: [(Pattern, WebView.RuleAction)]
 
-    init(_ rules: NavigationRules) throws {
+    init(_ rules: WebView.NavigationRules) throws {
         defaultAction = rules.defaultAction
         patterns = try rules.rules.map { (try CompiledRules.compile($0.pattern), $0.action) }
     }
 
-    func evaluate(_ raw: String, fileAccess: Bool) -> RuleAction {
+    func evaluate(_ raw: String, fileAccess: Bool) -> WebView.RuleAction {
         guard let url = RuleUrl.parse(raw) else { return .deny }
         if CompiledRules.blocked.contains(url.scheme) || (url.scheme == "file" && !fileAccess) || url.hasCredentials {
             return .deny
@@ -44,8 +44,8 @@ struct CompiledRules {
         return patterns.first { $0.0.matches(url) }?.1 ?? defaultAction
     }
 
-    private static func compile(_ p: UrlPattern) throws -> Pattern {
-        let bad = WebViewError.invalidArgument("url pattern \(p.scheme)://\(p.host)\(p.pathPrefix)")
+    private static func compile(_ p: WebView.UrlPattern) throws -> Pattern {
+        let bad = WebView.WebViewError.invalidArgument("url pattern \(p.scheme)://\(p.host)\(p.pathPrefix)")
         var scheme: String?
         if p.scheme != "*" {
             let lower = p.scheme.lowercased()

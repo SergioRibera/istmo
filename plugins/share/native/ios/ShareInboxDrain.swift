@@ -4,7 +4,7 @@ import IstmoRuntime
 /// App side of the Share Extension hand-off (see ``IstmoShareHandoff``).
 ///
 /// Moves every complete inbox entry into `Caches/istmo-share/incoming/`,
-/// publishes it as an `IncomingShare` on the `istmo.share.incoming`
+/// publishes it as a `Share.IncomingShare` on the `istmo.share.incoming`
 /// early-event queue (buffered until Rust subscribes), and deletes the
 /// entry. Call it on launch, when the app becomes active, and when the
 /// extension's wake-up URL arrives:
@@ -100,7 +100,7 @@ public enum IstmoShareInbox {
             }
             let dest = caches.appendingPathComponent(entry.lastPathComponent, isDirectory: true)
             try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
-            let files: [IncomingFile] = manifest.files.compactMap { file in
+            let files: [Share.IncomingFile] = manifest.files.compactMap { file in
                 // `file` comes from disk: keep it inside the entry directory.
                 let name = (file.file as NSString).lastPathComponent
                 guard !name.isEmpty, name != ".", name != "..", name != IstmoShareHandoff.manifestName else {
@@ -110,9 +110,9 @@ public enum IstmoShareInbox {
                 let target = dest.appendingPathComponent(name)
                 guard (try? fm.moveItem(at: src, to: target)) != nil else { return nil }
                 let size = (try? fm.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.uint64Value
-                return IncomingFile(path: target.path, name: file.name, mimeType: file.mimeType, size: size)
+                return Share.IncomingFile(path: target.path, name: file.name, mimeType: file.mimeType, size: size)
             }
-            let share = IncomingShare(
+            let share = Share.IncomingShare(
                 text: manifest.text,
                 url: manifest.url,
                 subject: manifest.subject,

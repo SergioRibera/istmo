@@ -30,12 +30,12 @@ public final class NotificationsBackendImpl: NotificationsBackend {
         }
     }
 
-    public func schedule(request: NotificationRequest) async throws -> NotificationHandle {
+    public func schedule(request: Notifications.NotificationRequest) async throws -> Notifications.NotificationHandle {
 
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {
         case .authorized, .provisional, .ephemeral: break
-        default: throw NotificationError.permissionDenied
+        default: throw Notifications.NotificationError.permissionDenied
         }
 
         idLock.lock()
@@ -71,9 +71,9 @@ public final class NotificationsBackendImpl: NotificationsBackend {
         do {
             try await center.add(osRequest)
         } catch {
-            throw NotificationError.scheduler("\(error)")
+            throw Notifications.NotificationError.scheduler("\(error)")
         }
-        return NotificationHandle(id: id)
+        return Notifications.NotificationHandle(id: id)
     }
 
     public func cancel(id: UInt32) async throws {
@@ -82,7 +82,7 @@ public final class NotificationsBackendImpl: NotificationsBackend {
         center.removeDeliveredNotifications(withIdentifiers: [identifier])
     }
 
-    private func mapSound(_ importance: NotificationImportance) -> UNNotificationSound? {
+    private func mapSound(_ importance: Notifications.NotificationImportance) -> UNNotificationSound? {
         switch importance {
         case .min, .low: return nil
         case .default, .high: return .default
@@ -90,7 +90,7 @@ public final class NotificationsBackendImpl: NotificationsBackend {
     }
 
     @available(iOS 15.0, *)
-    private func mapInterruption(_ importance: NotificationImportance) -> UNNotificationInterruptionLevel {
+    private func mapInterruption(_ importance: Notifications.NotificationImportance) -> UNNotificationInterruptionLevel {
         switch importance {
         case .min: return .passive
         case .low: return .passive

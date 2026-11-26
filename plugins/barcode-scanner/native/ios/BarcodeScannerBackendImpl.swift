@@ -10,29 +10,29 @@ import UIKit
 /// Presents a full-screen camera over the top view controller and
 /// resolves with the first code read. Needs `NSCameraUsageDescription`.
 /// Codes whose payload is not text are skipped (AVFoundation exposes no
-/// raw bytes), so `ScannedCode.raw` is always `nil` here.
+/// raw bytes), so `BarcodeScanner.ScannedCode.raw` is always `nil` here.
 public final class BarcodeScannerBackendImpl: BarcodeScannerBackend {
 
     #if canImport(UIKit) && canImport(AVFoundation)
     public init() {}
 
-    public func scan(config: ScanConfig) async throws -> ScannedCode? {
+    public func scan(config: BarcodeScanner.ScanConfig) async throws -> BarcodeScanner.ScannedCode? {
         guard AVCaptureDevice.default(for: .video) != nil else {
-            throw ScanError.unavailable
+            throw BarcodeScanner.ScanError.unavailable
         }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             break
         case .notDetermined:
             let granted = await AVCaptureDevice.requestAccess(for: .video)
-            if !granted { throw ScanError.permissionDenied }
+            if !granted { throw BarcodeScanner.ScanError.permissionDenied }
         default:
-            throw ScanError.permissionDenied
+            throw BarcodeScanner.ScanError.permissionDenied
         }
         return try await withCheckedThrowingContinuation { cont in
             DispatchQueue.main.async {
                 guard let root = Self.topViewController() else {
-                    cont.resume(throwing: ScanError.backend("no root view controller to present from"))
+                    cont.resume(throwing: BarcodeScanner.ScanError.backend("no root view controller to present from"))
                     return
                 }
                 let controller = ScannerViewController(config: config) { result in
@@ -69,25 +69,25 @@ public final class BarcodeScannerBackendImpl: BarcodeScannerBackend {
     #else
     public init() {}
 
-    public func scan(config: ScanConfig) async throws -> ScannedCode? {
-        throw ScanError.unavailable
+    public func scan(config: BarcodeScanner.ScanConfig) async throws -> BarcodeScanner.ScannedCode? {
+        throw BarcodeScanner.ScanError.unavailable
     }
     #endif
 }
 
 #if canImport(UIKit) && canImport(AVFoundation)
 private final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
-    private static let allFormats: [BarcodeFormat] = [
+    private static let allFormats: [BarcodeScanner.BarcodeFormat] = [
         .qr, .aztec, .dataMatrix, .pdf417, .code128, .ean13,
         .ean8, .upcE, .code39, .code93, .itf, .codabar,
     ]
 
-    private let config: ScanConfig
-    private var finish: ((Result<ScannedCode?, Error>) -> Void)?
+    private let config: BarcodeScanner.ScanConfig
+    private var finish: ((Result<BarcodeScanner.ScannedCode?, Error>) -> Void)?
     private let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "dev.istmo.plugins.barcode-scanner.session")
 
-    init(config: ScanConfig, finish: @escaping (Result<ScannedCode?, Error>) -> Void) {
+    init(config: BarcodeScanner.ScanConfig, finish: @escaping (Result<BarcodeScanner.ScannedCode?, Error>) -> Void) {
         self.config = config
         self.finish = finish
         super.init(nibName: nil, bundle: nil)
@@ -104,12 +104,12 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
             let input = try? AVCaptureDeviceInput(device: device),
             session.canAddInput(input)
         else {
-            throw ScanError.unavailable
+            throw BarcodeScanner.ScanError.unavailable
         }
         session.addInput(input)
         let output = AVCaptureMetadataOutput()
         guard session.canAddOutput(output) else {
-            throw ScanError.backend("cannot attach metadata output")
+            throw BarcodeScanner.ScanError.backend("cannot attach metadata output")
         }
         session.addOutput(output)
         output.setMetadataObjectsDelegate(self, queue: .main)
@@ -117,7 +117,7 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
         let types = Set(wanted.flatMap(Self.metadataTypes))
             .filter { output.availableMetadataObjectTypes.contains($0) }
         guard !types.isEmpty else {
-            throw ScanError.backend("none of the requested formats can be scanned")
+            throw BarcodeScanner.ScanError.backend("none of the requested formats can be scanned")
         }
         output.metadataObjectTypes = Array(types)
     }
@@ -194,14 +194,14 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
                 .first(where: { $0.stringValue != nil }),
             let text = code.stringValue
         else { return }
-        complete(.success(ScannedCode(text: text, format: Self.format(of: code.type), raw: nil)))
+        complete(.success(BarcodeScanner.ScannedCode(text: text, format: Self.format(of: code.type), raw: nil)))
     }
 
     @objc private func cancel() {
         complete(.success(nil))
     }
 
-    private func complete(_ result: Result<ScannedCode?, Error>) {
+    private func complete(_ result: Result<BarcodeScanner.ScannedCode?, Error>) {
         guard let finish else { return }
         self.finish = nil
         sessionQueue.async { [session] in session.stopRunning() }
@@ -213,7 +213,7 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
     }
 
     /// AVFoundation types to ask for; empty when the platform has none.
-    private static func metadataTypes(_ format: BarcodeFormat) -> [AVMetadataObject.ObjectType] {
+    private static func metadataTypes(_ format: BarcodeScanner.BarcodeFormat) -> [AVMetadataObject.ObjectType] {
         switch format {
         case .qr: return [.qr]
         case .aztec: return [.aztec]
@@ -236,7 +236,7 @@ private final class ScannerViewController: UIViewController, AVCaptureMetadataOu
         }
     }
 
-    private static func format(of type: AVMetadataObject.ObjectType) -> BarcodeFormat {
+    private static func format(of type: AVMetadataObject.ObjectType) -> BarcodeScanner.BarcodeFormat {
         if #available(iOS 15.4, *), type == .codabar {
             return .codabar
         }

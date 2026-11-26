@@ -34,13 +34,13 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
     public func start(
         attributes: Data,
         initialState: Data,
-        style: ActivityStyle,
+        style: LiveActivity.ActivityStyle,
         staleAfterSeconds: UInt32?,
-        androidTierHint _: AndroidTierHint?
+        androidTierHint _: LiveActivity.AndroidTierHint?
     ) async throws -> NativeHandleId {
         let info = ActivityAuthorizationInfo()
         guard info.areActivitiesEnabled else {
-            throw ActivityError.disabled
+            throw LiveActivity.ActivityError.disabled
         }
 
         let attrs: Attributes
@@ -49,7 +49,7 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
             attrs = try decodeAttributes(attributes)
             state = try decodeState(initialState)
         } catch {
-            throw ActivityError.decode(String(describing: error))
+            throw LiveActivity.ActivityError.decode(String(describing: error))
         }
 
         do {
@@ -63,31 +63,31 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
                 self.activities[id] = activity
             }
             return id
-        } catch let err as ActivityError {
+        } catch let err as LiveActivity.ActivityError {
             throw err
         } catch {
             let message = String(describing: error)
             if message.contains("exceededMaximum") {
-                throw ActivityError.exceededMaximum
+                throw LiveActivity.ActivityError.exceededMaximum
             }
-            throw ActivityError.backend(message)
+            throw LiveActivity.ActivityError.backend(message)
         }
     }
 
     public func update(
         handle: NativeHandleId,
         state: Data,
-        alert: AlertConfig?
+        alert: LiveActivity.AlertConfig?
     ) async throws {
         guard let activity = queue.sync(execute: { activities[handle] }) else {
-            throw ActivityError.handleNotFound
+            throw LiveActivity.ActivityError.handleNotFound
         }
 
         let decoded: Attributes.ContentState
         do {
             decoded = try decodeState(state)
         } catch {
-            throw ActivityError.decode(String(describing: error))
+            throw LiveActivity.ActivityError.decode(String(describing: error))
         }
 
         let content = ActivityContent(state: decoded, staleDate: nil)
@@ -101,10 +101,10 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
     public func end(
         handle: NativeHandleId,
         finalState: Data?,
-        dismissal: DismissalPolicy
+        dismissal: LiveActivity.DismissalPolicy
     ) async throws {
         let activity = queue.sync { activities[handle] }
-        guard let activity else { throw ActivityError.handleNotFound }
+        guard let activity else { throw LiveActivity.ActivityError.handleNotFound }
 
         let policy: ActivityUIDismissalPolicy
         switch dismissal {
@@ -121,7 +121,7 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
             do {
                 content = ActivityContent(state: try decodeState(finalState), staleDate: nil)
             } catch {
-                throw ActivityError.decode(String(describing: error))
+                throw LiveActivity.ActivityError.decode(String(describing: error))
             }
         } else {
             content = nil
@@ -133,8 +133,8 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
         }
     }
 
-    public func restoreActive() async throws -> [RestoredActivity] {
-        var out: [RestoredActivity] = []
+    public func restoreActive() async throws -> [LiveActivity.RestoredActivity] {
+        var out: [LiveActivity.RestoredActivity] = []
         for activity in Activity<Attributes>.activities {
             // Encode before allocating so a failing activity does not leave
             // an id registered that nothing will ever release.
@@ -144,7 +144,7 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
                 attrsData = try encodeAttributes(activity.attributes)
                 stateData = try encodeState(activity.content.state)
             } catch {
-                throw ActivityError.decode(String(describing: error))
+                throw LiveActivity.ActivityError.decode(String(describing: error))
             }
             // An activity that already has a handle (started by this
             // process, or reported by an earlier restore) keeps it:
@@ -159,7 +159,7 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
                 return id
             }
             out.append(
-                RestoredActivity(
+                LiveActivity.RestoredActivity(
                     handle: id,
                     activityType: self.activityType,
                     attributes: attrsData,
@@ -183,13 +183,13 @@ open class ActivityKitLiveActivityHandler<Attributes: ActivityAttributes>: LiveA
     private func request(
         attributes: Attributes,
         content: ActivityContent<Attributes.ContentState>,
-        style _: ActivityStyle
+        style _: LiveActivity.ActivityStyle
     ) throws -> Activity<Attributes> {
 
         return try Activity<Attributes>.request(attributes: attributes, content: content)
     }
 
-    private func alertConfiguration(from alert: AlertConfig) -> AlertConfiguration {
+    private func alertConfiguration(from alert: LiveActivity.AlertConfig) -> AlertConfiguration {
         let sound: AlertConfiguration.AlertSound
         switch alert.sound {
         case .default:

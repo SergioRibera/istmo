@@ -10,18 +10,18 @@ import Foundation
 /// `dictionaryRepresentation()` also contains `NSGlobalDomain` and the
 /// app's standard defaults.
 ///
-/// A key read as the wrong type fails with `DataStoreError.corrupted`,
+/// A key read as the wrong type fails with `DataStore.DataStoreError.corrupted`,
 /// like the desktop and Android backends.
 final class DataStoreBackendImpl: DataStoreBackend {
 
     private let defaults: UserDefaults
     private let suiteName: String
 
-    init(config: DataStoreConfig) throws {
+    init(config: DataStore.DataStoreConfig) throws {
         let app = Bundle.main.bundleIdentifier ?? "app"
         let suiteName = "\(app).istmo.\(config.namespace)"
         guard let store = UserDefaults(suiteName: suiteName) else {
-            throw DataStoreError.backend("UserDefaults(suiteName: \(suiteName)) is unavailable")
+            throw DataStore.DataStoreError.backend("UserDefaults(suiteName: \(suiteName)) is unavailable")
         }
         self.defaults = store
         self.suiteName = suiteName
@@ -105,7 +105,7 @@ final class DataStoreBackendImpl: DataStoreBackend {
         Set(defaults.persistentDomain(forName: suiteName).map { Array($0.keys) } ?? [])
     }
 
-    private func mismatch(_ key: String, _ wanted: String) -> DataStoreError {
+    private func mismatch(_ key: String, _ wanted: String) -> DataStore.DataStoreError {
         .corrupted("key `\(key)` holds another type but caller asked for \(wanted)")
     }
 
@@ -122,7 +122,7 @@ final class DataStoreBackendImpl: DataStoreBackend {
 }
 
 final class DataStoreFactoryImpl: DataStoreFactory {
-    func create(config: DataStoreConfig) async throws -> DataStoreBackend {
+    func create(config: DataStore.DataStoreConfig) async throws -> DataStoreBackend {
         try DataStoreBackendImpl(config: config)
     }
 }

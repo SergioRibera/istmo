@@ -7,7 +7,7 @@ import UIKit
 /// provides the actual stylus event source; this wrapper surfaces its
 /// `AsyncThrowingStream`s through the plugin interface.
 ///
-/// `windowId` is echoed from `PenConfig`; consumers can log or route
+/// `windowId` is echoed from `Pen.PenConfig`; consumers can log or route
 /// by it but the mapping from id to view is the factory's job.
 public final class PenBackendImpl: PenBackend {
 
@@ -22,15 +22,15 @@ public final class PenBackendImpl: PenBackend {
         _ = self.windowId
     }
 
-    public func events() -> AsyncThrowingStream<PenEvent, Error> {
+    public func events() -> AsyncThrowingStream<Pen.PenEvent, Error> {
         view.events
     }
 
-    public func hover() -> AsyncThrowingStream<PenHoverEvent, Error> {
+    public func hover() -> AsyncThrowingStream<Pen.PenHoverEvent, Error> {
         view.hover
     }
 
-    public func capabilities() async throws -> PenCapabilities {
+    public func capabilities() async throws -> Pen.PenCapabilities {
         view.capabilities
     }
 
@@ -43,7 +43,7 @@ public final class PenBackendImpl: PenBackend {
 ///
 /// Multi-window apps need a per-window `PenCaptureView` and cannot use
 /// this factory directly — write a bespoke factory that maps
-/// `PenConfig.windowId` to the matching view. Because the factory
+/// `Pen.PenConfig.windowId` to the matching view. Because the factory
 /// requires a `PenCaptureView` reference the app assembles at
 /// UI-construction time, `istmo-pen` opts out of auto-registration
 /// (`auto_register = false` in its `istmo.toml`) and expects the app
@@ -64,7 +64,7 @@ public final class PenFactoryImpl: PenFactory {
         self.view = view
     }
 
-    public func create(config: PenConfig) async throws -> PenBackend {
+    public func create(config: Pen.PenConfig) async throws -> PenBackend {
         PenBackendImpl(view: view, windowId: config.windowId)
     }
 }

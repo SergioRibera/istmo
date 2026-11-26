@@ -29,9 +29,9 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
         activity_type: String,
         attributes: Data,
         initial_state: Data,
-        style: ActivityStyle,
+        style: LiveActivity.ActivityStyle,
         stale_after_seconds: UInt32?,
-        android_tier_hint _: AndroidTierHint?
+        android_tier_hint _: LiveActivity.AndroidTierHint?
     ) async throws -> NativeHandleId {
         let handler = try handler(for: activity_type)
         let id = try await handler.start(
@@ -50,7 +50,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
     public func update(
         handle: NativeHandleId,
         state: Data,
-        alert: AlertConfig?
+        alert: LiveActivity.AlertConfig?
     ) async throws {
         let handler = try handler(forHandle: handle)
         try await handler.update(handle: handle, state: state, alert: alert)
@@ -59,7 +59,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
     public func end(
         handle: NativeHandleId,
         final_state: Data?,
-        dismissal: DismissalPolicy
+        dismissal: LiveActivity.DismissalPolicy
     ) async throws {
         let handler = try handler(forHandle: handle)
         try await handler.end(handle: handle, finalState: final_state, dismissal: dismissal)
@@ -80,12 +80,12 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
         #endif
     }
 
-    public func capabilities() async throws -> PlatformCapabilities {
+    public func capabilities() async throws -> LiveActivity.PlatformCapabilities {
         #if canImport(ActivityKit)
         if #available(iOS 16.2, *) {
             let info = ActivityAuthorizationInfo()
             return .ios(
-                IosCapabilities(
+                LiveActivity.IosCapabilities(
                     activityKitAvailable: true,
                     activitiesEnabled: info.areActivitiesEnabled,
                     pushUpdates: false
@@ -93,7 +93,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
             )
         }
         return .ios(
-            IosCapabilities(
+            LiveActivity.IosCapabilities(
                 activityKitAvailable: false,
                 activitiesEnabled: false,
                 pushUpdates: false
@@ -106,7 +106,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
 
     // Only the requested type's handler runs: every id it allocates is
     // returned to a Rust adapter that adopts (and later releases) it.
-    public func restore_active(activity_type: String) async throws -> [RestoredActivity] {
+    public func restore_active(activity_type: String) async throws -> [LiveActivity.RestoredActivity] {
         let handler = try handler(for: activity_type)
         let restored = try await handler.restoreActive()
         queue.sync {
@@ -131,7 +131,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
     private func handler(for activityType: String) throws -> LiveActivityHandler {
         let handler = queue.sync { handlersByType[activityType] }
         guard let handler else {
-            throw ActivityError.unknownActivityType(activityType)
+            throw LiveActivity.ActivityError.unknownActivityType(activityType)
         }
         return handler
     }
@@ -139,7 +139,7 @@ public final class LiveActivityBackendImpl: LiveActivityBackend, HandleReleaser 
     private func handler(forHandle handle: NativeHandleId) throws -> LiveActivityHandler {
         let ty = queue.sync { typeByHandle[handle] }
         guard let ty else {
-            throw ActivityError.handleNotFound
+            throw LiveActivity.ActivityError.handleNotFound
         }
         return try handler(for: ty)
     }

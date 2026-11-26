@@ -8,7 +8,7 @@ import UIKit
 ///
 /// Only URLs whose scheme is in `allowedSchemes` are opened, mirroring
 /// the Rust-side `SchemePolicy`; anything else fails with
-/// `OpenError.schemeNotAllowed`.
+/// `Opener.OpenError.schemeNotAllowed`.
 public final class OpenerBackendImpl: OpenerBackend {
     /// Same list as the Rust `DEFAULT_ALLOWED_SCHEMES`.
     public static let defaultAllowedSchemes: Set<String> = [
@@ -30,10 +30,10 @@ public final class OpenerBackendImpl: OpenerBackend {
         guard !url.isEmpty, !url.hasPrefix("-"), !hasControl,
               let target = URL(string: url), let scheme = target.scheme?.lowercased()
         else {
-            throw OpenError.invalid
+            throw Opener.OpenError.invalid
         }
         guard allowedSchemes.contains(scheme) else {
-            throw OpenError.schemeNotAllowed(scheme)
+            throw Opener.OpenError.schemeNotAllowed(scheme)
         }
         #if canImport(UIKit)
         let opened = await withCheckedContinuation { cont in
@@ -42,10 +42,10 @@ public final class OpenerBackendImpl: OpenerBackend {
             }
         }
         if !opened {
-            throw OpenError.noHandler
+            throw Opener.OpenError.noHandler
         }
         #else
-        throw OpenError.noHandler
+        throw Opener.OpenError.noHandler
         #endif
     }
 }

@@ -11,20 +11,20 @@ final class ManagedWebView: NSObject {
     let id: UInt64
     let tokenHi: UInt64
     let tokenLo: UInt64
-    let spec: WebViewSpec
+    let spec: WebView.WebViewSpec
     let webView: WKWebView
     private let rules: CompiledRules
 
     // Presentation.
     private var controller: UIViewController?
-    private var pendingFrame: ViewFrame?
+    private var pendingFrame: WebView.ViewFrame?
     private var frameScheduled = false
 
     // Lanes.
-    private var controlContinuation: AsyncThrowingStream<ControlEvent, Error>.Continuation?
-    private var controlBuffer: [ControlEvent] = []
+    private var controlContinuation: AsyncThrowingStream<WebView.ControlEvent, Error>.Continuation?
+    private var controlBuffer: [WebView.ControlEvent] = []
     private var controlTaken = false
-    private var telemetrySubs: [UUID: (Set<TelemetryKind>, AsyncThrowingStream<TelemetryEvent, Error>.Continuation)] = [:]
+    private var telemetrySubs: [UUID: (Set<WebView.TelemetryKind>, AsyncThrowingStream<WebView.TelemetryEvent, Error>.Continuation)] = [:]
     private var telemetryDropped: [UUID: UInt32] = [:]
     private var observations: [NSKeyValueObservation] = []
 
@@ -52,7 +52,7 @@ final class ManagedWebView: NSObject {
     private(set) var closed = false
 
     init(backend: WebViewBackendImpl, id: UInt64, tokenHi: UInt64, tokenLo: UInt64,
-         spec: WebViewSpec, inherited: WKWebViewConfiguration?) throws {
+         spec: WebView.WebViewSpec, inherited: WKWebViewConfiguration?) throws {
         self.backend = backend
         self.id = id
         self.tokenHi = tokenHi
@@ -68,7 +68,7 @@ final class ManagedWebView: NSObject {
 
     // MARK: setup
 
-    private static func configuration(_ spec: WebViewSpec, backend: WebViewBackendImpl) throws -> WKWebViewConfiguration {
+    private static func configuration(_ spec: WebView.WebViewSpec, backend: WebViewBackendImpl) throws -> WKWebViewConfiguration {
         let c = WKWebViewConfiguration()
         switch spec.profile {
         case .shared:
@@ -76,7 +76,7 @@ final class ManagedWebView: NSObject {
         case .ephemeral:
             c.websiteDataStore = .nonPersistent()
         case .persistent(let profile):
-            guard #available(iOS 17.0, *) else { throw WebViewError.profileUnsupported }
+            guard #available(iOS 17.0, *) else { throw WebView.WebViewError.profileUnsupported }
             c.websiteDataStore = WKWebsiteDataStore(forIdentifier: profileUUID(profile.name))
         }
         let s = spec.settings
@@ -131,7 +131,7 @@ final class ManagedWebView: NSObject {
             webView.observe(\.title) { [weak self] web, _ in self?.telemetry(.title, .title(web.title ?? "")) },
             webView.observe(\.url) { [weak self] web, _ in self?.telemetry(.url, .url(web.url?.absoluteString ?? "")) },
             webView.observe(\.canGoBack) { [weak self] web, _ in
-                self?.telemetry(.history, .history(HistoryState(canGoBack: web.canGoBack, canGoForward: web.canGoForward)))
+                self?.telemetry(.history, .history(WebView.HistoryState(canGoBack: web.canGoBack, canGoForward: web.canGoForward)))
             },
         ]
     }
@@ -229,7 +229,7 @@ final class ManagedWebView: NSObject {
     }
 
     /// Latest frame wins; applied once per run-loop turn.
-    func setFrame(_ frame: ViewFrame) {
+    func setFrame(_ frame: WebView.ViewFrame) {
         pendingFrame = frame
         guard !frameScheduled else { return }
         frameScheduled = true
@@ -241,7 +241,7 @@ final class ManagedWebView: NSObject {
         }
     }
 
-    private func apply(_ frame: ViewFrame) {
+    private func apply(_ frame: WebView.ViewFrame) {
         let scale = webView.window?.screen.scale ?? UIScreen.main.scale
         webView.isHidden = !frame.visible || frame.width == 0 || frame.height == 0
         webView.frame = CGRect(x: CGFloat(frame.x) / scale, y: CGFloat(frame.y) / scale,
@@ -251,7 +251,7 @@ final class ManagedWebView: NSObject {
 
     // MARK: lanes
 
-    func emit(_ event: ControlEvent) {
+    func emit(_ event: WebView.ControlEvent) {
         guard !closed else { return }
         if let cont = controlContinuation {
             cont.yield(event)
@@ -261,11 +261,11 @@ final class ManagedWebView: NSObject {
     }
 
     /// Called from the runtime's task: hops to main for the bookkeeping.
-    func controlStream() -> AsyncThrowingStream<ControlEvent, Error> {
+    func controlStream() -> AsyncThrowingStream<WebView.ControlEvent, Error> {
         AsyncThrowingStream(bufferingPolicy: .unbounded) { cont in
             DispatchQueue.main.async {
                 guard !self.controlTaken else {
-                    cont.finish(throwing: WebViewError.invalidArgument("control events already have a subscriber"))
+                    cont.finish(throwing: WebView.WebViewError.invalidArgument("control events already have a subscriber"))
                     return
                 }
                 self.controlTaken = true
@@ -282,10 +282,10 @@ final class ManagedWebView: NSObject {
         }
     }
 
-    func telemetryStream(_ kinds: [TelemetryKind]) -> AsyncThrowingStream<TelemetryEvent, Error> {
+    func telemetryStream(_ kinds: [WebView.TelemetryKind]) -> AsyncThrowingStream<WebView.TelemetryEvent, Error> {
         let missing = kinds.filter { !spec.telemetry.contains($0) }
         if !missing.isEmpty {
-            return AsyncThrowingStream { $0.finish(throwing: WebViewError.invalidArgument("telemetry kinds not in the view spec: \(missing)")) }
+            return AsyncThrowingStream { $0.finish(throwing: WebView.WebViewError.invalidArgument("telemetry kinds not in the view spec: \(missing)")) }
         }
         let wanted = Set(kinds)
         let key = UUID()
@@ -302,9 +302,9 @@ final class ManagedWebView: NSObject {
         }
     }
 
-    private func wants(_ kind: TelemetryKind) -> Bool { telemetrySubs.values.contains { $0.0.contains(kind) } }
+    private func wants(_ kind: WebView.TelemetryKind) -> Bool { telemetrySubs.values.contains { $0.0.contains(kind) } }
 
-    private func telemetry(_ kind: TelemetryKind, _ event: TelemetryEvent) {
+    private func telemetry(_ kind: WebView.TelemetryKind, _ event: WebView.TelemetryEvent) {
         for (key, (kinds, cont)) in telemetrySubs where kinds.contains(kind) {
             if let dropped = telemetryDropped.removeValue(forKey: key) { cont.yield(.dropped(dropped)) }
             if case .dropped = cont.yield(event) {
@@ -335,12 +335,12 @@ final class ManagedWebView: NSObject {
         }
     }
 
-    func load(_ request: LoadRequest) {
-        let info = NavInfo(navigationId: nextNavigation(), url: request.url, isRedirect: false, userGesture: false)
+    func load(_ request: WebView.LoadRequest) {
+        let info = WebView.NavInfo(navigationId: nextNavigation(), url: request.url, isRedirect: false, userGesture: false)
         switch rules.evaluate(request.url, fileAccess: spec.settings.fileAccess) {
         case .allow, .ask:
             guard let url = URL(string: request.url) else {
-                emit(.navigationFailed(NavFailure(navigationId: info.navigationId, url: request.url, kind: .badUrl, description: "invalid URL")))
+                emit(.navigationFailed(WebView.NavFailure(navigationId: info.navigationId, url: request.url, kind: .badUrl, description: "invalid URL")))
                 return
             }
             var urlRequest = URLRequest(url: url)
@@ -353,9 +353,9 @@ final class ManagedWebView: NSObject {
             // `.ask` is decided by `decidePolicyFor`, which sees this load.
             webView.load(urlRequest)
         case .deny:
-            emit(.navigationFailed(NavFailure(navigationId: info.navigationId, url: request.url, kind: .cancelled, description: "blocked by navigation rules")))
+            emit(.navigationFailed(WebView.NavFailure(navigationId: info.navigationId, url: request.url, kind: .cancelled, description: "blocked by navigation rules")))
         case .intercept:
-            emit(.intercepted(InterceptedNav(navigationId: info.navigationId, url: request.url)))
+            emit(.intercepted(WebView.InterceptedNav(navigationId: info.navigationId, url: request.url)))
         case .external:
             openExternally(request.url)
         }
@@ -364,7 +364,7 @@ final class ManagedWebView: NSObject {
     func loadHtml(_ html: String, baseUrl: String?) throws {
         if let bridge = spec.bridge, let base = baseUrl {
             guard let origin = CompiledRules.origin(of: base), bridge.allowedOrigins.contains(origin) else {
-                throw WebViewError.invalidArgument("base_url origin must be in the bridge's allowed_origins")
+                throw WebView.WebViewError.invalidArgument("base_url origin must be in the bridge's allowed_origins")
             }
         }
         webView.loadHTMLString(html, baseURL: baseUrl.flatMap(URL.init(string:)))
@@ -375,7 +375,7 @@ final class ManagedWebView: NSObject {
         UIApplication.shared.open(target, options: [:], completionHandler: nil)
     }
 
-    func navigate(_ nav: HistoryNav) {
+    func navigate(_ nav: WebView.HistoryNav) {
         switch nav {
         case .back: webView.goBack()
         case .forward: webView.goForward()
@@ -389,18 +389,18 @@ final class ManagedWebView: NSObject {
         }
     }
 
-    func history() -> WebHistory {
+    func history() -> WebView.WebHistory {
         let list = webView.backForwardList
         let entries = list.backList + (list.currentItem.map { [$0] } ?? []) + list.forwardList
-        return WebHistory(
-            entries: entries.map { HistoryEntry(url: $0.url.absoluteString, title: $0.title ?? "") },
+        return WebView.WebHistory(
+            entries: entries.map { WebView.HistoryEntry(url: $0.url.absoluteString, title: $0.title ?? "") },
             current: UInt32(list.backList.count))
     }
 
     // MARK: scripts and bridge
 
-    func eval(_ call: ScriptCall, done: @escaping (Result<String, Error>) -> Void) {
-        guard committedOrigin == call.expectedOrigin else { return done(.failure(WebViewError.originMismatch)) }
+    func eval(_ call: WebView.ScriptCall, done: @escaping (Result<String, Error>) -> Void) {
+        guard committedOrigin == call.expectedOrigin else { return done(.failure(WebView.WebViewError.originMismatch)) }
         let world: WKContentWorld = call.world == .isolated ? .defaultClient : .page
         // `callAsyncJavaScript` awaits promises; JSON keeps the answer typed.
         webView.callAsyncJavaScript(
@@ -409,19 +409,19 @@ final class ManagedWebView: NSObject {
         ) { result in
             switch result {
             case .success(let value): done(.success(value as? String ?? "null"))
-            case .failure(let error): done(.failure(WebViewError.backend(error.localizedDescription)))
+            case .failure(let error): done(.failure(WebView.WebViewError.backend(error.localizedDescription)))
             }
         }
     }
 
-    func postMessage(_ message: OutgoingMessage) throws {
-        guard committedOrigin == message.expectedOrigin else { throw WebViewError.originMismatch }
+    func postMessage(_ message: WebView.OutgoingMessage) throws {
+        guard committedOrigin == message.expectedOrigin else { throw WebView.WebViewError.originMismatch }
         let script = "window.__istmoDeliver && window.__istmoDeliver(\"\(Self.jsEscape(message.channel))\", \"\(message.data.base64EncodedString())\");"
         webView.evaluateJavaScript(script, in: nil, in: .page, completionHandler: nil)
     }
 
-    func reply(_ reply: BridgeReply) throws {
-        guard let handler = replies.removeValue(forKey: reply.replyId) else { throw WebViewError.unknownRequest }
+    func reply(_ reply: WebView.BridgeReply) throws {
+        guard let handler = replies.removeValue(forKey: reply.replyId) else { throw WebView.WebViewError.unknownRequest }
         switch reply.result {
         case .ok(let data): handler(data.base64EncodedString(), nil)
         case .err(let message): handler(nil, message)
@@ -430,10 +430,10 @@ final class ManagedWebView: NSObject {
 
     // MARK: decisions
 
-    private func ask(_ ask: Ask, _ kind: DecisionKind, timeoutMs: UInt32?) {
+    private func ask(_ ask: Ask, _ kind: WebView.DecisionKind, timeoutMs: UInt32?) {
         let id = requestId()
         asks[id] = ask
-        emit(.decisionRequested(DecisionRequest(requestId: id, kind: kind)))
+        emit(.decisionRequested(WebView.DecisionRequest(requestId: id, kind: kind)))
         if let timeout = timeoutMs, timeout > 0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(timeout))) { [weak self] in
                 if let pending = self?.asks.removeValue(forKey: id) { self?.resolve(pending, .deny) }
@@ -441,12 +441,12 @@ final class ManagedWebView: NSObject {
         }
     }
 
-    func decide(_ decision: Decision) throws {
-        guard let ask = asks.removeValue(forKey: decision.requestId) else { throw WebViewError.unknownRequest }
+    func decide(_ decision: WebView.Decision) throws {
+        guard let ask = asks.removeValue(forKey: decision.requestId) else { throw WebView.WebViewError.unknownRequest }
         resolve(ask, decision.response)
     }
 
-    private func resolve(_ ask: Ask, _ response: DecisionResponse) {
+    private func resolve(_ ask: Ask, _ response: WebView.DecisionResponse) {
         let allowed: Bool
         if case .deny = response { allowed = false } else { allowed = true }
         switch ask {
@@ -483,15 +483,15 @@ final class ManagedWebView: NSObject {
         schemeTasks.removeAll()
     }
 
-    func downloadControl(_ op: DownloadOp) throws {
-        guard op.action == .cancel else { throw WebViewError.unsupported("pausing downloads") }
-        guard let download = downloads.removeValue(forKey: op.downloadId) else { throw WebViewError.unknownRequest }
+    func downloadControl(_ op: WebView.DownloadOp) throws {
+        guard op.action == .cancel else { throw WebView.WebViewError.unsupported("pausing downloads") }
+        guard let download = downloads.removeValue(forKey: op.downloadId) else { throw WebView.WebViewError.unknownRequest }
         if #available(iOS 14.5, *), let d = download as? WKDownload { d.cancel(nil) }
     }
 
     // MARK: profile data
 
-    func cookies(_ filter: CookieFilter, done: @escaping (Result<[WebCookie], Error>) -> Void) {
+    func cookies(_ filter: WebView.CookieFilter, done: @escaping (Result<[WebView.WebCookie], Error>) -> Void) {
         let host = filter.url.flatMap { URL(string: $0)?.host }?.lowercased()
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { all in
             let matching = all.filter { cookie in
@@ -504,20 +504,20 @@ final class ManagedWebView: NSObject {
         }
     }
 
-    private static func webCookie(_ c: HTTPCookie) -> WebCookie {
-        let sameSite: SameSite
+    private static func webCookie(_ c: HTTPCookie) -> WebView.WebCookie {
+        let sameSite: WebView.SameSite
         switch c.sameSitePolicy {
         case .some(.sameSiteStrict): sameSite = .strict
         case .some(.sameSiteLax): sameSite = .lax
         default: sameSite = .none
         }
-        return WebCookie(
+        return WebView.WebCookie(
             name: c.name, value: c.value, domain: c.domain, path: c.path,
             expiresUnixMs: c.expiresDate.map { Int64($0.timeIntervalSince1970 * 1000) },
             secure: c.isSecure, httpOnly: c.isHTTPOnly, sameSite: sameSite)
     }
 
-    func setCookie(_ cookie: WebCookie, done: @escaping (Result<Void, Error>) -> Void) {
+    func setCookie(_ cookie: WebView.WebCookie, done: @escaping (Result<Void, Error>) -> Void) {
         var properties: [HTTPCookiePropertyKey: Any] = [
             .name: cookie.name, .value: cookie.value, .domain: cookie.domain,
             .path: cookie.path.isEmpty ? "/" : cookie.path,
@@ -531,12 +531,12 @@ final class ManagedWebView: NSObject {
         case .none: break
         }
         guard let http = HTTPCookie(properties: properties) else {
-            return done(.failure(WebViewError.invalidArgument("cookie")))
+            return done(.failure(WebView.WebViewError.invalidArgument("cookie")))
         }
         webView.configuration.websiteDataStore.httpCookieStore.setCookie(http) { done(.success(())) }
     }
 
-    func clearData(_ request: ClearDataRequest, done: @escaping (Result<Void, Error>) -> Void) {
+    func clearData(_ request: WebView.ClearDataRequest, done: @escaping (Result<Void, Error>) -> Void) {
         var types = Set<String>()
         for kind in request.kinds {
             switch kind {
@@ -554,32 +554,32 @@ final class ManagedWebView: NSObject {
 
     // MARK: misc
 
-    func find(_ query: FindQuery, done: @escaping (Result<FindResult, Error>) -> Void) {
-        guard #available(iOS 16.0, *) else { return done(.failure(WebViewError.unsupported("find needs iOS 16"))) }
+    func find(_ query: WebView.FindQuery, done: @escaping (Result<WebView.FindResult, Error>) -> Void) {
+        guard #available(iOS 16.0, *) else { return done(.failure(WebView.WebViewError.unsupported("find needs iOS 16"))) }
         let config = WKFindConfiguration()
         config.backwards = query.backwards
         config.caseSensitive = query.caseSensitive
         config.wraps = query.wrap
         webView.find(query.text, configuration: config) { result in
             // WebKit reports a match, not a count.
-            done(.success(FindResult(matches: result.matchFound ? 1 : 0, active: result.matchFound ? 1 : 0)))
+            done(.success(WebView.FindResult(matches: result.matchFound ? 1 : 0, active: result.matchFound ? 1 : 0)))
         }
     }
 
-    func snapshot(_ options: SnapshotOptions, done: @escaping (Result<WebSnapshot, Error>) -> Void) {
+    func snapshot(_ options: WebView.SnapshotOptions, done: @escaping (Result<WebView.WebSnapshot, Error>) -> Void) {
         let config = WKSnapshotConfiguration()
         if options.maxWidth > 0 { config.snapshotWidth = NSNumber(value: Double(options.maxWidth) / Double(UIScreen.main.scale)) }
         webView.takeSnapshot(with: config) { image, error in
             guard let image = image else {
-                return done(.failure(WebViewError.backend(error?.localizedDescription ?? "snapshot failed")))
+                return done(.failure(WebView.WebViewError.backend(error?.localizedDescription ?? "snapshot failed")))
             }
             let data: Data?
             switch options.format {
             case .png: data = image.pngData()
             case .jpeg(let q): data = image.jpegData(compressionQuality: CGFloat(min(q, 100)) / 100)
             }
-            guard let bytes = data, let cg = image.cgImage else { return done(.failure(WebViewError.backend("encode"))) }
-            done(.success(WebSnapshot(width: UInt32(cg.width), height: UInt32(cg.height), format: options.format, bytes: bytes)))
+            guard let bytes = data, let cg = image.cgImage else { return done(.failure(WebView.WebViewError.backend("encode"))) }
+            done(.success(WebView.WebSnapshot(width: UInt32(cg.width), height: UInt32(cg.height), format: options.format, bytes: bytes)))
         }
     }
 
@@ -627,7 +627,7 @@ extension ManagedWebView: WKScriptMessageHandlerWithReply {
         } else {
             replyHandler(nil, nil)
         }
-        emit(.message(BridgeMessage(channel: channel, origin: originText, isMainFrame: isMain,
+        emit(.message(WebView.BridgeMessage(channel: channel, origin: originText, isMainFrame: isMain,
                                     documentId: documentId, replyId: replyId, data: data)))
     }
 }
@@ -640,17 +640,17 @@ extension ManagedWebView: WKNavigationDelegate {
         guard action.targetFrame?.isMainFrame ?? true, let url = action.request.url?.absoluteString else {
             return decisionHandler(.allow)
         }
-        let info = NavInfo(navigationId: nextNavigation(), url: url, isRedirect: false,
+        let info = WebView.NavInfo(navigationId: nextNavigation(), url: url, isRedirect: false,
                            userGesture: action.navigationType == .linkActivated)
         switch rules.evaluate(url, fileAccess: spec.settings.fileAccess) {
         case .allow:
             decisionHandler(.allow)
         case .deny:
             decisionHandler(.cancel)
-            emit(.navigationFailed(NavFailure(navigationId: info.navigationId, url: url, kind: .cancelled, description: "blocked by navigation rules")))
+            emit(.navigationFailed(WebView.NavFailure(navigationId: info.navigationId, url: url, kind: .cancelled, description: "blocked by navigation rules")))
         case .intercept:
             decisionHandler(.cancel)
-            emit(.intercepted(InterceptedNav(navigationId: info.navigationId, url: url)))
+            emit(.intercepted(WebView.InterceptedNav(navigationId: info.navigationId, url: url)))
         case .external:
             decisionHandler(.cancel)
             openExternally(url)
@@ -670,7 +670,7 @@ extension ManagedWebView: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        emit(.navigationStarted(NavInfo(navigationId: navigationId, url: webView.url?.absoluteString ?? "", isRedirect: false, userGesture: false)))
+        emit(.navigationStarted(WebView.NavInfo(navigationId: navigationId, url: webView.url?.absoluteString ?? "", isRedirect: false, userGesture: false)))
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
@@ -680,11 +680,11 @@ extension ManagedWebView: WKNavigationDelegate {
         // Replies owed to the previous document can no longer arrive.
         replies.values.forEach { $0(nil, "document replaced") }
         replies.removeAll()
-        emit(.navigationCommitted(NavInfo(navigationId: navigationId, url: url, isRedirect: false, userGesture: false)))
+        emit(.navigationCommitted(WebView.NavInfo(navigationId: navigationId, url: url, isRedirect: false, userGesture: false)))
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        emit(.navigationFinished(NavInfo(navigationId: navigationId, url: webView.url?.absoluteString ?? "", isRedirect: false, userGesture: false)))
+        emit(.navigationFinished(WebView.NavInfo(navigationId: navigationId, url: webView.url?.absoluteString ?? "", isRedirect: false, userGesture: false)))
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -697,7 +697,7 @@ extension ManagedWebView: WKNavigationDelegate {
 
     private func failed(_ error: Error) {
         let ns = error as NSError
-        let kind: NavErrorKind
+        let kind: WebView.NavErrorKind
         switch ns.code {
         case NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed: kind = .dns
         case NSURLErrorTimedOut: kind = .timeout
@@ -709,7 +709,7 @@ extension ManagedWebView: WKNavigationDelegate {
         default: kind = .other
         }
         let url = (ns.userInfo[NSURLErrorFailingURLStringErrorKey] as? String) ?? ""
-        emit(.navigationFailed(NavFailure(navigationId: navigationId, url: url, kind: kind, description: ns.localizedDescription)))
+        emit(.navigationFailed(WebView.NavFailure(navigationId: navigationId, url: url, kind: kind, description: ns.localizedDescription)))
     }
 
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
@@ -720,12 +720,12 @@ extension ManagedWebView: WKNavigationDelegate {
             return completionHandler(.performDefaultHandling, nil)
         }
         let space = challenge.protectionSpace
-        ask(.auth(completionHandler), .httpAuth(HttpAuthAsk(host: space.host, realm: space.realm ?? "", isProxy: space.isProxy())), timeoutMs: nil)
+        ask(.auth(completionHandler), .httpAuth(WebView.HttpAuthAsk(host: space.host, realm: space.realm ?? "", isProxy: space.isProxy())), timeoutMs: nil)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         failPending()
-        emit(.processTerminated(TerminationInfo(reason: .crashed)))
+        emit(.processTerminated(WebView.TerminationInfo(reason: .crashed)))
     }
 
     @available(iOS 14.5, *)
@@ -750,7 +750,7 @@ extension ManagedWebView: WKDownloadDelegate {
         let name = suggestedFilename.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "\\", with: "_")
         let length = response.expectedContentLength >= 0 ? UInt64(response.expectedContentLength) : nil
         asks[id] = .download(download, completionHandler)
-        emit(.decisionRequested(DecisionRequest(requestId: id, kind: .download(DownloadAsk(
+        emit(.decisionRequested(WebView.DecisionRequest(requestId: id, kind: .download(WebView.DownloadAsk(
             downloadId: id, url: response.url?.absoluteString ?? "", suggestedName: name,
             mimeType: response.mimeType ?? "", contentLength: length)))))
     }
@@ -758,13 +758,13 @@ extension ManagedWebView: WKDownloadDelegate {
     func downloadDidFinish(_ download: WKDownload) {
         guard let id = downloads.first(where: { ($0.value as AnyObject) === download })?.key else { return }
         downloads.removeValue(forKey: id)
-        telemetry(.downloads, .downloadFinished(DownloadDone(downloadId: id, path: nil, error: nil)))
+        telemetry(.downloads, .downloadFinished(WebView.DownloadDone(downloadId: id, path: nil, error: nil)))
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
         guard let id = downloads.first(where: { ($0.value as AnyObject) === download })?.key else { return }
         downloads.removeValue(forKey: id)
-        telemetry(.downloads, .downloadFinished(DownloadDone(downloadId: id, path: nil, error: error.localizedDescription)))
+        telemetry(.downloads, .downloadFinished(WebView.DownloadDone(downloadId: id, path: nil, error: error.localizedDescription)))
     }
 }
 
@@ -776,12 +776,12 @@ extension ManagedWebView: WKUIDelegate {
         // WebKit wants the new view synchronously: the rules decide.
         let url = action.request.url?.absoluteString ?? ""
         guard rules.evaluate(url, fileAccess: spec.settings.fileAccess) == .allow, let backend = backend else { return nil }
-        let childSpec = WebViewSpec(
-            target: .window(WindowTarget(title: "", width: 0, height: 0, parentWindowId: nil, modal: false, resizable: true)),
+        let childSpec = WebView.WebViewSpec(
+            target: .window(WebView.WindowTarget(title: "", width: 0, height: 0, parentWindowId: nil, modal: false, resizable: true)),
             profile: spec.profile, settings: spec.settings, rules: spec.rules, userScripts: spec.userScripts,
             bridge: spec.bridge, timeouts: spec.timeouts, telemetry: spec.telemetry)
         guard let child = try? backend.create(spec: childSpec, configuration: configuration) else { return nil }
-        emit(.newView(NewViewInfo(instance: child.instance, url: url)))
+        emit(.newView(WebView.NewViewInfo(instance: child.instance, url: url)))
         return child.webView
     }
 
@@ -791,24 +791,24 @@ extension ManagedWebView: WKUIDelegate {
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
-        ask(.alert(completionHandler), .dialog(DialogAsk(kind: .alert, message: message, defaultText: "", origin: origin(frame))), timeoutMs: nil)
+        ask(.alert(completionHandler), .dialog(WebView.DialogAsk(kind: .alert, message: message, defaultText: "", origin: origin(frame))), timeoutMs: nil)
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
-        ask(.confirm(completionHandler), .dialog(DialogAsk(kind: .confirm, message: message, defaultText: "", origin: origin(frame))), timeoutMs: nil)
+        ask(.confirm(completionHandler), .dialog(WebView.DialogAsk(kind: .confirm, message: message, defaultText: "", origin: origin(frame))), timeoutMs: nil)
     }
 
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
-        ask(.prompt(completionHandler), .dialog(DialogAsk(kind: .prompt, message: prompt, defaultText: defaultText ?? "", origin: origin(frame))), timeoutMs: nil)
+        ask(.prompt(completionHandler), .dialog(WebView.DialogAsk(kind: .prompt, message: prompt, defaultText: defaultText ?? "", origin: origin(frame))), timeoutMs: nil)
     }
 
     @available(iOS 15.0, *)
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        let kinds: [WebPermission]
+        let kinds: [WebView.WebPermission]
         switch type {
         case .camera: kinds = [.camera]
         case .microphone: kinds = [.microphone]
@@ -816,7 +816,7 @@ extension ManagedWebView: WKUIDelegate {
         @unknown default: kinds = [.other]
         }
         let frameOrigin = "\(origin.protocol)://\(origin.host)"
-        ask(.permission(decisionHandler), .permission(PermissionAsk(permissions: kinds, frameOrigin: frameOrigin, topOrigin: committedOrigin ?? frameOrigin)), timeoutMs: nil)
+        ask(.permission(decisionHandler), .permission(WebView.PermissionAsk(permissions: kinds, frameOrigin: frameOrigin, topOrigin: committedOrigin ?? frameOrigin)), timeoutMs: nil)
     }
 
     private func origin(_ frame: WKFrameInfo) -> String {
@@ -833,7 +833,7 @@ extension ManagedWebView: UIAdaptivePresentationControllerDelegate {
 }
 
 extension ManagedWebView {
-    var instance: WebViewInstance { WebViewInstance(view: id, tokenHi: tokenHi, tokenLo: tokenLo) }
+    var instance: WebView.WebViewInstance { WebView.WebViewInstance(view: id, tokenHi: tokenHi, tokenLo: tokenLo) }
 }
 
 private extension String {
@@ -868,8 +868,8 @@ final class SchemeRouter: NSObject, WKURLSchemeHandler {
             let id = view.requestId()
             view.schemeTasks[id] = task
             owners[ObjectIdentifier(task)] = (view, id)
-            let headers = (task.request.allHTTPHeaderFields ?? [:]).map { HttpHeader(name: $0.key, value: $0.value) }
-            view.emit(.schemeRequest(SchemeRequestInfo(
+            let headers = (task.request.allHTTPHeaderFields ?? [:]).map { WebView.HttpHeader(name: $0.key, value: $0.value) }
+            view.emit(.schemeRequest(WebView.SchemeRequestInfo(
                 requestId: id, scheme: scheme, method: task.request.httpMethod ?? "GET", url: url.absoluteString,
                 headers: headers, hasBody: task.request.httpBody != nil, initiatorOrigin: view.committedOrigin)))
             let timeout = Int(view.spec.timeouts.schemeHeadMs)
@@ -890,9 +890,9 @@ final class SchemeRouter: NSObject, WKURLSchemeHandler {
 
     private var started = Set<UInt64>()
 
-    func head(_ view: ManagedWebView, _ head: SchemeResponseHead) throws {
+    func head(_ view: ManagedWebView, _ head: WebView.SchemeResponseHead) throws {
         guard let task = view.schemeTasks[head.requestId], !started.contains(head.requestId), let url = task.request.url else {
-            throw WebViewError.unknownRequest
+            throw WebView.WebViewError.unknownRequest
         }
         started.insert(head.requestId)
         var headers = ["Content-Type": head.mimeType, "X-Content-Type-Options": "nosniff"]
@@ -901,14 +901,14 @@ final class SchemeRouter: NSObject, WKURLSchemeHandler {
         }
         if let length = head.contentLength { headers["Content-Length"] = String(length) }
         guard let response = HTTPURLResponse(url: url, statusCode: Int(head.status), httpVersion: "HTTP/1.1", headerFields: headers) else {
-            throw WebViewError.invalidArgument("response head")
+            throw WebView.WebViewError.invalidArgument("response head")
         }
         task.didReceive(response)
     }
 
-    func chunk(_ view: ManagedWebView, _ chunk: SchemeChunk) throws {
+    func chunk(_ view: ManagedWebView, _ chunk: WebView.SchemeChunk) throws {
         guard let task = view.schemeTasks[chunk.requestId], started.contains(chunk.requestId) else {
-            throw WebViewError.unknownRequest
+            throw WebView.WebViewError.unknownRequest
         }
         switch chunk.body {
         case .data(let data):
@@ -923,7 +923,7 @@ final class SchemeRouter: NSObject, WKURLSchemeHandler {
     }
 
     func body(_ view: ManagedWebView, _ id: UInt64) throws -> Data? {
-        guard let task = view.schemeTasks[id] else { throw WebViewError.unknownRequest }
+        guard let task = view.schemeTasks[id] else { throw WebView.WebViewError.unknownRequest }
         return task.request.httpBody
     }
 

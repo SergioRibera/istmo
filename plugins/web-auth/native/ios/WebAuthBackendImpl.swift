@@ -17,7 +17,7 @@ import UIKit
 /// are a desktop concept and are refused.
 public final class WebAuthBackendImpl: NSObject, WebAuthBackend {
     private struct Prepared {
-        let spec: CallbackSpec
+        let spec: WebAuth.CallbackSpec
         let redirect: URL
     }
 
@@ -29,12 +29,12 @@ public final class WebAuthBackendImpl: NSObject, WebAuthBackend {
         super.init()
     }
 
-    public func capabilities() async throws -> WebAuthCapabilities {
+    public func capabilities() async throws -> WebAuth.WebAuthCapabilities {
         var https = false
         if #available(iOS 17.4, *) {
             https = true
         }
-        return WebAuthCapabilities(
+        return WebAuth.WebAuthCapabilities(
             backend: "aswebauthenticationsession",
             loopbackCallbacks: false,
             schemeCallbacks: true,
@@ -44,49 +44,49 @@ public final class WebAuthBackendImpl: NSObject, WebAuthBackend {
         )
     }
 
-    public func prepare(callback: CallbackSpec) async throws -> PreparedRedirect {
+    public func prepare(callback: WebAuth.CallbackSpec) async throws -> WebAuth.PreparedRedirect {
         let uri: String
         switch callback {
         case .loopback:
-            throw WebAuthError.unsupported("loopback callbacks on iOS; use a custom scheme or https")
+            throw WebAuth.WebAuthError.unsupported("loopback callbacks on iOS; use a custom scheme or https")
         case .customScheme(let spec):
             let scheme = spec.scheme.lowercased()
             guard Self.isValidScheme(scheme), spec.path.isEmpty || spec.path.hasPrefix("/") else {
-                throw WebAuthError.invalidArgument("callback scheme")
+                throw WebAuth.WebAuthError.invalidArgument("callback scheme")
             }
             guard Self.appDeclares(scheme: scheme) else {
-                throw WebAuthError.callbackNotRegistered
+                throw WebAuth.WebAuthError.callbackNotRegistered
             }
             let path = spec.path.isEmpty ? "/" : spec.path
             uri = spec.host.isEmpty ? "\(scheme):\(path)" : "\(scheme)://\(spec.host.lowercased())\(path)"
         case .https(let spec):
             guard #available(iOS 17.4, *) else {
-                throw WebAuthError.unsupported("https callbacks need iOS 17.4")
+                throw WebAuth.WebAuthError.unsupported("https callbacks need iOS 17.4")
             }
             let path = spec.path.isEmpty ? "/" : spec.path
             uri = "https://\(spec.host.lowercased())\(path)"
         }
         guard let redirect = URL(string: uri) else {
-            throw WebAuthError.invalidArgument("callback")
+            throw WebAuth.WebAuthError.invalidArgument("callback")
         }
         let session = store(Prepared(spec: callback, redirect: redirect))
-        return PreparedRedirect(redirectUri: uri, session: session)
+        return WebAuth.PreparedRedirect(redirectUri: uri, session: session)
     }
 
-    public func authenticate(request: AuthRequest) async throws -> AuthCallback {
+    public func authenticate(request: WebAuth.AuthRequest) async throws -> WebAuth.AuthCallback {
         guard request.mode == .system else {
-            throw WebAuthError.unsupported("embedded sign-in on iOS; ASWebAuthenticationSession is the supported path")
+            throw WebAuth.WebAuthError.unsupported("embedded sign-in on iOS; ASWebAuthenticationSession is the supported path")
         }
         guard let authorize = URL(string: request.authorizeUrl), authorize.scheme == "https" else {
-            throw WebAuthError.invalidArgument("authorize_url must be https")
+            throw WebAuth.WebAuthError.invalidArgument("authorize_url must be https")
         }
         let entry = try takeSession(request.session)
         defer { release() }
         let url = try await present(authorize: authorize, entry: entry, request: request)
         guard Self.queryValue(url, "state") == request.expectedState else {
-            throw WebAuthError.stateMismatch
+            throw WebAuth.WebAuthError.stateMismatch
         }
-        return AuthCallback(url: url.absoluteString)
+        return WebAuth.AuthCallback(url: url.absoluteString)
     }
 
     // `NSLock` is unavailable from async contexts: every locked section is
@@ -106,10 +106,10 @@ public final class WebAuthBackendImpl: NSObject, WebAuthBackend {
         lock.lock()
         defer { lock.unlock() }
         if busy {
-            throw WebAuthError.alreadyInProgress
+            throw WebAuth.WebAuthError.alreadyInProgress
         }
         guard let entry = prepared.removeValue(forKey: id) else {
-            throw WebAuthError.unknownSession
+            throw WebAuth.WebAuthError.unknownSession
         }
         busy = true
         return entry
@@ -121,7 +121,7 @@ public final class WebAuthBackendImpl: NSObject, WebAuthBackend {
         lock.unlock()
     }
 
-    private func present(authorize: URL, entry: Prepared, request: AuthRequest) async throws -> URL {
+    private func present(authorize: URL, entry: Prepared, request: WebAuth.AuthRequest) async throws -> URL {
         #if canImport(AuthenticationServices) && canImport(UIKit)
         let box = SessionBox()
         return try await withTaskCancellationHandler {
@@ -131,7 +131,7 @@ public final class WebAuthBackendImpl: NSObject, WebAuthBackend {
                         if let url = url {
                             cont.resume(returning: url)
                         } else if box.timedOut {
-                            cont.resume(throwing: WebAuthError.timeout)
+                            cont.resume(throwing: WebAuth.WebAuthError.timeout)
                         } else {
                             cont.resume(throwing: Self.map(error))
                         }
@@ -149,7 +149,7 @@ public final class WebAuthBackendImpl: NSObject, WebAuthBackend {
                     box.session = session
                     if !session.start() {
                         box.session = nil
-                        cont.resume(throwing: WebAuthError.presentationUnavailable)
+                        cont.resume(throwing: WebAuth.WebAuthError.presentationUnavailable)
                         return
                     }
                     if request.timeoutMs > 0 {
@@ -165,7 +165,7 @@ public final class WebAuthBackendImpl: NSObject, WebAuthBackend {
             DispatchQueue.main.async { box.session?.cancel() }
         }
         #else
-        throw WebAuthError.noBrowser
+        throw WebAuth.WebAuthError.noBrowser
         #endif
     }
 
@@ -180,7 +180,7 @@ public final class WebAuthBackendImpl: NSObject, WebAuthBackend {
         }
     }
 
-    private static func map(_ error: Error?) -> WebAuthError {
+    private static func map(_ error: Error?) -> WebAuth.WebAuthError {
         guard let error = error as? ASWebAuthenticationSessionError else {
             return .backend(error.map { "\($0)" } ?? "no callback")
         }
