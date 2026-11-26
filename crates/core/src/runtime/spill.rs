@@ -22,12 +22,13 @@
 //! worth of frames it logs a warning (at most every [`WARN_EVERY`]), and
 //! [`SpillStats`] counts what it holds.
 //!
-//! At shutdown, frames queued without a waiting sender (whose send
-//! already returned) get [`SHUTDOWN_FLUSH`] more to reach a transport
-//! that keeps draining; whatever is left then is dropped and the drain
-//! exits, so it never holds the channel open after shutdown. A sender
-//! still waiting on its frame takes it back and fails, as any blocking
-//! send does at shutdown.
+//! At shutdown, or when the runtime drops without one, frames queued
+//! without a waiting sender (whose send already returned) get
+//! [`SHUTDOWN_FLUSH`] more to reach a transport that keeps draining;
+//! whatever is left then is dropped and the drain exits, so it never
+//! holds the channel open after that. A sender still waiting on its
+//! frame takes it back and fails, as any blocking send does at
+//! shutdown.
 //!
 //! [`DeliveryScope`]: super::DeliveryScope
 

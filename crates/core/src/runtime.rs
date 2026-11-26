@@ -2547,6 +2547,17 @@ impl Runtime {
     }
 }
 
+impl Drop for Runtime {
+    /// A runtime dropped without [`shutdown`](Self::shutdown) stops its
+    /// outbound queue the same way: a drain lingering for more frames
+    /// would otherwise keep the outbound channel open for up to a
+    /// second, and frames still queued get the same flush window.
+    fn drop(&mut self) {
+        self.stopped.cancel();
+        self.spill.stop();
+    }
+}
+
 /// A frame counted in [`Runtime::outbound_backlog`] while it is being
 /// sent; see [`Runtime::count_outbound`].
 struct InFlight<'a>(Option<&'a AtomicUsize>);

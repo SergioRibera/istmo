@@ -387,3 +387,30 @@ fn shutdown_lets_the_channel_close_once_queued_frames_had_their_chance() {
     }
     assert_eq!(frames, DEFAULT_OUTBOUND_CAPACITY);
 }
+
+#[test]
+fn dropping_the_runtime_closes_the_channel_without_a_shutdown() {
+    let init = Runtime::mock();
+    fill(&init);
+    let runtime = Arc::clone(&init.runtime);
+    on_thread(move || {
+        let _scope = DeliveryScope::enter();
+        runtime
+            .notify("peer.p", None, "queued", Vec::new())
+            .expect("queued");
+    });
+    assert_eq!(drained_after_fill(&init, 1), ["queued"]);
+    // The drain lingers for more frames now; the runtime goes away.
+    let RuntimeInit { runtime, outbound } = init;
+    drop(runtime);
+    let since = std::time::Instant::now();
+    assert!(matches!(
+        outbound.recv_timeout(Duration::from_secs(5)),
+        Err(flume::RecvTimeoutError::Disconnected)
+    ));
+    assert!(
+        since.elapsed() < Duration::from_millis(300),
+        "the lingering drain kept the channel open for {:?}",
+        since.elapsed()
+    );
+}
