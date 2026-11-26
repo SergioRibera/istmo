@@ -17,6 +17,14 @@ pub const DEFAULT_POOLED_BUFFERS: usize = 6;
 /// are freed).
 pub const DEFAULT_POOLED_BYTES: usize = 96 << 20;
 
+/// A pooled buffer serves a frame of at most this many times less than
+/// its capacity: a small frame queued for long must not hold a buffer
+/// sized for a large one.
+const MAX_SLACK: usize = 4;
+
+/// Buffers up to this capacity fit any smaller frame.
+const SMALL_BUFFER: usize = 64 << 10;
+
 /// Recycles the byte buffers of copied frames.
 ///
 /// A frame built with [`copy_of`](Self::copy_of) or [`buffer`](Self::buffer) returns its
@@ -64,7 +72,8 @@ impl BytePool {
     }
 
     /// An empty buffer with room for at least `len` bytes: the smallest
-    /// pooled one that fits, or a new one.
+    /// pooled one that fits without being much larger (at most
+    /// 4 × `len`, or 64 KiB), or a new one.
     #[must_use]
     pub fn take(&self, len: usize) -> Vec<u8> {
         let mut free = lock(&self.inner.free);
@@ -72,7 +81,7 @@ impl BytePool {
             .buffers
             .iter()
             .enumerate()
-            .filter(|(_, buffer)| buffer.capacity() >= len)
+            .filter(|(_, buffer)| fits(buffer.capacity(), len))
             .min_by_key(|(_, buffer)| buffer.capacity())
             .map(|(index, _)| index);
         let reused = best.map(|index| free.buffers.swap_remove(index));
@@ -112,6 +121,12 @@ impl BytePool {
     pub fn pooled(&self) -> usize {
         lock(&self.inner.free).buffers.len()
     }
+}
+
+/// Whether a buffer of `capacity` may serve a frame of `len` bytes.
+const fn fits(capacity: usize, len: usize) -> bool {
+    let most = len.saturating_mul(MAX_SLACK);
+    capacity >= len && (capacity <= most || capacity <= SMALL_BUFFER)
 }
 
 impl Inner {
@@ -175,6 +190,21 @@ mod tests {
         let big = pool.take(100_000);
         assert!(big.capacity() >= 100_000, "nothing fits: a new buffer");
         assert_eq!(pool.pooled(), 1);
+    }
+
+    #[test]
+    fn a_small_frame_never_takes_a_much_larger_buffer() {
+        let pool = BytePool::default();
+        drop(pool.copy_of(&vec![0u8; 1 << 20]));
+        let small = pool.take(1000);
+        assert!(
+            small.capacity() < 1 << 20,
+            "a fresh buffer, not the 1 MiB one"
+        );
+        assert_eq!(pool.pooled(), 1);
+        let quarter = pool.take(256 << 10);
+        assert!(quarter.capacity() >= 1 << 20, "within 4x: reused");
+        assert_eq!(pool.pooled(), 0);
     }
 
     #[test]
