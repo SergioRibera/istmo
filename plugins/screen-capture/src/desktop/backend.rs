@@ -7,10 +7,11 @@
 use istmo_core::NativeBuffer;
 
 use crate::types::{
-    AudioCaps, AudioConfig, AudioNegotiated, Availability, BackendCaps, BackendId, CaptureError,
-    ConsentConfig, CursorRequest, Exhaustion, FormatRequest, FrameMeta, FrameRate, GpuPreference,
-    HdrPolicy, LinuxOptions, NegotiatedStream, OrientationHandling, OutputSize, PickerOptions,
-    Rect, Requirement, SessionUpdate, Source, SourceList, SourceSelector, Strength, WindowsOptions,
+    AccessScope, AccessState, AudioCaps, AudioConfig, AudioNegotiated, Availability, BackendCaps,
+    BackendId, CaptureError, ConsentConfig, CursorRequest, Exhaustion, FormatRequest, FrameMeta,
+    FrameRate, GpuPreference, HdrPolicy, LinuxOptions, NegotiatedStream, OrientationHandling,
+    OutputSize, PickerOptions, Rect, Requirement, SessionUpdate, Source, SourceId, SourceList,
+    SourceSelector, Strength, WindowsOptions,
 };
 
 use super::offload::Caller;
@@ -89,6 +90,11 @@ pub(crate) struct StreamPlan {
     pub(crate) gpu: GpuPreference,
     pub(crate) orientation: OrientationHandling,
     pub(crate) live_buffers: bool,
+    /// Windows / applications to leave out, where the backend can.
+    pub(crate) exclude: Vec<SourceId>,
+    /// Leave this process's own windows and audio out, where the
+    /// backend can.
+    pub(crate) exclude_own_process: bool,
     pub(crate) consent: ConsentConfig,
     pub(crate) linux: LinuxOptions,
     pub(crate) windows: WindowsOptions,
@@ -130,6 +136,26 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// override only.
     fn joins_auto(&self) -> bool {
         true
+    }
+
+    /// Whether a `SourceSelector::Picker` shows a system picker here
+    /// although the backend also lists sources (macOS 14+
+    /// `SCContentSharingPicker`). Picker-only backends say so through
+    /// their `SourceListing` instead.
+    fn offers_picker(&self) -> bool {
+        false
+    }
+
+    /// The standing grant for `scope`, without prompting; `None` when
+    /// the backend has none for it.
+    fn access(&self, _scope: AccessScope) -> Option<AccessState> {
+        None
+    }
+
+    /// Prompt for the standing grant for `scope`; `None` when the
+    /// backend has none for it.
+    fn request_access(&self, _scope: AccessScope) -> Option<AccessState> {
+        None
     }
 
     /// The capability report, probed where possible, each section with

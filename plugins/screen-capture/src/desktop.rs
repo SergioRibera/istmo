@@ -140,15 +140,16 @@ impl ScreenCapture for DesktopCapture {
     }
 
     async fn access(&self, scope: AccessScope) -> Result<AccessState, CaptureError> {
+        let engine = self.engine();
         #[cfg(all(windows, feature = "windows-common"))]
         if scope == AccessScope::BorderlessCapture {
             // WinRT capability queries: off the caller's executor.
             return offload_open("access", move || {
-                Ok(windows::access::current(scope).unwrap_or_else(|| Engine::access(scope)))
+                Ok(windows::access::current(scope).unwrap_or_else(|| engine.access(scope)))
             })
             .await;
         }
-        Ok(Engine::access(scope))
+        offload_open("access", move || Ok(engine.access(scope))).await
     }
 
     async fn request_access(
@@ -157,19 +158,22 @@ impl ScreenCapture for DesktopCapture {
         request: AccessRequest,
     ) -> Result<AccessState, CaptureError> {
         self.admit(&ctx, "request_access")?;
+        let engine = self.engine();
         #[cfg(all(windows, feature = "windows-common"))]
         if request.scope == AccessScope::BorderlessCapture {
             // The OS prompt blocks until the person answers.
-            let engine = self.engine();
             return offload("request_access", move || {
                 windows::access::request(request.scope, engine.policy())
-                    .unwrap_or_else(|| Ok(Engine::access(request.scope)))
+                    .unwrap_or_else(|| Ok(engine.request_access(request.scope)))
             })
             .await;
         }
-        // Desktop Linux (and every other scope on Windows) has no
-        // standing grant to prompt for.
-        Ok(Engine::access(request.scope))
+        // Only backends with a standing grant prompt (macOS TCC); the rest
+        // answer `NotApplicable`.
+        offload("request_access", move || {
+            Ok(engine.request_access(request.scope))
+        })
+        .await
     }
 
     async fn request_projection(

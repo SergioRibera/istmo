@@ -469,7 +469,30 @@ impl Engine {
         Ok(Arc::clone(pick))
     }
 
-    pub(crate) const fn access(scope: AccessScope) -> AccessState {
+    /// The standing grant for `scope`: the first backend that has one,
+    /// else [`Self::no_access`].
+    pub(crate) fn access(&self, scope: AccessScope) -> AccessState {
+        self.backends
+            .iter()
+            .find_map(|backend| backend.access(scope))
+            .unwrap_or_else(|| Self::no_access(scope))
+    }
+
+    /// Prompt for the standing grant for `scope` on the first backend
+    /// that has one.
+    pub(crate) fn request_access(&self, scope: AccessScope) -> AccessState {
+        let state = self
+            .backends
+            .iter()
+            .find_map(|backend| backend.request_access(scope))
+            .unwrap_or_else(|| Self::no_access(scope));
+        // A new grant changes what the backends can list.
+        self.invalidate_probes();
+        state
+    }
+
+    /// No standing grant applies to `scope` here.
+    pub(crate) const fn no_access(scope: AccessScope) -> AccessState {
         AccessState {
             scope,
             status: AccessStatus::NotApplicable,
@@ -625,6 +648,16 @@ impl Engine {
                 return Err(CaptureError::ConsentRequired);
             }
             return Ok(Target::Picker(options));
+        }
+        // A listing backend with a system picker besides (macOS 14+): the
+        // picker shows only when asked for, and only with `allow_picker`.
+        if let SourceSelector::Picker(options) = selector
+            && backend.offers_picker()
+        {
+            if !consent.allow_picker {
+                return Err(CaptureError::ConsentRequired);
+            }
+            return Ok(Target::Picker(options.clone()));
         }
         let list = || backend.sources().map(|l| l.sources);
         let monitors = |sources: Vec<Source>| -> Vec<Source> {
@@ -1273,6 +1306,8 @@ impl Engine {
             gpu: config.video.gpu,
             orientation: config.video.orientation,
             live_buffers: config.video.live_buffers,
+            exclude: config.video.exclude.clone(),
+            exclude_own_process: config.video.exclude_own_process,
             consent: config.consent.clone(),
             linux: config.linux,
             windows: config.windows,

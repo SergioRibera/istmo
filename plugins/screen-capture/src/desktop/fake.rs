@@ -61,6 +61,11 @@ pub(crate) struct Fake {
     /// Listings a source watch publishes after the first (`None`: no
     /// watch); the sender hanging up ends the watch with `SourceLost`.
     pub(crate) watch: Option<flume::Receiver<Vec<Source>>>,
+    /// Whether a `Picker` selector shows a system picker besides the
+    /// listing (macOS 14+).
+    pub(crate) picker: bool,
+    /// The standing grant `access` reports (`None`: no grant applies).
+    pub(crate) access: Option<crate::types::AccessStatus>,
 }
 
 pub(crate) fn monitor(id: BackendId, index: usize, geometry: Rect, scale: u32) -> Source {
@@ -94,6 +99,8 @@ impl Fake {
             teardown: Duration::ZERO,
             kinds: vec![SourceKind::Monitor],
             watch: None,
+            picker: false,
+            access: None,
         }
     }
 
@@ -207,6 +214,21 @@ impl Backend for Fake {
 
     fn joins_auto(&self) -> bool {
         self.joins_auto
+    }
+
+    fn offers_picker(&self) -> bool {
+        self.picker
+    }
+
+    fn access(&self, scope: crate::types::AccessScope) -> Option<crate::types::AccessState> {
+        self.access.map(|status| crate::types::AccessState {
+            scope,
+            status,
+            model: ConsentModel::SystemSetting,
+            persistence: crate::types::Persistence::SystemSetting,
+            revocable_mid_session: true,
+            indicator: crate::types::IndicatorState::Shown,
+        })
     }
 
     fn caps(&self) -> Result<BackendCaps, CaptureError> {

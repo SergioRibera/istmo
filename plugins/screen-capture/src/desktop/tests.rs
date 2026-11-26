@@ -403,6 +403,57 @@ fn a_picker_only_backend_needs_allow_picker() {
 }
 
 #[test]
+fn a_listing_backend_with_a_picker_shows_it_only_when_allowed() {
+    let mut sck = Fake::new(BackendId::MacosSck, two_monitors());
+    sck.picker = true;
+    let with_picker = rig_with(vec![sck], CapturePolicy::default());
+    let picker = SourceSelector::Picker(crate::types::PickerOptions::default());
+    let err = block(with_picker.client.screenshot_cpu(
+        ScreenshotRequest::of(picker.clone()),
+        PixelLayout::default(),
+    ))
+    .expect_err("consent");
+    assert_eq!(err, CaptureError::ConsentRequired);
+    let allowed = ConsentConfig {
+        allow_picker: true,
+        ..ConsentConfig::default()
+    };
+    let request = ScreenshotRequest {
+        consent: allowed.clone(),
+        ..ScreenshotRequest::of(picker.clone())
+    };
+    block(
+        with_picker
+            .client
+            .screenshot_cpu(request, PixelLayout::default()),
+    )
+    .expect("picker allowed");
+    // A listing backend without a picker still refuses the selector.
+    let plain = rig();
+    let request = ScreenshotRequest {
+        consent: allowed,
+        ..ScreenshotRequest::of(picker)
+    };
+    let err =
+        block(plain.client.screenshot_cpu(request, PixelLayout::default())).expect_err("no picker");
+    assert!(matches!(err, CaptureError::Unsatisfiable(_)), "{err:?}");
+}
+
+#[test]
+fn standing_grants_come_from_the_backend_that_has_them() {
+    use crate::types::{AccessScope, AccessStatus, ConsentModel};
+    let rig = rig();
+    let state = block(rig.client.access(AccessScope::ScreenRecording)).expect("access");
+    assert_eq!(state.status, AccessStatus::NotApplicable);
+    let mut sck = Fake::new(BackendId::MacosSck, two_monitors());
+    sck.access = Some(AccessStatus::RequiresRestart);
+    let rig = rig_with(vec![sck], CapturePolicy::default());
+    let state = block(rig.client.access(AccessScope::ScreenRecording)).expect("access");
+    assert_eq!(state.status, AccessStatus::RequiresRestart);
+    assert_eq!(state.model, ConsentModel::SystemSetting);
+}
+
+#[test]
 fn open_streams_frames_then_close_returns_every_buffer() {
     let rig = rig();
     let config = SessionConfig::default()
