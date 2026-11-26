@@ -875,9 +875,13 @@ impl Engine {
                 let Some(sessions) = sessions.upgrade() else {
                     return;
                 };
-                let entry = lock(&sessions).remove(&id);
-                // Dropping the entry stops the capture and ends the sinks.
-                drop(entry);
+                let Some(entry) = lock(&sessions).remove(&id) else {
+                    return;
+                };
+                // Dropping the entry stops the capture (joins its threads)
+                // and ends the sinks: never on the thread that dropped the
+                // handle, which may be an executor's.
+                super::offload::detach("teardown", move || drop(entry));
             }));
         });
     }

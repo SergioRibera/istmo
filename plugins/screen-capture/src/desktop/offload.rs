@@ -91,6 +91,22 @@ impl Workers {
     }
 }
 
+/// Run `job` on a plugin thread without waiting for it, for teardown
+/// that must never block the thread that triggered it (a handle dropped
+/// in async code). Falls back to a dedicated thread when the pool is
+/// saturated, so the work is neither lost nor run inline.
+pub(crate) fn detach(what: &'static str, job: impl FnOnce() + Send + 'static) {
+    let Err(job) = workers().submit(Box::new(job)) else {
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name(format!("istmo-screen-capture-{what}"))
+        .spawn(job);
+    if let Err(err) = spawned {
+        tracing::error!(%err, what, "screen-capture: teardown thread could not start");
+    }
+}
+
 /// Whether the caller of an offloaded call is still waiting for it.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Caller {

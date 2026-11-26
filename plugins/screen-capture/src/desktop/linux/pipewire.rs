@@ -107,10 +107,16 @@ pub(crate) const SETUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A PipeWire main loop on its own thread. Dropping it stops the loop
 /// and joins the thread (unless dropped on that thread).
+/// How long dropping a [`LoopThread`] waits for the loop to end before it
+/// detaches the thread.
+const JOIN_WAIT: Duration = Duration::from_secs(2);
+
 pub(crate) struct LoopThread {
     terminate: pw::channel::Sender<Terminate>,
     join: Option<JoinHandle<()>>,
     thread: ThreadId,
+    /// Disconnected once the loop thread's body returned.
+    done: flume::Receiver<()>,
 }
 
 impl std::fmt::Debug for LoopThread {
@@ -145,20 +151,24 @@ impl LoopThread {
         init();
         let (terminate, terminate_rx) = pw::channel::channel::<Terminate>();
         let (ready_tx, ready_rx) = flume::bounded(1);
+        let (done_tx, done) = flume::bounded::<()>(0);
         let join = std::thread::Builder::new()
             .name(name.to_owned())
-            .spawn(move || match connect(backend, remote) {
-                Ok((mainloop, core)) => body(
-                    LoopCtx {
-                        mainloop,
-                        core,
-                        terminate: terminate_rx,
-                    },
-                    &ready_tx,
-                ),
-                Err(err) => {
-                    // The caller gave up waiting when this fails.
-                    let _unwanted = ready_tx.send(Err(err));
+            .spawn(move || {
+                let _done = done_tx;
+                match connect(backend, remote) {
+                    Ok((mainloop, core)) => body(
+                        LoopCtx {
+                            mainloop,
+                            core,
+                            terminate: terminate_rx,
+                        },
+                        &ready_tx,
+                    ),
+                    Err(err) => {
+                        // The caller gave up waiting when this fails.
+                        let _unwanted = ready_tx.send(Err(err));
+                    }
                 }
             })
             .map_err(|err| error(backend, "spawn the PipeWire thread", err))?;
@@ -167,6 +177,7 @@ impl LoopThread {
             terminate,
             join: Some(join),
             thread,
+            done,
         };
         match ready_rx.recv_timeout(timeout) {
             Ok(Ok(value)) => Ok((this, value)),
@@ -190,6 +201,14 @@ impl Drop for LoopThread {
         // Fails only when the loop already ended.
         let _ended = self.terminate.send(Terminate);
         if std::thread::current().id() == self.thread {
+            return;
+        }
+        // Bounded: a wedged PipeWire loop is detached, never waited on.
+        if !matches!(
+            self.done.recv_timeout(JOIN_WAIT),
+            Err(flume::RecvTimeoutError::Disconnected)
+        ) {
+            tracing::warn!("screen-capture: a PipeWire thread did not stop in time; detached");
             return;
         }
         if let Some(join) = self.join.take()

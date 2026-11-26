@@ -48,6 +48,8 @@ pub(crate) struct Fake {
     pub(crate) joins_auto: bool,
     /// Returned in every negotiated stream, like a portal token.
     pub(crate) restore_token: Option<crate::types::RestoreToken>,
+    /// How long stopping a session takes (a slow PipeWire or X11 join).
+    pub(crate) teardown: Duration,
 }
 
 pub(crate) fn monitor(id: BackendId, index: usize, geometry: Rect, scale: u32) -> Source {
@@ -78,6 +80,7 @@ impl Fake {
             lose_source: true,
             joins_auto: true,
             restore_token: None,
+            teardown: Duration::ZERO,
         }
     }
 
@@ -344,6 +347,7 @@ impl Backend for Fake {
             Box::new(FakeSession {
                 stop,
                 thread: Some(thread),
+                teardown: self.teardown,
             }),
             negotiated,
         ))
@@ -353,6 +357,7 @@ impl Backend for Fake {
 pub(crate) struct FakeSession {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    teardown: Duration,
 }
 
 impl BackendSession for FakeSession {
@@ -370,6 +375,7 @@ impl BackendSession for FakeSession {
 impl Drop for FakeSession {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        std::thread::sleep(self.teardown);
         if let Some(thread) = self.thread.take() {
             let _joined = thread.join();
         }

@@ -907,3 +907,27 @@ fn an_abandoned_open_leaves_no_session_running() {
     assert_eq!(counters.live_threads.load(Ordering::SeqCst), 0);
     assert!(sink.is_closed(), "sink ended");
 }
+
+#[test]
+fn dropping_a_handle_never_waits_for_the_teardown() {
+    let mut fake = Fake::new(WLR, two_monitors());
+    fake.teardown = Duration::from_millis(600);
+    let rig = rig_with(vec![fake], CapturePolicy::default());
+    let session = block(rig.client.open_session(
+        &rig.runtime,
+        SessionConfig::default(),
+        SinkPolicy::latest(),
+    ))
+    .expect("open");
+    let _first = session.video().recv().expect("frame");
+    let started = Instant::now();
+    drop(session);
+    assert!(
+        started.elapsed() < Duration::from_millis(300),
+        "drop blocked for {:?}",
+        started.elapsed()
+    );
+    wait_until("the teardown on a plugin thread", || {
+        rig.counters.live_threads.load(Ordering::SeqCst) == 0
+    });
+}
