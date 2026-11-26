@@ -226,7 +226,7 @@ fn scenario() {
         service.starts_with("org.kde.StatusNotifierItem-"),
         "{service}"
     );
-    assert!(!sender.is_empty());
+    assert_ne!(sender, "");
 
     check_item(&bus, &service);
     check_clicks(&bus, &service, &events, theme);

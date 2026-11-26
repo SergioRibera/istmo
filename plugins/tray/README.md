@@ -7,6 +7,7 @@ the app swaps at run time.
 | Platform | Backend |
 | --- | --- |
 | Linux | `StatusNotifierItem` + `com.canonical.dbusmenu` over D-Bus (KDE Plasma, waybar, xfce4-panel, GNOME with the AppIndicator extension) |
+| Windows | The notification area (`Shell_NotifyIconW`, `NOTIFYICON_VERSION_4`); menus built when they open; icons added again when explorer.exe restarts |
 | Android / iOS | `UnavailableTray`: every call answers `TrayError::Unsupported` |
 
 Everything runs in Rust; the plugin generates no Kotlin or Swift.

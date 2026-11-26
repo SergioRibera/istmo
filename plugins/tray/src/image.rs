@@ -30,6 +30,10 @@ pub(crate) struct Raster {
 
 impl Raster {
     /// The pixels as a PNG file.
+    #[cfg_attr(
+        not(any(target_os = "linux", test)),
+        expect(dead_code, reason = "dbusmenu is the only consumer of PNG bytes")
+    )]
     pub(crate) fn to_png(&self) -> Vec<u8> {
         let mut out = Vec::new();
         let mut encoder = png::Encoder::new(&mut out, self.width, self.height);
@@ -121,9 +125,9 @@ fn average(src: &Raster, x0: f64, x1: f64, y0: f64, y1: f64) -> [u8; 4] {
             let at = ((sy * src.width + sx) * 4) as usize;
             let alpha = f64::from(src.rgba[at + 3]) / 255.0;
             for (channel, value) in sum.iter_mut().take(3).zip(&src.rgba[at..at + 3]) {
-                *channel += f64::from(*value) * alpha * weight;
+                *channel = (f64::from(*value) * alpha).mul_add(weight, *channel);
             }
-            sum[3] += alpha * weight;
+            sum[3] = alpha.mul_add(weight, sum[3]);
             total += weight;
             sx += 1;
         }
@@ -216,6 +220,10 @@ impl DecodedIcon {
     }
 
     /// The first platform icon name listed, when the backend uses names.
+    #[cfg_attr(
+        all(target_os = "windows", not(test)),
+        expect(dead_code, reason = "Windows has no named icons")
+    )]
     pub(crate) fn name(&self) -> Option<&str> {
         self.reps.iter().find_map(|rep| match rep {
             Rep::Name(name) => Some(name.as_str()),
@@ -367,12 +375,16 @@ fn decode_png(bytes: &[u8]) -> Result<Raster, ImageFailure> {
     let rgba = match frame.color_type {
         png::ColorType::Rgba => buf,
         png::ColorType::Rgb => buf
-            .chunks_exact(3)
-            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b]| [r, g, b, 255])
             .collect(),
         png::ColorType::GrayscaleAlpha => buf
-            .chunks_exact(2)
-            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|&[v, a]| [v, v, v, a])
             .collect(),
         png::ColorType::Grayscale => buf.iter().flat_map(|&v| [v, v, v, 255]).collect(),
         png::ColorType::Indexed => {

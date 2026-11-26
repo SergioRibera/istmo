@@ -934,7 +934,7 @@ mod tests {
 
         // Setting the same value again is no change.
         host.set_title(tray, Some("c".to_owned())).unwrap();
-        assert!(host.shared.take_pending().is_empty());
+        assert_eq!(host.shared.take_pending(), Vec::new());
     }
 
     #[test]
@@ -942,7 +942,7 @@ mod tests {
         let (host, ctx, _rt) = setup();
         let tray = host.create(&ctx, spec()).unwrap().tray;
         host.destroy(tray).unwrap();
-        assert!(host.shared.take_pending().is_empty());
+        assert_eq!(host.shared.take_pending(), Vec::new());
         assert_eq!(host.destroy(tray), Err(TrayError::UnknownTray));
     }
 
@@ -1011,7 +1011,7 @@ mod tests {
                 .label,
             "a"
         );
-        assert!(host.shared.take_pending().is_empty());
+        assert_eq!(host.shared.take_pending(), Vec::new());
     }
 
     #[test]

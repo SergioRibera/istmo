@@ -29,9 +29,9 @@
 
 #![doc(html_root_url = "https://docs.rs/istmo-tray")]
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod desktop;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[expect(
     clippy::redundant_pub_crate,
     reason = "`pub(crate)` marks crate-internal items; plain `pub` in private modules trips `unreachable_pub`"
@@ -50,7 +50,7 @@ use istmo_core::{HostCtx, NativeHandleId};
 use istmo_macros::{owned, plugin, stream};
 use istmo_menu::{IconImage, ItemPatch, MenuNode};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use desktop::DesktopTray;
 pub use istmo_menu;
 pub use types::*;

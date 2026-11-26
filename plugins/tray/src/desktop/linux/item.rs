@@ -85,8 +85,10 @@ fn pixmaps(tray: &TrayState) -> Vec<Pixmap> {
         .map(|raster| {
             let argb = raster
                 .rgba
-                .chunks_exact(4)
-                .flat_map(|p| [p[3], p[0], p[1], p[2]])
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|&[r, g, b, a]| [a, r, g, b])
                 .collect();
             (
                 i32::try_from(raster.width).unwrap_or(i32::MAX),

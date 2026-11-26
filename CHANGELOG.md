@@ -21,7 +21,11 @@
   check / radio changes, tray host presence). Changes coalesce per item.
   Linux backend: `StatusNotifierItem` + `com.canonical.dbusmenu` over
   zbus, one bus connection per item, re-registration when the watcher
-  comes back. `UnavailableTray` for Android / iOS.
+  comes back. Windows backend: `Shell_NotifyIconW` (version 4) on a hidden
+  top-level window, popup menus built when they open (radio items
+  native, mixed checks drawn as a dash, default item, shortcut text),
+  icons added again on `TaskbarCreated`, optional `windows_guid`.
+  `UnavailableTray` for Android / iOS.
 - `istmo-screen-capture` plugin (`istmo.screen_capture`): screenshots
   (frames into a sink, or raw pixels with `screenshot_pixels`, never
   encoded; multi-monitor CPU composite) and live sessions into frame
