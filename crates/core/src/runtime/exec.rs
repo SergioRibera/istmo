@@ -119,6 +119,13 @@ impl DeliveryScope {
     /// consumer to another thread when this is `false`). Always `true`
     /// on `wasm32`, where nothing blocks in the first place.
     #[must_use]
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_os = "unknown"),
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "const only on wasm32; one signature for every target"
+        )
+    )]
     pub fn may_block() -> bool {
         may_block()
     }
