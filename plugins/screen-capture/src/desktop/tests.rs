@@ -1156,3 +1156,23 @@ fn upright_on_an_upright_source_lists_no_copy() {
     let frame = session.video().recv().expect("frame");
     assert_eq!(frame.meta.copied, None);
 }
+
+#[test]
+fn a_vanished_source_invalidates_the_probe_cache() {
+    let rig = rig();
+    block(rig.client.backends()).expect("backends");
+    assert_eq!(rig.counters.probes.load(Ordering::SeqCst), 1);
+    let gone = crate::types::SourceId::new(WLR, "unplugged");
+    let err = block(rig.client.screenshot_cpu(
+        ScreenshotRequest::of(SourceSelector::Id(gone.clone())),
+        PixelLayout::default(),
+    ))
+    .expect_err("gone");
+    assert_eq!(err, CaptureError::SourceNotFound(gone));
+    block(rig.client.backends()).expect("backends");
+    assert_eq!(
+        rig.counters.probes.load(Ordering::SeqCst),
+        2,
+        "probed again after the outputs changed"
+    );
+}

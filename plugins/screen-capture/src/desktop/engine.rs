@@ -244,6 +244,11 @@ impl Engine {
         candidates
     }
 
+    /// Forget the cached probe: the next report probes again.
+    fn invalidate_probes(&self) {
+        *lock(&self.probed) = None;
+    }
+
     /// Audio comes from the audio backend, whatever the video backend.
     fn with_audio(&self, mut caps: BackendCaps) -> BackendCaps {
         if caps.audio.sources.is_empty()
@@ -608,7 +613,15 @@ impl Engine {
                 .iter()
                 .find(|c| c.backend == id)
                 .and_then(|c| c.caps.as_ref());
-            match attempt(backend, caps) {
+            let outcome = attempt(backend, caps);
+            if matches!(
+                outcome,
+                Err(CaptureError::SourceNotFound(_) | CaptureError::SourceLost)
+            ) {
+                // The outputs changed (hot-plug): the cached probe is stale.
+                self.invalidate_probes();
+            }
+            match outcome {
                 Ok(value) => return Ok(value),
                 // Consent answers are the person's, not the backend's:
                 // never fall through to another backend after them.
