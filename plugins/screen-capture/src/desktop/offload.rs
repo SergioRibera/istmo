@@ -5,7 +5,10 @@
 //! The threads are a small shared pool: at most [`MAX_WORKERS`] run at
 //! once, idle ones exit after [`IDLE_EXIT`], and at most [`QUEUE`] jobs
 //! wait. A flood of calls (methods open to every origin included) is
-//! refused instead of costing one OS thread per call.
+//! refused instead of costing one OS thread per call. Teardown never
+//! goes through the pool: it runs on a thread of its own, so it never
+//! waits behind host calls (a consent dialog can hold a worker for
+//! minutes).
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -108,14 +111,12 @@ impl Workers {
     }
 }
 
-/// Run `job` on a plugin thread without waiting for it, for teardown
-/// that must never block the thread that triggered it (a handle dropped
-/// in async code). Falls back to a dedicated thread when the pool is
-/// saturated, so the work is neither lost nor run inline.
+/// Run `job` on a thread of its own without waiting for it, for
+/// teardown that must never block the thread that triggered it (a handle
+/// dropped in async code), nor queue behind host calls in the pool.
+/// When no thread starts, the job is dropped here, and with it whatever
+/// it owns (a teardown job is a drop of the session it carries).
 pub(crate) fn detach(what: &'static str, job: impl FnOnce() + Send + 'static) {
-    let Err(job) = workers().submit(Box::new(job)) else {
-        return;
-    };
     let spawned = std::thread::Builder::new()
         .name(format!("istmo-screen-capture-{what}"))
         .spawn(job);
@@ -269,6 +270,17 @@ mod tests {
         );
         release_tx.send(()).expect("release");
         long.join().expect("long").expect("long call");
+    }
+
+    #[test]
+    fn teardown_runs_on_its_own_thread() {
+        let (tx, rx) = flume::bounded(1);
+        detach("teardown", move || {
+            let name = std::thread::current().name().map(str::to_owned);
+            let _sent = tx.send(name);
+        });
+        let name = rx.recv_timeout(Duration::from_secs(5)).expect("ran");
+        assert_eq!(name.as_deref(), Some("istmo-screen-capture-teardown"));
     }
 
     #[test]
