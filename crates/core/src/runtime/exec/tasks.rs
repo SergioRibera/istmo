@@ -377,6 +377,11 @@ pub(super) fn spawn(future: impl Future<Output = ()> + Send + 'static) {
     pool().push(task);
 }
 
+/// The current thread is an async worker.
+pub(super) fn on_worker() -> bool {
+    INDEX.with(Cell::get).is_some()
+}
+
 /// Number of async workers started so far (tests).
 #[cfg(test)]
 pub(super) fn started_workers() -> usize {

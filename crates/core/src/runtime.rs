@@ -30,7 +30,9 @@ use crate::sync::lock;
 
 mod exec;
 mod peer;
+mod spill;
 
+pub use exec::DeliveryScope;
 pub use peer::{DirectOutcome, DirectPeer};
 
 use exec::{CatchUnwind, Delivery, Either, race, send_unless_cancelled};
@@ -387,6 +389,16 @@ struct RemoteCalls {
 /// reading nor a transport that stopped draining after
 /// [`shutdown`](Self::shutdown) pins it forever.
 ///
+/// A thread that delivers work never waits on a full outbound channel:
+/// an async worker, a thread polling an inline host it delivered, a
+/// thread handling inbound frames, or one the transport marked with a
+/// [`DeliveryScope`] (its pump). Its sends queue behind the channel in
+/// order and a task moves them on as room frees up, so a host cannot
+/// deadlock waiting for the very thread that drains the channel. Any
+/// other thread still waits for room, as the backpressure the channel
+/// gives; while frames are queued that way, it waits for its own frame
+/// to leave the queue.
+///
 /// # Locking
 ///
 /// No mutex of the runtime is acquired while another one is held: every
@@ -457,7 +469,11 @@ pub struct Runtime {
 
     /// Frames put on the outbound channel and not yet reported delivered
     /// by the transport ([`outbound_delivered`](Self::outbound_delivered)).
-    outbound_backlog: AtomicUsize,
+    outbound_backlog: Arc<AtomicUsize>,
+
+    /// Frames a thread that must not block could not put on the full
+    /// outbound channel, on their way to it in order.
+    spill: Arc<spill::Spill>,
 
     /// Credit lanes of peer streams opened with a window
     /// ([`serve_peer_stream`](Self::serve_peer_stream)).
@@ -1087,6 +1103,9 @@ impl Runtime {
         origin: Origin,
         envelope: Envelope,
     ) -> Result<(), IstmoError> {
+        // Inbound frames arrive on the transport's threads: an error
+        // answer sent from here must not wait for them to drain.
+        let _delivering = DeliveryScope::enter();
         if envelope.version != PROTOCOL_VERSION {
             return Err(IstmoError::ProtocolVersionMismatch {
                 expected: PROTOCOL_VERSION,
@@ -1184,7 +1203,7 @@ impl Runtime {
             Err(encode_dispatch_error_string(&format!(
                 "`{plugin_id}` refuses requests from this origin"
             ))),
-            Wait::Block,
+            Wait::Block.for_sync(),
         ));
     }
 
@@ -1196,7 +1215,7 @@ impl Runtime {
             Err(encode_dispatch_error_string(&format!(
                 "no host registered for `{plugin_id}`"
             ))),
-            Wait::Block,
+            Wait::Block.for_sync(),
         ));
     }
 
@@ -1445,7 +1464,8 @@ impl Runtime {
         *lock(&self.remote_sink) = Some(sink);
     }
 
-    /// Send a frame, blocking while the outbound channel is full.
+    /// Send a frame, blocking while the outbound channel is full (on a
+    /// thread that may block; see the type's `# Threads`).
     fn send_outbound(&self, envelope: Envelope) -> Result<(), IstmoError> {
         let Some(envelope) = self.route_remote(envelope)? else {
             return Ok(());
@@ -1472,7 +1492,7 @@ impl Runtime {
     fn push_outbound(&self, envelope: Envelope, wait: Wait<'_>) -> Result<bool, IstmoError> {
         #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         {
-            pollster::block_on(self.push_outbound_async(envelope, wait))
+            pollster::block_on(self.push_outbound_async(envelope, wait.for_sync()))
         }
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         {
@@ -1490,7 +1510,7 @@ impl Runtime {
     /// when the attempt is dropped half way.
     fn count_outbound(&self) -> InFlight<'_> {
         self.outbound_backlog.fetch_add(1, Ordering::AcqRel);
-        InFlight(Some(&self.outbound_backlog))
+        InFlight(Some(&*self.outbound_backlog))
     }
 
     /// Put `envelope` on the outbound channel. `Ok(false)` when `wait`
@@ -1501,15 +1521,10 @@ impl Runtime {
         wait: Wait<'_>,
     ) -> Result<bool, IstmoError> {
         let in_flight = self.count_outbound();
-        in_flight.settle(self.push_outbound_waiting(envelope, wait).await)
-    }
-
-    async fn push_outbound_waiting(
-        &self,
-        envelope: Envelope,
-        wait: Wait<'_>,
-    ) -> Result<bool, IstmoError> {
-        match wait {
+        if self.spill.is_active() {
+            return self.push_behind_spill(envelope, wait, in_flight).await;
+        }
+        let sent = match wait {
             // Room on the channel goes first, shut down or not: frames
             // already decided (an error answer after shutdown) still
             // reach a transport that keeps draining.
@@ -1532,6 +1547,51 @@ impl Runtime {
                 }
             }
             Wait::Never => self.push_outbound_now(envelope),
+            Wait::Queue => match self.outbound.try_send(envelope) {
+                Ok(()) => Ok(true),
+                Err(TrySendError::Disconnected(_)) => Err(IstmoError::ChannelClosed),
+                Err(TrySendError::Full(envelope)) => {
+                    return self.push_behind_spill(envelope, wait, in_flight).await;
+                }
+            },
+        };
+        in_flight.settle(sent)
+    }
+
+    /// Queue `envelope` behind the frames that could not wait for room
+    /// (see `runtime/spill.rs`), which takes over its count. A sender that
+    /// may wait still waits, for its own frame to leave the queue, unless
+    /// `wait` gives up first.
+    async fn push_behind_spill(
+        &self,
+        envelope: Envelope,
+        wait: Wait<'_>,
+        in_flight: InFlight<'_>,
+    ) -> Result<bool, IstmoError> {
+        in_flight.hand_over();
+        let (stop, on_stop) = match wait {
+            Wait::Block => (&self.stopped, Err(IstmoError::RuntimeShutDown)),
+            Wait::UnlessCancelled(cancel) => (cancel, Ok(false)),
+            Wait::Never | Wait::Queue => {
+                self.spill.push(envelope, false);
+                return Ok(true);
+            }
+        };
+        let Some(mut ticket) = self.spill.push(envelope, true) else {
+            return Ok(true);
+        };
+        match race(&mut ticket.done, stop.cancelled()).await {
+            Either::Left(Ok(sent)) => sent,
+            Either::Left(Err(_)) => Err(IstmoError::ChannelClosed),
+            Either::Right(()) if self.spill.withdraw(&ticket) => on_stop,
+            // Already taken by the queue's drain, which gives up at
+            // shutdown too: its verdict comes right away.
+            Either::Right(()) if matches!(wait, Wait::Block) => {
+                ticket.done.await.unwrap_or(Err(IstmoError::ChannelClosed))
+            }
+            // Taken by the drain, which waits for room regardless of this
+            // call: it goes out (or fails) without this sender.
+            Either::Right(()) => Ok(true),
         }
     }
 
@@ -1740,6 +1800,8 @@ impl Runtime {
         method: String,
         payload: Vec<u8>,
     ) -> Option<CallResult> {
+        // The peer's thread delivers the call: see `dispatch_from`.
+        let _delivering = DeliveryScope::enter();
         let call = HostedCall {
             origin: Origin::Peer,
             call_id,
@@ -1784,6 +1846,7 @@ impl Runtime {
         payload: Vec<u8>,
         window: u32,
     ) {
+        let _delivering = DeliveryScope::enter();
         let stream_id = StreamId(call_id.get());
         let (tx, rx) = flume::unbounded();
         // Unbounded and still connected: the send cannot fail.
@@ -1927,7 +1990,7 @@ impl Runtime {
             origin,
             call_id,
             Err(encode_dispatch_error_string(&message)),
-            Wait::UnlessCancelled(cancel),
+            Wait::UnlessCancelled(cancel).for_sync(),
         ));
         lock(&self.hosted).finish(origin, call_id);
     }
@@ -2358,6 +2421,12 @@ impl InFlight<'_> {
         }
         sent
     }
+
+    /// The frame was queued behind the channel; the queue owns the count
+    /// from now on.
+    fn hand_over(mut self) {
+        self.0 = None;
+    }
 }
 
 impl Drop for InFlight<'_> {
@@ -2377,6 +2446,25 @@ enum Wait<'a> {
     UnlessCancelled(&'a CancelToken),
     /// Not at all: a full channel drops the frame.
     Never,
+    /// Not at all: a full channel queues the frame behind it, in order,
+    /// and the send returns at once.
+    Queue,
+}
+
+impl Wait<'_> {
+    /// The wait a synchronous send on this thread may afford: none that
+    /// could block where the runtime must not
+    /// ([`DeliveryScope`], an async worker).
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "could be const only on wasm32, where may_block is"
+    )]
+    fn for_sync(self) -> Self {
+        match self {
+            Self::Block | Self::UnlessCancelled(_) if !exec::may_block() => Self::Queue,
+            other => other,
+        }
+    }
 }
 
 /// Run a notification in the background; nothing is sent back.
@@ -2602,6 +2690,13 @@ where
 
 fn build(config: RuntimeConfig) -> RuntimeInit {
     let (outbound_tx, outbound_rx) = bounded(config.outbound_capacity);
+    let outbound_backlog = Arc::new(AtomicUsize::new(0));
+    let stopped = CancelToken::new();
+    let spill = Arc::new(spill::Spill::new(
+        outbound_tx.clone(),
+        Arc::clone(&outbound_backlog),
+        stopped.clone(),
+    ));
     let runtime = Arc::new(Runtime {
         outbound: outbound_tx,
         routing: RoutingTables::default(),
@@ -2610,7 +2705,7 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         next_id: AtomicU64::new(1),
         next_native_handle: AtomicU64::new(NativeHandleId::RUST_ALLOCATED_BASE),
         shutting_down: AtomicBool::new(false),
-        stopped: CancelToken::new(),
+        stopped,
         declared_plugins: Mutex::new(HashSet::new()),
         enforce_declarations: AtomicBool::new(false),
         hosts: Mutex::new(HashMap::new()),
@@ -2624,7 +2719,8 @@ fn build(config: RuntimeConfig) -> RuntimeInit {
         native_handle_release_hooks: Mutex::new(Vec::new()),
         frame_sinks: FrameSinks::default(),
         direct_peer: OnceLock::new(),
-        outbound_backlog: AtomicUsize::new(0),
+        outbound_backlog,
+        spill,
         peer_credits: Mutex::new(HashMap::new()),
     });
     RuntimeInit {

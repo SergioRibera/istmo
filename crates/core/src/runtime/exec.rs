@@ -20,6 +20,7 @@
 //! [`DispatchMode::Isolated`]: crate::DispatchMode::Isolated
 
 use std::any::Any;
+use std::cell::Cell;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::{Pin, pin};
@@ -51,7 +52,81 @@ pub(super) fn spawn(task: impl Future<Output = ()> + Send + 'static) {
 /// it to the async workers. `true` when it finished before returning.
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub(super) fn run_here(task: impl Future<Output = ()> + Send + 'static) -> bool {
+    // An inline host must not block whatever thread delivered it.
+    let _delivering = DeliveryScope::enter();
     tasks::run_here(task)
+}
+
+mod delivery {
+    // The initialiser is a `const` block already; clippy's
+    // `missing_const_for_thread_local` still fires on some targets.
+    #![allow(
+        clippy::missing_const_for_thread_local,
+        reason = "false positive on some targets; the initialiser is const"
+    )]
+
+    use std::cell::Cell;
+
+    thread_local! {
+        /// Open [`super::DeliveryScope`]s on this thread.
+        pub(super) static DEPTH: Cell<u32> = const { Cell::new(0) };
+    }
+}
+
+/// Marks the current thread as delivering work while it lives: the
+/// runtime never blocks it waiting for room on the outbound channel.
+///
+/// A transport opens one for the life of a thread whose progress the
+/// outbound channel depends on, such as its pump, so a send made from
+/// there (by code the pump calls into) can never wait for the pump
+/// itself. Frames that would have to wait are queued in order behind
+/// the channel instead. The runtime opens one itself while it polls an
+/// inline host on the thread that delivered the call, and while it
+/// handles inbound frames.
+///
+/// Scopes nest; the thread is unmarked when the outermost one drops.
+#[derive(Debug)]
+#[must_use = "the thread is only marked while the scope lives"]
+pub struct DeliveryScope {
+    /// Thread-local state: the scope must drop on the thread that
+    /// opened it.
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+impl DeliveryScope {
+    /// Mark the current thread until the returned scope drops.
+    pub fn enter() -> Self {
+        delivery::DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+        Self {
+            _not_send: std::marker::PhantomData,
+        }
+    }
+
+    /// The current thread is inside a scope.
+    #[must_use]
+    pub fn is_active() -> bool {
+        delivery::DEPTH.with(Cell::get) > 0
+    }
+}
+
+impl Drop for DeliveryScope {
+    fn drop(&mut self) {
+        delivery::DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+/// Whether a synchronous send may block this thread on a full channel:
+/// not on an async worker, not inside a [`DeliveryScope`].
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub(super) fn may_block() -> bool {
+    !tasks::on_worker() && !DeliveryScope::is_active()
+}
+
+/// On `wasm32` synchronous sends never wait in the first place (a full
+/// channel fails them), so nothing changes there.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(super) const fn may_block() -> bool {
+    true
 }
 
 /// Poll `task` once here; a pending one goes to the browser's event

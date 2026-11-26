@@ -28,7 +28,12 @@ pub(crate) fn spawn(
     let (shutdown_tx, shutdown_rx) = unbounded::<()>();
     let join = thread::Builder::new()
         .name("istmo-ios-pump".to_owned())
-        .spawn(move || pump_loop(&callbacks, &outbound, &shutdown_rx))
+        .spawn(move || {
+            // Swift callbacks run here and may send: never wait on the
+            // channel this thread drains.
+            let _delivering = istmo_core::DeliveryScope::enter();
+            pump_loop(&callbacks, &outbound, &shutdown_rx);
+        })
         .map_err(IosRuntimeError::SpawnPump)?;
     Ok(PumpHandles {
         shutdown: shutdown_tx,

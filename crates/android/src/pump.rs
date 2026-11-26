@@ -91,6 +91,9 @@ pub(crate) fn spawn(
             let Ok(outbound) = outbound_rx.recv() else {
                 return;
             };
+            // Kotlin callbacks run here and may send: never wait on the
+            // channel this thread drains.
+            let _delivering = istmo_core::DeliveryScope::enter();
             pump.run(&mut env, &outbound, &remote_rx, &shutdown_rx);
         })?;
     match ready_rx.recv() {
