@@ -191,14 +191,25 @@ fn swift_defaults_match_rust() {
     for text in &expected {
         contains(file, &swift, text);
     }
-    contains(file, &swift, "formats: ScreenCapture.FormatRequest(tiers: [])");
+    contains(
+        file,
+        &swift,
+        "formats: ScreenCapture.FormatRequest(tiers: [])",
+    );
     let BackendSelection::Auto(AutoSelect { prefer, .. }) = BackendSelection::default() else {
         panic!("the default selection is Auto");
     };
     contains(
         file,
         &swift,
-        &format!(".auto(ScreenCapture.AutoSelect(prefer: {}, exclude: []))", sw(&prefer)),
+        &format!(
+            ".auto(ScreenCapture.AutoSelect(prefer: {}, exclude: []))",
+            sw(&prefer)
+        ),
     );
-    contains(file, &swift, "source: ScreenCapture.SourceSelector = .primaryMonitor");
+    contains(
+        file,
+        &swift,
+        "source: ScreenCapture.SourceSelector = .primaryMonitor",
+    );
 }
