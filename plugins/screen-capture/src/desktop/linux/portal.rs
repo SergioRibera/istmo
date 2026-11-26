@@ -843,7 +843,8 @@ mod tests {
 /// The PipeWire half of the portal against niri, without a dialog: niri's
 /// Mutter ScreenCast API (what its portal calls) hands out a stream node
 /// directly. Runs with `ISTMO_SC_TEST_NIRI_SCREENCAST` set
-/// (`ISTMO_SC_TEST_CONNECTOR` picks the output, default `DP-3`).
+/// (`ISTMO_SC_TEST_CONNECTOR` picks the output, default `DP-3`). niri sends
+/// frames on damage only: pick an output whose content changes.
 #[cfg(test)]
 mod niri_live {
     use std::collections::HashMap;
