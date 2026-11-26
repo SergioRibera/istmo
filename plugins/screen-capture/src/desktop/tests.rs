@@ -1095,3 +1095,43 @@ fn exact_pacing_with_a_shallow_pool_keeps_flowing() {
     }
     assert_eq!(fresh, 10, "new frames keep coming, not only repeats");
 }
+
+#[test]
+fn a_paced_producer_landing_a_hair_early_is_not_held_a_period() {
+    for fps in [FrameRate::Max(10), FrameRate::Exact(10)] {
+        let runtime = Runtime::mock().runtime;
+        let sink = runtime
+            .open_frame_sink::<crate::types::FrameMeta>(SinkPolicy::queue(8))
+            .expect("sink");
+        let out = super::output::FrameOut::new(
+            WLR,
+            runtime.frame_sender(sink.id()).expect("sender"),
+            Arc::new(super::output::EventHub::default()),
+            fps,
+        );
+        let source = two_monitors().remove(0);
+        let frame = || {
+            (
+                fake::meta(&source, crate::types::Size::new(8, 4)),
+                istmo_core::NativeBuffer::from_bytes(vec![0u8; 8 * 4 * 4]),
+            )
+        };
+        let (meta, buffer) = frame();
+        assert_eq!(
+            out.deliver(meta, buffer),
+            super::output::Delivery::Delivered
+        );
+        // 97 ms into a 100 ms period: within the slack.
+        std::thread::sleep(Duration::from_millis(97));
+        let (meta, buffer) = frame();
+        assert_eq!(
+            out.deliver(meta, buffer),
+            super::output::Delivery::Delivered,
+            "{fps:?}"
+        );
+        // Right after a delivery: early, deferred to the period's end.
+        let (meta, buffer) = frame();
+        assert_eq!(out.deliver(meta, buffer), super::output::Delivery::Deferred);
+        out.stop(StopReason::Closed);
+    }
+}

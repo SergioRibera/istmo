@@ -31,6 +31,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// A frame arriving within `period / SLACK` of its due time counts as due.
+const SLACK: u32 = 20;
+
 /// Events kept for replay to every new subscriber (the newest ones).
 const BACKLOG: usize = 64;
 /// Events queued per subscriber before new ones are dropped.
@@ -326,24 +329,28 @@ impl FrameOut {
         match state.fps {
             FrameRate::Native => self.push(&mut state, meta, buffer),
             FrameRate::OnDamage(_) if !meta.damage.changed() => Delivery::Dropped,
-            FrameRate::Max(_) | FrameRate::OnDamage(_) => {
+            FrameRate::Max(_) | FrameRate::OnDamage(_) | FrameRate::Exact(_) => {
+                // A frame due now goes out now (no added latency); one that
+                // comes early waits for the end of the period. A producer
+                // that already paces at the rate lands a hair early or late:
+                // the slack keeps those on time instead of a period late.
                 let due = state.pending.is_none()
                     && match (state.last_push, period(state.fps)) {
-                        (Some(at), Some(period)) => at.elapsed() >= period,
+                        (Some(at), Some(period)) => at.elapsed() + period / SLACK >= period,
                         _ => true,
                     };
                 if due {
-                    self.push(&mut state, meta, buffer)
+                    let delivery = self.push(&mut state, meta, buffer);
+                    if matches!(state.fps, FrameRate::Exact(_)) {
+                        // Exact repeats an idle source from the pacer.
+                        self.ensure_pacer(&mut state);
+                    }
+                    delivery
                 } else {
                     Self::defer(&mut state, meta, buffer);
                     self.ensure_pacer(&mut state);
                     Delivery::Deferred
                 }
-            }
-            FrameRate::Exact(_) => {
-                Self::defer(&mut state, meta, buffer);
-                self.ensure_pacer(&mut state);
-                Delivery::Deferred
             }
         }
     }
