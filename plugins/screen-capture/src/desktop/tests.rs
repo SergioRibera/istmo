@@ -993,3 +993,50 @@ fn a_full_drop_newest_sink_is_reported_as_full() {
     assert_eq!(CaptureError::from(err), CaptureError::SinkFull);
     assert!(sink.try_recv().is_some(), "the first frame stays queued");
 }
+
+#[test]
+fn an_empty_monitor_list_names_the_missing_monitors() {
+    let rig = rig();
+    let err = block(rig.client.screenshot_cpu(
+        ScreenshotRequest::of(SourceSelector::Monitors(Vec::new())),
+        PixelLayout::default(),
+    ))
+    .expect_err("no monitor");
+    assert_eq!(
+        err,
+        CaptureError::unsatisfiable(
+            Some(WLR),
+            Requirement::Kind(crate::types::SourceKind::Monitor)
+        )
+    );
+}
+
+#[test]
+fn a_region_update_at_the_edge_of_i32_does_not_overflow() {
+    let offset = vec![fake::monitor(WLR, 0, Rect::new(100, 100, 8, 4), 1000)];
+    let engine = Engine::new(
+        vec![Arc::new(Fake::new(WLR, offset))],
+        None,
+        Vec::new(),
+        vec![WLR],
+        None,
+        CapturePolicy::default(),
+    );
+    let runtime = Runtime::mock().runtime;
+    let (session, _sink) = open_on(&runtime, &engine, CallOrigin::Local);
+    let monitor = session.negotiated.source.id.clone();
+    let err = engine
+        .update(
+            session.session,
+            &SessionUpdate::Region(RegionSelector {
+                rect: Rect::new(i32::MAX, i32::MAX, 10, 10),
+                space: RegionSpace::MonitorRelative(monitor),
+            }),
+            CallOrigin::Local,
+        )
+        .expect_err("outside the monitor");
+    assert_eq!(
+        err,
+        CaptureError::unsatisfiable(Some(WLR), Requirement::Region)
+    );
+}

@@ -430,6 +430,12 @@ impl Engine {
         consent: &crate::types::ConsentConfig,
     ) -> Result<Target, CaptureError> {
         let id = backend.id();
+        if matches!(selector, SourceSelector::Monitors(ids) if ids.is_empty()) {
+            return Err(CaptureError::unsatisfiable(
+                Some(id),
+                Requirement::Kind(SourceKind::Monitor),
+            ));
+        }
         let picker_only = caps.is_some_and(|c| c.listing == SourceListing::PickerOnly);
         if picker_only {
             let options = match selector {
@@ -1193,8 +1199,8 @@ impl Engine {
                     crate::types::RegionSpace::Global => region.rect,
                     crate::types::RegionSpace::MonitorRelative(owner) if owner == &source.id => {
                         Rect::new(
-                            region.rect.x + geometry.x,
-                            region.rect.y + geometry.y,
+                            region.rect.x.saturating_add(geometry.x),
+                            region.rect.y.saturating_add(geometry.y),
                             region.rect.width,
                             region.rect.height,
                         )
