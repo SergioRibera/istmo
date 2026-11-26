@@ -1000,9 +1000,9 @@ impl Runtime {
     /// # Errors
     ///
     /// - [`IstmoError::ChannelClosed`] when the outbound pump is gone.
-    /// - [`IstmoError::OutboundFull`] on `wasm32` when the outbound
-    ///   channel is full; the release frame is dropped. Elsewhere it
-    ///   queues behind the full channel.
+    ///
+    /// A full outbound channel never fails it: the release queues
+    /// behind the channel.
     pub fn release_native_handle(&self, handle_id: NativeHandleId) -> Result<(), IstmoError> {
         let hooks: Vec<NativeHandleReleaseHook> = lock(&self.native_handle_release_hooks).clone();
         for hook in &hooks {
@@ -1071,9 +1071,9 @@ impl Runtime {
     /// # Errors
     ///
     /// - [`IstmoError::ChannelClosed`] if the outbound pump is gone.
-    /// - [`IstmoError::OutboundFull`] on `wasm32` when the outbound
-    ///   channel is full; the cancel is dropped. Elsewhere it queues
-    ///   behind the full channel, so the peer always hears it.
+    ///
+    /// A full outbound channel never fails it: the cancel queues behind
+    /// the channel, so the peer always hears it.
     pub fn cancel_call(&self, call_id: CallId) -> Result<(), IstmoError> {
         if !self.routing.remove_pending(call_id.get()) {
             return Ok(());
@@ -1544,9 +1544,10 @@ impl Runtime {
     /// `Ok(false)` when `wait` gave up because the call was cancelled
     /// first.
     ///
-    /// On `wasm32` nothing drains the channel while this frame waits, so
-    /// every wait becomes [`Wait::Never`]: a full channel fails with
-    /// [`IstmoError::OutboundFull`].
+    /// On `wasm32` nothing drains the channel while this frame waits: a
+    /// frame that cannot go now (no room, or frames queued ahead of it)
+    /// queues behind the others for [`Wait::Never`], like an async send,
+    /// and fails with [`IstmoError::OutboundFull`] for any other wait.
     fn push_outbound(&self, envelope: Envelope, wait: Wait<'_>) -> Result<bool, IstmoError> {
         #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         {
@@ -1554,9 +1555,7 @@ impl Runtime {
         }
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         {
-            let _ = wait;
-            let in_flight = self.count_outbound();
-            in_flight.settle(self.push_outbound_now(envelope))
+            self.push_outbound_now(envelope, wait)
         }
     }
 
@@ -1652,19 +1651,31 @@ impl Runtime {
         }
     }
 
-    /// Put `envelope` on the outbound channel if there is room.
+    /// [`push_outbound`](Self::push_outbound) on `wasm32`, without
+    /// waiting at all.
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-    fn push_outbound_now(&self, envelope: Envelope) -> Result<bool, IstmoError> {
-        self.outbound
-            .try_send(envelope)
-            .map(|()| true)
-            .map_err(|err| match err {
-                TrySendError::Full(envelope) => {
-                    tracing::warn!(frame = ?envelope.frame, "outbound channel full; frame dropped");
-                    IstmoError::OutboundFull
+    fn push_outbound_now(&self, envelope: Envelope, wait: Wait<'_>) -> Result<bool, IstmoError> {
+        let in_flight = self.count_outbound();
+        // While frames are queued, room on the channel belongs to them:
+        // taking it would let this frame overtake them.
+        let envelope = if self.spill.is_active() {
+            envelope
+        } else {
+            match self.outbound.try_send(envelope) {
+                Ok(()) => return in_flight.settle(Ok(true)),
+                Err(TrySendError::Disconnected(_)) => {
+                    return in_flight.settle(Err(IstmoError::ChannelClosed));
                 }
-                TrySendError::Disconnected(_) => IstmoError::ChannelClosed,
-            })
+                Err(TrySendError::Full(envelope)) => envelope,
+            }
+        };
+        if matches!(wait, Wait::Never) {
+            in_flight.hand_over();
+            self.spill.push(envelope, false);
+            return Ok(true);
+        }
+        tracing::warn!(frame = ?envelope.frame, "outbound channel full; frame dropped");
+        in_flight.settle(Err(IstmoError::OutboundFull))
     }
 
     /// Send a frame of a hosted call to whoever issued it, other than

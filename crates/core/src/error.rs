@@ -33,8 +33,9 @@ pub enum IstmoError {
     /// A queue or oneshot channel closed before the value could be
     /// delivered. Typically means the runtime is shutting down.
     ChannelClosed,
-    /// The outbound channel was full, so a frame sent from a path that
-    /// must not block (a drop, a cancel, a handle release) was dropped.
+    /// The outbound channel was full on `wasm32`, where a synchronous
+    /// send cannot wait for room, so the frame was not sent. Frames that
+    /// must not be lost (a cancel, a handle release) queue instead.
     OutboundFull,
     /// The peer's [`PROTOCOL_VERSION`](crate::protocol::PROTOCOL_VERSION)
     /// does not match this runtime's.
