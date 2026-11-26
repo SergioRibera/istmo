@@ -1,0 +1,14 @@
+# Platform API names used in prose throughout the docs; ".." keeps
+# clippy's default list.
+doc-valid-idents = [
+    "PipeWire",
+    "XWayland",
+    "XShm",
+    "XDamage",
+    "XFixes",
+    "ScreenCast",
+    "ScreenCaptureKit",
+    "ReplayKit",
+    "MediaProjection",
+    "..",
+]

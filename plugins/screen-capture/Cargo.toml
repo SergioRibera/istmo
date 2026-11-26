@@ -1,0 +1,70 @@
+[package]
+name = "istmo-screen-capture"
+version = "0.1.1-alpha.7"
+description = "Cross-platform screen capture plugin for the istmo framework: screenshots and live streams of monitors, windows and regions with an honest capability report and zero-copy frame sinks."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["istmo", "screen-capture", "screenshot", "wayland", "pipewire"]
+categories = ["multimedia::video", "api-bindings"]
+links = "istmo_screen_capture"
+
+[features]
+# Every Linux backend except KMS (KMS is opt-in twice: its feature and
+# `CapturePolicy::allow_kms`). The dependencies are gated on
+# `target_os = "linux"`, so these features are inert elsewhere: a build
+# with no backend for its target answers `NoBackendCompiled` at run time
+# instead of failing to compile.
+default = ["linux-portal", "linux-ext-image-copy", "linux-wlr-screencopy", "linux-x11", "linux-audio"]
+# xdg-desktop-portal ScreenCast + PipeWire video. Needs libpipewire at
+# build time (pkg-config, bindgen) and at run time.
+linux-portal = ["dep:ashpd", "pipewire"]
+# ext-image-copy-capture-v1 (Sway 1.11, Hyprland, COSMIC, ...).
+linux-ext-image-copy = ["wayland", "dmabuf-alloc"]
+# zwlr_screencopy_manager_v1 (wlroots compositors, niri).
+linux-wlr-screencopy = ["wayland", "dmabuf-alloc"]
+# X11: XShm, Composite, XDamage, XFixes. Pure Rust, no libxcb.
+linux-x11 = ["dep:x11rb"]
+# System / application audio through PipeWire.
+linux-audio = ["pipewire"]
+# Internal: Wayland client plumbing shared by the direct backends.
+wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr"]
+# Internal: GBM DMA-BUF pools for the direct Wayland backends (links
+# libgbm, which every Mesa / NVIDIA desktop install ships).
+dmabuf-alloc = ["dep:gbm", "dep:drm-fourcc"]
+# Internal: the PipeWire client shared by portal video and audio.
+pipewire = ["dep:pipewire", "dep:libspa"]
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+flume = { workspace = true }
+oneshot = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "time", "mm", "fs", "shm", "event", "param"] }
+# `async-io` (not tokio): zbus must never need a tokio reactor, the
+# host runs on whatever executor polls it.
+ashpd = { version = "0.14", default-features = false, features = ["async-io", "screencast"], optional = true }
+drm-fourcc = { version = "2.2", optional = true }
+gbm = { version = "0.18", default-features = false, features = ["drm-support"], optional = true }
+libspa = { version = "0.10", optional = true }
+pipewire = { version = "0.10", optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"], optional = true }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+x11rb = { version = "0.14", default-features = false, features = ["allow-unsafe-code", "randr", "xfixes", "shm", "composite", "damage"], optional = true }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+istmo-build = { workspace = true }
+pollster = { workspace = true }
+
+[lints]
+workspace = true

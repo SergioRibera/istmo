@@ -29,6 +29,7 @@ members = [
     "plugins/dnd",
     "plugins/webview",
     "plugins/web-auth",
+    "plugins/screen-capture",
     "examples/camera-demo",
     "examples/data-store-demo",
     "examples/live-activity-demo",
@@ -105,6 +106,7 @@ istmo-dnd = { path = "plugins/dnd", version = "0.1.1-alpha.7" }
 istmo-webview = { path = "plugins/webview", version = "0.1.1-alpha.7" }
 istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.7" }
 istmo-camera = { path = "plugins/camera", version = "0.1.1-alpha.7" }
+istmo-screen-capture = { path = "plugins/screen-capture", version = "0.1.1-alpha.7" }
 
 [package]
 name = "istmo"

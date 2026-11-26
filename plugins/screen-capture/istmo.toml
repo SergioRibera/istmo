@@ -1,0 +1,17 @@
+[plugin]
+id = "istmo.screen_capture"
+client_type = "::istmo_screen_capture::ScreenCaptureClient"
+android_package = "dev.istmo.plugins.screencapture"
+default_deployment = "local"
+# The MediaProjection backend is not implemented yet: the reference
+# backend answers `NoBackendCompiled`, so it needs no Activity, no
+# foreground service and no permission until it captures.
+android_backend = "dev.istmo.plugins.screencapture.ScreenCaptureBackendImpl"
+android_backend_arg = "context"
+
+[min_versions]
+# Nothing newer than the runtime floors until the capturing backends
+# land (MediaProjection needs API 21, iOS 27 ScreenCaptureKit is
+# behind `#available`).
+android = 21
+ios = "14.0"
