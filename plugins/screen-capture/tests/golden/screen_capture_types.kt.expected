@@ -640,6 +640,7 @@ sealed class CaptureError {
     object FormatLost : CaptureError()
     data class Protocol(val value: BackendDetail) : CaptureError()
     data class Os(val value: OsFailure) : CaptureError()
+    object SinkFull : CaptureError()
 }
 
 enum class PtsClock {

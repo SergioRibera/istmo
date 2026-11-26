@@ -976,3 +976,20 @@ fn a_picker_never_stands_in_for_a_region_or_the_focused_window() {
         );
     }
 }
+
+#[test]
+fn a_full_drop_newest_sink_is_reported_as_full() {
+    let rig = rig();
+    let sink = rig
+        .runtime
+        .open_frame_sink(SinkPolicy::queue(1).with_overflow(istmo_core::Overflow::DropNewest))
+        .expect("sink");
+    let request = ScreenshotRequest {
+        composite: false,
+        ..ScreenshotRequest::of(SourceSelector::AllMonitors)
+    };
+    let err =
+        block(rig.client.screenshot(request, sink.id())).expect_err("two frames, room for one");
+    assert_eq!(CaptureError::from(err), CaptureError::SinkFull);
+    assert!(sink.try_recv().is_some(), "the first frame stays queued");
+}

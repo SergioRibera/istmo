@@ -1736,6 +1736,7 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
                 val inner = d_inner.value
                 Bincode.Decoded(CaptureError.Os(inner) as CaptureError, cursor)
             }
+            20 -> Bincode.Decoded(CaptureError.SinkFull, cursor)
             else -> throw Bincode.DecodeException("CaptureError: unknown discriminant ${disc.value}")
         }
     }
@@ -1789,6 +1790,7 @@ class ScreenCaptureCodecsImpl : ScreenCaptureCodecs {
                 Bincode.writeEnumDiscriminant(out, 19)
                 writeOsFailure(out, value.value)
             }
+            CaptureError.SinkFull -> Bincode.writeEnumDiscriminant(out, 20)
         }
     }
 

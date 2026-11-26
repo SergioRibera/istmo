@@ -1406,6 +1406,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         case 17: return .formatLost
         case 18: return .`protocol`(try self.readBackendDetail(&c))
         case 19: return .os(try self.readOsFailure(&c))
+        case 20: return .sinkFull
         default: throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
     }
@@ -1461,6 +1462,8 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         case .os(let payload):
             Bincode.writeVarintU32(&out, 19)
             self.writeOsFailure(&out, payload)
+        case .sinkFull:
+            Bincode.writeVarintU32(&out, 20)
         }
     }
 

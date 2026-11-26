@@ -831,8 +831,13 @@ impl Engine {
         for frame in frames {
             let mut meta = frame.meta;
             meta.wall_us = super::clock::wall_us_for(meta.pts_ns, meta.pts_clock);
-            sink.push(meta, frame.buffer)
-                .map_err(|_| CaptureError::SinkUnreachable)?;
+            sink.push(meta, frame.buffer).map_err(|err| {
+                if err.is_closed() {
+                    CaptureError::SinkUnreachable
+                } else {
+                    CaptureError::SinkFull
+                }
+            })?;
         }
         Ok(ScreenshotInfo {
             frames: count,

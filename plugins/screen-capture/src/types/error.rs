@@ -154,6 +154,9 @@ pub enum CaptureError {
     FormatLost,
     Protocol(BackendDetail),
     Os(OsFailure),
+    /// The sink is full and drops new frames (`Overflow::DropNewest`), so
+    /// a screenshot could not be queued. Frames queued before it stay.
+    SinkFull,
 }
 
 impl CaptureError {
@@ -314,6 +317,7 @@ impl fmt::Display for CaptureError {
                 "{}: {} failed (code {})",
                 os.backend, os.operation, os.code
             ),
+            Self::SinkFull => f.write_str("the frame sink is full and drops new frames"),
         }
     }
 }

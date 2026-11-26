@@ -916,6 +916,7 @@ public enum CaptureError: Error {
     case formatLost
     case `protocol`(BackendDetail)
     case os(OsFailure)
+    case sinkFull
 }
 
 public enum PtsClock: UInt32, Sendable {
