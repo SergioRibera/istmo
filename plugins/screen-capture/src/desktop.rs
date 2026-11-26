@@ -18,6 +18,8 @@ mod fake;
 mod linux;
 mod offload;
 mod output;
+#[cfg(any(all(target_os = "macos", feature = "macos-sck"), test))]
+mod sck_map;
 #[cfg(test)]
 mod tests;
 mod watch;

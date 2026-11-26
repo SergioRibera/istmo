@@ -14,10 +14,10 @@ links = "istmo_screen_capture"
 
 [features]
 # Every Linux backend except KMS (KMS is opt-in twice: its feature and
-# `CapturePolicy::allow_kms`), and every Windows backend. The
-# dependencies are gated on their target OS, so these features are inert
-# elsewhere: a build with no backend for its target answers
-# `NoBackendCompiled` at run time instead of failing to compile.
+# `CapturePolicy::allow_kms`), every Windows backend and ScreenCaptureKit
+# on macOS. The dependencies are gated on their target OS, so these
+# features are inert elsewhere: a build with no backend for its target
+# answers `NoBackendCompiled` at run time instead of failing to compile.
 default = [
     "linux-portal",
     "linux-ext-image-copy",
@@ -28,6 +28,7 @@ default = [
     "windows-dxgi",
     "windows-gdi",
     "windows-audio",
+    "macos-sck",
 ]
 # xdg-desktop-portal ScreenCast + PipeWire video (DMA-BUF zero-copy with
 # the compositor's dmabuf feedback, explicit sync through DRM syncobjs).
@@ -41,6 +42,23 @@ linux-wlr-screencopy = ["wayland", "dmabuf-alloc"]
 linux-x11 = ["dep:x11rb"]
 # System / application audio through PipeWire.
 linux-audio = ["pipewire"]
+# macOS ScreenCaptureKit (12.3+): displays, windows and applications,
+# IOSurface frames without a copy, the content-sharing picker and
+# screenshots on 14+, system / application audio on 13+. Inert on other
+# targets: its dependencies are gated on `target_os = "macos"`.
+macos-sck = [
+    "dep:block2",
+    "dep:dispatch2",
+    "dep:objc2",
+    "dep:objc2-core-audio-types",
+    "dep:objc2-core-foundation",
+    "dep:objc2-core-graphics",
+    "dep:objc2-core-media",
+    "dep:objc2-core-video",
+    "dep:objc2-foundation",
+    "dep:objc2-io-surface",
+    "dep:objc2-screen-capture-kit",
+]
 # Internal: Wayland client plumbing shared by the direct backends.
 wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr"]
 # Internal: GBM DMA-BUF pools for the direct Wayland backends (links
@@ -130,6 +148,21 @@ windows-core = { version = "0.62", optional = true }
 windows-future = { version = "0.3", default-features = false, features = ["std"], optional = true }
 # `IVectorView` (WGC dirty regions).
 windows-collections = { version = "0.3", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# ScreenCaptureKit through objc2's generated bindings (declarations
+# only: nothing links before a macOS build).
+block2 = { version = "0.6", default-features = false, features = ["std"], optional = true }
+dispatch2 = { version = "0.3", default-features = false, features = ["std", "objc2"], optional = true }
+objc2 = { version = "0.6", default-features = false, features = ["std"], optional = true }
+objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"], optional = true }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFArray", "CFCGTypes", "CFDictionary", "CFString", "CFNumber"], optional = true }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "libc", "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGWindow", "CGColorSpace", "CGGeometry", "CGImage"], optional = true }
+objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMBase", "CMBlockBuffer", "CMFormatDescription", "CMSampleBuffer", "CMSync", "CMTime", "objc2-core-audio-types", "objc2-core-video"], optional = true }
+objc2-core-video = { version = "0.3", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVPixelBufferIOSurface", "CVReturn", "objc2-io-surface"], optional = true }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSObject", "NSProcessInfo", "NSString", "NSValue", "objc2-core-foundation"], optional = true }
+objc2-io-surface = { version = "0.3", default-features = false, features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "libc", "objc2-core-foundation"], optional = true }
+objc2-screen-capture-kit = { version = "0.3", default-features = false, features = ["std", "SCContentSharingPicker", "SCError", "SCScreenshotManager", "SCShareableContent", "SCStream", "bitflags", "block2", "dispatch2", "libc", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media"], optional = true }
 
 [build-dependencies]
 istmo-build = { workspace = true }
