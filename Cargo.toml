@@ -40,6 +40,7 @@ members = [
     "examples/share-demo",
     "examples/biometric-demo",
     "examples/webview-demo",
+    "examples/tray-demo",
 ]
 
 [workspace.package]
