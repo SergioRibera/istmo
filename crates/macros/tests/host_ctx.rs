@@ -99,7 +99,7 @@ fn a_rust_host_feeds_a_sink_through_its_context() {
 }
 
 #[test]
-fn blocking_methods_keep_the_dispatcher_thread() {
+fn blocking_methods_run_on_a_blocking_worker() {
     let rt = Runtime::mock().runtime;
     rt.register_host(CameraHost::new(Impl));
     let client = CameraClient::from_runtime(&rt).expect("client");
@@ -108,7 +108,7 @@ fn blocking_methods_keep_the_dispatcher_thread() {
     assert_ne!(
         pollster::block_on(client.blocking_thread()).expect("thread"),
         here,
-        "a #[istmo::blocking] method runs on a dispatcher thread"
+        "a #[istmo::blocking] method runs on a blocking worker"
     );
 }
 
