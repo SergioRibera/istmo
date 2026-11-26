@@ -260,7 +260,8 @@ docs-types:
         opener=plugins/opener/src/lib.rs \
         pen=plugins/istmo-pen/src/lib.rs \
         webview=plugins/webview/src/lib.rs \
-        web-auth=plugins/web-auth/src/lib.rs
+        web-auth=plugins/web-auth/src/lib.rs \
+        tray=plugins/tray/src/lib.rs
 
 # Gen default keystore default
 # keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"

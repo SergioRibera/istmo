@@ -1,0 +1,196 @@
+---
+title: Tray
+description: Tray icons with menus and static or animated icons on Linux, Windows and macOS, and the favicon on the web.
+sidebar:
+  order: 13
+---
+
+import PluginTypes from '../../../generated/plugins/tray-types.mdx';
+
+`istmo-tray` puts an item in the system tray: an icon the app swaps at
+run time, an optional title and tooltip, a menu, and a stream of what
+the user does with it. Everything runs in Rust; the plugin generates no
+Kotlin or Swift (`targets = ["desktop", "web"]` in its `istmo.toml`).
+
+| Platform | Backend |
+| -------- | ------- |
+| Linux | `StatusNotifierItem` + `com.canonical.dbusmenu` over D-Bus: KDE Plasma, waybar, xfce4-panel, GNOME with the AppIndicator extension |
+| Windows | The notification area (`Shell_NotifyIconW`, version 4) |
+| macOS | The menu bar (`NSStatusItem` + `NSMenu`) |
+| Web | `WebTray`: the tab's favicon |
+| Android, iOS | `UnavailableTray`: every call answers `TrayError::Unsupported` |
+
+## Install
+
+```toml
+[dependencies]
+istmo-tray = "0.1.1-alpha.7"
+```
+
+Features: `svg` (default) rasterises SVG icons at the size each tray
+host asks for, `jpeg` (default) decodes JPEG. PNG is always on.
+
+Register the host for the platform:
+
+```rust
+use istmo_tray::{DesktopTray, TrayHost};
+
+runtime.register_host(TrayHost::new(DesktopTray::default()));
+```
+
+The platform connection opens on first use. On macOS the main run loop
+must run: winit and eframe run it; an app whose only UI is the tray
+calls `istmo_tray::run_event_loop(false)` from `main` (and keeps out of
+the Dock) and does its work on another thread.
+
+## Create an item
+
+```rust
+use istmo_tray::istmo_menu::{CheckState, IconImage, ImageData, MenuBuilder, RadioGroupId};
+use istmo_tray::{TrayClient, TraySpec};
+
+let tray = TrayClient::from_runtime(&runtime)?;
+let theme = RadioGroupId::from(1);
+let menu = MenuBuilder::default()
+    .header(1, "My app")
+    .action(2, "&Open")
+    .check(3, "Start at login", CheckState::Off)
+    .submenu(4, "Theme", |m| {
+        m.radio(5, "Light", theme, true).radio(6, "Dark", theme, false)
+    })
+    .separator(7)
+    .action(8, "&Quit")
+    .into_nodes();
+
+let item = tray
+    .create_owned(
+        TraySpec::new("my-app", IconImage::new(ImageData::Svg(ICON.to_vec())).template())
+            .with_tooltip("My app")
+            .with_menu(menu),
+    )
+    .await?;
+let id = item.tray.id();
+```
+
+Dropping `item` removes the tray item. `TraySpec::id` stays the same
+across runs: Linux panels and macOS use it to remember where the user
+put the item.
+
+`PrimaryAction::ShowMenu` (the default) opens the menu on a left click.
+`PrimaryAction::Activate` sends `TrayEvent::Activate` instead and keeps
+the menu on the right click.
+
+## Icons
+
+The plugin never draws. Icons are files the app supplies: SVG, PNG,
+JPEG (no transparency) or a platform icon name (an SF Symbol on macOS,
+an icon theme name on Linux). An `IconImage` can list several
+representations; the plugin takes an SVG first, else the smallest
+raster at least as large as the size the host asks for. `template()`
+marks a macOS template image, tinted by the system.
+
+```rust
+use istmo_tray::istmo_menu::IconRef;
+use istmo_tray::{Animation, AnimationFrame, Repeat, TrayIcon};
+
+// Decoded once; swapping to it is a lookup.
+let busy = tray.register_icon_owned(busy_image).await?;
+tray.set_icon(id, TrayIcon::Static(IconRef::Registered(busy.icon.id()))).await?;
+
+// One call; the plugin's timer runs the frames.
+tray.set_icon(id, TrayIcon::Animated(Animation {
+    frames: frames.into_iter()
+        .map(|icon| AnimationFrame { icon, duration_ms: 80 })
+        .collect(),
+    repeat: Repeat::Forever,
+})).await?;
+```
+
+Changes made faster than the platform applies them collapse to the
+latest one, so updating the icon or a menu label from a fast loop costs
+the platform one redraw per pass. Frame durations are raised to
+`capabilities().min_frame_ms`.
+
+## Menus
+
+Menus are [`istmo_menu`](https://docs.rs/istmo-menu) node lists: a flat
+list in display order where a node's `parent` names its submenu. Item
+kinds: actions, checks (on, off, mixed), radio items in groups,
+submenus, separators and section headers; items carry an icon, a
+shortcut shown next to the label, a subtitle and a badge.
+
+- A check toggles and a radio item selects itself (clearing its group)
+  before the app hears about the click. `MenuBuilder::manual` leaves
+  the state to the app.
+- `set_menu` replaces the menu. With the same items in the same places
+  it goes to the platform as property changes.
+- `update_items` changes single items: all patches apply or none do.
+
+```rust
+use istmo_tray::istmo_menu::{ItemChange, ItemId, ItemPatch};
+
+tray.update_items(id, vec![ItemPatch {
+    id: ItemId::from(2),
+    change: ItemChange::Label("Open (3 new)".into()),
+}]).await?;
+```
+
+## Events
+
+```rust
+use istmo::StreamItem;
+use istmo_tray::TrayEvent;
+
+let events = tray.events(id)?;
+while let Ok(StreamItem::Event(event)) = events.recv_async().await {
+    match event {
+        TrayEvent::ItemActivated(item) if item.value == 8 => break,
+        TrayEvent::CheckChanged(change) => println!("{:?} is {:?}", change.item, change.state),
+        TrayEvent::RadioSelected(change) => println!("theme {:?}", change.item),
+        TrayEvent::Activate(pointer) => println!("clicked at {:?}", pointer.anchor),
+        _ => {}
+    }
+}
+```
+
+Events emitted before the first subscriber are kept (the last 64) and
+replayed to it. Clicks carry an `Anchor`: the icon's rectangle on
+Windows and macOS, the click point on X11. On Wayland the point comes
+from the panel and is often 0, 0, so its precision is `Unreliable`.
+
+`TrayEvent::Host` reports the tray host: `Missing` when nothing shows
+tray items (GNOME without the AppIndicator extension; the item appears
+once a host does), `Restarted` after the panel or explorer.exe
+restarted (the plugin has added the item again).
+
+## Capabilities
+
+`capabilities()` says, per feature, whether the backend shows it
+natively, emulates it, leaves it to the tray host or ignores it.
+Properties a backend does not support are ignored, never refused, so
+one menu works everywhere.
+
+| | Linux | Windows | macOS | Web |
+| - | - | - | - | - |
+| Radio items | host dependent | native | emulated (dot image) | ignored |
+| Mixed checks | host dependent | emulated (dash) | native | ignored |
+| Item icons | native | native | native | ignored |
+| Shortcuts shown | native | native | native | ignored |
+| Section headers | emulated (disabled item) | emulated | native on macOS 14 | ignored |
+| Subtitles, badges | ignored | ignored | native on macOS 14 | ignored |
+| Default item | ignored | native (bold, double click) | ignored | ignored |
+| Title next to the icon | host dependent (`XAyatanaLabel`) | ignored | native | ignored |
+| Changes while the menu is open | host dependent | next open | native | ignored |
+| Scroll events | native | ignored | ignored | ignored |
+
+Windows 11 puts new icons in the overflow area; there is no API to pin
+them. `TraySpec::windows_guid` lets Windows remember the user's choice
+across runs, but ties the icon to the executable's path.
+
+On the web only the favicon changes: one item per document, and
+browsers slow timers in background tabs, so an animation runs at its
+speed only while the tab is visible.
+
+## Types
+
+<PluginTypes />
