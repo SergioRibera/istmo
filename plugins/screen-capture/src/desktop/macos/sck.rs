@@ -359,13 +359,20 @@ impl SckBackend {
         })
     }
 
-    /// One frame of `filter` on this OS.
+    /// One frame of `filter` on this OS: `SCScreenshotManager` on 14+, a
+    /// one-frame stream before (and when the manager's sample carries no
+    /// `IOSurface`-backed pixel buffer, which the frame path needs).
     fn shoot(&self, filter: &Filter, settings: &Settings) -> Result<ffi::Sample, CaptureError> {
         if sck_map::at_least(self.os, sck_map::PICKER) {
-            ffi::screenshot(filter, settings)
-        } else {
-            session::one_frame(filter, settings)
+            let sample = ffi::screenshot(filter, settings)?;
+            if sample.pixel_buffer().is_some() {
+                return Ok(sample);
+            }
+            tracing::debug!(
+                "screen-capture: the screenshot has no IOSurface; taking a stream frame"
+            );
         }
+        session::one_frame(filter, settings)
     }
 
     #[expect(
