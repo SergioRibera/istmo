@@ -23,10 +23,16 @@ regions.
 | xdg-desktop-portal + PipeWire | `linux-portal` | DMA-BUF, `MemFd` | dialog per session (restore tokens) | no: by name only |
 | X11 (XShm, Composite, XDamage, XFixes) | `linux-x11` | shared memory | none | yes |
 | PipeWire audio (alone or with video) | `linux-audio` | interleaved PCM | none | — |
+| Windows.Graphics.Capture (Windows 10 1903+) | `windows-wgc` | D3D11 texture, CPU | none (the OS draws a yellow border) | no: by name only |
+| DXGI Desktop Duplication (monitors) | `windows-dxgi` | D3D11 texture (NT handle), CPU | none | no: by name only |
+| GDI `BitBlt` / `PrintWindow` | `windows-gdi` | CPU | none | no: by name only |
+| WASAPI loopback audio (alone or with video) | `windows-audio` | interleaved PCM | none | — |
 
-Android, iOS, macOS, Windows and the web are designed
-(`design/screen-capture.md`) but not implemented yet. Their hosts answer
-`CaptureError::NoBackendCompiled`.
+The Windows backends stay out of `Auto` until their checklist passed on
+a real Windows session (`examples/win_probe.rs` runs it); name them with
+`BackendSelection::Fixed` / `Ordered`. Android, iOS, macOS and the web
+are designed (`design/screen-capture.md`) but not implemented yet. Their
+hosts answer `CaptureError::NoBackendCompiled`.
 
 ## Install
 
@@ -35,8 +41,11 @@ Android, iOS, macOS, Windows and the web are designed
 istmo-screen-capture = "0.1.1-alpha.7"
 ```
 
-The default features build every Linux backend except KMS. They need
-`libpipewire` and `libgbm` at build time (pkg-config) and at run time.
+The default features build every Linux backend except KMS and every
+Windows backend; each platform's dependencies are gated on its target.
+On Linux they need `libpipewire` and `libgbm` at build time
+(pkg-config) and at run time. On Windows nothing beyond the OS.
+
 
 Register the desktop host with the runtime:
 
@@ -140,7 +149,7 @@ use istmo_screen_capture::{FormatChoice, FormatRequest, FormatTier, PixelFormat}
 let formats = FormatRequest {
     tiers: vec![
         FormatTier::new(vec![FormatChoice::dmabuf(PixelFormat::Bgrx8, Vec::new())]),
-        FormatTier::cpu_rgb(), // shared memory: allows CopyStage::ShmTransport
+        FormatTier::cpu_rgb(), // shared memory: allows CopyStage::ShmTransport / GpuReadback / DxgiMandatory
     ],
 };
 let config = SessionConfig::primary_monitor().formats(formats);
@@ -167,11 +176,49 @@ subscriber, then streams these events:
 - `Exhausted`
 - `Stopped`, which says why the session ended
 
+## Windows
+
+- **WGC** captures monitors and windows. With an empty format request
+  (or a `D3d11Texture` tier) frames are the frame pool's own textures,
+  no copy: `frame.buffer.downcast_ref::<D3d11Frame>()` gives the
+  `ID3D11Texture2D` and the plugin's device (multithread-protected, so
+  it may be used from the consumer's threads). Those textures cannot be
+  shared with another device; for that, pass
+  `GpuPreference::Same(GpuIdentity::Luid(..))` and a tier allowing
+  `CopyStage::CrossDevice`: each frame is then copied into a texture
+  with an NT handle (`D3d11Frame::shared_handle`, for
+  `ID3D11Device1::OpenSharedResource1`). CPU frames are read back
+  through a staging texture (`CopyStage::GpuReadback`). FP16 (scRGB)
+  with `HdrPolicy::PreferHdr` / `RequireHdr`.
+- **DXGI** captures monitors; every frame is copied into the plugin's
+  pool (`CopyStage::DxgiMandatory`), whose textures carry NT handles.
+  Rotated outputs arrive unrotated (`FrameMeta::orientation` says how
+  to turn them), the pointer only as `CursorMode::Metadata`, damage
+  from dirty and move rectangles, `protected_content` when DXGI masked
+  something. The secure desktop pauses the session
+  (`Paused(SecureDesktop)`).
+- **GDI** is the CPU fallback (`BitBlt`, `PrintWindow` for windows).
+  Awaiting a GDI screenshot of one of the app's own windows on that
+  window's thread deadlocks (`PrintWindow` sends it `WM_PRINT`).
+- No fence or keyed mutex travels with a frame: the plugin pushes it
+  once the GPU finished writing (`SyncKind::Ready`), and dropping it
+  means every read of it is done.
+- Geometry is in physical desktop pixels, so `scale_permille` is 1000.
+- `pts_ns` is on `PtsClock::Qpc`; `wall_us` is UNIX-epoch µs as
+  everywhere.
+- Borderless WGC capture: `WindowsOptions::borderless` (`Prefer` /
+  `Require`) with `CapturePolicy::allow_borderless`, build 20348+. The
+  OS consent runs at most once; `access(AccessScope::BorderlessCapture)`
+  reads it without prompting, `request_access` prompts.
+- Audio: `AudioSource::System` (default render endpoint loopback),
+  `ExcludeSelf` and `Application(executable or pid)` (process loopback,
+  build 20348+).
+
 ## Audio only
 
 `open_audio_session` captures audio without a video session. The rate,
-channels and format are asked per open; PipeWire converts what the
-source does not have:
+channels and format are asked per open; PipeWire or the Windows audio
+engine converts what the source does not have:
 
 ```rust,ignore
 use istmo_core::{Overflow, SinkPolicy};
@@ -228,7 +275,10 @@ while let Some(change) = watch.recv() {
 
 Wayland watches follow output hot-plug (`wl_output` / xdg-output) and
 the toplevel list; X11 watches follow the root window, every listed
-window and `RandR`.
+window and `RandR`. Windows watches follow `WM_DISPLAYCHANGE` and
+window events (`SetWinEventHook`: shown, hidden, destroyed, renamed,
+moved, minimised, cloaked, focused). Windows lists only what a person
+sees as an app window, with its executable name as `app_id`.
 
 ## Consent
 
@@ -276,6 +326,9 @@ tests:
 - `ISTMO_SC_TEST_NIRI_SCREENCAST=1`: niri's PipeWire producer, no dialog
 - `ISTMO_SC_TEST_PORTAL_SESSION=1`: one portal dialog
 - `ISTMO_SC_TEST_PIPEWIRE=1`: audio-only sessions at 44.1 and 48 kHz, no dialog
+- `examples/win_probe.rs`: the whole checklist on a Windows desktop
+  (build it with `--target x86_64-pc-windows-msvc`); prints PASS / FAIL
+  and writes `win_probe_report.txt`
 
 Design: `design/screen-capture.md`. Platform facts:
 `design/screen-capture-platforms.md`.

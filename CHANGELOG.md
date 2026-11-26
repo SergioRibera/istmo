@@ -119,6 +119,36 @@
   outbound channel), `BlockingThreads::now()` (blocking workers alive
   and their peak; a warning past 256), `DeliveryScope::may_block()`,
   `Runtime::offer_peer_event`, `Runtime::offer_peer_stream_end`.
+- Screen capture Windows backends (default features, inert elsewhere),
+  not yet in `Auto` (named with `Fixed` / `Ordered` until their
+  checklist passes on a real Windows session):
+  - `windows-wgc`: Windows.Graphics.Capture, monitors and windows
+    (Windows 10 1903+). Zero-copy frame-pool textures, shareable
+    NT-handle copies for another device (`GpuPreference::Same` +
+    `CopyStage::CrossDevice`), CPU readback, FP16 for HDR, dirty
+    regions and `MinUpdateInterval` where the OS has them, cursor on /
+    off, borderless capture behind `CapturePolicy::allow_borderless`.
+  - `windows-dxgi`: Desktop Duplication of monitors
+    (`CopyStage::DxgiMandatory` into an NT-handle pool), dirty / move
+    rectangles, pointer metadata, scan-out rotation in
+    `FrameMeta::orientation`, `protected_content`, `ACCESS_LOST`
+    re-creation and `Paused(SecureDesktop)`.
+  - `windows-gdi`: `BitBlt` / `PrintWindow` into pooled DIB sections.
+  - `windows-audio`: WASAPI loopback of the default render endpoint,
+    and process loopback (`ExcludeSelf`, `Application`) on build
+    20348+, alone or with video, on the shared sample-count clock.
+  - Monitor and window listing (EDID make / model, connector, refresh,
+    executable as `app_id`), `watch_sources` (`WM_DISPLAYCHANGE` +
+    WinEvent hooks), `Focused` / `UnderCursor`, and
+    `access` / `request_access(BorderlessCapture)`.
+  - `D3d11Frame`: the backing of `BufferMemory::D3d11Texture` frames
+    (texture, device, adapter LUID, optional NT handle).
+  - `examples/win_probe.rs`: the per-backend checklist on a Windows
+    desktop, with a PASS / FAIL report.
+- `CopyStage::GpuReadback`: a GPU texture read back into CPU memory.
+  `FormatTier::cpu_rgb()` (and `FormatRequest::cpu()`, `cpu_frames()`,
+  CPU screenshots) accepts it and `DxgiMandatory` next to
+  `ShmTransport`.
 
 ### Changed (breaking)
 

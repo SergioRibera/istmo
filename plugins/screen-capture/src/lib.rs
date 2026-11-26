@@ -11,18 +11,20 @@
 //!
 //! - Desktop (Rust): [`DesktopCapture`], built from the compiled backend
 //!   features (`linux-portal`, `linux-ext-image-copy`,
-//!   `linux-wlr-screencopy`, `linux-x11`, `linux-audio`). A build with
-//!   no backend for its platform answers
-//!   [`CaptureError::NoBackendCompiled`].
+//!   `linux-wlr-screencopy`, `linux-x11`, `linux-audio`; `windows-wgc`,
+//!   `windows-dxgi`, `windows-gdi`, `windows-audio`). A build with no
+//!   backend for its platform answers
+//!   [`CaptureError::NoBackendCompiled`]. Windows GPU frames carry a
+//!   `D3d11Frame` backing.
 //! - Android / iOS: the Kotlin / Swift backends in `native/` (not
 //!   capturing yet: they answer `NoBackendCompiled`).
 //!
 //! # Threads
 //!
 //! Every method returns a future that completes on any executor; the
-//! blocking platform work (Wayland queues, the portal, PipeWire, X11)
-//! runs on the plugin's own threads, so no method is
-//! `#[istmo::blocking]`.
+//! blocking platform work (Wayland queues, the portal, PipeWire, X11,
+//! WGC, DXGI, GDI, WASAPI) runs on the plugin's own threads, so no
+//! method is `#[istmo::blocking]`.
 //!
 //! # Security
 //!

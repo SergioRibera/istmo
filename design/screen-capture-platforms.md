@@ -171,6 +171,32 @@ succeed, but the value will be ignored and the border will be
 displayed" (IsBorderRequired remarks). The plugin reports the border
 state from the consent result, not from the property.
 
+More rows the backends rely on:
+
+| Feature | Requires | Source |
+|---|---|---|
+| `Direct3D11CaptureFramePool.CreateFreeThreaded` | Windows 10 1809 (17763) | [Direct3D11CaptureFramePool](https://learn.microsoft.com/uwp/api/windows.graphics.capture.direct3d11captureframepool) version history |
+| `IncludeSecondaryWindows`, `MinUpdateInterval`, `DirtyRegionMode` | no build stated: probed with `ApiInformation.IsPropertyPresent` | [GraphicsCaptureSession](https://learn.microsoft.com/uwp/api/windows.graphics.capture.graphicscapturesession) |
+| `IDXGIResource1::CreateSharedHandle` | Windows 8; the resource created `SHARED_NTHANDLE` (with `SHARED` or `SHARED_KEYEDMUTEX`) | [CreateSharedHandle](https://learn.microsoft.com/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgiresource1-createsharedhandle) |
+| `DuplicateOutput1` errors: `E_ACCESSDENIED` (secure desktop), `DXGI_ERROR_UNSUPPORTED` (mode), `NOT_CURRENTLY_AVAILABLE` (4 duplicators), `E_INVALIDARG` (already duplicated by this process) | — | [DuplicateOutput1](https://learn.microsoft.com/windows/win32/api/dxgi1_5/nf-dxgi1_5-idxgioutput5-duplicateoutput1) |
+| `ACCESS_LOST` on desktop switch / mode change / DWM change: re-create the duplication | — | [AcquireNextFrame](https://learn.microsoft.com/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgioutputduplication-acquirenextframe) |
+| `AUDIOCLIENT_ACTIVATION_PARAMS`, `PROCESS_LOOPBACK_MODE_{INCLUDE,EXCLUDE}_TARGET_PROCESS_TREE` | build 20348 | [AUDIOCLIENT_ACTIVATION_PARAMS](https://learn.microsoft.com/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_activation_params) |
+
+### Known before consent (Windows)
+
+No Windows backend asks for consent, so "Negotiated" only means "after
+`StartCapture` / `DuplicateOutput`".
+
+| Fact | WGC | DXGI | GDI |
+|---|---|---|---|
+| Source kinds | Table (monitors, windows) | Table (monitors) | Table (monitors, windows) |
+| Source list | Probe (`EnumDisplayMonitors`, `EnumWindows`) | Probe | Probe |
+| Pixel formats | Table (BGRA8, FP16) | Probe (`IDXGIOutput5` → FP16 / 10-bit possible); the format itself Negotiated | Table (BGRX8) |
+| Cursor modes | Probe (`IsCursorCaptureEnabled`) | Table (hidden, metadata) | Table |
+| Damage | Probe (`DirtyRegionMode`) | Table (dirty / move rects) | Table (none) |
+| Producer GPU | Probe (first hardware adapter, or the preferred one) | Probe (the output's adapter) | Table (none: CPU) |
+| Border / persistence | Probe (`IsBorderRequired`, the capability status) | Table (none) | Table (none) |
+
 ### Backend notes
 
 **WGC** (`windows-wgc`): item from `CreateForMonitor` /
@@ -202,8 +228,9 @@ a copy into a `D3D11_RESOURCE_MISC_SHARED_NTHANDLE` texture
   `E_ACCESSDENIED` → `Paused(SecureDesktop)`; `DXGI_ERROR_ACCESS_LOST`
   → re-create, `pool_generation` bump, `Renegotiated`.
 
-**GDI** (`windows-gdi`, screenshots only): `BitBlt` /
-`PrintWindow(PW_RENDERFULLCONTENT)`, CPU.
+**GDI** (`windows-gdi`): `BitBlt` / `PrintWindow(PW_RENDERFULLCONTENT)`,
+CPU. Screenshots, and slow streams polled at the session rate with no
+damage.
 
 ## macOS
 

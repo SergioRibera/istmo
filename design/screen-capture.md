@@ -8,9 +8,11 @@ control plane over istmo and a data plane over native frame sinks
 (`design/native-frames.md`) or straight into a platform surface.
 Implemented so far: the contract, selection, pools, pixel helper,
 desktop host and the Linux backends (wlr-screencopy, ext-image-copy,
-X11, portal over PipeWire with DMA-BUF zero-copy, PipeWire audio). Later
-steps are listed under "Implementation order"; deviations are in
-"Implementation notes" below.
+X11, portal over PipeWire with DMA-BUF zero-copy, PipeWire audio) and the
+Windows backends (WGC, DXGI Desktop Duplication, GDI, WASAPI audio), the
+latter not yet run on Windows. Later steps are listed under
+"Implementation order"; deviations are in the "Implementation notes"
+sections below.
 
 Per-platform facts, version tables and official sources live in
 `design/screen-capture-platforms.md`; this document refers to them by
@@ -241,6 +243,130 @@ safe `drm` crate.
   unchanged.
 - The audio backend's availability is a connection to the session
   daemon (`LoopThread` with a no-op body), cached 5 s.
+
+## Implementation notes (Windows, as built)
+
+Like the Linux notes, this section wins where it disagrees with the
+design text below. None of it has run on a real Windows machine yet:
+the code builds for `x86_64-pc-windows-msvc` with `-D warnings`, its unit
+tests and the GDI / WASAPI paths ran under Wine, and
+`examples/win_probe.rs` runs the checklist on a real desktop. **No
+Windows backend joins `Auto`** until that checklist passed there; they
+are reachable through `Fixed`, `Ordered` and the environment override.
+
+**Copies.**
+- `CopyStage::GpuReadback` (new): a GPU texture copied into a staging
+  texture, mapped and copied out. The WGC and DXGI CPU tiers declare it.
+  `FormatTier::cpu_rgb()` (and so `FormatRequest::cpu()`,
+  `cpu_frames()`, every CPU screenshot) accepts `ShmTransport`,
+  `GpuReadback` and `DxgiMandatory`: the copy that brings pixels into
+  CPU memory on each platform.
+- GDI frames are the DIB section `BitBlt` / `PrintWindow` drew into,
+  pooled like X11 segments (`ShmTransport`), read in place.
+- A WGC screenshot in a GPU tier is copied out of the frame pool into a
+  texture of its own (`LiveBufferSnapshot` in `FrameMeta::copied`): it
+  outlives its capture.
+
+**Frames (`D3d11Frame`).** The plugin's backing for
+`BufferMemory::D3d11Texture`: `ID3D11Texture2D`, its device, the
+adapter LUID and an optional NT handle. `MemoryKind::D3d11Texture`
+already existed in core; nothing was added there.
+- WGC zero-copy: the frame pool's own texture, on the plugin's device
+  (multithread-protected). The `Direct3D11CaptureFrame` stays open
+  until the consumer drops the frame (its release hook closes it), so
+  "never the last free buffer" holds against `numberOfBuffers`. These
+  textures are not shareable: no handle.
+- WGC shareable: `GpuPreference::Same(Luid)` means "the consumer opens
+  frames on its own device". The pool runs on that adapter, the
+  copy-free offers are withdrawn, and each frame is copied into a
+  `SHARED | SHARED_NTHANDLE` texture (`CrossDevice`); without a tier
+  allowing it, `Unsatisfiable(Gpu)`.
+- DXGI: every frame is copied into the plugin's pool
+  (`DxgiMandatory`); pool textures are `SHARED | SHARED_NTHANDLE`, so
+  every DXGI frame has a handle at no extra copy. `Same(Luid)` of an
+  adapter that does not drive the output is `Unsatisfiable(Gpu)` (no
+  cross-adapter copy).
+- Sync: no keyed mutex, no fence. After a copy the plugin waits
+  (bounded, 100 ms) on a D3D11 event query; frames leave `Ready`.
+
+**Selection and caps.** `Auto` order WGC → DXGI → GDI. Caps are probed
+per call where the OS can say: `RtlGetVersion` (build),
+`GraphicsCaptureSession.IsSupported`, `ApiInformation` for
+`IsCursorCaptureEnabled`, `IsBorderRequired`, `DirtyRegionMode` +
+`DirtyRegions`, `MinUpdateInterval`, `IncludeSecondaryWindows`, and
+`IDXGIOutput5` for FP16 duplication. WGC below build 18362 is
+`OsTooOld`.
+- WGC cursor: `[Hidden, Embedded]` with `IsCursorCaptureEnabled`, else
+  `[Embedded]`; never metadata. DXGI: `[Hidden, Metadata]` (the image
+  never holds the pointer). GDI: all three.
+- WGC damage: `DirtyRegionMode::ReportOnly` (regions reported, every
+  buffer complete) when present and damage is not `Ignore`; otherwise
+  `Unsupported` and every frame is `Full`. `ReportAndRender` is not
+  used: its documentation says nothing of what it renders.
+- WGC HDR: `PreferHdr` / `RequireHdr` pick FP16 inside the caller's
+  best tier; scRGB colour.
+- WGC sessions have no `update`: cursor, tier and pool are fixed at
+  `StartCapture` (`Unsatisfiable(Operation)`). DXGI updates the cursor
+  mode only; GDI the cursor and the tier.
+- DXGI concurrency is 1 (one duplication of an output per process).
+
+**Sources.**
+- Geometry in physical desktop pixels (per-monitor DPI awareness v2 on
+  the listing thread), `scale_permille` 1000: Windows places monitors
+  of different DPI side by side in pixels, and dividing each by its own
+  scale would make them overlap. The composite works on that space.
+- Monitors: `monitor:<GDI device name>`; `make` = EDID PNP id
+  (DisplayConfig `edidManufactureId`, byte-swapped), `model` = the
+  DisplayConfig friendly name, `connector` = output technology +
+  instance (`HDMI-1`, `DP-2`, `eDP-1`), `description` =
+  `EnumDisplayDevices` device string. DXGI sources carry the scan-out
+  orientation; WGC / GDI ones are upright.
+- Windows: `window:<HWND hex>`, visible, not cloaked, not a tool window,
+  unowned or `WS_EX_APPWINDOW`, titled; `app_id` = executable name,
+  `flags.protected` = a display affinity is set, `flags.primary` = the
+  foreground window. Titles of this process's own windows are asked
+  with `SendMessageTimeout` (50 ms): the owner thread may be the one
+  waiting for the listing.
+- `watch_sources`: a hidden top-level window (broadcasts such as
+  `WM_DISPLAYCHANGE` reach top-level windows only) plus out-of-context
+  WinEvent hooks; any event relists after 50 ms.
+
+**Clocks and audio.** `pts_ns` on `PtsClock::Qpc` (WGC
+`SystemRelativeTime`, DXGI `LastPresentTime`, WASAPI's QPC position);
+`wall_us_for(Qpc)` ages it against QPC now. WASAPI shares the Linux
+`SampleClock` (moved to `desktop/audio_clock.rs`), UNIX-epoch µs.
+- `System`: default render endpoint loopback. `ExcludeSelf` and
+  `Application(executable or pid)`: process loopback through
+  `ActivateAudioInterfaceAsync` (build 20348+, else `OsTooOld`).
+  `Node` is `Unsatisfiable(Audio)`.
+- Rate, channels and format are asked with `AUTOCONVERTPCM`.
+- Loopback delivers no packets while nothing plays; after 40 ms
+  without one, the thread fills the gap with silence, so the timeline
+  stays continuous as a PipeWire monitor's does.
+
+**Borderless.** `WindowsOptions::borderless` needs
+`CapturePolicy::allow_borderless` (else `Require` →
+`PolicyDenied`, `Prefer` → border shown). The grant is read through the
+`graphicsCaptureWithoutBorder` capability; `NotDetermined` prompts once
+(`RequestAccessAsync`). Granted → `IsBorderRequired(false)`,
+`BorderState::Hidden`; denied → `Require` fails `ConsentDenied`.
+`access` / `request_access(BorderlessCapture)` read / prompt.
+
+**COM and threads.** `CoIncrementMTAUsage` once per process, so every
+plugin thread runs in the implicit MTA. WGC objects are made and used on
+the session's capture thread only; WASAPI clients live on theirs.
+
+**unsafe.** Win32 / COM calls are `unsafe` in the `windows` crate, so
+each FFI module allows `unsafe_code` with a reason: `d3d11.rs`,
+`desktop/windows/{os,d3d,listing,watch,gdi,dxgi,wgc,wasapi}.rs`. Every
+block carries a `SAFETY:` comment and holds one unsafe operation.
+`access.rs` and `common.rs` are safe.
+
+**Hardware-only questions** (the probe reports them): the DXGI rotation
+direction (`ROTATE90` → `R90`, taken from the duplication sample's
+dirty-rect transform), cursor hotspots on rotated outputs, WGC dirty
+regions on 24H2, FP16 on an HDR display, process loopback, the
+borderless prompt for unpackaged apps.
 
 ## Goals
 
