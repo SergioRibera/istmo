@@ -321,6 +321,10 @@ impl HostedCalls {
         self.active.remove(&(origin, call_id));
     }
 
+    fn is_active(&self, origin: Origin, call_id: CallId) -> bool {
+        self.active.contains_key(&(origin, call_id))
+    }
+
     fn cancel_all(&mut self) {
         self.closed = true;
         for token in self.active.values() {
@@ -1897,6 +1901,13 @@ impl Runtime {
                 payload,
             },
         );
+        // A call that never started (refused for its origin, after
+        // shutdown, no thread for it) has no pump to take its lane and
+        // no answer path to drop it; one that finished already dropped
+        // it.
+        if !lock(&self.hosted).is_active(Origin::Peer, call_id) {
+            self.forget_peer_credit(stream_id);
+        }
     }
 
     /// The peer's consumer of `stream_id` took `items` more: let that
@@ -3001,6 +3012,55 @@ impl<D: Dispatch> Dispatch for WireOnly<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stream host that refuses the platform peer.
+    struct PeerRefused;
+
+    impl Dispatch for PeerRefused {
+        fn plugin_id(&self) -> &'static str {
+            "test.peer_refused"
+        }
+
+        fn admits(&self, origin: CallOrigin) -> bool {
+            origin != CallOrigin::Peer
+        }
+
+        fn dispatch<'a>(
+            &'a self,
+            _instance_id: Option<InstanceId>,
+            _method: &'a str,
+            _payload: &'a [u8],
+            _cancel: CancelToken,
+        ) -> crate::dispatch::DispatchFuture<'a> {
+            Box::pin(async { Ok(Outcome::StreamOpened(flume::bounded(1).1)) })
+        }
+    }
+
+    #[test]
+    fn streams_that_never_start_leave_no_credit_lane() {
+        let init = Runtime::mock();
+        let rt = &init.runtime;
+        rt.register_host(PeerRefused);
+        rt.serve_peer_stream(
+            CallId(1),
+            "test.peer_refused",
+            None,
+            "s".into(),
+            Vec::new(),
+            4,
+        );
+        assert!(lock(&rt.peer_credits).is_empty(), "refused for its origin");
+        rt.shutdown();
+        rt.serve_peer_stream(
+            CallId(2),
+            "test.peer_refused",
+            None,
+            "s".into(),
+            Vec::new(),
+            4,
+        );
+        assert!(lock(&rt.peer_credits).is_empty(), "after shutdown");
+    }
 
     #[test]
     fn early_cancels_are_bounded_and_evict_the_oldest() {
