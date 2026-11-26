@@ -117,3 +117,39 @@ fn clients_drop_the_sink_taking_methods() {
     assert!(kotlin.contains("fun screenshot_pixels("));
     assert!(kotlin.contains("fun open_preview("));
 }
+
+/// The Kotlin files an app receives for this plugin, whole: package line
+/// and the imports `emit_app` writes (runtime types and each shared type
+/// by name). `scripts/check-plugin-native.sh` compiles the backends
+/// against these, so the imports are checked as apps get them.
+#[test]
+fn kotlin_app_files() {
+    let root = std::env::temp_dir().join(format!("istmo-sc-app-kt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let android_root = root.join("android");
+    let java = android_root.join("app/src/main/java");
+    std::fs::create_dir_all(&java).expect("create java root");
+    let manifest = istmo_build::Manifest::parse(include_str!("../istmo.toml")).expect("istmo.toml");
+    istmo_build::emit_app_with(istmo_build::AppOpts {
+        root: Some(root.clone()),
+        android_root: Some(android_root),
+        android_package: Some("com.example.app".to_owned()),
+        ios: Some(false),
+        auto_register: Some(false),
+        extra_manifests: vec![manifest],
+        extra_contracts: vec![contract()],
+        ..istmo_build::AppOpts::default()
+    });
+    let package = java.join("dev/istmo/plugins/screencapture");
+    for (file, golden) in [
+        ("ScreenCaptureTypes.kt", "app_screen_capture_types.kt"),
+        ("ScreenCaptureCodecsImpl.kt", "app_screen_capture_codecs.kt"),
+        ("ScreenCaptureDispatcher.kt", "app_screen_capture_host.kt"),
+    ] {
+        let path = package.join(file);
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+        assert_golden(golden, &source);
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

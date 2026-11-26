@@ -1,6 +1,7 @@
 #!/bin/sh
 # Compile a plugin's `native/` backends against the Kotlin / Swift its
-# contract generates (the plugin's own `tests/golden/*.expected`), with
+# contract generates (the plugin's own `tests/golden/*.expected`; Kotlin
+# from the whole app files, `app_<prefix>_*.kt.expected`), with
 # warnings as errors, on a plain JVM / any Swift toolchain: the runtime
 # sources plus the stubs under `runtime/*/ci` stand in for the Android
 # and Apple SDKs. Catches a backend that drifted from its contract
@@ -27,20 +28,15 @@ if [ -z "${SKIP_KOTLIN:-}" ]; then
     runtime="$root/runtime/android/src/main/java/dev/istmo/runtime"
     ci="$root/runtime/android/ci"
     mkdir "$work/kt"
+    # The files as an app receives them (`tests/golden/app_*`): package
+    # line and the imports `istmo-build` writes, each shared type by name.
     for part in types codecs host; do
-        {
-            echo "package $package"
-            echo
-            # What `istmo-build` imports into a plugin package.
-            for name in BackendException Bincode HandleReleaser IstmoBytesOut IstmoFrameSender \
-                IstmoGeneratedApi NativeHandleId PluginException PluginHandler PluginResult; do
-                echo "import dev.istmo.runtime.$name"
-            done
-            # Shared media types live in their own package.
-            echo "import dev.istmo.media.*"
-            echo
-            cat "$golden/${prefix}_$part.kt.expected"
-        } > "$work/kt/${prefix}_$part.kt"
+        app="$golden/app_${prefix}_$part.kt.expected"
+        if [ "$(head -n 1 "$app")" != "package $package" ]; then
+            echo "$app is not in package $package" >&2
+            exit 1
+        fi
+        cp "$app" "$work/kt/${prefix}_$part.kt"
     done
     # The shared media types, generated once per app in their package.
     { echo "package dev.istmo.media"; echo; cat "$shared/istmo_media_types.kt.expected"; } \
