@@ -576,6 +576,8 @@ pub trait Share {
     /// backend's shareable roots (the `FileProvider` cache on Android).
     /// The backend prunes it: after a day on mobile, when the backend is
     /// dropped on desktop.
+    // Creates and checks the staging directory on disk.
+    #[istmo_macros::blocking]
     async fn staging_dir(&self) -> Result<String, ShareError>;
 
     /// Replace the app's direct-share targets and launcher shortcuts.

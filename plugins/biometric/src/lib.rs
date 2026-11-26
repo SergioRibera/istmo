@@ -449,6 +449,9 @@ impl BiometricError {
 #[plugin(name = "istmo.biometric", crate = "::istmo_core")]
 pub trait Biometric {
     /// Whether `policy` can be satisfied right now. Never shows UI.
+    // macOS answers this and the keychain probes below through
+    // synchronous LocalAuthentication / Security calls.
+    #[istmo_macros::blocking]
     async fn availability(&self, policy: AuthPolicy) -> Result<Availability, BiometricError>;
 
     /// Present the system prompt and wait for the user.
@@ -496,9 +499,11 @@ pub trait Biometric {
 
     /// Delete the secret stored as `alias` and its key. Succeeds when
     /// nothing is stored. Never shows UI.
+    #[istmo_macros::blocking]
     async fn delete_secret(&self, alias: String) -> Result<(), BiometricError>;
 
     /// Whether a secret is stored as `alias`. Never shows UI.
+    #[istmo_macros::blocking]
     async fn has_secret(&self, alias: String) -> Result<bool, BiometricError>;
 
     /// Opaque token describing the current biometric enrollment. Store
@@ -516,5 +521,6 @@ pub trait Biometric {
     ///   time a change is observed.
     /// * Linux → the fprintd list of enrolled fingers (re-enrolling the
     ///   same finger goes unnoticed).
+    #[istmo_macros::blocking]
     async fn enrollment_state(&self) -> Result<Option<Vec<u8>>, BiometricError>;
 }

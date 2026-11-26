@@ -267,10 +267,13 @@ pub trait FilePicker {
 
     /// Open the picked resource for reading, returning a native fd /
     /// `HANDLE`. Prefer wrapping the result with [`PickedFileReader`].
+    // File-system I/O: a network or FUSE mount can stall it.
+    #[istmo_macros::blocking]
     async fn open_read(&self, file: NativeHandleId) -> Result<RawFileHandle, FilePickerError>;
 
     /// Open the picked resource for writing, returning a native fd /
     /// `HANDLE`. Prefer wrapping the result with [`PickedFileWriter`].
+    #[istmo_macros::blocking]
     async fn open_write(&self, file: NativeHandleId) -> Result<RawFileHandle, FilePickerError>;
 
     /// Real filesystem path when the backend can produce one, otherwise

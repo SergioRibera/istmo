@@ -659,6 +659,9 @@ pub trait Camera {
     /// Enumerate every camera the OS currently exposes. Cheap on
     /// Android (static query), noticeably slower on iOS the first
     /// time (triggers `AVCaptureDevice.DiscoverySession`).
+    // Desktop enumeration, opens, closes, control ioctls and still
+    // decoding are synchronous device work.
+    #[istmo_macros::blocking]
     async fn devices(&self) -> Result<Vec<CameraDevice>, CameraError>;
 
     /// Report how many sessions may run concurrently and which
@@ -685,11 +688,13 @@ pub trait Camera {
     /// `open_owned` sibling wraps it in a [`NativeHandle`] whose drop
     /// closes the session.
     #[owned]
+    #[istmo_macros::blocking]
     async fn open(&self, config: SessionConfig) -> Result<CameraSession, CameraError>;
 
     /// Explicitly close a session. Prefer dropping the owned
     /// [`NativeHandle<CameraSessionTag>`] from [`CameraSession::session`];
     /// the backend fires the same release path.
+    #[istmo_macros::blocking]
     async fn close(&self, session: NativeHandleId) -> Result<(), CameraError>;
 
     /// Live frame stream for a session. The receiver closes when the
@@ -701,6 +706,7 @@ pub trait Camera {
     /// Apply (or clear) one or more capture controls. Returns the
     /// resulting state; see [`AppliedControls`] for how faithful it is
     /// on each backend.
+    #[istmo_macros::blocking]
     async fn apply_controls(
         &self,
         session: NativeHandleId,
@@ -715,6 +721,7 @@ pub trait Camera {
     /// [`CameraError::FormatUnsupported`] for every other format; the
     /// desktop host returns the latest preview frame in the session's
     /// stream format.
+    #[istmo_macros::blocking]
     async fn capture_still(
         &self,
         session: NativeHandleId,

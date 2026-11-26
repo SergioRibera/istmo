@@ -84,6 +84,8 @@ impl From<istmo_core::IstmoError> for OpenError {
 #[plugin(name = "istmo.opener", crate = "::istmo_core")]
 pub trait Opener {
     /// Hand `url` to the system.
+    // The desktop opener spawns the platform handler process synchronously.
+    #[istmo_macros::blocking]
     async fn open(&self, url: String) -> Result<(), OpenError>;
 }
 
