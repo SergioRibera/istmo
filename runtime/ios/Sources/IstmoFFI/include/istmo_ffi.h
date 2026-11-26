@@ -145,7 +145,8 @@ typedef struct IstmoIosReply {
 } IstmoIosReply;
 
 /* `istmo_ios_call` results. PENDING: the answer comes through
- * `on_respond` under the call id; `reply` is left empty. */
+ * `on_respond` under the call id; `reply` is left empty. A call that
+ * could not be submitted is ERR (no `on_respond` follows). */
 enum {
     ISTMO_IOS_CALL_PENDING = 0,
     ISTMO_IOS_CALL_OK = 1,

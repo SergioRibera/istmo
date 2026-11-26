@@ -384,9 +384,13 @@ pub const ISTMO_IOS_CALL_ERR: i32 = 2;
 ///
 /// A host that answers before this returns (an inline host that did not
 /// wait) gives [`ISTMO_IOS_CALL_OK`] / [`ISTMO_IOS_CALL_ERR`] with the bytes in
-/// `*reply`. [`ISTMO_IOS_CALL_PENDING`] (also for any failure to submit)
-/// means the answer arrives through `on_respond` under `call_id`, as for
-/// [`istmo_ios_submit_call`]; `*reply` is left empty then.
+/// `*reply`. [`ISTMO_IOS_CALL_PENDING`] means the answer arrives through
+/// `on_respond` under `call_id`, as for [`istmo_ios_submit_call`];
+/// `*reply` is left empty then. A call that could not be submitted (bad
+/// UTF-8, runtime not started, a bug caught at this boundary) gives
+/// [`ISTMO_IOS_CALL_ERR`] with the error message as a wire string (empty
+/// after a caught panic): no `on_respond` follows, so the caller resumes
+/// right away.
 ///
 /// # Safety
 ///
@@ -405,10 +409,10 @@ pub unsafe extern "C" fn istmo_ios_call(
     payload_len: usize,
     reply: *mut IstmoIosReply,
 ) -> i32 {
-    ffi_guard("istmo_ios_call", ISTMO_IOS_CALL_PENDING, || {
+    ffi_guard("istmo_ios_call", ISTMO_IOS_CALL_ERR, || {
         if reply.is_null() {
             tracing::error!("istmo_ios_call without a reply slot");
-            return ISTMO_IOS_CALL_PENDING;
+            return ISTMO_IOS_CALL_ERR;
         }
         // SAFETY: `reply` is non-null and writable per the contract.
         unsafe { reply.write(IstmoIosReply::empty()) };
@@ -439,7 +443,8 @@ pub unsafe extern "C" fn istmo_ios_call(
             Ok(Some(Err(bytes))) => (ISTMO_IOS_CALL_ERR, bytes),
             Err(err) => {
                 tracing::error!(%err, "istmo_ios_call failed");
-                return ISTMO_IOS_CALL_PENDING;
+                let message = istmo_core::codec::encode(&err.to_string()).unwrap_or_default();
+                (ISTMO_IOS_CALL_ERR, message)
             }
         };
         // SAFETY: as above.

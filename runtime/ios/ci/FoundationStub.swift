@@ -60,10 +60,16 @@ public extension String {
     }
 }
 
-public enum DispatchQoS { case userInitiated }
+public enum DispatchQoS {
+    case userInitiated
+    public enum QoSClass { case `default`, userInitiated }
+}
 
 public final class DispatchQueue {
     public init(label: String, qos: DispatchQoS) {}
+    public static func global(qos: DispatchQoS.QoSClass = .default) -> DispatchQueue {
+        DispatchQueue(label: "global", qos: .userInitiated)
+    }
     public func sync<T>(execute work: () throws -> T) rethrows -> T { try work() }
     public func async(execute work: @escaping () -> Void) { work() }
 }

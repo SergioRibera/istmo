@@ -150,45 +150,54 @@ public final class IstmoRuntime: @unchecked Sendable {
             return id
         }
         return try await withCheckedThrowingContinuation { cont in
-            queue.async {
-                // Outside start()..shutdown() no pump delivers a response,
-                // so the continuation would never resume. `shutdown()`
-                // fails whatever got in before `started` flipped.
-                guard self.started else {
-                    cont.resume(throwing: IstmoRuntimeError.shutdown)
-                    return
-                }
-                // Registered first: a host that waits answers through
-                // `on_respond`, which looks the call up here.
+            // Outside start()..shutdown() no pump delivers a response, so
+            // the continuation would never resume. `shutdown()` fails
+            // whatever got in before `started` flipped. Registered first:
+            // a host that waits answers through `on_respond`, which looks
+            // the call up here.
+            let registered = queue.sync { () -> Bool in
+                guard self.started else { return false }
                 self.pending[callId] = PendingCall(pluginId: pluginId, cont: cont)
-                let pidBytes = Array(pluginId.utf8)
-                let mBytes = Array(method.utf8)
-                var reply = IstmoIosReply(ptr: nil, len: 0, cap: 0)
-                let status = payload.withUnsafeBytes { payloadPtr in
-                    pidBytes.withUnsafeBufferPointer { pidBuf in
-                        mBytes.withUnsafeBufferPointer { mBuf in
-                            istmo_ios_call(
-                                callId,
-                                pidBuf.baseAddress, pidBuf.count,
-                                0,
-                                mBuf.baseAddress, mBuf.count,
-                                payloadPtr.bindMemory(to: UInt8.self).baseAddress,
-                                payload.count,
-                                &reply
-                            )
-                        }
+                return true
+            }
+            guard registered else {
+                cont.resume(throwing: IstmoRuntimeError.shutdown)
+                return
+            }
+            // Off `queue`, on the caller's thread: an inline Rust host runs
+            // inside this call, and the pump's callbacks take `queue`
+            // synchronously, so a host that waits for the pump must not
+            // hold it.
+            let pidBytes = Array(pluginId.utf8)
+            let mBytes = Array(method.utf8)
+            var reply = IstmoIosReply(ptr: nil, len: 0, cap: 0)
+            let status = payload.withUnsafeBytes { payloadPtr in
+                pidBytes.withUnsafeBufferPointer { pidBuf in
+                    mBytes.withUnsafeBufferPointer { mBuf in
+                        istmo_ios_call(
+                            callId,
+                            pidBuf.baseAddress, pidBuf.count,
+                            0,
+                            mBuf.baseAddress, mBuf.count,
+                            payloadPtr.bindMemory(to: UInt8.self).baseAddress,
+                            payload.count,
+                            &reply
+                        )
                     }
                 }
-                // An inline host answered in place: no frame follows.
-                guard status != Int32(ISTMO_IOS_CALL_PENDING) else { return }
-                let answer = reply.ptr.map { Data(bytes: $0, count: reply.len) } ?? Data()
-                istmo_ios_free_reply(&reply)
-                guard let waiting = self.pending.removeValue(forKey: callId)?.cont else { return }
-                if status == Int32(ISTMO_IOS_CALL_OK) {
-                    waiting.resume(returning: answer)
-                } else {
-                    waiting.resume(throwing: PluginException(payload: answer))
-                }
+            }
+            // The answer comes as a frame through `on_respond`.
+            guard status != Int32(ISTMO_IOS_CALL_PENDING) else { return }
+            // Answered here (or refused before it was submitted): no frame
+            // follows.
+            let answer = reply.ptr.map { Data(bytes: $0, count: reply.len) } ?? Data()
+            istmo_ios_free_reply(&reply)
+            let waiting = queue.sync { self.pending.removeValue(forKey: callId)?.cont }
+            guard let waiting = waiting else { return }
+            if status == Int32(ISTMO_IOS_CALL_OK) {
+                waiting.resume(returning: answer)
+            } else {
+                waiting.resume(throwing: PluginException(payload: answer))
             }
         }
     }
@@ -236,12 +245,18 @@ public final class IstmoRuntime: @unchecked Sendable {
                 self.nextId += 1
                 return id
             }
-            self.queue.async {
-                guard self.started else {
-                    cont.finish(throwing: IstmoRuntimeError.shutdown)
-                    return
-                }
+            let registered = self.queue.sync { () -> Bool in
+                guard self.started else { return false }
                 self.streams[streamId] = PendingStream(pluginId: pluginId, cont: cont)
+                return true
+            }
+            guard registered else {
+                cont.finish(throwing: IstmoRuntimeError.shutdown)
+                return
+            }
+            // Off `queue` (see `call`), and off the caller's thread: an
+            // inline Rust host starts its stream inside the submit.
+            DispatchQueue.global(qos: .userInitiated).async {
                 let pidBytes = Array(pluginId.utf8)
                 let mBytes = Array(method.utf8)
                 payload.withUnsafeBytes { payloadPtr in

@@ -7,9 +7,10 @@ use istmo_core::{
     CancelToken, Dispatch, DispatchError, DispatchFuture, InstanceId, Outcome, Plugin, RuntimeInit,
 };
 use istmo_ios::{
-    ISTMO_IOS_CALL_OK, ISTMO_IOS_CALL_PENDING, IstmoIosCallbacks, IstmoIosReply, istmo_ios_call,
-    istmo_ios_free_reply, istmo_ios_shutdown, istmo_ios_start, istmo_ios_submit_call,
-    istmo_ios_submit_cancel, istmo_ios_submit_notify, istmo_ios_submit_response,
+    ISTMO_IOS_CALL_ERR, ISTMO_IOS_CALL_OK, ISTMO_IOS_CALL_PENDING, IstmoIosCallbacks,
+    IstmoIosReply, istmo_ios_call, istmo_ios_free_reply, istmo_ios_shutdown, istmo_ios_start,
+    istmo_ios_submit_call, istmo_ios_submit_cancel, istmo_ios_submit_notify,
+    istmo_ios_submit_response,
 };
 
 const PLUGIN_ID: &str = "test.ios.echo";
@@ -437,6 +438,36 @@ fn ios_transport_end_to_end() {
         0,
         "a direct answer sends no frame"
     );
+    // A call that cannot be submitted answers in place too, so the Swift
+    // caller always resumes.
+    let bad_plugin = [0xffu8, 0xfe];
+    let mut reply = IstmoIosReply {
+        ptr: std::ptr::null_mut(),
+        len: 0,
+        cap: 0,
+    };
+    // SAFETY: every pointer/length pair borrows a live buffer and
+    // `reply` is writable.
+    let status = unsafe {
+        istmo_ios_call(
+            45,
+            bad_plugin.as_ptr(),
+            bad_plugin.len(),
+            0,
+            b"echo".as_ptr(),
+            4,
+            args.as_ptr(),
+            args.len(),
+            &raw mut reply,
+        )
+    };
+    assert_eq!(status, ISTMO_IOS_CALL_ERR);
+    // SAFETY: a filled reply holds `len` initialised bytes.
+    let message = unsafe { std::slice::from_raw_parts(reply.ptr, reply.len).to_vec() };
+    let (message, _): (String, _) = istmo_core::codec::decode(&message).unwrap();
+    assert!(message.contains("utf-8"), "{message}");
+    // SAFETY: `reply` was last written by `istmo_ios_call`.
+    unsafe { istmo_ios_free_reply(&raw mut reply) };
 
     let runtime = istmo_core::Runtime::global().expect("started");
     let handle = runtime
