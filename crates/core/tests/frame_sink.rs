@@ -734,3 +734,13 @@ fn into_backing_racing_clone_drops_releases_exactly_once() {
         assert_eq!(released.load(Ordering::SeqCst), 1);
     }
 }
+
+#[test]
+fn a_producer_sees_the_sink_policy() {
+    let rt = Runtime::mock().runtime;
+    let policy = SinkPolicy::queue(5).with_overflow(Overflow::DropNewest);
+    let sink = rt.open_frame_sink::<u32>(policy).expect("open");
+    let sender = rt.frame_sender(sink.id()).expect("sender");
+    assert_eq!(sender.policy(), policy);
+    assert_eq!(sender.policy().depth().get(), 5);
+}

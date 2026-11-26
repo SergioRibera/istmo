@@ -857,6 +857,13 @@ impl<M> FrameSender<M> {
         FrameSinkId::from_raw(self.shared.id)
     }
 
+    /// The sink's policy: how many frames it queues, so a producer can
+    /// size its pool to keep frames flowing.
+    #[must_use]
+    pub fn policy(&self) -> SinkPolicy {
+        self.shared.policy
+    }
+
     /// Hand a frame to the consumer. Never blocks.
     ///
     /// # Errors
