@@ -66,6 +66,7 @@ pub use jni_exports::{
     Java_dev_istmo_runtime_IstmoRuntime_nativeInjectEnvelope,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallAssets,
     Java_dev_istmo_runtime_IstmoRuntime_nativeInstallPaths,
+    Java_dev_istmo_runtime_IstmoRuntime_nativeMayBlock,
     Java_dev_istmo_runtime_IstmoRuntime_nativeShutdown,
     Java_dev_istmo_runtime_IstmoRuntime_nativeStart,
     Java_dev_istmo_runtime_IstmoRuntime_nativeStreamCredit,

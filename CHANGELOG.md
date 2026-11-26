@@ -31,9 +31,9 @@
   `outbound_delivered`, `track_outbound_deliveries` (Rust → Kotlin calls
   and stream items on the caller's thread); `DeliveryScope` (a thread
   that must never block on the outbound channel).
-- JNI `nativeCall`, `nativeSubmitStream`, `nativeStreamCredit`; Kotlin
-  callbacks `onCallDirect` and `onEvents`; C `istmo_ios_call` +
-  `IstmoIosReply` + `istmo_ios_free_reply`.
+- JNI `nativeCall`, `nativeSubmitStream`, `nativeStreamCredit`,
+  `nativeMayBlock`; Kotlin callbacks `onCallDirect` and `onEvents`; C
+  `istmo_ios_call` + `IstmoIosReply` + `istmo_ios_free_reply`.
 - `istmo_core::spin::SpinWait` (bounded adaptive spinning before a park,
   `spin::set_enabled` for A/B); `native_frame::BytePool` (recycled CPU
   frame buffers); Kotlin `IstmoBytesOut`.

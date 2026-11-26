@@ -110,6 +110,18 @@ impl DeliveryScope {
     pub fn is_active() -> bool {
         delivery::DEPTH.with(Cell::get) > 0
     }
+
+    /// Whether the current thread may block: not inside a scope, not one
+    /// of the runtime's async workers.
+    ///
+    /// A platform runtime asks before it does something that can wait on
+    /// Rust (Kotlin's stream relay hands an item that may wait for the
+    /// consumer to another thread when this is `false`). Always `true`
+    /// on `wasm32`, where nothing blocks in the first place.
+    #[must_use]
+    pub fn may_block() -> bool {
+        may_block()
+    }
 }
 
 impl Drop for DeliveryScope {
@@ -326,6 +338,26 @@ pub(super) async fn send_unless_cancelled<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_plain_threads_may_block() {
+        assert!(DeliveryScope::may_block());
+        {
+            let _outer = DeliveryScope::enter();
+            let inner = DeliveryScope::enter();
+            drop(inner);
+            assert!(!DeliveryScope::may_block(), "still inside the outer scope");
+        }
+        assert!(DeliveryScope::may_block());
+        let (tx, rx) = flume::bounded(1);
+        spawn(async move {
+            let _ = tx.send(DeliveryScope::may_block());
+        });
+        let on_worker = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("worker ran");
+        assert!(!on_worker, "an async worker must not block");
+    }
 
     #[test]
     fn race_takes_the_ready_side() {

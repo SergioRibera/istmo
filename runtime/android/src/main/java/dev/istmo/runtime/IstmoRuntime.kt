@@ -503,13 +503,15 @@ object IstmoRuntime {
                 // when its consumer falls behind.
                 kotlinx.coroutines.withContext(Dispatchers.Unconfined) {
                     flow.collect { bytes ->
-                        // Holding an item back blocks the emitting thread,
-                        // which must never be the delivery thread (an
-                        // upstream fed by a Rust stream resumes there).
-                        if (onDeliveryThread()) {
-                            kotlinx.coroutines.withContext(Dispatchers.Default) { nativeSubmitEvent(callId, bytes) }
-                        } else {
+                        // Holding an item back blocks the emitting thread.
+                        // An upstream fed by a Rust stream resumes on a
+                        // Rust thread that must never block (the pump, an
+                        // async worker): Rust says which, and the item
+                        // waits on an IO thread instead, in order.
+                        if (nativeMayBlock()) {
                             nativeSubmitEvent(callId, bytes)
+                        } else {
+                            kotlinx.coroutines.withContext(Dispatchers.IO) { nativeSubmitEvent(callId, bytes) }
                         }
                     }
                 }
@@ -527,21 +529,6 @@ object IstmoRuntime {
             nativeSubmitStreamEnd(callId, STREAM_END_CANCELLED, null)
         }
     }
-
-    /** The runtime's delivery thread (Rust's pump), once seen. */
-    @Volatile
-    private var deliveryThread: Thread? = null
-
-    private fun onDeliveryThread(): Boolean {
-        val current = Thread.currentThread()
-        deliveryThread?.let { return it === current }
-        if (current.name != DELIVERY_THREAD_NAME) return false
-        deliveryThread = current
-        return true
-    }
-
-    /** Name of the Rust pump thread (`crates/android/src/pump.rs`). */
-    private const val DELIVERY_THREAD_NAME = "istmo-android-pump"
 
     private const val STREAM_END_COMPLETE = 0
     private const val STREAM_END_CANCELLED = 1
@@ -687,6 +674,7 @@ object IstmoRuntime {
     )
     external fun nativeSubmitResponse(callId: Long, ok: Boolean, payload: ByteArray)
     external fun nativeSubmitEvent(streamId: Long, payload: ByteArray)
+    external fun nativeMayBlock(): Boolean
     external fun nativeSubmitStream(
         callId: Long,
         pluginId: String,

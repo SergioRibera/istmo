@@ -339,6 +339,26 @@ pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeSubmitEvent<'lo
     });
 }
 
+/// Whether the calling thread may block on Rust.
+///
+/// `false` on the pump and on the runtime's async workers (see
+/// [`DeliveryScope::may_block`](istmo_core::DeliveryScope::may_block)):
+/// Kotlin moves a `nativeSubmitEvent`, which can wait for the consumer,
+/// off such a thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_istmo_runtime_IstmoRuntime_nativeMayBlock<'local>(
+    mut env: JNIEnv<'local>,
+    _caller: JClass<'local>,
+) -> jboolean {
+    guarded(&mut env, "nativeMayBlock", JNI_FALSE, |_env| {
+        Ok(if istmo_core::DeliveryScope::may_block() {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        })
+    })
+}
+
 /// Open a stream on a Rust-hosted plugin that sends at most `window`
 /// items ahead of the Kotlin collector; `nativeStreamCredit` grants
 /// more as it takes them. Reads the first `len` bytes of `payload`.
