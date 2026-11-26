@@ -42,10 +42,17 @@ fn workers() -> &'static Workers {
     })
 }
 
+/// Whether a job about to be queued needs a new worker: every idle one
+/// may already be promised to a job still in the queue (an idle worker
+/// woken for job 1 must not leave job 2 queued behind it).
+const fn needs_worker(queued: usize, idle: usize) -> bool {
+    queued >= idle
+}
+
 impl Workers {
     /// Queue `job`; it comes back when the queue is full.
     fn submit(&'static self, job: Job) -> Result<(), Job> {
-        if self.idle.load(Ordering::Acquire) == 0 {
+        if needs_worker(self.queue.len(), self.idle.load(Ordering::Acquire)) {
             self.grow();
         }
         self.jobs.try_send(job).map_err(|err| match err {
@@ -93,7 +100,9 @@ impl Workers {
         self.live.fetch_sub(1, Ordering::AcqRel);
         // A job queued while this worker was deciding to exit still
         // needs a thread.
-        if !self.queue.is_empty() && self.idle.load(Ordering::Acquire) == 0 {
+        if !self.queue.is_empty()
+            && needs_worker(self.queue.len(), self.idle.load(Ordering::Acquire))
+        {
             self.grow();
         }
     }
@@ -226,6 +235,40 @@ mod tests {
             assert_eq!(got, i);
         }
         assert!(workers().live.load(Ordering::Acquire) <= MAX_WORKERS);
+    }
+
+    #[test]
+    fn a_job_queued_behind_promised_workers_gets_a_new_one() {
+        assert!(needs_worker(0, 0));
+        assert!(
+            needs_worker(1, 1),
+            "the idle worker is promised to the queued job"
+        );
+        assert!(needs_worker(3, 2));
+        assert!(!needs_worker(0, 1));
+        assert!(!needs_worker(1, 2));
+    }
+
+    #[test]
+    fn a_quick_call_does_not_wait_behind_a_long_one() {
+        let (release_tx, release_rx) = flume::bounded::<()>(1);
+        let long = std::thread::spawn(move || {
+            pollster::block_on(offload("long", move || {
+                let _released = release_rx.recv_timeout(Duration::from_secs(10));
+                Ok(())
+            }))
+        });
+        let start = Instant::now();
+        for i in 0..4_u32 {
+            let got = pollster::block_on(offload("quick", move || Ok(i))).expect("quick");
+            assert_eq!(got, i);
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "quick calls ran beside the long one"
+        );
+        release_tx.send(()).expect("release");
+        long.join().expect("long").expect("long call");
     }
 
     #[test]
