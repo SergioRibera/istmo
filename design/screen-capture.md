@@ -9,12 +9,13 @@ control plane over istmo and a data plane over native frame sinks
 Implemented so far: the contract, selection, pools, pixel helper,
 desktop host and the Linux backends (wlr-screencopy, ext-image-copy,
 X11, portal over PipeWire with DMA-BUF zero-copy, PipeWire audio), the
-Windows backends (WGC, DXGI Desktop Duplication, GDI, WASAPI audio) and
+Windows backends (WGC, DXGI Desktop Duplication, GDI, WASAPI audio),
 macOS ScreenCaptureKit (video and audio) with the iOS / iPadOS Swift
-backends (ScreenCaptureKit 27, ReplayKit in-app); the Windows and Apple
-backends have not run on their hardware yet. Later steps are listed
-under "Implementation order"; deviations are in the "Implementation
-notes" sections below.
+backends (ScreenCaptureKit 27, ReplayKit in-app), and the Android Kotlin
+backend (MediaProjection); the Windows, Apple and Android backends have
+not run on their hardware yet. Later steps are listed under
+"Implementation order"; deviations are in the "Implementation notes"
+sections below.
 
 Per-platform facts, version tables and official sources live in
 `design/screen-capture-platforms.md`; this document refers to them by
@@ -529,6 +530,97 @@ the picker on a running `NSApplication`, HDR colour, audio layouts and
 rates, the iOS 27 API names (the stubs follow the macOS SDK and the iOS
 27 article; `videoOrientation`'s value type is assumed EXIF),
 ReplayKit's pixel format and orientation semantics, preview layers.
+
+## Implementation notes (Android, as built)
+
+The Kotlin backend in `plugins/screen-capture/native/android`. Where it
+differs from the text below, or makes it more precise, this section
+wins.
+
+**Host and origin.**
+- `ScreenCaptureBackendImpl(ComponentActivity)` is `IstmoActivityBound`:
+  built once per process, so grants and sessions outlive activity
+  recreation. The consent dialog and the runtime permission prompts go
+  through the host activity's `ActivityResultRegistry` (registered
+  without a lifecycle); a consent still showing when the activity is
+  recreated is registered again on the new one under the same key, so
+  the registry delivers the result there.
+- The generated Kotlin host gets no `CallOrigin`, so the per-method
+  origin rule is not enforced on Android. Session ids come from
+  `IstmoRuntime.allocHandleId` (releases reach the backend); grant ids
+  are random, with bit 62 set (clear of the runtime counter and of the
+  Rust-allocated range).
+
+**Consent and the service.**
+- Order: dialog → `IstmoProjectionService.startForeground(...,
+  FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)` (awaited, 5 s) →
+  `getMediaProjection` → `registerCallback` → `createVirtualDisplay`.
+  One service lease per projection; the last one stops the service.
+- The notification has a Stop action: every session ends with
+  `ConsentRevoked` (as on the system's `onStop`).
+- `ProjectionMode`: `EntireScreen` uses
+  `MediaProjectionConfig.createConfigForDefaultDisplay()` on 34+;
+  `UserChoice` and `SingleApp` use `createConfigForUserChoice()`
+  (Android has no app-only config). `SingleApp` below 34 is
+  `Unsatisfiable(Kind(Application))`.
+- Grants: single use, removed on `onStop`, stopped after 60 s unused.
+- Android never says whether the person shared the display or an app:
+  a first `onCapturedContentResize` of another size than the display
+  turns the negotiated source into `Application` (`app:shared`) with a
+  `Renegotiated` event.
+- `open_audio` takes a live grant from `request_projection`
+  (`AudioConfig` has no consent fields); without one it is
+  `ConsentRequired`.
+- The plugin declares `FOREGROUND_SERVICE`,
+  `FOREGROUND_SERVICE_MEDIA_PROJECTION` and `POST_NOTIFICATIONS`; apps
+  that capture audio declare `RECORD_AUDIO` (a screen-only app should
+  not ask for the microphone). Without it audio is
+  `BackendUnavailable(NeedsAccess(Microphone))` and the report's
+  `audio.availability` says so.
+
+**Frames.**
+- Offers: `Rgba8` / `HardwareBuffer` (API 29+, no copy) and `Rgba8` /
+  `Cpu` (`ShmTransport`: the image rows are copied into the sink).
+  Readers are `RGBA_8888` with `USAGE_GPU_SAMPLED_IMAGE`; a device that
+  refuses that combination gets `PRIVATE` (then `format` stays `Rgba8`,
+  the display composes RGBA).
+- `HardwareBuffer` frames carry no `planes` (the Java API has no
+  stride); `istmo_android::HardwareBuffer::desc()` has it. `slot` is
+  the buffer's `HardwareBuffer.id` order (API 31+), `u32::MAX` below
+  31 and for CPU copies.
+- Pool rule: a frame is delivered only while the reader keeps one image
+  free; otherwise the image is closed at once and counted in the next
+  `skipped_before`, with one `Exhausted` per episode. `Stall` and
+  `DropNewest` behave the same (a virtual display cannot pause per
+  buffer); `CopyToCpu` is accepted on the CPU tier only
+  (`Unsatisfiable(ExhaustionReadback)` with `HardwareBuffer`).
+- `Exact` repeats carry the tick's `CLOCK_MONOTONIC` time as `pts_ns`.
+- Cursor `Hidden` only (the pointer sprite is not composed into virtual
+  displays); damage `Frame` (`Damage::Full`); orientation
+  `AlreadyApplied`; regions are `InMeta` crops; `Scaled` / `Fit` size the
+  virtual display (no copy, `Scaling::Native`).
+- Resizes: on API 34+ from `onCapturedContentResize` (rotation
+  included), below from a `DisplayListener` on the default display. Each
+  one opens a new reader (new `pool_generation`) and emits
+  `SourceResized`; the old reader closes once its last image is back.
+- `sources` lists every display; only the default one is `ById`, the
+  rest `PickerOnly([])` (MediaProjection mirrors the default display).
+
+**Preview.**
+- `open_preview`: the virtual display renders into the registered
+  `Surface`; `PreviewTarget::fit` is not applied (the view scales the
+  buffer).
+- `open_preview_with_frames`: a `SurfaceTexture` on a GL thread; each
+  frame is drawn into the preview (per `fit`) and into the reader's
+  surface with `eglPresentationTimeANDROID` = the capture time.
+
+**Audio.** `AudioRecord` with `AudioPlaybackCaptureConfiguration`
+(media, game, unknown usages; `Application(package)` matches its uid;
+`ExcludeSelf` excludes this uid; `Node` is `Unsatisfiable(Audio)`), 10 ms
+chunks read straight into the sink's slots. `pts_ns` comes from
+`AudioRecord.getTimestamp(TIMEBASE_MONOTONIC)`; `wall_us` follows the
+sample count and re-anchors (with `discontinuity`) past 20 ms of drift
+or after dropped chunks.
 
 ## Goals
 

@@ -30,14 +30,15 @@ regions.
 | macOS ScreenCaptureKit 12.3+ (displays, windows, apps; audio 13+) | `macos-sck` | `IOSurface`, `CVPixelBuffer`, locked `IOSurface` memory | Screen Recording (TCC); picker on 14+ | no: by name only |
 | iOS / iPadOS 27 ScreenCaptureKit (Swift) | — | `CVPixelBuffer`, `IOSurface` | system picker per session | no: by name only |
 | iOS ReplayKit in-app, before 27 (Swift) | — | `CVPixelBuffer`, `IOSurface` | system alert per session | no: by name only |
+| Android MediaProjection (Kotlin, `native/android`) | — | `HardwareBuffer` (API 29+), CPU | system dialog per session | yes (the only one) |
 
 The Windows backends stay out of `Auto` until their checklist passed on
 a real Windows session (`examples/win_probe.rs` runs it); name them with
 `BackendSelection::Fixed` / `Ordered`. The Apple backends compile and
 pass their lints but have not run on a Mac, iPhone or iPad yet: they
 stay out of `Auto` until the checklist in `docs/apple-checklist.es.md`
-passes. Android and the web are designed (`design/screen-capture.md`)
-but not implemented yet; their hosts answer
+passes. The web is designed (`design/screen-capture.md`) but not
+implemented yet; its host answers
 `CaptureError::NoBackendCompiled`.
 
 ## Install
@@ -341,6 +342,39 @@ retained `CVPixelBuffer`s / `IOSurface`s. `open_preview` renders into an
 `AVSampleBufferDisplayLayer` registered with
 `IstmoRuntime.shared.registerObject(layer)`.
 
+## Android
+
+The Kotlin backend in `native/android` captures through MediaProjection.
+It needs the host `ComponentActivity` (the consent dialog goes through
+its `ActivityResultRegistry`) and runs every projection under
+`IstmoProjectionService`, a non-exported foreground service of type
+`mediaProjection` that the plugin's manifest declares with its
+permissions. Apps that capture audio add `RECORD_AUDIO` themselves.
+
+- Consent: Android asks every time. `open` / `screenshot` show the
+  dialog when `allow_picker` is set; `request_projection` shows it ahead
+  of time and returns a `ProjectionGrant` for one later call (gone after
+  60 s or when the projection stops). Audio-only sessions take such a
+  grant: `AudioConfig` has no consent fields. From API 34 a picker
+  source lets the person share one app instead of the screen.
+- Frames: a virtual display mirrors the default display into an
+  `ImageReader`. The native tier is `RGBA_8888` `HardwareBuffer`s handed
+  over without a copy; each `Image` stays open until Rust drops the
+  frame, and the consumer never gets the reader's last image. A CPU tier
+  copies each image into the sink (`CopyStage::ShmTransport`). Frames
+  come already upright; rotation and app-window resizes give a new pool
+  (`pool_generation`) and `SourceResized`.
+- Preview: `open_preview` renders straight into a `Surface` the app
+  registered (`IstmoRuntime.registerObject(holder.surface)`), with no
+  copy. `PreviewTarget::fit` applies only to
+  `open_preview_with_frames`, where a GLES pass draws each frame into
+  the preview and the sink (`CopyStage::PreviewFanOut`).
+- Audio: playback capture (API 29+) of media, game and unknown usages,
+  one app's (`AudioSource::Application(package)`) or everything but this
+  app's. Apps that opt out, or target API 28 and lower, are silent.
+- Stopping from the notification, the status-bar chip or the lock
+  screen ends sessions with `ConsentRevoked`.
+
 ## Kotlin and Swift
 
 The generated clients offer the control plane:
@@ -377,6 +411,8 @@ tests:
 - `ISTMO_SC_TEST_MACOS=1` (plus `_PICKER`, `_AUDIO`): ScreenCaptureKit on a
   Mac (`tests/macos_live.rs`); the full Apple checklist, iOS included,
   is `docs/apple-checklist.es.md`
+- `examples/android-probe`: an Android app that runs each Android check
+  on a device (see its `README.md`)
 
 Design: `design/screen-capture.md`. Platform facts:
 `design/screen-capture-platforms.md`.
