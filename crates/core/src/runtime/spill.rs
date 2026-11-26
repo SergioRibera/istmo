@@ -18,7 +18,9 @@
 //! this queue, so they keep the backpressure the channel gives them.
 //!
 //! The queue has no bound: the threads feeding it must not wait, and
-//! dropping frames would lose answers. Past [`HIGH_WATER`] channels'
+//! dropping frames would lose answers. Cancels and handle releases feed
+//! it from any thread (they run from `Drop`), so a stalled transport
+//! piles them up too. Past [`HIGH_WATER`] channels'
 //! worth of frames it logs a warning (at most every [`WARN_EVERY`]), and
 //! [`SpillStats`] counts what it holds.
 //!

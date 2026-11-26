@@ -411,6 +411,13 @@ struct RemoteCalls {
 /// While frames are queued that way, it waits for its own frame to
 /// leave the queue.
 ///
+/// Cancels, handle releases and the ends of cancelled streams never
+/// wait, from any thread: they run from `Drop` and must not be lost, so
+/// they queue the same way. A transport that stops draining while a
+/// thread keeps dropping handles therefore grows that queue without
+/// bound; past four channels' worth it logs a warning (at most every
+/// 10 s), and [`outbound_spill`](Self::outbound_spill) shows it.
+///
 /// That covers the outbound channel only. An inbound stream item or end
 /// for a local consumer with a full buffer is delivered by the thread
 /// that injects it: a plain thread or a bridge's reader waits for room;
