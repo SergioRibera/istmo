@@ -3,20 +3,25 @@
 
 import Foundation
 
-public enum PermissionStatus: UInt32, Sendable {
-    case granted = 0
-    case denied = 1
-    case permanentlyDenied = 2
-    case notDetermined = 3
-    case notSupported = 4
-}
+/// The `Permissions` plugin's message types.
+public enum Permissions {}
 
-public struct PermissionOutcome: Sendable {
-    public let permission: String
-    public let status: PermissionStatus
+extension Permissions {
+    public enum PermissionStatus: UInt32, Sendable {
+        case granted = 0
+        case denied = 1
+        case permanentlyDenied = 2
+        case notDetermined = 3
+        case notSupported = 4
+    }
 
-    public init(permission: String, status: PermissionStatus) {
-        self.permission = permission
-        self.status = status
+    public struct PermissionOutcome: Sendable {
+        public let permission: String
+        public let status: PermissionStatus
+
+        public init(permission: String, status: PermissionStatus) {
+            self.permission = permission
+            self.status = status
+        }
     }
 }

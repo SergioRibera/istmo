@@ -7,25 +7,25 @@ import IstmoRuntime
 public final class PermissionsCodecsImpl: PermissionsCodecs {
     public init() {}
 
-    public func readPermissionStatus(_ c: inout Bincode.Cursor) throws -> PermissionStatus {
+    public func readPermissionStatus(_ c: inout Bincode.Cursor) throws -> Permissions.PermissionStatus {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = PermissionStatus(rawValue: disc) else {
+        guard let value = Permissions.PermissionStatus(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writePermissionStatus(_ out: inout Data, _ value: PermissionStatus) {
+    public func writePermissionStatus(_ out: inout Data, _ value: Permissions.PermissionStatus) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readPermissionOutcome(_ c: inout Bincode.Cursor) throws -> PermissionOutcome {
+    public func readPermissionOutcome(_ c: inout Bincode.Cursor) throws -> Permissions.PermissionOutcome {
         let permission = try Bincode.readString(&c)
         let status = try self.readPermissionStatus(&c)
-        return PermissionOutcome(permission: permission, status: status)
+        return Permissions.PermissionOutcome(permission: permission, status: status)
     }
 
-    public func writePermissionOutcome(_ out: inout Data, _ value: PermissionOutcome) {
+    public func writePermissionOutcome(_ out: inout Data, _ value: Permissions.PermissionOutcome) {
         Bincode.writeString(&out, value.permission)
         self.writePermissionStatus(&out, value.status)
     }

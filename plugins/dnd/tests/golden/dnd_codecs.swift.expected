@@ -7,20 +7,20 @@ import IstmoRuntime
 public final class DragAndDropCodecsImpl: DragAndDropCodecs {
     public init() {}
 
-    public func readDropOptions(_ c: inout Bincode.Cursor) throws -> DropOptions {
+    public func readDropOptions(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DropOptions {
         let mimeTypes = try Bincode.readVec(&c) { c1 in try Bincode.readString(&c1) }
         let maxBytes = try Bincode.readVarintU64(&c)
         let folders = try Bincode.readBool(&c)
-        return DropOptions(mimeTypes: mimeTypes, maxBytes: maxBytes, folders: folders)
+        return DragAndDrop.DropOptions(mimeTypes: mimeTypes, maxBytes: maxBytes, folders: folders)
     }
 
-    public func writeDropOptions(_ out: inout Data, _ value: DropOptions) {
+    public func writeDropOptions(_ out: inout Data, _ value: DragAndDrop.DropOptions) {
         Bincode.writeVec(&out, value.mimeTypes) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeVarintU64(&out, value.maxBytes)
         Bincode.writeBool(&out, value.folders)
     }
 
-    public func readDndError(_ c: inout Bincode.Cursor) throws -> DndError {
+    public func readDndError(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DndError {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .unsupported
@@ -30,7 +30,7 @@ public final class DragAndDropCodecsImpl: DragAndDropCodecs {
         }
     }
 
-    public func writeDndError(_ out: inout Data, _ value: DndError) {
+    public func writeDndError(_ out: inout Data, _ value: DragAndDrop.DndError) {
         switch value {
         case .unsupported:
             Bincode.writeVarintU32(&out, 0)
@@ -42,16 +42,16 @@ public final class DragAndDropCodecsImpl: DragAndDropCodecs {
         }
     }
 
-    public func readDroppedFiles(_ c: inout Bincode.Cursor) throws -> DroppedFiles {
+    public func readDroppedFiles(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DroppedFiles {
         let files = try Bincode.readVec(&c) { c1 in try self.readDroppedFile(&c1) }
         let skipped = try Bincode.readVec(&c) { c1 in try self.readSkippedFile(&c1) }
         let position = try Bincode.readOption(&c) { c1 in try self.readDropPoint(&c1) }
         let receivedAtMs = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
         let windowId = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
-        return DroppedFiles(files: files, skipped: skipped, position: position, receivedAtMs: receivedAtMs, windowId: windowId)
+        return DragAndDrop.DroppedFiles(files: files, skipped: skipped, position: position, receivedAtMs: receivedAtMs, windowId: windowId)
     }
 
-    public func writeDroppedFiles(_ out: inout Data, _ value: DroppedFiles) {
+    public func writeDroppedFiles(_ out: inout Data, _ value: DragAndDrop.DroppedFiles) {
         Bincode.writeVec(&out, value.files) { o1, v1 in self.writeDroppedFile(&o1, v1) }
         Bincode.writeVec(&out, value.skipped) { o1, v1 in self.writeSkippedFile(&o1, v1) }
         Bincode.writeOption(&out, value.position) { o1, v1 in self.writeDropPoint(&o1, v1) }
@@ -59,45 +59,45 @@ public final class DragAndDropCodecsImpl: DragAndDropCodecs {
         Bincode.writeOption(&out, value.windowId) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
     }
 
-    public func readDroppedFile(_ c: inout Bincode.Cursor) throws -> DroppedFile {
+    public func readDroppedFile(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DroppedFile {
         let path = try Bincode.readString(&c)
         let displayName = try Bincode.readString(&c)
         let mimeType = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let size = try Bincode.readVarintU64(&c)
-        return DroppedFile(path: path, displayName: displayName, mimeType: mimeType, size: size)
+        return DragAndDrop.DroppedFile(path: path, displayName: displayName, mimeType: mimeType, size: size)
     }
 
-    public func writeDroppedFile(_ out: inout Data, _ value: DroppedFile) {
+    public func writeDroppedFile(_ out: inout Data, _ value: DragAndDrop.DroppedFile) {
         Bincode.writeString(&out, value.path)
         Bincode.writeString(&out, value.displayName)
         Bincode.writeOption(&out, value.mimeType) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeVarintU64(&out, value.size)
     }
 
-    public func readSkippedFile(_ c: inout Bincode.Cursor) throws -> SkippedFile {
+    public func readSkippedFile(_ c: inout Bincode.Cursor) throws -> DragAndDrop.SkippedFile {
         let displayName = try Bincode.readString(&c)
         let reason = try self.readSkipReason(&c)
-        return SkippedFile(displayName: displayName, reason: reason)
+        return DragAndDrop.SkippedFile(displayName: displayName, reason: reason)
     }
 
-    public func writeSkippedFile(_ out: inout Data, _ value: SkippedFile) {
+    public func writeSkippedFile(_ out: inout Data, _ value: DragAndDrop.SkippedFile) {
         Bincode.writeString(&out, value.displayName)
         self.writeSkipReason(&out, value.reason)
     }
 
-    public func readSkipReason(_ c: inout Bincode.Cursor) throws -> SkipReason {
+    public func readSkipReason(_ c: inout Bincode.Cursor) throws -> DragAndDrop.SkipReason {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = SkipReason(rawValue: disc) else {
+        guard let value = DragAndDrop.SkipReason(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeSkipReason(_ out: inout Data, _ value: SkipReason) {
+    public func writeSkipReason(_ out: inout Data, _ value: DragAndDrop.SkipReason) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readDragState(_ c: inout Bincode.Cursor) throws -> DragState {
+    public func readDragState(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragState {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .idle
@@ -107,7 +107,7 @@ public final class DragAndDropCodecsImpl: DragAndDropCodecs {
         }
     }
 
-    public func writeDragState(_ out: inout Data, _ value: DragState) {
+    public func writeDragState(_ out: inout Data, _ value: DragAndDrop.DragState) {
         switch value {
         case .idle:
             Bincode.writeVarintU32(&out, 0)
@@ -120,31 +120,31 @@ public final class DragAndDropCodecsImpl: DragAndDropCodecs {
         }
     }
 
-    public func readDragOver(_ c: inout Bincode.Cursor) throws -> DragOver {
+    public func readDragOver(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragOver {
         let count = try Bincode.readVarintU32(&c)
         let position = try Bincode.readOption(&c) { c1 in try self.readDropPoint(&c1) }
         let windowId = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
-        return DragOver(count: count, position: position, windowId: windowId)
+        return DragAndDrop.DragOver(count: count, position: position, windowId: windowId)
     }
 
-    public func writeDragOver(_ out: inout Data, _ value: DragOver) {
+    public func writeDragOver(_ out: inout Data, _ value: DragAndDrop.DragOver) {
         Bincode.writeVarintU32(&out, value.count)
         Bincode.writeOption(&out, value.position) { o1, v1 in self.writeDropPoint(&o1, v1) }
         Bincode.writeOption(&out, value.windowId) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
     }
 
-    public func readDropPoint(_ c: inout Bincode.Cursor) throws -> DropPoint {
+    public func readDropPoint(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DropPoint {
         let x = try Bincode.readF32(&c)
         let y = try Bincode.readF32(&c)
-        return DropPoint(x: x, y: y)
+        return DragAndDrop.DropPoint(x: x, y: y)
     }
 
-    public func writeDropPoint(_ out: inout Data, _ value: DropPoint) {
+    public func writeDropPoint(_ out: inout Data, _ value: DragAndDrop.DropPoint) {
         Bincode.writeF32(&out, value.x)
         Bincode.writeF32(&out, value.y)
     }
 
-    public func readDragItem(_ c: inout Bincode.Cursor) throws -> DragItem {
+    public func readDragItem(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragItem {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .text(try Bincode.readString(&c))
@@ -154,7 +154,7 @@ public final class DragAndDropCodecsImpl: DragAndDropCodecs {
         }
     }
 
-    public func writeDragItem(_ out: inout Data, _ value: DragItem) {
+    public func writeDragItem(_ out: inout Data, _ value: DragAndDrop.DragItem) {
         switch value {
         case .text(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -168,52 +168,52 @@ public final class DragAndDropCodecsImpl: DragAndDropCodecs {
         }
     }
 
-    public func readDragFile(_ c: inout Bincode.Cursor) throws -> DragFile {
+    public func readDragFile(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragFile {
         let path = try Bincode.readString(&c)
         let mimeType = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
-        return DragFile(path: path, mimeType: mimeType)
+        return DragAndDrop.DragFile(path: path, mimeType: mimeType)
     }
 
-    public func writeDragFile(_ out: inout Data, _ value: DragFile) {
+    public func writeDragFile(_ out: inout Data, _ value: DragAndDrop.DragFile) {
         Bincode.writeString(&out, value.path)
         Bincode.writeOption(&out, value.mimeType) { o1, v1 in Bincode.writeString(&o1, v1) }
     }
 
-    public func readDragImage(_ c: inout Bincode.Cursor) throws -> DragImage {
+    public func readDragImage(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragImage {
         let png = try Bincode.readData(&c)
         let width = try Bincode.readVarintU32(&c)
         let height = try Bincode.readVarintU32(&c)
-        return DragImage(png: png, width: width, height: height)
+        return DragAndDrop.DragImage(png: png, width: width, height: height)
     }
 
-    public func writeDragImage(_ out: inout Data, _ value: DragImage) {
+    public func writeDragImage(_ out: inout Data, _ value: DragAndDrop.DragImage) {
         Bincode.writeData(&out, value.png)
         Bincode.writeVarintU32(&out, value.width)
         Bincode.writeVarintU32(&out, value.height)
     }
 
-    public func readDragRequest(_ c: inout Bincode.Cursor) throws -> DragRequest {
+    public func readDragRequest(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragRequest {
         let items = try Bincode.readVec(&c) { c1 in try self.readDragItem(&c1) }
         let preview = try Bincode.readOption(&c) { c1 in try self.readDragImage(&c1) }
         let windowId = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
-        return DragRequest(items: items, preview: preview, windowId: windowId)
+        return DragAndDrop.DragRequest(items: items, preview: preview, windowId: windowId)
     }
 
-    public func writeDragRequest(_ out: inout Data, _ value: DragRequest) {
+    public func writeDragRequest(_ out: inout Data, _ value: DragAndDrop.DragRequest) {
         Bincode.writeVec(&out, value.items) { o1, v1 in self.writeDragItem(&o1, v1) }
         Bincode.writeOption(&out, value.preview) { o1, v1 in self.writeDragImage(&o1, v1) }
         Bincode.writeOption(&out, value.windowId) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
     }
 
-    public func readDragResult(_ c: inout Bincode.Cursor) throws -> DragResult {
+    public func readDragResult(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragResult {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = DragResult(rawValue: disc) else {
+        guard let value = DragAndDrop.DragResult(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeDragResult(_ out: inout Data, _ value: DragResult) {
+    public func writeDragResult(_ out: inout Data, _ value: DragAndDrop.DragResult) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 }

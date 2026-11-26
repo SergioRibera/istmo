@@ -4,314 +4,319 @@
 import Foundation
 import IstmoRuntime
 
-public struct CameraInitConfig: Sendable {
-    public let framePoolDepth: UInt32
+/// The `Camera` plugin's message types.
+public enum Camera {}
 
-    public init(framePoolDepth: UInt32) {
-        self.framePoolDepth = framePoolDepth
+extension Camera {
+    public struct CameraInitConfig: Sendable {
+        public let framePoolDepth: UInt32
+
+        public init(framePoolDepth: UInt32) {
+            self.framePoolDepth = framePoolDepth
+        }
     }
-}
 
-public enum CameraFacing: UInt32, Sendable {
-    case front = 0
-    case back = 1
-    case external = 2
-    case unknown = 3
-}
-
-public enum LensKind: UInt32, Sendable {
-    case wide = 0
-    case ultraWide = 1
-    case telephoto = 2
-    case macro = 3
-    case trueDepth = 4
-    case lidar = 5
-    case logical = 6
-    case unknown = 7
-}
-
-public struct Resolution: Sendable {
-    public let width: UInt32
-    public let height: UInt32
-
-    public init(width: UInt32, height: UInt32) {
-        self.width = width
-        self.height = height
+    public enum CameraFacing: UInt32, Sendable {
+        case front = 0
+        case back = 1
+        case external = 2
+        case unknown = 3
     }
-}
 
-public struct SupportedFormat: Sendable {
-    public let resolution: Resolution
-    public let pixelFormat: PixelFormat
-    public let minFps: UInt32
-    public let maxFps: UInt32
-
-    public init(resolution: Resolution, pixelFormat: PixelFormat, minFps: UInt32, maxFps: UInt32) {
-        self.resolution = resolution
-        self.pixelFormat = pixelFormat
-        self.minFps = minFps
-        self.maxFps = maxFps
+    public enum LensKind: UInt32, Sendable {
+        case wide = 0
+        case ultraWide = 1
+        case telephoto = 2
+        case macro = 3
+        case trueDepth = 4
+        case lidar = 5
+        case logical = 6
+        case unknown = 7
     }
-}
 
-public struct CameraCapabilities: Sendable {
-    public let minZoom: Float
-    public let maxZoom: Float
-    public let opticalZoomSteps: [Float]
-    public let focalLengthsMm: [Float]
-    public let supportsFlash: Bool
-    public let supportsTorch: Bool
-    public let supportsAutofocus: Bool
-    public let supportsManualFocus: Bool
-    public let supportsOis: Bool
-    public let supportsEis: Bool
-    public let supportsHdr: Bool
-    public let supportsDepth: Bool
-    public let supportsRaw: Bool
-    public let maxStillResolution: Resolution
+    public struct Resolution: Sendable {
+        public let width: UInt32
+        public let height: UInt32
 
-    public init(minZoom: Float, maxZoom: Float, opticalZoomSteps: [Float], focalLengthsMm: [Float], supportsFlash: Bool, supportsTorch: Bool, supportsAutofocus: Bool, supportsManualFocus: Bool, supportsOis: Bool, supportsEis: Bool, supportsHdr: Bool, supportsDepth: Bool, supportsRaw: Bool, maxStillResolution: Resolution) {
-        self.minZoom = minZoom
-        self.maxZoom = maxZoom
-        self.opticalZoomSteps = opticalZoomSteps
-        self.focalLengthsMm = focalLengthsMm
-        self.supportsFlash = supportsFlash
-        self.supportsTorch = supportsTorch
-        self.supportsAutofocus = supportsAutofocus
-        self.supportsManualFocus = supportsManualFocus
-        self.supportsOis = supportsOis
-        self.supportsEis = supportsEis
-        self.supportsHdr = supportsHdr
-        self.supportsDepth = supportsDepth
-        self.supportsRaw = supportsRaw
-        self.maxStillResolution = maxStillResolution
+        public init(width: UInt32, height: UInt32) {
+            self.width = width
+            self.height = height
+        }
     }
-}
 
-public struct CameraDevice: Sendable {
-    public let id: String
-    public let label: String
-    public let facing: CameraFacing
-    public let lens: LensKind
-    public let physicalSensors: [String]
-    public let capabilities: CameraCapabilities
-    public let supportedFormats: [SupportedFormat]
+    public struct SupportedFormat: Sendable {
+        public let resolution: Resolution
+        public let pixelFormat: PixelFormat
+        public let minFps: UInt32
+        public let maxFps: UInt32
 
-    public init(id: String, label: String, facing: CameraFacing, lens: LensKind, physicalSensors: [String], capabilities: CameraCapabilities, supportedFormats: [SupportedFormat]) {
-        self.id = id
-        self.label = label
-        self.facing = facing
-        self.lens = lens
-        self.physicalSensors = physicalSensors
-        self.capabilities = capabilities
-        self.supportedFormats = supportedFormats
+        public init(resolution: Resolution, pixelFormat: PixelFormat, minFps: UInt32, maxFps: UInt32) {
+            self.resolution = resolution
+            self.pixelFormat = pixelFormat
+            self.minFps = minFps
+            self.maxFps = maxFps
+        }
     }
-}
 
-public struct ConcurrentPair: Sendable {
-    public let primary: String
-    public let secondary: String
+    public struct CameraCapabilities: Sendable {
+        public let minZoom: Float
+        public let maxZoom: Float
+        public let opticalZoomSteps: [Float]
+        public let focalLengthsMm: [Float]
+        public let supportsFlash: Bool
+        public let supportsTorch: Bool
+        public let supportsAutofocus: Bool
+        public let supportsManualFocus: Bool
+        public let supportsOis: Bool
+        public let supportsEis: Bool
+        public let supportsHdr: Bool
+        public let supportsDepth: Bool
+        public let supportsRaw: Bool
+        public let maxStillResolution: Resolution
 
-    public init(primary: String, secondary: String) {
-        self.primary = primary
-        self.secondary = secondary
+        public init(minZoom: Float, maxZoom: Float, opticalZoomSteps: [Float], focalLengthsMm: [Float], supportsFlash: Bool, supportsTorch: Bool, supportsAutofocus: Bool, supportsManualFocus: Bool, supportsOis: Bool, supportsEis: Bool, supportsHdr: Bool, supportsDepth: Bool, supportsRaw: Bool, maxStillResolution: Resolution) {
+            self.minZoom = minZoom
+            self.maxZoom = maxZoom
+            self.opticalZoomSteps = opticalZoomSteps
+            self.focalLengthsMm = focalLengthsMm
+            self.supportsFlash = supportsFlash
+            self.supportsTorch = supportsTorch
+            self.supportsAutofocus = supportsAutofocus
+            self.supportsManualFocus = supportsManualFocus
+            self.supportsOis = supportsOis
+            self.supportsEis = supportsEis
+            self.supportsHdr = supportsHdr
+            self.supportsDepth = supportsDepth
+            self.supportsRaw = supportsRaw
+            self.maxStillResolution = maxStillResolution
+        }
     }
-}
 
-public struct ConcurrentSupport: Sendable {
-    public let maxConcurrent: UInt32
-    public let approvedPairs: [ConcurrentPair]
-    public let anyCombination: Bool
+    public struct CameraDevice: Sendable {
+        public let id: String
+        public let label: String
+        public let facing: CameraFacing
+        public let lens: LensKind
+        public let physicalSensors: [String]
+        public let capabilities: CameraCapabilities
+        public let supportedFormats: [SupportedFormat]
 
-    public init(maxConcurrent: UInt32, approvedPairs: [ConcurrentPair], anyCombination: Bool) {
-        self.maxConcurrent = maxConcurrent
-        self.approvedPairs = approvedPairs
-        self.anyCombination = anyCombination
+        public init(id: String, label: String, facing: CameraFacing, lens: LensKind, physicalSensors: [String], capabilities: CameraCapabilities, supportedFormats: [SupportedFormat]) {
+            self.id = id
+            self.label = label
+            self.facing = facing
+            self.lens = lens
+            self.physicalSensors = physicalSensors
+            self.capabilities = capabilities
+            self.supportedFormats = supportedFormats
+        }
     }
-}
 
-public enum PixelFormat: Sendable {
-    case nv21
-    case yuv420
-    case bgra8
-    case rgba8
-    case jpeg(UInt8)
-}
+    public struct ConcurrentPair: Sendable {
+        public let primary: String
+        public let secondary: String
 
-public struct SessionConfig: Sendable {
-    public let deviceId: String
-    public let pixelFormat: PixelFormat
-    public let resolution: Resolution?
-    public let targetFps: UInt32?
-    public let emitFrames: Bool
-    public let initialControls: CameraControls
-
-    public init(deviceId: String, pixelFormat: PixelFormat, resolution: Resolution?, targetFps: UInt32?, emitFrames: Bool, initialControls: CameraControls) {
-        self.deviceId = deviceId
-        self.pixelFormat = pixelFormat
-        self.resolution = resolution
-        self.targetFps = targetFps
-        self.emitFrames = emitFrames
-        self.initialControls = initialControls
+        public init(primary: String, secondary: String) {
+            self.primary = primary
+            self.secondary = secondary
+        }
     }
-}
 
-public struct NegotiatedFormat: Sendable {
-    public let resolution: Resolution
-    public let pixelFormat: PixelFormat
-    public let fps: UInt32
-    public let rotationDegrees: UInt16
+    public struct ConcurrentSupport: Sendable {
+        public let maxConcurrent: UInt32
+        public let approvedPairs: [ConcurrentPair]
+        public let anyCombination: Bool
 
-    public init(resolution: Resolution, pixelFormat: PixelFormat, fps: UInt32, rotationDegrees: UInt16) {
-        self.resolution = resolution
-        self.pixelFormat = pixelFormat
-        self.fps = fps
-        self.rotationDegrees = rotationDegrees
+        public init(maxConcurrent: UInt32, approvedPairs: [ConcurrentPair], anyCombination: Bool) {
+            self.maxConcurrent = maxConcurrent
+            self.approvedPairs = approvedPairs
+            self.anyCombination = anyCombination
+        }
     }
-}
 
-public struct CameraSession: Sendable {
-    public let session: NativeHandleId
-    public let negotiated: NegotiatedFormat
-
-    public init(session: NativeHandleId, negotiated: NegotiatedFormat) {
-        self.session = session
-        self.negotiated = negotiated
+    public enum PixelFormat: Sendable {
+        case nv21
+        case yuv420
+        case bgra8
+        case rgba8
+        case jpeg(UInt8)
     }
-}
 
-public struct FramePlane: Sendable {
-    public let offset: UInt32
-    public let rowStride: UInt32
-    public let pixelStride: UInt32
-    public let width: UInt32
-    public let height: UInt32
+    public struct SessionConfig: Sendable {
+        public let deviceId: String
+        public let pixelFormat: PixelFormat
+        public let resolution: Resolution?
+        public let targetFps: UInt32?
+        public let emitFrames: Bool
+        public let initialControls: CameraControls
 
-    public init(offset: UInt32, rowStride: UInt32, pixelStride: UInt32, width: UInt32, height: UInt32) {
-        self.offset = offset
-        self.rowStride = rowStride
-        self.pixelStride = pixelStride
-        self.width = width
-        self.height = height
+        public init(deviceId: String, pixelFormat: PixelFormat, resolution: Resolution?, targetFps: UInt32?, emitFrames: Bool, initialControls: CameraControls) {
+            self.deviceId = deviceId
+            self.pixelFormat = pixelFormat
+            self.resolution = resolution
+            self.targetFps = targetFps
+            self.emitFrames = emitFrames
+            self.initialControls = initialControls
+        }
     }
-}
 
-public struct CameraFrame: Sendable {
-    public let seq: UInt64
-    public let timestampNs: UInt64
-    public let resolution: Resolution
-    public let rotationDegrees: UInt16
-    public let pixelFormat: PixelFormat
-    public let planes: [FramePlane]
-    public let bytes: Data
-    public let droppedBefore: UInt32
+    public struct NegotiatedFormat: Sendable {
+        public let resolution: Resolution
+        public let pixelFormat: PixelFormat
+        public let fps: UInt32
+        public let rotationDegrees: UInt16
 
-    public init(seq: UInt64, timestampNs: UInt64, resolution: Resolution, rotationDegrees: UInt16, pixelFormat: PixelFormat, planes: [FramePlane], bytes: Data, droppedBefore: UInt32) {
-        self.seq = seq
-        self.timestampNs = timestampNs
-        self.resolution = resolution
-        self.rotationDegrees = rotationDegrees
-        self.pixelFormat = pixelFormat
-        self.planes = planes
-        self.bytes = bytes
-        self.droppedBefore = droppedBefore
+        public init(resolution: Resolution, pixelFormat: PixelFormat, fps: UInt32, rotationDegrees: UInt16) {
+            self.resolution = resolution
+            self.pixelFormat = pixelFormat
+            self.fps = fps
+            self.rotationDegrees = rotationDegrees
+        }
     }
-}
 
-public enum FocusMode: Sendable {
-    case auto
-    case continuousVideo
-    case continuousPicture
-    case fixed
-    case manual(Float)
-}
+    public struct CameraSession: Sendable {
+        public let session: NativeHandleId
+        public let negotiated: NegotiatedFormat
 
-public enum WhiteBalanceMode: UInt32, Sendable {
-    case auto = 0
-    case daylight = 1
-    case cloudy = 2
-    case incandescent = 3
-    case fluorescent = 4
-    case shade = 5
-    case twilight = 6
-}
-
-public enum FlashMode: UInt32, Sendable {
-    case off = 0
-    case on = 1
-    case auto = 2
-}
-
-public struct CameraControls: Sendable {
-    public let zoom: Float?
-    public let torch: Bool?
-    public let focus: FocusMode?
-    public let exposureCompensationEv: Float?
-    public let whiteBalance: WhiteBalanceMode?
-    public let flash: FlashMode?
-
-    public init(zoom: Float?, torch: Bool?, focus: FocusMode?, exposureCompensationEv: Float?, whiteBalance: WhiteBalanceMode?, flash: FlashMode?) {
-        self.zoom = zoom
-        self.torch = torch
-        self.focus = focus
-        self.exposureCompensationEv = exposureCompensationEv
-        self.whiteBalance = whiteBalance
-        self.flash = flash
+        public init(session: NativeHandleId, negotiated: NegotiatedFormat) {
+            self.session = session
+            self.negotiated = negotiated
+        }
     }
-}
 
-public struct AppliedControls: Sendable {
-    public let zoom: Float
-    public let torch: Bool
-    public let focus: FocusMode
-    public let exposureCompensationEv: Float
-    public let whiteBalance: WhiteBalanceMode
-    public let flash: FlashMode
+    public struct FramePlane: Sendable {
+        public let offset: UInt32
+        public let rowStride: UInt32
+        public let pixelStride: UInt32
+        public let width: UInt32
+        public let height: UInt32
 
-    public init(zoom: Float, torch: Bool, focus: FocusMode, exposureCompensationEv: Float, whiteBalance: WhiteBalanceMode, flash: FlashMode) {
-        self.zoom = zoom
-        self.torch = torch
-        self.focus = focus
-        self.exposureCompensationEv = exposureCompensationEv
-        self.whiteBalance = whiteBalance
-        self.flash = flash
+        public init(offset: UInt32, rowStride: UInt32, pixelStride: UInt32, width: UInt32, height: UInt32) {
+            self.offset = offset
+            self.rowStride = rowStride
+            self.pixelStride = pixelStride
+            self.width = width
+            self.height = height
+        }
     }
-}
 
-public struct StillCaptureRequest: Sendable {
-    public let pixelFormat: PixelFormat
-    public let resolution: Resolution?
-    public let flash: FlashMode
+    public struct CameraFrame: Sendable {
+        public let seq: UInt64
+        public let timestampNs: UInt64
+        public let resolution: Resolution
+        public let rotationDegrees: UInt16
+        public let pixelFormat: PixelFormat
+        public let planes: [FramePlane]
+        public let bytes: Data
+        public let droppedBefore: UInt32
 
-    public init(pixelFormat: PixelFormat, resolution: Resolution?, flash: FlashMode) {
-        self.pixelFormat = pixelFormat
-        self.resolution = resolution
-        self.flash = flash
+        public init(seq: UInt64, timestampNs: UInt64, resolution: Resolution, rotationDegrees: UInt16, pixelFormat: PixelFormat, planes: [FramePlane], bytes: Data, droppedBefore: UInt32) {
+            self.seq = seq
+            self.timestampNs = timestampNs
+            self.resolution = resolution
+            self.rotationDegrees = rotationDegrees
+            self.pixelFormat = pixelFormat
+            self.planes = planes
+            self.bytes = bytes
+            self.droppedBefore = droppedBefore
+        }
     }
-}
 
-public struct StillPhoto: Sendable {
-    public let resolution: Resolution
-    public let rotationDegrees: UInt16
-    public let pixelFormat: PixelFormat
-    public let bytes: Data
-    public let timestampNs: UInt64
-
-    public init(resolution: Resolution, rotationDegrees: UInt16, pixelFormat: PixelFormat, bytes: Data, timestampNs: UInt64) {
-        self.resolution = resolution
-        self.rotationDegrees = rotationDegrees
-        self.pixelFormat = pixelFormat
-        self.bytes = bytes
-        self.timestampNs = timestampNs
+    public enum FocusMode: Sendable {
+        case auto
+        case continuousVideo
+        case continuousPicture
+        case fixed
+        case manual(Float)
     }
-}
 
-public enum CameraError: Error {
-    case permissionDenied
-    case deviceNotFound(String)
-    case formatUnsupported
-    case concurrencyUnsupported
-    case sessionClosed
-    case interrupted
-    case backend(String)
+    public enum WhiteBalanceMode: UInt32, Sendable {
+        case auto = 0
+        case daylight = 1
+        case cloudy = 2
+        case incandescent = 3
+        case fluorescent = 4
+        case shade = 5
+        case twilight = 6
+    }
+
+    public enum FlashMode: UInt32, Sendable {
+        case off = 0
+        case on = 1
+        case auto = 2
+    }
+
+    public struct CameraControls: Sendable {
+        public let zoom: Float?
+        public let torch: Bool?
+        public let focus: FocusMode?
+        public let exposureCompensationEv: Float?
+        public let whiteBalance: WhiteBalanceMode?
+        public let flash: FlashMode?
+
+        public init(zoom: Float?, torch: Bool?, focus: FocusMode?, exposureCompensationEv: Float?, whiteBalance: WhiteBalanceMode?, flash: FlashMode?) {
+            self.zoom = zoom
+            self.torch = torch
+            self.focus = focus
+            self.exposureCompensationEv = exposureCompensationEv
+            self.whiteBalance = whiteBalance
+            self.flash = flash
+        }
+    }
+
+    public struct AppliedControls: Sendable {
+        public let zoom: Float
+        public let torch: Bool
+        public let focus: FocusMode
+        public let exposureCompensationEv: Float
+        public let whiteBalance: WhiteBalanceMode
+        public let flash: FlashMode
+
+        public init(zoom: Float, torch: Bool, focus: FocusMode, exposureCompensationEv: Float, whiteBalance: WhiteBalanceMode, flash: FlashMode) {
+            self.zoom = zoom
+            self.torch = torch
+            self.focus = focus
+            self.exposureCompensationEv = exposureCompensationEv
+            self.whiteBalance = whiteBalance
+            self.flash = flash
+        }
+    }
+
+    public struct StillCaptureRequest: Sendable {
+        public let pixelFormat: PixelFormat
+        public let resolution: Resolution?
+        public let flash: FlashMode
+
+        public init(pixelFormat: PixelFormat, resolution: Resolution?, flash: FlashMode) {
+            self.pixelFormat = pixelFormat
+            self.resolution = resolution
+            self.flash = flash
+        }
+    }
+
+    public struct StillPhoto: Sendable {
+        public let resolution: Resolution
+        public let rotationDegrees: UInt16
+        public let pixelFormat: PixelFormat
+        public let bytes: Data
+        public let timestampNs: UInt64
+
+        public init(resolution: Resolution, rotationDegrees: UInt16, pixelFormat: PixelFormat, bytes: Data, timestampNs: UInt64) {
+            self.resolution = resolution
+            self.rotationDegrees = rotationDegrees
+            self.pixelFormat = pixelFormat
+            self.bytes = bytes
+            self.timestampNs = timestampNs
+        }
+    }
+
+    public enum CameraError: Error {
+        case permissionDenied
+        case deviceNotFound(String)
+        case formatUnsupported
+        case concurrencyUnsupported
+        case sessionClosed
+        case interrupted
+        case backend(String)
+    }
 }

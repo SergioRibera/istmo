@@ -8,14 +8,14 @@ import IstmoRuntime
 /// User provides one impl; each entry typically delegates to a
 /// helper on the type itself.
 public protocol WatchCodecs {
-    func readAccuracy(_ c: inout Bincode.Cursor) throws -> Accuracy
-    func writeAccuracy(_ out: inout Data, _ value: Accuracy)
-    func readPosition(_ c: inout Bincode.Cursor) throws -> Position
-    func writePosition(_ out: inout Data, _ value: Position)
-    func readWatchConfig(_ c: inout Bincode.Cursor) throws -> WatchConfig
-    func writeWatchConfig(_ out: inout Data, _ value: WatchConfig)
-    func readWatchError(_ c: inout Bincode.Cursor) throws -> WatchError
-    func writeWatchError(_ out: inout Data, _ value: WatchError)
+    func readAccuracy(_ c: inout Bincode.Cursor) throws -> Watch.Accuracy
+    func writeAccuracy(_ out: inout Data, _ value: Watch.Accuracy)
+    func readPosition(_ c: inout Bincode.Cursor) throws -> Watch.Position
+    func writePosition(_ out: inout Data, _ value: Watch.Position)
+    func readWatchConfig(_ c: inout Bincode.Cursor) throws -> Watch.WatchConfig
+    func writeWatchConfig(_ out: inout Data, _ value: Watch.WatchConfig)
+    func readWatchError(_ c: inout Bincode.Cursor) throws -> Watch.WatchError
+    func writeWatchError(_ out: inout Data, _ value: Watch.WatchError)
 }
 
 /// Rust-hosted `Watch` plugin. Ships each call across the frame
@@ -29,7 +29,7 @@ public final class WatchClient {
         self.codecs = codecs
     }
 
-    public func watchLocation(accuracy: Accuracy) -> AsyncThrowingStream<Position, Error> {
+    public func watchLocation(accuracy: Watch.Accuracy) -> AsyncThrowingStream<Watch.Position, Error> {
         let codecs = self.codecs
         var payload = Data()
         codecs.writeAccuracy(&payload, accuracy)
@@ -40,7 +40,7 @@ public final class WatchClient {
                 next = try await events.next()
             } catch IstmoRuntimeError.streamError(let errPayload) {
                 var errCursor = Bincode.Cursor(errPayload)
-                let decoded: WatchError? = try? codecs.readWatchError(&errCursor)
+                let decoded: Watch.WatchError? = try? codecs.readWatchError(&errCursor)
                 throw WatchException(payload: errPayload, decoded: decoded)
             }
             guard let bytes = next else { return nil }
@@ -49,7 +49,7 @@ public final class WatchClient {
         })
     }
 
-    public func history(since: UInt64?) async throws -> [Position] {
+    public func history(since: UInt64?) async throws -> [Watch.Position] {
         var payload = Data()
         Bincode.writeOption(&payload, since) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
         let bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "history", payload: payload)
@@ -69,5 +69,5 @@ public final class WatchClient {
 /// Swift-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.
 public struct WatchException: Error {
     public let payload: Data
-    public let decoded: WatchError?
+    public let decoded: Watch.WatchError?
 }

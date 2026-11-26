@@ -8,19 +8,19 @@ import IstmoRuntime
 /// impl with the SDK-specific logic; the dispatcher below handles
 /// wire encode/decode.
 public protocol AdMobBackend: AnyObject {
-    /// Throw `AdError` to surface a typed domain error.
+    /// Throw `AdMob.AdError` to surface a typed domain error.
     func load_interstitial(ad_unit_id: String) async throws -> NativeHandleId
-    /// Throw `AdError` to surface a typed domain error.
-    func show_interstitial(ad: NativeHandleId) async throws -> InterstitialOutcome
-    /// Throw `AdError` to surface a typed domain error.
+    /// Throw `AdMob.AdError` to surface a typed domain error.
+    func show_interstitial(ad: NativeHandleId) async throws -> AdMob.InterstitialOutcome
+    /// Throw `AdMob.AdError` to surface a typed domain error.
     func load_rewarded(ad_unit_id: String) async throws -> NativeHandleId
-    /// Throw `AdError` to surface a typed domain error.
-    func show_rewarded(ad: NativeHandleId) async throws -> RewardedOutcome
-    /// Throw `AdError` to surface a typed domain error.
-    func show_banner(request: BannerRequest) async throws -> NativeHandleId
-    /// Throw `AdError` to surface a typed domain error.
-    func update_banner(banner: NativeHandleId, rect: BannerRect) async throws -> Void
-    /// Throw `AdError` to surface a typed domain error.
+    /// Throw `AdMob.AdError` to surface a typed domain error.
+    func show_rewarded(ad: NativeHandleId) async throws -> AdMob.RewardedOutcome
+    /// Throw `AdMob.AdError` to surface a typed domain error.
+    func show_banner(request: AdMob.BannerRequest) async throws -> NativeHandleId
+    /// Throw `AdMob.AdError` to surface a typed domain error.
+    func update_banner(banner: NativeHandleId, rect: AdMob.BannerRect) async throws -> Void
+    /// Throw `AdMob.AdError` to surface a typed domain error.
     func hide_banner(banner: NativeHandleId) async throws -> Void
 }
 
@@ -28,26 +28,26 @@ public protocol AdMobBackend: AnyObject {
 /// User provides one impl; each entry typically delegates to a
 /// helper on the type itself.
 public protocol AdMobCodecs {
-    func readAdError(_ c: inout Bincode.Cursor) throws -> AdError
-    func writeAdError(_ out: inout Data, _ value: AdError)
-    func readAdMobConfig(_ c: inout Bincode.Cursor) throws -> AdMobConfig
-    func writeAdMobConfig(_ out: inout Data, _ value: AdMobConfig)
-    func readBannerRect(_ c: inout Bincode.Cursor) throws -> BannerRect
-    func writeBannerRect(_ out: inout Data, _ value: BannerRect)
-    func readBannerRequest(_ c: inout Bincode.Cursor) throws -> BannerRequest
-    func writeBannerRequest(_ out: inout Data, _ value: BannerRequest)
-    func readInterstitialOutcome(_ c: inout Bincode.Cursor) throws -> InterstitialOutcome
-    func writeInterstitialOutcome(_ out: inout Data, _ value: InterstitialOutcome)
+    func readAdError(_ c: inout Bincode.Cursor) throws -> AdMob.AdError
+    func writeAdError(_ out: inout Data, _ value: AdMob.AdError)
+    func readAdMobConfig(_ c: inout Bincode.Cursor) throws -> AdMob.AdMobConfig
+    func writeAdMobConfig(_ out: inout Data, _ value: AdMob.AdMobConfig)
+    func readBannerRect(_ c: inout Bincode.Cursor) throws -> AdMob.BannerRect
+    func writeBannerRect(_ out: inout Data, _ value: AdMob.BannerRect)
+    func readBannerRequest(_ c: inout Bincode.Cursor) throws -> AdMob.BannerRequest
+    func writeBannerRequest(_ out: inout Data, _ value: AdMob.BannerRequest)
+    func readInterstitialOutcome(_ c: inout Bincode.Cursor) throws -> AdMob.InterstitialOutcome
+    func writeInterstitialOutcome(_ out: inout Data, _ value: AdMob.InterstitialOutcome)
     func readNativeHandleId(_ c: inout Bincode.Cursor) throws -> NativeHandleId
     func writeNativeHandleId(_ out: inout Data, _ value: NativeHandleId)
-    func readRewardedOutcome(_ c: inout Bincode.Cursor) throws -> RewardedOutcome
-    func writeRewardedOutcome(_ out: inout Data, _ value: RewardedOutcome)
+    func readRewardedOutcome(_ c: inout Bincode.Cursor) throws -> AdMob.RewardedOutcome
+    func writeRewardedOutcome(_ out: inout Data, _ value: AdMob.RewardedOutcome)
 }
 
 /// Decodes wire calls, invokes `AdMobBackend`, encodes the response.
 /// Register with `IstmoRuntime.shared.registerHandler(PLUGIN_ID, dispatcher)`.
 public protocol AdMobFactory {
-    func create(config: AdMobConfig) async throws -> AdMobBackend
+    func create(config: AdMob.AdMobConfig) async throws -> AdMobBackend
 }
 
 public final class AdMobDispatcher: PluginHandler, HandleReleaser {
@@ -109,7 +109,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 var out = Data()
                 codecs.writeNativeHandleId(&out, result)
                 return .unary(out)
-            } catch let err as AdError {
+            } catch let err as AdMob.AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -122,7 +122,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 var out = Data()
                 codecs.writeInterstitialOutcome(&out, result)
                 return .unary(out)
-            } catch let err as AdError {
+            } catch let err as AdMob.AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -135,7 +135,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 var out = Data()
                 codecs.writeNativeHandleId(&out, result)
                 return .unary(out)
-            } catch let err as AdError {
+            } catch let err as AdMob.AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -148,7 +148,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 var out = Data()
                 codecs.writeRewardedOutcome(&out, result)
                 return .unary(out)
-            } catch let err as AdError {
+            } catch let err as AdMob.AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -161,7 +161,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 var out = Data()
                 codecs.writeNativeHandleId(&out, result)
                 return .unary(out)
-            } catch let err as AdError {
+            } catch let err as AdMob.AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -173,7 +173,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 let rect = try codecs.readBannerRect(&c)
                 try await backend.update_banner(banner: banner, rect: rect)
                 return .unary(Data())
-            } catch let err as AdError {
+            } catch let err as AdMob.AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -184,7 +184,7 @@ public final class AdMobDispatcher: PluginHandler, HandleReleaser {
                 let banner = try codecs.readNativeHandleId(&c)
                 try await backend.hide_banner(banner: banner)
                 return .unary(Data())
-            } catch let err as AdError {
+            } catch let err as AdMob.AdError {
                 var errOut = Data()
                 codecs.writeAdError(&errOut, err)
                 throw PluginException(payload: errOut)

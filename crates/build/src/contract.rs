@@ -213,28 +213,4 @@ impl TypeRef {
             Self::FrameSink(meta) => format!("IstmoFrameSender<{}>", meta.to_kotlin()),
         }
     }
-
-    #[must_use]
-    pub fn to_swift(&self) -> String {
-        match self {
-            Self::Unit => "Void".to_owned(),
-            Self::Bool => "Bool".to_owned(),
-            Self::U8 => "UInt8".to_owned(),
-            Self::I8 => "Int8".to_owned(),
-            Self::U16 => "UInt16".to_owned(),
-            Self::I16 => "Int16".to_owned(),
-            Self::U32 => "UInt32".to_owned(),
-            Self::I32 => "Int32".to_owned(),
-            Self::U64 => "UInt64".to_owned(),
-            Self::I64 => "Int64".to_owned(),
-            Self::F32 => "Float".to_owned(),
-            Self::F64 => "Double".to_owned(),
-            Self::String => "String".to_owned(),
-            Self::Bytes => "Data".to_owned(),
-            Self::Vec(inner) => format!("[{}]", inner.to_swift()),
-            Self::Option(inner) => format!("{}?", inner.to_swift()),
-            Self::Named(name) => name.clone(),
-            Self::FrameSink(meta) => format!("IstmoFrameSender<{}>", meta.to_swift()),
-        }
-    }
 }

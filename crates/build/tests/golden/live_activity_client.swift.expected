@@ -8,28 +8,28 @@ import IstmoRuntime
 /// User provides one impl; each entry typically delegates to a
 /// helper on the type itself.
 public protocol LiveActivityCodecs {
-    func readActivityError(_ c: inout Bincode.Cursor) throws -> ActivityError
-    func writeActivityError(_ out: inout Data, _ value: ActivityError)
-    func readActivityStyle(_ c: inout Bincode.Cursor) throws -> ActivityStyle
-    func writeActivityStyle(_ out: inout Data, _ value: ActivityStyle)
-    func readAlertConfig(_ c: inout Bincode.Cursor) throws -> AlertConfig
-    func writeAlertConfig(_ out: inout Data, _ value: AlertConfig)
-    func readAlertSound(_ c: inout Bincode.Cursor) throws -> AlertSound
-    func writeAlertSound(_ out: inout Data, _ value: AlertSound)
-    func readAndroidCapabilities(_ c: inout Bincode.Cursor) throws -> AndroidCapabilities
-    func writeAndroidCapabilities(_ out: inout Data, _ value: AndroidCapabilities)
-    func readAndroidTierHint(_ c: inout Bincode.Cursor) throws -> AndroidTierHint
-    func writeAndroidTierHint(_ out: inout Data, _ value: AndroidTierHint)
-    func readDismissalPolicy(_ c: inout Bincode.Cursor) throws -> DismissalPolicy
-    func writeDismissalPolicy(_ out: inout Data, _ value: DismissalPolicy)
-    func readIosCapabilities(_ c: inout Bincode.Cursor) throws -> IosCapabilities
-    func writeIosCapabilities(_ out: inout Data, _ value: IosCapabilities)
+    func readActivityError(_ c: inout Bincode.Cursor) throws -> LiveActivity.ActivityError
+    func writeActivityError(_ out: inout Data, _ value: LiveActivity.ActivityError)
+    func readActivityStyle(_ c: inout Bincode.Cursor) throws -> LiveActivity.ActivityStyle
+    func writeActivityStyle(_ out: inout Data, _ value: LiveActivity.ActivityStyle)
+    func readAlertConfig(_ c: inout Bincode.Cursor) throws -> LiveActivity.AlertConfig
+    func writeAlertConfig(_ out: inout Data, _ value: LiveActivity.AlertConfig)
+    func readAlertSound(_ c: inout Bincode.Cursor) throws -> LiveActivity.AlertSound
+    func writeAlertSound(_ out: inout Data, _ value: LiveActivity.AlertSound)
+    func readAndroidCapabilities(_ c: inout Bincode.Cursor) throws -> LiveActivity.AndroidCapabilities
+    func writeAndroidCapabilities(_ out: inout Data, _ value: LiveActivity.AndroidCapabilities)
+    func readAndroidTierHint(_ c: inout Bincode.Cursor) throws -> LiveActivity.AndroidTierHint
+    func writeAndroidTierHint(_ out: inout Data, _ value: LiveActivity.AndroidTierHint)
+    func readDismissalPolicy(_ c: inout Bincode.Cursor) throws -> LiveActivity.DismissalPolicy
+    func writeDismissalPolicy(_ out: inout Data, _ value: LiveActivity.DismissalPolicy)
+    func readIosCapabilities(_ c: inout Bincode.Cursor) throws -> LiveActivity.IosCapabilities
+    func writeIosCapabilities(_ out: inout Data, _ value: LiveActivity.IosCapabilities)
     func readNativeHandleId(_ c: inout Bincode.Cursor) throws -> NativeHandleId
     func writeNativeHandleId(_ out: inout Data, _ value: NativeHandleId)
-    func readPlatformCapabilities(_ c: inout Bincode.Cursor) throws -> PlatformCapabilities
-    func writePlatformCapabilities(_ out: inout Data, _ value: PlatformCapabilities)
-    func readRestoredActivity(_ c: inout Bincode.Cursor) throws -> RestoredActivity
-    func writeRestoredActivity(_ out: inout Data, _ value: RestoredActivity)
+    func readPlatformCapabilities(_ c: inout Bincode.Cursor) throws -> LiveActivity.PlatformCapabilities
+    func writePlatformCapabilities(_ out: inout Data, _ value: LiveActivity.PlatformCapabilities)
+    func readRestoredActivity(_ c: inout Bincode.Cursor) throws -> LiveActivity.RestoredActivity
+    func writeRestoredActivity(_ out: inout Data, _ value: LiveActivity.RestoredActivity)
 }
 
 /// Rust-hosted `LiveActivity` plugin. Ships each call across the frame
@@ -43,7 +43,7 @@ public final class LiveActivityClient {
         self.codecs = codecs
     }
 
-    public func start(activity_type: String, attributes: Data, initial_state: Data, style: ActivityStyle, stale_after_seconds: UInt32?, android_tier_hint: AndroidTierHint?) async throws -> NativeHandleId {
+    public func start(activity_type: String, attributes: Data, initial_state: Data, style: LiveActivity.ActivityStyle, stale_after_seconds: UInt32?, android_tier_hint: LiveActivity.AndroidTierHint?) async throws -> NativeHandleId {
         var payload = Data()
         Bincode.writeString(&payload, activity_type)
         Bincode.writeData(&payload, attributes)
@@ -56,14 +56,14 @@ public final class LiveActivityClient {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "start", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: ActivityError? = try? codecs.readActivityError(&errCursor)
+            let decoded: LiveActivity.ActivityError? = try? codecs.readActivityError(&errCursor)
             throw LiveActivityException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
         return try codecs.readNativeHandleId(&c)
     }
 
-    public func update(handle: NativeHandleId, state: Data, alert: AlertConfig?) async throws -> Void {
+    public func update(handle: NativeHandleId, state: Data, alert: LiveActivity.AlertConfig?) async throws -> Void {
         var payload = Data()
         codecs.writeNativeHandleId(&payload, handle)
         Bincode.writeData(&payload, state)
@@ -72,12 +72,12 @@ public final class LiveActivityClient {
             _ = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "update", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: ActivityError? = try? codecs.readActivityError(&errCursor)
+            let decoded: LiveActivity.ActivityError? = try? codecs.readActivityError(&errCursor)
             throw LiveActivityException(payload: e.payload, decoded: decoded)
         }
     }
 
-    public func end(handle: NativeHandleId, final_state: Data?, dismissal: DismissalPolicy) async throws -> Void {
+    public func end(handle: NativeHandleId, final_state: Data?, dismissal: LiveActivity.DismissalPolicy) async throws -> Void {
         var payload = Data()
         codecs.writeNativeHandleId(&payload, handle)
         Bincode.writeOption(&payload, final_state) { o1, v1 in Bincode.writeData(&o1, v1) }
@@ -86,7 +86,7 @@ public final class LiveActivityClient {
             _ = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "end", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: ActivityError? = try? codecs.readActivityError(&errCursor)
+            let decoded: LiveActivity.ActivityError? = try? codecs.readActivityError(&errCursor)
             throw LiveActivityException(payload: e.payload, decoded: decoded)
         }
     }
@@ -98,35 +98,35 @@ public final class LiveActivityClient {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "are_activities_enabled", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: ActivityError? = try? codecs.readActivityError(&errCursor)
+            let decoded: LiveActivity.ActivityError? = try? codecs.readActivityError(&errCursor)
             throw LiveActivityException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
         return try Bincode.readBool(&c)
     }
 
-    public func capabilities() async throws -> PlatformCapabilities {
+    public func capabilities() async throws -> LiveActivity.PlatformCapabilities {
         let payload = Data()
         let bytes: Data
         do {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "capabilities", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: ActivityError? = try? codecs.readActivityError(&errCursor)
+            let decoded: LiveActivity.ActivityError? = try? codecs.readActivityError(&errCursor)
             throw LiveActivityException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
         return try codecs.readPlatformCapabilities(&c)
     }
 
-    public func restore_active() async throws -> [RestoredActivity] {
+    public func restore_active() async throws -> [LiveActivity.RestoredActivity] {
         let payload = Data()
         let bytes: Data
         do {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "restore_active", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: ActivityError? = try? codecs.readActivityError(&errCursor)
+            let decoded: LiveActivity.ActivityError? = try? codecs.readActivityError(&errCursor)
             throw LiveActivityException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
@@ -137,5 +137,5 @@ public final class LiveActivityClient {
 /// Swift-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.
 public struct LiveActivityException: Error {
     public let payload: Data
-    public let decoded: ActivityError?
+    public let decoded: LiveActivity.ActivityError?
 }

@@ -3,113 +3,118 @@
 
 import Foundation
 
-public struct WebAuthCapabilities: Sendable {
-    public let backend: String
-    public let loopbackCallbacks: Bool
-    public let schemeCallbacks: Bool
-    public let httpsCallbacks: Bool
-    public let ephemeral: Bool
-    public let embedded: Bool
+/// The `WebAuth` plugin's message types.
+public enum WebAuth {}
 
-    public init(backend: String, loopbackCallbacks: Bool, schemeCallbacks: Bool, httpsCallbacks: Bool, ephemeral: Bool, embedded: Bool) {
-        self.backend = backend
-        self.loopbackCallbacks = loopbackCallbacks
-        self.schemeCallbacks = schemeCallbacks
-        self.httpsCallbacks = httpsCallbacks
-        self.ephemeral = ephemeral
-        self.embedded = embedded
+extension WebAuth {
+    public struct WebAuthCapabilities: Sendable {
+        public let backend: String
+        public let loopbackCallbacks: Bool
+        public let schemeCallbacks: Bool
+        public let httpsCallbacks: Bool
+        public let ephemeral: Bool
+        public let embedded: Bool
+
+        public init(backend: String, loopbackCallbacks: Bool, schemeCallbacks: Bool, httpsCallbacks: Bool, ephemeral: Bool, embedded: Bool) {
+            self.backend = backend
+            self.loopbackCallbacks = loopbackCallbacks
+            self.schemeCallbacks = schemeCallbacks
+            self.httpsCallbacks = httpsCallbacks
+            self.ephemeral = ephemeral
+            self.embedded = embedded
+        }
     }
-}
 
-public enum CallbackSpec: Sendable {
-    case loopback(LoopbackCallback)
-    case customScheme(SchemeCallback)
-    case https(HttpsCallback)
-}
-
-public struct LoopbackCallback: Sendable {
-    public let path: String
-
-    public init(path: String) {
-        self.path = path
+    public enum CallbackSpec: Sendable {
+        case loopback(LoopbackCallback)
+        case customScheme(SchemeCallback)
+        case https(HttpsCallback)
     }
-}
 
-public struct SchemeCallback: Sendable {
-    public let scheme: String
-    public let host: String
-    public let path: String
+    public struct LoopbackCallback: Sendable {
+        public let path: String
 
-    public init(scheme: String, host: String, path: String) {
-        self.scheme = scheme
-        self.host = host
-        self.path = path
+        public init(path: String) {
+            self.path = path
+        }
     }
-}
 
-public struct HttpsCallback: Sendable {
-    public let host: String
-    public let path: String
+    public struct SchemeCallback: Sendable {
+        public let scheme: String
+        public let host: String
+        public let path: String
 
-    public init(host: String, path: String) {
-        self.host = host
-        self.path = path
+        public init(scheme: String, host: String, path: String) {
+            self.scheme = scheme
+            self.host = host
+            self.path = path
+        }
     }
-}
 
-public struct PreparedRedirect: Sendable {
-    public let redirectUri: String
-    public let session: UInt64
+    public struct HttpsCallback: Sendable {
+        public let host: String
+        public let path: String
 
-    public init(redirectUri: String, session: UInt64) {
-        self.redirectUri = redirectUri
-        self.session = session
+        public init(host: String, path: String) {
+            self.host = host
+            self.path = path
+        }
     }
-}
 
-public enum AuthMode: UInt32, Sendable {
-    case system = 0
-    case embedded = 1
-}
+    public struct PreparedRedirect: Sendable {
+        public let redirectUri: String
+        public let session: UInt64
 
-public struct AuthRequest: Sendable {
-    public let session: UInt64
-    public let authorizeUrl: String
-    public let expectedState: String
-    public let mode: AuthMode
-    public let ephemeral: Bool
-    public let timeoutMs: UInt32
-
-    public init(session: UInt64, authorizeUrl: String, expectedState: String, mode: AuthMode, ephemeral: Bool, timeoutMs: UInt32) {
-        self.session = session
-        self.authorizeUrl = authorizeUrl
-        self.expectedState = expectedState
-        self.mode = mode
-        self.ephemeral = ephemeral
-        self.timeoutMs = timeoutMs
+        public init(redirectUri: String, session: UInt64) {
+            self.redirectUri = redirectUri
+            self.session = session
+        }
     }
-}
 
-public struct AuthCallback: Sendable {
-    public let url: String
-
-    public init(url: String) {
-        self.url = url
+    public enum AuthMode: UInt32, Sendable {
+        case system = 0
+        case embedded = 1
     }
-}
 
-public enum WebAuthError: Error {
-    case cancelled
-    case alreadyInProgress
-    case noBrowser
-    case presentationUnavailable
-    case callbackNotRegistered
-    case stateMismatch
-    case issuerMismatch
-    case missingCode
-    case timeout
-    case unknownSession
-    case unsupported(String)
-    case invalidArgument(String)
-    case backend(String)
+    public struct AuthRequest: Sendable {
+        public let session: UInt64
+        public let authorizeUrl: String
+        public let expectedState: String
+        public let mode: AuthMode
+        public let ephemeral: Bool
+        public let timeoutMs: UInt32
+
+        public init(session: UInt64, authorizeUrl: String, expectedState: String, mode: AuthMode, ephemeral: Bool, timeoutMs: UInt32) {
+            self.session = session
+            self.authorizeUrl = authorizeUrl
+            self.expectedState = expectedState
+            self.mode = mode
+            self.ephemeral = ephemeral
+            self.timeoutMs = timeoutMs
+        }
+    }
+
+    public struct AuthCallback: Sendable {
+        public let url: String
+
+        public init(url: String) {
+            self.url = url
+        }
+    }
+
+    public enum WebAuthError: Error {
+        case cancelled
+        case alreadyInProgress
+        case noBrowser
+        case presentationUnavailable
+        case callbackNotRegistered
+        case stateMismatch
+        case issuerMismatch
+        case missingCode
+        case timeout
+        case unknownSession
+        case unsupported(String)
+        case invalidArgument(String)
+        case backend(String)
+    }
 }

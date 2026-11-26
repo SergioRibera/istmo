@@ -3,140 +3,145 @@
 
 import Foundation
 
-public struct DropOptions: Sendable {
-    public let mimeTypes: [String]
-    public let maxBytes: UInt64
-    public let folders: Bool
+/// The `DragAndDrop` plugin's message types.
+public enum DragAndDrop {}
 
-    public init(mimeTypes: [String], maxBytes: UInt64, folders: Bool) {
-        self.mimeTypes = mimeTypes
-        self.maxBytes = maxBytes
-        self.folders = folders
+extension DragAndDrop {
+    public struct DropOptions: Sendable {
+        public let mimeTypes: [String]
+        public let maxBytes: UInt64
+        public let folders: Bool
+
+        public init(mimeTypes: [String], maxBytes: UInt64, folders: Bool) {
+            self.mimeTypes = mimeTypes
+            self.maxBytes = maxBytes
+            self.folders = folders
+        }
     }
-}
 
-public enum DndError: Error {
-    case unsupported
-    case backend(String)
-    case notPressed
-}
-
-public struct DroppedFiles: Sendable {
-    public let files: [DroppedFile]
-    public let skipped: [SkippedFile]
-    public let position: DropPoint?
-    public let receivedAtMs: UInt64?
-    public let windowId: UInt64?
-
-    public init(files: [DroppedFile], skipped: [SkippedFile], position: DropPoint?, receivedAtMs: UInt64?, windowId: UInt64?) {
-        self.files = files
-        self.skipped = skipped
-        self.position = position
-        self.receivedAtMs = receivedAtMs
-        self.windowId = windowId
+    public enum DndError: Error {
+        case unsupported
+        case backend(String)
+        case notPressed
     }
-}
 
-public struct DroppedFile: Sendable {
-    public let path: String
-    public let displayName: String
-    public let mimeType: String?
-    public let size: UInt64
+    public struct DroppedFiles: Sendable {
+        public let files: [DroppedFile]
+        public let skipped: [SkippedFile]
+        public let position: DropPoint?
+        public let receivedAtMs: UInt64?
+        public let windowId: UInt64?
 
-    public init(path: String, displayName: String, mimeType: String?, size: UInt64) {
-        self.path = path
-        self.displayName = displayName
-        self.mimeType = mimeType
-        self.size = size
+        public init(files: [DroppedFile], skipped: [SkippedFile], position: DropPoint?, receivedAtMs: UInt64?, windowId: UInt64?) {
+            self.files = files
+            self.skipped = skipped
+            self.position = position
+            self.receivedAtMs = receivedAtMs
+            self.windowId = windowId
+        }
     }
-}
 
-public struct SkippedFile: Sendable {
-    public let displayName: String
-    public let reason: SkipReason
+    public struct DroppedFile: Sendable {
+        public let path: String
+        public let displayName: String
+        public let mimeType: String?
+        public let size: UInt64
 
-    public init(displayName: String, reason: SkipReason) {
-        self.displayName = displayName
-        self.reason = reason
+        public init(path: String, displayName: String, mimeType: String?, size: UInt64) {
+            self.path = path
+            self.displayName = displayName
+            self.mimeType = mimeType
+            self.size = size
+        }
     }
-}
 
-public enum SkipReason: UInt32, Sendable {
-    case tooLarge = 0
-    case unreadable = 1
-    case notAFile = 2
-    case wrongType = 3
-}
+    public struct SkippedFile: Sendable {
+        public let displayName: String
+        public let reason: SkipReason
 
-public enum DragState: Sendable {
-    case idle
-    case over(DragOver)
-    case receiving(UInt32)
-}
-
-public struct DragOver: Sendable {
-    public let count: UInt32
-    public let position: DropPoint?
-    public let windowId: UInt64?
-
-    public init(count: UInt32, position: DropPoint?, windowId: UInt64?) {
-        self.count = count
-        self.position = position
-        self.windowId = windowId
+        public init(displayName: String, reason: SkipReason) {
+            self.displayName = displayName
+            self.reason = reason
+        }
     }
-}
 
-public struct DropPoint: Sendable {
-    public let x: Float
-    public let y: Float
-
-    public init(x: Float, y: Float) {
-        self.x = x
-        self.y = y
+    public enum SkipReason: UInt32, Sendable {
+        case tooLarge = 0
+        case unreadable = 1
+        case notAFile = 2
+        case wrongType = 3
     }
-}
 
-public enum DragItem: Sendable {
-    case text(String)
-    case url(String)
-    case file(DragFile)
-}
-
-public struct DragFile: Sendable {
-    public let path: String
-    public let mimeType: String?
-
-    public init(path: String, mimeType: String?) {
-        self.path = path
-        self.mimeType = mimeType
+    public enum DragState: Sendable {
+        case idle
+        case over(DragOver)
+        case receiving(UInt32)
     }
-}
 
-public struct DragImage: Sendable {
-    public let png: Data
-    public let width: UInt32
-    public let height: UInt32
+    public struct DragOver: Sendable {
+        public let count: UInt32
+        public let position: DropPoint?
+        public let windowId: UInt64?
 
-    public init(png: Data, width: UInt32, height: UInt32) {
-        self.png = png
-        self.width = width
-        self.height = height
+        public init(count: UInt32, position: DropPoint?, windowId: UInt64?) {
+            self.count = count
+            self.position = position
+            self.windowId = windowId
+        }
     }
-}
 
-public struct DragRequest: Sendable {
-    public let items: [DragItem]
-    public let preview: DragImage?
-    public let windowId: UInt64?
+    public struct DropPoint: Sendable {
+        public let x: Float
+        public let y: Float
 
-    public init(items: [DragItem], preview: DragImage?, windowId: UInt64?) {
-        self.items = items
-        self.preview = preview
-        self.windowId = windowId
+        public init(x: Float, y: Float) {
+            self.x = x
+            self.y = y
+        }
     }
-}
 
-public enum DragResult: UInt32, Sendable {
-    case dropped = 0
-    case cancelled = 1
+    public enum DragItem: Sendable {
+        case text(String)
+        case url(String)
+        case file(DragFile)
+    }
+
+    public struct DragFile: Sendable {
+        public let path: String
+        public let mimeType: String?
+
+        public init(path: String, mimeType: String?) {
+            self.path = path
+            self.mimeType = mimeType
+        }
+    }
+
+    public struct DragImage: Sendable {
+        public let png: Data
+        public let width: UInt32
+        public let height: UInt32
+
+        public init(png: Data, width: UInt32, height: UInt32) {
+            self.png = png
+            self.width = width
+            self.height = height
+        }
+    }
+
+    public struct DragRequest: Sendable {
+        public let items: [DragItem]
+        public let preview: DragImage?
+        public let windowId: UInt64?
+
+        public init(items: [DragItem], preview: DragImage?, windowId: UInt64?) {
+            self.items = items
+            self.preview = preview
+            self.windowId = windowId
+        }
+    }
+
+    public enum DragResult: UInt32, Sendable {
+        case dropped = 0
+        case cancelled = 1
+    }
 }

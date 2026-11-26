@@ -10,9 +10,9 @@ import IstmoRuntime
 public protocol NotificationsBackend: AnyObject {
     func is_authorized() async throws -> Bool
     func request_authorization() async throws -> Bool
-    /// Throw `NotificationError` to surface a typed domain error.
-    func schedule(request: NotificationRequest) async throws -> NotificationHandle
-    /// Throw `NotificationError` to surface a typed domain error.
+    /// Throw `Notifications.NotificationError` to surface a typed domain error.
+    func schedule(request: Notifications.NotificationRequest) async throws -> Notifications.NotificationHandle
+    /// Throw `Notifications.NotificationError` to surface a typed domain error.
     func cancel(id: UInt32) async throws -> Void
 }
 
@@ -20,12 +20,12 @@ public protocol NotificationsBackend: AnyObject {
 /// User provides one impl; each entry typically delegates to a
 /// helper on the type itself.
 public protocol NotificationsCodecs {
-    func readNotificationError(_ c: inout Bincode.Cursor) throws -> NotificationError
-    func writeNotificationError(_ out: inout Data, _ value: NotificationError)
-    func readNotificationHandle(_ c: inout Bincode.Cursor) throws -> NotificationHandle
-    func writeNotificationHandle(_ out: inout Data, _ value: NotificationHandle)
-    func readNotificationRequest(_ c: inout Bincode.Cursor) throws -> NotificationRequest
-    func writeNotificationRequest(_ out: inout Data, _ value: NotificationRequest)
+    func readNotificationError(_ c: inout Bincode.Cursor) throws -> Notifications.NotificationError
+    func writeNotificationError(_ out: inout Data, _ value: Notifications.NotificationError)
+    func readNotificationHandle(_ c: inout Bincode.Cursor) throws -> Notifications.NotificationHandle
+    func writeNotificationHandle(_ out: inout Data, _ value: Notifications.NotificationHandle)
+    func readNotificationRequest(_ c: inout Bincode.Cursor) throws -> Notifications.NotificationRequest
+    func writeNotificationRequest(_ out: inout Data, _ value: Notifications.NotificationRequest)
 }
 
 /// Decodes wire calls, invokes `NotificationsBackend`, encodes the response.
@@ -61,7 +61,7 @@ public final class NotificationsDispatcher: PluginHandler {
                 var out = Data()
                 codecs.writeNotificationHandle(&out, result)
                 return .unary(out)
-            } catch let err as NotificationError {
+            } catch let err as Notifications.NotificationError {
                 var errOut = Data()
                 codecs.writeNotificationError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -72,7 +72,7 @@ public final class NotificationsDispatcher: PluginHandler {
                 let id_ = try Bincode.readVarintU32(&c)
                 try await backend.cancel(id: id_)
                 return .unary(Data())
-            } catch let err as NotificationError {
+            } catch let err as Notifications.NotificationError {
                 var errOut = Data()
                 codecs.writeNotificationError(&errOut, err)
                 throw PluginException(payload: errOut)

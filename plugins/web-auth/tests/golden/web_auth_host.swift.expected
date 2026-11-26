@@ -8,38 +8,38 @@ import IstmoRuntime
 /// impl with the SDK-specific logic; the dispatcher below handles
 /// wire encode/decode.
 public protocol WebAuthBackend: AnyObject {
-    /// Throw `WebAuthError` to surface a typed domain error.
-    func capabilities() async throws -> WebAuthCapabilities
-    /// Throw `WebAuthError` to surface a typed domain error.
-    func prepare(callback: CallbackSpec) async throws -> PreparedRedirect
-    /// Throw `WebAuthError` to surface a typed domain error.
-    func authenticate(request: AuthRequest) async throws -> AuthCallback
+    /// Throw `WebAuth.WebAuthError` to surface a typed domain error.
+    func capabilities() async throws -> WebAuth.WebAuthCapabilities
+    /// Throw `WebAuth.WebAuthError` to surface a typed domain error.
+    func prepare(callback: WebAuth.CallbackSpec) async throws -> WebAuth.PreparedRedirect
+    /// Throw `WebAuth.WebAuthError` to surface a typed domain error.
+    func authenticate(request: WebAuth.AuthRequest) async throws -> WebAuth.AuthCallback
 }
 
 /// Reader / writer per `Named` type referenced by the `WebAuth` contract.
 /// User provides one impl; each entry typically delegates to a
 /// helper on the type itself.
 public protocol WebAuthCodecs {
-    func readAuthCallback(_ c: inout Bincode.Cursor) throws -> AuthCallback
-    func writeAuthCallback(_ out: inout Data, _ value: AuthCallback)
-    func readAuthMode(_ c: inout Bincode.Cursor) throws -> AuthMode
-    func writeAuthMode(_ out: inout Data, _ value: AuthMode)
-    func readAuthRequest(_ c: inout Bincode.Cursor) throws -> AuthRequest
-    func writeAuthRequest(_ out: inout Data, _ value: AuthRequest)
-    func readCallbackSpec(_ c: inout Bincode.Cursor) throws -> CallbackSpec
-    func writeCallbackSpec(_ out: inout Data, _ value: CallbackSpec)
-    func readHttpsCallback(_ c: inout Bincode.Cursor) throws -> HttpsCallback
-    func writeHttpsCallback(_ out: inout Data, _ value: HttpsCallback)
-    func readLoopbackCallback(_ c: inout Bincode.Cursor) throws -> LoopbackCallback
-    func writeLoopbackCallback(_ out: inout Data, _ value: LoopbackCallback)
-    func readPreparedRedirect(_ c: inout Bincode.Cursor) throws -> PreparedRedirect
-    func writePreparedRedirect(_ out: inout Data, _ value: PreparedRedirect)
-    func readSchemeCallback(_ c: inout Bincode.Cursor) throws -> SchemeCallback
-    func writeSchemeCallback(_ out: inout Data, _ value: SchemeCallback)
-    func readWebAuthCapabilities(_ c: inout Bincode.Cursor) throws -> WebAuthCapabilities
-    func writeWebAuthCapabilities(_ out: inout Data, _ value: WebAuthCapabilities)
-    func readWebAuthError(_ c: inout Bincode.Cursor) throws -> WebAuthError
-    func writeWebAuthError(_ out: inout Data, _ value: WebAuthError)
+    func readAuthCallback(_ c: inout Bincode.Cursor) throws -> WebAuth.AuthCallback
+    func writeAuthCallback(_ out: inout Data, _ value: WebAuth.AuthCallback)
+    func readAuthMode(_ c: inout Bincode.Cursor) throws -> WebAuth.AuthMode
+    func writeAuthMode(_ out: inout Data, _ value: WebAuth.AuthMode)
+    func readAuthRequest(_ c: inout Bincode.Cursor) throws -> WebAuth.AuthRequest
+    func writeAuthRequest(_ out: inout Data, _ value: WebAuth.AuthRequest)
+    func readCallbackSpec(_ c: inout Bincode.Cursor) throws -> WebAuth.CallbackSpec
+    func writeCallbackSpec(_ out: inout Data, _ value: WebAuth.CallbackSpec)
+    func readHttpsCallback(_ c: inout Bincode.Cursor) throws -> WebAuth.HttpsCallback
+    func writeHttpsCallback(_ out: inout Data, _ value: WebAuth.HttpsCallback)
+    func readLoopbackCallback(_ c: inout Bincode.Cursor) throws -> WebAuth.LoopbackCallback
+    func writeLoopbackCallback(_ out: inout Data, _ value: WebAuth.LoopbackCallback)
+    func readPreparedRedirect(_ c: inout Bincode.Cursor) throws -> WebAuth.PreparedRedirect
+    func writePreparedRedirect(_ out: inout Data, _ value: WebAuth.PreparedRedirect)
+    func readSchemeCallback(_ c: inout Bincode.Cursor) throws -> WebAuth.SchemeCallback
+    func writeSchemeCallback(_ out: inout Data, _ value: WebAuth.SchemeCallback)
+    func readWebAuthCapabilities(_ c: inout Bincode.Cursor) throws -> WebAuth.WebAuthCapabilities
+    func writeWebAuthCapabilities(_ out: inout Data, _ value: WebAuth.WebAuthCapabilities)
+    func readWebAuthError(_ c: inout Bincode.Cursor) throws -> WebAuth.WebAuthError
+    func writeWebAuthError(_ out: inout Data, _ value: WebAuth.WebAuthError)
 }
 
 /// Decodes wire calls, invokes `WebAuthBackend`, encodes the response.
@@ -63,7 +63,7 @@ public final class WebAuthDispatcher: PluginHandler {
                 var out = Data()
                 codecs.writeWebAuthCapabilities(&out, result)
                 return .unary(out)
-            } catch let err as WebAuthError {
+            } catch let err as WebAuth.WebAuthError {
                 var errOut = Data()
                 codecs.writeWebAuthError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -76,7 +76,7 @@ public final class WebAuthDispatcher: PluginHandler {
                 var out = Data()
                 codecs.writePreparedRedirect(&out, result)
                 return .unary(out)
-            } catch let err as WebAuthError {
+            } catch let err as WebAuth.WebAuthError {
                 var errOut = Data()
                 codecs.writeWebAuthError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -89,7 +89,7 @@ public final class WebAuthDispatcher: PluginHandler {
                 var out = Data()
                 codecs.writeAuthCallback(&out, result)
                 return .unary(out)
-            } catch let err as WebAuthError {
+            } catch let err as WebAuth.WebAuthError {
                 var errOut = Data()
                 codecs.writeWebAuthError(&errOut, err)
                 throw PluginException(payload: errOut)

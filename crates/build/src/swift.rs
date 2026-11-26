@@ -1,10 +1,15 @@
 use std::fmt::Write as _;
 
-use crate::codegen::{NamedAccess, SwiftWire, fresh, swift_ident, swift_string, write_header};
+use crate::codegen::{
+    NamedAccess, SwiftNames, SwiftWire, fresh, swift_ident, swift_string, write_header,
+};
 use crate::contract::{Contract, Method, MethodKind, TypeRef};
 use crate::swift_host::{format_args, write_codecs_protocol};
 
-const WIRE: SwiftWire = SwiftWire::new(NamedAccess::Codecs);
+/// Clients reach the readers and writers through their `codecs`.
+const fn wire(names: SwiftNames<'_>) -> SwiftWire<'_> {
+    SwiftWire::new(NamedAccess::Codecs, names)
+}
 
 #[must_use]
 pub fn generate_swift(contract: &Contract) -> String {
@@ -79,14 +84,18 @@ pub fn generate_swift_client(contract: &Contract) -> String {
             contract.exception_name(err)
         );
         let _ = writeln!(out, "    public let payload: Data");
-        let _ = writeln!(out, "    public let decoded: {}?", err.to_swift());
+        let _ = writeln!(
+            out,
+            "    public let decoded: {}?",
+            SwiftNames::of(contract).ty(err)
+        );
         let _ = writeln!(out, "}}");
     }
     out
 }
 
 /// Emits the payload encoding and returns the payload variable's name.
-fn write_payload(out: &mut String, method: &Method) -> String {
+fn write_payload(out: &mut String, swift: SwiftNames<'_>, method: &Method) -> String {
     let payload = fresh("payload", &arg_names(method));
     if method.args.is_empty() {
         let _ = writeln!(out, "        let {payload} = Data()");
@@ -94,20 +103,22 @@ fn write_payload(out: &mut String, method: &Method) -> String {
     }
     let _ = writeln!(out, "        var {payload} = Data()");
     for arg in &method.args {
-        WIRE.write_stmt(out, "        ", &arg.ty, &payload, &swift_ident(&arg.name));
+        wire(swift).write_stmt(out, "        ", &arg.ty, &payload, &swift_ident(&arg.name));
     }
     payload
 }
 
 fn write_unary(out: &mut String, contract: &Contract, method: &Method) {
-    let args = format_args(method);
-    let ret = method.returns.to_swift();
+    let swift = SwiftNames::of(contract);
+    let wire = wire(swift);
+    let args = format_args(swift, method);
+    let ret = swift.ty(&method.returns);
     let _ = writeln!(
         out,
         "    public func {}({args}) async throws -> {ret} {{",
         swift_ident(&method.name),
     );
-    let payload = write_payload(out, method);
+    let payload = write_payload(out, swift, method);
     let names = arg_names(method);
     let bytes = fresh("bytes", &names);
     let cursor = fresh("c", &names);
@@ -134,12 +145,12 @@ fn write_unary(out: &mut String, contract: &Contract, method: &Method) {
             let _ = writeln!(out, "            {target} = {call}");
             let _ = writeln!(out, "        }} catch let e as PluginException {{");
             let _ = writeln!(out, "            var errCursor = Bincode.Cursor(e.payload)");
-            let read = WIRE.read(err, "errCursor");
+            let read = wire.read(err, "errCursor");
             let read = read.strip_prefix("try ").unwrap_or(&read);
             let _ = writeln!(
                 out,
                 "            let decoded: {}? = try? {read}",
-                err.to_swift()
+                swift.ty(err)
             );
             let _ = writeln!(
                 out,
@@ -154,7 +165,7 @@ fn write_unary(out: &mut String, contract: &Contract, method: &Method) {
         let _ = writeln!(
             out,
             "        return {}",
-            WIRE.read(&method.returns, &cursor)
+            wire.read(&method.returns, &cursor)
         );
     }
     let _ = writeln!(out, "    }}");
@@ -167,8 +178,10 @@ fn arg_names(method: &Method) -> Vec<&str> {
 }
 
 fn write_stream(out: &mut String, contract: &Contract, method: &Method) {
-    let args = format_args(method);
-    let item = method.returns.to_swift();
+    let swift = SwiftNames::of(contract);
+    let wire = wire(swift);
+    let args = format_args(swift, method);
+    let item = swift.ty(&method.returns);
     let _ = writeln!(
         out,
         "    public func {}({args}) -> AsyncThrowingStream<{item}, Error> {{",
@@ -179,7 +192,7 @@ fn write_stream(out: &mut String, contract: &Contract, method: &Method) {
         // Bound first: the payload writers below already use the name.
         let _ = writeln!(out, "        let codecs = self.codecs");
     }
-    let payload = write_payload(out, method);
+    let payload = write_payload(out, swift, method);
     let names = arg_names(method);
     let events = fresh("events", &names);
     let bytes = fresh("bytes", &names);
@@ -207,12 +220,12 @@ fn write_stream(out: &mut String, contract: &Contract, method: &Method) {
             out,
             "                var errCursor = Bincode.Cursor({err_payload})"
         );
-        let read = WIRE.read(err, "errCursor");
+        let read = wire.read(err, "errCursor");
         let read = read.strip_prefix("try ").unwrap_or(&read);
         let _ = writeln!(
             out,
             "                let decoded: {}? = try? {read}",
-            err.to_swift()
+            swift.ty(err)
         );
         let _ = writeln!(
             out,
@@ -236,7 +249,7 @@ fn write_stream(out: &mut String, contract: &Contract, method: &Method) {
         let _ = writeln!(
             out,
             "            return {}",
-            WIRE.read(&method.returns, &cursor)
+            wire.read(&method.returns, &cursor)
         );
     }
     let _ = writeln!(out, "        }})");
@@ -244,20 +257,20 @@ fn write_stream(out: &mut String, contract: &Contract, method: &Method) {
 }
 
 fn write_protocol(out: &mut String, contract: &Contract) {
-    let _ = writeln!(out, "protocol {} {{", contract.type_name);
+    let _ = writeln!(out, "protocol {}Interface {{", contract.type_name);
     for (i, method) in contract.methods.iter().enumerate() {
         if i > 0 {
             let _ = writeln!(out);
         }
-        write_method(out, method);
+        write_method(out, SwiftNames::of(contract), method);
     }
     let _ = writeln!(out, "}}");
 }
 
-fn write_method(out: &mut String, method: &Method) {
-    let args = format_args(method);
+fn write_method(out: &mut String, swift: SwiftNames<'_>, method: &Method) {
+    let args = format_args(swift, method);
     let name = swift_ident(&method.name);
-    let ret = method.returns.to_swift();
+    let ret = swift.ty(&method.returns);
     match method.kind {
         MethodKind::Unary => {
             let _ = writeln!(out, "    func {name}({args}) async throws -> {ret}");
@@ -274,11 +287,11 @@ fn write_method(out: &mut String, method: &Method) {
 fn write_factory(out: &mut String, contract: &Contract, init: &TypeRef) {
     let _ = writeln!(out);
     let _ = writeln!(out, "// Factory contract for `acquire_with`.");
-    let _ = writeln!(out, "protocol {}Factory {{", contract.type_name);
+    let _ = writeln!(out, "protocol {}InterfaceFactory {{", contract.type_name);
     let _ = writeln!(
         out,
-        "    func create(config: {}) async throws -> {}",
-        init.to_swift(),
+        "    func create(config: {}) async throws -> {}Interface",
+        SwiftNames::of(contract).ty(init),
         contract.type_name,
     );
     let _ = writeln!(out, "}}");

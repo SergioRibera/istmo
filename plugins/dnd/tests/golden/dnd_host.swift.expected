@@ -8,46 +8,46 @@ import IstmoRuntime
 /// impl with the SDK-specific logic; the dispatcher below handles
 /// wire encode/decode.
 public protocol DragAndDropBackend: AnyObject {
-    /// Throw `DndError` to surface a typed domain error.
-    func listen(options: DropOptions) async throws -> Void
-    /// Throw `DndError` to surface a typed domain error.
+    /// Throw `DragAndDrop.DndError` to surface a typed domain error.
+    func listen(options: DragAndDrop.DropOptions) async throws -> Void
+    /// Throw `DragAndDrop.DndError` to surface a typed domain error.
     func stop() async throws -> Void
-    /// Throw `DndError` to surface a typed domain error.
-    func start_drag(request: DragRequest) async throws -> DragResult
+    /// Throw `DragAndDrop.DndError` to surface a typed domain error.
+    func start_drag(request: DragAndDrop.DragRequest) async throws -> DragAndDrop.DragResult
 }
 
 /// Reader / writer per `Named` type referenced by the `DragAndDrop` contract.
 /// User provides one impl; each entry typically delegates to a
 /// helper on the type itself.
 public protocol DragAndDropCodecs {
-    func readDndError(_ c: inout Bincode.Cursor) throws -> DndError
-    func writeDndError(_ out: inout Data, _ value: DndError)
-    func readDragFile(_ c: inout Bincode.Cursor) throws -> DragFile
-    func writeDragFile(_ out: inout Data, _ value: DragFile)
-    func readDragImage(_ c: inout Bincode.Cursor) throws -> DragImage
-    func writeDragImage(_ out: inout Data, _ value: DragImage)
-    func readDragItem(_ c: inout Bincode.Cursor) throws -> DragItem
-    func writeDragItem(_ out: inout Data, _ value: DragItem)
-    func readDragOver(_ c: inout Bincode.Cursor) throws -> DragOver
-    func writeDragOver(_ out: inout Data, _ value: DragOver)
-    func readDragRequest(_ c: inout Bincode.Cursor) throws -> DragRequest
-    func writeDragRequest(_ out: inout Data, _ value: DragRequest)
-    func readDragResult(_ c: inout Bincode.Cursor) throws -> DragResult
-    func writeDragResult(_ out: inout Data, _ value: DragResult)
-    func readDragState(_ c: inout Bincode.Cursor) throws -> DragState
-    func writeDragState(_ out: inout Data, _ value: DragState)
-    func readDropOptions(_ c: inout Bincode.Cursor) throws -> DropOptions
-    func writeDropOptions(_ out: inout Data, _ value: DropOptions)
-    func readDropPoint(_ c: inout Bincode.Cursor) throws -> DropPoint
-    func writeDropPoint(_ out: inout Data, _ value: DropPoint)
-    func readDroppedFile(_ c: inout Bincode.Cursor) throws -> DroppedFile
-    func writeDroppedFile(_ out: inout Data, _ value: DroppedFile)
-    func readDroppedFiles(_ c: inout Bincode.Cursor) throws -> DroppedFiles
-    func writeDroppedFiles(_ out: inout Data, _ value: DroppedFiles)
-    func readSkipReason(_ c: inout Bincode.Cursor) throws -> SkipReason
-    func writeSkipReason(_ out: inout Data, _ value: SkipReason)
-    func readSkippedFile(_ c: inout Bincode.Cursor) throws -> SkippedFile
-    func writeSkippedFile(_ out: inout Data, _ value: SkippedFile)
+    func readDndError(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DndError
+    func writeDndError(_ out: inout Data, _ value: DragAndDrop.DndError)
+    func readDragFile(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragFile
+    func writeDragFile(_ out: inout Data, _ value: DragAndDrop.DragFile)
+    func readDragImage(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragImage
+    func writeDragImage(_ out: inout Data, _ value: DragAndDrop.DragImage)
+    func readDragItem(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragItem
+    func writeDragItem(_ out: inout Data, _ value: DragAndDrop.DragItem)
+    func readDragOver(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragOver
+    func writeDragOver(_ out: inout Data, _ value: DragAndDrop.DragOver)
+    func readDragRequest(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragRequest
+    func writeDragRequest(_ out: inout Data, _ value: DragAndDrop.DragRequest)
+    func readDragResult(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragResult
+    func writeDragResult(_ out: inout Data, _ value: DragAndDrop.DragResult)
+    func readDragState(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DragState
+    func writeDragState(_ out: inout Data, _ value: DragAndDrop.DragState)
+    func readDropOptions(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DropOptions
+    func writeDropOptions(_ out: inout Data, _ value: DragAndDrop.DropOptions)
+    func readDropPoint(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DropPoint
+    func writeDropPoint(_ out: inout Data, _ value: DragAndDrop.DropPoint)
+    func readDroppedFile(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DroppedFile
+    func writeDroppedFile(_ out: inout Data, _ value: DragAndDrop.DroppedFile)
+    func readDroppedFiles(_ c: inout Bincode.Cursor) throws -> DragAndDrop.DroppedFiles
+    func writeDroppedFiles(_ out: inout Data, _ value: DragAndDrop.DroppedFiles)
+    func readSkipReason(_ c: inout Bincode.Cursor) throws -> DragAndDrop.SkipReason
+    func writeSkipReason(_ out: inout Data, _ value: DragAndDrop.SkipReason)
+    func readSkippedFile(_ c: inout Bincode.Cursor) throws -> DragAndDrop.SkippedFile
+    func writeSkippedFile(_ out: inout Data, _ value: DragAndDrop.SkippedFile)
 }
 
 /// Decodes wire calls, invokes `DragAndDropBackend`, encodes the response.
@@ -71,7 +71,7 @@ public final class DragAndDropDispatcher: PluginHandler {
                 let options = try codecs.readDropOptions(&c)
                 try await backend.listen(options: options)
                 return .unary(Data())
-            } catch let err as DndError {
+            } catch let err as DragAndDrop.DndError {
                 var errOut = Data()
                 codecs.writeDndError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -80,7 +80,7 @@ public final class DragAndDropDispatcher: PluginHandler {
             do {
                 try await backend.stop()
                 return .unary(Data())
-            } catch let err as DndError {
+            } catch let err as DragAndDrop.DndError {
                 var errOut = Data()
                 codecs.writeDndError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -93,7 +93,7 @@ public final class DragAndDropDispatcher: PluginHandler {
                 var out = Data()
                 codecs.writeDragResult(&out, result)
                 return .unary(out)
-            } catch let err as DndError {
+            } catch let err as DragAndDrop.DndError {
                 var errOut = Data()
                 codecs.writeDndError(&errOut, err)
                 throw PluginException(payload: errOut)

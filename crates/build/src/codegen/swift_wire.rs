@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use super::{NamedAccess, Scalar, Shape};
+use super::{NamedAccess, Scalar, Shape, SwiftNames};
 use crate::contract::TypeRef;
 
 /// Builds Swift expressions that decode / encode a [`TypeRef`].
@@ -11,13 +11,14 @@ use crate::contract::TypeRef;
 /// append to an `inout Data`. Nested containers get closure parameters
 /// indexed by depth (`c1`, `o1, v1`, …).
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SwiftWire {
+pub(crate) struct SwiftWire<'a> {
     named: NamedAccess,
+    spelling: SwiftNames<'a>,
 }
 
-impl SwiftWire {
-    pub(crate) const fn new(named: NamedAccess) -> Self {
-        Self { named }
+impl<'a> SwiftWire<'a> {
+    pub(crate) const fn new(named: NamedAccess, spelling: SwiftNames<'a>) -> Self {
+        Self { named, spelling }
     }
 
     const fn prefix(self) -> &'static str {
@@ -87,7 +88,7 @@ impl SwiftWire {
     /// session) presenting the metadata type's fingerprint. The closure escapes, so
     /// it captures what it encodes with (`codecs` or `self`) explicitly.
     fn read_frame_sink(self, meta: &TypeRef, cursor: &str, depth: usize) -> String {
-        let ty = meta.to_swift();
+        let ty = self.spelling.ty(meta);
         let id = format!(
             "try Bincode.readVarintU64(&{cursor}), fingerprint: 0x{:016x}",
             meta.meta_fingerprint()

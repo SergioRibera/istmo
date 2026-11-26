@@ -8,8 +8,8 @@ import IstmoRuntime
 /// User provides one impl; each entry typically delegates to a
 /// helper on the type itself.
 public protocol EchoCodecs {
-    func readEchoError(_ c: inout Bincode.Cursor) throws -> EchoError
-    func writeEchoError(_ out: inout Data, _ value: EchoError)
+    func readEchoError(_ c: inout Bincode.Cursor) throws -> Echo.EchoError
+    func writeEchoError(_ out: inout Data, _ value: Echo.EchoError)
 }
 
 /// Rust-hosted `Echo` plugin. Ships each call across the frame
@@ -31,7 +31,7 @@ public final class EchoClient {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "ping", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: EchoError? = try? codecs.readEchoError(&errCursor)
+            let decoded: Echo.EchoError? = try? codecs.readEchoError(&errCursor)
             throw EchoException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
@@ -51,5 +51,5 @@ public final class EchoClient {
 /// Swift-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.
 public struct EchoException: Error {
     public let payload: Data
-    public let decoded: EchoError?
+    public let decoded: Echo.EchoError?
 }

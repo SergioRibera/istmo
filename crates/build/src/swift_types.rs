@@ -1,11 +1,10 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use crate::codegen::{NamedAccess, SwiftWire, local, swift_ident, swift_label, write_header};
+use crate::codegen::{
+    NamedAccess, SwiftNames, SwiftWire, local, swift_ident, swift_label, write_header,
+};
 use crate::contract::{Contract, EnumDef, SharedTypes, StructDef, TypeDef, TypeRef};
-
-/// Codecs implementations call their own `read<T>` / `write<T>`.
-const WIRE: SwiftWire = SwiftWire::new(NamedAccess::SelfImpl);
 
 /// Locals a struct reader declares before decoding its fields.
 const READER_LOCALS: &[&str] = &["c"];
@@ -21,20 +20,22 @@ pub fn generate_swift_types(contract: &Contract) -> String {
         // `NativeHandleId` is declared by the runtime module.
         let _ = writeln!(out, "import IstmoRuntime");
     }
-    for ty in &contract.types {
-        let _ = writeln!(out);
-        let is_error = is_error_shape(ty.name()) || errors.contains(ty.name());
-        match ty {
-            TypeDef::Struct(s) => write_struct(&mut out, s, is_error),
-            TypeDef::Enum(e) => write_enum(&mut out, e, is_error),
-        }
-    }
+    let names = SwiftNames::of(contract).within();
+    write_namespace(
+        &mut out,
+        names,
+        &format!("The `{}` plugin's message types.", contract.type_name),
+        contract.types.iter().map(|ty| {
+            let is_error = is_error_shape(ty.name()) || errors.contains(ty.name());
+            (ty, is_error)
+        }),
+    );
     out
 }
 
-/// The declarations of a shared group's types, one Swift file per group.
-/// No codecs: every plugin's `CodecsImpl` reads and writes the shared
-/// types it uses.
+/// The declarations of a shared group's types, one Swift file per group,
+/// nested in the group's namespace. No codecs: every plugin's
+/// `CodecsImpl` reads and writes the shared types it uses.
 #[must_use]
 pub fn generate_swift_shared_types(group: &SharedTypes) -> String {
     let mut out = String::new();
@@ -55,18 +56,55 @@ pub fn generate_swift_shared_types(group: &SharedTypes) -> String {
     if handles {
         let _ = writeln!(out, "import IstmoRuntime");
     }
-    for ty in &group.types {
-        let _ = writeln!(out);
+    write_namespace(
+        &mut out,
+        SwiftNames::of_group(group),
+        &format!("Message types shared by plugins: `{}`.", group.group),
+        group.types.iter().map(|ty| (ty, is_error_shape(ty.name()))),
+    );
+    out
+}
+
+/// `public enum <Namespace> {}` and an extension nesting each type in it.
+fn write_namespace<'a>(
+    out: &mut String,
+    names: SwiftNames<'_>,
+    doc: &str,
+    types: impl Iterator<Item = (&'a TypeDef, bool)>,
+) {
+    let namespace = names.namespace();
+    let _ = writeln!(out);
+    let _ = writeln!(out, "/// {doc}");
+    let _ = writeln!(out, "public enum {namespace} {{}}");
+    let mut body = String::new();
+    for (ty, is_error) in types {
+        if !body.is_empty() {
+            body.push('\n');
+        }
         match ty {
-            TypeDef::Struct(s) => write_struct(&mut out, s, is_error_shape(&s.name)),
-            TypeDef::Enum(e) => write_enum(&mut out, e, is_error_shape(&e.name)),
+            TypeDef::Struct(s) => write_struct(&mut body, names, s, is_error),
+            TypeDef::Enum(e) => write_enum(&mut body, names, e, is_error),
         }
     }
-    out
+    if body.is_empty() {
+        return;
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "extension {namespace} {{");
+    for line in body.lines() {
+        if line.is_empty() {
+            out.push('\n');
+        } else {
+            let _ = writeln!(out, "    {line}");
+        }
+    }
+    let _ = writeln!(out, "}}");
 }
 
 #[must_use]
 pub fn generate_swift_codecs(contract: &Contract) -> String {
+    let names = SwiftNames::of(contract);
+    let wire = SwiftWire::new(NamedAccess::SelfImpl, names);
     let mut out = String::new();
     write_header(&mut out, contract);
     let _ = writeln!(out);
@@ -82,8 +120,8 @@ pub fn generate_swift_codecs(contract: &Contract) -> String {
     for ty in contract.codec_types() {
         let _ = writeln!(out);
         match ty {
-            TypeDef::Struct(s) => write_struct_codec(&mut out, s),
-            TypeDef::Enum(e) => write_enum_codec(&mut out, e),
+            TypeDef::Struct(s) => write_struct_codec(&mut out, wire, names, s),
+            TypeDef::Enum(e) => write_enum_codec(&mut out, wire, names, e),
         }
     }
     if contract.references_native_handle() {
@@ -107,7 +145,7 @@ fn error_type_names(contract: &Contract) -> BTreeSet<&str> {
         .collect()
 }
 
-fn write_struct(out: &mut String, s: &StructDef, is_error: bool) {
+fn write_struct(out: &mut String, names: SwiftNames<'_>, s: &StructDef, is_error: bool) {
     // `Error` refines `Sendable`; plain types state it, so backends can
     // capture them in `@Sendable` capture callbacks (Swift 6 mode).
     let conform = if is_error { ": Error" } else { ": Sendable" };
@@ -117,14 +155,14 @@ fn write_struct(out: &mut String, s: &StructDef, is_error: bool) {
             out,
             "    public let {}: {}",
             swift_ident(&f.name),
-            f.ty.to_swift()
+            names.ty(&f.ty)
         );
     }
     let _ = writeln!(out);
     let init_args = s
         .fields
         .iter()
-        .map(|f| format!("{}: {}", swift_ident(&f.name), f.ty.to_swift()))
+        .map(|f| format!("{}: {}", swift_ident(&f.name), names.ty(&f.ty)))
         .collect::<Vec<_>>()
         .join(", ");
     let _ = writeln!(out, "    public init({init_args}) {{");
@@ -136,7 +174,7 @@ fn write_struct(out: &mut String, s: &StructDef, is_error: bool) {
     let _ = writeln!(out, "}}");
 }
 
-fn write_enum(out: &mut String, e: &EnumDef, is_error: bool) {
+fn write_enum(out: &mut String, names: SwiftNames<'_>, e: &EnumDef, is_error: bool) {
     if e.variants.iter().all(|v| v.payload.is_empty()) {
         let conform = if is_error { ", Error" } else { ", Sendable" };
         let _ = writeln!(out, "public enum {}: UInt32{conform} {{", e.name);
@@ -154,7 +192,7 @@ fn write_enum(out: &mut String, e: &EnumDef, is_error: bool) {
                 let tys = v
                     .payload
                     .iter()
-                    .map(TypeRef::to_swift)
+                    .map(|ty| names.ty(ty))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let _ = writeln!(out, "    case {case_name}({tys})");
@@ -178,11 +216,12 @@ fn to_swift_case(name: &str) -> String {
     swift_ident(&base)
 }
 
-fn write_struct_codec(out: &mut String, s: &StructDef) {
+fn write_struct_codec(out: &mut String, wire: SwiftWire<'_>, names: SwiftNames<'_>, s: &StructDef) {
+    let ty = names.named(&s.name);
     let _ = writeln!(
         out,
         "    public func read{}(_ c: inout Bincode.Cursor) throws -> {} {{",
-        s.name, s.name,
+        s.name, ty,
     );
     let mut init_args = Vec::with_capacity(s.fields.len());
     for f in &s.fields {
@@ -194,32 +233,33 @@ fn write_struct_codec(out: &mut String, s: &StructDef) {
             continue;
         }
         let name = local(&f.name, READER_LOCALS, swift_ident);
-        let _ = writeln!(out, "        let {name} = {}", WIRE.read(&f.ty, "c"));
+        let _ = writeln!(out, "        let {name} = {}", wire.read(&f.ty, "c"));
         init_args.push(format!("{label}: {name}"));
     }
-    let _ = writeln!(out, "        return {}({})", s.name, init_args.join(", "));
+    let _ = writeln!(out, "        return {ty}({})", init_args.join(", "));
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
 
     let _ = writeln!(
         out,
         "    public func write{}(_ out: inout Data, _ value: {}) {{",
-        s.name, s.name,
+        s.name, ty,
     );
     for f in &s.fields {
         let value = format!("value.{}", swift_ident(&f.name));
-        WIRE.write_stmt(out, "        ", &f.ty, "out", &value);
+        wire.write_stmt(out, "        ", &f.ty, "out", &value);
     }
     let _ = writeln!(out, "    }}");
 }
 
-fn write_enum_codec(out: &mut String, e: &EnumDef) {
+fn write_enum_codec(out: &mut String, wire: SwiftWire<'_>, names: SwiftNames<'_>, e: &EnumDef) {
+    let ty = names.named(&e.name);
     let has_payload = e.variants.iter().any(|v| !v.payload.is_empty());
 
     let _ = writeln!(
         out,
         "    public func read{}(_ c: inout Bincode.Cursor) throws -> {} {{",
-        e.name, e.name,
+        e.name, ty,
     );
     let _ = writeln!(out, "        let disc = try Bincode.readVarintU32(&c)");
     if has_payload {
@@ -234,7 +274,7 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
                     let _ = writeln!(
                         out,
                         "        case {i}: return .{case_name}({})",
-                        WIRE.read(ty, "c")
+                        wire.read(ty, "c")
                     );
                 }
                 payload => {
@@ -242,7 +282,7 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
                     let mut bindings = Vec::with_capacity(payload.len());
                     for (idx, ty) in payload.iter().enumerate() {
                         let name = format!("f{idx}");
-                        let _ = writeln!(out, "            let {name} = {}", WIRE.read(ty, "c"));
+                        let _ = writeln!(out, "            let {name} = {}", wire.read(ty, "c"));
                         bindings.push(name);
                     }
                     let _ = writeln!(
@@ -261,8 +301,7 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
     } else {
         let _ = writeln!(
             out,
-            "        guard let value = {}(rawValue: disc) else {{",
-            e.name,
+            "        guard let value = {ty}(rawValue: disc) else {{",
         );
         let _ = writeln!(
             out,
@@ -277,7 +316,7 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
     let _ = writeln!(
         out,
         "    public func write{}(_ out: inout Data, _ value: {}) {{",
-        e.name, e.name,
+        e.name, ty,
     );
     if has_payload {
         let _ = writeln!(out, "        switch value {{");
@@ -291,7 +330,7 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
                 [ty] => {
                     let _ = writeln!(out, "        case .{case_name}(let payload):");
                     let _ = writeln!(out, "            Bincode.writeVarintU32(&out, {i})");
-                    WIRE.write_stmt(out, "            ", ty, "out", "payload");
+                    wire.write_stmt(out, "            ", ty, "out", "payload");
                 }
                 payload => {
                     let bindings = (0..payload.len())
@@ -301,7 +340,7 @@ fn write_enum_codec(out: &mut String, e: &EnumDef) {
                     let _ = writeln!(out, "        case .{case_name}({bindings}):");
                     let _ = writeln!(out, "            Bincode.writeVarintU32(&out, {i})");
                     for (idx, ty) in payload.iter().enumerate() {
-                        WIRE.write_stmt(out, "            ", ty, "out", &format!("f{idx}"));
+                        wire.write_stmt(out, "            ", ty, "out", &format!("f{idx}"));
                     }
                 }
             }

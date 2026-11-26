@@ -8,56 +8,56 @@ import IstmoRuntime
 /// User provides one impl; each entry typically delegates to a
 /// helper on the type itself.
 public protocol CameraCodecs {
-    func readAccessStatus(_ c: inout Bincode.Cursor) throws -> AccessStatus
-    func writeAccessStatus(_ out: inout Data, _ value: AccessStatus)
-    func readAppliedControls(_ c: inout Bincode.Cursor) throws -> AppliedControls
-    func writeAppliedControls(_ out: inout Data, _ value: AppliedControls)
-    func readCameraCapabilities(_ c: inout Bincode.Cursor) throws -> CameraCapabilities
-    func writeCameraCapabilities(_ out: inout Data, _ value: CameraCapabilities)
-    func readCameraControls(_ c: inout Bincode.Cursor) throws -> CameraControls
-    func writeCameraControls(_ out: inout Data, _ value: CameraControls)
-    func readCameraDevice(_ c: inout Bincode.Cursor) throws -> CameraDevice
-    func writeCameraDevice(_ out: inout Data, _ value: CameraDevice)
-    func readCameraError(_ c: inout Bincode.Cursor) throws -> CameraError
-    func writeCameraError(_ out: inout Data, _ value: CameraError)
-    func readCameraFacing(_ c: inout Bincode.Cursor) throws -> CameraFacing
-    func writeCameraFacing(_ out: inout Data, _ value: CameraFacing)
-    func readCameraFrame(_ c: inout Bincode.Cursor) throws -> CameraFrame
-    func writeCameraFrame(_ out: inout Data, _ value: CameraFrame)
-    func readCameraInitConfig(_ c: inout Bincode.Cursor) throws -> CameraInitConfig
-    func writeCameraInitConfig(_ out: inout Data, _ value: CameraInitConfig)
-    func readCameraSession(_ c: inout Bincode.Cursor) throws -> CameraSession
-    func writeCameraSession(_ out: inout Data, _ value: CameraSession)
-    func readConcurrentPair(_ c: inout Bincode.Cursor) throws -> ConcurrentPair
-    func writeConcurrentPair(_ out: inout Data, _ value: ConcurrentPair)
-    func readConcurrentSupport(_ c: inout Bincode.Cursor) throws -> ConcurrentSupport
-    func writeConcurrentSupport(_ out: inout Data, _ value: ConcurrentSupport)
-    func readFlashMode(_ c: inout Bincode.Cursor) throws -> FlashMode
-    func writeFlashMode(_ out: inout Data, _ value: FlashMode)
-    func readFocusMode(_ c: inout Bincode.Cursor) throws -> FocusMode
-    func writeFocusMode(_ out: inout Data, _ value: FocusMode)
-    func readFramePlane(_ c: inout Bincode.Cursor) throws -> FramePlane
-    func writeFramePlane(_ out: inout Data, _ value: FramePlane)
-    func readLensKind(_ c: inout Bincode.Cursor) throws -> LensKind
-    func writeLensKind(_ out: inout Data, _ value: LensKind)
+    func readAccessStatus(_ c: inout Bincode.Cursor) throws -> IstmoMedia.AccessStatus
+    func writeAccessStatus(_ out: inout Data, _ value: IstmoMedia.AccessStatus)
+    func readAppliedControls(_ c: inout Bincode.Cursor) throws -> Camera.AppliedControls
+    func writeAppliedControls(_ out: inout Data, _ value: Camera.AppliedControls)
+    func readCameraCapabilities(_ c: inout Bincode.Cursor) throws -> Camera.CameraCapabilities
+    func writeCameraCapabilities(_ out: inout Data, _ value: Camera.CameraCapabilities)
+    func readCameraControls(_ c: inout Bincode.Cursor) throws -> Camera.CameraControls
+    func writeCameraControls(_ out: inout Data, _ value: Camera.CameraControls)
+    func readCameraDevice(_ c: inout Bincode.Cursor) throws -> Camera.CameraDevice
+    func writeCameraDevice(_ out: inout Data, _ value: Camera.CameraDevice)
+    func readCameraError(_ c: inout Bincode.Cursor) throws -> Camera.CameraError
+    func writeCameraError(_ out: inout Data, _ value: Camera.CameraError)
+    func readCameraFacing(_ c: inout Bincode.Cursor) throws -> Camera.CameraFacing
+    func writeCameraFacing(_ out: inout Data, _ value: Camera.CameraFacing)
+    func readCameraFrame(_ c: inout Bincode.Cursor) throws -> Camera.CameraFrame
+    func writeCameraFrame(_ out: inout Data, _ value: Camera.CameraFrame)
+    func readCameraInitConfig(_ c: inout Bincode.Cursor) throws -> Camera.CameraInitConfig
+    func writeCameraInitConfig(_ out: inout Data, _ value: Camera.CameraInitConfig)
+    func readCameraSession(_ c: inout Bincode.Cursor) throws -> Camera.CameraSession
+    func writeCameraSession(_ out: inout Data, _ value: Camera.CameraSession)
+    func readConcurrentPair(_ c: inout Bincode.Cursor) throws -> Camera.ConcurrentPair
+    func writeConcurrentPair(_ out: inout Data, _ value: Camera.ConcurrentPair)
+    func readConcurrentSupport(_ c: inout Bincode.Cursor) throws -> Camera.ConcurrentSupport
+    func writeConcurrentSupport(_ out: inout Data, _ value: Camera.ConcurrentSupport)
+    func readFlashMode(_ c: inout Bincode.Cursor) throws -> Camera.FlashMode
+    func writeFlashMode(_ out: inout Data, _ value: Camera.FlashMode)
+    func readFocusMode(_ c: inout Bincode.Cursor) throws -> Camera.FocusMode
+    func writeFocusMode(_ out: inout Data, _ value: Camera.FocusMode)
+    func readFramePlane(_ c: inout Bincode.Cursor) throws -> Camera.FramePlane
+    func writeFramePlane(_ out: inout Data, _ value: Camera.FramePlane)
+    func readLensKind(_ c: inout Bincode.Cursor) throws -> Camera.LensKind
+    func writeLensKind(_ out: inout Data, _ value: Camera.LensKind)
     func readNativeHandleId(_ c: inout Bincode.Cursor) throws -> NativeHandleId
     func writeNativeHandleId(_ out: inout Data, _ value: NativeHandleId)
-    func readNegotiatedFormat(_ c: inout Bincode.Cursor) throws -> NegotiatedFormat
-    func writeNegotiatedFormat(_ out: inout Data, _ value: NegotiatedFormat)
-    func readPixelFormat(_ c: inout Bincode.Cursor) throws -> PixelFormat
-    func writePixelFormat(_ out: inout Data, _ value: PixelFormat)
-    func readResolution(_ c: inout Bincode.Cursor) throws -> Resolution
-    func writeResolution(_ out: inout Data, _ value: Resolution)
-    func readSessionConfig(_ c: inout Bincode.Cursor) throws -> SessionConfig
-    func writeSessionConfig(_ out: inout Data, _ value: SessionConfig)
-    func readStillCaptureRequest(_ c: inout Bincode.Cursor) throws -> StillCaptureRequest
-    func writeStillCaptureRequest(_ out: inout Data, _ value: StillCaptureRequest)
-    func readStillPhoto(_ c: inout Bincode.Cursor) throws -> StillPhoto
-    func writeStillPhoto(_ out: inout Data, _ value: StillPhoto)
-    func readSupportedFormat(_ c: inout Bincode.Cursor) throws -> SupportedFormat
-    func writeSupportedFormat(_ out: inout Data, _ value: SupportedFormat)
-    func readWhiteBalanceMode(_ c: inout Bincode.Cursor) throws -> WhiteBalanceMode
-    func writeWhiteBalanceMode(_ out: inout Data, _ value: WhiteBalanceMode)
+    func readNegotiatedFormat(_ c: inout Bincode.Cursor) throws -> Camera.NegotiatedFormat
+    func writeNegotiatedFormat(_ out: inout Data, _ value: Camera.NegotiatedFormat)
+    func readPixelFormat(_ c: inout Bincode.Cursor) throws -> Camera.PixelFormat
+    func writePixelFormat(_ out: inout Data, _ value: Camera.PixelFormat)
+    func readResolution(_ c: inout Bincode.Cursor) throws -> Camera.Resolution
+    func writeResolution(_ out: inout Data, _ value: Camera.Resolution)
+    func readSessionConfig(_ c: inout Bincode.Cursor) throws -> Camera.SessionConfig
+    func writeSessionConfig(_ out: inout Data, _ value: Camera.SessionConfig)
+    func readStillCaptureRequest(_ c: inout Bincode.Cursor) throws -> Camera.StillCaptureRequest
+    func writeStillCaptureRequest(_ out: inout Data, _ value: Camera.StillCaptureRequest)
+    func readStillPhoto(_ c: inout Bincode.Cursor) throws -> Camera.StillPhoto
+    func writeStillPhoto(_ out: inout Data, _ value: Camera.StillPhoto)
+    func readSupportedFormat(_ c: inout Bincode.Cursor) throws -> Camera.SupportedFormat
+    func writeSupportedFormat(_ out: inout Data, _ value: Camera.SupportedFormat)
+    func readWhiteBalanceMode(_ c: inout Bincode.Cursor) throws -> Camera.WhiteBalanceMode
+    func writeWhiteBalanceMode(_ out: inout Data, _ value: Camera.WhiteBalanceMode)
 }
 
 /// Rust-hosted `Camera` plugin. Ships each call across the frame
@@ -71,63 +71,63 @@ public final class CameraClient {
         self.codecs = codecs
     }
 
-    public func devices() async throws -> [CameraDevice] {
+    public func devices() async throws -> [Camera.CameraDevice] {
         let payload = Data()
         let bytes: Data
         do {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "devices", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: CameraError? = try? codecs.readCameraError(&errCursor)
+            let decoded: Camera.CameraError? = try? codecs.readCameraError(&errCursor)
             throw CameraException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
         return try Bincode.readVec(&c) { c1 in try codecs.readCameraDevice(&c1) }
     }
 
-    public func concurrent_support() async throws -> ConcurrentSupport {
+    public func concurrent_support() async throws -> Camera.ConcurrentSupport {
         let payload = Data()
         let bytes: Data
         do {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "concurrent_support", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: CameraError? = try? codecs.readCameraError(&errCursor)
+            let decoded: Camera.CameraError? = try? codecs.readCameraError(&errCursor)
             throw CameraException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
         return try codecs.readConcurrentSupport(&c)
     }
 
-    public func access_status() async throws -> AccessStatus {
+    public func access_status() async throws -> IstmoMedia.AccessStatus {
         let payload = Data()
         let bytes: Data
         do {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "access_status", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: CameraError? = try? codecs.readCameraError(&errCursor)
+            let decoded: Camera.CameraError? = try? codecs.readCameraError(&errCursor)
             throw CameraException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
         return try codecs.readAccessStatus(&c)
     }
 
-    public func request_access() async throws -> AccessStatus {
+    public func request_access() async throws -> IstmoMedia.AccessStatus {
         let payload = Data()
         let bytes: Data
         do {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "request_access", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: CameraError? = try? codecs.readCameraError(&errCursor)
+            let decoded: Camera.CameraError? = try? codecs.readCameraError(&errCursor)
             throw CameraException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
         return try codecs.readAccessStatus(&c)
     }
 
-    public func `open`(config: SessionConfig) async throws -> CameraSession {
+    public func `open`(config: Camera.SessionConfig) async throws -> Camera.CameraSession {
         var payload = Data()
         codecs.writeSessionConfig(&payload, config)
         let bytes: Data
@@ -135,7 +135,7 @@ public final class CameraClient {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "open", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: CameraError? = try? codecs.readCameraError(&errCursor)
+            let decoded: Camera.CameraError? = try? codecs.readCameraError(&errCursor)
             throw CameraException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
@@ -149,12 +149,12 @@ public final class CameraClient {
             _ = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "close", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: CameraError? = try? codecs.readCameraError(&errCursor)
+            let decoded: Camera.CameraError? = try? codecs.readCameraError(&errCursor)
             throw CameraException(payload: e.payload, decoded: decoded)
         }
     }
 
-    public func frames(session: NativeHandleId) -> AsyncThrowingStream<CameraFrame, Error> {
+    public func frames(session: NativeHandleId) -> AsyncThrowingStream<Camera.CameraFrame, Error> {
         let codecs = self.codecs
         var payload = Data()
         codecs.writeNativeHandleId(&payload, session)
@@ -166,7 +166,7 @@ public final class CameraClient {
         })
     }
 
-    public func apply_controls(session: NativeHandleId, controls: CameraControls) async throws -> AppliedControls {
+    public func apply_controls(session: NativeHandleId, controls: Camera.CameraControls) async throws -> Camera.AppliedControls {
         var payload = Data()
         codecs.writeNativeHandleId(&payload, session)
         codecs.writeCameraControls(&payload, controls)
@@ -175,14 +175,14 @@ public final class CameraClient {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "apply_controls", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: CameraError? = try? codecs.readCameraError(&errCursor)
+            let decoded: Camera.CameraError? = try? codecs.readCameraError(&errCursor)
             throw CameraException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
         return try codecs.readAppliedControls(&c)
     }
 
-    public func capture_still(session: NativeHandleId, request: StillCaptureRequest) async throws -> StillPhoto {
+    public func capture_still(session: NativeHandleId, request: Camera.StillCaptureRequest) async throws -> Camera.StillPhoto {
         var payload = Data()
         codecs.writeNativeHandleId(&payload, session)
         codecs.writeStillCaptureRequest(&payload, request)
@@ -191,7 +191,7 @@ public final class CameraClient {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "capture_still", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: CameraError? = try? codecs.readCameraError(&errCursor)
+            let decoded: Camera.CameraError? = try? codecs.readCameraError(&errCursor)
             throw CameraException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
@@ -202,5 +202,5 @@ public final class CameraClient {
 /// Swift-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.
 public struct CameraException: Error {
     public let payload: Data
-    public let decoded: CameraError?
+    public let decoded: Camera.CameraError?
 }

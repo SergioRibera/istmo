@@ -1,11 +1,14 @@
 use std::fmt::Write as _;
 
 use crate::codegen::{
-    NamedAccess, SwiftWire, local, swift_ident, swift_label, swift_string, write_header,
+    NamedAccess, SwiftNames, SwiftWire, local, swift_ident, swift_label, swift_string, write_header,
 };
 use crate::contract::{Contract, Method, MethodKind, TypeRef};
 
-const WIRE: SwiftWire = SwiftWire::new(NamedAccess::Codecs);
+/// Dispatchers reach the readers and writers through their `codecs`.
+const fn wire(names: SwiftNames<'_>) -> SwiftWire<'_> {
+    SwiftWire::new(NamedAccess::Codecs, names)
+}
 
 /// Names the generated `handleCall` / `handleCreateInstance` bodies
 /// already bind; decoded arguments with the same name get renamed.
@@ -62,27 +65,27 @@ fn write_backend_protocol(out: &mut String, contract: &Contract) {
         contract.type_name
     );
     for method in &contract.methods {
-        write_backend_method(out, method);
+        write_backend_method(out, SwiftNames::of(contract), method);
     }
     let _ = writeln!(out, "}}");
 }
 
-fn write_backend_method(out: &mut String, method: &Method) {
+fn write_backend_method(out: &mut String, names: SwiftNames<'_>, method: &Method) {
     if let (MethodKind::Unary, Some(err)) = (method.kind, &method.error) {
         let _ = writeln!(
             out,
             "    /// Throw `{}` to surface a typed domain error.",
-            err.to_swift()
+            names.ty(err)
         );
     }
-    let _ = writeln!(out, "    {}", backend_method_decl(method));
+    let _ = writeln!(out, "    {}", backend_method_decl(names, method));
 }
 
 /// Requirement of `method` on the `<T>Backend` protocol, shared with the
 /// seeded implementation so the two cannot drift apart.
-pub(crate) fn backend_method_decl(method: &Method) -> String {
-    let args = format_args(method);
-    let ret = method.returns.to_swift();
+pub(crate) fn backend_method_decl(names: SwiftNames<'_>, method: &Method) -> String {
+    let args = format_args(names, method);
+    let ret = names.ty(&method.returns);
     let name = swift_ident(&method.name);
     match method.kind {
         MethodKind::Unary => format!("func {name}({args}) async throws -> {ret}"),
@@ -91,17 +94,18 @@ pub(crate) fn backend_method_decl(method: &Method) -> String {
 }
 
 /// `label: Type` parameters, labels backticked when they are keywords.
-pub(crate) fn format_args(method: &Method) -> String {
+pub(crate) fn format_args(names: SwiftNames<'_>, method: &Method) -> String {
     method
         .args
         .iter()
-        .map(|a| format!("{}: {}", swift_ident(&a.name), a.ty.to_swift()))
+        .map(|a| format!("{}: {}", swift_ident(&a.name), names.ty(&a.ty)))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
 /// `public protocol <T>Codecs`, shared by the dispatcher and the client.
 pub(crate) fn write_codecs_protocol(out: &mut String, contract: &Contract) {
+    let names = SwiftNames::of(contract);
     let types = contract.codec_type_names();
     let _ = writeln!(
         out,
@@ -117,12 +121,16 @@ pub(crate) fn write_codecs_protocol(out: &mut String, contract: &Contract) {
     if types.is_empty() {
         let _ = writeln!(out, "    // No named types in this contract.");
     }
-    for ty in &types {
+    for name in &types {
+        let ty = names.named(name);
         let _ = writeln!(
             out,
-            "    func read{ty}(_ c: inout Bincode.Cursor) throws -> {ty}"
+            "    func read{name}(_ c: inout Bincode.Cursor) throws -> {ty}"
         );
-        let _ = writeln!(out, "    func write{ty}(_ out: inout Data, _ value: {ty})");
+        let _ = writeln!(
+            out,
+            "    func write{name}(_ out: inout Data, _ value: {ty})"
+        );
     }
     let _ = writeln!(out, "}}");
 }
@@ -202,7 +210,7 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
     let _ = writeln!(
         out,
         "    func create(config: {}) async throws -> {name}Backend",
-        init.to_swift(),
+        SwiftNames::of(contract).ty(init),
     );
     let _ = writeln!(out, "}}");
     let _ = writeln!(out);
@@ -256,7 +264,11 @@ fn write_stateful_dispatcher(out: &mut String, contract: &Contract) {
         "    public func handleCreateInstance(payload: Data) async throws -> Data {{",
     );
     let _ = writeln!(out, "        var c = Bincode.Cursor(payload)");
-    let _ = writeln!(out, "        let config = {}", WIRE.read(init, "c"));
+    let _ = writeln!(
+        out,
+        "        let config = {}",
+        wire(SwiftNames::of(contract)).read(init, "c")
+    );
     let _ = writeln!(
         out,
         "        let backend = try await factory.create(config: config)"
@@ -312,7 +324,7 @@ fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
     }
     let _ = writeln!(out, "        switch method {{");
     for method in &contract.methods {
-        write_method_arm(out, method);
+        write_method_arm(out, SwiftNames::of(contract), method);
     }
     let _ = writeln!(out, "        default:");
     let _ = writeln!(
@@ -324,7 +336,8 @@ fn write_handle_call(out: &mut String, contract: &Contract, stateful: bool) {
     let _ = writeln!(out, "    }}");
 }
 
-fn write_method_arm(out: &mut String, method: &Method) {
+fn write_method_arm(out: &mut String, names: SwiftNames<'_>, method: &Method) {
+    let wire = wire(names);
     let _ = writeln!(out, "        case {}:", swift_string(&method.name));
     let is_stream = matches!(method.kind, MethodKind::Stream);
     // Stream errors are thrown while iterating, after `handleCall` returned;
@@ -351,7 +364,7 @@ fn write_method_arm(out: &mut String, method: &Method) {
             continue;
         }
         let name = local(&arg.name, DISPATCH_LOCALS, swift_ident);
-        let _ = writeln!(out, "{indent}let {name} = {}", WIRE.read(&arg.ty, "c"));
+        let _ = writeln!(out, "{indent}let {name} = {}", wire.read(&arg.ty, "c"));
         call_args.push(format!("{label}: {name}"));
     }
     let call = format!(
@@ -360,25 +373,32 @@ fn write_method_arm(out: &mut String, method: &Method) {
         call_args.join(", ")
     );
     if is_stream {
-        write_stream_return(out, indent, method, &call);
+        write_stream_return(out, names, indent, method, &call);
     } else if method.returns.is_unit() {
         let _ = writeln!(out, "{indent}try await {call}");
         let _ = writeln!(out, "{indent}return .unary(Data())");
     } else {
         let _ = writeln!(out, "{indent}let result = try await {call}");
         let _ = writeln!(out, "{indent}var out = Data()");
-        WIRE.write_stmt(out, indent, &method.returns, "out", "result");
+        wire.write_stmt(out, indent, &method.returns, "out", "result");
         let _ = writeln!(out, "{indent}return .unary(out)");
     }
     if let Some(err) = unary_error {
-        write_error_catch(out, err);
+        write_error_catch(out, names, err);
     }
 }
 
 /// `return PluginResult.encoding(...)` over the backend's stream. The
 /// closures escape, so they capture `codecs` as a local rather than
 /// reaching through `self`.
-fn write_stream_return(out: &mut String, indent: &str, method: &Method, call: &str) {
+fn write_stream_return(
+    out: &mut String,
+    names: SwiftNames<'_>,
+    indent: &str,
+    method: &Method,
+    call: &str,
+) {
+    let wire = wire(names);
     let body = format!("{indent}    ");
     let mut closures = String::new();
     if method.returns.is_unit() {
@@ -394,7 +414,7 @@ fn write_stream_return(out: &mut String, indent: &str, method: &Method, call: &s
             "{indent}return PluginResult.encoding({call}, encode: {{ item in"
         );
         let _ = writeln!(closures, "{body}var out = Data()");
-        WIRE.write_stmt(&mut closures, &body, &method.returns, "out", "item");
+        wire.write_stmt(&mut closures, &body, &method.returns, "out", "item");
         let _ = writeln!(closures, "{body}return out");
     }
     if let Some(err) = &method.error {
@@ -402,10 +422,10 @@ fn write_stream_return(out: &mut String, indent: &str, method: &Method, call: &s
         let _ = writeln!(
             closures,
             "{body}guard let err = error as? {} else {{ return error }}",
-            err.to_swift()
+            names.ty(err)
         );
         let _ = writeln!(closures, "{body}var errOut = Data()");
-        WIRE.write_stmt(&mut closures, &body, err, "errOut", "err");
+        wire.write_stmt(&mut closures, &body, err, "errOut", "err");
         let _ = writeln!(closures, "{body}return PluginException(payload: errOut)");
     }
     let _ = writeln!(closures, "{indent}}})");
@@ -416,10 +436,10 @@ fn write_stream_return(out: &mut String, indent: &str, method: &Method, call: &s
     out.push_str(&closures);
 }
 
-fn write_error_catch(out: &mut String, err: &TypeRef) {
-    let _ = writeln!(out, "            }} catch let err as {} {{", err.to_swift());
+fn write_error_catch(out: &mut String, names: SwiftNames<'_>, err: &TypeRef) {
+    let _ = writeln!(out, "            }} catch let err as {} {{", names.ty(err));
     let _ = writeln!(out, "                var errOut = Data()");
-    WIRE.write_stmt(out, "                ", err, "errOut", "err");
+    wire(names).write_stmt(out, "                ", err, "errOut", "err");
     let _ = writeln!(
         out,
         "                throw PluginException(payload: errOut)"

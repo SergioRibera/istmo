@@ -10,14 +10,14 @@ import IstmoRuntime
 public protocol SignInCodecs {
     func readNativeHandleId(_ c: inout Bincode.Cursor) throws -> NativeHandleId
     func writeNativeHandleId(_ out: inout Data, _ value: NativeHandleId)
-    func readSignInAccount(_ c: inout Bincode.Cursor) throws -> SignInAccount
-    func writeSignInAccount(_ out: inout Data, _ value: SignInAccount)
-    func readSignInConfig(_ c: inout Bincode.Cursor) throws -> SignInConfig
-    func writeSignInConfig(_ out: inout Data, _ value: SignInConfig)
-    func readSignInError(_ c: inout Bincode.Cursor) throws -> SignInError
-    func writeSignInError(_ out: inout Data, _ value: SignInError)
-    func readSignInMode(_ c: inout Bincode.Cursor) throws -> SignInMode
-    func writeSignInMode(_ out: inout Data, _ value: SignInMode)
+    func readSignInAccount(_ c: inout Bincode.Cursor) throws -> SignIn.SignInAccount
+    func writeSignInAccount(_ out: inout Data, _ value: SignIn.SignInAccount)
+    func readSignInConfig(_ c: inout Bincode.Cursor) throws -> SignIn.SignInConfig
+    func writeSignInConfig(_ out: inout Data, _ value: SignIn.SignInConfig)
+    func readSignInError(_ c: inout Bincode.Cursor) throws -> SignIn.SignInError
+    func writeSignInError(_ out: inout Data, _ value: SignIn.SignInError)
+    func readSignInMode(_ c: inout Bincode.Cursor) throws -> SignIn.SignInMode
+    func writeSignInMode(_ out: inout Data, _ value: SignIn.SignInMode)
 }
 
 /// Rust-hosted `SignIn` plugin. Ships each call across the frame
@@ -31,7 +31,7 @@ public final class SignInClient {
         self.codecs = codecs
     }
 
-    public func sign_in(mode: SignInMode) async throws -> SignInAccount {
+    public func sign_in(mode: SignIn.SignInMode) async throws -> SignIn.SignInAccount {
         var payload = Data()
         codecs.writeSignInMode(&payload, mode)
         let bytes: Data
@@ -39,28 +39,28 @@ public final class SignInClient {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "sign_in", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: SignInError? = try? codecs.readSignInError(&errCursor)
+            let decoded: SignIn.SignInError? = try? codecs.readSignInError(&errCursor)
             throw SignInException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
         return try codecs.readSignInAccount(&c)
     }
 
-    public func silent_sign_in() async throws -> SignInAccount? {
+    public func silent_sign_in() async throws -> SignIn.SignInAccount? {
         let payload = Data()
         let bytes: Data
         do {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "silent_sign_in", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: SignInError? = try? codecs.readSignInError(&errCursor)
+            let decoded: SignIn.SignInError? = try? codecs.readSignInError(&errCursor)
             throw SignInException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
         return try Bincode.readOption(&c) { c1 in try codecs.readSignInAccount(&c1) }
     }
 
-    public func refresh(credential: NativeHandleId) async throws -> SignInAccount {
+    public func refresh(credential: NativeHandleId) async throws -> SignIn.SignInAccount {
         var payload = Data()
         codecs.writeNativeHandleId(&payload, credential)
         let bytes: Data
@@ -68,7 +68,7 @@ public final class SignInClient {
             bytes = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "refresh", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: SignInError? = try? codecs.readSignInError(&errCursor)
+            let decoded: SignIn.SignInError? = try? codecs.readSignInError(&errCursor)
             throw SignInException(payload: e.payload, decoded: decoded)
         }
         var c = Bincode.Cursor(bytes)
@@ -81,7 +81,7 @@ public final class SignInClient {
             _ = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "sign_out", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: SignInError? = try? codecs.readSignInError(&errCursor)
+            let decoded: SignIn.SignInError? = try? codecs.readSignInError(&errCursor)
             throw SignInException(payload: e.payload, decoded: decoded)
         }
     }
@@ -92,7 +92,7 @@ public final class SignInClient {
             _ = try await IstmoRuntime.shared.call(pluginId: Self.PLUGIN_ID, method: "revoke", payload: payload)
         } catch let e as PluginException {
             var errCursor = Bincode.Cursor(e.payload)
-            let decoded: SignInError? = try? codecs.readSignInError(&errCursor)
+            let decoded: SignIn.SignInError? = try? codecs.readSignInError(&errCursor)
             throw SignInException(payload: e.payload, decoded: decoded)
         }
     }
@@ -101,5 +101,5 @@ public final class SignInClient {
 /// Swift-side view of a domain error decoded from `Frame::Respond { Err(bytes) }`.
 public struct SignInException: Error {
     public let payload: Data
-    public let decoded: SignInError?
+    public let decoded: SignIn.SignInError?
 }

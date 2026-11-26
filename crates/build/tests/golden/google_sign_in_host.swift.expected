@@ -8,15 +8,15 @@ import IstmoRuntime
 /// impl with the SDK-specific logic; the dispatcher below handles
 /// wire encode/decode.
 public protocol SignInBackend: AnyObject {
-    /// Throw `SignInError` to surface a typed domain error.
-    func sign_in(mode: SignInMode) async throws -> SignInAccount
-    /// Throw `SignInError` to surface a typed domain error.
-    func silent_sign_in() async throws -> SignInAccount?
-    /// Throw `SignInError` to surface a typed domain error.
-    func refresh(credential: NativeHandleId) async throws -> SignInAccount
-    /// Throw `SignInError` to surface a typed domain error.
+    /// Throw `SignIn.SignInError` to surface a typed domain error.
+    func sign_in(mode: SignIn.SignInMode) async throws -> SignIn.SignInAccount
+    /// Throw `SignIn.SignInError` to surface a typed domain error.
+    func silent_sign_in() async throws -> SignIn.SignInAccount?
+    /// Throw `SignIn.SignInError` to surface a typed domain error.
+    func refresh(credential: NativeHandleId) async throws -> SignIn.SignInAccount
+    /// Throw `SignIn.SignInError` to surface a typed domain error.
     func sign_out() async throws -> Void
-    /// Throw `SignInError` to surface a typed domain error.
+    /// Throw `SignIn.SignInError` to surface a typed domain error.
     func revoke() async throws -> Void
 }
 
@@ -26,20 +26,20 @@ public protocol SignInBackend: AnyObject {
 public protocol SignInCodecs {
     func readNativeHandleId(_ c: inout Bincode.Cursor) throws -> NativeHandleId
     func writeNativeHandleId(_ out: inout Data, _ value: NativeHandleId)
-    func readSignInAccount(_ c: inout Bincode.Cursor) throws -> SignInAccount
-    func writeSignInAccount(_ out: inout Data, _ value: SignInAccount)
-    func readSignInConfig(_ c: inout Bincode.Cursor) throws -> SignInConfig
-    func writeSignInConfig(_ out: inout Data, _ value: SignInConfig)
-    func readSignInError(_ c: inout Bincode.Cursor) throws -> SignInError
-    func writeSignInError(_ out: inout Data, _ value: SignInError)
-    func readSignInMode(_ c: inout Bincode.Cursor) throws -> SignInMode
-    func writeSignInMode(_ out: inout Data, _ value: SignInMode)
+    func readSignInAccount(_ c: inout Bincode.Cursor) throws -> SignIn.SignInAccount
+    func writeSignInAccount(_ out: inout Data, _ value: SignIn.SignInAccount)
+    func readSignInConfig(_ c: inout Bincode.Cursor) throws -> SignIn.SignInConfig
+    func writeSignInConfig(_ out: inout Data, _ value: SignIn.SignInConfig)
+    func readSignInError(_ c: inout Bincode.Cursor) throws -> SignIn.SignInError
+    func writeSignInError(_ out: inout Data, _ value: SignIn.SignInError)
+    func readSignInMode(_ c: inout Bincode.Cursor) throws -> SignIn.SignInMode
+    func writeSignInMode(_ out: inout Data, _ value: SignIn.SignInMode)
 }
 
 /// Decodes wire calls, invokes `SignInBackend`, encodes the response.
 /// Register with `IstmoRuntime.shared.registerHandler(PLUGIN_ID, dispatcher)`.
 public protocol SignInFactory {
-    func create(config: SignInConfig) async throws -> SignInBackend
+    func create(config: SignIn.SignInConfig) async throws -> SignInBackend
 }
 
 public final class SignInDispatcher: PluginHandler, HandleReleaser {
@@ -101,7 +101,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
                 var out = Data()
                 codecs.writeSignInAccount(&out, result)
                 return .unary(out)
-            } catch let err as SignInError {
+            } catch let err as SignIn.SignInError {
                 var errOut = Data()
                 codecs.writeSignInError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -112,7 +112,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
                 var out = Data()
                 Bincode.writeOption(&out, result) { o1, v1 in codecs.writeSignInAccount(&o1, v1) }
                 return .unary(out)
-            } catch let err as SignInError {
+            } catch let err as SignIn.SignInError {
                 var errOut = Data()
                 codecs.writeSignInError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -125,7 +125,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
                 var out = Data()
                 codecs.writeSignInAccount(&out, result)
                 return .unary(out)
-            } catch let err as SignInError {
+            } catch let err as SignIn.SignInError {
                 var errOut = Data()
                 codecs.writeSignInError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -134,7 +134,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
             do {
                 try await backend.sign_out()
                 return .unary(Data())
-            } catch let err as SignInError {
+            } catch let err as SignIn.SignInError {
                 var errOut = Data()
                 codecs.writeSignInError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -143,7 +143,7 @@ public final class SignInDispatcher: PluginHandler, HandleReleaser {
             do {
                 try await backend.revoke()
                 return .unary(Data())
-            } catch let err as SignInError {
+            } catch let err as SignIn.SignInError {
                 var errOut = Data()
                 codecs.writeSignInError(&errOut, err)
                 throw PluginException(payload: errOut)

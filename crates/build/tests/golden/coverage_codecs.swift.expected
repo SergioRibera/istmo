@@ -7,7 +7,7 @@ import IstmoRuntime
 public final class CoverageCodecsImpl: CoverageCodecs {
     public init() {}
 
-    public func readEverything(_ c: inout Bincode.Cursor) throws -> Everything {
+    public func readEverything(_ c: inout Bincode.Cursor) throws -> Coverage.Everything {
         let flag = try Bincode.readBool(&c)
         let byte = try Bincode.readU8(&c)
         let signedByte = try Bincode.readI8(&c)
@@ -31,10 +31,10 @@ public final class CoverageCodecsImpl: CoverageCodecs {
         let `where` = try Bincode.readOption(&c) { c1 in try Bincode.readVarintI64(&c1) }
         let cursor = try Bincode.readU8(&c)
         let c_ = try Bincode.readU8(&c)
-        return Everything(unit: (), flag: flag, byte: byte, signedByte: signedByte, short: short, signedShort: signedShort, word: word, signedWord: signedWord, long: long, signedLong: signedLong, single: single, double: double, text: text, blob: blob, nested: nested, maybeBlob: maybeBlob, grid: grid, shapes: shapes, handle: handle, object: object, default: `default`, where: `where`, cursor: cursor, c: c_)
+        return Coverage.Everything(unit: (), flag: flag, byte: byte, signedByte: signedByte, short: short, signedShort: signedShort, word: word, signedWord: signedWord, long: long, signedLong: signedLong, single: single, double: double, text: text, blob: blob, nested: nested, maybeBlob: maybeBlob, grid: grid, shapes: shapes, handle: handle, object: object, default: `default`, where: `where`, cursor: cursor, c: c_)
     }
 
-    public func writeEverything(_ out: inout Data, _ value: Everything) {
+    public func writeEverything(_ out: inout Data, _ value: Coverage.Everything) {
         // () — nothing to encode
         Bincode.writeBool(&out, value.flag)
         Bincode.writeU8(&out, value.byte)
@@ -61,7 +61,7 @@ public final class CoverageCodecsImpl: CoverageCodecs {
         Bincode.writeU8(&out, value.c)
     }
 
-    public func readShape(_ c: inout Bincode.Cursor) throws -> Shape {
+    public func readShape(_ c: inout Bincode.Cursor) throws -> Coverage.Shape {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .`default`
@@ -74,7 +74,7 @@ public final class CoverageCodecsImpl: CoverageCodecs {
         }
     }
 
-    public func writeShape(_ out: inout Data, _ value: Shape) {
+    public func writeShape(_ out: inout Data, _ value: Coverage.Shape) {
         switch value {
         case .`default`:
             Bincode.writeVarintU32(&out, 0)
@@ -88,19 +88,19 @@ public final class CoverageCodecsImpl: CoverageCodecs {
         }
     }
 
-    public func readMode(_ c: inout Bincode.Cursor) throws -> Mode {
+    public func readMode(_ c: inout Bincode.Cursor) throws -> Coverage.Mode {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = Mode(rawValue: disc) else {
+        guard let value = Coverage.Mode(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeMode(_ out: inout Data, _ value: Mode) {
+    public func writeMode(_ out: inout Data, _ value: Coverage.Mode) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readFirstError(_ c: inout Bincode.Cursor) throws -> FirstError {
+    public func readFirstError(_ c: inout Bincode.Cursor) throws -> Coverage.FirstError {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .denied
@@ -109,7 +109,7 @@ public final class CoverageCodecsImpl: CoverageCodecs {
         }
     }
 
-    public func writeFirstError(_ out: inout Data, _ value: FirstError) {
+    public func writeFirstError(_ out: inout Data, _ value: Coverage.FirstError) {
         switch value {
         case .denied:
             Bincode.writeVarintU32(&out, 0)
@@ -119,12 +119,12 @@ public final class CoverageCodecsImpl: CoverageCodecs {
         }
     }
 
-    public func readSecondError(_ c: inout Bincode.Cursor) throws -> SecondError {
+    public func readSecondError(_ c: inout Bincode.Cursor) throws -> Coverage.SecondError {
         let code = try Bincode.readVarintU32(&c)
-        return SecondError(code: code)
+        return Coverage.SecondError(code: code)
     }
 
-    public func writeSecondError(_ out: inout Data, _ value: SecondError) {
+    public func writeSecondError(_ out: inout Data, _ value: Coverage.SecondError) {
         Bincode.writeVarintU32(&out, value.code)
     }
 

@@ -3,164 +3,169 @@
 
 import Foundation
 
-public struct ShareRect: Sendable {
-    public let x: Double
-    public let y: Double
-    public let width: Double
-    public let height: Double
+/// The `Share` plugin's message types.
+public enum Share {}
 
-    public init(x: Double, y: Double, width: Double, height: Double) {
-        self.x = x
-        self.y = y
-        self.width = width
-        self.height = height
+extension Share {
+    public struct ShareRect: Sendable {
+        public let x: Double
+        public let y: Double
+        public let width: Double
+        public let height: Double
+
+        public init(x: Double, y: Double, width: Double, height: Double) {
+            self.x = x
+            self.y = y
+            self.width = width
+            self.height = height
+        }
     }
-}
 
-public struct ShareAnchor: Sendable {
-    public let windowId: UInt64?
-    public let rect: ShareRect?
+    public struct ShareAnchor: Sendable {
+        public let windowId: UInt64?
+        public let rect: ShareRect?
 
-    public init(windowId: UInt64?, rect: ShareRect?) {
-        self.windowId = windowId
-        self.rect = rect
+        public init(windowId: UInt64?, rect: ShareRect?) {
+            self.windowId = windowId
+            self.rect = rect
+        }
     }
-}
 
-public enum ShareFileSource: Sendable {
-    case path(String)
-    case bytes(Data)
-}
-
-public struct ShareFile: Sendable {
-    public let source: ShareFileSource
-    public let name: String?
-    public let mimeType: String?
-
-    public init(source: ShareFileSource, name: String?, mimeType: String?) {
-        self.source = source
-        self.name = name
-        self.mimeType = mimeType
+    public enum ShareFileSource: Sendable {
+        case path(String)
+        case bytes(Data)
     }
-}
 
-public struct SharePreview: Sendable {
-    public let title: String?
-    public let thumbnail: ShareFile?
-    public let fetchLinkMetadata: Bool
+    public struct ShareFile: Sendable {
+        public let source: ShareFileSource
+        public let name: String?
+        public let mimeType: String?
 
-    public init(title: String?, thumbnail: ShareFile?, fetchLinkMetadata: Bool) {
-        self.title = title
-        self.thumbnail = thumbnail
-        self.fetchLinkMetadata = fetchLinkMetadata
+        public init(source: ShareFileSource, name: String?, mimeType: String?) {
+            self.source = source
+            self.name = name
+            self.mimeType = mimeType
+        }
     }
-}
 
-public struct ShareRequest: Sendable {
-    public let text: String?
-    public let url: String?
-    public let subject: String?
-    public let files: [ShareFile]
-    public let preview: SharePreview?
-    public let anchor: ShareAnchor?
+    public struct SharePreview: Sendable {
+        public let title: String?
+        public let thumbnail: ShareFile?
+        public let fetchLinkMetadata: Bool
 
-    public init(text: String?, url: String?, subject: String?, files: [ShareFile], preview: SharePreview?, anchor: ShareAnchor?) {
-        self.text = text
-        self.url = url
-        self.subject = subject
-        self.files = files
-        self.preview = preview
-        self.anchor = anchor
+        public init(title: String?, thumbnail: ShareFile?, fetchLinkMetadata: Bool) {
+            self.title = title
+            self.thumbnail = thumbnail
+            self.fetchLinkMetadata = fetchLinkMetadata
+        }
     }
-}
 
-public enum ShareOutcome: Sendable {
-    case shared(String?)
-    case targetChosen(String)
-    case dismissed
-    case unknown
-}
+    public struct ShareRequest: Sendable {
+        public let text: String?
+        public let url: String?
+        public let subject: String?
+        public let files: [ShareFile]
+        public let preview: SharePreview?
+        public let anchor: ShareAnchor?
 
-public struct ShareCapabilities: Sendable {
-    public let send: Bool
-    public let files: Bool
-    public let mixedContent: Bool
-    public let richPreview: Bool
-    public let reportsCompletion: Bool
-    public let reportsTarget: Bool
-    public let receive: Bool
-    public let directShare: Bool
-    public let dismissOnCancel: Bool
-
-    public init(send: Bool, files: Bool, mixedContent: Bool, richPreview: Bool, reportsCompletion: Bool, reportsTarget: Bool, receive: Bool, directShare: Bool, dismissOnCancel: Bool) {
-        self.send = send
-        self.files = files
-        self.mixedContent = mixedContent
-        self.richPreview = richPreview
-        self.reportsCompletion = reportsCompletion
-        self.reportsTarget = reportsTarget
-        self.receive = receive
-        self.directShare = directShare
-        self.dismissOnCancel = dismissOnCancel
+        public init(text: String?, url: String?, subject: String?, files: [ShareFile], preview: SharePreview?, anchor: ShareAnchor?) {
+            self.text = text
+            self.url = url
+            self.subject = subject
+            self.files = files
+            self.preview = preview
+            self.anchor = anchor
+        }
     }
-}
 
-public enum ShareError: Error {
-    case unsupported(String)
-    case invalidRequest(String)
-    case notFound(String)
-    case noPresenter(String)
-    case busy
-    case io(String)
-    case backend(String)
-}
-
-public struct IncomingFile: Sendable {
-    public let path: String
-    public let name: String
-    public let mimeType: String?
-    public let size: UInt64?
-
-    public init(path: String, name: String, mimeType: String?, size: UInt64?) {
-        self.path = path
-        self.name = name
-        self.mimeType = mimeType
-        self.size = size
+    public enum ShareOutcome: Sendable {
+        case shared(String?)
+        case targetChosen(String)
+        case dismissed
+        case unknown
     }
-}
 
-public struct IncomingShare: Sendable {
-    public let text: String?
-    public let url: String?
-    public let subject: String?
-    public let files: [IncomingFile]
-    public let sourceApp: String?
-    public let receivedAtMs: UInt64?
-    public let targetId: String?
+    public struct ShareCapabilities: Sendable {
+        public let send: Bool
+        public let files: Bool
+        public let mixedContent: Bool
+        public let richPreview: Bool
+        public let reportsCompletion: Bool
+        public let reportsTarget: Bool
+        public let receive: Bool
+        public let directShare: Bool
+        public let dismissOnCancel: Bool
 
-    public init(text: String?, url: String?, subject: String?, files: [IncomingFile], sourceApp: String?, receivedAtMs: UInt64?, targetId: String?) {
-        self.text = text
-        self.url = url
-        self.subject = subject
-        self.files = files
-        self.sourceApp = sourceApp
-        self.receivedAtMs = receivedAtMs
-        self.targetId = targetId
+        public init(send: Bool, files: Bool, mixedContent: Bool, richPreview: Bool, reportsCompletion: Bool, reportsTarget: Bool, receive: Bool, directShare: Bool, dismissOnCancel: Bool) {
+            self.send = send
+            self.files = files
+            self.mixedContent = mixedContent
+            self.richPreview = richPreview
+            self.reportsCompletion = reportsCompletion
+            self.reportsTarget = reportsTarget
+            self.receive = receive
+            self.directShare = directShare
+            self.dismissOnCancel = dismissOnCancel
+        }
     }
-}
 
-public struct ShareTarget: Sendable {
-    public let id: String
-    public let label: String
-    public let icon: ShareFile?
-    public let uri: String?
-    public let launcherOnly: Bool
+    public enum ShareError: Error {
+        case unsupported(String)
+        case invalidRequest(String)
+        case notFound(String)
+        case noPresenter(String)
+        case busy
+        case io(String)
+        case backend(String)
+    }
 
-    public init(id: String, label: String, icon: ShareFile?, uri: String?, launcherOnly: Bool) {
-        self.id = id
-        self.label = label
-        self.icon = icon
-        self.uri = uri
-        self.launcherOnly = launcherOnly
+    public struct IncomingFile: Sendable {
+        public let path: String
+        public let name: String
+        public let mimeType: String?
+        public let size: UInt64?
+
+        public init(path: String, name: String, mimeType: String?, size: UInt64?) {
+            self.path = path
+            self.name = name
+            self.mimeType = mimeType
+            self.size = size
+        }
+    }
+
+    public struct IncomingShare: Sendable {
+        public let text: String?
+        public let url: String?
+        public let subject: String?
+        public let files: [IncomingFile]
+        public let sourceApp: String?
+        public let receivedAtMs: UInt64?
+        public let targetId: String?
+
+        public init(text: String?, url: String?, subject: String?, files: [IncomingFile], sourceApp: String?, receivedAtMs: UInt64?, targetId: String?) {
+            self.text = text
+            self.url = url
+            self.subject = subject
+            self.files = files
+            self.sourceApp = sourceApp
+            self.receivedAtMs = receivedAtMs
+            self.targetId = targetId
+        }
+    }
+
+    public struct ShareTarget: Sendable {
+        public let id: String
+        public let label: String
+        public let icon: ShareFile?
+        public let uri: String?
+        public let launcherOnly: Bool
+
+        public init(id: String, label: String, icon: ShareFile?, uri: String?, launcherOnly: Bool) {
+            self.id = id
+            self.label = label
+            self.icon = icon
+            self.uri = uri
+            self.launcherOnly = launcherOnly
+        }
     }
 }

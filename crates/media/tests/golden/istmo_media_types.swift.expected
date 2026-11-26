@@ -3,12 +3,17 @@
 
 import Foundation
 
-public enum AccessStatus: UInt32, Sendable {
-    case granted = 0
-    case denied = 1
-    case notDetermined = 2
-    case restricted = 3
-    case requiresRestart = 4
-    case perSession = 5
-    case notApplicable = 6
+/// Message types shared by plugins: `IstmoMedia`.
+public enum IstmoMedia {}
+
+extension IstmoMedia {
+    public enum AccessStatus: UInt32, Sendable {
+        case granted = 0
+        case denied = 1
+        case notDetermined = 2
+        case restricted = 3
+        case requiresRestart = 4
+        case perSession = 5
+        case notApplicable = 6
+    }
 }

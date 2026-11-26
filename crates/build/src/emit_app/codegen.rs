@@ -347,7 +347,7 @@ fn seed_swift_backend_impl(gen_dir: &Path, contract: &Contract) {
          // logic; regenerate is a no-op once this file exists.\n\n",
     );
     if let Some(init) = &contract.init {
-        let config = init.to_swift();
+        let config = crate::codegen::SwiftNames::of(contract).ty(init);
         let _ = write!(
             body,
             "final class {ty}FactoryImpl: {ty}Factory {{\n\
@@ -370,7 +370,10 @@ fn seed_swift_backend_impl(gen_dir: &Path, contract: &Contract) {
         let _ = write!(
             body,
             "    {} {{\n        fatalError({})\n    }}\n",
-            crate::swift_host::backend_method_decl(method),
+            crate::swift_host::backend_method_decl(
+                crate::codegen::SwiftNames::of(contract),
+                method
+            ),
             swift_string(&format!("implement {}", method.name)),
         );
     }

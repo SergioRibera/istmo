@@ -7,66 +7,66 @@ import IstmoRuntime
 public final class CameraCodecsImpl: CameraCodecs {
     public init() {}
 
-    public func readCameraInitConfig(_ c: inout Bincode.Cursor) throws -> CameraInitConfig {
+    public func readCameraInitConfig(_ c: inout Bincode.Cursor) throws -> Camera.CameraInitConfig {
         let framePoolDepth = try Bincode.readVarintU32(&c)
-        return CameraInitConfig(framePoolDepth: framePoolDepth)
+        return Camera.CameraInitConfig(framePoolDepth: framePoolDepth)
     }
 
-    public func writeCameraInitConfig(_ out: inout Data, _ value: CameraInitConfig) {
+    public func writeCameraInitConfig(_ out: inout Data, _ value: Camera.CameraInitConfig) {
         Bincode.writeVarintU32(&out, value.framePoolDepth)
     }
 
-    public func readCameraFacing(_ c: inout Bincode.Cursor) throws -> CameraFacing {
+    public func readCameraFacing(_ c: inout Bincode.Cursor) throws -> Camera.CameraFacing {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = CameraFacing(rawValue: disc) else {
+        guard let value = Camera.CameraFacing(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeCameraFacing(_ out: inout Data, _ value: CameraFacing) {
+    public func writeCameraFacing(_ out: inout Data, _ value: Camera.CameraFacing) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readLensKind(_ c: inout Bincode.Cursor) throws -> LensKind {
+    public func readLensKind(_ c: inout Bincode.Cursor) throws -> Camera.LensKind {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = LensKind(rawValue: disc) else {
+        guard let value = Camera.LensKind(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeLensKind(_ out: inout Data, _ value: LensKind) {
+    public func writeLensKind(_ out: inout Data, _ value: Camera.LensKind) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readResolution(_ c: inout Bincode.Cursor) throws -> Resolution {
+    public func readResolution(_ c: inout Bincode.Cursor) throws -> Camera.Resolution {
         let width = try Bincode.readVarintU32(&c)
         let height = try Bincode.readVarintU32(&c)
-        return Resolution(width: width, height: height)
+        return Camera.Resolution(width: width, height: height)
     }
 
-    public func writeResolution(_ out: inout Data, _ value: Resolution) {
+    public func writeResolution(_ out: inout Data, _ value: Camera.Resolution) {
         Bincode.writeVarintU32(&out, value.width)
         Bincode.writeVarintU32(&out, value.height)
     }
 
-    public func readSupportedFormat(_ c: inout Bincode.Cursor) throws -> SupportedFormat {
+    public func readSupportedFormat(_ c: inout Bincode.Cursor) throws -> Camera.SupportedFormat {
         let resolution = try self.readResolution(&c)
         let pixelFormat = try self.readPixelFormat(&c)
         let minFps = try Bincode.readVarintU32(&c)
         let maxFps = try Bincode.readVarintU32(&c)
-        return SupportedFormat(resolution: resolution, pixelFormat: pixelFormat, minFps: minFps, maxFps: maxFps)
+        return Camera.SupportedFormat(resolution: resolution, pixelFormat: pixelFormat, minFps: minFps, maxFps: maxFps)
     }
 
-    public func writeSupportedFormat(_ out: inout Data, _ value: SupportedFormat) {
+    public func writeSupportedFormat(_ out: inout Data, _ value: Camera.SupportedFormat) {
         self.writeResolution(&out, value.resolution)
         self.writePixelFormat(&out, value.pixelFormat)
         Bincode.writeVarintU32(&out, value.minFps)
         Bincode.writeVarintU32(&out, value.maxFps)
     }
 
-    public func readCameraCapabilities(_ c: inout Bincode.Cursor) throws -> CameraCapabilities {
+    public func readCameraCapabilities(_ c: inout Bincode.Cursor) throws -> Camera.CameraCapabilities {
         let minZoom = try Bincode.readF32(&c)
         let maxZoom = try Bincode.readF32(&c)
         let opticalZoomSteps = try Bincode.readVec(&c) { c1 in try Bincode.readF32(&c1) }
@@ -81,10 +81,10 @@ public final class CameraCodecsImpl: CameraCodecs {
         let supportsDepth = try Bincode.readBool(&c)
         let supportsRaw = try Bincode.readBool(&c)
         let maxStillResolution = try self.readResolution(&c)
-        return CameraCapabilities(minZoom: minZoom, maxZoom: maxZoom, opticalZoomSteps: opticalZoomSteps, focalLengthsMm: focalLengthsMm, supportsFlash: supportsFlash, supportsTorch: supportsTorch, supportsAutofocus: supportsAutofocus, supportsManualFocus: supportsManualFocus, supportsOis: supportsOis, supportsEis: supportsEis, supportsHdr: supportsHdr, supportsDepth: supportsDepth, supportsRaw: supportsRaw, maxStillResolution: maxStillResolution)
+        return Camera.CameraCapabilities(minZoom: minZoom, maxZoom: maxZoom, opticalZoomSteps: opticalZoomSteps, focalLengthsMm: focalLengthsMm, supportsFlash: supportsFlash, supportsTorch: supportsTorch, supportsAutofocus: supportsAutofocus, supportsManualFocus: supportsManualFocus, supportsOis: supportsOis, supportsEis: supportsEis, supportsHdr: supportsHdr, supportsDepth: supportsDepth, supportsRaw: supportsRaw, maxStillResolution: maxStillResolution)
     }
 
-    public func writeCameraCapabilities(_ out: inout Data, _ value: CameraCapabilities) {
+    public func writeCameraCapabilities(_ out: inout Data, _ value: Camera.CameraCapabilities) {
         Bincode.writeF32(&out, value.minZoom)
         Bincode.writeF32(&out, value.maxZoom)
         Bincode.writeVec(&out, value.opticalZoomSteps) { o1, v1 in Bincode.writeF32(&o1, v1) }
@@ -101,7 +101,7 @@ public final class CameraCodecsImpl: CameraCodecs {
         self.writeResolution(&out, value.maxStillResolution)
     }
 
-    public func readCameraDevice(_ c: inout Bincode.Cursor) throws -> CameraDevice {
+    public func readCameraDevice(_ c: inout Bincode.Cursor) throws -> Camera.CameraDevice {
         let id = try Bincode.readString(&c)
         let label = try Bincode.readString(&c)
         let facing = try self.readCameraFacing(&c)
@@ -109,10 +109,10 @@ public final class CameraCodecsImpl: CameraCodecs {
         let physicalSensors = try Bincode.readVec(&c) { c1 in try Bincode.readString(&c1) }
         let capabilities = try self.readCameraCapabilities(&c)
         let supportedFormats = try Bincode.readVec(&c) { c1 in try self.readSupportedFormat(&c1) }
-        return CameraDevice(id: id, label: label, facing: facing, lens: lens, physicalSensors: physicalSensors, capabilities: capabilities, supportedFormats: supportedFormats)
+        return Camera.CameraDevice(id: id, label: label, facing: facing, lens: lens, physicalSensors: physicalSensors, capabilities: capabilities, supportedFormats: supportedFormats)
     }
 
-    public func writeCameraDevice(_ out: inout Data, _ value: CameraDevice) {
+    public func writeCameraDevice(_ out: inout Data, _ value: Camera.CameraDevice) {
         Bincode.writeString(&out, value.id)
         Bincode.writeString(&out, value.label)
         self.writeCameraFacing(&out, value.facing)
@@ -122,31 +122,31 @@ public final class CameraCodecsImpl: CameraCodecs {
         Bincode.writeVec(&out, value.supportedFormats) { o1, v1 in self.writeSupportedFormat(&o1, v1) }
     }
 
-    public func readConcurrentPair(_ c: inout Bincode.Cursor) throws -> ConcurrentPair {
+    public func readConcurrentPair(_ c: inout Bincode.Cursor) throws -> Camera.ConcurrentPair {
         let primary = try Bincode.readString(&c)
         let secondary = try Bincode.readString(&c)
-        return ConcurrentPair(primary: primary, secondary: secondary)
+        return Camera.ConcurrentPair(primary: primary, secondary: secondary)
     }
 
-    public func writeConcurrentPair(_ out: inout Data, _ value: ConcurrentPair) {
+    public func writeConcurrentPair(_ out: inout Data, _ value: Camera.ConcurrentPair) {
         Bincode.writeString(&out, value.primary)
         Bincode.writeString(&out, value.secondary)
     }
 
-    public func readConcurrentSupport(_ c: inout Bincode.Cursor) throws -> ConcurrentSupport {
+    public func readConcurrentSupport(_ c: inout Bincode.Cursor) throws -> Camera.ConcurrentSupport {
         let maxConcurrent = try Bincode.readVarintU32(&c)
         let approvedPairs = try Bincode.readVec(&c) { c1 in try self.readConcurrentPair(&c1) }
         let anyCombination = try Bincode.readBool(&c)
-        return ConcurrentSupport(maxConcurrent: maxConcurrent, approvedPairs: approvedPairs, anyCombination: anyCombination)
+        return Camera.ConcurrentSupport(maxConcurrent: maxConcurrent, approvedPairs: approvedPairs, anyCombination: anyCombination)
     }
 
-    public func writeConcurrentSupport(_ out: inout Data, _ value: ConcurrentSupport) {
+    public func writeConcurrentSupport(_ out: inout Data, _ value: Camera.ConcurrentSupport) {
         Bincode.writeVarintU32(&out, value.maxConcurrent)
         Bincode.writeVec(&out, value.approvedPairs) { o1, v1 in self.writeConcurrentPair(&o1, v1) }
         Bincode.writeBool(&out, value.anyCombination)
     }
 
-    public func readPixelFormat(_ c: inout Bincode.Cursor) throws -> PixelFormat {
+    public func readPixelFormat(_ c: inout Bincode.Cursor) throws -> Camera.PixelFormat {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .nv21
@@ -158,7 +158,7 @@ public final class CameraCodecsImpl: CameraCodecs {
         }
     }
 
-    public func writePixelFormat(_ out: inout Data, _ value: PixelFormat) {
+    public func writePixelFormat(_ out: inout Data, _ value: Camera.PixelFormat) {
         switch value {
         case .nv21:
             Bincode.writeVarintU32(&out, 0)
@@ -174,17 +174,17 @@ public final class CameraCodecsImpl: CameraCodecs {
         }
     }
 
-    public func readSessionConfig(_ c: inout Bincode.Cursor) throws -> SessionConfig {
+    public func readSessionConfig(_ c: inout Bincode.Cursor) throws -> Camera.SessionConfig {
         let deviceId = try Bincode.readString(&c)
         let pixelFormat = try self.readPixelFormat(&c)
         let resolution = try Bincode.readOption(&c) { c1 in try self.readResolution(&c1) }
         let targetFps = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU32(&c1) }
         let emitFrames = try Bincode.readBool(&c)
         let initialControls = try self.readCameraControls(&c)
-        return SessionConfig(deviceId: deviceId, pixelFormat: pixelFormat, resolution: resolution, targetFps: targetFps, emitFrames: emitFrames, initialControls: initialControls)
+        return Camera.SessionConfig(deviceId: deviceId, pixelFormat: pixelFormat, resolution: resolution, targetFps: targetFps, emitFrames: emitFrames, initialControls: initialControls)
     }
 
-    public func writeSessionConfig(_ out: inout Data, _ value: SessionConfig) {
+    public func writeSessionConfig(_ out: inout Data, _ value: Camera.SessionConfig) {
         Bincode.writeString(&out, value.deviceId)
         self.writePixelFormat(&out, value.pixelFormat)
         Bincode.writeOption(&out, value.resolution) { o1, v1 in self.writeResolution(&o1, v1) }
@@ -193,42 +193,42 @@ public final class CameraCodecsImpl: CameraCodecs {
         self.writeCameraControls(&out, value.initialControls)
     }
 
-    public func readNegotiatedFormat(_ c: inout Bincode.Cursor) throws -> NegotiatedFormat {
+    public func readNegotiatedFormat(_ c: inout Bincode.Cursor) throws -> Camera.NegotiatedFormat {
         let resolution = try self.readResolution(&c)
         let pixelFormat = try self.readPixelFormat(&c)
         let fps = try Bincode.readVarintU32(&c)
         let rotationDegrees = try Bincode.readVarintU16(&c)
-        return NegotiatedFormat(resolution: resolution, pixelFormat: pixelFormat, fps: fps, rotationDegrees: rotationDegrees)
+        return Camera.NegotiatedFormat(resolution: resolution, pixelFormat: pixelFormat, fps: fps, rotationDegrees: rotationDegrees)
     }
 
-    public func writeNegotiatedFormat(_ out: inout Data, _ value: NegotiatedFormat) {
+    public func writeNegotiatedFormat(_ out: inout Data, _ value: Camera.NegotiatedFormat) {
         self.writeResolution(&out, value.resolution)
         self.writePixelFormat(&out, value.pixelFormat)
         Bincode.writeVarintU32(&out, value.fps)
         Bincode.writeVarintU16(&out, value.rotationDegrees)
     }
 
-    public func readCameraSession(_ c: inout Bincode.Cursor) throws -> CameraSession {
+    public func readCameraSession(_ c: inout Bincode.Cursor) throws -> Camera.CameraSession {
         let session = try self.readNativeHandleId(&c)
         let negotiated = try self.readNegotiatedFormat(&c)
-        return CameraSession(session: session, negotiated: negotiated)
+        return Camera.CameraSession(session: session, negotiated: negotiated)
     }
 
-    public func writeCameraSession(_ out: inout Data, _ value: CameraSession) {
+    public func writeCameraSession(_ out: inout Data, _ value: Camera.CameraSession) {
         self.writeNativeHandleId(&out, value.session)
         self.writeNegotiatedFormat(&out, value.negotiated)
     }
 
-    public func readFramePlane(_ c: inout Bincode.Cursor) throws -> FramePlane {
+    public func readFramePlane(_ c: inout Bincode.Cursor) throws -> Camera.FramePlane {
         let offset = try Bincode.readVarintU32(&c)
         let rowStride = try Bincode.readVarintU32(&c)
         let pixelStride = try Bincode.readVarintU32(&c)
         let width = try Bincode.readVarintU32(&c)
         let height = try Bincode.readVarintU32(&c)
-        return FramePlane(offset: offset, rowStride: rowStride, pixelStride: pixelStride, width: width, height: height)
+        return Camera.FramePlane(offset: offset, rowStride: rowStride, pixelStride: pixelStride, width: width, height: height)
     }
 
-    public func writeFramePlane(_ out: inout Data, _ value: FramePlane) {
+    public func writeFramePlane(_ out: inout Data, _ value: Camera.FramePlane) {
         Bincode.writeVarintU32(&out, value.offset)
         Bincode.writeVarintU32(&out, value.rowStride)
         Bincode.writeVarintU32(&out, value.pixelStride)
@@ -236,7 +236,7 @@ public final class CameraCodecsImpl: CameraCodecs {
         Bincode.writeVarintU32(&out, value.height)
     }
 
-    public func readCameraFrame(_ c: inout Bincode.Cursor) throws -> CameraFrame {
+    public func readCameraFrame(_ c: inout Bincode.Cursor) throws -> Camera.CameraFrame {
         let seq = try Bincode.readVarintU64(&c)
         let timestampNs = try Bincode.readVarintU64(&c)
         let resolution = try self.readResolution(&c)
@@ -245,10 +245,10 @@ public final class CameraCodecsImpl: CameraCodecs {
         let planes = try Bincode.readVec(&c) { c1 in try self.readFramePlane(&c1) }
         let bytes = try Bincode.readData(&c)
         let droppedBefore = try Bincode.readVarintU32(&c)
-        return CameraFrame(seq: seq, timestampNs: timestampNs, resolution: resolution, rotationDegrees: rotationDegrees, pixelFormat: pixelFormat, planes: planes, bytes: bytes, droppedBefore: droppedBefore)
+        return Camera.CameraFrame(seq: seq, timestampNs: timestampNs, resolution: resolution, rotationDegrees: rotationDegrees, pixelFormat: pixelFormat, planes: planes, bytes: bytes, droppedBefore: droppedBefore)
     }
 
-    public func writeCameraFrame(_ out: inout Data, _ value: CameraFrame) {
+    public func writeCameraFrame(_ out: inout Data, _ value: Camera.CameraFrame) {
         Bincode.writeVarintU64(&out, value.seq)
         Bincode.writeVarintU64(&out, value.timestampNs)
         self.writeResolution(&out, value.resolution)
@@ -259,7 +259,7 @@ public final class CameraCodecsImpl: CameraCodecs {
         Bincode.writeVarintU32(&out, value.droppedBefore)
     }
 
-    public func readFocusMode(_ c: inout Bincode.Cursor) throws -> FocusMode {
+    public func readFocusMode(_ c: inout Bincode.Cursor) throws -> Camera.FocusMode {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .auto
@@ -271,7 +271,7 @@ public final class CameraCodecsImpl: CameraCodecs {
         }
     }
 
-    public func writeFocusMode(_ out: inout Data, _ value: FocusMode) {
+    public func writeFocusMode(_ out: inout Data, _ value: Camera.FocusMode) {
         switch value {
         case .auto:
             Bincode.writeVarintU32(&out, 0)
@@ -287,41 +287,41 @@ public final class CameraCodecsImpl: CameraCodecs {
         }
     }
 
-    public func readWhiteBalanceMode(_ c: inout Bincode.Cursor) throws -> WhiteBalanceMode {
+    public func readWhiteBalanceMode(_ c: inout Bincode.Cursor) throws -> Camera.WhiteBalanceMode {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = WhiteBalanceMode(rawValue: disc) else {
+        guard let value = Camera.WhiteBalanceMode(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeWhiteBalanceMode(_ out: inout Data, _ value: WhiteBalanceMode) {
+    public func writeWhiteBalanceMode(_ out: inout Data, _ value: Camera.WhiteBalanceMode) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readFlashMode(_ c: inout Bincode.Cursor) throws -> FlashMode {
+    public func readFlashMode(_ c: inout Bincode.Cursor) throws -> Camera.FlashMode {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = FlashMode(rawValue: disc) else {
+        guard let value = Camera.FlashMode(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeFlashMode(_ out: inout Data, _ value: FlashMode) {
+    public func writeFlashMode(_ out: inout Data, _ value: Camera.FlashMode) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readCameraControls(_ c: inout Bincode.Cursor) throws -> CameraControls {
+    public func readCameraControls(_ c: inout Bincode.Cursor) throws -> Camera.CameraControls {
         let zoom = try Bincode.readOption(&c) { c1 in try Bincode.readF32(&c1) }
         let torch = try Bincode.readOption(&c) { c1 in try Bincode.readBool(&c1) }
         let focus = try Bincode.readOption(&c) { c1 in try self.readFocusMode(&c1) }
         let exposureCompensationEv = try Bincode.readOption(&c) { c1 in try Bincode.readF32(&c1) }
         let whiteBalance = try Bincode.readOption(&c) { c1 in try self.readWhiteBalanceMode(&c1) }
         let flash = try Bincode.readOption(&c) { c1 in try self.readFlashMode(&c1) }
-        return CameraControls(zoom: zoom, torch: torch, focus: focus, exposureCompensationEv: exposureCompensationEv, whiteBalance: whiteBalance, flash: flash)
+        return Camera.CameraControls(zoom: zoom, torch: torch, focus: focus, exposureCompensationEv: exposureCompensationEv, whiteBalance: whiteBalance, flash: flash)
     }
 
-    public func writeCameraControls(_ out: inout Data, _ value: CameraControls) {
+    public func writeCameraControls(_ out: inout Data, _ value: Camera.CameraControls) {
         Bincode.writeOption(&out, value.zoom) { o1, v1 in Bincode.writeF32(&o1, v1) }
         Bincode.writeOption(&out, value.torch) { o1, v1 in Bincode.writeBool(&o1, v1) }
         Bincode.writeOption(&out, value.focus) { o1, v1 in self.writeFocusMode(&o1, v1) }
@@ -330,17 +330,17 @@ public final class CameraCodecsImpl: CameraCodecs {
         Bincode.writeOption(&out, value.flash) { o1, v1 in self.writeFlashMode(&o1, v1) }
     }
 
-    public func readAppliedControls(_ c: inout Bincode.Cursor) throws -> AppliedControls {
+    public func readAppliedControls(_ c: inout Bincode.Cursor) throws -> Camera.AppliedControls {
         let zoom = try Bincode.readF32(&c)
         let torch = try Bincode.readBool(&c)
         let focus = try self.readFocusMode(&c)
         let exposureCompensationEv = try Bincode.readF32(&c)
         let whiteBalance = try self.readWhiteBalanceMode(&c)
         let flash = try self.readFlashMode(&c)
-        return AppliedControls(zoom: zoom, torch: torch, focus: focus, exposureCompensationEv: exposureCompensationEv, whiteBalance: whiteBalance, flash: flash)
+        return Camera.AppliedControls(zoom: zoom, torch: torch, focus: focus, exposureCompensationEv: exposureCompensationEv, whiteBalance: whiteBalance, flash: flash)
     }
 
-    public func writeAppliedControls(_ out: inout Data, _ value: AppliedControls) {
+    public func writeAppliedControls(_ out: inout Data, _ value: Camera.AppliedControls) {
         Bincode.writeF32(&out, value.zoom)
         Bincode.writeBool(&out, value.torch)
         self.writeFocusMode(&out, value.focus)
@@ -349,29 +349,29 @@ public final class CameraCodecsImpl: CameraCodecs {
         self.writeFlashMode(&out, value.flash)
     }
 
-    public func readStillCaptureRequest(_ c: inout Bincode.Cursor) throws -> StillCaptureRequest {
+    public func readStillCaptureRequest(_ c: inout Bincode.Cursor) throws -> Camera.StillCaptureRequest {
         let pixelFormat = try self.readPixelFormat(&c)
         let resolution = try Bincode.readOption(&c) { c1 in try self.readResolution(&c1) }
         let flash = try self.readFlashMode(&c)
-        return StillCaptureRequest(pixelFormat: pixelFormat, resolution: resolution, flash: flash)
+        return Camera.StillCaptureRequest(pixelFormat: pixelFormat, resolution: resolution, flash: flash)
     }
 
-    public func writeStillCaptureRequest(_ out: inout Data, _ value: StillCaptureRequest) {
+    public func writeStillCaptureRequest(_ out: inout Data, _ value: Camera.StillCaptureRequest) {
         self.writePixelFormat(&out, value.pixelFormat)
         Bincode.writeOption(&out, value.resolution) { o1, v1 in self.writeResolution(&o1, v1) }
         self.writeFlashMode(&out, value.flash)
     }
 
-    public func readStillPhoto(_ c: inout Bincode.Cursor) throws -> StillPhoto {
+    public func readStillPhoto(_ c: inout Bincode.Cursor) throws -> Camera.StillPhoto {
         let resolution = try self.readResolution(&c)
         let rotationDegrees = try Bincode.readVarintU16(&c)
         let pixelFormat = try self.readPixelFormat(&c)
         let bytes = try Bincode.readData(&c)
         let timestampNs = try Bincode.readVarintU64(&c)
-        return StillPhoto(resolution: resolution, rotationDegrees: rotationDegrees, pixelFormat: pixelFormat, bytes: bytes, timestampNs: timestampNs)
+        return Camera.StillPhoto(resolution: resolution, rotationDegrees: rotationDegrees, pixelFormat: pixelFormat, bytes: bytes, timestampNs: timestampNs)
     }
 
-    public func writeStillPhoto(_ out: inout Data, _ value: StillPhoto) {
+    public func writeStillPhoto(_ out: inout Data, _ value: Camera.StillPhoto) {
         self.writeResolution(&out, value.resolution)
         Bincode.writeVarintU16(&out, value.rotationDegrees)
         self.writePixelFormat(&out, value.pixelFormat)
@@ -379,7 +379,7 @@ public final class CameraCodecsImpl: CameraCodecs {
         Bincode.writeVarintU64(&out, value.timestampNs)
     }
 
-    public func readCameraError(_ c: inout Bincode.Cursor) throws -> CameraError {
+    public func readCameraError(_ c: inout Bincode.Cursor) throws -> Camera.CameraError {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .permissionDenied
@@ -393,7 +393,7 @@ public final class CameraCodecsImpl: CameraCodecs {
         }
     }
 
-    public func writeCameraError(_ out: inout Data, _ value: CameraError) {
+    public func writeCameraError(_ out: inout Data, _ value: Camera.CameraError) {
         switch value {
         case .permissionDenied:
             Bincode.writeVarintU32(&out, 0)
@@ -414,15 +414,15 @@ public final class CameraCodecsImpl: CameraCodecs {
         }
     }
 
-    public func readAccessStatus(_ c: inout Bincode.Cursor) throws -> AccessStatus {
+    public func readAccessStatus(_ c: inout Bincode.Cursor) throws -> IstmoMedia.AccessStatus {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = AccessStatus(rawValue: disc) else {
+        guard let value = IstmoMedia.AccessStatus(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeAccessStatus(_ out: inout Data, _ value: AccessStatus) {
+    public func writeAccessStatus(_ out: inout Data, _ value: IstmoMedia.AccessStatus) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 

@@ -7,33 +7,33 @@ import IstmoRuntime
 public final class ShareCodecsImpl: ShareCodecs {
     public init() {}
 
-    public func readShareRect(_ c: inout Bincode.Cursor) throws -> ShareRect {
+    public func readShareRect(_ c: inout Bincode.Cursor) throws -> Share.ShareRect {
         let x = try Bincode.readF64(&c)
         let y = try Bincode.readF64(&c)
         let width = try Bincode.readF64(&c)
         let height = try Bincode.readF64(&c)
-        return ShareRect(x: x, y: y, width: width, height: height)
+        return Share.ShareRect(x: x, y: y, width: width, height: height)
     }
 
-    public func writeShareRect(_ out: inout Data, _ value: ShareRect) {
+    public func writeShareRect(_ out: inout Data, _ value: Share.ShareRect) {
         Bincode.writeF64(&out, value.x)
         Bincode.writeF64(&out, value.y)
         Bincode.writeF64(&out, value.width)
         Bincode.writeF64(&out, value.height)
     }
 
-    public func readShareAnchor(_ c: inout Bincode.Cursor) throws -> ShareAnchor {
+    public func readShareAnchor(_ c: inout Bincode.Cursor) throws -> Share.ShareAnchor {
         let windowId = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
         let rect = try Bincode.readOption(&c) { c1 in try self.readShareRect(&c1) }
-        return ShareAnchor(windowId: windowId, rect: rect)
+        return Share.ShareAnchor(windowId: windowId, rect: rect)
     }
 
-    public func writeShareAnchor(_ out: inout Data, _ value: ShareAnchor) {
+    public func writeShareAnchor(_ out: inout Data, _ value: Share.ShareAnchor) {
         Bincode.writeOption(&out, value.windowId) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
         Bincode.writeOption(&out, value.rect) { o1, v1 in self.writeShareRect(&o1, v1) }
     }
 
-    public func readShareFileSource(_ c: inout Bincode.Cursor) throws -> ShareFileSource {
+    public func readShareFileSource(_ c: inout Bincode.Cursor) throws -> Share.ShareFileSource {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .path(try Bincode.readString(&c))
@@ -42,7 +42,7 @@ public final class ShareCodecsImpl: ShareCodecs {
         }
     }
 
-    public func writeShareFileSource(_ out: inout Data, _ value: ShareFileSource) {
+    public func writeShareFileSource(_ out: inout Data, _ value: Share.ShareFileSource) {
         switch value {
         case .path(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -53,43 +53,43 @@ public final class ShareCodecsImpl: ShareCodecs {
         }
     }
 
-    public func readShareFile(_ c: inout Bincode.Cursor) throws -> ShareFile {
+    public func readShareFile(_ c: inout Bincode.Cursor) throws -> Share.ShareFile {
         let source = try self.readShareFileSource(&c)
         let name = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let mimeType = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
-        return ShareFile(source: source, name: name, mimeType: mimeType)
+        return Share.ShareFile(source: source, name: name, mimeType: mimeType)
     }
 
-    public func writeShareFile(_ out: inout Data, _ value: ShareFile) {
+    public func writeShareFile(_ out: inout Data, _ value: Share.ShareFile) {
         self.writeShareFileSource(&out, value.source)
         Bincode.writeOption(&out, value.name) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.mimeType) { o1, v1 in Bincode.writeString(&o1, v1) }
     }
 
-    public func readSharePreview(_ c: inout Bincode.Cursor) throws -> SharePreview {
+    public func readSharePreview(_ c: inout Bincode.Cursor) throws -> Share.SharePreview {
         let title = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let thumbnail = try Bincode.readOption(&c) { c1 in try self.readShareFile(&c1) }
         let fetchLinkMetadata = try Bincode.readBool(&c)
-        return SharePreview(title: title, thumbnail: thumbnail, fetchLinkMetadata: fetchLinkMetadata)
+        return Share.SharePreview(title: title, thumbnail: thumbnail, fetchLinkMetadata: fetchLinkMetadata)
     }
 
-    public func writeSharePreview(_ out: inout Data, _ value: SharePreview) {
+    public func writeSharePreview(_ out: inout Data, _ value: Share.SharePreview) {
         Bincode.writeOption(&out, value.title) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.thumbnail) { o1, v1 in self.writeShareFile(&o1, v1) }
         Bincode.writeBool(&out, value.fetchLinkMetadata)
     }
 
-    public func readShareRequest(_ c: inout Bincode.Cursor) throws -> ShareRequest {
+    public func readShareRequest(_ c: inout Bincode.Cursor) throws -> Share.ShareRequest {
         let text = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let url = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let subject = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let files = try Bincode.readVec(&c) { c1 in try self.readShareFile(&c1) }
         let preview = try Bincode.readOption(&c) { c1 in try self.readSharePreview(&c1) }
         let anchor = try Bincode.readOption(&c) { c1 in try self.readShareAnchor(&c1) }
-        return ShareRequest(text: text, url: url, subject: subject, files: files, preview: preview, anchor: anchor)
+        return Share.ShareRequest(text: text, url: url, subject: subject, files: files, preview: preview, anchor: anchor)
     }
 
-    public func writeShareRequest(_ out: inout Data, _ value: ShareRequest) {
+    public func writeShareRequest(_ out: inout Data, _ value: Share.ShareRequest) {
         Bincode.writeOption(&out, value.text) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.url) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.subject) { o1, v1 in Bincode.writeString(&o1, v1) }
@@ -98,7 +98,7 @@ public final class ShareCodecsImpl: ShareCodecs {
         Bincode.writeOption(&out, value.anchor) { o1, v1 in self.writeShareAnchor(&o1, v1) }
     }
 
-    public func readShareOutcome(_ c: inout Bincode.Cursor) throws -> ShareOutcome {
+    public func readShareOutcome(_ c: inout Bincode.Cursor) throws -> Share.ShareOutcome {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .shared(try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) })
@@ -109,7 +109,7 @@ public final class ShareCodecsImpl: ShareCodecs {
         }
     }
 
-    public func writeShareOutcome(_ out: inout Data, _ value: ShareOutcome) {
+    public func writeShareOutcome(_ out: inout Data, _ value: Share.ShareOutcome) {
         switch value {
         case .shared(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -124,7 +124,7 @@ public final class ShareCodecsImpl: ShareCodecs {
         }
     }
 
-    public func readShareCapabilities(_ c: inout Bincode.Cursor) throws -> ShareCapabilities {
+    public func readShareCapabilities(_ c: inout Bincode.Cursor) throws -> Share.ShareCapabilities {
         let send = try Bincode.readBool(&c)
         let files = try Bincode.readBool(&c)
         let mixedContent = try Bincode.readBool(&c)
@@ -134,10 +134,10 @@ public final class ShareCodecsImpl: ShareCodecs {
         let receive = try Bincode.readBool(&c)
         let directShare = try Bincode.readBool(&c)
         let dismissOnCancel = try Bincode.readBool(&c)
-        return ShareCapabilities(send: send, files: files, mixedContent: mixedContent, richPreview: richPreview, reportsCompletion: reportsCompletion, reportsTarget: reportsTarget, receive: receive, directShare: directShare, dismissOnCancel: dismissOnCancel)
+        return Share.ShareCapabilities(send: send, files: files, mixedContent: mixedContent, richPreview: richPreview, reportsCompletion: reportsCompletion, reportsTarget: reportsTarget, receive: receive, directShare: directShare, dismissOnCancel: dismissOnCancel)
     }
 
-    public func writeShareCapabilities(_ out: inout Data, _ value: ShareCapabilities) {
+    public func writeShareCapabilities(_ out: inout Data, _ value: Share.ShareCapabilities) {
         Bincode.writeBool(&out, value.send)
         Bincode.writeBool(&out, value.files)
         Bincode.writeBool(&out, value.mixedContent)
@@ -149,7 +149,7 @@ public final class ShareCodecsImpl: ShareCodecs {
         Bincode.writeBool(&out, value.dismissOnCancel)
     }
 
-    public func readShareError(_ c: inout Bincode.Cursor) throws -> ShareError {
+    public func readShareError(_ c: inout Bincode.Cursor) throws -> Share.ShareError {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .unsupported(try Bincode.readString(&c))
@@ -163,7 +163,7 @@ public final class ShareCodecsImpl: ShareCodecs {
         }
     }
 
-    public func writeShareError(_ out: inout Data, _ value: ShareError) {
+    public func writeShareError(_ out: inout Data, _ value: Share.ShareError) {
         switch value {
         case .unsupported(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -188,22 +188,22 @@ public final class ShareCodecsImpl: ShareCodecs {
         }
     }
 
-    public func readIncomingFile(_ c: inout Bincode.Cursor) throws -> IncomingFile {
+    public func readIncomingFile(_ c: inout Bincode.Cursor) throws -> Share.IncomingFile {
         let path = try Bincode.readString(&c)
         let name = try Bincode.readString(&c)
         let mimeType = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let size = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
-        return IncomingFile(path: path, name: name, mimeType: mimeType, size: size)
+        return Share.IncomingFile(path: path, name: name, mimeType: mimeType, size: size)
     }
 
-    public func writeIncomingFile(_ out: inout Data, _ value: IncomingFile) {
+    public func writeIncomingFile(_ out: inout Data, _ value: Share.IncomingFile) {
         Bincode.writeString(&out, value.path)
         Bincode.writeString(&out, value.name)
         Bincode.writeOption(&out, value.mimeType) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.size) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
     }
 
-    public func readIncomingShare(_ c: inout Bincode.Cursor) throws -> IncomingShare {
+    public func readIncomingShare(_ c: inout Bincode.Cursor) throws -> Share.IncomingShare {
         let text = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let url = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let subject = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
@@ -211,10 +211,10 @@ public final class ShareCodecsImpl: ShareCodecs {
         let sourceApp = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let receivedAtMs = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
         let targetId = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
-        return IncomingShare(text: text, url: url, subject: subject, files: files, sourceApp: sourceApp, receivedAtMs: receivedAtMs, targetId: targetId)
+        return Share.IncomingShare(text: text, url: url, subject: subject, files: files, sourceApp: sourceApp, receivedAtMs: receivedAtMs, targetId: targetId)
     }
 
-    public func writeIncomingShare(_ out: inout Data, _ value: IncomingShare) {
+    public func writeIncomingShare(_ out: inout Data, _ value: Share.IncomingShare) {
         Bincode.writeOption(&out, value.text) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.url) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.subject) { o1, v1 in Bincode.writeString(&o1, v1) }
@@ -224,16 +224,16 @@ public final class ShareCodecsImpl: ShareCodecs {
         Bincode.writeOption(&out, value.targetId) { o1, v1 in Bincode.writeString(&o1, v1) }
     }
 
-    public func readShareTarget(_ c: inout Bincode.Cursor) throws -> ShareTarget {
+    public func readShareTarget(_ c: inout Bincode.Cursor) throws -> Share.ShareTarget {
         let id = try Bincode.readString(&c)
         let label = try Bincode.readString(&c)
         let icon = try Bincode.readOption(&c) { c1 in try self.readShareFile(&c1) }
         let uri = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let launcherOnly = try Bincode.readBool(&c)
-        return ShareTarget(id: id, label: label, icon: icon, uri: uri, launcherOnly: launcherOnly)
+        return Share.ShareTarget(id: id, label: label, icon: icon, uri: uri, launcherOnly: launcherOnly)
     }
 
-    public func writeShareTarget(_ out: inout Data, _ value: ShareTarget) {
+    public func writeShareTarget(_ out: inout Data, _ value: Share.ShareTarget) {
         Bincode.writeString(&out, value.id)
         Bincode.writeString(&out, value.label)
         Bincode.writeOption(&out, value.icon) { o1, v1 in self.writeShareFile(&o1, v1) }

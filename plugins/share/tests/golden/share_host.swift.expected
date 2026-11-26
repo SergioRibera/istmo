@@ -8,44 +8,44 @@ import IstmoRuntime
 /// impl with the SDK-specific logic; the dispatcher below handles
 /// wire encode/decode.
 public protocol ShareBackend: AnyObject {
-    /// Throw `ShareError` to surface a typed domain error.
-    func share(request: ShareRequest) async throws -> ShareOutcome
-    /// Throw `ShareError` to surface a typed domain error.
-    func capabilities() async throws -> ShareCapabilities
-    /// Throw `ShareError` to surface a typed domain error.
+    /// Throw `Share.ShareError` to surface a typed domain error.
+    func share(request: Share.ShareRequest) async throws -> Share.ShareOutcome
+    /// Throw `Share.ShareError` to surface a typed domain error.
+    func capabilities() async throws -> Share.ShareCapabilities
+    /// Throw `Share.ShareError` to surface a typed domain error.
     func staging_dir() async throws -> String
-    /// Throw `ShareError` to surface a typed domain error.
-    func set_share_targets(targets: [ShareTarget]) async throws -> Void
+    /// Throw `Share.ShareError` to surface a typed domain error.
+    func set_share_targets(targets: [Share.ShareTarget]) async throws -> Void
 }
 
 /// Reader / writer per `Named` type referenced by the `Share` contract.
 /// User provides one impl; each entry typically delegates to a
 /// helper on the type itself.
 public protocol ShareCodecs {
-    func readIncomingFile(_ c: inout Bincode.Cursor) throws -> IncomingFile
-    func writeIncomingFile(_ out: inout Data, _ value: IncomingFile)
-    func readIncomingShare(_ c: inout Bincode.Cursor) throws -> IncomingShare
-    func writeIncomingShare(_ out: inout Data, _ value: IncomingShare)
-    func readShareAnchor(_ c: inout Bincode.Cursor) throws -> ShareAnchor
-    func writeShareAnchor(_ out: inout Data, _ value: ShareAnchor)
-    func readShareCapabilities(_ c: inout Bincode.Cursor) throws -> ShareCapabilities
-    func writeShareCapabilities(_ out: inout Data, _ value: ShareCapabilities)
-    func readShareError(_ c: inout Bincode.Cursor) throws -> ShareError
-    func writeShareError(_ out: inout Data, _ value: ShareError)
-    func readShareFile(_ c: inout Bincode.Cursor) throws -> ShareFile
-    func writeShareFile(_ out: inout Data, _ value: ShareFile)
-    func readShareFileSource(_ c: inout Bincode.Cursor) throws -> ShareFileSource
-    func writeShareFileSource(_ out: inout Data, _ value: ShareFileSource)
-    func readShareOutcome(_ c: inout Bincode.Cursor) throws -> ShareOutcome
-    func writeShareOutcome(_ out: inout Data, _ value: ShareOutcome)
-    func readSharePreview(_ c: inout Bincode.Cursor) throws -> SharePreview
-    func writeSharePreview(_ out: inout Data, _ value: SharePreview)
-    func readShareRect(_ c: inout Bincode.Cursor) throws -> ShareRect
-    func writeShareRect(_ out: inout Data, _ value: ShareRect)
-    func readShareRequest(_ c: inout Bincode.Cursor) throws -> ShareRequest
-    func writeShareRequest(_ out: inout Data, _ value: ShareRequest)
-    func readShareTarget(_ c: inout Bincode.Cursor) throws -> ShareTarget
-    func writeShareTarget(_ out: inout Data, _ value: ShareTarget)
+    func readIncomingFile(_ c: inout Bincode.Cursor) throws -> Share.IncomingFile
+    func writeIncomingFile(_ out: inout Data, _ value: Share.IncomingFile)
+    func readIncomingShare(_ c: inout Bincode.Cursor) throws -> Share.IncomingShare
+    func writeIncomingShare(_ out: inout Data, _ value: Share.IncomingShare)
+    func readShareAnchor(_ c: inout Bincode.Cursor) throws -> Share.ShareAnchor
+    func writeShareAnchor(_ out: inout Data, _ value: Share.ShareAnchor)
+    func readShareCapabilities(_ c: inout Bincode.Cursor) throws -> Share.ShareCapabilities
+    func writeShareCapabilities(_ out: inout Data, _ value: Share.ShareCapabilities)
+    func readShareError(_ c: inout Bincode.Cursor) throws -> Share.ShareError
+    func writeShareError(_ out: inout Data, _ value: Share.ShareError)
+    func readShareFile(_ c: inout Bincode.Cursor) throws -> Share.ShareFile
+    func writeShareFile(_ out: inout Data, _ value: Share.ShareFile)
+    func readShareFileSource(_ c: inout Bincode.Cursor) throws -> Share.ShareFileSource
+    func writeShareFileSource(_ out: inout Data, _ value: Share.ShareFileSource)
+    func readShareOutcome(_ c: inout Bincode.Cursor) throws -> Share.ShareOutcome
+    func writeShareOutcome(_ out: inout Data, _ value: Share.ShareOutcome)
+    func readSharePreview(_ c: inout Bincode.Cursor) throws -> Share.SharePreview
+    func writeSharePreview(_ out: inout Data, _ value: Share.SharePreview)
+    func readShareRect(_ c: inout Bincode.Cursor) throws -> Share.ShareRect
+    func writeShareRect(_ out: inout Data, _ value: Share.ShareRect)
+    func readShareRequest(_ c: inout Bincode.Cursor) throws -> Share.ShareRequest
+    func writeShareRequest(_ out: inout Data, _ value: Share.ShareRequest)
+    func readShareTarget(_ c: inout Bincode.Cursor) throws -> Share.ShareTarget
+    func writeShareTarget(_ out: inout Data, _ value: Share.ShareTarget)
 }
 
 /// Decodes wire calls, invokes `ShareBackend`, encodes the response.
@@ -71,7 +71,7 @@ public final class ShareDispatcher: PluginHandler {
                 var out = Data()
                 codecs.writeShareOutcome(&out, result)
                 return .unary(out)
-            } catch let err as ShareError {
+            } catch let err as Share.ShareError {
                 var errOut = Data()
                 codecs.writeShareError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -82,7 +82,7 @@ public final class ShareDispatcher: PluginHandler {
                 var out = Data()
                 codecs.writeShareCapabilities(&out, result)
                 return .unary(out)
-            } catch let err as ShareError {
+            } catch let err as Share.ShareError {
                 var errOut = Data()
                 codecs.writeShareError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -93,7 +93,7 @@ public final class ShareDispatcher: PluginHandler {
                 var out = Data()
                 Bincode.writeString(&out, result)
                 return .unary(out)
-            } catch let err as ShareError {
+            } catch let err as Share.ShareError {
                 var errOut = Data()
                 codecs.writeShareError(&errOut, err)
                 throw PluginException(payload: errOut)
@@ -104,7 +104,7 @@ public final class ShareDispatcher: PluginHandler {
                 let targets = try Bincode.readVec(&c) { c1 in try codecs.readShareTarget(&c1) }
                 try await backend.set_share_targets(targets: targets)
                 return .unary(Data())
-            } catch let err as ShareError {
+            } catch let err as Share.ShareError {
                 var errOut = Data()
                 codecs.writeShareError(&errOut, err)
                 throw PluginException(payload: errOut)

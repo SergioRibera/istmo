@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use crate::contract::{Contract, Method, MethodKind, TypeDef, TypeRef};
+use crate::contract::{Contract, Method, MethodKind, SharedTypes, TypeDef, TypeRef};
 
 mod ident;
 mod kotlin_wire;
@@ -21,6 +21,101 @@ pub(crate) use swift_wire::SwiftWire;
 
 /// Runtime-provided named type every generator knows how to encode.
 pub(crate) const NATIVE_HANDLE_ID: &str = "NativeHandleId";
+
+/// How generated Swift spells the types of one contract (or one shared
+/// group).
+///
+/// A plugin's message types are nested in a namespace named after the
+/// contract's type name (`Camera.SessionConfig`), shared types in their
+/// group's (`IstmoMedia.AccessStatus`), so two plugins of one app may
+/// declare the same type name. Inside the namespace's own declarations
+/// its types stay unqualified: member lookup finds them first, even one
+/// named like a namespace.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SwiftNames<'a> {
+    namespace: &'a str,
+    shared: &'a [SharedTypes],
+    within: bool,
+}
+
+impl<'a> SwiftNames<'a> {
+    /// Names as code outside the contract's namespace spells them.
+    pub(crate) fn of(contract: &'a Contract) -> Self {
+        Self {
+            namespace: &contract.type_name,
+            shared: &contract.shared,
+            within: false,
+        }
+    }
+
+    /// Names inside a shared group's own namespace.
+    pub(crate) fn of_group(group: &'a SharedTypes) -> Self {
+        Self {
+            namespace: &group.group,
+            shared: &[],
+            within: true,
+        }
+    }
+
+    /// The same names as spelled inside the namespace's declarations.
+    pub(crate) const fn within(self) -> Self {
+        Self {
+            within: true,
+            ..self
+        }
+    }
+
+    /// The namespace enum the types are nested in.
+    pub(crate) const fn namespace(self) -> &'a str {
+        self.namespace
+    }
+
+    /// The Swift spelling of the named type `name`.
+    pub(crate) fn named(self, name: &str) -> String {
+        if name == NATIVE_HANDLE_ID {
+            // Declared by the runtime module.
+            return name.to_owned();
+        }
+        if let Some(group) = self.shared.iter().find(|g| g.declares(name)) {
+            return format!("{}.{name}", group.group);
+        }
+        if self.within {
+            name.to_owned()
+        } else {
+            format!("{}.{name}", self.namespace)
+        }
+    }
+
+    /// The Swift spelling of `ty`.
+    pub(crate) fn ty(self, ty: &TypeRef) -> String {
+        match ty.shape() {
+            Shape::Scalar(s) => Self::scalar(s).to_owned(),
+            Shape::Unit => "Void".to_owned(),
+            Shape::Named(name) => self.named(name),
+            Shape::Vec(inner) => format!("[{}]", self.ty(inner)),
+            Shape::Option(inner) => format!("{}?", self.ty(inner)),
+            Shape::FrameSink(meta) => format!("IstmoFrameSender<{}>", self.ty(meta)),
+        }
+    }
+
+    const fn scalar(scalar: Scalar) -> &'static str {
+        match scalar {
+            Scalar::Bool => "Bool",
+            Scalar::U8 => "UInt8",
+            Scalar::I8 => "Int8",
+            Scalar::U16 => "UInt16",
+            Scalar::I16 => "Int16",
+            Scalar::U32 => "UInt32",
+            Scalar::I32 => "Int32",
+            Scalar::U64 => "UInt64",
+            Scalar::I64 => "Int64",
+            Scalar::F32 => "Float",
+            Scalar::F64 => "Double",
+            Scalar::String => "String",
+            Scalar::Bytes => "Data",
+        }
+    }
+}
 
 /// How generated code reaches the reader / writer of a named type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,6 +356,42 @@ pub(crate) fn write_header(out: &mut String, contract: &Contract) {
 mod tests {
     use super::*;
 
+    const NAMES: SwiftNames<'static> = SwiftNames {
+        namespace: "Foo",
+        shared: &[],
+        within: false,
+    };
+
+    #[test]
+    fn swift_names_qualify_by_namespace_and_shared_group() {
+        use crate::contract::{EnumDef, TypeDef};
+        let shared = [SharedTypes {
+            group: "IstmoMedia".to_owned(),
+            kotlin_package: "dev.istmo.media".to_owned(),
+            types: vec![TypeDef::Enum(EnumDef {
+                name: "AccessStatus".to_owned(),
+                variants: Vec::new(),
+            })],
+        }];
+        let names = SwiftNames {
+            shared: &shared,
+            ..NAMES
+        };
+        let of = |name: &str| TypeRef::Named(name.to_owned());
+        let list = TypeRef::Vec(Box::new(TypeRef::Option(Box::new(of("Config")))));
+        assert_eq!(names.ty(&list), "[Foo.Config?]");
+        assert_eq!(names.within().ty(&list), "[Config?]");
+        assert_eq!(names.ty(&of("AccessStatus")), "IstmoMedia.AccessStatus");
+        assert_eq!(
+            names.within().ty(&of("AccessStatus")),
+            "IstmoMedia.AccessStatus"
+        );
+        assert_eq!(names.ty(&of(NATIVE_HANDLE_ID)), NATIVE_HANDLE_ID);
+        let sink = TypeRef::FrameSink(Box::new(of("Meta")));
+        assert_eq!(names.ty(&sink), "IstmoFrameSender<Foo.Meta>");
+        assert_eq!(names.ty(&TypeRef::Unit), "Void");
+    }
+
     const SCALARS: [(TypeRef, Scalar); 13] = [
         (TypeRef::Bool, Scalar::Bool),
         (TypeRef::U8, Scalar::U8),
@@ -303,7 +434,7 @@ mod tests {
     #[test]
     fn scalar_helpers_match_the_pinned_wire_layout() {
         let kt = KotlinWire::new(NamedAccess::Codecs);
-        let sw = SwiftWire::new(NamedAccess::Codecs);
+        let sw = SwiftWire::new(NamedAccess::Codecs, NAMES);
         for (ty, scalar) in SCALARS {
             let (kr, kw, sr, swr) = expected_helpers(scalar);
             assert_eq!(kt.read(&ty, "b", "c"), format!("Bincode.{kr}(b, c)"));
@@ -329,7 +460,7 @@ mod tests {
             "Bincode.writeVec(out, value) { s1, v1 -> Bincode.writeOption(s1, v1) { s2, v2 -> \
              Bincode.writeVec(s2, v2) { s3, v3 -> Bincode.writeString(s3, v3) } } }"
         );
-        let sw = SwiftWire::new(NamedAccess::SelfImpl);
+        let sw = SwiftWire::new(NamedAccess::SelfImpl, NAMES);
         assert_eq!(
             sw.read(&ty, "c"),
             "try Bincode.readVec(&c) { c1 in try Bincode.readOption(&c1) { c2 in \

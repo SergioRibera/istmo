@@ -7,7 +7,7 @@ import IstmoRuntime
 public final class WebViewCodecsImpl: WebViewCodecs {
     public init() {}
 
-    public func readWebViewError(_ c: inout Bincode.Cursor) throws -> WebViewError {
+    public func readWebViewError(_ c: inout Bincode.Cursor) throws -> WebView.WebViewError {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .viewClosed
@@ -27,7 +27,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeWebViewError(_ out: inout Data, _ value: WebViewError) {
+    public func writeWebViewError(_ out: inout Data, _ value: WebView.WebViewError) {
         switch value {
         case .viewClosed:
             Bincode.writeVarintU32(&out, 0)
@@ -63,31 +63,31 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readWebViewInitConfig(_ c: inout Bincode.Cursor) throws -> WebViewInitConfig {
+    public func readWebViewInitConfig(_ c: inout Bincode.Cursor) throws -> WebView.WebViewInitConfig {
         let schemes = try Bincode.readVec(&c) { c1 in try self.readCustomScheme(&c1) }
         let allowInspector = try Bincode.readBool(&c)
         let userAgentSuffix = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
-        return WebViewInitConfig(schemes: schemes, allowInspector: allowInspector, userAgentSuffix: userAgentSuffix)
+        return WebView.WebViewInitConfig(schemes: schemes, allowInspector: allowInspector, userAgentSuffix: userAgentSuffix)
     }
 
-    public func writeWebViewInitConfig(_ out: inout Data, _ value: WebViewInitConfig) {
+    public func writeWebViewInitConfig(_ out: inout Data, _ value: WebView.WebViewInitConfig) {
         Bincode.writeVec(&out, value.schemes) { o1, v1 in self.writeCustomScheme(&o1, v1) }
         Bincode.writeBool(&out, value.allowInspector)
         Bincode.writeOption(&out, value.userAgentSuffix) { o1, v1 in Bincode.writeString(&o1, v1) }
     }
 
-    public func readCustomScheme(_ c: inout Bincode.Cursor) throws -> CustomScheme {
+    public func readCustomScheme(_ c: inout Bincode.Cursor) throws -> WebView.CustomScheme {
         let name = try Bincode.readString(&c)
         let source = try self.readSchemeSource(&c)
-        return CustomScheme(name: name, source: source)
+        return WebView.CustomScheme(name: name, source: source)
     }
 
-    public func writeCustomScheme(_ out: inout Data, _ value: CustomScheme) {
+    public func writeCustomScheme(_ out: inout Data, _ value: WebView.CustomScheme) {
         Bincode.writeString(&out, value.name)
         self.writeSchemeSource(&out, value.source)
     }
 
-    public func readSchemeSource(_ c: inout Bincode.Cursor) throws -> SchemeSource {
+    public func readSchemeSource(_ c: inout Bincode.Cursor) throws -> WebView.SchemeSource {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .assets(try self.readAssetsSource(&c))
@@ -96,7 +96,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeSchemeSource(_ out: inout Data, _ value: SchemeSource) {
+    public func writeSchemeSource(_ out: inout Data, _ value: WebView.SchemeSource) {
         switch value {
         case .assets(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -106,16 +106,16 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readAssetsSource(_ c: inout Bincode.Cursor) throws -> AssetsSource {
+    public func readAssetsSource(_ c: inout Bincode.Cursor) throws -> WebView.AssetsSource {
         let dir = try Bincode.readString(&c)
-        return AssetsSource(dir: dir)
+        return WebView.AssetsSource(dir: dir)
     }
 
-    public func writeAssetsSource(_ out: inout Data, _ value: AssetsSource) {
+    public func writeAssetsSource(_ out: inout Data, _ value: WebView.AssetsSource) {
         Bincode.writeString(&out, value.dir)
     }
 
-    public func readWebViewCapabilities(_ c: inout Bincode.Cursor) throws -> WebViewCapabilities {
+    public func readWebViewCapabilities(_ c: inout Bincode.Cursor) throws -> WebView.WebViewCapabilities {
         let backend = try Bincode.readString(&c)
         let engineVersion = try Bincode.readString(&c)
         let embedded = try Bincode.readBool(&c)
@@ -134,10 +134,10 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         let snapshot = try Bincode.readBool(&c)
         let inspector = try Bincode.readBool(&c)
         let schemeOrigins = try Bincode.readVec(&c) { c1 in try self.readSchemeOrigin(&c1) }
-        return WebViewCapabilities(backend: backend, engineVersion: engineVersion, embedded: embedded, windowed: windowed, windowParenting: windowParenting, persistentProfiles: persistentProfiles, ephemeralProfiles: ephemeralProfiles, isolatedWorld: isolatedWorld, bridgeReply: bridgeReply, deferredNavigation: deferredNavigation, schemeRequestBodies: schemeRequestBodies, downloads: downloads, downloadControl: downloadControl, find: find, print: print, snapshot: snapshot, inspector: inspector, schemeOrigins: schemeOrigins)
+        return WebView.WebViewCapabilities(backend: backend, engineVersion: engineVersion, embedded: embedded, windowed: windowed, windowParenting: windowParenting, persistentProfiles: persistentProfiles, ephemeralProfiles: ephemeralProfiles, isolatedWorld: isolatedWorld, bridgeReply: bridgeReply, deferredNavigation: deferredNavigation, schemeRequestBodies: schemeRequestBodies, downloads: downloads, downloadControl: downloadControl, find: find, print: print, snapshot: snapshot, inspector: inspector, schemeOrigins: schemeOrigins)
     }
 
-    public func writeWebViewCapabilities(_ out: inout Data, _ value: WebViewCapabilities) {
+    public func writeWebViewCapabilities(_ out: inout Data, _ value: WebView.WebViewCapabilities) {
         Bincode.writeString(&out, value.backend)
         Bincode.writeString(&out, value.engineVersion)
         Bincode.writeBool(&out, value.embedded)
@@ -158,20 +158,20 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         Bincode.writeVec(&out, value.schemeOrigins) { o1, v1 in self.writeSchemeOrigin(&o1, v1) }
     }
 
-    public func readSchemeOrigin(_ c: inout Bincode.Cursor) throws -> SchemeOrigin {
+    public func readSchemeOrigin(_ c: inout Bincode.Cursor) throws -> WebView.SchemeOrigin {
         let scheme = try Bincode.readString(&c)
         let origin = try Bincode.readString(&c)
         let baseUrl = try Bincode.readString(&c)
-        return SchemeOrigin(scheme: scheme, origin: origin, baseUrl: baseUrl)
+        return WebView.SchemeOrigin(scheme: scheme, origin: origin, baseUrl: baseUrl)
     }
 
-    public func writeSchemeOrigin(_ out: inout Data, _ value: SchemeOrigin) {
+    public func writeSchemeOrigin(_ out: inout Data, _ value: WebView.SchemeOrigin) {
         Bincode.writeString(&out, value.scheme)
         Bincode.writeString(&out, value.origin)
         Bincode.writeString(&out, value.baseUrl)
     }
 
-    public func readWebViewSpec(_ c: inout Bincode.Cursor) throws -> WebViewSpec {
+    public func readWebViewSpec(_ c: inout Bincode.Cursor) throws -> WebView.WebViewSpec {
         let target = try self.readRenderTarget(&c)
         let profile = try self.readWebProfile(&c)
         let settings = try self.readWebViewSettings(&c)
@@ -180,10 +180,10 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         let bridge = try Bincode.readOption(&c) { c1 in try self.readBridgeConfig(&c1) }
         let timeouts = try self.readDecisionTimeouts(&c)
         let telemetry = try Bincode.readVec(&c) { c1 in try self.readTelemetryKind(&c1) }
-        return WebViewSpec(target: target, profile: profile, settings: settings, rules: rules, userScripts: userScripts, bridge: bridge, timeouts: timeouts, telemetry: telemetry)
+        return WebView.WebViewSpec(target: target, profile: profile, settings: settings, rules: rules, userScripts: userScripts, bridge: bridge, timeouts: timeouts, telemetry: telemetry)
     }
 
-    public func writeWebViewSpec(_ out: inout Data, _ value: WebViewSpec) {
+    public func writeWebViewSpec(_ out: inout Data, _ value: WebView.WebViewSpec) {
         self.writeRenderTarget(&out, value.target)
         self.writeWebProfile(&out, value.profile)
         self.writeWebViewSettings(&out, value.settings)
@@ -194,7 +194,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         Bincode.writeVec(&out, value.telemetry) { o1, v1 in self.writeTelemetryKind(&o1, v1) }
     }
 
-    public func readRenderTarget(_ c: inout Bincode.Cursor) throws -> RenderTarget {
+    public func readRenderTarget(_ c: inout Bincode.Cursor) throws -> WebView.RenderTarget {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .embedded(try self.readEmbeddedTarget(&c))
@@ -203,7 +203,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeRenderTarget(_ out: inout Data, _ value: RenderTarget) {
+    public func writeRenderTarget(_ out: inout Data, _ value: WebView.RenderTarget) {
         switch value {
         case .embedded(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -214,26 +214,26 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readEmbeddedTarget(_ c: inout Bincode.Cursor) throws -> EmbeddedTarget {
+    public func readEmbeddedTarget(_ c: inout Bincode.Cursor) throws -> WebView.EmbeddedTarget {
         let windowId = try Bincode.readVarintU64(&c)
-        return EmbeddedTarget(windowId: windowId)
+        return WebView.EmbeddedTarget(windowId: windowId)
     }
 
-    public func writeEmbeddedTarget(_ out: inout Data, _ value: EmbeddedTarget) {
+    public func writeEmbeddedTarget(_ out: inout Data, _ value: WebView.EmbeddedTarget) {
         Bincode.writeVarintU64(&out, value.windowId)
     }
 
-    public func readWindowTarget(_ c: inout Bincode.Cursor) throws -> WindowTarget {
+    public func readWindowTarget(_ c: inout Bincode.Cursor) throws -> WebView.WindowTarget {
         let title = try Bincode.readString(&c)
         let width = try Bincode.readVarintU32(&c)
         let height = try Bincode.readVarintU32(&c)
         let parentWindowId = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
         let modal = try Bincode.readBool(&c)
         let resizable = try Bincode.readBool(&c)
-        return WindowTarget(title: title, width: width, height: height, parentWindowId: parentWindowId, modal: modal, resizable: resizable)
+        return WebView.WindowTarget(title: title, width: width, height: height, parentWindowId: parentWindowId, modal: modal, resizable: resizable)
     }
 
-    public func writeWindowTarget(_ out: inout Data, _ value: WindowTarget) {
+    public func writeWindowTarget(_ out: inout Data, _ value: WebView.WindowTarget) {
         Bincode.writeString(&out, value.title)
         Bincode.writeVarintU32(&out, value.width)
         Bincode.writeVarintU32(&out, value.height)
@@ -242,7 +242,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         Bincode.writeBool(&out, value.resizable)
     }
 
-    public func readWebProfile(_ c: inout Bincode.Cursor) throws -> WebProfile {
+    public func readWebProfile(_ c: inout Bincode.Cursor) throws -> WebView.WebProfile {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .ephemeral
@@ -252,7 +252,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeWebProfile(_ out: inout Data, _ value: WebProfile) {
+    public func writeWebProfile(_ out: inout Data, _ value: WebView.WebProfile) {
         switch value {
         case .ephemeral:
             Bincode.writeVarintU32(&out, 0)
@@ -264,16 +264,16 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readPersistentProfile(_ c: inout Bincode.Cursor) throws -> PersistentProfile {
+    public func readPersistentProfile(_ c: inout Bincode.Cursor) throws -> WebView.PersistentProfile {
         let name = try Bincode.readString(&c)
-        return PersistentProfile(name: name)
+        return WebView.PersistentProfile(name: name)
     }
 
-    public func writePersistentProfile(_ out: inout Data, _ value: PersistentProfile) {
+    public func writePersistentProfile(_ out: inout Data, _ value: WebView.PersistentProfile) {
         Bincode.writeString(&out, value.name)
     }
 
-    public func readWebViewSettings(_ c: inout Bincode.Cursor) throws -> WebViewSettings {
+    public func readWebViewSettings(_ c: inout Bincode.Cursor) throws -> WebView.WebViewSettings {
         let javascript = try Bincode.readBool(&c)
         let domStorage = try Bincode.readBool(&c)
         let mediaAutoplay = try Bincode.readBool(&c)
@@ -287,10 +287,10 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         let webauthn = try Bincode.readBool(&c)
         let transparent = try Bincode.readBool(&c)
         let background = try self.readWebColor(&c)
-        return WebViewSettings(javascript: javascript, domStorage: domStorage, mediaAutoplay: mediaAutoplay, zoomGestures: zoomGestures, contextMenu: contextMenu, userAgent: userAgent, acceptLanguage: acceptLanguage, thirdPartyCookies: thirdPartyCookies, fileAccess: fileAccess, autofill: autofill, webauthn: webauthn, transparent: transparent, background: background)
+        return WebView.WebViewSettings(javascript: javascript, domStorage: domStorage, mediaAutoplay: mediaAutoplay, zoomGestures: zoomGestures, contextMenu: contextMenu, userAgent: userAgent, acceptLanguage: acceptLanguage, thirdPartyCookies: thirdPartyCookies, fileAccess: fileAccess, autofill: autofill, webauthn: webauthn, transparent: transparent, background: background)
     }
 
-    public func writeWebViewSettings(_ out: inout Data, _ value: WebViewSettings) {
+    public func writeWebViewSettings(_ out: inout Data, _ value: WebView.WebViewSettings) {
         Bincode.writeBool(&out, value.javascript)
         Bincode.writeBool(&out, value.domStorage)
         Bincode.writeBool(&out, value.mediaAutoplay)
@@ -306,43 +306,43 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         self.writeWebColor(&out, value.background)
     }
 
-    public func readContextMenuMode(_ c: inout Bincode.Cursor) throws -> ContextMenuMode {
+    public func readContextMenuMode(_ c: inout Bincode.Cursor) throws -> WebView.ContextMenuMode {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = ContextMenuMode(rawValue: disc) else {
+        guard let value = WebView.ContextMenuMode(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeContextMenuMode(_ out: inout Data, _ value: ContextMenuMode) {
+    public func writeContextMenuMode(_ out: inout Data, _ value: WebView.ContextMenuMode) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readWebColor(_ c: inout Bincode.Cursor) throws -> WebColor {
+    public func readWebColor(_ c: inout Bincode.Cursor) throws -> WebView.WebColor {
         let r = try Bincode.readU8(&c)
         let g = try Bincode.readU8(&c)
         let b = try Bincode.readU8(&c)
         let a = try Bincode.readU8(&c)
-        return WebColor(r: r, g: g, b: b, a: a)
+        return WebView.WebColor(r: r, g: g, b: b, a: a)
     }
 
-    public func writeWebColor(_ out: inout Data, _ value: WebColor) {
+    public func writeWebColor(_ out: inout Data, _ value: WebView.WebColor) {
         Bincode.writeU8(&out, value.r)
         Bincode.writeU8(&out, value.g)
         Bincode.writeU8(&out, value.b)
         Bincode.writeU8(&out, value.a)
     }
 
-    public func readUserScript(_ c: inout Bincode.Cursor) throws -> UserScript {
+    public func readUserScript(_ c: inout Bincode.Cursor) throws -> WebView.UserScript {
         let source = try Bincode.readString(&c)
         let injectAt = try self.readInjectionTime(&c)
         let mainFrameOnly = try Bincode.readBool(&c)
         let world = try self.readScriptWorld(&c)
         let allowedOrigins = try Bincode.readVec(&c) { c1 in try Bincode.readString(&c1) }
-        return UserScript(source: source, injectAt: injectAt, mainFrameOnly: mainFrameOnly, world: world, allowedOrigins: allowedOrigins)
+        return WebView.UserScript(source: source, injectAt: injectAt, mainFrameOnly: mainFrameOnly, world: world, allowedOrigins: allowedOrigins)
     }
 
-    public func writeUserScript(_ out: inout Data, _ value: UserScript) {
+    public func writeUserScript(_ out: inout Data, _ value: WebView.UserScript) {
         Bincode.writeString(&out, value.source)
         self.writeInjectionTime(&out, value.injectAt)
         Bincode.writeBool(&out, value.mainFrameOnly)
@@ -350,139 +350,139 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         Bincode.writeVec(&out, value.allowedOrigins) { o1, v1 in Bincode.writeString(&o1, v1) }
     }
 
-    public func readInjectionTime(_ c: inout Bincode.Cursor) throws -> InjectionTime {
+    public func readInjectionTime(_ c: inout Bincode.Cursor) throws -> WebView.InjectionTime {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = InjectionTime(rawValue: disc) else {
+        guard let value = WebView.InjectionTime(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeInjectionTime(_ out: inout Data, _ value: InjectionTime) {
+    public func writeInjectionTime(_ out: inout Data, _ value: WebView.InjectionTime) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readScriptWorld(_ c: inout Bincode.Cursor) throws -> ScriptWorld {
+    public func readScriptWorld(_ c: inout Bincode.Cursor) throws -> WebView.ScriptWorld {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = ScriptWorld(rawValue: disc) else {
+        guard let value = WebView.ScriptWorld(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeScriptWorld(_ out: inout Data, _ value: ScriptWorld) {
+    public func writeScriptWorld(_ out: inout Data, _ value: WebView.ScriptWorld) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readBridgeConfig(_ c: inout Bincode.Cursor) throws -> BridgeConfig {
+    public func readBridgeConfig(_ c: inout Bincode.Cursor) throws -> WebView.BridgeConfig {
         let channels = try Bincode.readVec(&c) { c1 in try Bincode.readString(&c1) }
         let allowedOrigins = try Bincode.readVec(&c) { c1 in try Bincode.readString(&c1) }
         let allowSubframes = try Bincode.readBool(&c)
-        return BridgeConfig(channels: channels, allowedOrigins: allowedOrigins, allowSubframes: allowSubframes)
+        return WebView.BridgeConfig(channels: channels, allowedOrigins: allowedOrigins, allowSubframes: allowSubframes)
     }
 
-    public func writeBridgeConfig(_ out: inout Data, _ value: BridgeConfig) {
+    public func writeBridgeConfig(_ out: inout Data, _ value: WebView.BridgeConfig) {
         Bincode.writeVec(&out, value.channels) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeVec(&out, value.allowedOrigins) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeBool(&out, value.allowSubframes)
     }
 
-    public func readDecisionTimeouts(_ c: inout Bincode.Cursor) throws -> DecisionTimeouts {
+    public func readDecisionTimeouts(_ c: inout Bincode.Cursor) throws -> WebView.DecisionTimeouts {
         let navigationMs = try Bincode.readVarintU32(&c)
         let schemeHeadMs = try Bincode.readVarintU32(&c)
-        return DecisionTimeouts(navigationMs: navigationMs, schemeHeadMs: schemeHeadMs)
+        return WebView.DecisionTimeouts(navigationMs: navigationMs, schemeHeadMs: schemeHeadMs)
     }
 
-    public func writeDecisionTimeouts(_ out: inout Data, _ value: DecisionTimeouts) {
+    public func writeDecisionTimeouts(_ out: inout Data, _ value: WebView.DecisionTimeouts) {
         Bincode.writeVarintU32(&out, value.navigationMs)
         Bincode.writeVarintU32(&out, value.schemeHeadMs)
     }
 
-    public func readNavigationRules(_ c: inout Bincode.Cursor) throws -> NavigationRules {
+    public func readNavigationRules(_ c: inout Bincode.Cursor) throws -> WebView.NavigationRules {
         let defaultAction = try self.readRuleAction(&c)
         let rules = try Bincode.readVec(&c) { c1 in try self.readNavigationRule(&c1) }
-        return NavigationRules(defaultAction: defaultAction, rules: rules)
+        return WebView.NavigationRules(defaultAction: defaultAction, rules: rules)
     }
 
-    public func writeNavigationRules(_ out: inout Data, _ value: NavigationRules) {
+    public func writeNavigationRules(_ out: inout Data, _ value: WebView.NavigationRules) {
         self.writeRuleAction(&out, value.defaultAction)
         Bincode.writeVec(&out, value.rules) { o1, v1 in self.writeNavigationRule(&o1, v1) }
     }
 
-    public func readNavigationRule(_ c: inout Bincode.Cursor) throws -> NavigationRule {
+    public func readNavigationRule(_ c: inout Bincode.Cursor) throws -> WebView.NavigationRule {
         let pattern = try self.readUrlPattern(&c)
         let action = try self.readRuleAction(&c)
-        return NavigationRule(pattern: pattern, action: action)
+        return WebView.NavigationRule(pattern: pattern, action: action)
     }
 
-    public func writeNavigationRule(_ out: inout Data, _ value: NavigationRule) {
+    public func writeNavigationRule(_ out: inout Data, _ value: WebView.NavigationRule) {
         self.writeUrlPattern(&out, value.pattern)
         self.writeRuleAction(&out, value.action)
     }
 
-    public func readRuleAction(_ c: inout Bincode.Cursor) throws -> RuleAction {
+    public func readRuleAction(_ c: inout Bincode.Cursor) throws -> WebView.RuleAction {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = RuleAction(rawValue: disc) else {
+        guard let value = WebView.RuleAction(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeRuleAction(_ out: inout Data, _ value: RuleAction) {
+    public func writeRuleAction(_ out: inout Data, _ value: WebView.RuleAction) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readUrlPattern(_ c: inout Bincode.Cursor) throws -> UrlPattern {
+    public func readUrlPattern(_ c: inout Bincode.Cursor) throws -> WebView.UrlPattern {
         let scheme = try Bincode.readString(&c)
         let host = try Bincode.readString(&c)
         let port = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU16(&c1) }
         let pathPrefix = try Bincode.readString(&c)
-        return UrlPattern(scheme: scheme, host: host, port: port, pathPrefix: pathPrefix)
+        return WebView.UrlPattern(scheme: scheme, host: host, port: port, pathPrefix: pathPrefix)
     }
 
-    public func writeUrlPattern(_ out: inout Data, _ value: UrlPattern) {
+    public func writeUrlPattern(_ out: inout Data, _ value: WebView.UrlPattern) {
         Bincode.writeString(&out, value.scheme)
         Bincode.writeString(&out, value.host)
         Bincode.writeOption(&out, value.port) { o1, v1 in Bincode.writeVarintU16(&o1, v1) }
         Bincode.writeString(&out, value.pathPrefix)
     }
 
-    public func readWebViewInstance(_ c: inout Bincode.Cursor) throws -> WebViewInstance {
+    public func readWebViewInstance(_ c: inout Bincode.Cursor) throws -> WebView.WebViewInstance {
         let view = try self.readNativeHandleId(&c)
         let tokenHi = try Bincode.readVarintU64(&c)
         let tokenLo = try Bincode.readVarintU64(&c)
-        return WebViewInstance(view: view, tokenHi: tokenHi, tokenLo: tokenLo)
+        return WebView.WebViewInstance(view: view, tokenHi: tokenHi, tokenLo: tokenLo)
     }
 
-    public func writeWebViewInstance(_ out: inout Data, _ value: WebViewInstance) {
+    public func writeWebViewInstance(_ out: inout Data, _ value: WebView.WebViewInstance) {
         self.writeNativeHandleId(&out, value.view)
         Bincode.writeVarintU64(&out, value.tokenHi)
         Bincode.writeVarintU64(&out, value.tokenLo)
     }
 
-    public func readViewRef(_ c: inout Bincode.Cursor) throws -> ViewRef {
+    public func readViewRef(_ c: inout Bincode.Cursor) throws -> WebView.ViewRef {
         let view = try self.readNativeHandleId(&c)
         let tokenHi = try Bincode.readVarintU64(&c)
         let tokenLo = try Bincode.readVarintU64(&c)
-        return ViewRef(view: view, tokenHi: tokenHi, tokenLo: tokenLo)
+        return WebView.ViewRef(view: view, tokenHi: tokenHi, tokenLo: tokenLo)
     }
 
-    public func writeViewRef(_ out: inout Data, _ value: ViewRef) {
+    public func writeViewRef(_ out: inout Data, _ value: WebView.ViewRef) {
         self.writeNativeHandleId(&out, value.view)
         Bincode.writeVarintU64(&out, value.tokenHi)
         Bincode.writeVarintU64(&out, value.tokenLo)
     }
 
-    public func readViewFrame(_ c: inout Bincode.Cursor) throws -> ViewFrame {
+    public func readViewFrame(_ c: inout Bincode.Cursor) throws -> WebView.ViewFrame {
         let x = try Bincode.readVarintI32(&c)
         let y = try Bincode.readVarintI32(&c)
         let width = try Bincode.readVarintU32(&c)
         let height = try Bincode.readVarintU32(&c)
         let visible = try Bincode.readBool(&c)
-        return ViewFrame(x: x, y: y, width: width, height: height, visible: visible)
+        return WebView.ViewFrame(x: x, y: y, width: width, height: height, visible: visible)
     }
 
-    public func writeViewFrame(_ out: inout Data, _ value: ViewFrame) {
+    public func writeViewFrame(_ out: inout Data, _ value: WebView.ViewFrame) {
         Bincode.writeVarintI32(&out, value.x)
         Bincode.writeVarintI32(&out, value.y)
         Bincode.writeVarintU32(&out, value.width)
@@ -490,31 +490,31 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         Bincode.writeBool(&out, value.visible)
     }
 
-    public func readLoadRequest(_ c: inout Bincode.Cursor) throws -> LoadRequest {
+    public func readLoadRequest(_ c: inout Bincode.Cursor) throws -> WebView.LoadRequest {
         let url = try Bincode.readString(&c)
         let headers = try Bincode.readVec(&c) { c1 in try self.readHttpHeader(&c1) }
         let postBody = try Bincode.readOption(&c) { c1 in try Bincode.readData(&c1) }
-        return LoadRequest(url: url, headers: headers, postBody: postBody)
+        return WebView.LoadRequest(url: url, headers: headers, postBody: postBody)
     }
 
-    public func writeLoadRequest(_ out: inout Data, _ value: LoadRequest) {
+    public func writeLoadRequest(_ out: inout Data, _ value: WebView.LoadRequest) {
         Bincode.writeString(&out, value.url)
         Bincode.writeVec(&out, value.headers) { o1, v1 in self.writeHttpHeader(&o1, v1) }
         Bincode.writeOption(&out, value.postBody) { o1, v1 in Bincode.writeData(&o1, v1) }
     }
 
-    public func readHttpHeader(_ c: inout Bincode.Cursor) throws -> HttpHeader {
+    public func readHttpHeader(_ c: inout Bincode.Cursor) throws -> WebView.HttpHeader {
         let name = try Bincode.readString(&c)
         let value = try Bincode.readString(&c)
-        return HttpHeader(name: name, value: value)
+        return WebView.HttpHeader(name: name, value: value)
     }
 
-    public func writeHttpHeader(_ out: inout Data, _ value: HttpHeader) {
+    public func writeHttpHeader(_ out: inout Data, _ value: WebView.HttpHeader) {
         Bincode.writeString(&out, value.name)
         Bincode.writeString(&out, value.value)
     }
 
-    public func readHistoryNav(_ c: inout Bincode.Cursor) throws -> HistoryNav {
+    public func readHistoryNav(_ c: inout Bincode.Cursor) throws -> WebView.HistoryNav {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .back
@@ -527,7 +527,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeHistoryNav(_ out: inout Data, _ value: HistoryNav) {
+    public func writeHistoryNav(_ out: inout Data, _ value: WebView.HistoryNav) {
         switch value {
         case .back:
             Bincode.writeVarintU32(&out, 0)
@@ -545,66 +545,66 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readWebHistory(_ c: inout Bincode.Cursor) throws -> WebHistory {
+    public func readWebHistory(_ c: inout Bincode.Cursor) throws -> WebView.WebHistory {
         let entries = try Bincode.readVec(&c) { c1 in try self.readHistoryEntry(&c1) }
         let current = try Bincode.readVarintU32(&c)
-        return WebHistory(entries: entries, current: current)
+        return WebView.WebHistory(entries: entries, current: current)
     }
 
-    public func writeWebHistory(_ out: inout Data, _ value: WebHistory) {
+    public func writeWebHistory(_ out: inout Data, _ value: WebView.WebHistory) {
         Bincode.writeVec(&out, value.entries) { o1, v1 in self.writeHistoryEntry(&o1, v1) }
         Bincode.writeVarintU32(&out, value.current)
     }
 
-    public func readHistoryEntry(_ c: inout Bincode.Cursor) throws -> HistoryEntry {
+    public func readHistoryEntry(_ c: inout Bincode.Cursor) throws -> WebView.HistoryEntry {
         let url = try Bincode.readString(&c)
         let title = try Bincode.readString(&c)
-        return HistoryEntry(url: url, title: title)
+        return WebView.HistoryEntry(url: url, title: title)
     }
 
-    public func writeHistoryEntry(_ out: inout Data, _ value: HistoryEntry) {
+    public func writeHistoryEntry(_ out: inout Data, _ value: WebView.HistoryEntry) {
         Bincode.writeString(&out, value.url)
         Bincode.writeString(&out, value.title)
     }
 
-    public func readScriptCall(_ c: inout Bincode.Cursor) throws -> ScriptCall {
+    public func readScriptCall(_ c: inout Bincode.Cursor) throws -> WebView.ScriptCall {
         let source = try Bincode.readString(&c)
         let world = try self.readScriptWorld(&c)
         let expectedOrigin = try Bincode.readString(&c)
-        return ScriptCall(source: source, world: world, expectedOrigin: expectedOrigin)
+        return WebView.ScriptCall(source: source, world: world, expectedOrigin: expectedOrigin)
     }
 
-    public func writeScriptCall(_ out: inout Data, _ value: ScriptCall) {
+    public func writeScriptCall(_ out: inout Data, _ value: WebView.ScriptCall) {
         Bincode.writeString(&out, value.source)
         self.writeScriptWorld(&out, value.world)
         Bincode.writeString(&out, value.expectedOrigin)
     }
 
-    public func readOutgoingMessage(_ c: inout Bincode.Cursor) throws -> OutgoingMessage {
+    public func readOutgoingMessage(_ c: inout Bincode.Cursor) throws -> WebView.OutgoingMessage {
         let channel = try Bincode.readString(&c)
         let data = try Bincode.readData(&c)
         let expectedOrigin = try Bincode.readString(&c)
-        return OutgoingMessage(channel: channel, data: data, expectedOrigin: expectedOrigin)
+        return WebView.OutgoingMessage(channel: channel, data: data, expectedOrigin: expectedOrigin)
     }
 
-    public func writeOutgoingMessage(_ out: inout Data, _ value: OutgoingMessage) {
+    public func writeOutgoingMessage(_ out: inout Data, _ value: WebView.OutgoingMessage) {
         Bincode.writeString(&out, value.channel)
         Bincode.writeData(&out, value.data)
         Bincode.writeString(&out, value.expectedOrigin)
     }
 
-    public func readBridgeReply(_ c: inout Bincode.Cursor) throws -> BridgeReply {
+    public func readBridgeReply(_ c: inout Bincode.Cursor) throws -> WebView.BridgeReply {
         let replyId = try Bincode.readVarintU64(&c)
         let result = try self.readReplyResult(&c)
-        return BridgeReply(replyId: replyId, result: result)
+        return WebView.BridgeReply(replyId: replyId, result: result)
     }
 
-    public func writeBridgeReply(_ out: inout Data, _ value: BridgeReply) {
+    public func writeBridgeReply(_ out: inout Data, _ value: WebView.BridgeReply) {
         Bincode.writeVarintU64(&out, value.replyId)
         self.writeReplyResult(&out, value.result)
     }
 
-    public func readReplyResult(_ c: inout Bincode.Cursor) throws -> ReplyResult {
+    public func readReplyResult(_ c: inout Bincode.Cursor) throws -> WebView.ReplyResult {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .ok(try Bincode.readData(&c))
@@ -613,7 +613,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeReplyResult(_ out: inout Data, _ value: ReplyResult) {
+    public func writeReplyResult(_ out: inout Data, _ value: WebView.ReplyResult) {
         switch value {
         case .ok(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -624,18 +624,18 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readDecision(_ c: inout Bincode.Cursor) throws -> Decision {
+    public func readDecision(_ c: inout Bincode.Cursor) throws -> WebView.Decision {
         let requestId = try Bincode.readVarintU64(&c)
         let response = try self.readDecisionResponse(&c)
-        return Decision(requestId: requestId, response: response)
+        return WebView.Decision(requestId: requestId, response: response)
     }
 
-    public func writeDecision(_ out: inout Data, _ value: Decision) {
+    public func writeDecision(_ out: inout Data, _ value: WebView.Decision) {
         Bincode.writeVarintU64(&out, value.requestId)
         self.writeDecisionResponse(&out, value.response)
     }
 
-    public func readDecisionResponse(_ c: inout Bincode.Cursor) throws -> DecisionResponse {
+    public func readDecisionResponse(_ c: inout Bincode.Cursor) throws -> WebView.DecisionResponse {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .allow
@@ -649,7 +649,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeDecisionResponse(_ out: inout Data, _ value: DecisionResponse) {
+    public func writeDecisionResponse(_ out: inout Data, _ value: WebView.DecisionResponse) {
         switch value {
         case .allow:
             Bincode.writeVarintU32(&out, 0)
@@ -673,27 +673,27 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readHttpCredentials(_ c: inout Bincode.Cursor) throws -> HttpCredentials {
+    public func readHttpCredentials(_ c: inout Bincode.Cursor) throws -> WebView.HttpCredentials {
         let user = try Bincode.readString(&c)
         let password = try Bincode.readString(&c)
-        return HttpCredentials(user: user, password: password)
+        return WebView.HttpCredentials(user: user, password: password)
     }
 
-    public func writeHttpCredentials(_ out: inout Data, _ value: HttpCredentials) {
+    public func writeHttpCredentials(_ out: inout Data, _ value: WebView.HttpCredentials) {
         Bincode.writeString(&out, value.user)
         Bincode.writeString(&out, value.password)
     }
 
-    public func readSchemeResponseHead(_ c: inout Bincode.Cursor) throws -> SchemeResponseHead {
+    public func readSchemeResponseHead(_ c: inout Bincode.Cursor) throws -> WebView.SchemeResponseHead {
         let requestId = try Bincode.readVarintU64(&c)
         let status = try Bincode.readVarintU16(&c)
         let mimeType = try Bincode.readString(&c)
         let headers = try Bincode.readVec(&c) { c1 in try self.readHttpHeader(&c1) }
         let contentLength = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
-        return SchemeResponseHead(requestId: requestId, status: status, mimeType: mimeType, headers: headers, contentLength: contentLength)
+        return WebView.SchemeResponseHead(requestId: requestId, status: status, mimeType: mimeType, headers: headers, contentLength: contentLength)
     }
 
-    public func writeSchemeResponseHead(_ out: inout Data, _ value: SchemeResponseHead) {
+    public func writeSchemeResponseHead(_ out: inout Data, _ value: WebView.SchemeResponseHead) {
         Bincode.writeVarintU64(&out, value.requestId)
         Bincode.writeVarintU16(&out, value.status)
         Bincode.writeString(&out, value.mimeType)
@@ -701,18 +701,18 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         Bincode.writeOption(&out, value.contentLength) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
     }
 
-    public func readSchemeChunk(_ c: inout Bincode.Cursor) throws -> SchemeChunk {
+    public func readSchemeChunk(_ c: inout Bincode.Cursor) throws -> WebView.SchemeChunk {
         let requestId = try Bincode.readVarintU64(&c)
         let body = try self.readSchemeBody(&c)
-        return SchemeChunk(requestId: requestId, body: body)
+        return WebView.SchemeChunk(requestId: requestId, body: body)
     }
 
-    public func writeSchemeChunk(_ out: inout Data, _ value: SchemeChunk) {
+    public func writeSchemeChunk(_ out: inout Data, _ value: WebView.SchemeChunk) {
         Bincode.writeVarintU64(&out, value.requestId)
         self.writeSchemeBody(&out, value.body)
     }
 
-    public func readSchemeBody(_ c: inout Bincode.Cursor) throws -> SchemeBody {
+    public func readSchemeBody(_ c: inout Bincode.Cursor) throws -> WebView.SchemeBody {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .data(try Bincode.readData(&c))
@@ -722,7 +722,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeSchemeBody(_ out: inout Data, _ value: SchemeBody) {
+    public func writeSchemeBody(_ out: inout Data, _ value: WebView.SchemeBody) {
         switch value {
         case .data(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -735,7 +735,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readWebCookie(_ c: inout Bincode.Cursor) throws -> WebCookie {
+    public func readWebCookie(_ c: inout Bincode.Cursor) throws -> WebView.WebCookie {
         let name = try Bincode.readString(&c)
         let value = try Bincode.readString(&c)
         let domain = try Bincode.readString(&c)
@@ -744,10 +744,10 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         let secure = try Bincode.readBool(&c)
         let httpOnly = try Bincode.readBool(&c)
         let sameSite = try self.readSameSite(&c)
-        return WebCookie(name: name, value: value, domain: domain, path: path, expiresUnixMs: expiresUnixMs, secure: secure, httpOnly: httpOnly, sameSite: sameSite)
+        return WebView.WebCookie(name: name, value: value, domain: domain, path: path, expiresUnixMs: expiresUnixMs, secure: secure, httpOnly: httpOnly, sameSite: sameSite)
     }
 
-    public func writeWebCookie(_ out: inout Data, _ value: WebCookie) {
+    public func writeWebCookie(_ out: inout Data, _ value: WebView.WebCookie) {
         Bincode.writeString(&out, value.name)
         Bincode.writeString(&out, value.value)
         Bincode.writeString(&out, value.domain)
@@ -758,90 +758,90 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         self.writeSameSite(&out, value.sameSite)
     }
 
-    public func readSameSite(_ c: inout Bincode.Cursor) throws -> SameSite {
+    public func readSameSite(_ c: inout Bincode.Cursor) throws -> WebView.SameSite {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = SameSite(rawValue: disc) else {
+        guard let value = WebView.SameSite(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeSameSite(_ out: inout Data, _ value: SameSite) {
+    public func writeSameSite(_ out: inout Data, _ value: WebView.SameSite) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readCookieFilter(_ c: inout Bincode.Cursor) throws -> CookieFilter {
+    public func readCookieFilter(_ c: inout Bincode.Cursor) throws -> WebView.CookieFilter {
         let url = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let name = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
-        return CookieFilter(url: url, name: name)
+        return WebView.CookieFilter(url: url, name: name)
     }
 
-    public func writeCookieFilter(_ out: inout Data, _ value: CookieFilter) {
+    public func writeCookieFilter(_ out: inout Data, _ value: WebView.CookieFilter) {
         Bincode.writeOption(&out, value.url) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.name) { o1, v1 in Bincode.writeString(&o1, v1) }
     }
 
-    public func readClearDataRequest(_ c: inout Bincode.Cursor) throws -> ClearDataRequest {
+    public func readClearDataRequest(_ c: inout Bincode.Cursor) throws -> WebView.ClearDataRequest {
         let kinds = try Bincode.readVec(&c) { c1 in try self.readDataKind(&c1) }
         let sinceUnixMs = try Bincode.readOption(&c) { c1 in try Bincode.readVarintI64(&c1) }
-        return ClearDataRequest(kinds: kinds, sinceUnixMs: sinceUnixMs)
+        return WebView.ClearDataRequest(kinds: kinds, sinceUnixMs: sinceUnixMs)
     }
 
-    public func writeClearDataRequest(_ out: inout Data, _ value: ClearDataRequest) {
+    public func writeClearDataRequest(_ out: inout Data, _ value: WebView.ClearDataRequest) {
         Bincode.writeVec(&out, value.kinds) { o1, v1 in self.writeDataKind(&o1, v1) }
         Bincode.writeOption(&out, value.sinceUnixMs) { o1, v1 in Bincode.writeVarintI64(&o1, v1) }
     }
 
-    public func readDataKind(_ c: inout Bincode.Cursor) throws -> DataKind {
+    public func readDataKind(_ c: inout Bincode.Cursor) throws -> WebView.DataKind {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = DataKind(rawValue: disc) else {
+        guard let value = WebView.DataKind(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeDataKind(_ out: inout Data, _ value: DataKind) {
+    public func writeDataKind(_ out: inout Data, _ value: WebView.DataKind) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readFindQuery(_ c: inout Bincode.Cursor) throws -> FindQuery {
+    public func readFindQuery(_ c: inout Bincode.Cursor) throws -> WebView.FindQuery {
         let text = try Bincode.readString(&c)
         let backwards = try Bincode.readBool(&c)
         let caseSensitive = try Bincode.readBool(&c)
         let wrap = try Bincode.readBool(&c)
-        return FindQuery(text: text, backwards: backwards, caseSensitive: caseSensitive, wrap: wrap)
+        return WebView.FindQuery(text: text, backwards: backwards, caseSensitive: caseSensitive, wrap: wrap)
     }
 
-    public func writeFindQuery(_ out: inout Data, _ value: FindQuery) {
+    public func writeFindQuery(_ out: inout Data, _ value: WebView.FindQuery) {
         Bincode.writeString(&out, value.text)
         Bincode.writeBool(&out, value.backwards)
         Bincode.writeBool(&out, value.caseSensitive)
         Bincode.writeBool(&out, value.wrap)
     }
 
-    public func readFindResult(_ c: inout Bincode.Cursor) throws -> FindResult {
+    public func readFindResult(_ c: inout Bincode.Cursor) throws -> WebView.FindResult {
         let matches = try Bincode.readVarintU32(&c)
         let active = try Bincode.readVarintU32(&c)
-        return FindResult(matches: matches, active: active)
+        return WebView.FindResult(matches: matches, active: active)
     }
 
-    public func writeFindResult(_ out: inout Data, _ value: FindResult) {
+    public func writeFindResult(_ out: inout Data, _ value: WebView.FindResult) {
         Bincode.writeVarintU32(&out, value.matches)
         Bincode.writeVarintU32(&out, value.active)
     }
 
-    public func readSnapshotOptions(_ c: inout Bincode.Cursor) throws -> SnapshotOptions {
+    public func readSnapshotOptions(_ c: inout Bincode.Cursor) throws -> WebView.SnapshotOptions {
         let maxWidth = try Bincode.readVarintU32(&c)
         let format = try self.readSnapshotFormat(&c)
-        return SnapshotOptions(maxWidth: maxWidth, format: format)
+        return WebView.SnapshotOptions(maxWidth: maxWidth, format: format)
     }
 
-    public func writeSnapshotOptions(_ out: inout Data, _ value: SnapshotOptions) {
+    public func writeSnapshotOptions(_ out: inout Data, _ value: WebView.SnapshotOptions) {
         Bincode.writeVarintU32(&out, value.maxWidth)
         self.writeSnapshotFormat(&out, value.format)
     }
 
-    public func readSnapshotFormat(_ c: inout Bincode.Cursor) throws -> SnapshotFormat {
+    public func readSnapshotFormat(_ c: inout Bincode.Cursor) throws -> WebView.SnapshotFormat {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .png
@@ -850,7 +850,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeSnapshotFormat(_ out: inout Data, _ value: SnapshotFormat) {
+    public func writeSnapshotFormat(_ out: inout Data, _ value: WebView.SnapshotFormat) {
         switch value {
         case .png:
             Bincode.writeVarintU32(&out, 0)
@@ -860,45 +860,45 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readWebSnapshot(_ c: inout Bincode.Cursor) throws -> WebSnapshot {
+    public func readWebSnapshot(_ c: inout Bincode.Cursor) throws -> WebView.WebSnapshot {
         let width = try Bincode.readVarintU32(&c)
         let height = try Bincode.readVarintU32(&c)
         let format = try self.readSnapshotFormat(&c)
         let bytes = try Bincode.readData(&c)
-        return WebSnapshot(width: width, height: height, format: format, bytes: bytes)
+        return WebView.WebSnapshot(width: width, height: height, format: format, bytes: bytes)
     }
 
-    public func writeWebSnapshot(_ out: inout Data, _ value: WebSnapshot) {
+    public func writeWebSnapshot(_ out: inout Data, _ value: WebView.WebSnapshot) {
         Bincode.writeVarintU32(&out, value.width)
         Bincode.writeVarintU32(&out, value.height)
         self.writeSnapshotFormat(&out, value.format)
         Bincode.writeData(&out, value.bytes)
     }
 
-    public func readDownloadOp(_ c: inout Bincode.Cursor) throws -> DownloadOp {
+    public func readDownloadOp(_ c: inout Bincode.Cursor) throws -> WebView.DownloadOp {
         let downloadId = try Bincode.readVarintU64(&c)
         let action = try self.readDownloadAction(&c)
-        return DownloadOp(downloadId: downloadId, action: action)
+        return WebView.DownloadOp(downloadId: downloadId, action: action)
     }
 
-    public func writeDownloadOp(_ out: inout Data, _ value: DownloadOp) {
+    public func writeDownloadOp(_ out: inout Data, _ value: WebView.DownloadOp) {
         Bincode.writeVarintU64(&out, value.downloadId)
         self.writeDownloadAction(&out, value.action)
     }
 
-    public func readDownloadAction(_ c: inout Bincode.Cursor) throws -> DownloadAction {
+    public func readDownloadAction(_ c: inout Bincode.Cursor) throws -> WebView.DownloadAction {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = DownloadAction(rawValue: disc) else {
+        guard let value = WebView.DownloadAction(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeDownloadAction(_ out: inout Data, _ value: DownloadAction) {
+    public func writeDownloadAction(_ out: inout Data, _ value: WebView.DownloadAction) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readControlEvent(_ c: inout Bincode.Cursor) throws -> ControlEvent {
+    public func readControlEvent(_ c: inout Bincode.Cursor) throws -> WebView.ControlEvent {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .navigationStarted(try self.readNavInfo(&c))
@@ -917,7 +917,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeControlEvent(_ out: inout Data, _ value: ControlEvent) {
+    public func writeControlEvent(_ out: inout Data, _ value: WebView.ControlEvent) {
         switch value {
         case .navigationStarted(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -957,71 +957,71 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readNavInfo(_ c: inout Bincode.Cursor) throws -> NavInfo {
+    public func readNavInfo(_ c: inout Bincode.Cursor) throws -> WebView.NavInfo {
         let navigationId = try Bincode.readVarintU64(&c)
         let url = try Bincode.readString(&c)
         let isRedirect = try Bincode.readBool(&c)
         let userGesture = try Bincode.readBool(&c)
-        return NavInfo(navigationId: navigationId, url: url, isRedirect: isRedirect, userGesture: userGesture)
+        return WebView.NavInfo(navigationId: navigationId, url: url, isRedirect: isRedirect, userGesture: userGesture)
     }
 
-    public func writeNavInfo(_ out: inout Data, _ value: NavInfo) {
+    public func writeNavInfo(_ out: inout Data, _ value: WebView.NavInfo) {
         Bincode.writeVarintU64(&out, value.navigationId)
         Bincode.writeString(&out, value.url)
         Bincode.writeBool(&out, value.isRedirect)
         Bincode.writeBool(&out, value.userGesture)
     }
 
-    public func readNavFailure(_ c: inout Bincode.Cursor) throws -> NavFailure {
+    public func readNavFailure(_ c: inout Bincode.Cursor) throws -> WebView.NavFailure {
         let navigationId = try Bincode.readVarintU64(&c)
         let url = try Bincode.readString(&c)
         let kind = try self.readNavErrorKind(&c)
         let description = try Bincode.readString(&c)
-        return NavFailure(navigationId: navigationId, url: url, kind: kind, description: description)
+        return WebView.NavFailure(navigationId: navigationId, url: url, kind: kind, description: description)
     }
 
-    public func writeNavFailure(_ out: inout Data, _ value: NavFailure) {
+    public func writeNavFailure(_ out: inout Data, _ value: WebView.NavFailure) {
         Bincode.writeVarintU64(&out, value.navigationId)
         Bincode.writeString(&out, value.url)
         self.writeNavErrorKind(&out, value.kind)
         Bincode.writeString(&out, value.description)
     }
 
-    public func readNavErrorKind(_ c: inout Bincode.Cursor) throws -> NavErrorKind {
+    public func readNavErrorKind(_ c: inout Bincode.Cursor) throws -> WebView.NavErrorKind {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = NavErrorKind(rawValue: disc) else {
+        guard let value = WebView.NavErrorKind(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeNavErrorKind(_ out: inout Data, _ value: NavErrorKind) {
+    public func writeNavErrorKind(_ out: inout Data, _ value: WebView.NavErrorKind) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readInterceptedNav(_ c: inout Bincode.Cursor) throws -> InterceptedNav {
+    public func readInterceptedNav(_ c: inout Bincode.Cursor) throws -> WebView.InterceptedNav {
         let navigationId = try Bincode.readVarintU64(&c)
         let url = try Bincode.readString(&c)
-        return InterceptedNav(navigationId: navigationId, url: url)
+        return WebView.InterceptedNav(navigationId: navigationId, url: url)
     }
 
-    public func writeInterceptedNav(_ out: inout Data, _ value: InterceptedNav) {
+    public func writeInterceptedNav(_ out: inout Data, _ value: WebView.InterceptedNav) {
         Bincode.writeVarintU64(&out, value.navigationId)
         Bincode.writeString(&out, value.url)
     }
 
-    public func readDecisionRequest(_ c: inout Bincode.Cursor) throws -> DecisionRequest {
+    public func readDecisionRequest(_ c: inout Bincode.Cursor) throws -> WebView.DecisionRequest {
         let requestId = try Bincode.readVarintU64(&c)
         let kind = try self.readDecisionKind(&c)
-        return DecisionRequest(requestId: requestId, kind: kind)
+        return WebView.DecisionRequest(requestId: requestId, kind: kind)
     }
 
-    public func writeDecisionRequest(_ out: inout Data, _ value: DecisionRequest) {
+    public func writeDecisionRequest(_ out: inout Data, _ value: WebView.DecisionRequest) {
         Bincode.writeVarintU64(&out, value.requestId)
         self.writeDecisionKind(&out, value.kind)
     }
 
-    public func readDecisionKind(_ c: inout Bincode.Cursor) throws -> DecisionKind {
+    public func readDecisionKind(_ c: inout Bincode.Cursor) throws -> WebView.DecisionKind {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .navigation(try self.readNavInfo(&c))
@@ -1036,7 +1036,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeDecisionKind(_ out: inout Data, _ value: DecisionKind) {
+    public func writeDecisionKind(_ out: inout Data, _ value: WebView.DecisionKind) {
         switch value {
         case .navigation(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -1065,120 +1065,120 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readNewWindowAsk(_ c: inout Bincode.Cursor) throws -> NewWindowAsk {
+    public func readNewWindowAsk(_ c: inout Bincode.Cursor) throws -> WebView.NewWindowAsk {
         let url = try Bincode.readString(&c)
         let userGesture = try Bincode.readBool(&c)
-        return NewWindowAsk(url: url, userGesture: userGesture)
+        return WebView.NewWindowAsk(url: url, userGesture: userGesture)
     }
 
-    public func writeNewWindowAsk(_ out: inout Data, _ value: NewWindowAsk) {
+    public func writeNewWindowAsk(_ out: inout Data, _ value: WebView.NewWindowAsk) {
         Bincode.writeString(&out, value.url)
         Bincode.writeBool(&out, value.userGesture)
     }
 
-    public func readPermissionAsk(_ c: inout Bincode.Cursor) throws -> PermissionAsk {
+    public func readPermissionAsk(_ c: inout Bincode.Cursor) throws -> WebView.PermissionAsk {
         let permissions = try Bincode.readVec(&c) { c1 in try self.readWebPermission(&c1) }
         let frameOrigin = try Bincode.readString(&c)
         let topOrigin = try Bincode.readString(&c)
-        return PermissionAsk(permissions: permissions, frameOrigin: frameOrigin, topOrigin: topOrigin)
+        return WebView.PermissionAsk(permissions: permissions, frameOrigin: frameOrigin, topOrigin: topOrigin)
     }
 
-    public func writePermissionAsk(_ out: inout Data, _ value: PermissionAsk) {
+    public func writePermissionAsk(_ out: inout Data, _ value: WebView.PermissionAsk) {
         Bincode.writeVec(&out, value.permissions) { o1, v1 in self.writeWebPermission(&o1, v1) }
         Bincode.writeString(&out, value.frameOrigin)
         Bincode.writeString(&out, value.topOrigin)
     }
 
-    public func readWebPermission(_ c: inout Bincode.Cursor) throws -> WebPermission {
+    public func readWebPermission(_ c: inout Bincode.Cursor) throws -> WebView.WebPermission {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = WebPermission(rawValue: disc) else {
+        guard let value = WebView.WebPermission(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeWebPermission(_ out: inout Data, _ value: WebPermission) {
+    public func writeWebPermission(_ out: inout Data, _ value: WebView.WebPermission) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readHttpAuthAsk(_ c: inout Bincode.Cursor) throws -> HttpAuthAsk {
+    public func readHttpAuthAsk(_ c: inout Bincode.Cursor) throws -> WebView.HttpAuthAsk {
         let host = try Bincode.readString(&c)
         let realm = try Bincode.readString(&c)
         let isProxy = try Bincode.readBool(&c)
-        return HttpAuthAsk(host: host, realm: realm, isProxy: isProxy)
+        return WebView.HttpAuthAsk(host: host, realm: realm, isProxy: isProxy)
     }
 
-    public func writeHttpAuthAsk(_ out: inout Data, _ value: HttpAuthAsk) {
+    public func writeHttpAuthAsk(_ out: inout Data, _ value: WebView.HttpAuthAsk) {
         Bincode.writeString(&out, value.host)
         Bincode.writeString(&out, value.realm)
         Bincode.writeBool(&out, value.isProxy)
     }
 
-    public func readTlsErrorInfo(_ c: inout Bincode.Cursor) throws -> TlsErrorInfo {
+    public func readTlsErrorInfo(_ c: inout Bincode.Cursor) throws -> WebView.TlsErrorInfo {
         let url = try Bincode.readString(&c)
         let host = try Bincode.readString(&c)
         let description = try Bincode.readString(&c)
         let fingerprintSha256 = try Bincode.readString(&c)
-        return TlsErrorInfo(url: url, host: host, description: description, fingerprintSha256: fingerprintSha256)
+        return WebView.TlsErrorInfo(url: url, host: host, description: description, fingerprintSha256: fingerprintSha256)
     }
 
-    public func writeTlsErrorInfo(_ out: inout Data, _ value: TlsErrorInfo) {
+    public func writeTlsErrorInfo(_ out: inout Data, _ value: WebView.TlsErrorInfo) {
         Bincode.writeString(&out, value.url)
         Bincode.writeString(&out, value.host)
         Bincode.writeString(&out, value.description)
         Bincode.writeString(&out, value.fingerprintSha256)
     }
 
-    public func readFileChooserAsk(_ c: inout Bincode.Cursor) throws -> FileChooserAsk {
+    public func readFileChooserAsk(_ c: inout Bincode.Cursor) throws -> WebView.FileChooserAsk {
         let multiple = try Bincode.readBool(&c)
         let accept = try Bincode.readVec(&c) { c1 in try Bincode.readString(&c1) }
         let capture = try Bincode.readBool(&c)
-        return FileChooserAsk(multiple: multiple, accept: accept, capture: capture)
+        return WebView.FileChooserAsk(multiple: multiple, accept: accept, capture: capture)
     }
 
-    public func writeFileChooserAsk(_ out: inout Data, _ value: FileChooserAsk) {
+    public func writeFileChooserAsk(_ out: inout Data, _ value: WebView.FileChooserAsk) {
         Bincode.writeBool(&out, value.multiple)
         Bincode.writeVec(&out, value.accept) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeBool(&out, value.capture)
     }
 
-    public func readDialogAsk(_ c: inout Bincode.Cursor) throws -> DialogAsk {
+    public func readDialogAsk(_ c: inout Bincode.Cursor) throws -> WebView.DialogAsk {
         let kind = try self.readDialogKind(&c)
         let message = try Bincode.readString(&c)
         let defaultText = try Bincode.readString(&c)
         let origin = try Bincode.readString(&c)
-        return DialogAsk(kind: kind, message: message, defaultText: defaultText, origin: origin)
+        return WebView.DialogAsk(kind: kind, message: message, defaultText: defaultText, origin: origin)
     }
 
-    public func writeDialogAsk(_ out: inout Data, _ value: DialogAsk) {
+    public func writeDialogAsk(_ out: inout Data, _ value: WebView.DialogAsk) {
         self.writeDialogKind(&out, value.kind)
         Bincode.writeString(&out, value.message)
         Bincode.writeString(&out, value.defaultText)
         Bincode.writeString(&out, value.origin)
     }
 
-    public func readDialogKind(_ c: inout Bincode.Cursor) throws -> DialogKind {
+    public func readDialogKind(_ c: inout Bincode.Cursor) throws -> WebView.DialogKind {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = DialogKind(rawValue: disc) else {
+        guard let value = WebView.DialogKind(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeDialogKind(_ out: inout Data, _ value: DialogKind) {
+    public func writeDialogKind(_ out: inout Data, _ value: WebView.DialogKind) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readDownloadAsk(_ c: inout Bincode.Cursor) throws -> DownloadAsk {
+    public func readDownloadAsk(_ c: inout Bincode.Cursor) throws -> WebView.DownloadAsk {
         let downloadId = try Bincode.readVarintU64(&c)
         let url = try Bincode.readString(&c)
         let suggestedName = try Bincode.readString(&c)
         let mimeType = try Bincode.readString(&c)
         let contentLength = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
-        return DownloadAsk(downloadId: downloadId, url: url, suggestedName: suggestedName, mimeType: mimeType, contentLength: contentLength)
+        return WebView.DownloadAsk(downloadId: downloadId, url: url, suggestedName: suggestedName, mimeType: mimeType, contentLength: contentLength)
     }
 
-    public func writeDownloadAsk(_ out: inout Data, _ value: DownloadAsk) {
+    public func writeDownloadAsk(_ out: inout Data, _ value: WebView.DownloadAsk) {
         Bincode.writeVarintU64(&out, value.downloadId)
         Bincode.writeString(&out, value.url)
         Bincode.writeString(&out, value.suggestedName)
@@ -1186,7 +1186,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         Bincode.writeOption(&out, value.contentLength) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
     }
 
-    public func readSchemeRequestInfo(_ c: inout Bincode.Cursor) throws -> SchemeRequestInfo {
+    public func readSchemeRequestInfo(_ c: inout Bincode.Cursor) throws -> WebView.SchemeRequestInfo {
         let requestId = try Bincode.readVarintU64(&c)
         let scheme = try Bincode.readString(&c)
         let method = try Bincode.readString(&c)
@@ -1194,10 +1194,10 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         let headers = try Bincode.readVec(&c) { c1 in try self.readHttpHeader(&c1) }
         let hasBody = try Bincode.readBool(&c)
         let initiatorOrigin = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
-        return SchemeRequestInfo(requestId: requestId, scheme: scheme, method: method, url: url, headers: headers, hasBody: hasBody, initiatorOrigin: initiatorOrigin)
+        return WebView.SchemeRequestInfo(requestId: requestId, scheme: scheme, method: method, url: url, headers: headers, hasBody: hasBody, initiatorOrigin: initiatorOrigin)
     }
 
-    public func writeSchemeRequestInfo(_ out: inout Data, _ value: SchemeRequestInfo) {
+    public func writeSchemeRequestInfo(_ out: inout Data, _ value: WebView.SchemeRequestInfo) {
         Bincode.writeVarintU64(&out, value.requestId)
         Bincode.writeString(&out, value.scheme)
         Bincode.writeString(&out, value.method)
@@ -1207,17 +1207,17 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         Bincode.writeOption(&out, value.initiatorOrigin) { o1, v1 in Bincode.writeString(&o1, v1) }
     }
 
-    public func readBridgeMessage(_ c: inout Bincode.Cursor) throws -> BridgeMessage {
+    public func readBridgeMessage(_ c: inout Bincode.Cursor) throws -> WebView.BridgeMessage {
         let channel = try Bincode.readString(&c)
         let origin = try Bincode.readString(&c)
         let isMainFrame = try Bincode.readBool(&c)
         let documentId = try Bincode.readVarintU64(&c)
         let replyId = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
         let data = try Bincode.readData(&c)
-        return BridgeMessage(channel: channel, origin: origin, isMainFrame: isMainFrame, documentId: documentId, replyId: replyId, data: data)
+        return WebView.BridgeMessage(channel: channel, origin: origin, isMainFrame: isMainFrame, documentId: documentId, replyId: replyId, data: data)
     }
 
-    public func writeBridgeMessage(_ out: inout Data, _ value: BridgeMessage) {
+    public func writeBridgeMessage(_ out: inout Data, _ value: WebView.BridgeMessage) {
         Bincode.writeString(&out, value.channel)
         Bincode.writeString(&out, value.origin)
         Bincode.writeBool(&out, value.isMainFrame)
@@ -1226,51 +1226,51 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         Bincode.writeData(&out, value.data)
     }
 
-    public func readNewViewInfo(_ c: inout Bincode.Cursor) throws -> NewViewInfo {
+    public func readNewViewInfo(_ c: inout Bincode.Cursor) throws -> WebView.NewViewInfo {
         let instance = try self.readWebViewInstance(&c)
         let url = try Bincode.readString(&c)
-        return NewViewInfo(instance: instance, url: url)
+        return WebView.NewViewInfo(instance: instance, url: url)
     }
 
-    public func writeNewViewInfo(_ out: inout Data, _ value: NewViewInfo) {
+    public func writeNewViewInfo(_ out: inout Data, _ value: WebView.NewViewInfo) {
         self.writeWebViewInstance(&out, value.instance)
         Bincode.writeString(&out, value.url)
     }
 
-    public func readTerminationInfo(_ c: inout Bincode.Cursor) throws -> TerminationInfo {
+    public func readTerminationInfo(_ c: inout Bincode.Cursor) throws -> WebView.TerminationInfo {
         let reason = try self.readTerminationReason(&c)
-        return TerminationInfo(reason: reason)
+        return WebView.TerminationInfo(reason: reason)
     }
 
-    public func writeTerminationInfo(_ out: inout Data, _ value: TerminationInfo) {
+    public func writeTerminationInfo(_ out: inout Data, _ value: WebView.TerminationInfo) {
         self.writeTerminationReason(&out, value.reason)
     }
 
-    public func readTerminationReason(_ c: inout Bincode.Cursor) throws -> TerminationReason {
+    public func readTerminationReason(_ c: inout Bincode.Cursor) throws -> WebView.TerminationReason {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = TerminationReason(rawValue: disc) else {
+        guard let value = WebView.TerminationReason(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeTerminationReason(_ out: inout Data, _ value: TerminationReason) {
+    public func writeTerminationReason(_ out: inout Data, _ value: WebView.TerminationReason) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readTelemetryKind(_ c: inout Bincode.Cursor) throws -> TelemetryKind {
+    public func readTelemetryKind(_ c: inout Bincode.Cursor) throws -> WebView.TelemetryKind {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = TelemetryKind(rawValue: disc) else {
+        guard let value = WebView.TelemetryKind(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeTelemetryKind(_ out: inout Data, _ value: TelemetryKind) {
+    public func writeTelemetryKind(_ out: inout Data, _ value: WebView.TelemetryKind) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readTelemetryEvent(_ c: inout Bincode.Cursor) throws -> TelemetryEvent {
+    public func readTelemetryEvent(_ c: inout Bincode.Cursor) throws -> WebView.TelemetryEvent {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .progress(try Bincode.readF32(&c))
@@ -1286,7 +1286,7 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func writeTelemetryEvent(_ out: inout Data, _ value: TelemetryEvent) {
+    public func writeTelemetryEvent(_ out: inout Data, _ value: WebView.TelemetryEvent) {
         switch value {
         case .progress(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -1318,65 +1318,65 @@ public final class WebViewCodecsImpl: WebViewCodecs {
         }
     }
 
-    public func readHistoryState(_ c: inout Bincode.Cursor) throws -> HistoryState {
+    public func readHistoryState(_ c: inout Bincode.Cursor) throws -> WebView.HistoryState {
         let canGoBack = try Bincode.readBool(&c)
         let canGoForward = try Bincode.readBool(&c)
-        return HistoryState(canGoBack: canGoBack, canGoForward: canGoForward)
+        return WebView.HistoryState(canGoBack: canGoBack, canGoForward: canGoForward)
     }
 
-    public func writeHistoryState(_ out: inout Data, _ value: HistoryState) {
+    public func writeHistoryState(_ out: inout Data, _ value: WebView.HistoryState) {
         Bincode.writeBool(&out, value.canGoBack)
         Bincode.writeBool(&out, value.canGoForward)
     }
 
-    public func readConsoleLine(_ c: inout Bincode.Cursor) throws -> ConsoleLine {
+    public func readConsoleLine(_ c: inout Bincode.Cursor) throws -> WebView.ConsoleLine {
         let level = try self.readConsoleLevel(&c)
         let message = try Bincode.readString(&c)
         let source = try Bincode.readString(&c)
         let line = try Bincode.readVarintU32(&c)
-        return ConsoleLine(level: level, message: message, source: source, line: line)
+        return WebView.ConsoleLine(level: level, message: message, source: source, line: line)
     }
 
-    public func writeConsoleLine(_ out: inout Data, _ value: ConsoleLine) {
+    public func writeConsoleLine(_ out: inout Data, _ value: WebView.ConsoleLine) {
         self.writeConsoleLevel(&out, value.level)
         Bincode.writeString(&out, value.message)
         Bincode.writeString(&out, value.source)
         Bincode.writeVarintU32(&out, value.line)
     }
 
-    public func readConsoleLevel(_ c: inout Bincode.Cursor) throws -> ConsoleLevel {
+    public func readConsoleLevel(_ c: inout Bincode.Cursor) throws -> WebView.ConsoleLevel {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = ConsoleLevel(rawValue: disc) else {
+        guard let value = WebView.ConsoleLevel(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeConsoleLevel(_ out: inout Data, _ value: ConsoleLevel) {
+    public func writeConsoleLevel(_ out: inout Data, _ value: WebView.ConsoleLevel) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readDownloadProgress(_ c: inout Bincode.Cursor) throws -> DownloadProgress {
+    public func readDownloadProgress(_ c: inout Bincode.Cursor) throws -> WebView.DownloadProgress {
         let downloadId = try Bincode.readVarintU64(&c)
         let received = try Bincode.readVarintU64(&c)
         let total = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU64(&c1) }
-        return DownloadProgress(downloadId: downloadId, received: received, total: total)
+        return WebView.DownloadProgress(downloadId: downloadId, received: received, total: total)
     }
 
-    public func writeDownloadProgress(_ out: inout Data, _ value: DownloadProgress) {
+    public func writeDownloadProgress(_ out: inout Data, _ value: WebView.DownloadProgress) {
         Bincode.writeVarintU64(&out, value.downloadId)
         Bincode.writeVarintU64(&out, value.received)
         Bincode.writeOption(&out, value.total) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
     }
 
-    public func readDownloadDone(_ c: inout Bincode.Cursor) throws -> DownloadDone {
+    public func readDownloadDone(_ c: inout Bincode.Cursor) throws -> WebView.DownloadDone {
         let downloadId = try Bincode.readVarintU64(&c)
         let path = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
         let error = try Bincode.readOption(&c) { c1 in try Bincode.readString(&c1) }
-        return DownloadDone(downloadId: downloadId, path: path, error: error)
+        return WebView.DownloadDone(downloadId: downloadId, path: path, error: error)
     }
 
-    public func writeDownloadDone(_ out: inout Data, _ value: DownloadDone) {
+    public func writeDownloadDone(_ out: inout Data, _ value: WebView.DownloadDone) {
         Bincode.writeVarintU64(&out, value.downloadId)
         Bincode.writeOption(&out, value.path) { o1, v1 in Bincode.writeString(&o1, v1) }
         Bincode.writeOption(&out, value.error) { o1, v1 in Bincode.writeString(&o1, v1) }

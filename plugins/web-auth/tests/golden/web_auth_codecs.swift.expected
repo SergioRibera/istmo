@@ -7,17 +7,17 @@ import IstmoRuntime
 public final class WebAuthCodecsImpl: WebAuthCodecs {
     public init() {}
 
-    public func readWebAuthCapabilities(_ c: inout Bincode.Cursor) throws -> WebAuthCapabilities {
+    public func readWebAuthCapabilities(_ c: inout Bincode.Cursor) throws -> WebAuth.WebAuthCapabilities {
         let backend = try Bincode.readString(&c)
         let loopbackCallbacks = try Bincode.readBool(&c)
         let schemeCallbacks = try Bincode.readBool(&c)
         let httpsCallbacks = try Bincode.readBool(&c)
         let ephemeral = try Bincode.readBool(&c)
         let embedded = try Bincode.readBool(&c)
-        return WebAuthCapabilities(backend: backend, loopbackCallbacks: loopbackCallbacks, schemeCallbacks: schemeCallbacks, httpsCallbacks: httpsCallbacks, ephemeral: ephemeral, embedded: embedded)
+        return WebAuth.WebAuthCapabilities(backend: backend, loopbackCallbacks: loopbackCallbacks, schemeCallbacks: schemeCallbacks, httpsCallbacks: httpsCallbacks, ephemeral: ephemeral, embedded: embedded)
     }
 
-    public func writeWebAuthCapabilities(_ out: inout Data, _ value: WebAuthCapabilities) {
+    public func writeWebAuthCapabilities(_ out: inout Data, _ value: WebAuth.WebAuthCapabilities) {
         Bincode.writeString(&out, value.backend)
         Bincode.writeBool(&out, value.loopbackCallbacks)
         Bincode.writeBool(&out, value.schemeCallbacks)
@@ -26,7 +26,7 @@ public final class WebAuthCodecsImpl: WebAuthCodecs {
         Bincode.writeBool(&out, value.embedded)
     }
 
-    public func readCallbackSpec(_ c: inout Bincode.Cursor) throws -> CallbackSpec {
+    public func readCallbackSpec(_ c: inout Bincode.Cursor) throws -> WebAuth.CallbackSpec {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .loopback(try self.readLoopbackCallback(&c))
@@ -36,7 +36,7 @@ public final class WebAuthCodecsImpl: WebAuthCodecs {
         }
     }
 
-    public func writeCallbackSpec(_ out: inout Data, _ value: CallbackSpec) {
+    public func writeCallbackSpec(_ out: inout Data, _ value: WebAuth.CallbackSpec) {
         switch value {
         case .loopback(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -50,73 +50,73 @@ public final class WebAuthCodecsImpl: WebAuthCodecs {
         }
     }
 
-    public func readLoopbackCallback(_ c: inout Bincode.Cursor) throws -> LoopbackCallback {
+    public func readLoopbackCallback(_ c: inout Bincode.Cursor) throws -> WebAuth.LoopbackCallback {
         let path = try Bincode.readString(&c)
-        return LoopbackCallback(path: path)
+        return WebAuth.LoopbackCallback(path: path)
     }
 
-    public func writeLoopbackCallback(_ out: inout Data, _ value: LoopbackCallback) {
+    public func writeLoopbackCallback(_ out: inout Data, _ value: WebAuth.LoopbackCallback) {
         Bincode.writeString(&out, value.path)
     }
 
-    public func readSchemeCallback(_ c: inout Bincode.Cursor) throws -> SchemeCallback {
+    public func readSchemeCallback(_ c: inout Bincode.Cursor) throws -> WebAuth.SchemeCallback {
         let scheme = try Bincode.readString(&c)
         let host = try Bincode.readString(&c)
         let path = try Bincode.readString(&c)
-        return SchemeCallback(scheme: scheme, host: host, path: path)
+        return WebAuth.SchemeCallback(scheme: scheme, host: host, path: path)
     }
 
-    public func writeSchemeCallback(_ out: inout Data, _ value: SchemeCallback) {
+    public func writeSchemeCallback(_ out: inout Data, _ value: WebAuth.SchemeCallback) {
         Bincode.writeString(&out, value.scheme)
         Bincode.writeString(&out, value.host)
         Bincode.writeString(&out, value.path)
     }
 
-    public func readHttpsCallback(_ c: inout Bincode.Cursor) throws -> HttpsCallback {
+    public func readHttpsCallback(_ c: inout Bincode.Cursor) throws -> WebAuth.HttpsCallback {
         let host = try Bincode.readString(&c)
         let path = try Bincode.readString(&c)
-        return HttpsCallback(host: host, path: path)
+        return WebAuth.HttpsCallback(host: host, path: path)
     }
 
-    public func writeHttpsCallback(_ out: inout Data, _ value: HttpsCallback) {
+    public func writeHttpsCallback(_ out: inout Data, _ value: WebAuth.HttpsCallback) {
         Bincode.writeString(&out, value.host)
         Bincode.writeString(&out, value.path)
     }
 
-    public func readPreparedRedirect(_ c: inout Bincode.Cursor) throws -> PreparedRedirect {
+    public func readPreparedRedirect(_ c: inout Bincode.Cursor) throws -> WebAuth.PreparedRedirect {
         let redirectUri = try Bincode.readString(&c)
         let session = try Bincode.readVarintU64(&c)
-        return PreparedRedirect(redirectUri: redirectUri, session: session)
+        return WebAuth.PreparedRedirect(redirectUri: redirectUri, session: session)
     }
 
-    public func writePreparedRedirect(_ out: inout Data, _ value: PreparedRedirect) {
+    public func writePreparedRedirect(_ out: inout Data, _ value: WebAuth.PreparedRedirect) {
         Bincode.writeString(&out, value.redirectUri)
         Bincode.writeVarintU64(&out, value.session)
     }
 
-    public func readAuthMode(_ c: inout Bincode.Cursor) throws -> AuthMode {
+    public func readAuthMode(_ c: inout Bincode.Cursor) throws -> WebAuth.AuthMode {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = AuthMode(rawValue: disc) else {
+        guard let value = WebAuth.AuthMode(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeAuthMode(_ out: inout Data, _ value: AuthMode) {
+    public func writeAuthMode(_ out: inout Data, _ value: WebAuth.AuthMode) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readAuthRequest(_ c: inout Bincode.Cursor) throws -> AuthRequest {
+    public func readAuthRequest(_ c: inout Bincode.Cursor) throws -> WebAuth.AuthRequest {
         let session = try Bincode.readVarintU64(&c)
         let authorizeUrl = try Bincode.readString(&c)
         let expectedState = try Bincode.readString(&c)
         let mode = try self.readAuthMode(&c)
         let ephemeral = try Bincode.readBool(&c)
         let timeoutMs = try Bincode.readVarintU32(&c)
-        return AuthRequest(session: session, authorizeUrl: authorizeUrl, expectedState: expectedState, mode: mode, ephemeral: ephemeral, timeoutMs: timeoutMs)
+        return WebAuth.AuthRequest(session: session, authorizeUrl: authorizeUrl, expectedState: expectedState, mode: mode, ephemeral: ephemeral, timeoutMs: timeoutMs)
     }
 
-    public func writeAuthRequest(_ out: inout Data, _ value: AuthRequest) {
+    public func writeAuthRequest(_ out: inout Data, _ value: WebAuth.AuthRequest) {
         Bincode.writeVarintU64(&out, value.session)
         Bincode.writeString(&out, value.authorizeUrl)
         Bincode.writeString(&out, value.expectedState)
@@ -125,16 +125,16 @@ public final class WebAuthCodecsImpl: WebAuthCodecs {
         Bincode.writeVarintU32(&out, value.timeoutMs)
     }
 
-    public func readAuthCallback(_ c: inout Bincode.Cursor) throws -> AuthCallback {
+    public func readAuthCallback(_ c: inout Bincode.Cursor) throws -> WebAuth.AuthCallback {
         let url = try Bincode.readString(&c)
-        return AuthCallback(url: url)
+        return WebAuth.AuthCallback(url: url)
     }
 
-    public func writeAuthCallback(_ out: inout Data, _ value: AuthCallback) {
+    public func writeAuthCallback(_ out: inout Data, _ value: WebAuth.AuthCallback) {
         Bincode.writeString(&out, value.url)
     }
 
-    public func readWebAuthError(_ c: inout Bincode.Cursor) throws -> WebAuthError {
+    public func readWebAuthError(_ c: inout Bincode.Cursor) throws -> WebAuth.WebAuthError {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .cancelled
@@ -154,7 +154,7 @@ public final class WebAuthCodecsImpl: WebAuthCodecs {
         }
     }
 
-    public func writeWebAuthError(_ out: inout Data, _ value: WebAuthError) {
+    public func writeWebAuthError(_ out: inout Data, _ value: WebAuth.WebAuthError) {
         switch value {
         case .cancelled:
             Bincode.writeVarintU32(&out, 0)

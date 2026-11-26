@@ -7,20 +7,20 @@ import IstmoRuntime
 public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
     public init() {}
 
-    public func readOsVersion(_ c: inout Bincode.Cursor) throws -> OsVersion {
+    public func readOsVersion(_ c: inout Bincode.Cursor) throws -> ScreenCapture.OsVersion {
         let major = try Bincode.readVarintU32(&c)
         let minor = try Bincode.readVarintU32(&c)
         let patch = try Bincode.readVarintU32(&c)
-        return OsVersion(major: major, minor: minor, patch: patch)
+        return ScreenCapture.OsVersion(major: major, minor: minor, patch: patch)
     }
 
-    public func writeOsVersion(_ out: inout Data, _ value: OsVersion) {
+    public func writeOsVersion(_ out: inout Data, _ value: ScreenCapture.OsVersion) {
         Bincode.writeVarintU32(&out, value.major)
         Bincode.writeVarintU32(&out, value.minor)
         Bincode.writeVarintU32(&out, value.patch)
     }
 
-    public func readAvailability(_ c: inout Bincode.Cursor) throws -> Availability {
+    public func readAvailability(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Availability {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .ready
@@ -33,7 +33,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeAvailability(_ out: inout Data, _ value: Availability) {
+    public func writeAvailability(_ out: inout Data, _ value: ScreenCapture.Availability) {
         switch value {
         case .ready:
             Bincode.writeVarintU32(&out, 0)
@@ -55,43 +55,43 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readBackendStatus(_ c: inout Bincode.Cursor) throws -> BackendStatus {
+    public func readBackendStatus(_ c: inout Bincode.Cursor) throws -> ScreenCapture.BackendStatus {
         let backend = try self.readBackendId(&c)
         let availability = try self.readAvailability(&c)
-        return BackendStatus(backend: backend, availability: availability)
+        return ScreenCapture.BackendStatus(backend: backend, availability: availability)
     }
 
-    public func writeBackendStatus(_ out: inout Data, _ value: BackendStatus) {
+    public func writeBackendStatus(_ out: inout Data, _ value: ScreenCapture.BackendStatus) {
         self.writeBackendId(&out, value.backend)
         self.writeAvailability(&out, value.availability)
     }
 
-    public func readCapabilityQuery(_ c: inout Bincode.Cursor) throws -> CapabilityQuery {
+    public func readCapabilityQuery(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CapabilityQuery {
         let backend = try Bincode.readOption(&c) { c1 in try self.readBackendId(&c1) }
         let kind = try Bincode.readOption(&c) { c1 in try self.readSourceKind(&c1) }
         let source = try Bincode.readOption(&c) { c1 in try self.readSourceId(&c1) }
-        return CapabilityQuery(backend: backend, kind: kind, source: source)
+        return ScreenCapture.CapabilityQuery(backend: backend, kind: kind, source: source)
     }
 
-    public func writeCapabilityQuery(_ out: inout Data, _ value: CapabilityQuery) {
+    public func writeCapabilityQuery(_ out: inout Data, _ value: ScreenCapture.CapabilityQuery) {
         Bincode.writeOption(&out, value.backend) { o1, v1 in self.writeBackendId(&o1, v1) }
         Bincode.writeOption(&out, value.kind) { o1, v1 in self.writeSourceKind(&o1, v1) }
         Bincode.writeOption(&out, value.source) { o1, v1 in self.writeSourceId(&o1, v1) }
     }
 
-    public func readProvenance(_ c: inout Bincode.Cursor) throws -> Provenance {
+    public func readProvenance(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Provenance {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = Provenance(rawValue: disc) else {
+        guard let value = ScreenCapture.Provenance(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeProvenance(_ out: inout Data, _ value: Provenance) {
+    public func writeProvenance(_ out: inout Data, _ value: ScreenCapture.Provenance) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readCapsProvenance(_ c: inout Bincode.Cursor) throws -> CapsProvenance {
+    public func readCapsProvenance(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CapsProvenance {
         let sourceKinds = try self.readProvenance(&c)
         let listing = try self.readProvenance(&c)
         let video = try self.readProvenance(&c)
@@ -102,10 +102,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let producer = try self.readProvenance(&c)
         let sync = try self.readProvenance(&c)
         let persistence = try self.readProvenance(&c)
-        return CapsProvenance(sourceKinds: sourceKinds, listing: listing, video: video, cursor: cursor, damage: damage, colour: colour, audio: audio, producer: producer, sync: sync, persistence: persistence)
+        return ScreenCapture.CapsProvenance(sourceKinds: sourceKinds, listing: listing, video: video, cursor: cursor, damage: damage, colour: colour, audio: audio, producer: producer, sync: sync, persistence: persistence)
     }
 
-    public func writeCapsProvenance(_ out: inout Data, _ value: CapsProvenance) {
+    public func writeCapsProvenance(_ out: inout Data, _ value: ScreenCapture.CapsProvenance) {
         self.writeProvenance(&out, value.sourceKinds)
         self.writeProvenance(&out, value.listing)
         self.writeProvenance(&out, value.video)
@@ -118,214 +118,214 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         self.writeProvenance(&out, value.persistence)
     }
 
-    public func readPixelFormat(_ c: inout Bincode.Cursor) throws -> PixelFormat {
+    public func readPixelFormat(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PixelFormat {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = PixelFormat(rawValue: disc) else {
+        guard let value = ScreenCapture.PixelFormat(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writePixelFormat(_ out: inout Data, _ value: PixelFormat) {
+    public func writePixelFormat(_ out: inout Data, _ value: ScreenCapture.PixelFormat) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readBufferMemory(_ c: inout Bincode.Cursor) throws -> BufferMemory {
+    public func readBufferMemory(_ c: inout Bincode.Cursor) throws -> ScreenCapture.BufferMemory {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = BufferMemory(rawValue: disc) else {
+        guard let value = ScreenCapture.BufferMemory(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeBufferMemory(_ out: inout Data, _ value: BufferMemory) {
+    public func writeBufferMemory(_ out: inout Data, _ value: ScreenCapture.BufferMemory) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readCopyStage(_ c: inout Bincode.Cursor) throws -> CopyStage {
+    public func readCopyStage(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CopyStage {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = CopyStage(rawValue: disc) else {
+        guard let value = ScreenCapture.CopyStage(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeCopyStage(_ out: inout Data, _ value: CopyStage) {
+    public func writeCopyStage(_ out: inout Data, _ value: ScreenCapture.CopyStage) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readFormatCaps(_ c: inout Bincode.Cursor) throws -> FormatCaps {
+    public func readFormatCaps(_ c: inout Bincode.Cursor) throws -> ScreenCapture.FormatCaps {
         let format = try self.readPixelFormat(&c)
         let memory = try self.readBufferMemory(&c)
         let modifiers = try Bincode.readVec(&c) { c1 in try Bincode.readVarintU64(&c1) }
         let copies = try Bincode.readVec(&c) { c1 in try self.readCopyStage(&c1) }
-        return FormatCaps(format: format, memory: memory, modifiers: modifiers, copies: copies)
+        return ScreenCapture.FormatCaps(format: format, memory: memory, modifiers: modifiers, copies: copies)
     }
 
-    public func writeFormatCaps(_ out: inout Data, _ value: FormatCaps) {
+    public func writeFormatCaps(_ out: inout Data, _ value: ScreenCapture.FormatCaps) {
         self.writePixelFormat(&out, value.format)
         self.writeBufferMemory(&out, value.memory)
         Bincode.writeVec(&out, value.modifiers) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
         Bincode.writeVec(&out, value.copies) { o1, v1 in self.writeCopyStage(&o1, v1) }
     }
 
-    public func readScaling(_ c: inout Bincode.Cursor) throws -> Scaling {
+    public func readScaling(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Scaling {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = Scaling(rawValue: disc) else {
+        guard let value = ScreenCapture.Scaling(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeScaling(_ out: inout Data, _ value: Scaling) {
+    public func writeScaling(_ out: inout Data, _ value: ScreenCapture.Scaling) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readRegionCrop(_ c: inout Bincode.Cursor) throws -> RegionCrop {
+    public func readRegionCrop(_ c: inout Bincode.Cursor) throws -> ScreenCapture.RegionCrop {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = RegionCrop(rawValue: disc) else {
+        guard let value = ScreenCapture.RegionCrop(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeRegionCrop(_ out: inout Data, _ value: RegionCrop) {
+    public func writeRegionCrop(_ out: inout Data, _ value: ScreenCapture.RegionCrop) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readCompositeSupport(_ c: inout Bincode.Cursor) throws -> CompositeSupport {
+    public func readCompositeSupport(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CompositeSupport {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = CompositeSupport(rawValue: disc) else {
+        guard let value = ScreenCapture.CompositeSupport(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeCompositeSupport(_ out: inout Data, _ value: CompositeSupport) {
+    public func writeCompositeSupport(_ out: inout Data, _ value: ScreenCapture.CompositeSupport) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readCompositeCaps(_ c: inout Bincode.Cursor) throws -> CompositeCaps {
+    public func readCompositeCaps(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CompositeCaps {
         let screenshot = try self.readCompositeSupport(&c)
         let streaming = try self.readCompositeSupport(&c)
-        return CompositeCaps(screenshot: screenshot, streaming: streaming)
+        return ScreenCapture.CompositeCaps(screenshot: screenshot, streaming: streaming)
     }
 
-    public func writeCompositeCaps(_ out: inout Data, _ value: CompositeCaps) {
+    public func writeCompositeCaps(_ out: inout Data, _ value: ScreenCapture.CompositeCaps) {
         self.writeCompositeSupport(&out, value.screenshot)
         self.writeCompositeSupport(&out, value.streaming)
     }
 
-    public func readDamageSupport(_ c: inout Bincode.Cursor) throws -> DamageSupport {
+    public func readDamageSupport(_ c: inout Bincode.Cursor) throws -> ScreenCapture.DamageSupport {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = DamageSupport(rawValue: disc) else {
+        guard let value = ScreenCapture.DamageSupport(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeDamageSupport(_ out: inout Data, _ value: DamageSupport) {
+    public func writeDamageSupport(_ out: inout Data, _ value: ScreenCapture.DamageSupport) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readOrientationSupport(_ c: inout Bincode.Cursor) throws -> OrientationSupport {
+    public func readOrientationSupport(_ c: inout Bincode.Cursor) throws -> ScreenCapture.OrientationSupport {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = OrientationSupport(rawValue: disc) else {
+        guard let value = ScreenCapture.OrientationSupport(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeOrientationSupport(_ out: inout Data, _ value: OrientationSupport) {
+    public func writeOrientationSupport(_ out: inout Data, _ value: ScreenCapture.OrientationSupport) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readColourSpace(_ c: inout Bincode.Cursor) throws -> ColourSpace {
+    public func readColourSpace(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ColourSpace {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = ColourSpace(rawValue: disc) else {
+        guard let value = ScreenCapture.ColourSpace(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeColourSpace(_ out: inout Data, _ value: ColourSpace) {
+    public func writeColourSpace(_ out: inout Data, _ value: ScreenCapture.ColourSpace) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readTransferFunction(_ c: inout Bincode.Cursor) throws -> TransferFunction {
+    public func readTransferFunction(_ c: inout Bincode.Cursor) throws -> ScreenCapture.TransferFunction {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = TransferFunction(rawValue: disc) else {
+        guard let value = ScreenCapture.TransferFunction(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeTransferFunction(_ out: inout Data, _ value: TransferFunction) {
+    public func writeTransferFunction(_ out: inout Data, _ value: ScreenCapture.TransferFunction) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readColourRange(_ c: inout Bincode.Cursor) throws -> ColourRange {
+    public func readColourRange(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ColourRange {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = ColourRange(rawValue: disc) else {
+        guard let value = ScreenCapture.ColourRange(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeColourRange(_ out: inout Data, _ value: ColourRange) {
+    public func writeColourRange(_ out: inout Data, _ value: ScreenCapture.ColourRange) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readColour(_ c: inout Bincode.Cursor) throws -> Colour {
+    public func readColour(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Colour {
         let space = try self.readColourSpace(&c)
         let transfer = try self.readTransferFunction(&c)
         let range = try self.readColourRange(&c)
-        return Colour(space: space, transfer: transfer, range: range)
+        return ScreenCapture.Colour(space: space, transfer: transfer, range: range)
     }
 
-    public func writeColour(_ out: inout Data, _ value: Colour) {
+    public func writeColour(_ out: inout Data, _ value: ScreenCapture.Colour) {
         self.writeColourSpace(&out, value.space)
         self.writeTransferFunction(&out, value.transfer)
         self.writeColourRange(&out, value.range)
     }
 
-    public func readColourCaps(_ c: inout Bincode.Cursor) throws -> ColourCaps {
+    public func readColourCaps(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ColourCaps {
         let colours = try Bincode.readVec(&c) { c1 in try self.readColour(&c1) }
         let hdr = try Bincode.readBool(&c)
-        return ColourCaps(colours: colours, hdr: hdr)
+        return ScreenCapture.ColourCaps(colours: colours, hdr: hdr)
     }
 
-    public func writeColourCaps(_ out: inout Data, _ value: ColourCaps) {
+    public func writeColourCaps(_ out: inout Data, _ value: ScreenCapture.ColourCaps) {
         Bincode.writeVec(&out, value.colours) { o1, v1 in self.writeColour(&o1, v1) }
         Bincode.writeBool(&out, value.hdr)
     }
 
-    public func readAudioSourceKind(_ c: inout Bincode.Cursor) throws -> AudioSourceKind {
+    public func readAudioSourceKind(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioSourceKind {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = AudioSourceKind(rawValue: disc) else {
+        guard let value = ScreenCapture.AudioSourceKind(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeAudioSourceKind(_ out: inout Data, _ value: AudioSourceKind) {
+    public func writeAudioSourceKind(_ out: inout Data, _ value: ScreenCapture.AudioSourceKind) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readAudioCaps(_ c: inout Bincode.Cursor) throws -> AudioCaps {
+    public func readAudioCaps(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioCaps {
         let sources = try Bincode.readVec(&c) { c1 in try self.readAudioSourceKind(&c1) }
         let formats = try Bincode.readVec(&c) { c1 in try self.readSampleFormat(&c1) }
         let mayBeSilent = try Bincode.readBool(&c)
-        return AudioCaps(sources: sources, formats: formats, mayBeSilent: mayBeSilent)
+        return ScreenCapture.AudioCaps(sources: sources, formats: formats, mayBeSilent: mayBeSilent)
     }
 
-    public func writeAudioCaps(_ out: inout Data, _ value: AudioCaps) {
+    public func writeAudioCaps(_ out: inout Data, _ value: ScreenCapture.AudioCaps) {
         Bincode.writeVec(&out, value.sources) { o1, v1 in self.writeAudioSourceKind(&o1, v1) }
         Bincode.writeVec(&out, value.formats) { o1, v1 in self.writeSampleFormat(&o1, v1) }
         Bincode.writeBool(&out, value.mayBeSilent)
     }
 
-    public func readGpuIdentity(_ c: inout Bincode.Cursor) throws -> GpuIdentity {
+    public func readGpuIdentity(_ c: inout Bincode.Cursor) throws -> ScreenCapture.GpuIdentity {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .drm(try Bincode.readVarintU64(&c))
@@ -335,7 +335,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeGpuIdentity(_ out: inout Data, _ value: GpuIdentity) {
+    public func writeGpuIdentity(_ out: inout Data, _ value: ScreenCapture.GpuIdentity) {
         switch value {
         case .drm(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -349,85 +349,85 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readSyncKind(_ c: inout Bincode.Cursor) throws -> SyncKind {
+    public func readSyncKind(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SyncKind {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = SyncKind(rawValue: disc) else {
+        guard let value = ScreenCapture.SyncKind(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeSyncKind(_ out: inout Data, _ value: SyncKind) {
+    public func writeSyncKind(_ out: inout Data, _ value: ScreenCapture.SyncKind) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readPersistence(_ c: inout Bincode.Cursor) throws -> Persistence {
+    public func readPersistence(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Persistence {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = Persistence(rawValue: disc) else {
+        guard let value = ScreenCapture.Persistence(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writePersistence(_ out: inout Data, _ value: Persistence) {
+    public func writePersistence(_ out: inout Data, _ value: ScreenCapture.Persistence) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readPoolCaps(_ c: inout Bincode.Cursor) throws -> PoolCaps {
+    public func readPoolCaps(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PoolCaps {
         let minDepth = try Bincode.readU8(&c)
         let maxDepth = try Bincode.readU8(&c)
         let defaultDepth = try Bincode.readU8(&c)
         let exhaustion = try Bincode.readVec(&c) { c1 in try self.readExhaustion(&c1) }
-        return PoolCaps(minDepth: minDepth, maxDepth: maxDepth, defaultDepth: defaultDepth, exhaustion: exhaustion)
+        return ScreenCapture.PoolCaps(minDepth: minDepth, maxDepth: maxDepth, defaultDepth: defaultDepth, exhaustion: exhaustion)
     }
 
-    public func writePoolCaps(_ out: inout Data, _ value: PoolCaps) {
+    public func writePoolCaps(_ out: inout Data, _ value: ScreenCapture.PoolCaps) {
         Bincode.writeU8(&out, value.minDepth)
         Bincode.writeU8(&out, value.maxDepth)
         Bincode.writeU8(&out, value.defaultDepth)
         Bincode.writeVec(&out, value.exhaustion) { o1, v1 in self.writeExhaustion(&o1, v1) }
     }
 
-    public func readProtectedContent(_ c: inout Bincode.Cursor) throws -> ProtectedContent {
+    public func readProtectedContent(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ProtectedContent {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = ProtectedContent(rawValue: disc) else {
+        guard let value = ScreenCapture.ProtectedContent(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeProtectedContent(_ out: inout Data, _ value: ProtectedContent) {
+    public func writeProtectedContent(_ out: inout Data, _ value: ScreenCapture.ProtectedContent) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readWindowCaptureCaps(_ c: inout Bincode.Cursor) throws -> WindowCaptureCaps {
+    public func readWindowCaptureCaps(_ c: inout Bincode.Cursor) throws -> ScreenCapture.WindowCaptureCaps {
         let occluded = try Bincode.readBool(&c)
         let minimised = try Bincode.readBool(&c)
         let childPopups = try Bincode.readBool(&c)
         let border = try Bincode.readBool(&c)
-        return WindowCaptureCaps(occluded: occluded, minimised: minimised, childPopups: childPopups, border: border)
+        return ScreenCapture.WindowCaptureCaps(occluded: occluded, minimised: minimised, childPopups: childPopups, border: border)
     }
 
-    public func writeWindowCaptureCaps(_ out: inout Data, _ value: WindowCaptureCaps) {
+    public func writeWindowCaptureCaps(_ out: inout Data, _ value: ScreenCapture.WindowCaptureCaps) {
         Bincode.writeBool(&out, value.occluded)
         Bincode.writeBool(&out, value.minimised)
         Bincode.writeBool(&out, value.childPopups)
         Bincode.writeBool(&out, value.border)
     }
 
-    public func readCapabilityNote(_ c: inout Bincode.Cursor) throws -> CapabilityNote {
+    public func readCapabilityNote(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CapabilityNote {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = CapabilityNote(rawValue: disc) else {
+        guard let value = ScreenCapture.CapabilityNote(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeCapabilityNote(_ out: inout Data, _ value: CapabilityNote) {
+    public func writeCapabilityNote(_ out: inout Data, _ value: ScreenCapture.CapabilityNote) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readBackendCaps(_ c: inout Bincode.Cursor) throws -> BackendCaps {
+    public func readBackendCaps(_ c: inout Bincode.Cursor) throws -> ScreenCapture.BackendCaps {
         let backend = try self.readBackendId(&c)
         let sourceKinds = try Bincode.readVec(&c) { c1 in try self.readSourceKind(&c1) }
         let listing = try self.readSourceListing(&c)
@@ -454,10 +454,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let window = try self.readWindowCaptureCaps(&c)
         let provenance = try self.readCapsProvenance(&c)
         let notes = try Bincode.readVec(&c) { c1 in try self.readCapabilityNote(&c1) }
-        return BackendCaps(backend: backend, sourceKinds: sourceKinds, listing: listing, consent: consent, video: video, maxFps: maxFps, minIntervalUs: minIntervalUs, maxSize: maxSize, scaling: scaling, region: region, composite: composite, cursor: cursor, damage: damage, orientation: orientation, colour: colour, audio: audio, producer: producer, sync: sync, persistence: persistence, concurrency: concurrency, pool: pool, copies: copies, protectedContent: protectedContent, window: window, provenance: provenance, notes: notes)
+        return ScreenCapture.BackendCaps(backend: backend, sourceKinds: sourceKinds, listing: listing, consent: consent, video: video, maxFps: maxFps, minIntervalUs: minIntervalUs, maxSize: maxSize, scaling: scaling, region: region, composite: composite, cursor: cursor, damage: damage, orientation: orientation, colour: colour, audio: audio, producer: producer, sync: sync, persistence: persistence, concurrency: concurrency, pool: pool, copies: copies, protectedContent: protectedContent, window: window, provenance: provenance, notes: notes)
     }
 
-    public func writeBackendCaps(_ out: inout Data, _ value: BackendCaps) {
+    public func writeBackendCaps(_ out: inout Data, _ value: ScreenCapture.BackendCaps) {
         self.writeBackendId(&out, value.backend)
         Bincode.writeVec(&out, value.sourceKinds) { o1, v1 in self.writeSourceKind(&o1, v1) }
         self.writeSourceListing(&out, value.listing)
@@ -486,39 +486,39 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeVec(&out, value.notes) { o1, v1 in self.writeCapabilityNote(&o1, v1) }
     }
 
-    public func readCapabilityReport(_ c: inout Bincode.Cursor) throws -> CapabilityReport {
+    public func readCapabilityReport(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CapabilityReport {
         let backends = try Bincode.readVec(&c) { c1 in try self.readBackendCaps(&c1) }
-        return CapabilityReport(backends: backends)
+        return ScreenCapture.CapabilityReport(backends: backends)
     }
 
-    public func writeCapabilityReport(_ out: inout Data, _ value: CapabilityReport) {
+    public func writeCapabilityReport(_ out: inout Data, _ value: ScreenCapture.CapabilityReport) {
         Bincode.writeVec(&out, value.backends) { o1, v1 in self.writeBackendCaps(&o1, v1) }
     }
 
-    public func readAutoPreference(_ c: inout Bincode.Cursor) throws -> AutoPreference {
+    public func readAutoPreference(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AutoPreference {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = AutoPreference(rawValue: disc) else {
+        guard let value = ScreenCapture.AutoPreference(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeAutoPreference(_ out: inout Data, _ value: AutoPreference) {
+    public func writeAutoPreference(_ out: inout Data, _ value: ScreenCapture.AutoPreference) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readAutoSelect(_ c: inout Bincode.Cursor) throws -> AutoSelect {
+    public func readAutoSelect(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AutoSelect {
         let prefer = try self.readAutoPreference(&c)
         let exclude = try Bincode.readVec(&c) { c1 in try self.readBackendId(&c1) }
-        return AutoSelect(prefer: prefer, exclude: exclude)
+        return ScreenCapture.AutoSelect(prefer: prefer, exclude: exclude)
     }
 
-    public func writeAutoSelect(_ out: inout Data, _ value: AutoSelect) {
+    public func writeAutoSelect(_ out: inout Data, _ value: ScreenCapture.AutoSelect) {
         self.writeAutoPreference(&out, value.prefer)
         Bincode.writeVec(&out, value.exclude) { o1, v1 in self.writeBackendId(&o1, v1) }
     }
 
-    public func readBackendSelection(_ c: inout Bincode.Cursor) throws -> BackendSelection {
+    public func readBackendSelection(_ c: inout Bincode.Cursor) throws -> ScreenCapture.BackendSelection {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .auto(try self.readAutoSelect(&c))
@@ -528,7 +528,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeBackendSelection(_ out: inout Data, _ value: BackendSelection) {
+    public func writeBackendSelection(_ out: inout Data, _ value: ScreenCapture.BackendSelection) {
         switch value {
         case .auto(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -542,40 +542,40 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readFormatChoice(_ c: inout Bincode.Cursor) throws -> FormatChoice {
+    public func readFormatChoice(_ c: inout Bincode.Cursor) throws -> ScreenCapture.FormatChoice {
         let format = try self.readPixelFormat(&c)
         let memory = try self.readBufferMemory(&c)
         let modifiers = try Bincode.readVec(&c) { c1 in try Bincode.readVarintU64(&c1) }
-        return FormatChoice(format: format, memory: memory, modifiers: modifiers)
+        return ScreenCapture.FormatChoice(format: format, memory: memory, modifiers: modifiers)
     }
 
-    public func writeFormatChoice(_ out: inout Data, _ value: FormatChoice) {
+    public func writeFormatChoice(_ out: inout Data, _ value: ScreenCapture.FormatChoice) {
         self.writePixelFormat(&out, value.format)
         self.writeBufferMemory(&out, value.memory)
         Bincode.writeVec(&out, value.modifiers) { o1, v1 in Bincode.writeVarintU64(&o1, v1) }
     }
 
-    public func readFormatTier(_ c: inout Bincode.Cursor) throws -> FormatTier {
+    public func readFormatTier(_ c: inout Bincode.Cursor) throws -> ScreenCapture.FormatTier {
         let choices = try Bincode.readVec(&c) { c1 in try self.readFormatChoice(&c1) }
         let allowsCopy = try Bincode.readVec(&c) { c1 in try self.readCopyStage(&c1) }
-        return FormatTier(choices: choices, allowsCopy: allowsCopy)
+        return ScreenCapture.FormatTier(choices: choices, allowsCopy: allowsCopy)
     }
 
-    public func writeFormatTier(_ out: inout Data, _ value: FormatTier) {
+    public func writeFormatTier(_ out: inout Data, _ value: ScreenCapture.FormatTier) {
         Bincode.writeVec(&out, value.choices) { o1, v1 in self.writeFormatChoice(&o1, v1) }
         Bincode.writeVec(&out, value.allowsCopy) { o1, v1 in self.writeCopyStage(&o1, v1) }
     }
 
-    public func readFormatRequest(_ c: inout Bincode.Cursor) throws -> FormatRequest {
+    public func readFormatRequest(_ c: inout Bincode.Cursor) throws -> ScreenCapture.FormatRequest {
         let tiers = try Bincode.readVec(&c) { c1 in try self.readFormatTier(&c1) }
-        return FormatRequest(tiers: tiers)
+        return ScreenCapture.FormatRequest(tiers: tiers)
     }
 
-    public func writeFormatRequest(_ out: inout Data, _ value: FormatRequest) {
+    public func writeFormatRequest(_ out: inout Data, _ value: ScreenCapture.FormatRequest) {
         Bincode.writeVec(&out, value.tiers) { o1, v1 in self.writeFormatTier(&o1, v1) }
     }
 
-    public func readFrameRate(_ c: inout Bincode.Cursor) throws -> FrameRate {
+    public func readFrameRate(_ c: inout Bincode.Cursor) throws -> ScreenCapture.FrameRate {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .native
@@ -586,7 +586,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeFrameRate(_ out: inout Data, _ value: FrameRate) {
+    public func writeFrameRate(_ out: inout Data, _ value: ScreenCapture.FrameRate) {
         switch value {
         case .native:
             Bincode.writeVarintU32(&out, 0)
@@ -602,7 +602,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readOutputSize(_ c: inout Bincode.Cursor) throws -> OutputSize {
+    public func readOutputSize(_ c: inout Bincode.Cursor) throws -> ScreenCapture.OutputSize {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .native
@@ -612,7 +612,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeOutputSize(_ out: inout Data, _ value: OutputSize) {
+    public func writeOutputSize(_ out: inout Data, _ value: ScreenCapture.OutputSize) {
         switch value {
         case .native:
             Bincode.writeVarintU32(&out, 0)
@@ -625,66 +625,66 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readCursorMode(_ c: inout Bincode.Cursor) throws -> CursorMode {
+    public func readCursorMode(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CursorMode {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = CursorMode(rawValue: disc) else {
+        guard let value = ScreenCapture.CursorMode(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeCursorMode(_ out: inout Data, _ value: CursorMode) {
+    public func writeCursorMode(_ out: inout Data, _ value: ScreenCapture.CursorMode) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readStrength(_ c: inout Bincode.Cursor) throws -> Strength {
+    public func readStrength(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Strength {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = Strength(rawValue: disc) else {
+        guard let value = ScreenCapture.Strength(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeStrength(_ out: inout Data, _ value: Strength) {
+    public func writeStrength(_ out: inout Data, _ value: ScreenCapture.Strength) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readCursorRequest(_ c: inout Bincode.Cursor) throws -> CursorRequest {
+    public func readCursorRequest(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CursorRequest {
         let mode = try self.readCursorMode(&c)
         let strength = try self.readStrength(&c)
-        return CursorRequest(mode: mode, strength: strength)
+        return ScreenCapture.CursorRequest(mode: mode, strength: strength)
     }
 
-    public func writeCursorRequest(_ out: inout Data, _ value: CursorRequest) {
+    public func writeCursorRequest(_ out: inout Data, _ value: ScreenCapture.CursorRequest) {
         self.writeCursorMode(&out, value.mode)
         self.writeStrength(&out, value.strength)
     }
 
-    public func readHdrPolicy(_ c: inout Bincode.Cursor) throws -> HdrPolicy {
+    public func readHdrPolicy(_ c: inout Bincode.Cursor) throws -> ScreenCapture.HdrPolicy {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = HdrPolicy(rawValue: disc) else {
+        guard let value = ScreenCapture.HdrPolicy(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeHdrPolicy(_ out: inout Data, _ value: HdrPolicy) {
+    public func writeHdrPolicy(_ out: inout Data, _ value: ScreenCapture.HdrPolicy) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readExhaustion(_ c: inout Bincode.Cursor) throws -> Exhaustion {
+    public func readExhaustion(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Exhaustion {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = Exhaustion(rawValue: disc) else {
+        guard let value = ScreenCapture.Exhaustion(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeExhaustion(_ out: inout Data, _ value: Exhaustion) {
+    public func writeExhaustion(_ out: inout Data, _ value: ScreenCapture.Exhaustion) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readGpuPreference(_ c: inout Bincode.Cursor) throws -> GpuPreference {
+    public func readGpuPreference(_ c: inout Bincode.Cursor) throws -> ScreenCapture.GpuPreference {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .auto
@@ -695,7 +695,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeGpuPreference(_ out: inout Data, _ value: GpuPreference) {
+    public func writeGpuPreference(_ out: inout Data, _ value: ScreenCapture.GpuPreference) {
         switch value {
         case .auto:
             Bincode.writeVarintU32(&out, 0)
@@ -709,19 +709,19 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readOrientationHandling(_ c: inout Bincode.Cursor) throws -> OrientationHandling {
+    public func readOrientationHandling(_ c: inout Bincode.Cursor) throws -> ScreenCapture.OrientationHandling {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = OrientationHandling(rawValue: disc) else {
+        guard let value = ScreenCapture.OrientationHandling(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeOrientationHandling(_ out: inout Data, _ value: OrientationHandling) {
+    public func writeOrientationHandling(_ out: inout Data, _ value: ScreenCapture.OrientationHandling) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readVideoConfig(_ c: inout Bincode.Cursor) throws -> VideoConfig {
+    public func readVideoConfig(_ c: inout Bincode.Cursor) throws -> ScreenCapture.VideoConfig {
         let formats = try self.readFormatRequest(&c)
         let fps = try self.readFrameRate(&c)
         let size = try self.readOutputSize(&c)
@@ -735,10 +735,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let exclude = try Bincode.readVec(&c) { c1 in try self.readSourceId(&c1) }
         let excludeOwnProcess = try Bincode.readBool(&c)
         let liveBuffers = try Bincode.readBool(&c)
-        return VideoConfig(formats: formats, fps: fps, size: size, cursor: cursor, damage: damage, hdr: hdr, poolDepth: poolDepth, exhaustion: exhaustion, gpu: gpu, orientation: orientation, exclude: exclude, excludeOwnProcess: excludeOwnProcess, liveBuffers: liveBuffers)
+        return ScreenCapture.VideoConfig(formats: formats, fps: fps, size: size, cursor: cursor, damage: damage, hdr: hdr, poolDepth: poolDepth, exhaustion: exhaustion, gpu: gpu, orientation: orientation, exclude: exclude, excludeOwnProcess: excludeOwnProcess, liveBuffers: liveBuffers)
     }
 
-    public func writeVideoConfig(_ out: inout Data, _ value: VideoConfig) {
+    public func writeVideoConfig(_ out: inout Data, _ value: ScreenCapture.VideoConfig) {
         self.writeFormatRequest(&out, value.formats)
         self.writeFrameRate(&out, value.fps)
         self.writeOutputSize(&out, value.size)
@@ -754,19 +754,19 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeBool(&out, value.liveBuffers)
     }
 
-    public func readSampleFormat(_ c: inout Bincode.Cursor) throws -> SampleFormat {
+    public func readSampleFormat(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SampleFormat {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = SampleFormat(rawValue: disc) else {
+        guard let value = ScreenCapture.SampleFormat(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeSampleFormat(_ out: inout Data, _ value: SampleFormat) {
+    public func writeSampleFormat(_ out: inout Data, _ value: ScreenCapture.SampleFormat) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readAudioSource(_ c: inout Bincode.Cursor) throws -> AudioSource {
+    public func readAudioSource(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioSource {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .system
@@ -777,7 +777,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeAudioSource(_ out: inout Data, _ value: AudioSource) {
+    public func writeAudioSource(_ out: inout Data, _ value: ScreenCapture.AudioSource) {
         switch value {
         case .system:
             Bincode.writeVarintU32(&out, 0)
@@ -792,22 +792,22 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readAudioConfig(_ c: inout Bincode.Cursor) throws -> AudioConfig {
+    public func readAudioConfig(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioConfig {
         let source = try self.readAudioSource(&c)
         let rate = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU32(&c1) }
         let channels = try Bincode.readOption(&c) { c1 in try Bincode.readU8(&c1) }
         let format = try self.readSampleFormat(&c)
-        return AudioConfig(source: source, rate: rate, channels: channels, format: format)
+        return ScreenCapture.AudioConfig(source: source, rate: rate, channels: channels, format: format)
     }
 
-    public func writeAudioConfig(_ out: inout Data, _ value: AudioConfig) {
+    public func writeAudioConfig(_ out: inout Data, _ value: ScreenCapture.AudioConfig) {
         self.writeAudioSource(&out, value.source)
         Bincode.writeOption(&out, value.rate) { o1, v1 in Bincode.writeVarintU32(&o1, v1) }
         Bincode.writeOption(&out, value.channels) { o1, v1 in Bincode.writeU8(&o1, v1) }
         self.writeSampleFormat(&out, value.format)
     }
 
-    public func readCompositeScale(_ c: inout Bincode.Cursor) throws -> CompositeScale {
+    public func readCompositeScale(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CompositeScale {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .highestScale
@@ -817,7 +817,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeCompositeScale(_ out: inout Data, _ value: CompositeScale) {
+    public func writeCompositeScale(_ out: inout Data, _ value: ScreenCapture.CompositeScale) {
         switch value {
         case .highestScale:
             Bincode.writeVarintU32(&out, 0)
@@ -829,86 +829,86 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readCompositeFill(_ c: inout Bincode.Cursor) throws -> CompositeFill {
+    public func readCompositeFill(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CompositeFill {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = CompositeFill(rawValue: disc) else {
+        guard let value = ScreenCapture.CompositeFill(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeCompositeFill(_ out: inout Data, _ value: CompositeFill) {
+    public func writeCompositeFill(_ out: inout Data, _ value: ScreenCapture.CompositeFill) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readCompositeEngine(_ c: inout Bincode.Cursor) throws -> CompositeEngine {
+    public func readCompositeEngine(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CompositeEngine {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = CompositeEngine(rawValue: disc) else {
+        guard let value = ScreenCapture.CompositeEngine(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeCompositeEngine(_ out: inout Data, _ value: CompositeEngine) {
+    public func writeCompositeEngine(_ out: inout Data, _ value: ScreenCapture.CompositeEngine) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readCompositeConfig(_ c: inout Bincode.Cursor) throws -> CompositeConfig {
+    public func readCompositeConfig(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CompositeConfig {
         let scale = try self.readCompositeScale(&c)
         let fill = try self.readCompositeFill(&c)
         let engine = try self.readCompositeEngine(&c)
-        return CompositeConfig(scale: scale, fill: fill, engine: engine)
+        return ScreenCapture.CompositeConfig(scale: scale, fill: fill, engine: engine)
     }
 
-    public func writeCompositeConfig(_ out: inout Data, _ value: CompositeConfig) {
+    public func writeCompositeConfig(_ out: inout Data, _ value: ScreenCapture.CompositeConfig) {
         self.writeCompositeScale(&out, value.scale)
         self.writeCompositeFill(&out, value.fill)
         self.writeCompositeEngine(&out, value.engine)
     }
 
-    public func readPipeWireConnection(_ c: inout Bincode.Cursor) throws -> PipeWireConnection {
+    public func readPipeWireConnection(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PipeWireConnection {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = PipeWireConnection(rawValue: disc) else {
+        guard let value = ScreenCapture.PipeWireConnection(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writePipeWireConnection(_ out: inout Data, _ value: PipeWireConnection) {
+    public func writePipeWireConnection(_ out: inout Data, _ value: ScreenCapture.PipeWireConnection) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readLinuxOptions(_ c: inout Bincode.Cursor) throws -> LinuxOptions {
+    public func readLinuxOptions(_ c: inout Bincode.Cursor) throws -> ScreenCapture.LinuxOptions {
         let pipewire = try self.readPipeWireConnection(&c)
-        return LinuxOptions(pipewire: pipewire)
+        return ScreenCapture.LinuxOptions(pipewire: pipewire)
     }
 
-    public func writeLinuxOptions(_ out: inout Data, _ value: LinuxOptions) {
+    public func writeLinuxOptions(_ out: inout Data, _ value: ScreenCapture.LinuxOptions) {
         self.writePipeWireConnection(&out, value.pipewire)
     }
 
-    public func readBorderless(_ c: inout Bincode.Cursor) throws -> Borderless {
+    public func readBorderless(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Borderless {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = Borderless(rawValue: disc) else {
+        guard let value = ScreenCapture.Borderless(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeBorderless(_ out: inout Data, _ value: Borderless) {
+    public func writeBorderless(_ out: inout Data, _ value: ScreenCapture.Borderless) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readWindowsOptions(_ c: inout Bincode.Cursor) throws -> WindowsOptions {
+    public func readWindowsOptions(_ c: inout Bincode.Cursor) throws -> ScreenCapture.WindowsOptions {
         let borderless = try self.readBorderless(&c)
-        return WindowsOptions(borderless: borderless)
+        return ScreenCapture.WindowsOptions(borderless: borderless)
     }
 
-    public func writeWindowsOptions(_ out: inout Data, _ value: WindowsOptions) {
+    public func writeWindowsOptions(_ out: inout Data, _ value: ScreenCapture.WindowsOptions) {
         self.writeBorderless(&out, value.borderless)
     }
 
-    public func readSessionConfig(_ c: inout Bincode.Cursor) throws -> SessionConfig {
+    public func readSessionConfig(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SessionConfig {
         let source = try self.readSourceSelector(&c)
         let backend = try self.readBackendSelection(&c)
         let video = try self.readVideoConfig(&c)
@@ -917,10 +917,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let composite = try self.readCompositeConfig(&c)
         let linux = try self.readLinuxOptions(&c)
         let windows = try self.readWindowsOptions(&c)
-        return SessionConfig(source: source, backend: backend, video: video, audio: audio, consent: consent, composite: composite, linux: linux, windows: windows)
+        return ScreenCapture.SessionConfig(source: source, backend: backend, video: video, audio: audio, consent: consent, composite: composite, linux: linux, windows: windows)
     }
 
-    public func writeSessionConfig(_ out: inout Data, _ value: SessionConfig) {
+    public func writeSessionConfig(_ out: inout Data, _ value: ScreenCapture.SessionConfig) {
         self.writeSourceSelector(&out, value.source)
         self.writeBackendSelection(&out, value.backend)
         self.writeVideoConfig(&out, value.video)
@@ -931,7 +931,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         self.writeWindowsOptions(&out, value.windows)
     }
 
-    public func readSessionUpdate(_ c: inout Bincode.Cursor) throws -> SessionUpdate {
+    public func readSessionUpdate(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SessionUpdate {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .fps(try self.readFrameRate(&c))
@@ -944,7 +944,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeSessionUpdate(_ out: inout Data, _ value: SessionUpdate) {
+    public func writeSessionUpdate(_ out: inout Data, _ value: ScreenCapture.SessionUpdate) {
         switch value {
         case .fps(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -965,7 +965,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readScreenshotRequest(_ c: inout Bincode.Cursor) throws -> ScreenshotRequest {
+    public func readScreenshotRequest(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ScreenshotRequest {
         let source = try self.readSourceSelector(&c)
         let backend = try self.readBackendSelection(&c)
         let formats = try self.readFormatRequest(&c)
@@ -974,10 +974,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let composite = try Bincode.readBool(&c)
         let compositeConfig = try self.readCompositeConfig(&c)
         let consent = try self.readConsentConfig(&c)
-        return ScreenshotRequest(source: source, backend: backend, formats: formats, cursor: cursor, hdr: hdr, composite: composite, compositeConfig: compositeConfig, consent: consent)
+        return ScreenCapture.ScreenshotRequest(source: source, backend: backend, formats: formats, cursor: cursor, hdr: hdr, composite: composite, compositeConfig: compositeConfig, consent: consent)
     }
 
-    public func writeScreenshotRequest(_ out: inout Data, _ value: ScreenshotRequest) {
+    public func writeScreenshotRequest(_ out: inout Data, _ value: ScreenCapture.ScreenshotRequest) {
         self.writeSourceSelector(&out, value.source)
         self.writeBackendSelection(&out, value.backend)
         self.writeFormatRequest(&out, value.formats)
@@ -988,32 +988,32 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         self.writeConsentConfig(&out, value.consent)
     }
 
-    public func readCpuPixelFormat(_ c: inout Bincode.Cursor) throws -> CpuPixelFormat {
+    public func readCpuPixelFormat(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CpuPixelFormat {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = CpuPixelFormat(rawValue: disc) else {
+        guard let value = ScreenCapture.CpuPixelFormat(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeCpuPixelFormat(_ out: inout Data, _ value: CpuPixelFormat) {
+    public func writeCpuPixelFormat(_ out: inout Data, _ value: ScreenCapture.CpuPixelFormat) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readPixelLayout(_ c: inout Bincode.Cursor) throws -> PixelLayout {
+    public func readPixelLayout(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PixelLayout {
         let format = try self.readCpuPixelFormat(&c)
         let upright = try Bincode.readBool(&c)
         let tight = try Bincode.readBool(&c)
-        return PixelLayout(format: format, upright: upright, tight: tight)
+        return ScreenCapture.PixelLayout(format: format, upright: upright, tight: tight)
     }
 
-    public func writePixelLayout(_ out: inout Data, _ value: PixelLayout) {
+    public func writePixelLayout(_ out: inout Data, _ value: ScreenCapture.PixelLayout) {
         self.writeCpuPixelFormat(&out, value.format)
         Bincode.writeBool(&out, value.upright)
         Bincode.writeBool(&out, value.tight)
     }
 
-    public func readRawImage(_ c: inout Bincode.Cursor) throws -> RawImage {
+    public func readRawImage(_ c: inout Bincode.Cursor) throws -> ScreenCapture.RawImage {
         let width = try Bincode.readVarintU32(&c)
         let height = try Bincode.readVarintU32(&c)
         let stride = try Bincode.readVarintU32(&c)
@@ -1021,10 +1021,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let colour = try self.readColour(&c)
         let source = try self.readSourceId(&c)
         let bytes = try Bincode.readData(&c)
-        return RawImage(width: width, height: height, stride: stride, format: format, colour: colour, source: source, bytes: bytes)
+        return ScreenCapture.RawImage(width: width, height: height, stride: stride, format: format, colour: colour, source: source, bytes: bytes)
     }
 
-    public func writeRawImage(_ out: inout Data, _ value: RawImage) {
+    public func writeRawImage(_ out: inout Data, _ value: ScreenCapture.RawImage) {
         Bincode.writeVarintU32(&out, value.width)
         Bincode.writeVarintU32(&out, value.height)
         Bincode.writeVarintU32(&out, value.stride)
@@ -1034,77 +1034,77 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeData(&out, value.bytes)
     }
 
-    public func readPreviewSurfaceKind(_ c: inout Bincode.Cursor) throws -> PreviewSurfaceKind {
+    public func readPreviewSurfaceKind(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PreviewSurfaceKind {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = PreviewSurfaceKind(rawValue: disc) else {
+        guard let value = ScreenCapture.PreviewSurfaceKind(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writePreviewSurfaceKind(_ out: inout Data, _ value: PreviewSurfaceKind) {
+    public func writePreviewSurfaceKind(_ out: inout Data, _ value: ScreenCapture.PreviewSurfaceKind) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readPreviewFit(_ c: inout Bincode.Cursor) throws -> PreviewFit {
+    public func readPreviewFit(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PreviewFit {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = PreviewFit(rawValue: disc) else {
+        guard let value = ScreenCapture.PreviewFit(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writePreviewFit(_ out: inout Data, _ value: PreviewFit) {
+    public func writePreviewFit(_ out: inout Data, _ value: ScreenCapture.PreviewFit) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readPreviewTarget(_ c: inout Bincode.Cursor) throws -> PreviewTarget {
+    public func readPreviewTarget(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PreviewTarget {
         let surface = try self.readNativeHandleId(&c)
         let kind = try self.readPreviewSurfaceKind(&c)
         let fit = try self.readPreviewFit(&c)
-        return PreviewTarget(surface: surface, kind: kind, fit: fit)
+        return ScreenCapture.PreviewTarget(surface: surface, kind: kind, fit: fit)
     }
 
-    public func writePreviewTarget(_ out: inout Data, _ value: PreviewTarget) {
+    public func writePreviewTarget(_ out: inout Data, _ value: ScreenCapture.PreviewTarget) {
         self.writeNativeHandleId(&out, value.surface)
         self.writePreviewSurfaceKind(&out, value.kind)
         self.writePreviewFit(&out, value.fit)
     }
 
-    public func readAccessScope(_ c: inout Bincode.Cursor) throws -> AccessScope {
+    public func readAccessScope(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AccessScope {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = AccessScope(rawValue: disc) else {
+        guard let value = ScreenCapture.AccessScope(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeAccessScope(_ out: inout Data, _ value: AccessScope) {
+    public func writeAccessScope(_ out: inout Data, _ value: ScreenCapture.AccessScope) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readAccessRequest(_ c: inout Bincode.Cursor) throws -> AccessRequest {
+    public func readAccessRequest(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AccessRequest {
         let scope = try self.readAccessScope(&c)
-        return AccessRequest(scope: scope)
+        return ScreenCapture.AccessRequest(scope: scope)
     }
 
-    public func writeAccessRequest(_ out: inout Data, _ value: AccessRequest) {
+    public func writeAccessRequest(_ out: inout Data, _ value: ScreenCapture.AccessRequest) {
         self.writeAccessScope(&out, value.scope)
     }
 
-    public func readConsentModel(_ c: inout Bincode.Cursor) throws -> ConsentModel {
+    public func readConsentModel(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ConsentModel {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = ConsentModel(rawValue: disc) else {
+        guard let value = ScreenCapture.ConsentModel(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeConsentModel(_ out: inout Data, _ value: ConsentModel) {
+    public func writeConsentModel(_ out: inout Data, _ value: ScreenCapture.ConsentModel) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readIndicatorState(_ c: inout Bincode.Cursor) throws -> IndicatorState {
+    public func readIndicatorState(_ c: inout Bincode.Cursor) throws -> ScreenCapture.IndicatorState {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .shown
@@ -1114,7 +1114,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeIndicatorState(_ out: inout Data, _ value: IndicatorState) {
+    public func writeIndicatorState(_ out: inout Data, _ value: ScreenCapture.IndicatorState) {
         switch value {
         case .shown:
             Bincode.writeVarintU32(&out, 0)
@@ -1126,17 +1126,17 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readAccessState(_ c: inout Bincode.Cursor) throws -> AccessState {
+    public func readAccessState(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AccessState {
         let scope = try self.readAccessScope(&c)
         let status = try self.readAccessStatus(&c)
         let model = try self.readConsentModel(&c)
         let persistence = try self.readPersistence(&c)
         let revocableMidSession = try Bincode.readBool(&c)
         let indicator = try self.readIndicatorState(&c)
-        return AccessState(scope: scope, status: status, model: model, persistence: persistence, revocableMidSession: revocableMidSession, indicator: indicator)
+        return ScreenCapture.AccessState(scope: scope, status: status, model: model, persistence: persistence, revocableMidSession: revocableMidSession, indicator: indicator)
     }
 
-    public func writeAccessState(_ out: inout Data, _ value: AccessState) {
+    public func writeAccessState(_ out: inout Data, _ value: ScreenCapture.AccessState) {
         self.writeAccessScope(&out, value.scope)
         self.writeAccessStatus(&out, value.status)
         self.writeConsentModel(&out, value.model)
@@ -1145,77 +1145,77 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         self.writeIndicatorState(&out, value.indicator)
     }
 
-    public func readPersistMode(_ c: inout Bincode.Cursor) throws -> PersistMode {
+    public func readPersistMode(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PersistMode {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = PersistMode(rawValue: disc) else {
+        guard let value = ScreenCapture.PersistMode(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writePersistMode(_ out: inout Data, _ value: PersistMode) {
+    public func writePersistMode(_ out: inout Data, _ value: ScreenCapture.PersistMode) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readRestoreToken(_ c: inout Bincode.Cursor) throws -> RestoreToken {
+    public func readRestoreToken(_ c: inout Bincode.Cursor) throws -> ScreenCapture.RestoreToken {
         let value = try Bincode.readString(&c)
         let backend = try self.readBackendId(&c)
         let pluginVersion = try Bincode.readVarintU32(&c)
-        return RestoreToken(value: value, backend: backend, pluginVersion: pluginVersion)
+        return ScreenCapture.RestoreToken(value: value, backend: backend, pluginVersion: pluginVersion)
     }
 
-    public func writeRestoreToken(_ out: inout Data, _ value: RestoreToken) {
+    public func writeRestoreToken(_ out: inout Data, _ value: ScreenCapture.RestoreToken) {
         Bincode.writeString(&out, value.value)
         self.writeBackendId(&out, value.backend)
         Bincode.writeVarintU32(&out, value.pluginVersion)
     }
 
-    public func readProjectionGrant(_ c: inout Bincode.Cursor) throws -> ProjectionGrant {
+    public func readProjectionGrant(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ProjectionGrant {
         let handle = try self.readNativeHandleId(&c)
-        return ProjectionGrant(handle: handle)
+        return ScreenCapture.ProjectionGrant(handle: handle)
     }
 
-    public func writeProjectionGrant(_ out: inout Data, _ value: ProjectionGrant) {
+    public func writeProjectionGrant(_ out: inout Data, _ value: ScreenCapture.ProjectionGrant) {
         self.writeNativeHandleId(&out, value.handle)
     }
 
-    public func readProjectionMode(_ c: inout Bincode.Cursor) throws -> ProjectionMode {
+    public func readProjectionMode(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ProjectionMode {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = ProjectionMode(rawValue: disc) else {
+        guard let value = ScreenCapture.ProjectionMode(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeProjectionMode(_ out: inout Data, _ value: ProjectionMode) {
+    public func writeProjectionMode(_ out: inout Data, _ value: ScreenCapture.ProjectionMode) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readProjectionRequest(_ c: inout Bincode.Cursor) throws -> ProjectionRequest {
+    public func readProjectionRequest(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ProjectionRequest {
         let mode = try self.readProjectionMode(&c)
-        return ProjectionRequest(mode: mode)
+        return ScreenCapture.ProjectionRequest(mode: mode)
     }
 
-    public func writeProjectionRequest(_ out: inout Data, _ value: ProjectionRequest) {
+    public func writeProjectionRequest(_ out: inout Data, _ value: ScreenCapture.ProjectionRequest) {
         self.writeProjectionMode(&out, value.mode)
     }
 
-    public func readConsentConfig(_ c: inout Bincode.Cursor) throws -> ConsentConfig {
+    public func readConsentConfig(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ConsentConfig {
         let allowPicker = try Bincode.readBool(&c)
         let restoreToken = try Bincode.readOption(&c) { c1 in try self.readRestoreToken(&c1) }
         let persist = try self.readPersistMode(&c)
         let grant = try Bincode.readOption(&c) { c1 in try self.readProjectionGrant(&c1) }
-        return ConsentConfig(allowPicker: allowPicker, restoreToken: restoreToken, persist: persist, grant: grant)
+        return ScreenCapture.ConsentConfig(allowPicker: allowPicker, restoreToken: restoreToken, persist: persist, grant: grant)
     }
 
-    public func writeConsentConfig(_ out: inout Data, _ value: ConsentConfig) {
+    public func writeConsentConfig(_ out: inout Data, _ value: ScreenCapture.ConsentConfig) {
         Bincode.writeBool(&out, value.allowPicker)
         Bincode.writeOption(&out, value.restoreToken) { o1, v1 in self.writeRestoreToken(&o1, v1) }
         self.writePersistMode(&out, value.persist)
         Bincode.writeOption(&out, value.grant) { o1, v1 in self.writeProjectionGrant(&o1, v1) }
     }
 
-    public func readRequirement(_ c: inout Bincode.Cursor) throws -> Requirement {
+    public func readRequirement(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Requirement {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .kind(try self.readSourceKind(&c))
@@ -1242,7 +1242,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeRequirement(_ out: inout Data, _ value: Requirement) {
+    public func writeRequirement(_ out: inout Data, _ value: ScreenCapture.Requirement) {
         switch value {
         case .kind(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -1288,18 +1288,18 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readUnmet(_ c: inout Bincode.Cursor) throws -> Unmet {
+    public func readUnmet(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Unmet {
         let backend = try Bincode.readOption(&c) { c1 in try self.readBackendId(&c1) }
         let requirements = try Bincode.readVec(&c) { c1 in try self.readRequirement(&c1) }
-        return Unmet(backend: backend, requirements: requirements)
+        return ScreenCapture.Unmet(backend: backend, requirements: requirements)
     }
 
-    public func writeUnmet(_ out: inout Data, _ value: Unmet) {
+    public func writeUnmet(_ out: inout Data, _ value: ScreenCapture.Unmet) {
         Bincode.writeOption(&out, value.backend) { o1, v1 in self.writeBackendId(&o1, v1) }
         Bincode.writeVec(&out, value.requirements) { o1, v1 in self.writeRequirement(&o1, v1) }
     }
 
-    public func readAttemptFailure(_ c: inout Bincode.Cursor) throws -> AttemptFailure {
+    public func readAttemptFailure(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AttemptFailure {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .unavailable(try self.readAvailability(&c))
@@ -1309,7 +1309,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeAttemptFailure(_ out: inout Data, _ value: AttemptFailure) {
+    public func writeAttemptFailure(_ out: inout Data, _ value: ScreenCapture.AttemptFailure) {
         switch value {
         case .unavailable(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -1323,55 +1323,55 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readBackendAttempt(_ c: inout Bincode.Cursor) throws -> BackendAttempt {
+    public func readBackendAttempt(_ c: inout Bincode.Cursor) throws -> ScreenCapture.BackendAttempt {
         let backend = try self.readBackendId(&c)
         let failure = try self.readAttemptFailure(&c)
-        return BackendAttempt(backend: backend, failure: failure)
+        return ScreenCapture.BackendAttempt(backend: backend, failure: failure)
     }
 
-    public func writeBackendAttempt(_ out: inout Data, _ value: BackendAttempt) {
+    public func writeBackendAttempt(_ out: inout Data, _ value: ScreenCapture.BackendAttempt) {
         self.writeBackendId(&out, value.backend)
         self.writeAttemptFailure(&out, value.failure)
     }
 
-    public func readBackendReason(_ c: inout Bincode.Cursor) throws -> BackendReason {
+    public func readBackendReason(_ c: inout Bincode.Cursor) throws -> ScreenCapture.BackendReason {
         let backend = try self.readBackendId(&c)
         let availability = try self.readAvailability(&c)
-        return BackendReason(backend: backend, availability: availability)
+        return ScreenCapture.BackendReason(backend: backend, availability: availability)
     }
 
-    public func writeBackendReason(_ out: inout Data, _ value: BackendReason) {
+    public func writeBackendReason(_ out: inout Data, _ value: ScreenCapture.BackendReason) {
         self.writeBackendId(&out, value.backend)
         self.writeAvailability(&out, value.availability)
     }
 
-    public func readBackendDetail(_ c: inout Bincode.Cursor) throws -> BackendDetail {
+    public func readBackendDetail(_ c: inout Bincode.Cursor) throws -> ScreenCapture.BackendDetail {
         let backend = try Bincode.readOption(&c) { c1 in try self.readBackendId(&c1) }
         let step = try Bincode.readString(&c)
         let message = try Bincode.readString(&c)
-        return BackendDetail(backend: backend, step: step, message: message)
+        return ScreenCapture.BackendDetail(backend: backend, step: step, message: message)
     }
 
-    public func writeBackendDetail(_ out: inout Data, _ value: BackendDetail) {
+    public func writeBackendDetail(_ out: inout Data, _ value: ScreenCapture.BackendDetail) {
         Bincode.writeOption(&out, value.backend) { o1, v1 in self.writeBackendId(&o1, v1) }
         Bincode.writeString(&out, value.step)
         Bincode.writeString(&out, value.message)
     }
 
-    public func readOsFailure(_ c: inout Bincode.Cursor) throws -> OsFailure {
+    public func readOsFailure(_ c: inout Bincode.Cursor) throws -> ScreenCapture.OsFailure {
         let backend = try self.readBackendId(&c)
         let operation = try Bincode.readString(&c)
         let code = try Bincode.readVarintI64(&c)
-        return OsFailure(backend: backend, operation: operation, code: code)
+        return ScreenCapture.OsFailure(backend: backend, operation: operation, code: code)
     }
 
-    public func writeOsFailure(_ out: inout Data, _ value: OsFailure) {
+    public func writeOsFailure(_ out: inout Data, _ value: ScreenCapture.OsFailure) {
         self.writeBackendId(&out, value.backend)
         Bincode.writeString(&out, value.operation)
         Bincode.writeVarintI64(&out, value.code)
     }
 
-    public func readCaptureError(_ c: inout Bincode.Cursor) throws -> CaptureError {
+    public func readCaptureError(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CaptureError {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .noBackendCompiled
@@ -1399,7 +1399,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeCaptureError(_ out: inout Data, _ value: CaptureError) {
+    public func writeCaptureError(_ out: inout Data, _ value: ScreenCapture.CaptureError) {
         switch value {
         case .noBackendCompiled:
             Bincode.writeVarintU32(&out, 0)
@@ -1455,43 +1455,43 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readPtsClock(_ c: inout Bincode.Cursor) throws -> PtsClock {
+    public func readPtsClock(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PtsClock {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = PtsClock(rawValue: disc) else {
+        guard let value = ScreenCapture.PtsClock(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writePtsClock(_ out: inout Data, _ value: PtsClock) {
+    public func writePtsClock(_ out: inout Data, _ value: ScreenCapture.PtsClock) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readPlaneLayout(_ c: inout Bincode.Cursor) throws -> PlaneLayout {
+    public func readPlaneLayout(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PlaneLayout {
         let offset = try Bincode.readVarintU32(&c)
         let stride = try Bincode.readVarintU32(&c)
         let size = try Bincode.readVarintU64(&c)
-        return PlaneLayout(offset: offset, stride: stride, size: size)
+        return ScreenCapture.PlaneLayout(offset: offset, stride: stride, size: size)
     }
 
-    public func writePlaneLayout(_ out: inout Data, _ value: PlaneLayout) {
+    public func writePlaneLayout(_ out: inout Data, _ value: ScreenCapture.PlaneLayout) {
         Bincode.writeVarintU32(&out, value.offset)
         Bincode.writeVarintU32(&out, value.stride)
         Bincode.writeVarintU64(&out, value.size)
     }
 
-    public func readBufferIdentity(_ c: inout Bincode.Cursor) throws -> BufferIdentity {
+    public func readBufferIdentity(_ c: inout Bincode.Cursor) throws -> ScreenCapture.BufferIdentity {
         let poolGeneration = try Bincode.readVarintU64(&c)
         let slot = try Bincode.readVarintU32(&c)
-        return BufferIdentity(poolGeneration: poolGeneration, slot: slot)
+        return ScreenCapture.BufferIdentity(poolGeneration: poolGeneration, slot: slot)
     }
 
-    public func writeBufferIdentity(_ out: inout Data, _ value: BufferIdentity) {
+    public func writeBufferIdentity(_ out: inout Data, _ value: ScreenCapture.BufferIdentity) {
         Bincode.writeVarintU64(&out, value.poolGeneration)
         Bincode.writeVarintU32(&out, value.slot)
     }
 
-    public func readDamage(_ c: inout Bincode.Cursor) throws -> Damage {
+    public func readDamage(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Damage {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .full
@@ -1501,7 +1501,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeDamage(_ out: inout Data, _ value: Damage) {
+    public func writeDamage(_ out: inout Data, _ value: ScreenCapture.Damage) {
         switch value {
         case .full:
             Bincode.writeVarintU32(&out, 0)
@@ -1513,61 +1513,61 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readCursorState(_ c: inout Bincode.Cursor) throws -> CursorState {
+    public func readCursorState(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CursorState {
         let position = try self.readPoint(&c)
         let hotspot = try self.readPoint(&c)
         let visible = try Bincode.readBool(&c)
-        return CursorState(position: position, hotspot: hotspot, visible: visible)
+        return ScreenCapture.CursorState(position: position, hotspot: hotspot, visible: visible)
     }
 
-    public func writeCursorState(_ out: inout Data, _ value: CursorState) {
+    public func writeCursorState(_ out: inout Data, _ value: ScreenCapture.CursorState) {
         self.writePoint(&out, value.position)
         self.writePoint(&out, value.hotspot)
         Bincode.writeBool(&out, value.visible)
     }
 
-    public func readCompositePart(_ c: inout Bincode.Cursor) throws -> CompositePart {
+    public func readCompositePart(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CompositePart {
         let source = try self.readSourceId(&c)
         let rect = try self.readRect(&c)
         let ptsNs = try Bincode.readVarintU64(&c)
         let scalePermille = try Bincode.readVarintU32(&c)
-        return CompositePart(source: source, rect: rect, ptsNs: ptsNs, scalePermille: scalePermille)
+        return ScreenCapture.CompositePart(source: source, rect: rect, ptsNs: ptsNs, scalePermille: scalePermille)
     }
 
-    public func writeCompositePart(_ out: inout Data, _ value: CompositePart) {
+    public func writeCompositePart(_ out: inout Data, _ value: ScreenCapture.CompositePart) {
         self.writeSourceId(&out, value.source)
         self.writeRect(&out, value.rect)
         Bincode.writeVarintU64(&out, value.ptsNs)
         Bincode.writeVarintU32(&out, value.scalePermille)
     }
 
-    public func readCompositeInfo(_ c: inout Bincode.Cursor) throws -> CompositeInfo {
+    public func readCompositeInfo(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CompositeInfo {
         let parts = try Bincode.readVec(&c) { c1 in try self.readCompositePart(&c1) }
         let skewNs = try Bincode.readVarintU64(&c)
-        return CompositeInfo(parts: parts, skewNs: skewNs)
+        return ScreenCapture.CompositeInfo(parts: parts, skewNs: skewNs)
     }
 
-    public func writeCompositeInfo(_ out: inout Data, _ value: CompositeInfo) {
+    public func writeCompositeInfo(_ out: inout Data, _ value: ScreenCapture.CompositeInfo) {
         Bincode.writeVec(&out, value.parts) { o1, v1 in self.writeCompositePart(&o1, v1) }
         Bincode.writeVarintU64(&out, value.skewNs)
     }
 
-    public func readHdrMetadata(_ c: inout Bincode.Cursor) throws -> HdrMetadata {
+    public func readHdrMetadata(_ c: inout Bincode.Cursor) throws -> ScreenCapture.HdrMetadata {
         let maxLuminanceNits = try Bincode.readVarintU32(&c)
         let minLuminance = try Bincode.readVarintU32(&c)
         let maxCll = try Bincode.readVarintU32(&c)
         let maxFall = try Bincode.readVarintU32(&c)
-        return HdrMetadata(maxLuminanceNits: maxLuminanceNits, minLuminance: minLuminance, maxCll: maxCll, maxFall: maxFall)
+        return ScreenCapture.HdrMetadata(maxLuminanceNits: maxLuminanceNits, minLuminance: minLuminance, maxCll: maxCll, maxFall: maxFall)
     }
 
-    public func writeHdrMetadata(_ out: inout Data, _ value: HdrMetadata) {
+    public func writeHdrMetadata(_ out: inout Data, _ value: ScreenCapture.HdrMetadata) {
         Bincode.writeVarintU32(&out, value.maxLuminanceNits)
         Bincode.writeVarintU32(&out, value.minLuminance)
         Bincode.writeVarintU32(&out, value.maxCll)
         Bincode.writeVarintU32(&out, value.maxFall)
     }
 
-    public func readFrameMeta(_ c: inout Bincode.Cursor) throws -> FrameMeta {
+    public func readFrameMeta(_ c: inout Bincode.Cursor) throws -> ScreenCapture.FrameMeta {
         let seq = try Bincode.readVarintU64(&c)
         let ptsNs = try Bincode.readVarintU64(&c)
         let ptsClock = try self.readPtsClock(&c)
@@ -1594,10 +1594,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let skippedBefore = try Bincode.readVarintU32(&c)
         let protectedContent = try Bincode.readBool(&c)
         let composite = try Bincode.readOption(&c) { c1 in try self.readCompositeInfo(&c1) }
-        return FrameMeta(seq: seq, ptsNs: ptsNs, ptsClock: ptsClock, wallUs: wallUs, size: size, contentRect: contentRect, format: format, memory: memory, planes: planes, modifier: modifier, buffer: buffer, tier: tier, copied: copied, producer: producer, colour: colour, hdr: hdr, orientation: orientation, damage: damage, cursor: cursor, sync: sync, scalePermille: scalePermille, sourceId: sourceId, repeat: `repeat`, skippedBefore: skippedBefore, protectedContent: protectedContent, composite: composite)
+        return ScreenCapture.FrameMeta(seq: seq, ptsNs: ptsNs, ptsClock: ptsClock, wallUs: wallUs, size: size, contentRect: contentRect, format: format, memory: memory, planes: planes, modifier: modifier, buffer: buffer, tier: tier, copied: copied, producer: producer, colour: colour, hdr: hdr, orientation: orientation, damage: damage, cursor: cursor, sync: sync, scalePermille: scalePermille, sourceId: sourceId, repeat: `repeat`, skippedBefore: skippedBefore, protectedContent: protectedContent, composite: composite)
     }
 
-    public func writeFrameMeta(_ out: inout Data, _ value: FrameMeta) {
+    public func writeFrameMeta(_ out: inout Data, _ value: ScreenCapture.FrameMeta) {
         Bincode.writeVarintU64(&out, value.seq)
         Bincode.writeVarintU64(&out, value.ptsNs)
         self.writePtsClock(&out, value.ptsClock)
@@ -1626,7 +1626,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeOption(&out, value.composite) { o1, v1 in self.writeCompositeInfo(&o1, v1) }
     }
 
-    public func readAudioMeta(_ c: inout Bincode.Cursor) throws -> AudioMeta {
+    public func readAudioMeta(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioMeta {
         let seq = try Bincode.readVarintU64(&c)
         let ptsNs = try Bincode.readVarintU64(&c)
         let wallUs = try Bincode.readVarintU64(&c)
@@ -1635,10 +1635,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let format = try self.readSampleFormat(&c)
         let frames = try Bincode.readVarintU32(&c)
         let discontinuity = try Bincode.readBool(&c)
-        return AudioMeta(seq: seq, ptsNs: ptsNs, wallUs: wallUs, rate: rate, channels: channels, format: format, frames: frames, discontinuity: discontinuity)
+        return ScreenCapture.AudioMeta(seq: seq, ptsNs: ptsNs, wallUs: wallUs, rate: rate, channels: channels, format: format, frames: frames, discontinuity: discontinuity)
     }
 
-    public func writeAudioMeta(_ out: inout Data, _ value: AudioMeta) {
+    public func writeAudioMeta(_ out: inout Data, _ value: ScreenCapture.AudioMeta) {
         Bincode.writeVarintU64(&out, value.seq)
         Bincode.writeVarintU64(&out, value.ptsNs)
         Bincode.writeVarintU64(&out, value.wallUs)
@@ -1649,34 +1649,34 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeBool(&out, value.discontinuity)
     }
 
-    public func readAudioNegotiated(_ c: inout Bincode.Cursor) throws -> AudioNegotiated {
+    public func readAudioNegotiated(_ c: inout Bincode.Cursor) throws -> ScreenCapture.AudioNegotiated {
         let source = try self.readAudioSource(&c)
         let rate = try Bincode.readVarintU32(&c)
         let channels = try Bincode.readU8(&c)
         let format = try self.readSampleFormat(&c)
-        return AudioNegotiated(source: source, rate: rate, channels: channels, format: format)
+        return ScreenCapture.AudioNegotiated(source: source, rate: rate, channels: channels, format: format)
     }
 
-    public func writeAudioNegotiated(_ out: inout Data, _ value: AudioNegotiated) {
+    public func writeAudioNegotiated(_ out: inout Data, _ value: ScreenCapture.AudioNegotiated) {
         self.writeAudioSource(&out, value.source)
         Bincode.writeVarintU32(&out, value.rate)
         Bincode.writeU8(&out, value.channels)
         self.writeSampleFormat(&out, value.format)
     }
 
-    public func readBorderState(_ c: inout Bincode.Cursor) throws -> BorderState {
+    public func readBorderState(_ c: inout Bincode.Cursor) throws -> ScreenCapture.BorderState {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = BorderState(rawValue: disc) else {
+        guard let value = ScreenCapture.BorderState(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeBorderState(_ out: inout Data, _ value: BorderState) {
+    public func writeBorderState(_ out: inout Data, _ value: ScreenCapture.BorderState) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readNegotiatedStream(_ c: inout Bincode.Cursor) throws -> NegotiatedStream {
+    public func readNegotiatedStream(_ c: inout Bincode.Cursor) throws -> ScreenCapture.NegotiatedStream {
         let backend = try self.readBackendId(&c)
         let source = try self.readSource(&c)
         let size = try self.readSize(&c)
@@ -1705,10 +1705,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let restoreToken = try Bincode.readOption(&c) { c1 in try self.readRestoreToken(&c1) }
         let restored = try Bincode.readBool(&c)
         let audio = try Bincode.readOption(&c) { c1 in try self.readAudioNegotiated(&c1) }
-        return NegotiatedStream(backend: backend, source: source, size: size, contentRect: contentRect, format: format, memory: memory, modifier: modifier, tier: tier, copies: copies, fps: fps, sourceRateMhz: sourceRateMhz, producer: producer, sync: sync, poolDepth: poolDepth, exhaustion: exhaustion, orientation: orientation, crop: crop, damage: damage, cursor: cursor, colour: colour, hdr: hdr, composite: composite, consent: consent, indicator: indicator, border: border, restoreToken: restoreToken, restored: restored, audio: audio)
+        return ScreenCapture.NegotiatedStream(backend: backend, source: source, size: size, contentRect: contentRect, format: format, memory: memory, modifier: modifier, tier: tier, copies: copies, fps: fps, sourceRateMhz: sourceRateMhz, producer: producer, sync: sync, poolDepth: poolDepth, exhaustion: exhaustion, orientation: orientation, crop: crop, damage: damage, cursor: cursor, colour: colour, hdr: hdr, composite: composite, consent: consent, indicator: indicator, border: border, restoreToken: restoreToken, restored: restored, audio: audio)
     }
 
-    public func writeNegotiatedStream(_ out: inout Data, _ value: NegotiatedStream) {
+    public func writeNegotiatedStream(_ out: inout Data, _ value: ScreenCapture.NegotiatedStream) {
         self.writeBackendId(&out, value.backend)
         self.writeSource(&out, value.source)
         self.writeSize(&out, value.size)
@@ -1739,93 +1739,93 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeOption(&out, value.audio) { o1, v1 in self.writeAudioNegotiated(&o1, v1) }
     }
 
-    public func readScreenshotInfo(_ c: inout Bincode.Cursor) throws -> ScreenshotInfo {
+    public func readScreenshotInfo(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ScreenshotInfo {
         let frames = try Bincode.readVarintU32(&c)
         let backend = try self.readBackendId(&c)
         let negotiated = try self.readNegotiatedStream(&c)
-        return ScreenshotInfo(frames: frames, backend: backend, negotiated: negotiated)
+        return ScreenCapture.ScreenshotInfo(frames: frames, backend: backend, negotiated: negotiated)
     }
 
-    public func writeScreenshotInfo(_ out: inout Data, _ value: ScreenshotInfo) {
+    public func writeScreenshotInfo(_ out: inout Data, _ value: ScreenCapture.ScreenshotInfo) {
         Bincode.writeVarintU32(&out, value.frames)
         self.writeBackendId(&out, value.backend)
         self.writeNegotiatedStream(&out, value.negotiated)
     }
 
-    public func readCaptureSession(_ c: inout Bincode.Cursor) throws -> CaptureSession {
+    public func readCaptureSession(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CaptureSession {
         let session = try self.readNativeHandleId(&c)
         let negotiated = try self.readNegotiatedStream(&c)
-        return CaptureSession(session: session, negotiated: negotiated)
+        return ScreenCapture.CaptureSession(session: session, negotiated: negotiated)
     }
 
-    public func writeCaptureSession(_ out: inout Data, _ value: CaptureSession) {
+    public func writeCaptureSession(_ out: inout Data, _ value: ScreenCapture.CaptureSession) {
         self.writeNativeHandleId(&out, value.session)
         self.writeNegotiatedStream(&out, value.negotiated)
     }
 
-    public func readDowngradeReason(_ c: inout Bincode.Cursor) throws -> DowngradeReason {
+    public func readDowngradeReason(_ c: inout Bincode.Cursor) throws -> ScreenCapture.DowngradeReason {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = DowngradeReason(rawValue: disc) else {
+        guard let value = ScreenCapture.DowngradeReason(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeDowngradeReason(_ out: inout Data, _ value: DowngradeReason) {
+    public func writeDowngradeReason(_ out: inout Data, _ value: ScreenCapture.DowngradeReason) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readDowngrade(_ c: inout Bincode.Cursor) throws -> Downgrade {
+    public func readDowngrade(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Downgrade {
         let fromTier = try Bincode.readU8(&c)
         let toTier = try Bincode.readU8(&c)
         let reason = try self.readDowngradeReason(&c)
-        return Downgrade(fromTier: fromTier, toTier: toTier, reason: reason)
+        return ScreenCapture.Downgrade(fromTier: fromTier, toTier: toTier, reason: reason)
     }
 
-    public func writeDowngrade(_ out: inout Data, _ value: Downgrade) {
+    public func writeDowngrade(_ out: inout Data, _ value: ScreenCapture.Downgrade) {
         Bincode.writeU8(&out, value.fromTier)
         Bincode.writeU8(&out, value.toTier)
         self.writeDowngradeReason(&out, value.reason)
     }
 
-    public func readPauseReason(_ c: inout Bincode.Cursor) throws -> PauseReason {
+    public func readPauseReason(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PauseReason {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = PauseReason(rawValue: disc) else {
+        guard let value = ScreenCapture.PauseReason(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writePauseReason(_ out: inout Data, _ value: PauseReason) {
+    public func writePauseReason(_ out: inout Data, _ value: ScreenCapture.PauseReason) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readExhaustionReport(_ c: inout Bincode.Cursor) throws -> ExhaustionReport {
+    public func readExhaustionReport(_ c: inout Bincode.Cursor) throws -> ScreenCapture.ExhaustionReport {
         let episode = try Bincode.readVarintU32(&c)
         let poolDepth = try Bincode.readU8(&c)
         let policy = try self.readExhaustion(&c)
-        return ExhaustionReport(episode: episode, poolDepth: poolDepth, policy: policy)
+        return ScreenCapture.ExhaustionReport(episode: episode, poolDepth: poolDepth, policy: policy)
     }
 
-    public func writeExhaustionReport(_ out: inout Data, _ value: ExhaustionReport) {
+    public func writeExhaustionReport(_ out: inout Data, _ value: ScreenCapture.ExhaustionReport) {
         Bincode.writeVarintU32(&out, value.episode)
         Bincode.writeU8(&out, value.poolDepth)
         self.writeExhaustion(&out, value.policy)
     }
 
-    public func readStopReason(_ c: inout Bincode.Cursor) throws -> StopReason {
+    public func readStopReason(_ c: inout Bincode.Cursor) throws -> ScreenCapture.StopReason {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = StopReason(rawValue: disc) else {
+        guard let value = ScreenCapture.StopReason(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeStopReason(_ out: inout Data, _ value: StopReason) {
+    public func writeStopReason(_ out: inout Data, _ value: ScreenCapture.StopReason) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readCaptureEvent(_ c: inout Bincode.Cursor) throws -> CaptureEvent {
+    public func readCaptureEvent(_ c: inout Bincode.Cursor) throws -> ScreenCapture.CaptureEvent {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .started(try self.readNegotiatedStream(&c))
@@ -1845,7 +1845,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeCaptureEvent(_ out: inout Data, _ value: CaptureEvent) {
+    public func writeCaptureEvent(_ out: inout Data, _ value: ScreenCapture.CaptureEvent) {
         switch value {
         case .started(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -1884,111 +1884,111 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readBackendId(_ c: inout Bincode.Cursor) throws -> BackendId {
+    public func readBackendId(_ c: inout Bincode.Cursor) throws -> ScreenCapture.BackendId {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = BackendId(rawValue: disc) else {
+        guard let value = ScreenCapture.BackendId(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeBackendId(_ out: inout Data, _ value: BackendId) {
+    public func writeBackendId(_ out: inout Data, _ value: ScreenCapture.BackendId) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readSourceKind(_ c: inout Bincode.Cursor) throws -> SourceKind {
+    public func readSourceKind(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceKind {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = SourceKind(rawValue: disc) else {
+        guard let value = ScreenCapture.SourceKind(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeSourceKind(_ out: inout Data, _ value: SourceKind) {
+    public func writeSourceKind(_ out: inout Data, _ value: ScreenCapture.SourceKind) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readSourceId(_ c: inout Bincode.Cursor) throws -> SourceId {
+    public func readSourceId(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceId {
         let backend = try self.readBackendId(&c)
         let value = try Bincode.readString(&c)
-        return SourceId(backend: backend, value: value)
+        return ScreenCapture.SourceId(backend: backend, value: value)
     }
 
-    public func writeSourceId(_ out: inout Data, _ value: SourceId) {
+    public func writeSourceId(_ out: inout Data, _ value: ScreenCapture.SourceId) {
         self.writeBackendId(&out, value.backend)
         Bincode.writeString(&out, value.value)
     }
 
-    public func readPoint(_ c: inout Bincode.Cursor) throws -> Point {
+    public func readPoint(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Point {
         let x = try Bincode.readVarintI32(&c)
         let y = try Bincode.readVarintI32(&c)
-        return Point(x: x, y: y)
+        return ScreenCapture.Point(x: x, y: y)
     }
 
-    public func writePoint(_ out: inout Data, _ value: Point) {
+    public func writePoint(_ out: inout Data, _ value: ScreenCapture.Point) {
         Bincode.writeVarintI32(&out, value.x)
         Bincode.writeVarintI32(&out, value.y)
     }
 
-    public func readSize(_ c: inout Bincode.Cursor) throws -> Size {
+    public func readSize(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Size {
         let width = try Bincode.readVarintU32(&c)
         let height = try Bincode.readVarintU32(&c)
-        return Size(width: width, height: height)
+        return ScreenCapture.Size(width: width, height: height)
     }
 
-    public func writeSize(_ out: inout Data, _ value: Size) {
+    public func writeSize(_ out: inout Data, _ value: ScreenCapture.Size) {
         Bincode.writeVarintU32(&out, value.width)
         Bincode.writeVarintU32(&out, value.height)
     }
 
-    public func readRect(_ c: inout Bincode.Cursor) throws -> Rect {
+    public func readRect(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Rect {
         let x = try Bincode.readVarintI32(&c)
         let y = try Bincode.readVarintI32(&c)
         let width = try Bincode.readVarintU32(&c)
         let height = try Bincode.readVarintU32(&c)
-        return Rect(x: x, y: y, width: width, height: height)
+        return ScreenCapture.Rect(x: x, y: y, width: width, height: height)
     }
 
-    public func writeRect(_ out: inout Data, _ value: Rect) {
+    public func writeRect(_ out: inout Data, _ value: ScreenCapture.Rect) {
         Bincode.writeVarintI32(&out, value.x)
         Bincode.writeVarintI32(&out, value.y)
         Bincode.writeVarintU32(&out, value.width)
         Bincode.writeVarintU32(&out, value.height)
     }
 
-    public func readRotation(_ c: inout Bincode.Cursor) throws -> Rotation {
+    public func readRotation(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Rotation {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = Rotation(rawValue: disc) else {
+        guard let value = ScreenCapture.Rotation(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeRotation(_ out: inout Data, _ value: Rotation) {
+    public func writeRotation(_ out: inout Data, _ value: ScreenCapture.Rotation) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readOrientation(_ c: inout Bincode.Cursor) throws -> Orientation {
+    public func readOrientation(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Orientation {
         let mirrored = try Bincode.readBool(&c)
         let rotation = try self.readRotation(&c)
-        return Orientation(mirrored: mirrored, rotation: rotation)
+        return ScreenCapture.Orientation(mirrored: mirrored, rotation: rotation)
     }
 
-    public func writeOrientation(_ out: inout Data, _ value: Orientation) {
+    public func writeOrientation(_ out: inout Data, _ value: ScreenCapture.Orientation) {
         Bincode.writeBool(&out, value.mirrored)
         self.writeRotation(&out, value.rotation)
     }
 
-    public func readSourceFlags(_ c: inout Bincode.Cursor) throws -> SourceFlags {
+    public func readSourceFlags(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceFlags {
         let primary = try Bincode.readBool(&c)
         let minimised = try Bincode.readBool(&c)
         let occluded = try Bincode.readBool(&c)
         let protected = try Bincode.readBool(&c)
         let ownProcess = try Bincode.readBool(&c)
-        return SourceFlags(primary: primary, minimised: minimised, occluded: occluded, protected: protected, ownProcess: ownProcess)
+        return ScreenCapture.SourceFlags(primary: primary, minimised: minimised, occluded: occluded, protected: protected, ownProcess: ownProcess)
     }
 
-    public func writeSourceFlags(_ out: inout Data, _ value: SourceFlags) {
+    public func writeSourceFlags(_ out: inout Data, _ value: ScreenCapture.SourceFlags) {
         Bincode.writeBool(&out, value.primary)
         Bincode.writeBool(&out, value.minimised)
         Bincode.writeBool(&out, value.occluded)
@@ -1996,7 +1996,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         Bincode.writeBool(&out, value.ownProcess)
     }
 
-    public func readSource(_ c: inout Bincode.Cursor) throws -> Source {
+    public func readSource(_ c: inout Bincode.Cursor) throws -> ScreenCapture.Source {
         let id = try self.readSourceId(&c)
         let kind = try self.readSourceKind(&c)
         let name = try Bincode.readString(&c)
@@ -2008,10 +2008,10 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         let refreshMhz = try Bincode.readOption(&c) { c1 in try Bincode.readVarintU32(&c1) }
         let orientation = try self.readOrientation(&c)
         let flags = try self.readSourceFlags(&c)
-        return Source(id: id, kind: kind, name: name, appId: appId, pid: pid, geometry: geometry, physicalSize: physicalSize, scalePermille: scalePermille, refreshMhz: refreshMhz, orientation: orientation, flags: flags)
+        return ScreenCapture.Source(id: id, kind: kind, name: name, appId: appId, pid: pid, geometry: geometry, physicalSize: physicalSize, scalePermille: scalePermille, refreshMhz: refreshMhz, orientation: orientation, flags: flags)
     }
 
-    public func writeSource(_ out: inout Data, _ value: Source) {
+    public func writeSource(_ out: inout Data, _ value: ScreenCapture.Source) {
         self.writeSourceId(&out, value.id)
         self.writeSourceKind(&out, value.kind)
         Bincode.writeString(&out, value.name)
@@ -2025,7 +2025,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         self.writeSourceFlags(&out, value.flags)
     }
 
-    public func readRegionSpace(_ c: inout Bincode.Cursor) throws -> RegionSpace {
+    public func readRegionSpace(_ c: inout Bincode.Cursor) throws -> ScreenCapture.RegionSpace {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .global
@@ -2034,7 +2034,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeRegionSpace(_ out: inout Data, _ value: RegionSpace) {
+    public func writeRegionSpace(_ out: inout Data, _ value: ScreenCapture.RegionSpace) {
         switch value {
         case .global:
             Bincode.writeVarintU32(&out, 0)
@@ -2044,29 +2044,29 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readRegionSelector(_ c: inout Bincode.Cursor) throws -> RegionSelector {
+    public func readRegionSelector(_ c: inout Bincode.Cursor) throws -> ScreenCapture.RegionSelector {
         let rect = try self.readRect(&c)
         let space = try self.readRegionSpace(&c)
-        return RegionSelector(rect: rect, space: space)
+        return ScreenCapture.RegionSelector(rect: rect, space: space)
     }
 
-    public func writeRegionSelector(_ out: inout Data, _ value: RegionSelector) {
+    public func writeRegionSelector(_ out: inout Data, _ value: ScreenCapture.RegionSelector) {
         self.writeRect(&out, value.rect)
         self.writeRegionSpace(&out, value.space)
     }
 
-    public func readPickerOptions(_ c: inout Bincode.Cursor) throws -> PickerOptions {
+    public func readPickerOptions(_ c: inout Bincode.Cursor) throws -> ScreenCapture.PickerOptions {
         let kinds = try Bincode.readVec(&c) { c1 in try self.readSourceKind(&c1) }
         let multiple = try Bincode.readBool(&c)
-        return PickerOptions(kinds: kinds, multiple: multiple)
+        return ScreenCapture.PickerOptions(kinds: kinds, multiple: multiple)
     }
 
-    public func writePickerOptions(_ out: inout Data, _ value: PickerOptions) {
+    public func writePickerOptions(_ out: inout Data, _ value: ScreenCapture.PickerOptions) {
         Bincode.writeVec(&out, value.kinds) { o1, v1 in self.writeSourceKind(&o1, v1) }
         Bincode.writeBool(&out, value.multiple)
     }
 
-    public func readSourceSelector(_ c: inout Bincode.Cursor) throws -> SourceSelector {
+    public func readSourceSelector(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceSelector {
         let disc = try Bincode.readVarintU32(&c)
         switch disc {
         case 0: return .id(try self.readSourceId(&c))
@@ -2081,7 +2081,7 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func writeSourceSelector(_ out: inout Data, _ value: SourceSelector) {
+    public func writeSourceSelector(_ out: inout Data, _ value: ScreenCapture.SourceSelector) {
         switch value {
         case .id(let payload):
             Bincode.writeVarintU32(&out, 0)
@@ -2106,49 +2106,49 @@ public final class ScreenCaptureCodecsImpl: ScreenCaptureCodecs {
         }
     }
 
-    public func readSourceListing(_ c: inout Bincode.Cursor) throws -> SourceListing {
+    public func readSourceListing(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceListing {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = SourceListing(rawValue: disc) else {
+        guard let value = ScreenCapture.SourceListing(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeSourceListing(_ out: inout Data, _ value: SourceListing) {
+    public func writeSourceListing(_ out: inout Data, _ value: ScreenCapture.SourceListing) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 
-    public func readSourceList(_ c: inout Bincode.Cursor) throws -> SourceList {
+    public func readSourceList(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceList {
         let sources = try Bincode.readVec(&c) { c1 in try self.readSource(&c1) }
         let listing = try self.readSourceListing(&c)
-        return SourceList(sources: sources, listing: listing)
+        return ScreenCapture.SourceList(sources: sources, listing: listing)
     }
 
-    public func writeSourceList(_ out: inout Data, _ value: SourceList) {
+    public func writeSourceList(_ out: inout Data, _ value: ScreenCapture.SourceList) {
         Bincode.writeVec(&out, value.sources) { o1, v1 in self.writeSource(&o1, v1) }
         self.writeSourceListing(&out, value.listing)
     }
 
-    public func readSourceFilter(_ c: inout Bincode.Cursor) throws -> SourceFilter {
+    public func readSourceFilter(_ c: inout Bincode.Cursor) throws -> ScreenCapture.SourceFilter {
         let kinds = try Bincode.readVec(&c) { c1 in try self.readSourceKind(&c1) }
         let backend = try Bincode.readOption(&c) { c1 in try self.readBackendId(&c1) }
-        return SourceFilter(kinds: kinds, backend: backend)
+        return ScreenCapture.SourceFilter(kinds: kinds, backend: backend)
     }
 
-    public func writeSourceFilter(_ out: inout Data, _ value: SourceFilter) {
+    public func writeSourceFilter(_ out: inout Data, _ value: ScreenCapture.SourceFilter) {
         Bincode.writeVec(&out, value.kinds) { o1, v1 in self.writeSourceKind(&o1, v1) }
         Bincode.writeOption(&out, value.backend) { o1, v1 in self.writeBackendId(&o1, v1) }
     }
 
-    public func readAccessStatus(_ c: inout Bincode.Cursor) throws -> AccessStatus {
+    public func readAccessStatus(_ c: inout Bincode.Cursor) throws -> IstmoMedia.AccessStatus {
         let disc = try Bincode.readVarintU32(&c)
-        guard let value = AccessStatus(rawValue: disc) else {
+        guard let value = IstmoMedia.AccessStatus(rawValue: disc) else {
             throw Bincode.DecodeError.invalidTag(UInt8(clamping: disc))
         }
         return value
     }
 
-    public func writeAccessStatus(_ out: inout Data, _ value: AccessStatus) {
+    public func writeAccessStatus(_ out: inout Data, _ value: IstmoMedia.AccessStatus) {
         Bincode.writeVarintU32(&out, value.rawValue)
     }
 

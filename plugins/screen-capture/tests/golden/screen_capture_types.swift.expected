@@ -4,1429 +4,1434 @@
 import Foundation
 import IstmoRuntime
 
-public struct OsVersion: Sendable {
-    public let major: UInt32
-    public let minor: UInt32
-    public let patch: UInt32
+/// The `ScreenCapture` plugin's message types.
+public enum ScreenCapture {}
 
-    public init(major: UInt32, minor: UInt32, patch: UInt32) {
-        self.major = major
-        self.minor = minor
-        self.patch = patch
+extension ScreenCapture {
+    public struct OsVersion: Sendable {
+        public let major: UInt32
+        public let minor: UInt32
+        public let patch: UInt32
+
+        public init(major: UInt32, minor: UInt32, patch: UInt32) {
+            self.major = major
+            self.minor = minor
+            self.patch = patch
+        }
     }
-}
 
-public enum Availability: Sendable {
-    case ready
-    case notOnThisSession(String)
-    case needsAccess(AccessScope)
-    case osTooOld(OsVersion)
-    case notCompiled(String)
-    case policyDenied(String)
-}
-
-public struct BackendStatus: Sendable {
-    public let backend: BackendId
-    public let availability: Availability
-
-    public init(backend: BackendId, availability: Availability) {
-        self.backend = backend
-        self.availability = availability
+    public enum Availability: Sendable {
+        case ready
+        case notOnThisSession(String)
+        case needsAccess(AccessScope)
+        case osTooOld(OsVersion)
+        case notCompiled(String)
+        case policyDenied(String)
     }
-}
 
-public struct CapabilityQuery: Sendable {
-    public let backend: BackendId?
-    public let kind: SourceKind?
-    public let source: SourceId?
+    public struct BackendStatus: Sendable {
+        public let backend: BackendId
+        public let availability: Availability
 
-    public init(backend: BackendId?, kind: SourceKind?, source: SourceId?) {
-        self.backend = backend
-        self.kind = kind
-        self.source = source
+        public init(backend: BackendId, availability: Availability) {
+            self.backend = backend
+            self.availability = availability
+        }
     }
-}
 
-public enum Provenance: UInt32, Sendable {
-    case probe = 0
-    case table = 1
-    case unknownUntilNegotiated = 2
-}
+    public struct CapabilityQuery: Sendable {
+        public let backend: BackendId?
+        public let kind: SourceKind?
+        public let source: SourceId?
 
-public struct CapsProvenance: Sendable {
-    public let sourceKinds: Provenance
-    public let listing: Provenance
-    public let video: Provenance
-    public let cursor: Provenance
-    public let damage: Provenance
-    public let colour: Provenance
-    public let audio: Provenance
-    public let producer: Provenance
-    public let sync: Provenance
-    public let persistence: Provenance
-
-    public init(sourceKinds: Provenance, listing: Provenance, video: Provenance, cursor: Provenance, damage: Provenance, colour: Provenance, audio: Provenance, producer: Provenance, sync: Provenance, persistence: Provenance) {
-        self.sourceKinds = sourceKinds
-        self.listing = listing
-        self.video = video
-        self.cursor = cursor
-        self.damage = damage
-        self.colour = colour
-        self.audio = audio
-        self.producer = producer
-        self.sync = sync
-        self.persistence = persistence
+        public init(backend: BackendId?, kind: SourceKind?, source: SourceId?) {
+            self.backend = backend
+            self.kind = kind
+            self.source = source
+        }
     }
-}
 
-public enum PixelFormat: UInt32, Sendable {
-    case bgra8 = 0
-    case bgrx8 = 1
-    case rgba8 = 2
-    case rgbx8 = 3
-    case xr30 = 4
-    case xb30 = 5
-    case ar30 = 6
-    case rgba16f = 7
-    case nv12 = 8
-    case p010 = 9
-}
-
-public enum BufferMemory: UInt32, Sendable {
-    case cpu = 0
-    case dmaBuf = 1
-    case d3d11Texture = 2
-    case ioSurface = 3
-    case cvPixelBuffer = 4
-    case hardwareBuffer = 5
-    case webVideoFrame = 6
-}
-
-public enum CopyStage: UInt32, Sendable {
-    case dxgiMandatory = 0
-    case crossDevice = 1
-    case formatConversion = 2
-    case composite = 3
-    case orientationUpright = 4
-    case exhaustionReadback = 5
-    case shmTransport = 6
-    case liveBufferSnapshot = 7
-    case webCopyTo = 8
-    case previewFanOut = 9
-    case legacyRing = 10
-}
-
-public struct FormatCaps: Sendable {
-    public let format: PixelFormat
-    public let memory: BufferMemory
-    public let modifiers: [UInt64]
-    public let copies: [CopyStage]
-
-    public init(format: PixelFormat, memory: BufferMemory, modifiers: [UInt64], copies: [CopyStage]) {
-        self.format = format
-        self.memory = memory
-        self.modifiers = modifiers
-        self.copies = copies
+    public enum Provenance: UInt32, Sendable {
+        case probe = 0
+        case table = 1
+        case unknownUntilNegotiated = 2
     }
-}
 
-public enum Scaling: UInt32, Sendable {
-    case unsupported = 0
-    case backend = 1
-    case native = 2
-}
+    public struct CapsProvenance: Sendable {
+        public let sourceKinds: Provenance
+        public let listing: Provenance
+        public let video: Provenance
+        public let cursor: Provenance
+        public let damage: Provenance
+        public let colour: Provenance
+        public let audio: Provenance
+        public let producer: Provenance
+        public let sync: Provenance
+        public let persistence: Provenance
 
-public enum RegionCrop: UInt32, Sendable {
-    case native = 0
-    case inMeta = 1
-}
-
-public enum CompositeSupport: UInt32, Sendable {
-    case supported = 0
-    case unsupported = 1
-    case gpuOnly = 2
-    case cpuOnly = 3
-}
-
-public struct CompositeCaps: Sendable {
-    public let screenshot: CompositeSupport
-    public let streaming: CompositeSupport
-
-    public init(screenshot: CompositeSupport, streaming: CompositeSupport) {
-        self.screenshot = screenshot
-        self.streaming = streaming
+        public init(sourceKinds: Provenance, listing: Provenance, video: Provenance, cursor: Provenance, damage: Provenance, colour: Provenance, audio: Provenance, producer: Provenance, sync: Provenance, persistence: Provenance) {
+            self.sourceKinds = sourceKinds
+            self.listing = listing
+            self.video = video
+            self.cursor = cursor
+            self.damage = damage
+            self.colour = colour
+            self.audio = audio
+            self.producer = producer
+            self.sync = sync
+            self.persistence = persistence
+        }
     }
-}
 
-public enum DamageSupport: UInt32, Sendable {
-    case unsupported = 0
-    case frame = 1
-    case rects = 2
-}
-
-public enum OrientationSupport: UInt32, Sendable {
-    case inMeta = 0
-    case alreadyApplied = 1
-    case unsupported = 2
-}
-
-public enum ColourSpace: UInt32, Sendable {
-    case srgb = 0
-    case displayP3 = 1
-    case bt709 = 2
-    case bt2020 = 3
-    case scRgb = 4
-    case unknown = 5
-}
-
-public enum TransferFunction: UInt32, Sendable {
-    case srgb = 0
-    case linear = 1
-    case pq = 2
-    case hlg = 3
-    case bt709 = 4
-    case unknown = 5
-}
-
-public enum ColourRange: UInt32, Sendable {
-    case full = 0
-    case limited = 1
-}
-
-public struct Colour: Sendable {
-    public let space: ColourSpace
-    public let transfer: TransferFunction
-    public let range: ColourRange
-
-    public init(space: ColourSpace, transfer: TransferFunction, range: ColourRange) {
-        self.space = space
-        self.transfer = transfer
-        self.range = range
+    public enum PixelFormat: UInt32, Sendable {
+        case bgra8 = 0
+        case bgrx8 = 1
+        case rgba8 = 2
+        case rgbx8 = 3
+        case xr30 = 4
+        case xb30 = 5
+        case ar30 = 6
+        case rgba16f = 7
+        case nv12 = 8
+        case p010 = 9
     }
-}
 
-public struct ColourCaps: Sendable {
-    public let colours: [Colour]
-    public let hdr: Bool
-
-    public init(colours: [Colour], hdr: Bool) {
-        self.colours = colours
-        self.hdr = hdr
+    public enum BufferMemory: UInt32, Sendable {
+        case cpu = 0
+        case dmaBuf = 1
+        case d3d11Texture = 2
+        case ioSurface = 3
+        case cvPixelBuffer = 4
+        case hardwareBuffer = 5
+        case webVideoFrame = 6
     }
-}
 
-public enum AudioSourceKind: UInt32, Sendable {
-    case system = 0
-    case application = 1
-    case excludeSelf = 2
-    case node = 3
-}
-
-public struct AudioCaps: Sendable {
-    public let sources: [AudioSourceKind]
-    public let formats: [SampleFormat]
-    public let mayBeSilent: Bool
-
-    public init(sources: [AudioSourceKind], formats: [SampleFormat], mayBeSilent: Bool) {
-        self.sources = sources
-        self.formats = formats
-        self.mayBeSilent = mayBeSilent
+    public enum CopyStage: UInt32, Sendable {
+        case dxgiMandatory = 0
+        case crossDevice = 1
+        case formatConversion = 2
+        case composite = 3
+        case orientationUpright = 4
+        case exhaustionReadback = 5
+        case shmTransport = 6
+        case liveBufferSnapshot = 7
+        case webCopyTo = 8
+        case previewFanOut = 9
+        case legacyRing = 10
     }
-}
 
-public enum GpuIdentity: Sendable {
-    case drm(UInt64)
-    case luid(UInt64)
-    case registryId(UInt64)
-}
+    public struct FormatCaps: Sendable {
+        public let format: PixelFormat
+        public let memory: BufferMemory
+        public let modifiers: [UInt64]
+        public let copies: [CopyStage]
 
-public enum SyncKind: UInt32, Sendable {
-    case ready = 0
-    case implicit = 1
-}
-
-public enum Persistence: UInt32, Sendable {
-    case unsupported = 0
-    case token = 1
-    case systemSetting = 2
-}
-
-public struct PoolCaps: Sendable {
-    public let minDepth: UInt8
-    public let maxDepth: UInt8
-    public let defaultDepth: UInt8
-    public let exhaustion: [Exhaustion]
-
-    public init(minDepth: UInt8, maxDepth: UInt8, defaultDepth: UInt8, exhaustion: [Exhaustion]) {
-        self.minDepth = minDepth
-        self.maxDepth = maxDepth
-        self.defaultDepth = defaultDepth
-        self.exhaustion = exhaustion
+        public init(format: PixelFormat, memory: BufferMemory, modifiers: [UInt64], copies: [CopyStage]) {
+            self.format = format
+            self.memory = memory
+            self.modifiers = modifiers
+            self.copies = copies
+        }
     }
-}
 
-public enum ProtectedContent: UInt32, Sendable {
-    case reported = 0
-    case maskedUndetectable = 1
-    case blank = 2
-}
-
-public struct WindowCaptureCaps: Sendable {
-    public let occluded: Bool
-    public let minimised: Bool
-    public let childPopups: Bool
-    public let border: Bool
-
-    public init(occluded: Bool, minimised: Bool, childPopups: Bool, border: Bool) {
-        self.occluded = occluded
-        self.minimised = minimised
-        self.childPopups = childPopups
-        self.border = border
+    public enum Scaling: UInt32, Sendable {
+        case unsupported = 0
+        case backend = 1
+        case native = 2
     }
-}
 
-public enum CapabilityNote: UInt32, Sendable {
-    case nvidiaImplicitSyncBestEffort = 0
-    case readyNotKnownToWait = 1
-    case liveBuffer = 2
-    case kmsBypassesCompositor = 3
-    case noDmabufFeedback = 4
-    case noGbmDevice = 5
-    case xWaylandOnly = 6
-}
-
-public struct BackendCaps: Sendable {
-    public let backend: BackendId
-    public let sourceKinds: [SourceKind]
-    public let listing: SourceListing
-    public let consent: ConsentModel
-    public let video: [FormatCaps]
-    public let maxFps: UInt32?
-    public let minIntervalUs: UInt32?
-    public let maxSize: Size?
-    public let scaling: Scaling
-    public let region: RegionCrop
-    public let composite: CompositeCaps
-    public let cursor: [CursorMode]
-    public let damage: DamageSupport
-    public let orientation: OrientationSupport
-    public let colour: ColourCaps
-    public let audio: AudioCaps
-    public let producer: GpuIdentity?
-    public let sync: [SyncKind]
-    public let persistence: Persistence
-    public let concurrency: UInt32?
-    public let pool: PoolCaps
-    public let copies: [CopyStage]
-    public let protectedContent: ProtectedContent
-    public let window: WindowCaptureCaps
-    public let provenance: CapsProvenance
-    public let notes: [CapabilityNote]
-
-    public init(backend: BackendId, sourceKinds: [SourceKind], listing: SourceListing, consent: ConsentModel, video: [FormatCaps], maxFps: UInt32?, minIntervalUs: UInt32?, maxSize: Size?, scaling: Scaling, region: RegionCrop, composite: CompositeCaps, cursor: [CursorMode], damage: DamageSupport, orientation: OrientationSupport, colour: ColourCaps, audio: AudioCaps, producer: GpuIdentity?, sync: [SyncKind], persistence: Persistence, concurrency: UInt32?, pool: PoolCaps, copies: [CopyStage], protectedContent: ProtectedContent, window: WindowCaptureCaps, provenance: CapsProvenance, notes: [CapabilityNote]) {
-        self.backend = backend
-        self.sourceKinds = sourceKinds
-        self.listing = listing
-        self.consent = consent
-        self.video = video
-        self.maxFps = maxFps
-        self.minIntervalUs = minIntervalUs
-        self.maxSize = maxSize
-        self.scaling = scaling
-        self.region = region
-        self.composite = composite
-        self.cursor = cursor
-        self.damage = damage
-        self.orientation = orientation
-        self.colour = colour
-        self.audio = audio
-        self.producer = producer
-        self.sync = sync
-        self.persistence = persistence
-        self.concurrency = concurrency
-        self.pool = pool
-        self.copies = copies
-        self.protectedContent = protectedContent
-        self.window = window
-        self.provenance = provenance
-        self.notes = notes
+    public enum RegionCrop: UInt32, Sendable {
+        case native = 0
+        case inMeta = 1
     }
-}
 
-public struct CapabilityReport: Sendable {
-    public let backends: [BackendCaps]
-
-    public init(backends: [BackendCaps]) {
-        self.backends = backends
+    public enum CompositeSupport: UInt32, Sendable {
+        case supported = 0
+        case unsupported = 1
+        case gpuOnly = 2
+        case cpuOnly = 3
     }
-}
 
-public enum AutoPreference: UInt32, Sendable {
-    case zeroCopy = 0
-    case lowLatency = 1
-    case compatibility = 2
-}
+    public struct CompositeCaps: Sendable {
+        public let screenshot: CompositeSupport
+        public let streaming: CompositeSupport
 
-public struct AutoSelect: Sendable {
-    public let prefer: AutoPreference
-    public let exclude: [BackendId]
-
-    public init(prefer: AutoPreference, exclude: [BackendId]) {
-        self.prefer = prefer
-        self.exclude = exclude
+        public init(screenshot: CompositeSupport, streaming: CompositeSupport) {
+            self.screenshot = screenshot
+            self.streaming = streaming
+        }
     }
-}
 
-public enum BackendSelection: Sendable {
-    case auto(AutoSelect)
-    case fixed(BackendId)
-    case ordered([BackendId])
-}
-
-public struct FormatChoice: Sendable {
-    public let format: PixelFormat
-    public let memory: BufferMemory
-    public let modifiers: [UInt64]
-
-    public init(format: PixelFormat, memory: BufferMemory, modifiers: [UInt64]) {
-        self.format = format
-        self.memory = memory
-        self.modifiers = modifiers
+    public enum DamageSupport: UInt32, Sendable {
+        case unsupported = 0
+        case frame = 1
+        case rects = 2
     }
-}
 
-public struct FormatTier: Sendable {
-    public let choices: [FormatChoice]
-    public let allowsCopy: [CopyStage]
-
-    public init(choices: [FormatChoice], allowsCopy: [CopyStage]) {
-        self.choices = choices
-        self.allowsCopy = allowsCopy
+    public enum OrientationSupport: UInt32, Sendable {
+        case inMeta = 0
+        case alreadyApplied = 1
+        case unsupported = 2
     }
-}
 
-public struct FormatRequest: Sendable {
-    public let tiers: [FormatTier]
-
-    public init(tiers: [FormatTier]) {
-        self.tiers = tiers
+    public enum ColourSpace: UInt32, Sendable {
+        case srgb = 0
+        case displayP3 = 1
+        case bt709 = 2
+        case bt2020 = 3
+        case scRgb = 4
+        case unknown = 5
     }
-}
 
-public enum FrameRate: Sendable {
-    case native
-    case max(UInt32)
-    case exact(UInt32)
-    case onDamage(UInt32)
-}
-
-public enum OutputSize: Sendable {
-    case native
-    case scaled(Size)
-    case fit(Size)
-}
-
-public enum CursorMode: UInt32, Sendable {
-    case hidden = 0
-    case embedded = 1
-    case metadata = 2
-}
-
-public enum Strength: UInt32, Sendable {
-    case ignore = 0
-    case prefer = 1
-    case require = 2
-}
-
-public struct CursorRequest: Sendable {
-    public let mode: CursorMode
-    public let strength: Strength
-
-    public init(mode: CursorMode, strength: Strength) {
-        self.mode = mode
-        self.strength = strength
+    public enum TransferFunction: UInt32, Sendable {
+        case srgb = 0
+        case linear = 1
+        case pq = 2
+        case hlg = 3
+        case bt709 = 4
+        case unknown = 5
     }
-}
 
-public enum HdrPolicy: UInt32, Sendable {
-    case sdr = 0
-    case preferHdr = 1
-    case requireHdr = 2
-}
-
-public enum Exhaustion: UInt32, Sendable {
-    case stall = 0
-    case dropNewest = 1
-    case copyToCpu = 2
-}
-
-public enum GpuPreference: Sendable {
-    case auto
-    case same(GpuIdentity)
-    case discrete
-    case integrated
-}
-
-public enum OrientationHandling: UInt32, Sendable {
-    case inMeta = 0
-    case upright = 1
-}
-
-public struct VideoConfig: Sendable {
-    public let formats: FormatRequest
-    public let fps: FrameRate
-    public let size: OutputSize
-    public let cursor: CursorRequest
-    public let damage: Strength
-    public let hdr: HdrPolicy
-    public let poolDepth: UInt8
-    public let exhaustion: Exhaustion
-    public let gpu: GpuPreference
-    public let orientation: OrientationHandling
-    public let exclude: [SourceId]
-    public let excludeOwnProcess: Bool
-    public let liveBuffers: Bool
-
-    public init(formats: FormatRequest, fps: FrameRate, size: OutputSize, cursor: CursorRequest, damage: Strength, hdr: HdrPolicy, poolDepth: UInt8, exhaustion: Exhaustion, gpu: GpuPreference, orientation: OrientationHandling, exclude: [SourceId], excludeOwnProcess: Bool, liveBuffers: Bool) {
-        self.formats = formats
-        self.fps = fps
-        self.size = size
-        self.cursor = cursor
-        self.damage = damage
-        self.hdr = hdr
-        self.poolDepth = poolDepth
-        self.exhaustion = exhaustion
-        self.gpu = gpu
-        self.orientation = orientation
-        self.exclude = exclude
-        self.excludeOwnProcess = excludeOwnProcess
-        self.liveBuffers = liveBuffers
+    public enum ColourRange: UInt32, Sendable {
+        case full = 0
+        case limited = 1
     }
-}
 
-public enum SampleFormat: UInt32, Sendable {
-    case s16 = 0
-    case f32 = 1
-}
+    public struct Colour: Sendable {
+        public let space: ColourSpace
+        public let transfer: TransferFunction
+        public let range: ColourRange
 
-public enum AudioSource: Sendable {
-    case system
-    case application(String)
-    case excludeSelf
-    case node(UInt32)
-}
-
-public struct AudioConfig: Sendable {
-    public let source: AudioSource
-    public let rate: UInt32?
-    public let channels: UInt8?
-    public let format: SampleFormat
-
-    public init(source: AudioSource, rate: UInt32?, channels: UInt8?, format: SampleFormat) {
-        self.source = source
-        self.rate = rate
-        self.channels = channels
-        self.format = format
+        public init(space: ColourSpace, transfer: TransferFunction, range: ColourRange) {
+            self.space = space
+            self.transfer = transfer
+            self.range = range
+        }
     }
-}
 
-public enum CompositeScale: Sendable {
-    case highestScale
-    case logical
-    case permille(UInt32)
-}
+    public struct ColourCaps: Sendable {
+        public let colours: [Colour]
+        public let hdr: Bool
 
-public enum CompositeFill: UInt32, Sendable {
-    case transparent = 0
-    case black = 1
-}
-
-public enum CompositeEngine: UInt32, Sendable {
-    case auto = 0
-    case gpu = 1
-    case cpu = 2
-}
-
-public struct CompositeConfig: Sendable {
-    public let scale: CompositeScale
-    public let fill: CompositeFill
-    public let engine: CompositeEngine
-
-    public init(scale: CompositeScale, fill: CompositeFill, engine: CompositeEngine) {
-        self.scale = scale
-        self.fill = fill
-        self.engine = engine
+        public init(colours: [Colour], hdr: Bool) {
+            self.colours = colours
+            self.hdr = hdr
+        }
     }
-}
 
-public enum PipeWireConnection: UInt32, Sendable {
-    case portalRemote = 0
-    case sessionDaemon = 1
-}
-
-public struct LinuxOptions: Sendable {
-    public let pipewire: PipeWireConnection
-
-    public init(pipewire: PipeWireConnection) {
-        self.pipewire = pipewire
+    public enum AudioSourceKind: UInt32, Sendable {
+        case system = 0
+        case application = 1
+        case excludeSelf = 2
+        case node = 3
     }
-}
 
-public enum Borderless: UInt32, Sendable {
-    case off = 0
-    case prefer = 1
-    case require = 2
-}
+    public struct AudioCaps: Sendable {
+        public let sources: [AudioSourceKind]
+        public let formats: [SampleFormat]
+        public let mayBeSilent: Bool
 
-public struct WindowsOptions: Sendable {
-    public let borderless: Borderless
-
-    public init(borderless: Borderless) {
-        self.borderless = borderless
+        public init(sources: [AudioSourceKind], formats: [SampleFormat], mayBeSilent: Bool) {
+            self.sources = sources
+            self.formats = formats
+            self.mayBeSilent = mayBeSilent
+        }
     }
-}
 
-public struct SessionConfig: Sendable {
-    public let source: SourceSelector
-    public let backend: BackendSelection
-    public let video: VideoConfig
-    public let audio: AudioConfig?
-    public let consent: ConsentConfig
-    public let composite: CompositeConfig
-    public let linux: LinuxOptions
-    public let windows: WindowsOptions
-
-    public init(source: SourceSelector, backend: BackendSelection, video: VideoConfig, audio: AudioConfig?, consent: ConsentConfig, composite: CompositeConfig, linux: LinuxOptions, windows: WindowsOptions) {
-        self.source = source
-        self.backend = backend
-        self.video = video
-        self.audio = audio
-        self.consent = consent
-        self.composite = composite
-        self.linux = linux
-        self.windows = windows
+    public enum GpuIdentity: Sendable {
+        case drm(UInt64)
+        case luid(UInt64)
+        case registryId(UInt64)
     }
-}
 
-public enum SessionUpdate: Sendable {
-    case fps(FrameRate)
-    case cursor(CursorRequest)
-    case region(RegionSelector)
-    case formats(FormatRequest)
-    case pause
-    case resume
-}
-
-public struct ScreenshotRequest: Sendable {
-    public let source: SourceSelector
-    public let backend: BackendSelection
-    public let formats: FormatRequest
-    public let cursor: CursorRequest
-    public let hdr: HdrPolicy
-    public let composite: Bool
-    public let compositeConfig: CompositeConfig
-    public let consent: ConsentConfig
-
-    public init(source: SourceSelector, backend: BackendSelection, formats: FormatRequest, cursor: CursorRequest, hdr: HdrPolicy, composite: Bool, compositeConfig: CompositeConfig, consent: ConsentConfig) {
-        self.source = source
-        self.backend = backend
-        self.formats = formats
-        self.cursor = cursor
-        self.hdr = hdr
-        self.composite = composite
-        self.compositeConfig = compositeConfig
-        self.consent = consent
+    public enum SyncKind: UInt32, Sendable {
+        case ready = 0
+        case implicit = 1
     }
-}
 
-public enum CpuPixelFormat: UInt32, Sendable {
-    case rgba8 = 0
-    case bgra8 = 1
-    case rgba16f = 2
-}
-
-public struct PixelLayout: Sendable {
-    public let format: CpuPixelFormat
-    public let upright: Bool
-    public let tight: Bool
-
-    public init(format: CpuPixelFormat, upright: Bool, tight: Bool) {
-        self.format = format
-        self.upright = upright
-        self.tight = tight
+    public enum Persistence: UInt32, Sendable {
+        case unsupported = 0
+        case token = 1
+        case systemSetting = 2
     }
-}
 
-public struct RawImage: Sendable {
-    public let width: UInt32
-    public let height: UInt32
-    public let stride: UInt32
-    public let format: CpuPixelFormat
-    public let colour: Colour
-    public let source: SourceId
-    public let bytes: Data
+    public struct PoolCaps: Sendable {
+        public let minDepth: UInt8
+        public let maxDepth: UInt8
+        public let defaultDepth: UInt8
+        public let exhaustion: [Exhaustion]
 
-    public init(width: UInt32, height: UInt32, stride: UInt32, format: CpuPixelFormat, colour: Colour, source: SourceId, bytes: Data) {
-        self.width = width
-        self.height = height
-        self.stride = stride
-        self.format = format
-        self.colour = colour
-        self.source = source
-        self.bytes = bytes
+        public init(minDepth: UInt8, maxDepth: UInt8, defaultDepth: UInt8, exhaustion: [Exhaustion]) {
+            self.minDepth = minDepth
+            self.maxDepth = maxDepth
+            self.defaultDepth = defaultDepth
+            self.exhaustion = exhaustion
+        }
     }
-}
 
-public enum PreviewSurfaceKind: UInt32, Sendable {
-    case androidSurface = 0
-    case avSampleBufferDisplayLayer = 1
-    case htmlVideoElement = 2
-}
-
-public enum PreviewFit: UInt32, Sendable {
-    case fit = 0
-    case fill = 1
-    case stretch = 2
-}
-
-public struct PreviewTarget: Sendable {
-    public let surface: NativeHandleId
-    public let kind: PreviewSurfaceKind
-    public let fit: PreviewFit
-
-    public init(surface: NativeHandleId, kind: PreviewSurfaceKind, fit: PreviewFit) {
-        self.surface = surface
-        self.kind = kind
-        self.fit = fit
+    public enum ProtectedContent: UInt32, Sendable {
+        case reported = 0
+        case maskedUndetectable = 1
+        case blank = 2
     }
-}
 
-public enum AccessScope: UInt32, Sendable {
-    case screenRecording = 0
-    case borderlessCapture = 1
-    case notifications = 2
-    case microphone = 3
-}
+    public struct WindowCaptureCaps: Sendable {
+        public let occluded: Bool
+        public let minimised: Bool
+        public let childPopups: Bool
+        public let border: Bool
 
-public struct AccessRequest: Sendable {
-    public let scope: AccessScope
-
-    public init(scope: AccessScope) {
-        self.scope = scope
+        public init(occluded: Bool, minimised: Bool, childPopups: Bool, border: Bool) {
+            self.occluded = occluded
+            self.minimised = minimised
+            self.childPopups = childPopups
+            self.border = border
+        }
     }
-}
 
-public enum ConsentModel: UInt32, Sendable {
-    case noneNeeded = 0
-    case systemSetting = 1
-    case perSessionDialog = 2
-    case pickerPerSession = 3
-    case perSessionSystemAlert = 4
-}
-
-public enum IndicatorState: Sendable {
-    case shown
-    case hidden(String)
-    case notApplicable
-}
-
-public struct AccessState: Sendable {
-    public let scope: AccessScope
-    public let status: AccessStatus
-    public let model: ConsentModel
-    public let persistence: Persistence
-    public let revocableMidSession: Bool
-    public let indicator: IndicatorState
-
-    public init(scope: AccessScope, status: AccessStatus, model: ConsentModel, persistence: Persistence, revocableMidSession: Bool, indicator: IndicatorState) {
-        self.scope = scope
-        self.status = status
-        self.model = model
-        self.persistence = persistence
-        self.revocableMidSession = revocableMidSession
-        self.indicator = indicator
+    public enum CapabilityNote: UInt32, Sendable {
+        case nvidiaImplicitSyncBestEffort = 0
+        case readyNotKnownToWait = 1
+        case liveBuffer = 2
+        case kmsBypassesCompositor = 3
+        case noDmabufFeedback = 4
+        case noGbmDevice = 5
+        case xWaylandOnly = 6
     }
-}
 
-public enum PersistMode: UInt32, Sendable {
-    case doNot = 0
-    case whileRunning = 1
-    case untilRevoked = 2
-}
+    public struct BackendCaps: Sendable {
+        public let backend: BackendId
+        public let sourceKinds: [SourceKind]
+        public let listing: SourceListing
+        public let consent: ConsentModel
+        public let video: [FormatCaps]
+        public let maxFps: UInt32?
+        public let minIntervalUs: UInt32?
+        public let maxSize: Size?
+        public let scaling: Scaling
+        public let region: RegionCrop
+        public let composite: CompositeCaps
+        public let cursor: [CursorMode]
+        public let damage: DamageSupport
+        public let orientation: OrientationSupport
+        public let colour: ColourCaps
+        public let audio: AudioCaps
+        public let producer: GpuIdentity?
+        public let sync: [SyncKind]
+        public let persistence: Persistence
+        public let concurrency: UInt32?
+        public let pool: PoolCaps
+        public let copies: [CopyStage]
+        public let protectedContent: ProtectedContent
+        public let window: WindowCaptureCaps
+        public let provenance: CapsProvenance
+        public let notes: [CapabilityNote]
 
-public struct RestoreToken: Sendable {
-    public let value: String
-    public let backend: BackendId
-    public let pluginVersion: UInt32
-
-    public init(value: String, backend: BackendId, pluginVersion: UInt32) {
-        self.value = value
-        self.backend = backend
-        self.pluginVersion = pluginVersion
+        public init(backend: BackendId, sourceKinds: [SourceKind], listing: SourceListing, consent: ConsentModel, video: [FormatCaps], maxFps: UInt32?, minIntervalUs: UInt32?, maxSize: Size?, scaling: Scaling, region: RegionCrop, composite: CompositeCaps, cursor: [CursorMode], damage: DamageSupport, orientation: OrientationSupport, colour: ColourCaps, audio: AudioCaps, producer: GpuIdentity?, sync: [SyncKind], persistence: Persistence, concurrency: UInt32?, pool: PoolCaps, copies: [CopyStage], protectedContent: ProtectedContent, window: WindowCaptureCaps, provenance: CapsProvenance, notes: [CapabilityNote]) {
+            self.backend = backend
+            self.sourceKinds = sourceKinds
+            self.listing = listing
+            self.consent = consent
+            self.video = video
+            self.maxFps = maxFps
+            self.minIntervalUs = minIntervalUs
+            self.maxSize = maxSize
+            self.scaling = scaling
+            self.region = region
+            self.composite = composite
+            self.cursor = cursor
+            self.damage = damage
+            self.orientation = orientation
+            self.colour = colour
+            self.audio = audio
+            self.producer = producer
+            self.sync = sync
+            self.persistence = persistence
+            self.concurrency = concurrency
+            self.pool = pool
+            self.copies = copies
+            self.protectedContent = protectedContent
+            self.window = window
+            self.provenance = provenance
+            self.notes = notes
+        }
     }
-}
 
-public struct ProjectionGrant: Sendable {
-    public let handle: NativeHandleId
+    public struct CapabilityReport: Sendable {
+        public let backends: [BackendCaps]
 
-    public init(handle: NativeHandleId) {
-        self.handle = handle
+        public init(backends: [BackendCaps]) {
+            self.backends = backends
+        }
     }
-}
 
-public enum ProjectionMode: UInt32, Sendable {
-    case userChoice = 0
-    case entireScreen = 1
-    case singleApp = 2
-}
-
-public struct ProjectionRequest: Sendable {
-    public let mode: ProjectionMode
-
-    public init(mode: ProjectionMode) {
-        self.mode = mode
+    public enum AutoPreference: UInt32, Sendable {
+        case zeroCopy = 0
+        case lowLatency = 1
+        case compatibility = 2
     }
-}
 
-public struct ConsentConfig: Sendable {
-    public let allowPicker: Bool
-    public let restoreToken: RestoreToken?
-    public let persist: PersistMode
-    public let grant: ProjectionGrant?
+    public struct AutoSelect: Sendable {
+        public let prefer: AutoPreference
+        public let exclude: [BackendId]
 
-    public init(allowPicker: Bool, restoreToken: RestoreToken?, persist: PersistMode, grant: ProjectionGrant?) {
-        self.allowPicker = allowPicker
-        self.restoreToken = restoreToken
-        self.persist = persist
-        self.grant = grant
+        public init(prefer: AutoPreference, exclude: [BackendId]) {
+            self.prefer = prefer
+            self.exclude = exclude
+        }
     }
-}
 
-public enum Requirement: Sendable {
-    case kind(SourceKind)
-    case windowById
-    case picker
-    case sourceSelector
-    case multiMonitor
-    case compositeStreaming
-    case previewAndFrames
-    case formats
-    case scaling
-    case cursor
-    case damage
-    case hdr
-    case exhaustionReadback
-    case gpu
-    case borderless
-    case upright
-    case audio
-    case region
-    case operation
-    case compositeSize
-}
-
-public struct Unmet: Sendable {
-    public let backend: BackendId?
-    public let requirements: [Requirement]
-
-    public init(backend: BackendId?, requirements: [Requirement]) {
-        self.backend = backend
-        self.requirements = requirements
+    public enum BackendSelection: Sendable {
+        case auto(AutoSelect)
+        case fixed(BackendId)
+        case ordered([BackendId])
     }
-}
 
-public enum AttemptFailure: Sendable {
-    case unavailable(Availability)
-    case unsatisfiable([Requirement])
-    case failed(String)
-}
+    public struct FormatChoice: Sendable {
+        public let format: PixelFormat
+        public let memory: BufferMemory
+        public let modifiers: [UInt64]
 
-public struct BackendAttempt: Sendable {
-    public let backend: BackendId
-    public let failure: AttemptFailure
-
-    public init(backend: BackendId, failure: AttemptFailure) {
-        self.backend = backend
-        self.failure = failure
+        public init(format: PixelFormat, memory: BufferMemory, modifiers: [UInt64]) {
+            self.format = format
+            self.memory = memory
+            self.modifiers = modifiers
+        }
     }
-}
 
-public struct BackendReason: Sendable {
-    public let backend: BackendId
-    public let availability: Availability
+    public struct FormatTier: Sendable {
+        public let choices: [FormatChoice]
+        public let allowsCopy: [CopyStage]
 
-    public init(backend: BackendId, availability: Availability) {
-        self.backend = backend
-        self.availability = availability
+        public init(choices: [FormatChoice], allowsCopy: [CopyStage]) {
+            self.choices = choices
+            self.allowsCopy = allowsCopy
+        }
     }
-}
 
-public struct BackendDetail: Sendable {
-    public let backend: BackendId?
-    public let step: String
-    public let message: String
+    public struct FormatRequest: Sendable {
+        public let tiers: [FormatTier]
 
-    public init(backend: BackendId?, step: String, message: String) {
-        self.backend = backend
-        self.step = step
-        self.message = message
+        public init(tiers: [FormatTier]) {
+            self.tiers = tiers
+        }
     }
-}
 
-public struct OsFailure: Sendable {
-    public let backend: BackendId
-    public let operation: String
-    public let code: Int64
-
-    public init(backend: BackendId, operation: String, code: Int64) {
-        self.backend = backend
-        self.operation = operation
-        self.code = code
+    public enum FrameRate: Sendable {
+        case native
+        case max(UInt32)
+        case exact(UInt32)
+        case onDamage(UInt32)
     }
-}
 
-public enum CaptureError: Error {
-    case noBackendCompiled
-    case backendNotCompiled(BackendId)
-    case backendUnavailable(BackendReason)
-    case unsatisfiable(Unmet)
-    case noBackend([BackendAttempt])
-    case sourceNotFound(SourceId)
-    case sourceLost
-    case consentRequired
-    case consentDenied
-    case consentRevoked
-    case accessRequiresRestart
-    case osTooOld(OsVersion)
-    case originRefused
-    case policyDenied(String)
-    case sinkUnreachable
-    case sessionNotFound
-    case grantExpired
-    case formatLost
-    case `protocol`(BackendDetail)
-    case os(OsFailure)
-    case sinkFull
-}
-
-public enum PtsClock: UInt32, Sendable {
-    case monotonic = 0
-    case qpc = 1
-    case machContinuous = 2
-    case hostTime = 3
-    case performance = 4
-}
-
-public struct PlaneLayout: Sendable {
-    public let offset: UInt32
-    public let stride: UInt32
-    public let size: UInt64
-
-    public init(offset: UInt32, stride: UInt32, size: UInt64) {
-        self.offset = offset
-        self.stride = stride
-        self.size = size
+    public enum OutputSize: Sendable {
+        case native
+        case scaled(Size)
+        case fit(Size)
     }
-}
 
-public struct BufferIdentity: Sendable {
-    public let poolGeneration: UInt64
-    public let slot: UInt32
-
-    public init(poolGeneration: UInt64, slot: UInt32) {
-        self.poolGeneration = poolGeneration
-        self.slot = slot
+    public enum CursorMode: UInt32, Sendable {
+        case hidden = 0
+        case embedded = 1
+        case metadata = 2
     }
-}
 
-public enum Damage: Sendable {
-    case full
-    case rects([Rect])
-    case unchanged
-}
-
-public struct CursorState: Sendable {
-    public let position: Point
-    public let hotspot: Point
-    public let visible: Bool
-
-    public init(position: Point, hotspot: Point, visible: Bool) {
-        self.position = position
-        self.hotspot = hotspot
-        self.visible = visible
+    public enum Strength: UInt32, Sendable {
+        case ignore = 0
+        case prefer = 1
+        case require = 2
     }
-}
 
-public struct CompositePart: Sendable {
-    public let source: SourceId
-    public let rect: Rect
-    public let ptsNs: UInt64
-    public let scalePermille: UInt32
+    public struct CursorRequest: Sendable {
+        public let mode: CursorMode
+        public let strength: Strength
 
-    public init(source: SourceId, rect: Rect, ptsNs: UInt64, scalePermille: UInt32) {
-        self.source = source
-        self.rect = rect
-        self.ptsNs = ptsNs
-        self.scalePermille = scalePermille
+        public init(mode: CursorMode, strength: Strength) {
+            self.mode = mode
+            self.strength = strength
+        }
     }
-}
 
-public struct CompositeInfo: Sendable {
-    public let parts: [CompositePart]
-    public let skewNs: UInt64
-
-    public init(parts: [CompositePart], skewNs: UInt64) {
-        self.parts = parts
-        self.skewNs = skewNs
+    public enum HdrPolicy: UInt32, Sendable {
+        case sdr = 0
+        case preferHdr = 1
+        case requireHdr = 2
     }
-}
 
-public struct HdrMetadata: Sendable {
-    public let maxLuminanceNits: UInt32
-    public let minLuminance: UInt32
-    public let maxCll: UInt32
-    public let maxFall: UInt32
-
-    public init(maxLuminanceNits: UInt32, minLuminance: UInt32, maxCll: UInt32, maxFall: UInt32) {
-        self.maxLuminanceNits = maxLuminanceNits
-        self.minLuminance = minLuminance
-        self.maxCll = maxCll
-        self.maxFall = maxFall
+    public enum Exhaustion: UInt32, Sendable {
+        case stall = 0
+        case dropNewest = 1
+        case copyToCpu = 2
     }
-}
 
-public struct FrameMeta: Sendable {
-    public let seq: UInt64
-    public let ptsNs: UInt64
-    public let ptsClock: PtsClock
-    public let wallUs: UInt64
-    public let size: Size
-    public let contentRect: Rect
-    public let format: PixelFormat
-    public let memory: BufferMemory
-    public let planes: [PlaneLayout]
-    public let modifier: UInt64?
-    public let buffer: BufferIdentity
-    public let tier: UInt8
-    public let copied: CopyStage?
-    public let producer: GpuIdentity?
-    public let colour: Colour
-    public let hdr: HdrMetadata?
-    public let orientation: Orientation
-    public let damage: Damage
-    public let cursor: CursorState?
-    public let sync: SyncKind
-    public let scalePermille: UInt32
-    public let sourceId: SourceId
-    public let `repeat`: Bool
-    public let skippedBefore: UInt32
-    public let protectedContent: Bool
-    public let composite: CompositeInfo?
-
-    public init(seq: UInt64, ptsNs: UInt64, ptsClock: PtsClock, wallUs: UInt64, size: Size, contentRect: Rect, format: PixelFormat, memory: BufferMemory, planes: [PlaneLayout], modifier: UInt64?, buffer: BufferIdentity, tier: UInt8, copied: CopyStage?, producer: GpuIdentity?, colour: Colour, hdr: HdrMetadata?, orientation: Orientation, damage: Damage, cursor: CursorState?, sync: SyncKind, scalePermille: UInt32, sourceId: SourceId, `repeat`: Bool, skippedBefore: UInt32, protectedContent: Bool, composite: CompositeInfo?) {
-        self.seq = seq
-        self.ptsNs = ptsNs
-        self.ptsClock = ptsClock
-        self.wallUs = wallUs
-        self.size = size
-        self.contentRect = contentRect
-        self.format = format
-        self.memory = memory
-        self.planes = planes
-        self.modifier = modifier
-        self.buffer = buffer
-        self.tier = tier
-        self.copied = copied
-        self.producer = producer
-        self.colour = colour
-        self.hdr = hdr
-        self.orientation = orientation
-        self.damage = damage
-        self.cursor = cursor
-        self.sync = sync
-        self.scalePermille = scalePermille
-        self.sourceId = sourceId
-        self.`repeat` = `repeat`
-        self.skippedBefore = skippedBefore
-        self.protectedContent = protectedContent
-        self.composite = composite
+    public enum GpuPreference: Sendable {
+        case auto
+        case same(GpuIdentity)
+        case discrete
+        case integrated
     }
-}
 
-public struct AudioMeta: Sendable {
-    public let seq: UInt64
-    public let ptsNs: UInt64
-    public let wallUs: UInt64
-    public let rate: UInt32
-    public let channels: UInt8
-    public let format: SampleFormat
-    public let frames: UInt32
-    public let discontinuity: Bool
-
-    public init(seq: UInt64, ptsNs: UInt64, wallUs: UInt64, rate: UInt32, channels: UInt8, format: SampleFormat, frames: UInt32, discontinuity: Bool) {
-        self.seq = seq
-        self.ptsNs = ptsNs
-        self.wallUs = wallUs
-        self.rate = rate
-        self.channels = channels
-        self.format = format
-        self.frames = frames
-        self.discontinuity = discontinuity
+    public enum OrientationHandling: UInt32, Sendable {
+        case inMeta = 0
+        case upright = 1
     }
-}
 
-public struct AudioNegotiated: Sendable {
-    public let source: AudioSource
-    public let rate: UInt32
-    public let channels: UInt8
-    public let format: SampleFormat
+    public struct VideoConfig: Sendable {
+        public let formats: FormatRequest
+        public let fps: FrameRate
+        public let size: OutputSize
+        public let cursor: CursorRequest
+        public let damage: Strength
+        public let hdr: HdrPolicy
+        public let poolDepth: UInt8
+        public let exhaustion: Exhaustion
+        public let gpu: GpuPreference
+        public let orientation: OrientationHandling
+        public let exclude: [SourceId]
+        public let excludeOwnProcess: Bool
+        public let liveBuffers: Bool
 
-    public init(source: AudioSource, rate: UInt32, channels: UInt8, format: SampleFormat) {
-        self.source = source
-        self.rate = rate
-        self.channels = channels
-        self.format = format
+        public init(formats: FormatRequest, fps: FrameRate, size: OutputSize, cursor: CursorRequest, damage: Strength, hdr: HdrPolicy, poolDepth: UInt8, exhaustion: Exhaustion, gpu: GpuPreference, orientation: OrientationHandling, exclude: [SourceId], excludeOwnProcess: Bool, liveBuffers: Bool) {
+            self.formats = formats
+            self.fps = fps
+            self.size = size
+            self.cursor = cursor
+            self.damage = damage
+            self.hdr = hdr
+            self.poolDepth = poolDepth
+            self.exhaustion = exhaustion
+            self.gpu = gpu
+            self.orientation = orientation
+            self.exclude = exclude
+            self.excludeOwnProcess = excludeOwnProcess
+            self.liveBuffers = liveBuffers
+        }
     }
-}
 
-public enum BorderState: UInt32, Sendable {
-    case shown = 0
-    case hidden = 1
-    case notApplicable = 2
-}
-
-public struct NegotiatedStream: Sendable {
-    public let backend: BackendId
-    public let source: Source
-    public let size: Size
-    public let contentRect: Rect
-    public let format: PixelFormat
-    public let memory: BufferMemory
-    public let modifier: UInt64?
-    public let tier: UInt8
-    public let copies: [CopyStage]
-    public let fps: FrameRate
-    public let sourceRateMhz: UInt32?
-    public let producer: GpuIdentity?
-    public let sync: SyncKind
-    public let poolDepth: UInt8
-    public let exhaustion: Exhaustion
-    public let orientation: OrientationSupport
-    public let crop: RegionCrop
-    public let damage: DamageSupport
-    public let cursor: CursorMode
-    public let colour: Colour
-    public let hdr: Bool
-    public let composite: CompositeInfo?
-    public let consent: ConsentModel
-    public let indicator: IndicatorState
-    public let border: BorderState
-    public let restoreToken: RestoreToken?
-    public let restored: Bool
-    public let audio: AudioNegotiated?
-
-    public init(backend: BackendId, source: Source, size: Size, contentRect: Rect, format: PixelFormat, memory: BufferMemory, modifier: UInt64?, tier: UInt8, copies: [CopyStage], fps: FrameRate, sourceRateMhz: UInt32?, producer: GpuIdentity?, sync: SyncKind, poolDepth: UInt8, exhaustion: Exhaustion, orientation: OrientationSupport, crop: RegionCrop, damage: DamageSupport, cursor: CursorMode, colour: Colour, hdr: Bool, composite: CompositeInfo?, consent: ConsentModel, indicator: IndicatorState, border: BorderState, restoreToken: RestoreToken?, restored: Bool, audio: AudioNegotiated?) {
-        self.backend = backend
-        self.source = source
-        self.size = size
-        self.contentRect = contentRect
-        self.format = format
-        self.memory = memory
-        self.modifier = modifier
-        self.tier = tier
-        self.copies = copies
-        self.fps = fps
-        self.sourceRateMhz = sourceRateMhz
-        self.producer = producer
-        self.sync = sync
-        self.poolDepth = poolDepth
-        self.exhaustion = exhaustion
-        self.orientation = orientation
-        self.crop = crop
-        self.damage = damage
-        self.cursor = cursor
-        self.colour = colour
-        self.hdr = hdr
-        self.composite = composite
-        self.consent = consent
-        self.indicator = indicator
-        self.border = border
-        self.restoreToken = restoreToken
-        self.restored = restored
-        self.audio = audio
+    public enum SampleFormat: UInt32, Sendable {
+        case s16 = 0
+        case f32 = 1
     }
-}
 
-public struct ScreenshotInfo: Sendable {
-    public let frames: UInt32
-    public let backend: BackendId
-    public let negotiated: NegotiatedStream
-
-    public init(frames: UInt32, backend: BackendId, negotiated: NegotiatedStream) {
-        self.frames = frames
-        self.backend = backend
-        self.negotiated = negotiated
+    public enum AudioSource: Sendable {
+        case system
+        case application(String)
+        case excludeSelf
+        case node(UInt32)
     }
-}
 
-public struct CaptureSession: Sendable {
-    public let session: NativeHandleId
-    public let negotiated: NegotiatedStream
+    public struct AudioConfig: Sendable {
+        public let source: AudioSource
+        public let rate: UInt32?
+        public let channels: UInt8?
+        public let format: SampleFormat
 
-    public init(session: NativeHandleId, negotiated: NegotiatedStream) {
-        self.session = session
-        self.negotiated = negotiated
+        public init(source: AudioSource, rate: UInt32?, channels: UInt8?, format: SampleFormat) {
+            self.source = source
+            self.rate = rate
+            self.channels = channels
+            self.format = format
+        }
     }
-}
 
-public enum DowngradeReason: UInt32, Sendable {
-    case importRejected = 0
-    case allocationFailed = 1
-    case modifierUnreadable = 2
-    case producerChanged = 3
-    case poolChanged = 4
-}
-
-public struct Downgrade: Sendable {
-    public let fromTier: UInt8
-    public let toTier: UInt8
-    public let reason: DowngradeReason
-
-    public init(fromTier: UInt8, toTier: UInt8, reason: DowngradeReason) {
-        self.fromTier = fromTier
-        self.toTier = toTier
-        self.reason = reason
+    public enum CompositeScale: Sendable {
+        case highestScale
+        case logical
+        case permille(UInt32)
     }
-}
 
-public enum PauseReason: UInt32, Sendable {
-    case backgrounded = 0
-    case secureDesktop = 1
-    case systemPaused = 2
-    case requested = 3
-}
-
-public struct ExhaustionReport: Sendable {
-    public let episode: UInt32
-    public let poolDepth: UInt8
-    public let policy: Exhaustion
-
-    public init(episode: UInt32, poolDepth: UInt8, policy: Exhaustion) {
-        self.episode = episode
-        self.poolDepth = poolDepth
-        self.policy = policy
+    public enum CompositeFill: UInt32, Sendable {
+        case transparent = 0
+        case black = 1
     }
-}
 
-public enum StopReason: UInt32, Sendable {
-    case closed = 0
-    case consentRevoked = 1
-    case sourceLost = 2
-    case failed = 3
-    case shutdown = 4
-}
-
-public enum CaptureEvent: Sendable {
-    case started(NegotiatedStream)
-    case renegotiated(NegotiatedStream)
-    case downgraded(Downgrade)
-    case sourceResized(Size)
-    case sourceHidden
-    case sourceVisible
-    case paused(PauseReason)
-    case resumed
-    case exhausted(ExhaustionReport)
-    case consentRevoked
-    case sourceLost
-    case failed(CaptureError)
-    case stopped(StopReason)
-}
-
-public enum BackendId: UInt32, Sendable {
-    case linuxPortal = 0
-    case linuxExtImageCopy = 1
-    case linuxWlrScreencopy = 2
-    case linuxX11 = 3
-    case linuxKms = 4
-    case windowsWgc = 5
-    case windowsDxgi = 6
-    case windowsGdi = 7
-    case macosSck = 8
-    case iosSck = 9
-    case iosReplayKit = 10
-    case androidProjection = 11
-    case web = 12
-}
-
-public enum SourceKind: UInt32, Sendable {
-    case monitor = 0
-    case window = 1
-    case application = 2
-}
-
-public struct SourceId: Sendable {
-    public let backend: BackendId
-    public let value: String
-
-    public init(backend: BackendId, value: String) {
-        self.backend = backend
-        self.value = value
+    public enum CompositeEngine: UInt32, Sendable {
+        case auto = 0
+        case gpu = 1
+        case cpu = 2
     }
-}
 
-public struct Point: Sendable {
-    public let x: Int32
-    public let y: Int32
+    public struct CompositeConfig: Sendable {
+        public let scale: CompositeScale
+        public let fill: CompositeFill
+        public let engine: CompositeEngine
 
-    public init(x: Int32, y: Int32) {
-        self.x = x
-        self.y = y
+        public init(scale: CompositeScale, fill: CompositeFill, engine: CompositeEngine) {
+            self.scale = scale
+            self.fill = fill
+            self.engine = engine
+        }
     }
-}
 
-public struct Size: Sendable {
-    public let width: UInt32
-    public let height: UInt32
-
-    public init(width: UInt32, height: UInt32) {
-        self.width = width
-        self.height = height
+    public enum PipeWireConnection: UInt32, Sendable {
+        case portalRemote = 0
+        case sessionDaemon = 1
     }
-}
 
-public struct Rect: Sendable {
-    public let x: Int32
-    public let y: Int32
-    public let width: UInt32
-    public let height: UInt32
+    public struct LinuxOptions: Sendable {
+        public let pipewire: PipeWireConnection
 
-    public init(x: Int32, y: Int32, width: UInt32, height: UInt32) {
-        self.x = x
-        self.y = y
-        self.width = width
-        self.height = height
+        public init(pipewire: PipeWireConnection) {
+            self.pipewire = pipewire
+        }
     }
-}
 
-public enum Rotation: UInt32, Sendable {
-    case r0 = 0
-    case r90 = 1
-    case r180 = 2
-    case r270 = 3
-}
-
-public struct Orientation: Sendable {
-    public let mirrored: Bool
-    public let rotation: Rotation
-
-    public init(mirrored: Bool, rotation: Rotation) {
-        self.mirrored = mirrored
-        self.rotation = rotation
+    public enum Borderless: UInt32, Sendable {
+        case off = 0
+        case prefer = 1
+        case require = 2
     }
-}
 
-public struct SourceFlags: Sendable {
-    public let primary: Bool
-    public let minimised: Bool
-    public let occluded: Bool
-    public let protected: Bool
-    public let ownProcess: Bool
+    public struct WindowsOptions: Sendable {
+        public let borderless: Borderless
 
-    public init(primary: Bool, minimised: Bool, occluded: Bool, protected: Bool, ownProcess: Bool) {
-        self.primary = primary
-        self.minimised = minimised
-        self.occluded = occluded
-        self.protected = protected
-        self.ownProcess = ownProcess
+        public init(borderless: Borderless) {
+            self.borderless = borderless
+        }
     }
-}
 
-public struct Source: Sendable {
-    public let id: SourceId
-    public let kind: SourceKind
-    public let name: String
-    public let appId: String?
-    public let pid: UInt32?
-    public let geometry: Rect?
-    public let physicalSize: Size?
-    public let scalePermille: UInt32?
-    public let refreshMhz: UInt32?
-    public let orientation: Orientation
-    public let flags: SourceFlags
+    public struct SessionConfig: Sendable {
+        public let source: SourceSelector
+        public let backend: BackendSelection
+        public let video: VideoConfig
+        public let audio: AudioConfig?
+        public let consent: ConsentConfig
+        public let composite: CompositeConfig
+        public let linux: LinuxOptions
+        public let windows: WindowsOptions
 
-    public init(id: SourceId, kind: SourceKind, name: String, appId: String?, pid: UInt32?, geometry: Rect?, physicalSize: Size?, scalePermille: UInt32?, refreshMhz: UInt32?, orientation: Orientation, flags: SourceFlags) {
-        self.id = id
-        self.kind = kind
-        self.name = name
-        self.appId = appId
-        self.pid = pid
-        self.geometry = geometry
-        self.physicalSize = physicalSize
-        self.scalePermille = scalePermille
-        self.refreshMhz = refreshMhz
-        self.orientation = orientation
-        self.flags = flags
+        public init(source: SourceSelector, backend: BackendSelection, video: VideoConfig, audio: AudioConfig?, consent: ConsentConfig, composite: CompositeConfig, linux: LinuxOptions, windows: WindowsOptions) {
+            self.source = source
+            self.backend = backend
+            self.video = video
+            self.audio = audio
+            self.consent = consent
+            self.composite = composite
+            self.linux = linux
+            self.windows = windows
+        }
     }
-}
 
-public enum RegionSpace: Sendable {
-    case global
-    case monitorRelative(SourceId)
-}
-
-public struct RegionSelector: Sendable {
-    public let rect: Rect
-    public let space: RegionSpace
-
-    public init(rect: Rect, space: RegionSpace) {
-        self.rect = rect
-        self.space = space
+    public enum SessionUpdate: Sendable {
+        case fps(FrameRate)
+        case cursor(CursorRequest)
+        case region(RegionSelector)
+        case formats(FormatRequest)
+        case pause
+        case resume
     }
-}
 
-public struct PickerOptions: Sendable {
-    public let kinds: [SourceKind]
-    public let multiple: Bool
+    public struct ScreenshotRequest: Sendable {
+        public let source: SourceSelector
+        public let backend: BackendSelection
+        public let formats: FormatRequest
+        public let cursor: CursorRequest
+        public let hdr: HdrPolicy
+        public let composite: Bool
+        public let compositeConfig: CompositeConfig
+        public let consent: ConsentConfig
 
-    public init(kinds: [SourceKind], multiple: Bool) {
-        self.kinds = kinds
-        self.multiple = multiple
+        public init(source: SourceSelector, backend: BackendSelection, formats: FormatRequest, cursor: CursorRequest, hdr: HdrPolicy, composite: Bool, compositeConfig: CompositeConfig, consent: ConsentConfig) {
+            self.source = source
+            self.backend = backend
+            self.formats = formats
+            self.cursor = cursor
+            self.hdr = hdr
+            self.composite = composite
+            self.compositeConfig = compositeConfig
+            self.consent = consent
+        }
     }
-}
 
-public enum SourceSelector: Sendable {
-    case id(SourceId)
-    case region(RegionSelector)
-    case picker(PickerOptions)
-    case primaryMonitor
-    case allMonitors
-    case monitors([SourceId])
-    case focused
-    case underCursor
-}
-
-public enum SourceListing: UInt32, Sendable {
-    case enumerable = 0
-    case afterGrant = 1
-    case pickerOnly = 2
-}
-
-public struct SourceList: Sendable {
-    public let sources: [Source]
-    public let listing: SourceListing
-
-    public init(sources: [Source], listing: SourceListing) {
-        self.sources = sources
-        self.listing = listing
+    public enum CpuPixelFormat: UInt32, Sendable {
+        case rgba8 = 0
+        case bgra8 = 1
+        case rgba16f = 2
     }
-}
 
-public struct SourceFilter: Sendable {
-    public let kinds: [SourceKind]
-    public let backend: BackendId?
+    public struct PixelLayout: Sendable {
+        public let format: CpuPixelFormat
+        public let upright: Bool
+        public let tight: Bool
 
-    public init(kinds: [SourceKind], backend: BackendId?) {
-        self.kinds = kinds
-        self.backend = backend
+        public init(format: CpuPixelFormat, upright: Bool, tight: Bool) {
+            self.format = format
+            self.upright = upright
+            self.tight = tight
+        }
+    }
+
+    public struct RawImage: Sendable {
+        public let width: UInt32
+        public let height: UInt32
+        public let stride: UInt32
+        public let format: CpuPixelFormat
+        public let colour: Colour
+        public let source: SourceId
+        public let bytes: Data
+
+        public init(width: UInt32, height: UInt32, stride: UInt32, format: CpuPixelFormat, colour: Colour, source: SourceId, bytes: Data) {
+            self.width = width
+            self.height = height
+            self.stride = stride
+            self.format = format
+            self.colour = colour
+            self.source = source
+            self.bytes = bytes
+        }
+    }
+
+    public enum PreviewSurfaceKind: UInt32, Sendable {
+        case androidSurface = 0
+        case avSampleBufferDisplayLayer = 1
+        case htmlVideoElement = 2
+    }
+
+    public enum PreviewFit: UInt32, Sendable {
+        case fit = 0
+        case fill = 1
+        case stretch = 2
+    }
+
+    public struct PreviewTarget: Sendable {
+        public let surface: NativeHandleId
+        public let kind: PreviewSurfaceKind
+        public let fit: PreviewFit
+
+        public init(surface: NativeHandleId, kind: PreviewSurfaceKind, fit: PreviewFit) {
+            self.surface = surface
+            self.kind = kind
+            self.fit = fit
+        }
+    }
+
+    public enum AccessScope: UInt32, Sendable {
+        case screenRecording = 0
+        case borderlessCapture = 1
+        case notifications = 2
+        case microphone = 3
+    }
+
+    public struct AccessRequest: Sendable {
+        public let scope: AccessScope
+
+        public init(scope: AccessScope) {
+            self.scope = scope
+        }
+    }
+
+    public enum ConsentModel: UInt32, Sendable {
+        case noneNeeded = 0
+        case systemSetting = 1
+        case perSessionDialog = 2
+        case pickerPerSession = 3
+        case perSessionSystemAlert = 4
+    }
+
+    public enum IndicatorState: Sendable {
+        case shown
+        case hidden(String)
+        case notApplicable
+    }
+
+    public struct AccessState: Sendable {
+        public let scope: AccessScope
+        public let status: IstmoMedia.AccessStatus
+        public let model: ConsentModel
+        public let persistence: Persistence
+        public let revocableMidSession: Bool
+        public let indicator: IndicatorState
+
+        public init(scope: AccessScope, status: IstmoMedia.AccessStatus, model: ConsentModel, persistence: Persistence, revocableMidSession: Bool, indicator: IndicatorState) {
+            self.scope = scope
+            self.status = status
+            self.model = model
+            self.persistence = persistence
+            self.revocableMidSession = revocableMidSession
+            self.indicator = indicator
+        }
+    }
+
+    public enum PersistMode: UInt32, Sendable {
+        case doNot = 0
+        case whileRunning = 1
+        case untilRevoked = 2
+    }
+
+    public struct RestoreToken: Sendable {
+        public let value: String
+        public let backend: BackendId
+        public let pluginVersion: UInt32
+
+        public init(value: String, backend: BackendId, pluginVersion: UInt32) {
+            self.value = value
+            self.backend = backend
+            self.pluginVersion = pluginVersion
+        }
+    }
+
+    public struct ProjectionGrant: Sendable {
+        public let handle: NativeHandleId
+
+        public init(handle: NativeHandleId) {
+            self.handle = handle
+        }
+    }
+
+    public enum ProjectionMode: UInt32, Sendable {
+        case userChoice = 0
+        case entireScreen = 1
+        case singleApp = 2
+    }
+
+    public struct ProjectionRequest: Sendable {
+        public let mode: ProjectionMode
+
+        public init(mode: ProjectionMode) {
+            self.mode = mode
+        }
+    }
+
+    public struct ConsentConfig: Sendable {
+        public let allowPicker: Bool
+        public let restoreToken: RestoreToken?
+        public let persist: PersistMode
+        public let grant: ProjectionGrant?
+
+        public init(allowPicker: Bool, restoreToken: RestoreToken?, persist: PersistMode, grant: ProjectionGrant?) {
+            self.allowPicker = allowPicker
+            self.restoreToken = restoreToken
+            self.persist = persist
+            self.grant = grant
+        }
+    }
+
+    public enum Requirement: Sendable {
+        case kind(SourceKind)
+        case windowById
+        case picker
+        case sourceSelector
+        case multiMonitor
+        case compositeStreaming
+        case previewAndFrames
+        case formats
+        case scaling
+        case cursor
+        case damage
+        case hdr
+        case exhaustionReadback
+        case gpu
+        case borderless
+        case upright
+        case audio
+        case region
+        case operation
+        case compositeSize
+    }
+
+    public struct Unmet: Sendable {
+        public let backend: BackendId?
+        public let requirements: [Requirement]
+
+        public init(backend: BackendId?, requirements: [Requirement]) {
+            self.backend = backend
+            self.requirements = requirements
+        }
+    }
+
+    public enum AttemptFailure: Sendable {
+        case unavailable(Availability)
+        case unsatisfiable([Requirement])
+        case failed(String)
+    }
+
+    public struct BackendAttempt: Sendable {
+        public let backend: BackendId
+        public let failure: AttemptFailure
+
+        public init(backend: BackendId, failure: AttemptFailure) {
+            self.backend = backend
+            self.failure = failure
+        }
+    }
+
+    public struct BackendReason: Sendable {
+        public let backend: BackendId
+        public let availability: Availability
+
+        public init(backend: BackendId, availability: Availability) {
+            self.backend = backend
+            self.availability = availability
+        }
+    }
+
+    public struct BackendDetail: Sendable {
+        public let backend: BackendId?
+        public let step: String
+        public let message: String
+
+        public init(backend: BackendId?, step: String, message: String) {
+            self.backend = backend
+            self.step = step
+            self.message = message
+        }
+    }
+
+    public struct OsFailure: Sendable {
+        public let backend: BackendId
+        public let operation: String
+        public let code: Int64
+
+        public init(backend: BackendId, operation: String, code: Int64) {
+            self.backend = backend
+            self.operation = operation
+            self.code = code
+        }
+    }
+
+    public enum CaptureError: Error {
+        case noBackendCompiled
+        case backendNotCompiled(BackendId)
+        case backendUnavailable(BackendReason)
+        case unsatisfiable(Unmet)
+        case noBackend([BackendAttempt])
+        case sourceNotFound(SourceId)
+        case sourceLost
+        case consentRequired
+        case consentDenied
+        case consentRevoked
+        case accessRequiresRestart
+        case osTooOld(OsVersion)
+        case originRefused
+        case policyDenied(String)
+        case sinkUnreachable
+        case sessionNotFound
+        case grantExpired
+        case formatLost
+        case `protocol`(BackendDetail)
+        case os(OsFailure)
+        case sinkFull
+    }
+
+    public enum PtsClock: UInt32, Sendable {
+        case monotonic = 0
+        case qpc = 1
+        case machContinuous = 2
+        case hostTime = 3
+        case performance = 4
+    }
+
+    public struct PlaneLayout: Sendable {
+        public let offset: UInt32
+        public let stride: UInt32
+        public let size: UInt64
+
+        public init(offset: UInt32, stride: UInt32, size: UInt64) {
+            self.offset = offset
+            self.stride = stride
+            self.size = size
+        }
+    }
+
+    public struct BufferIdentity: Sendable {
+        public let poolGeneration: UInt64
+        public let slot: UInt32
+
+        public init(poolGeneration: UInt64, slot: UInt32) {
+            self.poolGeneration = poolGeneration
+            self.slot = slot
+        }
+    }
+
+    public enum Damage: Sendable {
+        case full
+        case rects([Rect])
+        case unchanged
+    }
+
+    public struct CursorState: Sendable {
+        public let position: Point
+        public let hotspot: Point
+        public let visible: Bool
+
+        public init(position: Point, hotspot: Point, visible: Bool) {
+            self.position = position
+            self.hotspot = hotspot
+            self.visible = visible
+        }
+    }
+
+    public struct CompositePart: Sendable {
+        public let source: SourceId
+        public let rect: Rect
+        public let ptsNs: UInt64
+        public let scalePermille: UInt32
+
+        public init(source: SourceId, rect: Rect, ptsNs: UInt64, scalePermille: UInt32) {
+            self.source = source
+            self.rect = rect
+            self.ptsNs = ptsNs
+            self.scalePermille = scalePermille
+        }
+    }
+
+    public struct CompositeInfo: Sendable {
+        public let parts: [CompositePart]
+        public let skewNs: UInt64
+
+        public init(parts: [CompositePart], skewNs: UInt64) {
+            self.parts = parts
+            self.skewNs = skewNs
+        }
+    }
+
+    public struct HdrMetadata: Sendable {
+        public let maxLuminanceNits: UInt32
+        public let minLuminance: UInt32
+        public let maxCll: UInt32
+        public let maxFall: UInt32
+
+        public init(maxLuminanceNits: UInt32, minLuminance: UInt32, maxCll: UInt32, maxFall: UInt32) {
+            self.maxLuminanceNits = maxLuminanceNits
+            self.minLuminance = minLuminance
+            self.maxCll = maxCll
+            self.maxFall = maxFall
+        }
+    }
+
+    public struct FrameMeta: Sendable {
+        public let seq: UInt64
+        public let ptsNs: UInt64
+        public let ptsClock: PtsClock
+        public let wallUs: UInt64
+        public let size: Size
+        public let contentRect: Rect
+        public let format: PixelFormat
+        public let memory: BufferMemory
+        public let planes: [PlaneLayout]
+        public let modifier: UInt64?
+        public let buffer: BufferIdentity
+        public let tier: UInt8
+        public let copied: CopyStage?
+        public let producer: GpuIdentity?
+        public let colour: Colour
+        public let hdr: HdrMetadata?
+        public let orientation: Orientation
+        public let damage: Damage
+        public let cursor: CursorState?
+        public let sync: SyncKind
+        public let scalePermille: UInt32
+        public let sourceId: SourceId
+        public let `repeat`: Bool
+        public let skippedBefore: UInt32
+        public let protectedContent: Bool
+        public let composite: CompositeInfo?
+
+        public init(seq: UInt64, ptsNs: UInt64, ptsClock: PtsClock, wallUs: UInt64, size: Size, contentRect: Rect, format: PixelFormat, memory: BufferMemory, planes: [PlaneLayout], modifier: UInt64?, buffer: BufferIdentity, tier: UInt8, copied: CopyStage?, producer: GpuIdentity?, colour: Colour, hdr: HdrMetadata?, orientation: Orientation, damage: Damage, cursor: CursorState?, sync: SyncKind, scalePermille: UInt32, sourceId: SourceId, `repeat`: Bool, skippedBefore: UInt32, protectedContent: Bool, composite: CompositeInfo?) {
+            self.seq = seq
+            self.ptsNs = ptsNs
+            self.ptsClock = ptsClock
+            self.wallUs = wallUs
+            self.size = size
+            self.contentRect = contentRect
+            self.format = format
+            self.memory = memory
+            self.planes = planes
+            self.modifier = modifier
+            self.buffer = buffer
+            self.tier = tier
+            self.copied = copied
+            self.producer = producer
+            self.colour = colour
+            self.hdr = hdr
+            self.orientation = orientation
+            self.damage = damage
+            self.cursor = cursor
+            self.sync = sync
+            self.scalePermille = scalePermille
+            self.sourceId = sourceId
+            self.`repeat` = `repeat`
+            self.skippedBefore = skippedBefore
+            self.protectedContent = protectedContent
+            self.composite = composite
+        }
+    }
+
+    public struct AudioMeta: Sendable {
+        public let seq: UInt64
+        public let ptsNs: UInt64
+        public let wallUs: UInt64
+        public let rate: UInt32
+        public let channels: UInt8
+        public let format: SampleFormat
+        public let frames: UInt32
+        public let discontinuity: Bool
+
+        public init(seq: UInt64, ptsNs: UInt64, wallUs: UInt64, rate: UInt32, channels: UInt8, format: SampleFormat, frames: UInt32, discontinuity: Bool) {
+            self.seq = seq
+            self.ptsNs = ptsNs
+            self.wallUs = wallUs
+            self.rate = rate
+            self.channels = channels
+            self.format = format
+            self.frames = frames
+            self.discontinuity = discontinuity
+        }
+    }
+
+    public struct AudioNegotiated: Sendable {
+        public let source: AudioSource
+        public let rate: UInt32
+        public let channels: UInt8
+        public let format: SampleFormat
+
+        public init(source: AudioSource, rate: UInt32, channels: UInt8, format: SampleFormat) {
+            self.source = source
+            self.rate = rate
+            self.channels = channels
+            self.format = format
+        }
+    }
+
+    public enum BorderState: UInt32, Sendable {
+        case shown = 0
+        case hidden = 1
+        case notApplicable = 2
+    }
+
+    public struct NegotiatedStream: Sendable {
+        public let backend: BackendId
+        public let source: Source
+        public let size: Size
+        public let contentRect: Rect
+        public let format: PixelFormat
+        public let memory: BufferMemory
+        public let modifier: UInt64?
+        public let tier: UInt8
+        public let copies: [CopyStage]
+        public let fps: FrameRate
+        public let sourceRateMhz: UInt32?
+        public let producer: GpuIdentity?
+        public let sync: SyncKind
+        public let poolDepth: UInt8
+        public let exhaustion: Exhaustion
+        public let orientation: OrientationSupport
+        public let crop: RegionCrop
+        public let damage: DamageSupport
+        public let cursor: CursorMode
+        public let colour: Colour
+        public let hdr: Bool
+        public let composite: CompositeInfo?
+        public let consent: ConsentModel
+        public let indicator: IndicatorState
+        public let border: BorderState
+        public let restoreToken: RestoreToken?
+        public let restored: Bool
+        public let audio: AudioNegotiated?
+
+        public init(backend: BackendId, source: Source, size: Size, contentRect: Rect, format: PixelFormat, memory: BufferMemory, modifier: UInt64?, tier: UInt8, copies: [CopyStage], fps: FrameRate, sourceRateMhz: UInt32?, producer: GpuIdentity?, sync: SyncKind, poolDepth: UInt8, exhaustion: Exhaustion, orientation: OrientationSupport, crop: RegionCrop, damage: DamageSupport, cursor: CursorMode, colour: Colour, hdr: Bool, composite: CompositeInfo?, consent: ConsentModel, indicator: IndicatorState, border: BorderState, restoreToken: RestoreToken?, restored: Bool, audio: AudioNegotiated?) {
+            self.backend = backend
+            self.source = source
+            self.size = size
+            self.contentRect = contentRect
+            self.format = format
+            self.memory = memory
+            self.modifier = modifier
+            self.tier = tier
+            self.copies = copies
+            self.fps = fps
+            self.sourceRateMhz = sourceRateMhz
+            self.producer = producer
+            self.sync = sync
+            self.poolDepth = poolDepth
+            self.exhaustion = exhaustion
+            self.orientation = orientation
+            self.crop = crop
+            self.damage = damage
+            self.cursor = cursor
+            self.colour = colour
+            self.hdr = hdr
+            self.composite = composite
+            self.consent = consent
+            self.indicator = indicator
+            self.border = border
+            self.restoreToken = restoreToken
+            self.restored = restored
+            self.audio = audio
+        }
+    }
+
+    public struct ScreenshotInfo: Sendable {
+        public let frames: UInt32
+        public let backend: BackendId
+        public let negotiated: NegotiatedStream
+
+        public init(frames: UInt32, backend: BackendId, negotiated: NegotiatedStream) {
+            self.frames = frames
+            self.backend = backend
+            self.negotiated = negotiated
+        }
+    }
+
+    public struct CaptureSession: Sendable {
+        public let session: NativeHandleId
+        public let negotiated: NegotiatedStream
+
+        public init(session: NativeHandleId, negotiated: NegotiatedStream) {
+            self.session = session
+            self.negotiated = negotiated
+        }
+    }
+
+    public enum DowngradeReason: UInt32, Sendable {
+        case importRejected = 0
+        case allocationFailed = 1
+        case modifierUnreadable = 2
+        case producerChanged = 3
+        case poolChanged = 4
+    }
+
+    public struct Downgrade: Sendable {
+        public let fromTier: UInt8
+        public let toTier: UInt8
+        public let reason: DowngradeReason
+
+        public init(fromTier: UInt8, toTier: UInt8, reason: DowngradeReason) {
+            self.fromTier = fromTier
+            self.toTier = toTier
+            self.reason = reason
+        }
+    }
+
+    public enum PauseReason: UInt32, Sendable {
+        case backgrounded = 0
+        case secureDesktop = 1
+        case systemPaused = 2
+        case requested = 3
+    }
+
+    public struct ExhaustionReport: Sendable {
+        public let episode: UInt32
+        public let poolDepth: UInt8
+        public let policy: Exhaustion
+
+        public init(episode: UInt32, poolDepth: UInt8, policy: Exhaustion) {
+            self.episode = episode
+            self.poolDepth = poolDepth
+            self.policy = policy
+        }
+    }
+
+    public enum StopReason: UInt32, Sendable {
+        case closed = 0
+        case consentRevoked = 1
+        case sourceLost = 2
+        case failed = 3
+        case shutdown = 4
+    }
+
+    public enum CaptureEvent: Sendable {
+        case started(NegotiatedStream)
+        case renegotiated(NegotiatedStream)
+        case downgraded(Downgrade)
+        case sourceResized(Size)
+        case sourceHidden
+        case sourceVisible
+        case paused(PauseReason)
+        case resumed
+        case exhausted(ExhaustionReport)
+        case consentRevoked
+        case sourceLost
+        case failed(CaptureError)
+        case stopped(StopReason)
+    }
+
+    public enum BackendId: UInt32, Sendable {
+        case linuxPortal = 0
+        case linuxExtImageCopy = 1
+        case linuxWlrScreencopy = 2
+        case linuxX11 = 3
+        case linuxKms = 4
+        case windowsWgc = 5
+        case windowsDxgi = 6
+        case windowsGdi = 7
+        case macosSck = 8
+        case iosSck = 9
+        case iosReplayKit = 10
+        case androidProjection = 11
+        case web = 12
+    }
+
+    public enum SourceKind: UInt32, Sendable {
+        case monitor = 0
+        case window = 1
+        case application = 2
+    }
+
+    public struct SourceId: Sendable {
+        public let backend: BackendId
+        public let value: String
+
+        public init(backend: BackendId, value: String) {
+            self.backend = backend
+            self.value = value
+        }
+    }
+
+    public struct Point: Sendable {
+        public let x: Int32
+        public let y: Int32
+
+        public init(x: Int32, y: Int32) {
+            self.x = x
+            self.y = y
+        }
+    }
+
+    public struct Size: Sendable {
+        public let width: UInt32
+        public let height: UInt32
+
+        public init(width: UInt32, height: UInt32) {
+            self.width = width
+            self.height = height
+        }
+    }
+
+    public struct Rect: Sendable {
+        public let x: Int32
+        public let y: Int32
+        public let width: UInt32
+        public let height: UInt32
+
+        public init(x: Int32, y: Int32, width: UInt32, height: UInt32) {
+            self.x = x
+            self.y = y
+            self.width = width
+            self.height = height
+        }
+    }
+
+    public enum Rotation: UInt32, Sendable {
+        case r0 = 0
+        case r90 = 1
+        case r180 = 2
+        case r270 = 3
+    }
+
+    public struct Orientation: Sendable {
+        public let mirrored: Bool
+        public let rotation: Rotation
+
+        public init(mirrored: Bool, rotation: Rotation) {
+            self.mirrored = mirrored
+            self.rotation = rotation
+        }
+    }
+
+    public struct SourceFlags: Sendable {
+        public let primary: Bool
+        public let minimised: Bool
+        public let occluded: Bool
+        public let protected: Bool
+        public let ownProcess: Bool
+
+        public init(primary: Bool, minimised: Bool, occluded: Bool, protected: Bool, ownProcess: Bool) {
+            self.primary = primary
+            self.minimised = minimised
+            self.occluded = occluded
+            self.protected = protected
+            self.ownProcess = ownProcess
+        }
+    }
+
+    public struct Source: Sendable {
+        public let id: SourceId
+        public let kind: SourceKind
+        public let name: String
+        public let appId: String?
+        public let pid: UInt32?
+        public let geometry: Rect?
+        public let physicalSize: Size?
+        public let scalePermille: UInt32?
+        public let refreshMhz: UInt32?
+        public let orientation: Orientation
+        public let flags: SourceFlags
+
+        public init(id: SourceId, kind: SourceKind, name: String, appId: String?, pid: UInt32?, geometry: Rect?, physicalSize: Size?, scalePermille: UInt32?, refreshMhz: UInt32?, orientation: Orientation, flags: SourceFlags) {
+            self.id = id
+            self.kind = kind
+            self.name = name
+            self.appId = appId
+            self.pid = pid
+            self.geometry = geometry
+            self.physicalSize = physicalSize
+            self.scalePermille = scalePermille
+            self.refreshMhz = refreshMhz
+            self.orientation = orientation
+            self.flags = flags
+        }
+    }
+
+    public enum RegionSpace: Sendable {
+        case global
+        case monitorRelative(SourceId)
+    }
+
+    public struct RegionSelector: Sendable {
+        public let rect: Rect
+        public let space: RegionSpace
+
+        public init(rect: Rect, space: RegionSpace) {
+            self.rect = rect
+            self.space = space
+        }
+    }
+
+    public struct PickerOptions: Sendable {
+        public let kinds: [SourceKind]
+        public let multiple: Bool
+
+        public init(kinds: [SourceKind], multiple: Bool) {
+            self.kinds = kinds
+            self.multiple = multiple
+        }
+    }
+
+    public enum SourceSelector: Sendable {
+        case id(SourceId)
+        case region(RegionSelector)
+        case picker(PickerOptions)
+        case primaryMonitor
+        case allMonitors
+        case monitors([SourceId])
+        case focused
+        case underCursor
+    }
+
+    public enum SourceListing: UInt32, Sendable {
+        case enumerable = 0
+        case afterGrant = 1
+        case pickerOnly = 2
+    }
+
+    public struct SourceList: Sendable {
+        public let sources: [Source]
+        public let listing: SourceListing
+
+        public init(sources: [Source], listing: SourceListing) {
+            self.sources = sources
+            self.listing = listing
+        }
+    }
+
+    public struct SourceFilter: Sendable {
+        public let kinds: [SourceKind]
+        public let backend: BackendId?
+
+        public init(kinds: [SourceKind], backend: BackendId?) {
+            self.kinds = kinds
+            self.backend = backend
+        }
     }
 }
