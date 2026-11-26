@@ -941,3 +941,38 @@ fn repeated_backend_reports_reuse_one_probe() {
     }
     assert_eq!(rig.counters.probes.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn a_picker_never_stands_in_for_a_region_or_the_focused_window() {
+    let mut portal = Fake::new(BackendId::LinuxPortal, two_monitors());
+    portal.listing = SourceListing::PickerOnly;
+    let rig = rig_with(vec![portal], CapturePolicy::default());
+    let consent = ConsentConfig {
+        allow_picker: true,
+        ..ConsentConfig::default()
+    };
+    let cases = [
+        (
+            SourceSelector::Region(RegionSelector {
+                rect: Rect::new(1, 1, 2, 2),
+                space: RegionSpace::Global,
+            }),
+            Requirement::Region,
+        ),
+        (SourceSelector::Focused, Requirement::SourceSelector),
+        (SourceSelector::UnderCursor, Requirement::SourceSelector),
+    ];
+    for (source, requirement) in cases {
+        let request = ScreenshotRequest {
+            consent: consent.clone(),
+            ..ScreenshotRequest::of(source.clone())
+        };
+        let err = block(rig.client.screenshot_cpu(request, PixelLayout::default()))
+            .expect_err("no silent substitution");
+        assert_eq!(
+            err,
+            CaptureError::unsatisfiable(Some(BackendId::LinuxPortal), requirement),
+            "{source:?}"
+        );
+    }
+}

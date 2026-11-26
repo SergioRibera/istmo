@@ -449,10 +449,23 @@ impl Engine {
                     }
                     crate::types::PickerOptions::default()
                 }
-                _ => crate::types::PickerOptions {
+                // The person picks the monitor: the consent dialog is the
+                // only way to name one here.
+                SourceSelector::PrimaryMonitor => crate::types::PickerOptions {
                     kinds: vec![SourceKind::Monitor],
                     multiple: false,
                 },
+                // A picker cannot honour these, and handing back whatever
+                // the person picked would be a silent substitution.
+                SourceSelector::Region(_) => {
+                    return Err(CaptureError::unsatisfiable(Some(id), Requirement::Region));
+                }
+                SourceSelector::Focused | SourceSelector::UnderCursor => {
+                    return Err(CaptureError::unsatisfiable(
+                        Some(id),
+                        Requirement::SourceSelector,
+                    ));
+                }
             };
             if !consent.allow_picker && consent.restore_token.is_none() {
                 return Err(CaptureError::ConsentRequired);
