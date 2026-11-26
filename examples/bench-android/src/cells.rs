@@ -160,6 +160,10 @@ fn raw_calls(
     Ok(out)
 }
 
+/// `extra`: whole-stream ns, first item ns, then the CPUs the consumer
+/// (this thread) and the Kotlin producer ended on (`u64::MAX` unknown):
+/// on big.LITTLE parts the placement decides this cell, so a run says
+/// where it ran.
 fn kotlin_stream(
     rt: &Arc<Runtime>,
     samples: usize,
@@ -173,6 +177,7 @@ fn kotlin_stream(
     let stream = client.ticks(count, size, gap_us)?;
     let mut out = Vec::with_capacity(samples);
     let mut first_item_ns = 0;
+    let mut producer_cpu = u64::MAX;
     while let StreamItem::Event(item) = stream.recv()? {
         let now = now_ns();
         if first_item_ns == 0 {
@@ -183,11 +188,20 @@ fn kotlin_stream(
             .and_then(|b| b.try_into().ok())
             .map_or(now, u64::from_le_bytes);
         out.push(now.saturating_sub(sent));
+        // The last item carries its producer's CPU after the stamp.
+        if let Some(cpu) = item
+            .get(8..12)
+            .and_then(|b| b.try_into().ok())
+            .map(i32::from_le_bytes)
+        {
+            producer_cpu = u64::try_from(cpu).unwrap_or(u64::MAX);
+        }
     }
     let total = now_ns() - t0;
+    let consumer_cpu = u64::try_from(crate::sys::current_cpu()).unwrap_or(u64::MAX);
     Ok(CellRun {
         samples: out,
-        extra: [total, first_item_ns, 0, 0],
+        extra: [total, first_item_ns, consumer_cpu, producer_cpu],
     })
 }
 

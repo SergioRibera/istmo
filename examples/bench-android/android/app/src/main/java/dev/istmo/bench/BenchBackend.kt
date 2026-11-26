@@ -44,6 +44,9 @@ class BenchBackend : KotlinBenchBackend {
             if (gapNs > 0) LockSupport.parkNanos(gapNs)
             val item = ByteArray(bytes)
             putLongLe(item, System.nanoTime())
+            // The last item says which CPU produced it (placement decides
+            // this cell on big.LITTLE parts).
+            if (bytes >= 12 && it == count.toInt() - 1) putIntLe(item, 8, BenchNative.currentCpu())
             emit(item)
         }
     }
@@ -74,6 +77,10 @@ class BenchBackend : KotlinBenchBackend {
 
 private fun putLongLe(dst: ByteArray, value: Long) {
     for (i in 0 until 8) dst[i] = (value ushr (8 * i)).toByte()
+}
+
+private fun putIntLe(dst: ByteArray, at: Int, value: Int) {
+    for (i in 0 until 4) dst[at + i] = (value ushr (8 * i)).toByte()
 }
 
 /** Width × height of an RGBA buffer of [size] bytes (1080p for the 8 MB cell). */

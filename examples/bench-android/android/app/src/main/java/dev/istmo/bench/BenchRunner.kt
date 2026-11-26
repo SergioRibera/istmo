@@ -110,7 +110,12 @@ class BenchRunner(
         }
         val note = when (cell) {
             BenchNative.Cell.KotlinStreamBurst, BenchNative.Cell.KotlinStreamPaced ->
-                "items/s=%d first_item_ns=%d".format(if (extra[0] > 0) n * 1_000_000_000L / extra[0] else 0, extra[1])
+                "items/s=%d first_item_ns=%d cpu=%d/%d".format(
+                    if (extra[0] > 0) n * 1_000_000_000L / extra[0] else 0,
+                    extra[1],
+                    extra[2], // consumer (Rust); -1 unknown
+                    extra[3], // producer (Kotlin)
+                )
             else -> ""
         }
         line(section, name, size, cond, samples.copyOf(n), note)
