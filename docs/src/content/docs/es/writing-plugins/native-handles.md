@@ -150,11 +150,11 @@ import IstmoRuntime
 final class AuthBackendImpl: AuthBackend, HandleReleaser {
     private var credentials: [UInt64: Credential] = [:]
 
-    func sign_in(provider: Provider) async throws -> SignInResult {
+    func sign_in(provider: Auth.Provider) async throws -> Auth.SignInResult {
         let credential = /* … inicio de sesión de la plataforma … */
         let id = IstmoRuntime.shared.allocHandleId(pluginId: AuthDispatcher.PLUGIN_ID)
         credentials[id] = credential
-        return SignInResult(email: credential.email, credential: id)
+        return Auth.SignInResult(email: credential.email, credential: id)
     }
 
     func releaseNativeHandle(_ handleId: UInt64) {

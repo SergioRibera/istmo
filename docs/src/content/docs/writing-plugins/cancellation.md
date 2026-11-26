@@ -126,7 +126,7 @@ override suspend fun authenticate(prompt: AuthPrompt): AuthMethod =
 ```
 
 ```swift
-func authenticate(prompt: AuthPrompt) async throws -> AuthMethod {
+func authenticate(prompt: Biometric.AuthPrompt) async throws -> Biometric.AuthMethod {
     try await withTaskCancellationHandler {
         // ...
     } onCancel: { /* dismiss the dialog */ }

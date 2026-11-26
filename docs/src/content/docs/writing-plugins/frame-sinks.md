@@ -267,10 +267,10 @@ override suspend fun start(count: UInt, frames: IstmoFrameSender<FrameInfo>) {
 ## Producing from Swift
 
 ```swift
-func start(count: UInt32, frames: IstmoFrameSender<FrameInfo>) async throws {
+func start(count: UInt32, frames: IstmoFrameSender<Capture.FrameInfo>) async throws {
     output.onSample = { [weak self] sample in
         // Rust retains the sample buffer until the frame drops.
-        let status = frames.submit(sample, meta: FrameInfo(width: w, height: h, timestampNs: 0))
+        let status = frames.submit(sample, meta: Capture.FrameInfo(width: w, height: h, timestampNs: 0))
         if status.shouldStop { self?.stop() }
     }
 }

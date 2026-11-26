@@ -69,6 +69,20 @@
 
 ### Changed (breaking)
 
+- **iOS apps refer to plugin types as `<Plugin>.<Type>`.** Each plugin's
+  generated Swift message types are nested in a `public enum <Plugin>`
+  namespace (`Camera.SessionConfig`, `ScreenCapture.SessionConfig`,
+  `Biometric.Availability`), types shared through `istmo-media` in
+  `IstmoMedia` (`IstmoMedia.AccessStatus`), so plugins declaring the same
+  type name can share one app. Generated codecs, clients, dispatchers and
+  backend protocols use the qualified names; hand-written backends must
+  too. Kotlin and the wire format are unchanged. Two namespaces, or a
+  namespace and a generated symbol (`<T>Client`, `<T>Backend`, a runtime
+  type), with the same name, and a message type that would shadow a name
+  inside its namespace (`Data`, `Error`, `IstmoMedia`), fail the build
+  (`istmo_build::check_swift_namespaces`). `TypeRef::to_swift` is
+  removed; `generate_swift` names its protocols `<T>Interface` /
+  `<T>InterfaceFactory`.
 - **The typed in-process shortcut is installed by every host
   registration** (`runtime!(hosts: …)`, `RuntimeInit::host`,
   `Runtime::register_host`) for stateless plugins: a client in the same

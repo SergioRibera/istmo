@@ -156,6 +156,14 @@ For each contract and active platform (role `host` unless overridden):
 Kotlin files import only the `dev.istmo.runtime` types they use, so they
 compile in any package.
 
+Swift files share the app module, so each plugin's message types are
+nested in an `enum <T>` namespace declared in `<T>Types.swift`: app and
+backend code writes `Camera.SessionConfig`, `ScreenCapture.SessionConfig`.
+Types shared by several plugins live in their group's namespace
+(`IstmoMedia.AccessStatus`, in `IstmoMedia/Generated/IstmoMediaTypes.swift`).
+Two namespaces, or a namespace and a generated symbol such as
+`<T>Client`, with the same name fail the build.
+
 ## Skip a platform
 
 If you only ship Android or only ship iOS, tell `emit()` to skip the
