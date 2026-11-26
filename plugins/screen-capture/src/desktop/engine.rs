@@ -144,24 +144,26 @@ impl Engine {
             super::linux::KNOWN.to_vec(),
             super::linux::session_kind(),
         );
-        #[cfg(not(target_os = "linux"))]
-        let (backends, audio, known, kind) = (
+        #[cfg(target_os = "linux")]
+        let order = kind.linux_order().to_vec();
+        #[cfg(all(windows, feature = "windows-common"))]
+        let (backends, audio, known, order) = (
+            super::windows::backends(),
+            super::windows::audio(),
+            super::windows::KNOWN.to_vec(),
+            super::windows::ORDER.to_vec(),
+        );
+        #[cfg(not(any(target_os = "linux", all(windows, feature = "windows-common"))))]
+        let (backends, audio, known, order) = (
             Vec::<Arc<dyn Backend>>::new(),
             None::<Arc<dyn AudioBackend>>,
             Vec::<BackendId>::new(),
-            select::SessionKind::Unknown,
+            Vec::<BackendId>::new(),
         );
         let env = std::env::var(select::BACKEND_ENV)
             .ok()
             .and_then(|v| select::parse_override(&v));
-        Self::new(
-            backends,
-            audio,
-            known,
-            kind.linux_order().to_vec(),
-            env,
-            policy,
-        )
+        Self::new(backends, audio, known, order, env, policy)
     }
 
     pub(crate) fn new(
@@ -1124,7 +1126,15 @@ impl Engine {
         requirements.audio = config.audio.is_some();
         let (backend_id, session, negotiated, out, events, source) =
             self.walk(&selection, &requirements, |backend, caps| {
-                Self::open_on(backend, caps, config, video, &requirements, caller)
+                Self::open_on(
+                    backend,
+                    caps,
+                    config,
+                    video,
+                    &requirements,
+                    self.policy.allow_borderless,
+                    caller,
+                )
             })?;
         let mut negotiated = negotiated;
         let mut audio_session = None;
@@ -1189,6 +1199,7 @@ impl Engine {
         config: &SessionConfig,
         video: &FrameSender<FrameMeta>,
         requirements: &Requirements,
+        allow_borderless: bool,
         caller: &Caller,
     ) -> Result<
         (
@@ -1264,6 +1275,8 @@ impl Engine {
             live_buffers: config.video.live_buffers,
             consent: config.consent.clone(),
             linux: config.linux,
+            windows: config.windows,
+            allow_borderless,
             picker,
             caller: caller.clone(),
         };

@@ -14,7 +14,8 @@ pub(crate) fn monotonic_ns() -> u64 {
     u64::try_from(ts.tv_sec).unwrap_or(0) * 1_000_000_000 + u64::try_from(ts.tv_nsec).unwrap_or(0)
 }
 
-/// A process-local monotonic clock elsewhere (no backend uses it yet).
+/// A process-local monotonic clock elsewhere (the pacer's repeats; the
+/// Windows backends time frames on QPC).
 #[cfg(not(target_os = "linux"))]
 #[must_use]
 pub(crate) fn monotonic_ns() -> u64 {
@@ -41,11 +42,16 @@ pub(crate) fn wall_us_for(pts_ns: u64, clock: PtsClock) -> u64 {
             let age_us = monotonic_ns().saturating_sub(pts_ns) / 1000;
             wall.saturating_sub(age_us)
         }
-        // No desktop backend on these clocks yet: the frame is as old as
-        // its delivery.
-        PtsClock::Qpc | PtsClock::MachContinuous | PtsClock::HostTime | PtsClock::Performance => {
-            wall
+        #[cfg(all(windows, feature = "windows-common"))]
+        PtsClock::Qpc => {
+            let age_us = super::windows::os::qpc_now_ns().saturating_sub(pts_ns) / 1000;
+            wall.saturating_sub(age_us)
         }
+        // No desktop backend on these clocks here: the frame is as old
+        // as its delivery.
+        #[cfg(not(all(windows, feature = "windows-common")))]
+        PtsClock::Qpc => wall,
+        PtsClock::MachContinuous | PtsClock::HostTime | PtsClock::Performance => wall,
     }
 }
 
@@ -53,13 +59,33 @@ pub(crate) fn wall_us_for(pts_ns: u64, clock: PtsClock) -> u64 {
 mod tests {
     use super::*;
 
+    /// How far `clock` (now at `now` ns) can look back: the process-local
+    /// clock starts at 0.
+    fn back(now: u64) -> u64 {
+        now.min(2_000_000_000)
+    }
+
+    fn assert_age(now: u64, clock: PtsClock) {
+        let back = back(now);
+        let fresh = wall_us_for(now, clock);
+        let old = wall_us_for(now - back, clock);
+        let age = fresh.saturating_sub(old);
+        let expected = back / 1000;
+        assert!(
+            age.abs_diff(expected) <= 100_000,
+            "age {age} µs, expected {expected}"
+        );
+        assert!(wall_now_us().abs_diff(fresh) < 1_000_000);
+    }
+
     #[test]
     fn wall_time_follows_the_frame_age() {
-        let now = monotonic_ns();
-        let fresh = wall_us_for(now, PtsClock::Monotonic);
-        let old = wall_us_for(now.saturating_sub(2_000_000_000), PtsClock::Monotonic);
-        let age = fresh.saturating_sub(old);
-        assert!((1_900_000..=2_100_000).contains(&age), "age {age} µs");
-        assert!(wall_now_us().abs_diff(fresh) < 1_000_000);
+        assert_age(monotonic_ns(), PtsClock::Monotonic);
+    }
+
+    #[cfg(all(windows, feature = "windows-common"))]
+    #[test]
+    fn qpc_frames_follow_their_age_too() {
+        assert_age(super::super::windows::os::qpc_now_ns(), PtsClock::Qpc);
     }
 }

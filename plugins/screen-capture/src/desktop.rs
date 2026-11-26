@@ -21,6 +21,8 @@ mod output;
 #[cfg(test)]
 mod tests;
 mod watch;
+#[cfg(all(windows, feature = "windows-common"))]
+mod windows;
 
 use std::sync::Arc;
 
@@ -138,6 +140,14 @@ impl ScreenCapture for DesktopCapture {
     }
 
     async fn access(&self, scope: AccessScope) -> Result<AccessState, CaptureError> {
+        #[cfg(all(windows, feature = "windows-common"))]
+        if scope == AccessScope::BorderlessCapture {
+            // WinRT capability queries: off the caller's executor.
+            return offload_open("access", move || {
+                Ok(windows::access::current(scope).unwrap_or_else(|| Engine::access(scope)))
+            })
+            .await;
+        }
         Ok(Engine::access(scope))
     }
 
@@ -147,7 +157,18 @@ impl ScreenCapture for DesktopCapture {
         request: AccessRequest,
     ) -> Result<AccessState, CaptureError> {
         self.admit(&ctx, "request_access")?;
-        // Desktop Linux has no standing grant to prompt for.
+        #[cfg(all(windows, feature = "windows-common"))]
+        if request.scope == AccessScope::BorderlessCapture {
+            // The OS prompt blocks until the person answers.
+            let engine = self.engine();
+            return offload("request_access", move || {
+                windows::access::request(request.scope, engine.policy())
+                    .unwrap_or_else(|| Ok(Engine::access(request.scope)))
+            })
+            .await;
+        }
+        // Desktop Linux (and every other scope on Windows) has no
+        // standing grant to prompt for.
         Ok(Engine::access(request.scope))
     }
 

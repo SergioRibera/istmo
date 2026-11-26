@@ -37,6 +37,19 @@
 
 mod client;
 pub mod composite;
+#[cfg(all(windows, feature = "windows-common"))]
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "`pub(crate)` marks crate-internal items; plain `pub` in private modules trips `unreachable_pub`"
+)]
+#[cfg_attr(
+    not(all(feature = "windows-wgc", feature = "windows-dxgi")),
+    allow(
+        dead_code,
+        reason = "the GPU backends make these frames; a build with fewer uses less"
+    )
+)]
+mod d3d11;
 #[cfg(not(target_arch = "wasm32"))]
 #[expect(
     clippy::redundant_pub_crate,
@@ -61,6 +74,8 @@ use istmo_core::{FrameSinkId, HostCtx, NativeHandleId};
 use istmo_macros::{owned, plugin, stream};
 
 pub use client::{AudioSessionHandle, ScreenCaptureClientExt, SessionHandle, SourceWatch};
+#[cfg(all(windows, feature = "windows-common"))]
+pub use d3d11::D3d11Frame;
 #[cfg(not(target_arch = "wasm32"))]
 pub use desktop::DesktopCapture;
 pub use policy::CapturePolicy;

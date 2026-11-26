@@ -10,5 +10,9 @@ doc-valid-idents = [
     "ScreenCaptureKit",
     "ReplayKit",
     "MediaProjection",
+    "WinRT",
+    "DisplayConfig",
+    "DirectX",
+    "WinForms",
     "..",
 ]

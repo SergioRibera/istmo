@@ -10,7 +10,7 @@ use crate::types::{
     AudioCaps, AudioConfig, AudioNegotiated, Availability, BackendCaps, BackendId, CaptureError,
     ConsentConfig, CursorRequest, Exhaustion, FormatRequest, FrameMeta, FrameRate, GpuPreference,
     HdrPolicy, LinuxOptions, NegotiatedStream, OrientationHandling, OutputSize, PickerOptions,
-    Rect, Requirement, SessionUpdate, Source, SourceList, SourceSelector, Strength,
+    Rect, Requirement, SessionUpdate, Source, SourceList, SourceSelector, Strength, WindowsOptions,
 };
 
 use super::offload::Caller;
@@ -91,6 +91,10 @@ pub(crate) struct StreamPlan {
     pub(crate) live_buffers: bool,
     pub(crate) consent: ConsentConfig,
     pub(crate) linux: LinuxOptions,
+    pub(crate) windows: WindowsOptions,
+    /// `CapturePolicy::allow_borderless`: whether a borderless request may
+    /// prompt for the grant.
+    pub(crate) allow_borderless: bool,
     /// For picker-only backends: what the picker offers.
     pub(crate) picker: Option<PickerOptions>,
     /// Whether the host call is still awaited.
