@@ -92,7 +92,9 @@ public final class NSLock {
 
 public typealias TimeInterval = Double
 public struct Date {
+    public init() {}
     public init(timeIntervalSinceNow: TimeInterval) {}
+    public var timeIntervalSince1970: TimeInterval { 0 }
 }
 
 // Objective-C / Core Foundation object model, for the Apple framework
