@@ -39,7 +39,7 @@ use super::super::super::clock::monotonic_ns;
 use super::super::super::output::{Delivery, FrameOut};
 use super::super::mapping::{MappedFrame, Mapping};
 use super::super::pipewire::{self as pwx, LoopCtx, LoopThread, Remote, StreamEnd};
-use super::super::syncobj::ExplicitSync;
+use super::super::syncobj::{Acquire, AcquireWait, ExplicitSync};
 use super::pods::{self, PortalTier};
 use super::raw::{self, Buffer, BufferKey};
 
@@ -169,6 +169,58 @@ struct Release {
     id: LeaseId,
 }
 
+/// What wakes the loop thread from outside it.
+enum Wake {
+    Release(Release),
+    /// A stream's parked buffer finished its acquire wait (`Err`: why it
+    /// cannot be read).
+    Acquired {
+        stream: usize,
+        key: BufferKey,
+        result: Result<(), String>,
+    },
+}
+
+/// Waits on one stream's acquire points on a thread of its own, so a
+/// slow producer never stalls the other streams of the loop. The thread
+/// ends with the stream's leases (its job queue closes), within one
+/// acquire timeout.
+struct AcquireWaiter {
+    jobs: flume::Sender<(BufferKey, AcquireWait)>,
+}
+
+impl AcquireWaiter {
+    fn spawn(stream: usize, wake: pw::channel::Sender<Wake>) -> std::io::Result<Self> {
+        let (jobs, queue) = flume::unbounded::<(BufferKey, AcquireWait)>();
+        std::thread::Builder::new()
+            .name("istmo-sc-acquire".to_owned())
+            .spawn(move || {
+                for (key, wait) in &queue {
+                    let result = wait.wait().map_err(|e| e.to_string());
+                    if wake
+                        .send(Wake::Acquired {
+                            stream,
+                            key,
+                            result,
+                        })
+                        .is_err()
+                    {
+                        // The loop ended.
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self { jobs })
+    }
+}
+
+/// A dequeued buffer waiting for its acquire point.
+struct Parked {
+    buffer: Buffer,
+    /// `None` while the wait runs; then whether it can be read.
+    acquired: Option<Result<(), String>>,
+}
+
 /// Which buffers the consumer holds, independent of PipeWire so it can
 /// be unit-tested. A buffer is held only while `held < pool - 1`.
 #[derive(Debug)]
@@ -257,14 +309,18 @@ struct Leases {
     /// Buffers held for the consumer.
     dequeued: HashMap<LeaseId, Buffer>,
     /// Acquire waits and release signals of this stream's buffers.
-    sync: ExplicitSync,
+    sync: ExplicitSync<BufferKey>,
     /// Slot of each live buffer, for `BufferIdentity`.
     slots: Vec<Option<BufferKey>>,
     backings: HashMap<BufferKey, Backing>,
     generation: u64,
     /// A buffer was removed: the next added one starts a generation.
     removed: bool,
-    tx: pw::channel::Sender<Release>,
+    tx: pw::channel::Sender<Wake>,
+    /// The buffer whose acquire point is being waited for.
+    parked: Option<Parked>,
+    /// Started at the first acquire point that had not signalled yet.
+    waiter: Option<AcquireWaiter>,
     /// This stream's index in the loop.
     stream: usize,
     /// Pool changes reported while the leases were borrowed.
@@ -276,12 +332,14 @@ struct Leases {
 
 impl Leases {
     fn new(
-        tx: pw::channel::Sender<Release>,
+        tx: pw::channel::Sender<Wake>,
         stream: usize,
         pending: PendingChanges,
-        sync: ExplicitSync,
+        sync: ExplicitSync<BufferKey>,
     ) -> Self {
         Self {
+            parked: None,
+            waiter: None,
             book: HeldBuffers::default(),
             dequeued: HashMap::new(),
             sync,
@@ -343,6 +401,10 @@ impl Leases {
         }
         // PipeWire frees the buffer: never re-queue it.
         self.dequeued.retain(|_, buffer| buffer.key() != key);
+        if self.parked.as_ref().is_some_and(|p| p.buffer.key() == key) {
+            self.parked = None;
+        }
+        self.sync.forget(&key);
         for slot in &mut self.slots {
             if *slot == Some(key) {
                 *slot = None;
@@ -375,6 +437,85 @@ impl Leases {
             new_episode,
             episode: self.episodes,
         }
+    }
+
+    /// The parked buffer `key` finished its acquire wait.
+    fn acquired(&mut self, key: BufferKey, result: Result<(), String>) {
+        if let Some(parked) = &mut self.parked
+            && parked.buffer.key() == key
+        {
+            parked.acquired = Some(result);
+        }
+    }
+
+    /// The next buffer to cut a frame from, its acquire point signalled:
+    /// the parked one once its wait succeeded, else the newest ready one
+    /// (older ones go back, counted in `skipped`). `None` while a wait
+    /// runs or when nothing is ready; a buffer whose acquire point did not
+    /// signal goes straight back.
+    fn next_buffer(&mut self, stream: &Stream, skipped: &mut u32) -> Option<Buffer> {
+        match self.parked.take() {
+            Some(Parked {
+                buffer,
+                acquired: Some(Ok(())),
+            }) => return Some(buffer),
+            Some(Parked {
+                buffer,
+                acquired: Some(Err(why)),
+            }) => {
+                tracing::debug!(%why, "screen-capture portal: frame dropped");
+                buffer.requeue(stream, &mut self.sync);
+                *skipped = skipped.saturating_add(1);
+            }
+            Some(waiting) => {
+                self.parked = Some(waiting);
+                return None;
+            }
+            None => {}
+        }
+        let buffer = newest(stream, &mut self.sync, skipped)?;
+        let Some(timeline) = buffer.timeline() else {
+            return Some(buffer);
+        };
+        let polled = self
+            .sync
+            .poll(buffer.key(), timeline.fds, timeline.acquire_point);
+        let wait = match polled {
+            Ok(Acquire::Ready) => return Some(buffer),
+            Ok(Acquire::Pending(wait)) => wait,
+            Err(why) => {
+                tracing::debug!(%why, "screen-capture portal: frame dropped");
+                buffer.requeue(stream, &mut self.sync);
+                *skipped = skipped.saturating_add(1);
+                return None;
+            }
+        };
+        if self.waiter.is_none() {
+            match AcquireWaiter::spawn(self.stream, self.tx.clone()) {
+                Ok(waiter) => self.waiter = Some(waiter),
+                Err(err) => {
+                    tracing::warn!(%err, "screen-capture portal: no acquire waiter thread");
+                    buffer.requeue(stream, &mut self.sync);
+                    *skipped = skipped.saturating_add(1);
+                    return None;
+                }
+            }
+        }
+        let key = buffer.key();
+        let queued = self
+            .waiter
+            .as_ref()
+            .is_some_and(|waiter| waiter.jobs.send((key, wait)).is_ok());
+        if queued {
+            self.parked = Some(Parked {
+                buffer,
+                acquired: None,
+            });
+        } else {
+            buffer.requeue(stream, &mut self.sync);
+            *skipped = skipped.saturating_add(1);
+        }
+        None
     }
 
     /// Re-queue the buffer behind `release`, unless it is gone.
@@ -490,7 +631,7 @@ fn run(
         mainloop: ctx.mainloop.clone(),
         shots: parts.iter().map(|_| None).collect(),
     }));
-    let (release_tx, release_rx) = pw::channel::channel::<Release>();
+    let (release_tx, release_rx) = pw::channel::channel::<Wake>();
     let mut live = live;
     let mut streams: Vec<Pair> = Vec::new();
     let mut listeners = Vec::new();
@@ -623,20 +764,30 @@ fn run(
             .map(|(s, d, l)| (s.clone(), Rc::clone(d), Rc::clone(l)))
             .collect();
         let retry = release_tx.clone();
-        move |release: Release| {
-            let Some((stream, data, leases)) = streams.get(release.stream) else {
+        move |wake: Wake| {
+            let index = match &wake {
+                Wake::Release(release) => release.stream,
+                Wake::Acquired { stream, .. } => *stream,
+            };
+            let Some((stream, data, leases)) = streams.get(index) else {
                 return;
             };
             match (data.try_borrow_mut(), leases.try_borrow_mut()) {
                 (Ok(mut data), Ok(mut leases)) => {
-                    leases.release(stream, &release);
+                    match wake {
+                        Wake::Release(release) => leases.release(stream, &release),
+                        Wake::Acquired { key, result, .. } => {
+                            leases.catch_up();
+                            leases.acquired(key, result);
+                        }
+                    }
                     on_process(stream, &mut data, &mut leases);
                 }
                 // Dispatched from inside a callback that holds the
                 // stream's state: posted again for the next loop
-                // iteration, so the hold is never leaked.
+                // iteration, so neither a hold nor a parked buffer leaks.
                 _ => {
-                    let _sent = retry.send(release);
+                    let _sent = retry.send(wake);
                 }
             }
         }
@@ -648,8 +799,11 @@ fn run(
         if let Mode::Live(live) = &data.mode {
             live.out.stop(crate::types::StopReason::Closed);
         }
-        // Buffers still held by frames go back with the stream itself.
-        leases.borrow_mut().dequeued.clear();
+        // Buffers still held by frames (or parked) go back with the
+        // stream itself.
+        let mut leases = leases.borrow_mut();
+        leases.dequeued.clear();
+        leases.parked = None;
         if let Mode::Shot { kept } = &mut data.mode {
             kept.clear();
         }
@@ -766,7 +920,7 @@ fn on_param(stream: &Stream, data: &mut StreamData, id: u32, param: Option<&pw::
 }
 
 /// Re-queue every ready buffer; how many there were.
-fn drain(stream: &Stream, sync: &mut ExplicitSync) -> u32 {
+fn drain(stream: &Stream, sync: &mut ExplicitSync<BufferKey>) -> u32 {
     let mut dropped = 0;
     while let Some(buffer) = Buffer::dequeue(stream) {
         buffer.requeue(stream, sync);
@@ -776,7 +930,11 @@ fn drain(stream: &Stream, sync: &mut ExplicitSync) -> u32 {
 }
 
 /// The newest ready buffer; older ones go straight back (`skipped`).
-fn newest(stream: &Stream, sync: &mut ExplicitSync, skipped: &mut u32) -> Option<Buffer> {
+fn newest(
+    stream: &Stream,
+    sync: &mut ExplicitSync<BufferKey>,
+    skipped: &mut u32,
+) -> Option<Buffer> {
     let mut newest: Option<Buffer> = None;
     while let Some(buffer) = Buffer::dequeue(stream) {
         if let Some(older) = newest.replace(buffer) {
@@ -878,7 +1036,7 @@ fn backing(
     clippy::too_many_lines,
     reason = "sync, metas and backing of one frame, read in one pass over the dequeued buffer"
 )]
-/// Cut a frame out of `buffer` (dequeued): wait for its acquire point,
+/// Cut a frame out of `buffer` (dequeued, its acquire point signalled):
 /// read its metas, share its backing. `copy` reads shared memory out
 /// instead (a lease-free `CopyToCpu` frame).
 fn cut(
@@ -896,16 +1054,11 @@ fn cut(
         // The producer has not rendered into it yet.
         return Ok(None);
     }
-    let sync = match buffer.timeline() {
-        Some(timeline) => {
-            leases
-                .sync
-                .acquire(timeline.acquire, timeline.acquire_point)
-                .map_err(|e| e.to_string())?;
-            SyncKind::Ready
-        }
-        None if negotiated.modifier.is_some() => SyncKind::Implicit,
-        None => SyncKind::Ready,
+    // A timeline buffer comes here once its acquire point signalled.
+    let sync = if buffer.timeline().is_none() && negotiated.modifier.is_some() {
+        SyncKind::Implicit
+    } else {
+        SyncKind::Ready
     };
     let row_bytes = negotiated
         .size
@@ -1033,7 +1186,7 @@ fn shot(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiated:
         return;
     }
     let mut skipped = 0;
-    let Some(buffer) = newest(stream, &mut leases.sync, &mut skipped) else {
+    let Some(buffer) = leases.next_buffer(stream, &mut skipped) else {
         return;
     };
     let cut = match cut(data, leases, &buffer, negotiated, false) {
@@ -1104,21 +1257,27 @@ fn deliver(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiat
         out.exhausted(exhausted, pool_depth, exhaustion);
         return;
     }
-    let mut skipped = data.skipped;
-    let Some(buffer) = newest(stream, &mut leases.sync, &mut skipped) else {
-        data.skipped = skipped;
-        return;
-    };
-    data.skipped = skipped;
     let copy = full && exhaustion == Exhaustion::CopyToCpu && negotiated.modifier.is_none();
+    let mut skipped = data.skipped;
     if full && !copy {
-        // DropNewest (or CopyToCpu on DMA-BUF, refused at open).
+        // DropNewest (or CopyToCpu on DMA-BUF, refused at open): nothing
+        // is read, so nothing waits for an acquire point.
+        let dropped = newest(stream, &mut leases.sync, &mut skipped);
+        data.skipped = skipped;
+        let Some(buffer) = dropped else {
+            return;
+        };
         let exhausted = leases.exhausted();
         out.exhausted(exhausted, pool_depth, exhaustion);
         buffer.requeue(stream, &mut leases.sync);
         data.skipped = data.skipped.saturating_add(1);
         return;
     }
+    let next = leases.next_buffer(stream, &mut skipped);
+    data.skipped = skipped;
+    let Some(buffer) = next else {
+        return;
+    };
     if copy {
         let exhausted = leases.exhausted();
         out.exhausted(exhausted, pool_depth, exhaustion);
@@ -1162,10 +1321,10 @@ fn deliver(stream: &Stream, data: &mut StreamData, leases: &mut Leases, negotiat
             };
             native.with_identity(identity.into()).with_release(move || {
                 // Fails only once the loop ended (and the buffers with it).
-                let _sent = tx.send(Release {
+                let _sent = tx.send(Wake::Release(Release {
                     stream: stream_index,
                     id,
-                });
+                }));
             })
         }
     };

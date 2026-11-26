@@ -11,7 +11,9 @@
 //! The ioctls are core DRM, so any render node waits on a syncobj
 //! another process exported; the producer's node is preferred.
 
+use std::collections::HashMap;
 use std::fs::File;
+use std::hash::Hash;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::fs::MetadataExt as _;
 use std::sync::Arc;
@@ -168,14 +170,63 @@ fn deadline(timeout: Duration) -> i64 {
     now_ns.saturating_add(i64::try_from(timeout.as_nanos()).unwrap_or(i64::MAX))
 }
 
-/// Waits on acquire points and signals release points of one stream's
-/// buffers, opening the node at the first synchronised buffer.
-#[derive(Debug)]
-pub(crate) struct ExplicitSync {
-    producer: Option<u64>,
-    device: Option<SyncDevice>,
+/// The acquire and release syncobjs of one buffer, as the producer
+/// attached them.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TimelineFds<'b> {
+    pub(crate) acquire: BorrowedFd<'b>,
+    pub(crate) release: BorrowedFd<'b>,
 }
 
+/// Waits on acquire points and signals release points of one stream's
+/// buffers, opening the node at the first synchronised buffer. Each
+/// buffer's syncobjs are imported once, at its first use, and kept until
+/// [`forget`](Self::forget).
+#[derive(Debug)]
+pub(crate) struct ExplicitSync<K> {
+    producer: Option<u64>,
+    device: Option<SyncDevice>,
+    imported: HashMap<K, Imported>,
+}
+
+#[derive(Debug)]
+struct Imported {
+    acquire: Arc<Syncobj>,
+    release: Syncobj,
+}
+
+/// Whether a buffer's acquire point signalled.
+#[derive(Debug)]
+pub(crate) enum Acquire {
+    Ready,
+    /// Not yet: [`AcquireWait::wait`] it off the loop thread.
+    Pending(AcquireWait),
+}
+
+/// An acquire point still to signal. `Send`: waited for on a thread of
+/// its own, so a slow producer never blocks the loop's other streams.
+#[derive(Debug)]
+pub(crate) struct AcquireWait {
+    syncobj: Arc<Syncobj>,
+    point: u64,
+}
+
+impl AcquireWait {
+    /// Block until the point signals, at most [`ACQUIRE_TIMEOUT`].
+    ///
+    /// # Errors
+    /// The wait failed or timed out.
+    pub(crate) fn wait(&self) -> Result<(), SyncError> {
+        match self
+            .syncobj
+            .wait(self.point, ACQUIRE_TIMEOUT)
+            .map_err(SyncError::Wait)?
+        {
+            Waited::Signalled => Ok(()),
+            Waited::TimedOut => Err(SyncError::TimedOut),
+        }
+    }
+}
 /// Why a synchronised buffer cannot be read, or handed back.
 #[derive(Debug)]
 pub(crate) enum SyncError {
@@ -201,12 +252,13 @@ impl std::fmt::Display for SyncError {
     }
 }
 
-impl ExplicitSync {
+impl<K: Copy + Eq + Hash> ExplicitSync<K> {
     /// Waits through the render node of `producer` when known.
-    pub(crate) const fn new(producer: Option<u64>) -> Self {
+    pub(crate) fn new(producer: Option<u64>) -> Self {
         Self {
             producer,
             device: None,
+            imported: HashMap::new(),
         }
     }
 
@@ -219,32 +271,68 @@ impl ExplicitSync {
             .ok_or_else(|| SyncError::Device(std::io::ErrorKind::NotFound.into()))
     }
 
-    /// Wait for `acquire` at `point`: the producer finished rendering.
+    /// The syncobjs of buffer `key`, imported at the first call.
+    fn imported(&mut self, key: K, fds: TimelineFds<'_>) -> Result<&Imported, SyncError> {
+        if !self.imported.contains_key(&key) {
+            let device = self.device()?;
+            let acquire = device.import(fds.acquire).map_err(SyncError::Import)?;
+            let release = device.import(fds.release).map_err(SyncError::Import)?;
+            self.imported.insert(
+                key,
+                Imported {
+                    acquire: Arc::new(acquire),
+                    release,
+                },
+            );
+        }
+        self.imported
+            .get(&key)
+            .ok_or_else(|| SyncError::Import(std::io::ErrorKind::NotFound.into()))
+    }
+
+    /// Whether buffer `key`'s acquire point already signalled (the
+    /// producer finished rendering); never blocks.
     ///
     /// # Errors
-    /// The node, the import or the wait failed, or the point did not
-    /// signal in time.
-    pub(crate) fn acquire(&mut self, acquire: BorrowedFd<'_>, point: u64) -> Result<(), SyncError> {
-        let syncobj = self.device()?.import(acquire).map_err(SyncError::Import)?;
-        match syncobj
-            .wait(point, ACQUIRE_TIMEOUT)
+    /// The node, the import or the check failed.
+    pub(crate) fn poll(
+        &mut self,
+        key: K,
+        fds: TimelineFds<'_>,
+        point: u64,
+    ) -> Result<Acquire, SyncError> {
+        let acquire = Arc::clone(&self.imported(key, fds)?.acquire);
+        match acquire
+            .wait(point, Duration::ZERO)
             .map_err(SyncError::Wait)?
         {
-            Waited::Signalled => Ok(()),
-            Waited::TimedOut => Err(SyncError::TimedOut),
+            Waited::Signalled => Ok(Acquire::Ready),
+            Waited::TimedOut => Ok(Acquire::Pending(AcquireWait {
+                syncobj: acquire,
+                point,
+            })),
         }
     }
 
-    /// Signal `release` at `point`: nothing reads the buffer any more.
+    /// Signal buffer `key`'s release point: nothing reads it any more.
     ///
     /// # Errors
     /// The node, the import or the signal failed.
-    pub(crate) fn release(&mut self, release: BorrowedFd<'_>, point: u64) -> Result<(), SyncError> {
-        self.device()?
-            .import(release)
-            .map_err(SyncError::Import)?
+    pub(crate) fn release(
+        &mut self,
+        key: K,
+        fds: TimelineFds<'_>,
+        point: u64,
+    ) -> Result<(), SyncError> {
+        self.imported(key, fds)?
+            .release
             .signal(point)
             .map_err(SyncError::Signal)
+    }
+
+    /// Buffer `key` is gone: drop its imported syncobjs.
+    pub(crate) fn forget(&mut self, key: &K) {
+        self.imported.remove(key);
     }
 }
 
@@ -287,24 +375,41 @@ mod tests {
     }
 
     #[test]
-    fn acquire_waits_and_release_reaches_the_producer() {
+    fn poll_never_blocks_and_release_reaches_the_producer() {
         let Some(device) = device() else { return };
         let (Ok(acquire), Ok(release)) = (device.create(), device.create()) else {
             return;
         };
-        acquire.signal(3).expect("producer finished");
         let (a, r) = (acquire.export().expect("a"), release.export().expect("r"));
+        let fds = TimelineFds {
+            acquire: a.as_fd(),
+            release: r.as_fd(),
+        };
         let mut sync = ExplicitSync::new(None);
-        sync.acquire(a.as_fd(), 3).expect("acquired");
-        sync.release(r.as_fd(), 4).expect("released");
+        let start = Instant::now();
+        let Ok(Acquire::Pending(wait)) = sync.poll(1, fds, 3) else {
+            panic!("an unsignalled point is pending");
+        };
+        assert!(start.elapsed() < ACQUIRE_TIMEOUT, "poll does not wait");
+        let waiter = std::thread::spawn(move || wait.wait());
+        acquire.signal(3).expect("producer finished");
+        waiter
+            .join()
+            .expect("waiter")
+            .expect("signalled within the timeout");
+        assert!(matches!(sync.poll(1, fds, 3), Ok(Acquire::Ready)));
+        sync.release(1, fds, 4).expect("released");
         assert_eq!(
             release.wait(4, Duration::from_millis(100)).expect("wait"),
             Waited::Signalled,
             "the release point reaches the producer"
         );
-        assert!(matches!(
-            sync.acquire(a.as_fd(), 9),
-            Err(SyncError::TimedOut)
-        ));
+        assert_eq!(sync.imported.len(), 1, "imported once per buffer");
+        sync.forget(&1);
+        assert!(sync.imported.is_empty());
+        let Ok(Acquire::Pending(late)) = sync.poll(2, fds, 9) else {
+            panic!("pending");
+        };
+        assert!(matches!(late.wait(), Err(SyncError::TimedOut)));
     }
 }

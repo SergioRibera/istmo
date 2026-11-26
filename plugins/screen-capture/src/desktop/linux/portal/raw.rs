@@ -26,7 +26,7 @@ use pw::stream::Stream;
 
 use crate::types::{CursorState, Point, Rect};
 
-use super::super::syncobj::ExplicitSync;
+use super::super::syncobj::{ExplicitSync, TimelineFds};
 
 // `spa/buffer/meta.h` and `buffer.h` ids, kept here rather than taken from
 // the bindings, which follow whatever headers the build machine has
@@ -80,9 +80,8 @@ pub(super) struct Buffer {
 /// The acquire / release timeline of an explicitly synchronised buffer.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Timeline<'b> {
-    pub(super) acquire: BorrowedFd<'b>,
+    pub(super) fds: TimelineFds<'b>,
     pub(super) acquire_point: u64,
-    pub(super) release: BorrowedFd<'b>,
     pub(super) release_point: u64,
     /// The producer set [`SYNC_TIMELINE_UNSCHEDULED_RELEASE`].
     pub(super) unscheduled_release: bool,
@@ -113,7 +112,7 @@ impl Buffer {
     /// Hand the buffer back to the producer, its release point signalled
     /// first when it carries a timeline (whether it was read or not: a
     /// producer that waits on the point would wait forever otherwise).
-    pub(super) fn requeue(self, stream: &Stream, sync: &mut ExplicitSync) {
+    pub(super) fn requeue(self, stream: &Stream, sync: &mut ExplicitSync<BufferKey>) {
         self.settle_release(sync);
         // SAFETY: `raw` was dequeued from `stream` (the caller passes the
         // stream it dequeued from) and, `self` being consumed, is queued
@@ -124,12 +123,12 @@ impl Buffer {
     /// Signal the release point, and once it is, clear the producer's
     /// "unscheduled" flag. When signalling fails the flag stays set, so a
     /// producer that reads it reuses the buffer without waiting.
-    fn settle_release(&self, sync: &mut ExplicitSync) {
+    fn settle_release(&self, sync: &mut ExplicitSync<BufferKey>) {
         let Some(timeline) = self.timeline() else {
             return;
         };
         let (unscheduled, point) = (timeline.unscheduled_release, timeline.release_point);
-        match sync.release(timeline.release, point) {
+        match sync.release(self.key(), timeline.fds, point) {
             Ok(()) if unscheduled => self.mark_release_scheduled(),
             Ok(()) => {}
             Err(err) => {
@@ -293,9 +292,8 @@ impl Buffer {
             .filter_map(|d| borrowed(d.fd));
         let (acquire, release) = (syncobjs.next()?, syncobjs.next()?);
         Some(Timeline {
-            acquire,
+            fds: TimelineFds { acquire, release },
             acquire_point: meta.acquire_point,
-            release,
             release_point: meta.release_point,
             unscheduled_release: meta.flags & SYNC_TIMELINE_UNSCHEDULED_RELEASE != 0,
         })
