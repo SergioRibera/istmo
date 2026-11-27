@@ -266,6 +266,16 @@ fn write_keys(app: &WindowsApp, clsid: &str) -> Result<(), NotificationError> {
     Ok(())
 }
 
+/// The process has package identity (MSIX): a package with a non-empty
+/// full name. Wine answers `Package::Current` for unpackaged exes, so a
+/// bare `is_ok` is not enough.
+fn is_packaged() -> bool {
+    Package::Current()
+        .and_then(|package| package.Id())
+        .and_then(|id| id.FullName())
+        .is_ok_and(|name| !name.is_empty())
+}
+
 fn install_once(app: &WindowsApp) -> Result<Installation, NotificationError> {
     ident::check_aumid(&app.aumid)?;
     if sys::is_elevated() {
@@ -284,7 +294,7 @@ fn install_once(app: &WindowsApp) -> Result<Installation, NotificationError> {
     }
     let clsid_value = ident::activator_clsid(&app.aumid);
     let clsid = ident::guid_text(clsid_value);
-    let packaged = Package::Current().is_ok();
+    let packaged = is_packaged();
     let aumid = if packaged {
         AppInfo::Current()
             .and_then(|info| info.AppUserModelId())
@@ -335,7 +345,7 @@ impl DesktopNotifications {
                 }
             }
         }
-        if Package::Current().is_ok() {
+        if is_packaged() {
             return Ok(());
         }
         let clsid = app.activator_clsid();
