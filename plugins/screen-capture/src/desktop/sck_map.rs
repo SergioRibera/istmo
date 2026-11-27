@@ -9,10 +9,10 @@ use crate::types::{
     AccessScope, AccessState, AccessStatus, AudioCaps, AudioSourceKind, BackendCaps, BackendId,
     BufferMemory, CapsProvenance, CaptureError, Colour, ColourCaps, ColourRange, ColourSpace,
     CompositeCaps, CompositeSupport, ConsentModel, CopyStage, CursorMode, Damage, DamageSupport,
-    Exhaustion, FormatCaps, FrameRate, IndicatorState, OrientationSupport, OsVersion, OutputSize,
-    Persistence, PixelFormat, PoolCaps, ProtectedContent, Provenance, Rect, RegionCrop,
-    SampleFormat, Scaling, Size, SourceKind, SourceListing, SyncKind, TransferFunction,
-    WindowCaptureCaps,
+    Exhaustion, FormatCaps, FrameRate, HdrPolicy, IndicatorState, OrientationSupport, OsVersion,
+    OutputSize, Persistence, PixelFormat, PoolCaps, ProtectedContent, Provenance, Rect, RegionCrop,
+    Requirement, SampleFormat, Scaling, Size, SourceKind, SourceListing, SyncKind,
+    TransferFunction, WindowCaptureCaps,
 };
 
 /// The backend these facts describe.
@@ -156,6 +156,56 @@ pub(crate) const fn colour(format: PixelFormat, range: ColourRange, hdr: bool) -
             range: ColourRange::Full,
         },
         _ => Colour::SRGB,
+    }
+}
+
+/// Whether frames in `format` are captured in HDR on `os` under `policy`:
+/// `l10r` (`Ar30`) on 15+, the format the HDR stream preset delivers.
+///
+/// # Errors
+/// `Unsatisfiable(Hdr)` when `policy` requires HDR and it cannot be had.
+pub(crate) fn hdr(
+    os: OsVersion,
+    policy: HdrPolicy,
+    format: PixelFormat,
+) -> Result<bool, CaptureError> {
+    let can = at_least(os, HDR) && format == PixelFormat::Ar30;
+    match policy {
+        HdrPolicy::Sdr => Ok(false),
+        HdrPolicy::PreferHdr => Ok(can),
+        HdrPolicy::RequireHdr if can => Ok(true),
+        HdrPolicy::RequireHdr => Err(CaptureError::unsatisfiable(Some(ID), Requirement::Hdr)),
+    }
+}
+
+/// The colour a pixel buffer's own tags name (`kCVImageBufferColorPrimariesKey`
+/// and `kCVImageBufferTransferFunctionKey` values), falling back to
+/// `expected` for what is untagged or unknown: SCK tags its buffers, and
+/// the tags are what was captured, not what was asked.
+#[must_use]
+pub(crate) fn tagged_colour(
+    primaries: Option<&str>,
+    transfer: Option<&str>,
+    expected: Colour,
+) -> Colour {
+    let space = match primaries {
+        Some("ITU_R_709_2") => ColourSpace::Bt709,
+        Some("P3_D65") => ColourSpace::DisplayP3,
+        Some("ITU_R_2020") => ColourSpace::Bt2020,
+        _ => expected.space,
+    };
+    let transfer = match transfer {
+        Some("IEC_sRGB") => TransferFunction::Srgb,
+        Some("ITU_R_709_2") => TransferFunction::Bt709,
+        Some("SMPTE_ST_2084_PQ") => TransferFunction::Pq,
+        Some("ITU_R_2100_HLG") => TransferFunction::Hlg,
+        Some("Linear") => TransferFunction::Linear,
+        _ => expected.transfer,
+    };
+    Colour {
+        space,
+        transfer,
+        range: expected.range,
     }
 }
 
@@ -729,6 +779,47 @@ mod tests {
         assert_eq!(
             FourCc::RGBA_HALF.format(),
             Some((PixelFormat::Rgba16f, ColourRange::Full))
+        );
+    }
+
+    #[test]
+    fn hdr_follows_the_policy_the_os_and_the_format() {
+        let sequoia = version(15, 0);
+        assert_eq!(
+            hdr(sequoia, HdrPolicy::PreferHdr, PixelFormat::Ar30),
+            Ok(true)
+        );
+        // An SDR format never keeps HDR, whatever was asked.
+        assert_eq!(
+            hdr(sequoia, HdrPolicy::PreferHdr, PixelFormat::Bgra8),
+            Ok(false)
+        );
+        assert_eq!(hdr(sequoia, HdrPolicy::Sdr, PixelFormat::Ar30), Ok(false));
+        assert!(hdr(version(14, 6), HdrPolicy::RequireHdr, PixelFormat::Ar30).is_err());
+        assert!(hdr(sequoia, HdrPolicy::RequireHdr, PixelFormat::Nv12).is_err());
+    }
+
+    #[test]
+    fn buffer_tags_win_over_the_expected_colour() {
+        let pq = tagged_colour(Some("P3_D65"), Some("SMPTE_ST_2084_PQ"), Colour::SRGB);
+        assert_eq!(pq.space, ColourSpace::DisplayP3);
+        assert_eq!(pq.transfer, TransferFunction::Pq);
+        assert_eq!(pq.range, ColourRange::Full);
+        let video = colour(PixelFormat::Nv12, ColourRange::Limited, false);
+        assert_eq!(tagged_colour(None, None, video), video);
+        let hlg = tagged_colour(Some("ITU_R_2020"), Some("ITU_R_2100_HLG"), video);
+        assert_eq!(
+            (hlg.space, hlg.transfer, hlg.range),
+            (
+                ColourSpace::Bt2020,
+                TransferFunction::Hlg,
+                ColourRange::Limited
+            )
+        );
+        // Unknown tags keep what was expected.
+        assert_eq!(
+            tagged_colour(Some("EBU_3213"), Some("SMPTE_ST_428_1"), video),
+            video
         );
     }
 

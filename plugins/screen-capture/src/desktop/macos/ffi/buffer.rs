@@ -10,12 +10,13 @@ use istmo_core::MemoryKind;
 use istmo_core::native_frame::PlatformBuffer;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2_core_foundation::{CFDictionary, CFRetained, CGRect};
+use objc2_core_foundation::{CFDictionary, CFRetained, CFString, CGRect};
 use objc2_core_graphics::CGRectMakeWithDictionaryRepresentation;
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferGetHeight, CVPixelBufferGetIOSurface,
-    CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth,
+    CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth, kCVImageBufferColorPrimariesKey,
+    kCVImageBufferTransferFunctionKey,
 };
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString, NSValue};
 use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
@@ -24,7 +25,7 @@ use objc2_screen_capture_kit::{
     SCStreamFrameInfoStatus,
 };
 
-use crate::types::{CaptureError, PlaneLayout, Size};
+use crate::types::{CaptureError, Colour, PlaneLayout, Size};
 
 use super::super::super::sck_map::{self, Attachments, FourCc, ID, RectF};
 
@@ -188,6 +189,31 @@ impl PixelBuffer {
     #[must_use]
     pub(crate) fn fourcc(&self) -> FourCc {
         FourCc(CVPixelBufferGetPixelFormatType(&self.buffer))
+    }
+
+    /// The colour the buffer is tagged with (primaries and transfer
+    /// function attachments), or `expected` where it has none.
+    #[must_use]
+    pub(crate) fn colour(&self, expected: Colour) -> Colour {
+        let tag = |key: &CFString| -> Option<String> {
+            // SAFETY: a getter on a valid pixel buffer with an immutable
+            // framework key; a null mode pointer is allowed. The binding
+            // returns its own (+1) reference.
+            let value = unsafe { self.buffer.attachment(key, std::ptr::null_mut()) }?;
+            value.downcast_ref::<CFString>().map(ToString::to_string)
+        };
+        // SAFETY: immutable framework constants.
+        let (primaries, transfer) = unsafe {
+            (
+                kCVImageBufferColorPrimariesKey,
+                kCVImageBufferTransferFunctionKey,
+            )
+        };
+        sck_map::tagged_colour(
+            tag(primaries).as_deref(),
+            tag(transfer).as_deref(),
+            expected,
+        )
     }
 
     /// The surface's process-wide id: the same id is the same memory.

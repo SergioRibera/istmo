@@ -56,12 +56,14 @@ fn meta_for(shape: &Shape, sample: &Sample, pixels: &PixelBuffer, pts_ns: u64) -
     let size = pixels.size();
     let attachments = sample.attachments();
     // What SCK delivered, should it differ from what was asked.
-    let (format, colour) = match pixels.fourcc().format() {
+    let (format, expected) = match pixels.fourcc().format() {
         Some((format, range)) if format != shape.format => {
             (format, sck_map::colour(format, range, false))
         }
         _ => (shape.format, shape.colour),
     };
+    // The buffer's own colour tags say what was captured.
+    let colour = pixels.colour(expected);
     FrameMeta {
         seq: 0,
         pts_ns,

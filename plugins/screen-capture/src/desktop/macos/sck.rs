@@ -317,13 +317,7 @@ impl SckBackend {
     }
 
     fn hdr(&self, policy: HdrPolicy, format: PixelFormat) -> Result<bool, CaptureError> {
-        let can = sck_map::at_least(self.os, sck_map::HDR) && format == PixelFormat::Ar30;
-        match policy {
-            HdrPolicy::Sdr => Ok(false),
-            HdrPolicy::PreferHdr => Ok(can),
-            HdrPolicy::RequireHdr if can => Ok(true),
-            HdrPolicy::RequireHdr => Err(CaptureError::unsatisfiable(Some(ID), Requirement::Hdr)),
-        }
+        sck_map::hdr(self.os, policy, format)
     }
 
     #[expect(
@@ -645,6 +639,7 @@ impl Backend for SckBackend {
             settings,
             negotiated: negotiated.clone(),
             os: self.os,
+            hdr_policy: plan.hdr,
         };
         Ok((Box::new(session), negotiated))
     }
@@ -658,6 +653,8 @@ struct SckSession {
     settings: Settings,
     negotiated: NegotiatedStream,
     os: OsVersion,
+    /// What the caller asked for HDR, applied again on a format change.
+    hdr_policy: HdrPolicy,
 }
 
 impl BackendSession for SckSession {
@@ -677,9 +674,14 @@ impl BackendSession for SckSession {
                     .ok_or_else(|| CaptureError::unsatisfiable(Some(ID), Requirement::Formats))?;
                 let fourcc = FourCc::for_format(chosen.format)
                     .ok_or_else(|| CaptureError::unsatisfiable(Some(ID), Requirement::Formats))?;
+                // The session's HDR policy decides again for the new format:
+                // an SDR format never keeps an HDR configuration.
+                let hdr = sck_map::hdr(self.os, self.hdr_policy, chosen.format)?;
                 settings.fourcc = fourcc.0;
-                settings.srgb = !negotiated.hdr
-                    && matches!(chosen.format, PixelFormat::Bgra8 | PixelFormat::Ar30);
+                settings.hdr = hdr;
+                settings.srgb =
+                    !hdr && matches!(chosen.format, PixelFormat::Bgra8 | PixelFormat::Ar30);
+                negotiated.hdr = hdr;
                 negotiated.format = chosen.format;
                 negotiated.memory = chosen.memory;
                 negotiated.tier = chosen.tier;

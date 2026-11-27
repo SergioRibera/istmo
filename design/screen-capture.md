@@ -446,8 +446,12 @@ this section wins. Nothing here ran on a Mac, an iPhone or an iPad yet
 - Screenshots: `SCScreenshotManager` sample buffers on 14+, a one-frame
   `SCStream` before (and when a 14+ sample has no `IOSurface`). Multiple
   displays compose on the CPU like Linux.
-- HDR: `captureDynamicRange = .hdrLocalDisplay` on 15+ for `Ar30` with
-  `PreferHdr` / `RequireHdr`; colour reported as Display P3 PQ. SDR RGB asks for
+- HDR: the `captureHDRStreamLocalDisplay` (screenshots:
+  `captureHDRScreenshotLocalDisplay`) preset on 15+ for `Ar30` with
+  `PreferHdr` / `RequireHdr`, then size, rate and format on top. Each
+  frame's colour comes from its pixel buffer's primaries / transfer tags,
+  the table value only where a buffer is untagged; a format change
+  decides HDR again from the session's policy. SDR RGB asks for
   `kCGColorSpaceSRGB`.
 - Access: `Backend::access` / `request_access` answer the standing grant;
   `CGPreflightScreenCaptureAccess` → `Granted`, else `NotDetermined`

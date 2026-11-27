@@ -14,8 +14,8 @@ use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
 use objc2_core_media::{CMSampleBuffer, CMTime, CMTimeFlags};
 use objc2_foundation::NSError;
 use objc2_screen_capture_kit::{
-    SCCaptureDynamicRange, SCScreenshotManager, SCStream, SCStreamConfiguration, SCStreamDelegate,
-    SCStreamOutput, SCStreamOutputType,
+    SCScreenshotManager, SCStream, SCStreamConfiguration, SCStreamConfigurationPreset,
+    SCStreamDelegate, SCStreamOutput, SCStreamOutputType,
 };
 
 use crate::types::{CaptureError, OsVersion};
@@ -62,12 +62,19 @@ pub(crate) struct Settings {
     pub(crate) scales_to_fit: bool,
     /// `colorSpaceName = kCGColorSpaceSRGB` (SDR RGB formats).
     pub(crate) srgb: bool,
-    /// `captureDynamicRange = .hdrLocalDisplay` (15+).
+    /// HDR through the `captureHDR*LocalDisplay` preset (15+).
     pub(crate) hdr: bool,
     /// `includeChildWindows` (14.2+).
     pub(crate) child_windows: bool,
     /// `capturesAudio` with its rate and channel count (13+).
     pub(crate) audio: Option<AudioSettings>,
+}
+
+/// What a configuration is built for: a stream or one screenshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Stream,
+    Screenshot,
 }
 
 /// The audio half of a configuration.
@@ -82,9 +89,23 @@ impl Settings {
     // Every setter below takes plain values on a configuration this
     // function owns; the version-gated ones are only called where the OS
     // has them (an unknown selector would raise).
-    fn build(&self) -> Retained<SCStreamConfiguration> {
-        // SAFETY: makes a default configuration.
-        let config = unsafe { SCStreamConfiguration::new() };
+    fn build(&self, purpose: Purpose) -> Retained<SCStreamConfiguration> {
+        let config = if self.hdr && sck_map::at_least(self.os, sck_map::HDR) {
+            // Apple's HDR path: the preset sets the dynamic range, colour
+            // space and transfer together; size, rate and format follow.
+            let preset = match purpose {
+                Purpose::Stream => SCStreamConfigurationPreset::CaptureHDRStreamLocalDisplay,
+                Purpose::Screenshot => {
+                    SCStreamConfigurationPreset::CaptureHDRScreenshotLocalDisplay
+                }
+            };
+            // SAFETY: a class constructor that exists from 15.0, checked
+            // above.
+            unsafe { SCStreamConfiguration::streamConfigurationWithPreset(preset) }
+        } else {
+            // SAFETY: makes a default configuration.
+            unsafe { SCStreamConfiguration::new() }
+        };
         // SAFETY: a plain setter, see above.
         unsafe { config.setWidth(self.width.max(1)) };
         // SAFETY: a plain setter, see above.
@@ -110,10 +131,6 @@ impl Settings {
             let srgb = unsafe { objc2_core_graphics::kCGColorSpaceSRGB };
             // SAFETY: a plain setter, see above.
             unsafe { config.setColorSpaceName(srgb) };
-        }
-        if self.hdr && sck_map::at_least(self.os, sck_map::HDR) {
-            // SAFETY: a setter that exists from 15.0, checked above.
-            unsafe { config.setCaptureDynamicRange(SCCaptureDynamicRange::HDRLocalDisplay) };
         }
         if self.child_windows && sck_map::at_least(self.os, sck_map::CHILD_WINDOWS) {
             // SAFETY: a setter that exists from 14.2, checked above.
@@ -244,7 +261,7 @@ impl Stream {
         audio: bool,
         sink: Arc<dyn Sink>,
     ) -> Result<Self, CaptureError> {
-        let config = settings.build();
+        let config = settings.build(Purpose::Stream);
         let output = StreamOutput::new(sink);
         let delegate: &ProtocolObject<dyn SCStreamDelegate> = ProtocolObject::from_ref(&*output);
         // SAFETY: a designated initialiser with a valid filter,
@@ -296,7 +313,7 @@ impl Stream {
     /// # Errors
     /// The framework refused them; the stream keeps the old ones.
     pub(crate) fn update(&self, settings: &Settings) -> Result<(), CaptureError> {
-        let config = settings.build();
+        let config = settings.build(Purpose::Stream);
         let (block, rx) = done_block("update");
         // SAFETY: a valid configuration and completion handler.
         unsafe {
@@ -350,7 +367,7 @@ fn shot_answer(sample: *mut CMSampleBuffer, error: *mut NSError) -> Result<Sampl
 /// # Errors
 /// The framework refused or did not answer.
 pub(crate) fn screenshot(filter: &Filter, settings: &Settings) -> Result<Sample, CaptureError> {
-    let config = settings.build();
+    let config = settings.build(Purpose::Screenshot);
     let (tx, rx) = flume::bounded(1);
     let block = RcBlock::new(move |sample: *mut CMSampleBuffer, error: *mut NSError| {
         let _sent = tx.try_send(shot_answer(sample, error));
