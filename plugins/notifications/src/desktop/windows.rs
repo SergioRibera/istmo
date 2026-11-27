@@ -23,6 +23,7 @@
 
 mod args;
 mod ident;
+mod marks;
 mod toast_xml;
 
 #[cfg(windows)]

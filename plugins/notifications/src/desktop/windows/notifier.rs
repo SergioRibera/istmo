@@ -8,15 +8,16 @@
 //! a full replace, with `SuppressPopup` when silent.
 //!
 //! Scheduled toasts ([`Backend::arm`]) cover deliveries while the app is
-//! closed. When the host delivers the same occurrence itself (the app
-//! runs at that time, or a missed delivery at the next start), the
-//! pending scheduled toast is removed first; if Windows already showed
-//! it (the history holds a toast of that tag marked with a fire time
-//! within the last day), the host's toast replaces it without a popup.
+//! closed. The backend keeps the fire time of every scheduled toast it
+//! (or an earlier process) armed ([`Marks`]). When the host delivers
+//! such an occurrence itself (the app runs at that time, or a missed
+//! delivery at the next start), the pending scheduled toast is removed
+//! first; if Windows already showed it (the history holds a toast of
+//! that tag marked with that fire time), the host's toast replaces it
+//! without a popup. Shows of ids without a due mark skip all of this.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use istmo_core::sync::lock;
 use windows::Data::Xml::Dom::{XmlDocument, XmlElement};
@@ -29,6 +30,7 @@ use windows::UI::Notifications::{
 use windows_core::{HSTRING, Interface};
 
 use super::args::Args;
+use super::marks::{DELIVERY_SLACK_MS, Marks, SHOWN_WINDOW_MS};
 use super::registration::{platform, registered};
 use super::toast_xml::{self, Carry, Options, Toast};
 use super::{GROUP, activator, ident};
@@ -38,10 +40,11 @@ use crate::{
     PermissionState, PermissionStatus, PlatformError,
 };
 
-/// A scheduled delivery this close to now is the host's own delivery.
-const DELIVERY_SLACK_MS: i64 = 60_000;
-/// How long a toast shown by a scheduled toast counts as "just shown".
-const SCHEDULED_SHOWN_WINDOW_MS: i64 = 24 * 3_600_000;
+/// Toasts kept for data-binding updates: twice what the notification
+/// center keeps, so a toast it dropped silently goes eventually (the
+/// cost of forgetting one too early is a full replace with
+/// `SuppressPopup` instead of an update).
+const MAX_SHOWN: usize = 2 * super::MAX_ACTIVE as usize;
 /// Windows `DateTime` ticks (100 ns) between 1601-01-01 and 1970-01-01.
 const UNIX_EPOCH_TICKS: i64 = 116_444_736_000_000_000;
 
@@ -63,11 +66,11 @@ pub(crate) fn start(sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationE
         notifier,
         build: registered.build,
         sink: sink.clone(),
-        shown: Mutex::new(HashMap::new()),
-        // Until the first arm: a scheduled toast of an earlier process may
-        // be pending or just shown.
-        armed: AtomicBool::new(true),
+        shown: Arc::default(),
+        marks: Mutex::default(),
     });
+    // Scheduled toasts of an earlier process may be pending or just shown.
+    backend.inherit_marks();
     activator::attach(sink);
     Ok(backend)
 }
@@ -79,6 +82,8 @@ struct ShownToast {
     sequence: u32,
     dismissed: i64,
     failed: i64,
+    /// Insertion order: the oldest goes past [`MAX_SHOWN`].
+    order: u64,
 }
 
 impl ShownToast {
@@ -88,15 +93,63 @@ impl ShownToast {
     }
 }
 
+/// The toasts this process shows, bounded: dismissed and failed ones
+/// leave from their event handlers, the oldest past [`MAX_SHOWN`] on
+/// insert.
+#[derive(Default)]
+struct ShownTable {
+    toasts: HashMap<NotificationId, ShownToast>,
+    next_order: u64,
+}
+
+impl ShownTable {
+    /// Puts `toast` under `id`; what it replaced or pushed out (to unhook
+    /// outside the lock).
+    fn insert(&mut self, id: NotificationId, mut toast: ShownToast) -> Vec<ShownToast> {
+        self.next_order += 1;
+        toast.order = self.next_order;
+        let mut gone: Vec<ShownToast> = self.toasts.insert(id, toast).into_iter().collect();
+        while self.toasts.len() > MAX_SHOWN {
+            let Some(oldest) = self
+                .toasts
+                .iter()
+                .min_by_key(|(_, entry)| entry.order)
+                .map(|(id, _)| id.clone())
+            else {
+                break;
+            };
+            gone.extend(self.toasts.remove(&oldest));
+        }
+        gone
+    }
+
+    /// Forgets `id` when it is still `toast` (not a newer one), from
+    /// inside the toast's own event: no unhooking there, the toast is
+    /// done and releases its handlers with itself.
+    fn forget(table: &Weak<Mutex<Self>>, id: &NotificationId, toast: Option<&ToastNotification>) {
+        let Some(table) = table.upgrade() else {
+            return;
+        };
+        let gone = {
+            let mut table = lock(&table);
+            match table.toasts.get(id) {
+                Some(entry) if Some(&entry.toast) == toast => table.toasts.remove(id),
+                _ => None,
+            }
+        };
+        drop(gone);
+    }
+}
+
 struct ToastBackend {
     aumid: HSTRING,
     group: HSTRING,
     notifier: ToastNotifier,
     build: u32,
     sink: BackendSink,
-    shown: Mutex<HashMap<NotificationId, ShownToast>>,
-    /// Scheduled toasts of this app may exist.
-    armed: AtomicBool,
+    shown: Arc<Mutex<ShownTable>>,
+    /// Fire times of the scheduled toasts of this app.
+    marks: Mutex<Marks>,
 }
 
 const fn date_time(unix_ms: i64) -> DateTime {
@@ -173,7 +226,7 @@ impl ToastBackend {
     fn try_update(&self, id: &NotificationId, tag: &HSTRING, toast: &Toast) -> bool {
         let sequence = {
             let shown = lock(&self.shown);
-            match shown.get(id) {
+            match shown.toasts.get(id) {
                 Some(entry) if entry.template == toast.template => entry.sequence + 1,
                 _ => return false,
             }
@@ -182,7 +235,7 @@ impl ToastBackend {
             .and_then(|data| self.notifier.UpdateWithTagAndGroup(&data, tag, &self.group));
         match updated {
             Ok(NotificationUpdateResult::Succeeded) => {
-                if let Some(entry) = lock(&self.shown).get_mut(id) {
+                if let Some(entry) = lock(&self.shown).toasts.get_mut(id) {
                     entry.sequence = entry.sequence.max(sequence);
                 }
                 true
@@ -196,23 +249,75 @@ impl ToastBackend {
         }
     }
 
-    /// Before the host's own delivery of `tag`: drops a scheduled toast
-    /// due now and tells whether Windows already showed one.
-    fn shown_by_schedule(&self, tag: &HSTRING) -> bool {
-        if !self.armed.load(Ordering::Acquire) {
-            return false;
-        }
+    /// The fire time a toast of the history was scheduled for.
+    fn fired_at(toast: &ToastNotification) -> Option<i64> {
+        toast
+            .Content()
+            .ok()
+            .and_then(|content| launch_args(&content))
+            .and_then(|args| args.fire_ms)
+    }
+
+    /// Marks what an earlier process scheduled: pending scheduled toasts
+    /// and scheduled toasts the history shows as fired within the window.
+    fn inherit_marks(&self) {
         let now = Self::now();
+        let mut found = Vec::new();
         if let Ok(scheduled) = self.notifier.GetScheduledToastNotifications() {
+            for toast in &scheduled {
+                if toast.Group().is_ok_and(|g| g == self.group)
+                    && let (Ok(tag), Ok(at)) = (toast.Tag(), toast.DeliveryTime())
+                {
+                    found.push((tag.to_string(), unix_ms(at)));
+                }
+            }
+        }
+        if let Ok(history) =
+            Self::history().and_then(|h| h.GetHistoryWithId(&self.aumid).map_err(|e| platform(&e)))
+        {
+            for toast in &history {
+                if toast.Group().is_ok_and(|g| g == self.group)
+                    && let Some(fire) = Self::fired_at(&toast)
+                    && fire >= now.saturating_sub(SHOWN_WINDOW_MS)
+                    && let Ok(tag) = toast.Tag()
+                {
+                    found.push((tag.to_string(), fire));
+                }
+            }
+        }
+        let mut marks = lock(&self.marks);
+        for (tag, fire) in &found {
+            marks.mark(tag, *fire);
+        }
+    }
+
+    /// Before the host's own alerting show of `id`: when a scheduled toast
+    /// stands for this delivery, drops it if still pending and tells
+    /// whether Windows already showed it. Ids without a due mark cost no
+    /// `WinRT` call.
+    fn shown_by_schedule(&self, id: &NotificationId, tag: &HSTRING) -> bool {
+        let now = Self::now();
+        let Some(fire) = lock(&self.marks).take_due(id.as_str(), now) else {
+            return false;
+        };
+        if let Ok(scheduled) = self.notifier.GetScheduledToastNotifications() {
+            let mut pending = false;
             for toast in &scheduled {
                 let ours = toast.Group().is_ok_and(|g| g == self.group)
                     && toast.Tag().is_ok_and(|t| t == *tag);
-                let due = toast
-                    .DeliveryTime()
-                    .is_ok_and(|at| unix_ms(at) <= now + DELIVERY_SLACK_MS);
-                if ours && due {
-                    let _removed = self.notifier.RemoveFromSchedule(&toast);
+                let Some(at) = toast.DeliveryTime().ok().map(unix_ms) else {
+                    continue;
+                };
+                if ours
+                    && at <= now.saturating_add(DELIVERY_SLACK_MS)
+                    && self.notifier.RemoveFromSchedule(&toast).is_ok()
+                {
+                    pending |= at == fire;
                 }
+            }
+            // Taken out before it fired: the host's toast is the only one.
+            if pending {
+                return false;
             }
         }
         let Ok(history) =
@@ -223,14 +328,7 @@ impl ToastBackend {
         (&history).into_iter().any(|toast| {
             toast.Group().is_ok_and(|g| g == self.group)
                 && toast.Tag().is_ok_and(|t| t == *tag)
-                && toast
-                    .Content()
-                    .ok()
-                    .and_then(|content| launch_args(&content))
-                    .and_then(|args| args.fire_ms)
-                    .is_some_and(|fire| {
-                        fire >= now - SCHEDULED_SHOWN_WINDOW_MS && fire <= now + DELIVERY_SLACK_MS
-                    })
+                && Self::fired_at(&toast) == Some(fire)
         })
     }
 
@@ -243,6 +341,7 @@ impl ToastBackend {
     ) -> windows_core::Result<()> {
         let n = shown.notification;
         let sequence = lock(&self.shown)
+            .toasts
             .get(&n.id)
             .map_or(1, |entry| entry.sequence + 1);
         let notification = ToastNotification::CreateToastNotification(&document(&toast.xml)?)?;
@@ -262,34 +361,38 @@ impl ToastBackend {
         }
         let sink = self.sink.clone();
         let id = n.id.clone();
+        let table = Arc::downgrade(&self.shown);
         let dismissed = notification.Dismissed(&TypedEventHandler::<
             ToastNotification,
             ToastDismissedEventArgs,
-        >::new(move |_, args| {
+        >::new(move |sender, args| {
             // TimedOut = the popup went to the notification center (still
             // there); ApplicationHidden = removed by this app.
             if let Some(args) = args.as_ref()
                 && args.Reason()? == ToastDismissalReason::UserCanceled
             {
+                ShownTable::forget(&table, &id, sender.as_ref());
                 sink.dismissed(&id, DismissReason::User);
             }
             Ok(())
         }))?;
         let sink = self.sink.clone();
         let id = n.id.clone();
+        let table = Arc::downgrade(&self.shown);
         let failed = notification.Failed(&TypedEventHandler::<
             ToastNotification,
             ToastFailedEventArgs,
-        >::new(move |_, args| {
+        >::new(move |sender, args| {
             let code = args
                 .as_ref()
                 .and_then(|args| args.ErrorCode().ok())
                 .map_or(0, |code| code.0);
+            ShownTable::forget(&table, &id, sender.as_ref());
             sink.failed(Some(&id), &format!("toast failed (HRESULT {code:#010x})"));
             Ok(())
         }))?;
         self.notifier.Show(&notification)?;
-        let previous = lock(&self.shown).insert(
+        let gone = lock(&self.shown).insert(
             n.id.clone(),
             ShownToast {
                 toast: notification,
@@ -297,10 +400,11 @@ impl ToastBackend {
                 sequence,
                 dismissed,
                 failed,
+                order: 0,
             },
         );
-        if let Some(previous) = previous {
-            previous.unhook();
+        for entry in &gone {
+            entry.unhook();
         }
         Ok(())
     }
@@ -353,13 +457,15 @@ impl Backend for ToastBackend {
         if silent && self.try_update(&n.id, &tag, &toast) {
             return Ok(());
         }
-        let suppress = silent || (shown.mode == ShowMode::New && self.shown_by_schedule(&tag));
+        // An alerting show (new, or a repeat replacing the previous
+        // occurrence) may be the delivery a scheduled toast just made.
+        let suppress = silent || self.shown_by_schedule(&n.id, &tag);
         self.post(shown, &tag, &toast, suppress)
             .map_err(|err| platform(&err))
     }
 
     fn remove(&self, id: &NotificationId) -> Result<(), NotificationError> {
-        let entry = lock(&self.shown).remove(id);
+        let entry = lock(&self.shown).toasts.remove(id);
         if let Some(entry) = entry {
             entry.unhook();
         }
@@ -369,7 +475,11 @@ impl Backend for ToastBackend {
     }
 
     fn remove_all(&self) -> Result<(), NotificationError> {
-        let entries: Vec<ShownToast> = lock(&self.shown).drain().map(|(_, entry)| entry).collect();
+        let entries: Vec<ShownToast> = lock(&self.shown)
+            .toasts
+            .drain()
+            .map(|(_, entry)| entry)
+            .collect();
         for entry in &entries {
             entry.unhook();
         }
@@ -430,7 +540,7 @@ impl Backend for ToastBackend {
 
     fn arm(&self, upcoming: &[Upcoming]) {
         let now = Self::now();
-        let mut desired: HashMap<String, (HSTRING, i64, String)> = HashMap::new();
+        let mut desired: HashMap<String, (&str, i64, String)> = HashMap::new();
         for item in upcoming {
             if item.fire_ms <= now + 2_000 {
                 continue;
@@ -450,14 +560,16 @@ impl Backend for ToastBackend {
             match toast {
                 Ok(toast) => {
                     let id = ident::scheduled_id(n.id.as_str(), item.fire_ms, &toast.xml);
-                    desired.insert(id, (HSTRING::from(n.id.as_str()), item.fire_ms, toast.xml));
+                    desired.insert(id, (n.id.as_str(), item.fire_ms, toast.xml));
                 }
                 Err(err) => {
                     tracing::debug!(%err, id = %n.id, "notifications: not scheduled natively");
                 }
             }
         }
-        let mut any = !desired.is_empty();
+        // Mark changes, applied at the end (no lock across `WinRT` calls).
+        let mut marked: Vec<(String, i64)> = Vec::new();
+        let mut unmarked: Vec<(String, i64)> = Vec::new();
         match self.notifier.GetScheduledToastNotifications() {
             Ok(scheduled) => {
                 for toast in &scheduled {
@@ -465,10 +577,21 @@ impl Backend for ToastBackend {
                         continue;
                     }
                     let id = toast.Id().map(|id| id.to_string()).unwrap_or_default();
+                    let at = toast.DeliveryTime().ok().map(unix_ms);
+                    let tag = toast.Tag().map(|tag| tag.to_string()).ok();
                     if desired.remove(&id).is_some() {
-                        any = true;
+                        if let (Some(tag), Some(at)) = (tag, at) {
+                            marked.push((tag, at));
+                        }
                     } else if let Err(err) = self.notifier.RemoveFromSchedule(&toast) {
                         tracing::debug!(%err, "notifications: scheduled toast not removed");
+                    } else if let (Some(tag), Some(at)) = (tag, at)
+                        && at > now.saturating_add(DELIVERY_SLACK_MS)
+                    {
+                        // It cannot fire any more. One due now may have
+                        // fired already: its mark stays for the history
+                        // check.
+                        unmarked.push((tag, at));
                     }
                 }
             }
@@ -484,14 +607,22 @@ impl Backend for ToastBackend {
                 })
                 .and_then(|toast| {
                     toast.SetId(&HSTRING::from(id.as_str()))?;
-                    toast.SetTag(&tag)?;
+                    toast.SetTag(&HSTRING::from(tag))?;
                     toast.SetGroup(&self.group)?;
                     self.notifier.AddToSchedule(&toast)
                 });
-            if let Err(err) = added {
-                tracing::warn!(%err, "notifications: scheduled toast not added");
+            match added {
+                Ok(()) => marked.push((tag.to_owned(), fire_ms)),
+                Err(err) => tracing::warn!(%err, "notifications: scheduled toast not added"),
             }
         }
-        self.armed.store(any, Ordering::Release);
+        let mut marks = lock(&self.marks);
+        for (tag, at) in &unmarked {
+            marks.unmark(tag, *at);
+        }
+        for (tag, at) in &marked {
+            marks.mark(tag, *at);
+        }
+        marks.prune(now);
     }
 }
