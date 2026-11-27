@@ -235,7 +235,7 @@ pub(crate) struct Stream {
     output: Shared<StreamOutput>,
     screen: bool,
     audio: bool,
-    _queue: DispatchRetained<DispatchQueue>,
+    queue: DispatchRetained<DispatchQueue>,
 }
 
 impl std::fmt::Debug for Stream {
@@ -275,37 +275,54 @@ impl Stream {
                 Some(delegate),
             )
         };
-        let queue = DispatchQueue::new("dev.istmo.screen-capture.stream", None);
-        let as_output: &ProtocolObject<dyn SCStreamOutput> = ProtocolObject::from_ref(&*output);
+        // Owned from here on: any failure below drops `this`, whose `Drop`
+        // stops the stream (a start that answers late included) and
+        // removes the outputs added so far, so nothing keeps capturing
+        // without an owner.
+        let mut this = Self {
+            capture: Shared(capture),
+            output: Shared(output),
+            screen: false,
+            audio: false,
+            queue: DispatchQueue::new("dev.istmo.screen-capture.stream", None),
+        };
         let outputs = [
             (screen, SCStreamOutputType::Screen),
             (audio, SCStreamOutputType::Audio),
         ];
         for (wanted, kind) in outputs {
             if wanted {
-                // SAFETY: the output object and the queue outlive the
-                // stream (both are held by `Self`).
-                unsafe {
-                    capture.addStreamOutput_type_sampleHandlerQueue_error(
-                        as_output,
-                        kind,
-                        Some(&queue),
-                    )
-                }
-                .map_err(|error| error_of(&error, "add stream output"))?;
+                this.add_output(kind)?;
             }
         }
         let (block, rx) = done_block("start");
         // SAFETY: a valid completion handler; the framework copies it.
-        unsafe { capture.startCaptureWithCompletionHandler(Some(&block)) };
+        unsafe { this.capture.startCaptureWithCompletionHandler(Some(&block)) };
         wait(&rx, CALL_TIMEOUT, "start")?;
-        Ok(Self {
-            capture: Shared(capture),
-            output: Shared(output),
-            screen,
-            audio,
-            _queue: queue,
-        })
+        Ok(this)
+    }
+
+    /// Add the output object for `kind` on the stream's queue, and note
+    /// it for `Drop`.
+    fn add_output(&mut self, kind: SCStreamOutputType) -> Result<(), CaptureError> {
+        let as_output: &ProtocolObject<dyn SCStreamOutput> =
+            ProtocolObject::from_ref(&*self.output.0);
+        // SAFETY: the output object and the queue outlive the stream (both
+        // are held by `self`).
+        unsafe {
+            self.capture.addStreamOutput_type_sampleHandlerQueue_error(
+                as_output,
+                kind,
+                Some(&self.queue),
+            )
+        }
+        .map_err(|error| error_of(&error, "add stream output"))?;
+        if kind == SCStreamOutputType::Screen {
+            self.screen = true;
+        } else {
+            self.audio = true;
+        }
+        Ok(())
     }
 
     /// Apply new settings to the running stream.
