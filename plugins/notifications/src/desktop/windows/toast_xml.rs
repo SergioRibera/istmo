@@ -115,7 +115,7 @@ fn xml_text(value: &str) -> String {
 fn escaped_len(value: &str) -> usize {
     value
         .chars()
-        .map(|c| escaped(c).map_or(c.len_utf8(), str::len))
+        .map(|c| escaped(c).map_or_else(|| c.len_utf8(), str::len))
         .sum()
 }
 
