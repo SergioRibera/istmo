@@ -427,6 +427,11 @@ fn writes_and_cleans_android_resources() {
     assert!(res.join("raw/istmo_notification_sound_pop.wav").is_file());
     // Android cannot play .caf.
     assert!(!res.join("raw/istmo_notification_sound_ding.caf").exists());
+    let keep = fs::read_to_string(res.join("raw/istmo_notifications_keep.xml")).unwrap();
+    assert!(
+        keep.contains("tools:keep=\"@raw/istmo_notification_*,"),
+        "{keep}"
+    );
     // Another resource of the directory is left alone; a stale one of
     // ours goes.
     fs::write(res.join("raw/app_own.ogg"), b"x").unwrap();
@@ -439,6 +444,7 @@ fn writes_and_cleans_android_resources() {
         .unwrap();
     assert!(!res.join("values/istmo_notifications.xml").exists());
     assert!(!res.join("drawable/istmo_notification_icon.xml").exists());
+    assert!(!res.join("raw/istmo_notifications_keep.xml").exists());
     assert!(!res.join("raw/istmo_notification_channels.bin").exists());
     assert!(res.join("raw/app_own.ogg").exists());
     let _ = fs::remove_dir_all(&root);
