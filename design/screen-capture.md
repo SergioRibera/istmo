@@ -290,7 +290,20 @@ already existed in core; nothing was added there.
   adapter that does not drive the output is `Unsatisfiable(Gpu)` (no
   cross-adapter copy).
 - Sync: no keyed mutex, no fence. After a copy the plugin waits
-  (bounded, 100 ms) on a D3D11 event query; frames leave `Ready`.
+  (bounded, 100 ms; 1 s for screenshots) on a reused D3D11 event query;
+  frames leave `Ready`. A stream frame whose copy overran is dropped;
+  30 in a row fail the session. `Gpu::new` requires
+  `ID3D11Multithread`, and copy → map → unmap and end → flush run under
+  its `Enter` / `Leave`.
+- WGC discards its frames on `Recreate` and `Close`: a resize or the
+  end of a session first waits up to 500 ms for zero-copy frames to be
+  dropped (the probe checks a held frame's pixels after close).
+- A device removed under a WGC session (TDR, driver update, GPU switch)
+  fails it with the removal reason instead of idling; DXGI / readback
+  errors report the removal reason too.
+- Damage of a frame dropped on exhaustion (or pacing) is carried into
+  the next delivered frame. `Exhaustion::Stall` waits one frame period
+  for a returned buffer before dropping (GDI waits too).
 
 **Selection and caps.** `Auto` order WGC → DXGI → GDI. Caps are probed
 per call where the OS can say: `RtlGetVersion` (build),
@@ -312,6 +325,18 @@ per call where the OS can say: `RtlGetVersion` (build),
   `StartCapture` (`Unsatisfiable(Operation)`). DXGI updates the cursor
   mode only; GDI the cursor and the tier.
 - DXGI concurrency is 1 (one duplication of an output per process).
+  On `ACCESS_LOST` the lost duplication is released before a new one is
+  made. `E_ACCESSDENIED` pauses (`SecureDesktop`), a disconnected session
+  pauses (`SystemPaused`); `E_INVALIDARG` (already duplicated here),
+  `NOT_CURRENTLY_AVAILABLE` (process limit) and `UNSUPPORTED` are named
+  errors with a bounded retry. `DuplicateOutput1` falling to `UNSUPPORTED`
+  retries the BGRA `DuplicateOutput`; every duplication is made in
+  physical pixels. Pool textures take the acquired image's size and
+  format.
+- GDI `PrintWindow` waits for the window's thread: this process's own
+  windows are refused, hung ones skipped, others drawn on a helper
+  thread bounded by 500 ms (a stream fails after 20 misses in a row; a
+  DIB a late helper may still write is never reused).
 
 **Sources.**
 - Geometry in physical desktop pixels (per-monitor DPI awareness v2 on
@@ -332,28 +357,41 @@ per call where the OS can say: `RtlGetVersion` (build),
   waiting for the listing.
 - `watch_sources`: a hidden top-level window (broadcasts such as
   `WM_DISPLAYCHANGE` reach top-level windows only) plus out-of-context
-  WinEvent hooks; any event relists after 50 ms.
+  WinEvent hooks; any event relists after 50 ms, window moves alone once
+  they paused 250 ms (at most 1 s). `edidIdsValid` is flag bit 2;
+  `QueryDisplayConfig` is asked again when the topology changes mid-call.
+  `SetThreadDpiAwarenessContext` is looked up at run time (1607+).
 
 **Clocks and audio.** `pts_ns` on `PtsClock::Qpc` (WGC
 `SystemRelativeTime`, DXGI `LastPresentTime`, WASAPI's QPC position);
 `wall_us_for(Qpc)` ages it against QPC now. WASAPI shares the Linux
 `SampleClock` (moved to `desktop/audio_clock.rs`), UNIX-epoch µs.
-- `System`: default render endpoint loopback. `ExcludeSelf` and
+- `System`: default render endpoint loopback; a new default endpoint
+  (polled every 500 ms) or `AUDCLNT_E_DEVICE_INVALIDATED` reopens the
+  stream there at the same rate and channels, with `discontinuity`. `ExcludeSelf` and
   `Application(executable or pid)`: process loopback through
   `ActivateAudioInterfaceAsync` (build 20348+, else `OsTooOld`).
   `Node` is `Unsatisfiable(Audio)`.
 - Rate, channels and format are asked with `AUTOCONVERTPCM`.
 - Loopback delivers no packets while nothing plays; after 40 ms
   without one, the thread fills the gap with silence, so the timeline
-  stays continuous as a PipeWire monitor's does.
+  stays continuous as a PipeWire monitor's does. The fill counts from
+  the end of the delivered audio (not the session start, so clock drift
+  never piles up), at most 200 ms at once.
+- Learn gives process loopback both 20348 and 20438: the caps use
+  20348, and a failed activation below 20438 answers `OsTooOld`.
 
 **Borderless.** `WindowsOptions::borderless` needs
 `CapturePolicy::allow_borderless` (else `Require` →
 `PolicyDenied`, `Prefer` → border shown). The grant is read through the
-`graphicsCaptureWithoutBorder` capability; `NotDetermined` prompts once
-(`RequestAccessAsync`). Granted → `IsBorderRequired(false)`,
-`BorderState::Hidden`; denied → `Require` fails `ConsentDenied`.
-`access` / `request_access(BorderlessCapture)` read / prompt.
+`graphicsCaptureWithoutBorder` capability; only
+`request_access(BorderlessCapture)` prompts (`RequestAccessAsync` on a
+thread of its own, at most 2 min), never `open`: `Require` before an
+answer is `ConsentRequired`. Granted → `IsBorderRequired(false)`,
+`BorderState::Hidden` (a best case: another capture requiring a border
+shows it); denied → `Require` fails `ConsentDenied`; an unpackaged app
+(`NotDeclaredByApp`) reads `Restricted`, is never prompted, and a
+`Require` session names the missing package identity.
 
 **COM and threads.** `CoIncrementMTAUsage` once per process, so every
 plugin thread runs in the implicit MTA. WGC objects are made and used on
