@@ -10,6 +10,7 @@ import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.view.Surface
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
@@ -84,6 +85,9 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
         appContext.getSharedPreferences("${appContext.packageName}.istmo.screen_capture", Context.MODE_PRIVATE)
     }
 
+    private val main = Handler(Looper.getMainLooper())
+    private val permissionRequests = ConcurrentHashMap<String, PermissionRequest>()
+
     init {
         ProjectionForeground.onStopRequested = ::stopFromNotification
     }
@@ -93,6 +97,37 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
         val host = activity as ComponentActivity
         activityRef = WeakReference(host)
         consent.attach(host)
+        if (permissionRequests.isEmpty()) return
+        // As consents do: a prompt still showing when the activity is
+        // recreated is registered again under its key, after `onCreate`,
+        // so the result reaches the new registry.
+        main.post {
+            for (request in permissionRequests.values) request.register(host)
+        }
+    }
+
+    /** One runtime permission prompt, registered on whichever activity is current. Main thread. */
+    private inner class PermissionRequest(
+        val key: String,
+        val permission: String,
+        val onResult: () -> Unit,
+    ) {
+        @Volatile
+        var launcher: ActivityResultLauncher<String>? = null
+
+        fun register(activity: ComponentActivity): ActivityResultLauncher<String> {
+            val registered = activity.activityResultRegistry.register(
+                key,
+                ActivityResultContracts.RequestPermission(),
+            ) {
+                permissionRequests.remove(key)
+                launcher?.unregister()
+                permissionPrefs.edit().putBoolean(permission, true).apply()
+                onResult()
+            }
+            launcher = registered
+            return registered
+        }
     }
 
     // ---- Reports ------------------------------------------------------
@@ -283,18 +318,23 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
         val activity = activityRef.get()?.takeUnless { it.isFinishing || it.isDestroyed }
             ?: fail(CaptureError.Protocol(BackendDetail(PROJECTION, "request_access", "no host activity")))
         suspendCancellableCoroutine { cont ->
-            // Registered outside a lifecycle: unregistered by hand.
-            lateinit var launcher: ActivityResultLauncher<String>
-            launcher = activity.activityResultRegistry.register(
-                "istmo.screen_capture.permission.${System.nanoTime()}",
-                ActivityResultContracts.RequestPermission(),
-            ) {
-                launcher.unregister()
-                permissionPrefs.edit().putBoolean(permission, true).apply()
-                if (cont.isActive) cont.resume(Unit)
+            // Registered outside a lifecycle: unregistered by hand, on the
+            // main thread.
+            val key = "istmo.screen_capture.permission.${System.nanoTime()}"
+            val request = PermissionRequest(key, permission) { if (cont.isActive) cont.resume(Unit) }
+            permissionRequests[key] = request
+            val launcher = request.register(activity)
+            cont.invokeOnCancellation {
+                permissionRequests.remove(key)
+                main.post { request.launcher?.unregister() }
             }
-            cont.invokeOnCancellation { launcher.unregister() }
-            launcher.launch(permission)
+            try {
+                launcher.launch(permission)
+            } catch (e: RuntimeException) {
+                permissionRequests.remove(key)
+                launcher.unregister()
+                throw e
+            }
         }
     }
 
