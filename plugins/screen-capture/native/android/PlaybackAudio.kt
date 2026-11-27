@@ -123,9 +123,19 @@ internal class PlaybackAudio(
             created.release()
             fail(CaptureError.SinkUnreachable)
         }
+        val started = try {
+            created.startRecording()
+            created.recordingState == AudioRecord.RECORDSTATE_RECORDING
+        } catch (e: RuntimeException) {
+            created.release()
+            fail(CaptureError.Protocol(BackendDetail(PROJECTION, "AudioRecord.startRecording", e.toString())))
+        }
+        if (!started) {
+            created.release()
+            fail(CaptureError.Protocol(BackendDetail(PROJECTION, "AudioRecord.startRecording", "not recording")))
+        }
         record = created
         running = true
-        created.startRecording()
         thread = Thread({ loop(created, chunkBytes) }, "istmo-capture-audio").apply {
             isDaemon = true
             start()
@@ -216,12 +226,14 @@ internal class PlaybackAudio(
         return System.nanoTime() - frames * 1_000_000_000L / plan.rate
     }
 
-    /** Stop reading (the blocking read returns) and wait for the thread. */
+    /**
+     * Stop reading without waiting: the reader thread sees [running] after
+     * its current chunk (10 ms) and stops and releases the record itself,
+     * so the caller's thread (the capture thread, delivering frames) is
+     * never held up. The record is never touched from here.
+     */
     fun stop() {
-        if (!running) return
         running = false
-        runCatching { record?.stop() }
-        thread?.join(JOIN_MS)
     }
 
     private companion object {
@@ -229,6 +241,5 @@ internal class PlaybackAudio(
         const val CHUNKS_PER_SECOND = 100
         const val SLOTS = 32
         const val REANCHOR_US = 20_000L
-        const val JOIN_MS = 1_000L
     }
 }

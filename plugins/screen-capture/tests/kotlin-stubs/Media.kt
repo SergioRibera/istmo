@@ -73,6 +73,7 @@ open class AudioRecord {
     }
 
     val state: Int get() = 0
+    val recordingState: Int get() = 0
     fun startRecording() {}
     fun read(audioBuffer: java.nio.ByteBuffer, sizeInBytes: Int, readMode: Int): Int = 0
     fun getTimestamp(outTimestamp: AudioTimestamp, timebase: Int): Int = 0
@@ -81,6 +82,7 @@ open class AudioRecord {
 
     companion object {
         const val STATE_INITIALIZED: Int = 1
+        const val RECORDSTATE_RECORDING: Int = 3
         const val READ_BLOCKING: Int = 0
         const val SUCCESS: Int = 0
 
