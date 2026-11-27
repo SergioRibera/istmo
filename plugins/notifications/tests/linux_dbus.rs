@@ -490,8 +490,19 @@ fn fdo_backend_against_a_fake_server() {
             reason: DismissReason::Other
         }
     );
+    // The host reads the info again once the backend sees the new owner
+    // (a bus signal, then a queued report).
     let (_server, calls) = fake_server("Plain", &["body"]);
-    let caps = pollster::block_on(s.client.capabilities()).unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let caps = loop {
+        s.host.settle();
+        let caps = pollster::block_on(s.client.capabilities()).unwrap();
+        if caps.backend != "fdo" {
+            break caps;
+        }
+        assert!(Instant::now() < deadline, "info not read again");
+        std::thread::sleep(Duration::from_millis(10));
+    };
     assert_eq!(caps.backend, "fdo:Plain 1.9");
     assert_eq!(caps.support(Feature::InlineReply), Support::Unsupported);
     assert_eq!(caps.support(Feature::Actions), Support::Unsupported);

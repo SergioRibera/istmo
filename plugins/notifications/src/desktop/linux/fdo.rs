@@ -78,6 +78,9 @@ enum Entry {
 #[derive(Debug, Default)]
 struct State {
     server: Option<Arc<Server>>,
+    /// `info()` answered without a server. The host keeps that answer
+    /// until `changed()`, so the next server that shows up reports one.
+    info_stale: bool,
 
     by_id: HashMap<NotificationId, Entry>,
     by_server: HashMap<u32, NotificationId>,
@@ -152,6 +155,7 @@ impl Fdo {
                 // restart: only an owner that goes away loses state.
                 if change.args().is_ok_and(|args| args.old_owner().is_none()) {
                     fdo.owner.forget();
+                    fdo.server_appeared();
                     continue;
                 }
                 fdo.server_restarted();
@@ -186,9 +190,25 @@ impl Fdo {
             value_hint,
             kde_jobs,
         });
-        let mut state = lock(&self.state);
-        // A restart while reading: keep what the other thread stored.
-        Ok(Arc::clone(state.server.get_or_insert(server)))
+        let (server, stale) = {
+            let mut state = lock(&self.state);
+            // A restart while reading: keep what the other thread stored.
+            let server = Arc::clone(state.server.get_or_insert(server));
+            (server, std::mem::take(&mut state.info_stale))
+        };
+        if stale {
+            self.sink.changed();
+        }
+        Ok(server)
+    }
+
+    /// A first owner took the server's name (D-Bus activation, or a
+    /// server started after the one that left).
+    fn server_appeared(&self) {
+        let stale = std::mem::take(&mut lock(&self.state).info_stale);
+        if stale {
+            self.sink.changed();
+        }
     }
 
     /// The server's bus name changed owner: what it showed is gone.
@@ -439,6 +459,7 @@ impl Backend for Fdo {
             Ok(server) => server.info.clone(),
             Err(err) => {
                 tracing::debug!(%err, "notifications: no notification server");
+                lock(&self.state).info_stale = true;
                 let mut info = BackendInfo::basic("fdo");
                 info.capabilities.max_actions = 0;
                 info.limits.max_actions = 0;
