@@ -10,9 +10,14 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
@@ -105,14 +110,24 @@ class IstmoProjectionService : Service() {
  * Process-scope control of [IstmoProjectionService]: every projection
  * holds one lease, the service runs in the foreground while any lease is
  * out and stops with the last one.
+ *
+ * Every start / stop decision runs on the main thread (where the service
+ * callbacks run too), so a lease taken while the last one is given back
+ * never sees its service stopped under it. A service started but not yet
+ * in the foreground is never stopped from outside (that crashes the
+ * process): it stops itself once it got there, unless a lease wants it
+ * again by then.
  */
 internal object ProjectionForeground {
     private const val START_TIMEOUT_MS = 5_000L
 
-    private val lock = Any()
+    private val main = Handler(Looper.getMainLooper())
+
+    // Main thread only.
     private var leases = 0
     private var service: IstmoProjectionService? = null
     private var waiting: CompletableDeferred<Unit>? = null
+    private var stopWhenUp = false
 
     /** Called when the notification's Stop action fires. */
     @Volatile
@@ -120,14 +135,24 @@ internal object ProjectionForeground {
 
     /** Take a lease, starting the service and waiting until it is in the foreground. */
     suspend fun acquire(context: Context) {
-        val deferred = synchronized(lock) {
+        // Not cancellable: the lease taken on the main thread must come
+        // back to a caller that gives it back.
+        val deferred = withContext(NonCancellable + Dispatchers.Main) {
             leases += 1
-            if (service != null) return
-            waiting ?: CompletableDeferred<Unit>().also { waiting = it }
-        }
+            stopWhenUp = false
+            if (service != null) return@withContext null
+            waiting ?: CompletableDeferred<Unit>().also { started ->
+                try {
+                    val intent = Intent(context, IstmoProjectionService::class.java)
+                    if (Build.VERSION.SDK_INT >= Api.O) context.startForegroundService(intent) else context.startService(intent)
+                } catch (e: RuntimeException) {
+                    leases -= 1
+                    throw e
+                }
+                waiting = started
+            }
+        } ?: return
         try {
-            val intent = Intent(context, IstmoProjectionService::class.java)
-            if (Build.VERSION.SDK_INT >= Api.O) context.startForegroundService(intent) else context.startService(intent)
             withTimeout(START_TIMEOUT_MS) { deferred.await() }
         } catch (e: Throwable) {
             release(context)
@@ -135,31 +160,45 @@ internal object ProjectionForeground {
         }
     }
 
-    /** Give a lease back; the last one stops the service. */
+    /** Give a lease back; the last one stops the service. Any thread. */
     fun release(context: Context) {
-        val stop = synchronized(lock) {
-            if (leases == 0) return
+        main.post {
+            if (leases == 0) return@post
             leases -= 1
-            // A lease taken from now on starts the service again instead
-            // of trusting one that is stopping.
-            if (leases == 0) service = null
-            leases == 0
+            if (leases > 0) return@post
+            val running = service
+            service = null
+            if (running != null) {
+                context.stopService(Intent(context, IstmoProjectionService::class.java))
+            } else if (waiting != null) {
+                stopWhenUp = true
+            }
         }
-        if (stop) context.stopService(Intent(context, IstmoProjectionService::class.java))
     }
 
+    /** Main thread (`onStartCommand`). */
     fun onForeground(running: IstmoProjectionService, error: Throwable?) {
-        val deferred = synchronized(lock) {
-            if (error == null) service = running
-            waiting.also { waiting = null }
+        val deferred = waiting
+        waiting = null
+        if (error != null) {
+            stopWhenUp = false
+            deferred?.completeExceptionally(error)
+            return
         }
-        if (error == null) deferred?.complete(Unit) else deferred?.completeExceptionally(error)
+        if (stopWhenUp || leases == 0) {
+            // Every lease went while it was starting.
+            stopWhenUp = false
+            running.stopSelf()
+            deferred?.completeExceptionally(IllegalStateException("projection service no longer needed"))
+            return
+        }
+        service = running
+        deferred?.complete(Unit)
     }
 
+    /** Main thread (`onDestroy`). */
     fun onDestroyed(stopped: IstmoProjectionService) {
-        synchronized(lock) {
-            if (service === stopped) service = null
-        }
+        if (service === stopped) service = null
     }
 
     fun stopRequested() {
