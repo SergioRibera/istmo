@@ -295,6 +295,8 @@ pub(crate) struct Inner {
     reports: Worker<Report>,
     clock: fn() -> i64,
     labels: Labels,
+    /// Bundled sounds (`with_sound_dir`), played by path on Linux.
+    sounds: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Inner {
@@ -339,6 +341,7 @@ pub struct DesktopNotificationsBuilder {
     labels: Labels,
     clock: fn() -> i64,
     manual_timer: bool,
+    sounds: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for DesktopNotificationsBuilder {
@@ -378,6 +381,18 @@ impl DesktopNotificationsBuilder {
     #[must_use]
     pub fn with_channels(mut self, channels: Vec<ChannelSpec>) -> Self {
         self.channels = channels;
+        self
+    }
+
+    /// Where the app's bundled sounds are (`<name>.oga|ogg|wav`), usually
+    /// `istmo_notifications::bundled_sounds!()`. Linux plays
+    /// `Sound::Named(name)` from there by path (fdo `sound-file`); other
+    /// names stay theme sound names. Windows plays bundled sounds only
+    /// from packaged apps (`ms-appx:`), macOS from the app bundle's
+    /// `Library/Sounds`: there it changes nothing.
+    #[must_use]
+    pub fn with_sound_dir(mut self, dir: Option<&Path>) -> Self {
+        self.sounds = dir.map(Path::to_path_buf);
         self
     }
 
@@ -446,6 +461,7 @@ impl DesktopNotificationsBuilder {
             reports: Worker::default(),
             clock: self.clock,
             labels: self.labels,
+            sounds: self.sounds,
         });
         let timer = if self.manual_timer {
             HostTimer::Manual(Arc::new(ManualTimer::default()))
@@ -478,6 +494,7 @@ impl DesktopNotifications {
             labels: Labels::default(),
             clock: crate::builder::now_ms,
             manual_timer: false,
+            sounds: None,
         }
     }
 
@@ -944,6 +961,22 @@ impl Inner {
         Some(Moved(deadline))
     }
 
+    /// `n` with `Sound::Named(name)` pointing at its file in the bundled
+    /// sound directory (Linux only, where the fdo backend plays a name
+    /// holding `/` through `sound-file`); `None` when nothing changes.
+    fn with_bundled_sound(&self, n: &Notification) -> Option<Notification> {
+        if !cfg!(target_os = "linux") {
+            return None;
+        }
+        let (Some(dir), Some(crate::Sound::Named(name))) = (&self.sounds, &n.sound) else {
+            return None;
+        };
+        let file = crate::build_config::bundled_sound_file(dir, name)?;
+        let mut n = n.clone();
+        n.sound = Some(crate::Sound::Named(file.display().to_string()));
+        Some(n)
+    }
+
     /// Sends `post` through the backend from inside its lane: images are
     /// collected and the body rendered with the state unlocked, the
     /// result recorded under it.
@@ -972,7 +1005,10 @@ impl Inner {
         let images = reused.unwrap_or_else(|| Arc::new(lock(&self.images).collect(&notification)));
         let rendered = render(&notification, &host.limits);
         let shown = backend.show(&Shown {
-            notification: &notification,
+            notification: self
+                .with_bundled_sound(&notification)
+                .as_ref()
+                .unwrap_or(&notification),
             rendered: &rendered,
             images: &images,
             mode,

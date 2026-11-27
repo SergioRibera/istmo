@@ -50,6 +50,35 @@ pub fn channels_from_build(hex: Option<&str>) -> Vec<ChannelSpec> {
     }
 }
 
+/// The directory of the app's bundled sounds, staged for a desktop build.
+///
+/// Every file of `[app.notifications] sounds` is there as `<name>.<ext>`;
+/// `None` when the app bundles none or does not build with
+/// `istmo-build`. Hand it to `DesktopNotificationsBuilder::with_sound_dir`:
+/// Linux then plays `Sound::Named(name)` from it through the fdo
+/// `sound-file` hint. The path is the build's `OUT_DIR`, so it serves
+/// `cargo run`; a packaged app passes the directory it installs the
+/// sounds to instead.
+#[macro_export]
+macro_rules! bundled_sounds {
+    () => {
+        ::core::option_env!("ISTMO_NOTIFICATION_SOUND_DIR").map(::std::path::Path::new)
+    };
+}
+
+/// The file in `dir` that plays `name` through the fdo `sound-file`
+/// hint: `<name>.oga`, `<name>.ogg` or `<name>.wav`, the first present.
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+pub(crate) fn bundled_sound_file(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    if name.is_empty() || name.contains(['/', '\\', '.']) {
+        return None;
+    }
+    ["oga", "ogg", "wav"]
+        .into_iter()
+        .map(|ext| dir.join(format!("{name}.{ext}")))
+        .find(|path| path.is_file())
+}
+
 fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
     let digit = |byte: u8| -> Result<u8, String> {
         char::from(byte)
@@ -80,5 +109,21 @@ mod tests {
         assert_eq!(channels_from_build(Some("zz")), Vec::new());
         // One channel announced, none present.
         assert_eq!(channels_from_build(Some("01")), Vec::new());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    #[test]
+    fn bundled_sounds_resolve_by_name_only() {
+        let dir = std::env::temp_dir().join(format!("istmo-notif-sounds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ding.ogg"), b"ogg").unwrap();
+        std::fs::write(dir.join("ding.wav"), b"wav").unwrap();
+        std::fs::write(dir.join("chime.caf"), b"caf").unwrap();
+        assert_eq!(bundled_sound_file(&dir, "ding"), Some(dir.join("ding.ogg")));
+        // Apple-only formats and system theme names stay names.
+        assert_eq!(bundled_sound_file(&dir, "chime"), None);
+        assert_eq!(bundled_sound_file(&dir, "message-new-instant"), None);
+        assert_eq!(bundled_sound_file(&dir, "../ding"), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
