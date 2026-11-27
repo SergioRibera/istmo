@@ -1101,7 +1101,8 @@ impl Worker {
                     continue;
                 }
                 Err(err) => {
-                    self.out.fail(hr("AcquireNextFrame", &err));
+                    self.out
+                        .fail(self.dup.gpu.failure(ID, "AcquireNextFrame", &err));
                     break;
                 }
             };

@@ -232,6 +232,27 @@ impl Gpu {
         })
     }
 
+    /// Why the driver removed the device (TDR, driver update, GPU
+    /// switch), once it did: every later call on it fails.
+    pub(crate) fn removed(&self, backend: BackendId) -> Option<CaptureError> {
+        // SAFETY: a live device; the call only reads its state.
+        let reason = unsafe { self.device.GetDeviceRemovedReason() };
+        reason
+            .err()
+            .map(|e| hr(backend, "ID3D11Device.GetDeviceRemovedReason", &e))
+    }
+
+    /// `err` from a call on this device, or the removal that caused it.
+    pub(crate) fn failure(
+        &self,
+        backend: BackendId,
+        operation: &str,
+        err: &windows_core::Error,
+    ) -> CaptureError {
+        self.removed(backend)
+            .unwrap_or_else(|| hr(backend, operation, err))
+    }
+
     /// A texture like `like` (same size and format) for `usage`.
     fn texture(
         &self,
@@ -339,7 +360,7 @@ impl Gpu {
                 return Ok(());
             }
             if let Err(err) = polled {
-                return Err(hr(backend, "GetData", &err));
+                return Err(self.failure(backend, "GetData", &err));
             }
             if Instant::now() >= deadline {
                 return Err(CaptureError::protocol(
@@ -423,7 +444,7 @@ impl Readback {
             gpu.context
                 .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&raw mut mapped))
         };
-        map.map_err(|e| hr(backend, "Map", &e))?;
+        map.map_err(|e| gpu.failure(backend, "Map", &e))?;
         let row = usize::try_from(size.width * format.bytes_per_pixel()).unwrap_or(0);
         let rows = usize::try_from(size.height).unwrap_or(0);
         let pitch = usize::try_from(mapped.RowPitch).unwrap_or(0);

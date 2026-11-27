@@ -449,6 +449,12 @@ struct Setup {
     min_interval: Option<Duration>,
 }
 
+/// Whether a failed `TryGetNextFrame` only means "nothing queued":
+/// windows-rs turns the null frame into an error carrying `S_OK`.
+const fn queue_empty(code: windows_core::HRESULT) -> bool {
+    code.0 >= 0
+}
+
 /// A started WGC capture; stops (session and pool closed) on drop.
 struct Capture {
     device: IDirect3DDevice,
@@ -554,21 +560,32 @@ impl Capture {
     }
 
     /// The newest frame (older queued ones are closed and counted in
-    /// `skipped`), waiting at most `timeout`.
-    fn next(&self, timeout: Duration, skipped: &mut u32) -> Option<Direct3D11CaptureFrame> {
+    /// `skipped`), waiting at most `timeout`. A failure other than "no
+    /// frame queued" is an error.
+    fn next(
+        &self,
+        timeout: Duration,
+        skipped: &mut u32,
+    ) -> Result<Option<Direct3D11CaptureFrame>, CaptureError> {
         let mut newest: Option<Direct3D11CaptureFrame> = None;
         loop {
-            if let Ok(frame) = self.pool.TryGetNextFrame() {
-                if let Some(older) = newest.replace(frame) {
-                    let _closed = older.Close();
-                    *skipped = skipped.saturating_add(1);
+            match self.pool.TryGetNextFrame() {
+                Ok(frame) => {
+                    if let Some(older) = newest.replace(frame) {
+                        let _closed = older.Close();
+                        *skipped = skipped.saturating_add(1);
+                    }
                 }
-            } else {
-                if newest.is_some() {
-                    return newest;
+                Err(err) if !queue_empty(err.code()) => {
+                    return Err(hr("TryGetNextFrame", &err));
                 }
-                if self.arrived.recv_timeout(timeout).is_err() {
-                    return None;
+                Err(_) => {
+                    if newest.is_some() {
+                        return Ok(newest);
+                    }
+                    if self.arrived.recv_timeout(timeout).is_err() {
+                        return Ok(None);
+                    }
                 }
             }
         }
@@ -777,8 +794,11 @@ impl Backend for WgcBackend {
                         "no frame in time (is the window minimised?)",
                     ));
                 }
-                if let Some(frame) = capture.next(remaining.min(FRAME_WAIT), &mut skipped) {
+                if let Some(frame) = capture.next(remaining.min(FRAME_WAIT), &mut skipped)? {
                     break frame;
+                }
+                if let Some(err) = gpu.removed(ID) {
+                    return Err(err);
                 }
             };
             let texture = texture_of(&frame)?;
@@ -1069,8 +1089,21 @@ impl Worker {
                     });
                 }
             }
-            let Some(frame) = capture.next(FRAME_WAIT, &mut skipped) else {
-                continue;
+            let frame = match capture.next(FRAME_WAIT, &mut skipped) {
+                Ok(Some(frame)) => frame,
+                Ok(None) => {
+                    // A removed device (TDR, driver update, GPU switch)
+                    // makes the pool go quiet, not fail.
+                    if let Some(err) = self.gpu.removed(ID) {
+                        self.out.fail(err);
+                        break;
+                    }
+                    continue;
+                }
+                Err(err) => {
+                    self.out.fail(self.gpu.removed(ID).unwrap_or(err));
+                    break;
+                }
             };
             if !self.out.wants_frames() {
                 // Paused: WGC frames are released at once; the next
@@ -1324,6 +1357,14 @@ impl Worker {
 mod tests {
     use super::*;
     use crate::types::{FormatChoice, FormatTier};
+
+    #[test]
+    fn only_a_null_frame_means_an_empty_queue() {
+        assert!(queue_empty(windows_core::HRESULT(0)));
+        let removed = windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED;
+        assert!(!queue_empty(removed));
+        assert!(!queue_empty(windows::Win32::Foundation::E_FAIL));
+    }
 
     fn tier(memory: BufferMemory, format: PixelFormat) -> FormatTier {
         FormatTier::new(vec![FormatChoice {
