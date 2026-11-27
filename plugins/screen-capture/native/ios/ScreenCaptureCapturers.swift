@@ -182,7 +182,12 @@ final class SckCapturer: NSObject, ScreenCapturer, SCStreamOutput, SCStreamDeleg
     private var stream: SCStream?
     private var filter: SCContentFilter?
     private weak var feed: ScreenCaptureFeed?
-    private var pick: CheckedContinuation<SCContentFilter, Error>?
+    /// The pick waiting for the person, and its number (a timeout or a
+    /// cancellation only ends the pick it was armed for).
+    private var pick: (id: UInt64, continuation: CheckedContinuation<SCContentFilter, Error>)?
+    private var picks: UInt64 = 0
+    /// Longest a person may take to pick, as on macOS.
+    private static let pickTimeoutNs: UInt64 = 120_000_000_000
 
     override init() {
         super.init()
@@ -229,22 +234,47 @@ final class SckCapturer: NSObject, ScreenCapturer, SCStreamOutput, SCStreamDeleg
 
     /// Show the shared picker; the person's choice comes back through the
     /// observer methods below.
+    /// The pick ends with the person's choice, after `pickTimeoutNs`, or
+    /// when the calling task is cancelled (all `consentRequired`); a new
+    /// pick on this capturer ends the one before it.
     private func choose() async throws -> SCContentFilter {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<SCContentFilter, Error>) in
-            lock.withLock { pick = continuation }
-            DispatchQueue.main.async {
-                let picker = SCContentSharingPicker.shared
-                picker.add(self)
-                picker.isActive = true
-                picker.present()
+        let id: UInt64 = lock.withLock {
+            picks += 1
+            return picks
+        }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<SCContentFilter, Error>) in
+                let previous = lock.withLock { () -> CheckedContinuation<SCContentFilter, Error>? in
+                    defer { pick = (id, continuation) }
+                    return pick?.continuation
+                }
+                previous?.resume(throwing: ScreenCapture.CaptureError.consentRequired)
+                if Task.isCancelled {
+                    finishPick(.failure(ScreenCapture.CaptureError.consentRequired), id: id)
+                    return
+                }
+                DispatchQueue.main.async {
+                    let picker = SCContentSharingPicker.shared
+                    picker.add(self)
+                    picker.isActive = true
+                    picker.present()
+                }
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: Self.pickTimeoutNs)
+                    self?.finishPick(.failure(ScreenCapture.CaptureError.consentRequired), id: id)
+                }
             }
+        } onCancel: {
+            finishPick(.failure(ScreenCapture.CaptureError.consentRequired), id: id)
         }
     }
 
-    private func finishPick(_ outcome: Result<SCContentFilter, Error>) {
+    /// End the waiting pick (only pick `id`, when given).
+    private func finishPick(_ outcome: Result<SCContentFilter, Error>, id: UInt64? = nil) {
         guard let continuation = lock.withLock({ () -> CheckedContinuation<SCContentFilter, Error>? in
-            defer { pick = nil }
-            return pick
+            guard let pending = pick, id == nil || pending.id == id else { return nil }
+            pick = nil
+            return pending.continuation
         }) else { return }
         DispatchQueue.main.async {
             let picker = SCContentSharingPicker.shared
