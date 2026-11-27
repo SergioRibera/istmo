@@ -166,7 +166,9 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
                 .map { FormatCaps(it.format, it.memory, emptyList(), it.copies) },
             maxFps = display?.refreshHz?.roundToInt()?.toUInt(),
             minIntervalUs = null,
-            maxSize = display?.let { Size(maxOf(it.width, it.height).toUInt(), maxOf(it.width, it.height).toUInt()) },
+            // The display in its current rotation: what a capture holds at
+            // native size (a rotation reports again through `SourceResized`).
+            maxSize = display?.pixels,
             scaling = Scaling.Native,
             region = RegionCrop.InMeta,
             composite = CompositeCaps(CompositeSupport.Unsupported, CompositeSupport.Unsupported),
