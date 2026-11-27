@@ -1238,6 +1238,7 @@ in that module.
 | `values/istmo_notifications.xml` | `color/istmo_notification_accent` (`#AARRGGBB`), only when `accent` (the flag bools / string were removed 2026-11-27: nothing read them; Kotlin checks the requested permissions) |
 | `raw/istmo_notification_channels.bin` | wire bytes of `Vec<ChannelSpec>` (no header, istmo codec = bincode 2 standard), only when channels exist |
 | `raw/istmo_notification_sound_<name>.<ext>` | Android-playable sounds; `Sound::Named("ding")` = `R.raw.istmo_notification_sound_ding`, URI `android.resource://<pkg>/raw/istmo_notification_sound_ding` |
+| `raw/istmo_notifications_keep.xml` | `tools:keep` of every resource above (the backend reads them by name), written with any of them; never packaged |
 
 - The Kotlin backend resolves these with `resources.getIdentifier(name,
   type, context.packageName)` (the R class is the app's, not the
@@ -1906,7 +1907,7 @@ change was made. The plugin keeps `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLET
   `CalendarRules` + `Triggers` (ports of `rule.rs` and `Trigger`
   timing). `Coalescer.kt`.
 - Notifications are posted with tag = id, id 0; group summaries with tag
-  `istmo.group:<group id>`. Every notification carries the extra
+  `istmo.group:<group id>` and id 1 (see "Review fixes (Android)"). Every notification carries the extra
   `dev.istmo.notifications.MARKER` (for `delivered` / `cancel_all`) and,
   when its wire encoding is at most 32 KiB, `dev.istmo.notifications.WIRE`
   so `update` / `append_message` / snooze still work after a restart.
@@ -1989,6 +1990,97 @@ change was made. The plugin keeps `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLET
 - Permission state: `NotDetermined` on 33+ until the prompt was shown
   once (a preference), then `Denied` while not granted.
 
+### Review fixes (Android)
+
+Branch `notif-fix-android`. Supersede the notes above they contradict.
+
+- **Validation.** `Validate.kt` is the port of `src/validate.rs` (same
+  limits, field paths and problems; characters counted as scalar values,
+  controls = category Cc). The backend runs it like the desktop host:
+  `show` / `schedule` (notification + trigger), `update` (patch, then the
+  whole patched notification), `set_progress` (the bar), `append_message`
+  (the message), `set_channels` (`channels[i].<field>`). An
+  `Every` under 60 s is `Invalid(trigger.every)` (was a 1 ms repeat).
+  The Rust tests are mirrored in `NativeChecks.kt`.
+- **Per-id lanes.** Every `notify` / `cancel` of one id runs in its lane
+  (a monitor per id, refcounted under the state lock); each post carries
+  the content version it was built from and is skipped inside the lane
+  when the table moved on (cancelled, or newer content set, which posts
+  on its own). A cancel lands after a post in flight: cancel wins.
+  Scheduled deliveries take tickets under the schedule lock
+  (`delivering`); a cancel revokes them there, so a due entry cancelled
+  before its show is never shown. Lock order: schedule lock before state
+  lock, lane before state lock, never a lane with the schedule lock.
+- **Group summaries.** Tag `istmo.group:<group>` with notification id 1
+  (items use id 0): no notification id can name a summary, so the
+  `istmo.` id prefix stays allowed (no cross-platform rule change).
+  Posted once a group has 2 members, then **kept until it has none**
+  (removing a summary makes the system cancel its children). Re-posted
+  only when the member set, the titles or the group texts change; every
+  summary post is charged to the coalescer. Summaries are not
+  auto-cancel and carry a delete intent that only forgets them (their
+  children report their own dismissals). Group membership is the
+  plugin's active set (id -> group), read back from
+  `getActiveNotifications` at start, so members shown before a restart
+  keep their summary.
+- **Taps.** Items are never auto-cancel (a system auto-cancel sends no
+  delete intent and the id stayed in the table: a later `set_progress`
+  resurrected it). The tap intent carries `cancel = !keep_on_tap` and the
+  trampoline removes the notification itself (off the main thread).
+- **Coalescer.** Reply re-posts (`complete` and the cold-process path)
+  go through it as regular updates; summaries spend a token. Dismissals
+  of ids the table does not hold (shown before a restart) join the
+  bounded dismissed list (256, as the core).
+- **50 per app.** The system silently refuses an app's 51st active
+  notification. A post of an id not active checks
+  `getActiveNotifications().size` (plus one when it would add a summary)
+  and fails `TooMany(50)` instead; `show` then restores the table and
+  emits no `Delivered`. Chosen over evicting the oldest for parity
+  (Apple / Windows refuse too). Below API 23 the count is the active set.
+- **Sounds.** `android.resource://<pkg>/raw/<entry>`, never the integer
+  id: channel sounds are fixed once created and ids move between builds.
+- **Channels.** The channels file (format 2: wire `Vec<ChannelSpec>` of
+  the *dynamic* channels, then wire `Vec<String>` of the system channels
+  the plugin created) no longer stores static ones, so the raw resource
+  stays authoritative. `set_channels` creates the merged spec (existing:
+  only name and description change). At start, channels the plugin
+  created that are neither static, dynamic nor `default` (a channel
+  removed from `istmo.toml`) are deleted. `set_channels` on a static id
+  renames it until the next start; `delete_channel` on a static id lasts
+  until the next start too.
+- **Schedule.** `ScheduleEngine` drops dead entries when built from the
+  store and finds the latest missed occurrence with the core's backward
+  doubling search (`FIRST_PROBE_MS`, then the capped walk). A failed save
+  or arm on the alarm / boot / start threads is logged, never thrown.
+- **Robustness.** Handler-thread tasks (coalesced posts, ack timeouts,
+  promotion checks) and the receiver threads catch `Exception`.
+  `Api36.finish` catches `Exception` (reflection throws checked ones) and
+  returns `null`; the renderer then builds the compat notification again
+  with the compat progress bar. Promotion is checked (one binder call a
+  second later) only after an alerting post or when the promotion
+  request changed.
+- **Cold start.** `Responses.attach` sets `hostAttached` and drains the
+  queue under the lock `enqueueIfDetached` takes: a background response
+  is never queued after the drain.
+- **Actions.** "More" cuts on whole actions like `render::render` (the
+  actions whose buttons fit in 2 stay; the first that does not goes with
+  every action after it). A simulated call (API 31+ without full screen)
+  shows the call buttons and then the app's own actions
+  (`render::effective_actions`).
+- **`complete`** of an unknown ack is `NotFound("ack <n>")`; at most 256
+  acks are held (the oldest finished).
+- **Timeout.** Android gives the delete intent no reason. A dismissal
+  within 1 s of `posted + timeout_ms` (the timeout restarts at each post)
+  is reported `Dismissed(Timeout)` and the id leaves the table; earlier
+  ones are `User`. A heuristic: a person dismissing in that last second
+  is reported as the timeout. Whether the delete intent fires on a
+  timeout at all is still unverified on a device.
+- **Shrinking.** istmo-build writes `res/raw/istmo_notifications_keep.xml`
+  (`tools:keep` of the `istmo_notification*` raw, drawable, color, bool
+  and string resources) whenever it writes Android resources: the
+  backend reads them by name, which `shrinkResources` cannot see.
+- Probe commands added: `group-shrink`, `limit`, `invalid`.
+
 ### Verification
 
 - `plugins/notifications/tests/native/android/check.sh` (just
@@ -1996,8 +2088,9 @@ change was made. The plugin keeps `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLET
   - JVM: `CalendarRule.kt` against all 30 rows of
     `tests/schedule_vectors.tsv`, the eight `coalesce.rs` cases (debt floor and
     `set_rate` included) plus a 100-alert floor case, trigger timing, missed deliveries (late within the hour,
-    `Drop`, `DeliverLate`, a daily reminder missed three days), store
-    round trip;
+    `Drop`, `DeliverLate`, a daily reminder missed three days, twenty
+    years asleep, a per-minute repeat after three days off, dead entries
+    dropped), store round trip, every `validate.rs` test case;
   - Android: every `native/android/*.kt` with `-Werror -no-jdk` against
     `android-34/android.jar` and the AndroidX jars of `istmo.toml`
     (fetched from Google Maven), kotlinc 2.3 and 1.9.24.
