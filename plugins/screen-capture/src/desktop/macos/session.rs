@@ -254,9 +254,6 @@ impl LiveSink {
         let mut state = lock(&self.state);
         let size = pixels.size();
         let resized = state.size.is_some_and(|known| known != size);
-        if resized {
-            self.out.event(CaptureEvent::SourceResized(size));
-        }
         state.size = Some(size);
         let pool = &self.pool;
         let depth = usize::from(self.depth);
@@ -278,6 +275,10 @@ impl LiveSink {
         meta.skipped_before = std::mem::take(&mut state.skipped);
         let shape = state.shape.clone();
         drop(state);
+        if resized {
+            // Events go out with the state unlocked.
+            self.out.event(CaptureEvent::SourceResized(size));
+        }
         let buffer = match self.pool.hold(slot) {
             Ok(lease) => {
                 let identity = lease.identity();
