@@ -577,7 +577,7 @@ el build. Lo que recibe cada plataforma:
   `ISTMO_NOTIFICATION_CHANNELS` (la lee
   `istmo_notifications::static_channels!()`), `ISTMO_NOTIFICATION_ACCENT`,
   `ISTMO_NOTIFICATION_APPLE`, `ISTMO_NOTIFICATION_SOUND_DIR` (sonidos
-  preparados en `OUT_DIR`) y, en wasm32, `ISTMO_NOTIFICATION_SERVICE_WORKER`.
+  preparados en `OUT_DIR`) y, en wasm32, `ISTMO_NOTIFICATION_SERVICE_WORKER`. Sirve ese archivo como `istmo-notifications-sw.js` junto a `index.html` (mismo origen, `text/javascript`).
   El empaquetado de macOS firma con los mismos entitlements.
 
 ## `[[remote_override]]`

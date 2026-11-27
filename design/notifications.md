@@ -1195,13 +1195,23 @@ in that module.
   `DesktopNotifications::platform().with_channels(static_channels!()).build()`.
   Backends that want the other envs read them the same way (a macro in
   the plugin crate, expanded in the app); none is wired yet.
-- Web: the plugin must hand its worker over as an asset:
-  `[[assets]] path = "assets/web/istmo-notifications-sw.js"` in
-  `plugins/notifications/istmo.toml` (the web agent adds it with the
-  file). istmo-build finds it in the `DEP_*_ISTMO_ASSETS` payload of
-  `istmo.notifications` by file name and copies it; with the plugin
-  linked but no such asset it warns. Serving it at the site root is the
-  app's bundler step (the env names the file).
+- Web (reconciled with `notif-web`): the worker is
+  `plugins/notifications/web/istmo-notifications-sw.js` (also
+  `istmo_notifications::web_assets::SERVICE_WORKER_JS`). istmo-build
+  finds it in the plugin's `DEP_*_ISTMO_ASSETS` payload by file name, so
+  at integration `plugins/notifications/istmo.toml` needs
+  `[[assets]] path = "web/istmo-notifications-sw.js"` (until then a
+  wasm32 build with the plugin linked warns and stages nothing; the
+  asset also lands in the mobile asset trees, a few KB). It is copied to
+  `OUT_DIR/istmo-notifications-web/istmo-notifications-sw.js`
+  (`ISTMO_NOTIFICATION_SERVICE_WORKER`). Serving it is the app's bundler
+  step: as `istmo-notifications-sw.js` next to `index.html`, same
+  origin, `text/javascript`. The web host registers it unless another
+  worker is registered; apps with their own worker `importScripts` it
+  and pass `ServiceWorker::Existing`. `web_service_worker = false` only
+  skips the staging (apps that write `SERVICE_WORKER_JS` themselves).
+- Linux needs nothing beyond the static channels (app id override:
+  `LinuxOptions::with_app_id` through `DesktopNotifications::builder`).
 
 ### Not done / open
 

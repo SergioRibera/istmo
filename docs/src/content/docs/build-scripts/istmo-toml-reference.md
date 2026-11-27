@@ -564,7 +564,7 @@ missing from `sounds` fail the build. What each target gets:
   `ISTMO_NOTIFICATION_CHANNELS` (read by
   `istmo_notifications::static_channels!()`), `ISTMO_NOTIFICATION_ACCENT`,
   `ISTMO_NOTIFICATION_APPLE`, `ISTMO_NOTIFICATION_SOUND_DIR` (sounds
-  staged in `OUT_DIR`) and, for wasm32, `ISTMO_NOTIFICATION_SERVICE_WORKER`.
+  staged in `OUT_DIR`) and, for wasm32, `ISTMO_NOTIFICATION_SERVICE_WORKER`. Serve that file as `istmo-notifications-sw.js` next to `index.html` (same origin, `text/javascript`).
   macOS packaging signs with the same entitlements.
 
 ## `[[remote_override]]`
