@@ -5,6 +5,18 @@ import Intents
 import IstmoRuntime
 import UserNotifications
 
+/// A built content and the attachment copies it points at: the system
+/// moves those into its store when the request is added; when the add
+/// fails they are the caller's to delete.
+struct NotificationsPrepared {
+    let content: UNNotificationContent
+    let files: [URL]
+
+    func discardFiles() {
+        for file in files { try? FileManager.default.removeItem(at: file) }
+    }
+}
+
 /// Builds the `UNNotificationContent` of one notification.
 extension NotificationsCore {
     /// Render limits on iOS for `n`.
@@ -14,10 +26,13 @@ extension NotificationsCore {
         return NotificationsRender.Limits(maxActions: Self.maxActions, messaging: messaging)
     }
 
-    /// `quiet` = a silent update: no sound, passive, list only.
+    /// `quiet` = a silent update: no sound, passive, list only. `donate`
+    /// = donate the conversation's `INInteraction` (an alerting post shown
+    /// now); silent updates and occurrences armed ahead of time build the
+    /// communication content without donating again.
     func content(
-        for n: Notifications.Notification, rendered: NotificationsRender.Rendered, quiet: Bool
-    ) async -> UNNotificationContent {
+        for n: Notifications.Notification, rendered: NotificationsRender.Rendered, quiet: Bool, donate: Bool
+    ) async -> NotificationsPrepared {
         let messaging = limits(for: n).messaging
         let content = UNMutableNotificationContent()
         content.title = n.title
@@ -28,7 +43,8 @@ extension NotificationsCore {
         } else if case .messaging = n.style {
             content.threadIdentifier = n.id.value
         }
-        content.categoryIdentifier = category(for: rendered, lockScreen: n.lockScreen, communication: messaging)
+        content.categoryIdentifier = await category(for: rendered, lockScreen: n.lockScreen,
+                                                    communication: messaging)
         content.sound = quiet ? nil : Self.sound(n)
         if #available(iOS 15.0, *) {
             content.interruptionLevel = quiet ? .passive : Self.level(n.interruption)
@@ -36,7 +52,8 @@ extension NotificationsCore {
         }
         if #available(iOS 16.0, *), let criteria = n.apple?.filterCriteria { content.filterCriteria = criteria }
         if let target = n.apple?.targetContentId { content.targetContentIdentifier = target }
-        content.attachments = Self.attachments(n)
+        let (attachments, files) = Self.attachments(n)
+        content.attachments = attachments
         var info: [AnyHashable: Any] = [
             NotificationsKeys.id: n.id.value,
             NotificationsKeys.keys: NotificationsKeyMap(rendered, codecs: codecs).encode(),
@@ -48,8 +65,8 @@ extension NotificationsCore {
         // Badge untouched: the app badge belongs to istmo-launcher-actions.
         if messaging, #available(iOS 15.0, *), case .messaging(let conversation) = n.style {
             #if canImport(Intents)
-            if let updated = await NotificationsCommunication.update(content, n, conversation) {
-                return updated
+            if let updated = await NotificationsCommunication.update(content, n, conversation, donate: donate) {
+                return NotificationsPrepared(content: updated, files: files)
             }
             #endif
             // Donation refused: the conversation as body lines.
@@ -57,7 +74,7 @@ extension NotificationsCore {
             plain.messaging = false
             content.body = NotificationsRender.body(n, plain) ?? ""
         }
-        return content
+        return NotificationsPrepared(content: content, files: files)
     }
 
     private static func sound(_ n: Notifications.Notification) -> UNNotificationSound? {
@@ -99,18 +116,31 @@ extension NotificationsCore {
         }
     }
 
-    /// The picture, else the icon, as a file attachment. The system moves
-    /// attachment files into its store, so each post writes a fresh copy.
-    private static func attachments(_ n: Notifications.Notification) -> [UNNotificationAttachment] {
+    /// The picture, else the icon, as a file attachment, and the copy it
+    /// uses. The system moves attachment files into its store, so each
+    /// post writes a fresh copy; a refused one is deleted at once.
+    private static func attachments(_ n: Notifications.Notification) -> ([UNNotificationAttachment], [URL]) {
         var image: Notifications.NotificationImage? = n.icon
         if case .picture(let picture) = n.style { image = picture }
-        guard let image = image, let url = attachmentFile(image) else { return [] }
+        guard let image = image, let url = attachmentFile(image) else { return ([], []) }
         do {
-            return [try UNNotificationAttachment(identifier: "istmo.image", url: url, options: nil)]
+            return ([try UNNotificationAttachment(identifier: "istmo.image", url: url, options: nil)], [url])
         } catch {
             NSLog("istmo-notifications: attachment refused: \(error)")
-            return []
+            try? FileManager.default.removeItem(at: url)
+            return ([], [])
         }
+    }
+
+    /// File extension of an image from its first bytes (PNG, JPEG, GIF):
+    /// the system types an attachment by its extension. Rust's
+    /// `apple_map::image_extension`.
+    static func imageExtension(_ data: Data) -> String? {
+        let head = Array(data.prefix(8))
+        if head.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) { return "png" }
+        if head.starts(with: [0xff, 0xd8, 0xff]) { return "jpg" }
+        if head.starts(with: Array("GIF87a".utf8)) || head.starts(with: Array("GIF89a".utf8)) { return "gif" }
+        return nil
     }
 
     static func attachmentFile(_ image: Notifications.NotificationImage) -> URL? {
@@ -129,7 +159,12 @@ extension NotificationsCore {
                 return url
             case .file(let path):
                 let source = URL(fileURLWithPath: path)
-                let url = dir.appendingPathComponent("\(name).\(source.pathExtension)")
+                var ext = source.pathExtension
+                if ext.isEmpty {
+                    // No extension: the type from the content, else PNG.
+                    ext = (try? Data(contentsOf: source)).flatMap(imageExtension) ?? "png"
+                }
+                let url = dir.appendingPathComponent("\(name).\(ext)")
                 try FileManager.default.copyItem(at: source, to: url)
                 return url
             case .named:
@@ -151,9 +186,12 @@ extension NotificationsCore {
 /// `INSendMessageIntent` in `NSUserActivityTypes`.
 @available(iOS 15.0, *)
 enum NotificationsCommunication {
+    /// `donate` = false: the content is built from the intent without
+    /// donating the interaction again (a silent update, an occurrence
+    /// armed before its message arrives).
     static func update(
         _ content: UNMutableNotificationContent, _ n: Notifications.Notification,
-        _ conversation: Notifications.Conversation
+        _ conversation: Notifications.Conversation, donate: Bool
     ) async -> UNNotificationContent? {
         guard let last = conversation.messages.last, let sender = last.sender else { return nil }
         let me = person(conversation.user, isMe: true)
@@ -171,10 +209,12 @@ enum NotificationsCommunication {
             recipients: recipients, outgoingMessageType: .outgoingMessageText, content: last.text,
             speakableGroupName: groupName, conversationIdentifier: n.id.value, serviceName: nil,
             sender: person(sender, isMe: false), attachments: nil)
-        let interaction = INInteraction(intent: intent, response: nil)
-        interaction.direction = .incoming
         do {
-            try await interaction.donate()
+            if donate {
+                let interaction = INInteraction(intent: intent, response: nil)
+                interaction.direction = .incoming
+                try await interaction.donate()
+            }
             return try content.updating(from: intent)
         } catch {
             NSLog("istmo-notifications: communication notification refused: \(error)")
@@ -192,7 +232,9 @@ enum NotificationsCommunication {
     private static func image(_ image: Notifications.NotificationImage) -> INImage? {
         switch image {
         case .png(let data), .jpeg(let data): return INImage(imageData: data)
-        case .file(let path): return INImage(url: URL(fileURLWithPath: path))
+        // The bytes, not the URL: an `INImage(url:)` is read lazily, by
+        // another process that cannot open the app's files.
+        case .file(let path): return (try? Data(contentsOf: URL(fileURLWithPath: path))).map { INImage(imageData: $0) }
         case .named(let name): return INImage(named: name)
         }
     }

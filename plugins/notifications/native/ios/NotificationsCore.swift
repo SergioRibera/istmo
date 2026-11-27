@@ -77,10 +77,12 @@ extension NSLock {
 
 func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
+
 /// Process-wide state of the iOS backend: the delegate's side (responses,
 /// acks, events) and what the backend shows (live table, coalescer,
 /// categories, schedule store). Every field is guarded by `lock`, never
-/// held across an `await`.
+/// held across an `await`; backend calls for one id run one at a time in
+/// `lanes` (the desktop host's per-id lanes).
 final class NotificationsCore: @unchecked Sendable {
     static let shared = NotificationsCore()
 
@@ -90,26 +92,49 @@ final class NotificationsCore: @unchecked Sendable {
     static let ackTimeout: TimeInterval = 25
     /// The event backlog kept for the first subscriber.
     static let backlog = 64
+    /// A response this soon after the process started (and the first one
+    /// of the process) is the one that launched it.
+    static let launchWindowMs: Int64 = 10_000
+    /// How long a read authorization status stays trusted by posts.
+    static let authorizationTtlMs: Int64 = 2_000
+    /// How long a read of the registered categories stays trusted.
+    static let categoriesRecheckMs: Int64 = 2_000
 
     let center = UNUserNotificationCenter.current()
     let codecs = NotificationsCodecsImpl()
     let lock = NSLock()
+    /// Per-id serialization of shows, updates, flushes and removals.
+    let lanes = NotificationsSerial()
     private let delegate = IstmoNotificationsDelegate()
     private var installed = false
-    /// No `didBecomeActive` seen yet: a response now launched the app.
-    private var becameActive = false
+    /// When `install()` ran (before `UIApplicationMain` from the registry),
+    /// `0` once the first response took it.
+    private var launchMark: Int64 = 0
     private var observers: [NSObjectProtocol] = []
 
     // Shown notifications (latest content, queued updates included).
     var live: [String: Notifications.Notification] = [:]
+    /// Bumped by every full show of an id: a timeout armed for an earlier
+    /// show does nothing.
+    var generations: [String: UInt64] = [:]
+    private var nextGeneration: UInt64 = 0
     var channels: [String: Notifications.ChannelSpec] = [:]
     var coalescer = NotificationsCoalescer<Notifications.Notification>(rate: .apple, nowMs: nowMs())
     var flushArmed = false
 
-    // Categories: replace-all on Apple, so the whole set is kept here.
+    // Categories: replace-all on Apple, so ours are kept here and every
+    // registration is the union with what is registered now.
+    private let categoryLane = NotificationsSerial()
     private var categories: [String: UNNotificationCategory] = [:]
-    private var istmoCategories: [String] = []
+    /// Ours, oldest first.
+    private var categoryOrder: [String] = []
+    private var categoriesSeeded = false
+    private var categoriesCheckedMs: Int64?
     static let maxCategories = 128
+    static let categoryPrefix = "istmo.c."
+
+    /// The last authorization read: when, and whether it was `denied`.
+    private var authorization: (atMs: Int64, denied: Bool)?
 
     // Background responses waiting for `complete(ack)`.
     private var acks: [UInt64: () -> Void] = [:]
@@ -143,6 +168,7 @@ final class NotificationsCore: @unchecked Sendable {
         let first: Bool = lock.guarded {
             if installed { return false }
             installed = true
+            launchMark = nowMs()
             return true
         }
         guard first else { return }
@@ -150,28 +176,30 @@ final class NotificationsCore: @unchecked Sendable {
             center.delegate = delegate
         }
         #if canImport(UIKit)
-        let active = NotificationCenter.default.addObserver(
-            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil
-        ) { _ in
-            NotificationsCore.shared.lock.guarded { NotificationsCore.shared.becameActive = true }
-        }
         let foreground = NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil
         ) { _ in
             Task { await NotificationsCore.shared.store.topUp() }
         }
-        lock.guarded { observers = [active, foreground] }
+        lock.guarded { observers = [foreground] }
         #endif
         loadStaticChannels()
-        Task {
-            let existing = await center.notificationCategories()
-            lock.guarded {
-                for category in existing where categories[category.identifier] == nil {
-                    categories[category.identifier] = category
-                    if category.identifier.hasPrefix("istmo.") { istmoCategories.append(category.identifier) }
-                }
-            }
-            await store.topUp()
+        Task { await store.topUp() }
+    }
+
+    /// `launched_app` of a response: the first response of the process,
+    /// within `launchWindowMs` of `install()` (which the registry runs
+    /// before `UIApplicationMain`), launched it. A tap on a cold start, a
+    /// background action that started the process: true; a second
+    /// background action in the same process, or a response long after
+    /// launch: false. The remaining guess: a user who opens the app and
+    /// taps one of its notifications within 10 s reports true.
+    private func takeLaunch() -> Bool {
+        let now = nowMs()
+        return lock.guarded {
+            let mark = launchMark
+            launchMark = 0
+            return mark > 0 && now >= mark && now - mark <= Self.launchWindowMs
         }
     }
 
@@ -187,6 +215,63 @@ final class NotificationsCore: @unchecked Sendable {
             return
         }
         lock.guarded { for spec in specs { channels[spec.id.value] = spec } }
+    }
+
+    // MARK: permission
+
+    /// Records an authorization status read elsewhere (`permission()`).
+    func noteAuthorization(denied: Bool) {
+        let now = nowMs()
+        lock.guarded { authorization = (now, denied) }
+    }
+
+    /// Whether the user denied notifications: posts then fail with
+    /// `PermissionDenied` (the system would accept and drop them).
+    func postsDenied() async -> Bool {
+        let now = nowMs()
+        if let cached = lock.guarded({ authorization }), now - cached.atMs < Self.authorizationTtlMs {
+            return cached.denied
+        }
+        let denied = await center.notificationSettings().authorizationStatus == .denied
+        noteAuthorization(denied: denied)
+        return denied
+    }
+
+    // MARK: live state
+
+    /// A full show of `id` happened: its new generation.
+    func bumpGeneration(_ id: String) -> UInt64 {
+        lock.guarded {
+            nextGeneration += 1
+            generations[id] = nextGeneration
+            return nextGeneration
+        }
+    }
+
+    /// Forgets the shown state of `ids` (live table, queued updates,
+    /// generations), before their lanes remove them from the screen.
+    func forgetState(_ ids: [String]) {
+        lock.guarded {
+            for id in ids {
+                live.removeValue(forKey: id)
+                coalescer.cancel(id)
+                generations.removeValue(forKey: id)
+            }
+        }
+    }
+
+    /// Removes the delivered notifications of `ids` (any request id: a
+    /// scheduled occurrence or a snoozed copy carries `istmo.id`).
+    func removeDelivered(_ ids: Set<String>) async {
+        guard !ids.isEmpty else { return }
+        let delivered = await center.deliveredNotifications()
+        var gone = delivered.compactMap { d -> String? in
+            guard let owner = d.request.content.userInfo[NotificationsKeys.id] as? String, ids.contains(owner)
+            else { return nil }
+            return d.request.identifier
+        }
+        gone.append(contentsOf: ids)
+        center.removeDeliveredNotifications(withIdentifiers: gone)
     }
 
     // MARK: events
@@ -220,6 +305,33 @@ final class NotificationsCore: @unchecked Sendable {
         }
     }
 
+    // MARK: scheduled deliveries
+
+    /// The content of a scheduled occurrence armed ahead of time (no
+    /// donation: the message is not received yet).
+    func scheduledContent(for n: Notifications.Notification) async -> NotificationsPrepared {
+        let rendered = NotificationsRender.render(n, limits(for: n))
+        return await content(for: n, rendered: rendered, quiet: false, donate: false)
+    }
+
+    /// Posts an overdue scheduled notification now (`late` = past its
+    /// `MissedPolicy` window start: `DeliveredLate`).
+    func postScheduled(_ n: Notifications.Notification, late: Bool) async {
+        await lanes.run(n.id.value) {
+            if await postsDenied() { return }
+            let rendered = NotificationsRender.render(n, limits(for: n))
+            let prepared = await content(for: n, rendered: rendered, quiet: false, donate: true)
+            do {
+                try await center.add(UNNotificationRequest(identifier: n.id.value, content: prepared.content,
+                                                           trigger: nil))
+                emit(late ? .deliveredLate(n.id) : .delivered(n.id))
+            } catch {
+                prepared.discardFiles()
+                emit(.failed(Notifications.Failure(id: n.id, message: error.localizedDescription)))
+            }
+        }
+    }
+
     // MARK: delegate
 
     func willPresent(
@@ -230,7 +342,7 @@ final class NotificationsCore: @unchecked Sendable {
         guard let id = info[NotificationsKeys.id] as? String else { return false }
         let bits = (info[NotificationsKeys.present] as? Int) ?? (ForegroundBits.banner | ForegroundBits.list)
         completion(ForegroundBits.options(bits))
-        // A scheduled one firing while the app is open.
+        // A scheduled one firing while the app is open: its slot is free.
         if notification.request.trigger != nil {
             emit(.delivered(Notifications.NotificationId(value: id)))
             Task { await store.topUp() }
@@ -243,7 +355,7 @@ final class NotificationsCore: @unchecked Sendable {
         let info = request.content.userInfo
         guard let rawId = info[NotificationsKeys.id] as? String else { return false }
         let id = Notifications.NotificationId(value: rawId)
-        let launched: Bool = lock.guarded { !becameActive }
+        let launched = takeLaunch()
         Task { await store.topUp() }
 
         if response.actionIdentifier == UNNotificationDismissActionIdentifier {
@@ -311,7 +423,8 @@ final class NotificationsCore: @unchecked Sendable {
     }
 
     /// Publishes a response, and its URL as a deep link for taps and
-    /// buttons (never for dismissals or "More").
+    /// buttons (never for dismissals or "More", never an empty URL), as
+    /// `NotificationResponse::deep_link` does.
     private func publish(_ response: Notifications.NotificationResponse) {
         var bytes = Data()
         codecs.writeNotificationResponse(&bytes, response)
@@ -329,25 +442,25 @@ final class NotificationsCore: @unchecked Sendable {
             payload: NotificationsLanes.deepLink(uri: url, source: source, receivedAtMs: UInt64(max(nowMs(), 0))))
     }
 
-    /// Shows the same content again after `ms`, without the app's code.
+    /// Shows the same content again after `ms`, without the app's code, as
+    /// `<id>#s` (a repeat's own requests stay armed).
     private func snooze(_ request: UNNotificationRequest, afterMs ms: UInt64, completion: @escaping () -> Void) {
-        let content = request.content.mutableCopy() as? UNMutableNotificationContent
         let rawId = request.content.userInfo[NotificationsKeys.id] as? String ?? request.identifier
         center.removeDeliveredNotifications(withIdentifiers: [request.identifier])
-        guard let content = content else {
+        guard let content = request.content.mutableCopy() as? UNMutableNotificationContent else {
             completion()
             return
         }
         var info = content.userInfo
         info[NotificationsKeys.snoozed] = 1
         content.userInfo = info
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(Double(ms) / 1000, 1), repeats: false)
-        center.add(UNNotificationRequest(identifier: request.identifier, content: content, trigger: trigger)) { error in
-            if let error = error {
-                NotificationsCore.shared.emit(.failed(Notifications.Failure(
-                    id: Notifications.NotificationId(value: rawId), message: error.localizedDescription)))
-            } else {
-                NotificationsCore.shared.emit(.snoozed(Notifications.NotificationId(value: rawId)))
+        let id = Notifications.NotificationId(value: rawId)
+        Task {
+            do {
+                try await store.snooze(rawId, content, afterMs: ms)
+                emit(.snoozed(id))
+            } catch {
+                emit(.failed(Notifications.Failure(id: id, message: "\(error)")))
             }
             completion()
         }
@@ -365,8 +478,15 @@ final class NotificationsCore: @unchecked Sendable {
 
     /// Registers the category `buttons` need (every notification gets one,
     /// for the custom dismiss action) and returns its identifier.
+    ///
+    /// One registration at a time: the set registered now is read and the
+    /// union with ours registered, so the app's own categories (set before
+    /// or after the plugin started) survive and ours come back when the
+    /// app replaced them. A read stays trusted for
+    /// `categoriesRecheckMs`. Past 128 of ours, the oldest that no
+    /// delivered or pending notification uses goes.
     func category(for rendered: NotificationsRender.Rendered, lockScreen: Notifications.LockScreen?,
-                  communication: Bool) -> String {
+                  communication: Bool) async -> String {
         var descriptor = "\(lockScreen.map { String($0.rawValue) } ?? "-")|\(communication)"
         for b in rendered.buttons {
             descriptor += "|\(b.key)\u{1f}\(b.title)\u{1f}\(b.opensApp)\(b.destructive)\(b.requiresUnlock)"
@@ -374,18 +494,64 @@ final class NotificationsCore: @unchecked Sendable {
                 descriptor += "\u{1f}r\(placeholder ?? "")\u{1f}\(submit ?? "")"
             }
         }
-        let identifier = "istmo.c.\(fnv1a64Hex(descriptor))"
-        let set: Set<UNNotificationCategory>? = lock.guarded {
-            if categories[identifier] != nil { return nil }
-            categories[identifier] = Self.makeCategory(identifier, rendered, lockScreen, communication)
-            istmoCategories.append(identifier)
-            while istmoCategories.count > Self.maxCategories {
-                categories.removeValue(forKey: istmoCategories.removeFirst())
+        let identifier = Self.categoryPrefix + fnv1a64Hex(descriptor)
+        return await categoryLane.run("categories") {
+            let now = nowMs()
+            let fresh: Bool = lock.guarded {
+                guard categories[identifier] != nil, let checked = categoriesCheckedMs else { return false }
+                return now - checked < Self.categoriesRecheckMs
             }
-            return Set(categories.values)
+            if fresh { return identifier }
+            let current = await center.notificationCategories()
+            let registered = Set(current.map { $0.identifier })
+            let overCap: Bool = lock.guarded {
+                if !categoriesSeeded {
+                    categoriesSeeded = true
+                    for category in current
+                    where category.identifier.hasPrefix(Self.categoryPrefix) && categories[category.identifier] == nil {
+                        categories[category.identifier] = category
+                        categoryOrder.append(category.identifier)
+                    }
+                }
+                if categories[identifier] == nil {
+                    categories[identifier] = Self.makeCategory(identifier, rendered, lockScreen, communication)
+                    categoryOrder.append(identifier)
+                }
+                return categoryOrder.count > Self.maxCategories
+            }
+            if overCap {
+                let inUse = await categoriesInUse()
+                lock.guarded {
+                    var extra = categoryOrder.count - Self.maxCategories
+                    categoryOrder.removeAll { id in
+                        guard extra > 0, id != identifier, !inUse.contains(id) else { return false }
+                        extra -= 1
+                        categories.removeValue(forKey: id)
+                        return true
+                    }
+                }
+            }
+            let (ours, complete): ([UNNotificationCategory], Bool) = lock.guarded {
+                let ours = categoryOrder.compactMap { categories[$0] }
+                let complete = categoryOrder.allSatisfy(registered.contains)
+                    && registered.filter { $0.hasPrefix(Self.categoryPrefix) }.allSatisfy { categories[$0] != nil }
+                return (ours, complete)
+            }
+            if !complete {
+                let apps = current.filter { !$0.identifier.hasPrefix(Self.categoryPrefix) }
+                center.setNotificationCategories(apps.union(ours))
+            }
+            lock.guarded { categoriesCheckedMs = now }
+            return identifier
         }
-        if let set = set { center.setNotificationCategories(set) }
-        return identifier
+    }
+
+    /// Category identifiers of the delivered and pending notifications.
+    private func categoriesInUse() async -> Set<String> {
+        var out = Set<String>()
+        for d in await center.deliveredNotifications() { out.insert(d.request.content.categoryIdentifier) }
+        for r in await center.pendingNotificationRequests() { out.insert(r.content.categoryIdentifier) }
+        return out
     }
 
     private static func makeCategory(

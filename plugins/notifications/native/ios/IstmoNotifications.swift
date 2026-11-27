@@ -65,7 +65,7 @@ final class IstmoNotificationsDelegate: NSObject, UNUserNotificationCenterDelega
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
     ) {
         if !IstmoNotifications.willPresent(notification, completion: completionHandler) {
             completionHandler([.banner, .list, .sound])
@@ -75,7 +75,7 @@ final class IstmoNotificationsDelegate: NSObject, UNUserNotificationCenterDelega
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
     ) {
         if !IstmoNotifications.didReceive(response, completion: completionHandler) {
             completionHandler()

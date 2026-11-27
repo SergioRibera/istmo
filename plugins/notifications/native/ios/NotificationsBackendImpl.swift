@@ -16,6 +16,12 @@ import UserNotifications
 /// foreground), progress as text, choices as buttons, snooze, channels,
 /// lock-screen privacy (category placeholder), call style (buttons),
 /// timeouts (while running). The app badge is never touched.
+///
+/// Every input is validated like the Rust host (`NotificationsValidate`,
+/// the port of `src/validate.rs`); posts fail with `PermissionDenied`
+/// while the user denies notifications; calls for one id run in order in
+/// its lane, so a cancel lands after the post before it and a queued
+/// update never brings a cancelled notification back.
 public final class NotificationsBackendImpl: NotificationsBackend {
     private let core = NotificationsCore.shared
 
@@ -47,6 +53,7 @@ public final class NotificationsBackendImpl: NotificationsBackend {
         let settings = await core.center.notificationSettings()
         // `UNAuthorizationStatus` is an open enum: compared, not switched.
         let status = settings.authorizationStatus
+        core.noteAuthorization(denied: status == .denied)
         let state: Notifications.PermissionState
         if status == .authorized {
             state = .granted
@@ -106,6 +113,7 @@ public final class NotificationsBackendImpl: NotificationsBackend {
     // MARK: channels (simulated: defaults merged into each notification)
 
     public func set_channels(channels: [Notifications.ChannelSpec]) async throws {
+        for (i, spec) in channels.enumerated() { try NotificationsValidate.check(spec, index: i) }
         core.lock.guarded {
             for spec in channels {
                 if let old = core.channels[spec.id.value] {
@@ -136,51 +144,74 @@ public final class NotificationsBackendImpl: NotificationsBackend {
 
     // MARK: showing
 
-    public func show(notification: Notifications.Notification) async throws {
-        let n = try merged(notification)
-        try await post(n, quiet: false)
-        core.lock.guarded {
-            core.live[n.id.value] = n
-            core.coalescer.shown(n.id.value, nowMs: nowMs())
-        }
-        core.emit(.delivered(n.id))
-        armTimeout(n)
+    /// Validation (`src/validate.rs`), normalisation, channel defaults:
+    /// what the desktop host does before a show or a schedule.
+    private func prepared(_ notification: Notifications.Notification) throws -> Notifications.Notification {
+        try NotificationsValidate.check(notification)
+        return try merged(notification.normalized())
     }
 
-    /// Adds (or replaces) the request of `n` with no trigger.
-    private func post(_ n: Notifications.Notification, quiet: Bool) async throws {
+    public func show(notification: Notifications.Notification) async throws {
+        let n = try prepared(notification)
+        try await core.lanes.run(n.id.value) {
+            try await post(n, quiet: false, donate: true)
+            let generation = core.bumpGeneration(n.id.value)
+            core.lock.guarded {
+                core.live[n.id.value] = n
+                core.coalescer.shown(n.id.value, nowMs: nowMs())
+            }
+            armTimeout(n, generation: generation)
+        }
+        core.emit(.delivered(n.id))
+    }
+
+    /// Adds (or replaces) the request of `n` with no trigger; called in
+    /// its lane. A denied permission fails with `PermissionDenied`.
+    private func post(_ n: Notifications.Notification, quiet: Bool, donate: Bool) async throws {
+        if await core.postsDenied() { throw Notifications.NotificationError.permissionDenied }
         let rendered = NotificationsRender.render(n, core.limits(for: n))
-        let content = await core.content(for: n, rendered: rendered, quiet: quiet)
+        let prepared = await core.content(for: n, rendered: rendered, quiet: quiet, donate: donate)
         do {
-            try await core.center.add(UNNotificationRequest(identifier: n.id.value, content: content, trigger: nil))
+            try await core.center.add(UNNotificationRequest(identifier: n.id.value, content: prepared.content,
+                                                            trigger: nil))
         } catch {
+            prepared.discardFiles()
             throw Self.platform(error)
         }
     }
 
-    /// The host-run timeout (`Timeout` is `WhileRunning` on Apple).
-    private func armTimeout(_ n: Notifications.Notification) {
+    /// The host-run timeout (`Timeout` is `WhileRunning` on Apple), for
+    /// the show of `generation`: a later show of the same id re-arms its
+    /// own.
+    private func armTimeout(_ n: Notifications.Notification, generation: UInt64) {
         guard let ms = n.timeoutMs else { return }
         let id = n.id.value
         DispatchQueue.global().asyncAfter(deadline: .now() + Double(ms) / 1000) { [core] in
             let still: Bool = core.lock.guarded {
-                guard core.live[id] != nil else { return false }
+                guard core.live[id] != nil, core.generations[id] == generation else { return false }
                 core.live.removeValue(forKey: id)
                 core.coalescer.cancel(id)
+                core.generations.removeValue(forKey: id)
                 return true
             }
             guard still else { return }
-            core.center.removeDeliveredNotifications(withIdentifiers: [id])
-            core.emit(.dismissed(Notifications.Dismissal(id: Notifications.NotificationId(value: id), reason: .timeout)))
+            Task {
+                await core.lanes.run(id) { await core.removeDelivered([id]) }
+                core.emit(.dismissed(Notifications.Dismissal(id: Notifications.NotificationId(value: id),
+                                                             reason: .timeout)))
+            }
         }
     }
 
     public func schedule(notification: Notifications.Notification, trigger: Notifications.Trigger) async throws
         -> Notifications.ScheduledInfo
     {
-        let n = try merged(notification)
-        // A past `At` is delivered at once (`Trigger::first_fire`).
+        let n = try prepared(notification)
+        try NotificationsValidate.check(trigger)
+        // A past `At` is delivered at once (`Trigger::first_fire`) and
+        // replaces what was scheduled under the id.
         if case .at(let ms) = trigger, ms <= nowMs() {
+            await core.store.remove(n.id.value)
             try await show(notification: n)
             return Notifications.ScheduledInfo(exact: true, nextFireMs: nowMs())
         }
@@ -190,10 +221,18 @@ public final class NotificationsBackendImpl: NotificationsBackend {
     // MARK: live updates
 
     public func update(id: Notifications.NotificationId, patch: Notifications.NotificationPatch) async throws {
-        try await change(id, patch.alertAgain ? .alert : .regular) { $0.applying(patch) }
+        try NotificationsValidate.check(patch)
+        try await change(id, patch.alertAgain ? .alert : .regular) { n in
+            // The whole notification: a patch alone cannot tell (call
+            // actions need a call style, fields depend on each other).
+            let next = n.applying(patch)
+            try NotificationsValidate.check(next)
+            return next
+        }
     }
 
     public func set_progress(id: Notifications.NotificationId, progress: Notifications.Progress?) async throws {
+        if let bar = progress { try NotificationsValidate.check(bar) }
         try await change(id, .regular) { n in
             n.with(title: n.title, subtitle: n.subtitle, body: n.body, style: n.style, icon: n.icon,
                    actions: n.actions, progress: progress, statusText: n.statusText, count: n.count,
@@ -202,42 +241,45 @@ public final class NotificationsBackendImpl: NotificationsBackend {
     }
 
     public func append_message(id: Notifications.NotificationId, message: Notifications.ChatMessage) async throws {
-        var notMessaging = false
+        try NotificationsValidate.check(message)
         try await change(id, .alert) { n in
             guard let next = n.appending(message) else {
-                notMessaging = true
-                return n
+                throw Notifications.NotificationError.invalid(
+                    Notifications.InvalidField(field: "style", problem: .notAllowedHere))
             }
             return next
         }
-        if notMessaging {
-            throw Notifications.NotificationError.invalid(Notifications.InvalidField(field: "style", problem: .notAllowedHere))
-        }
     }
 
+    /// Changes the shown `id` with `edit` in its lane; posts through the
+    /// coalescer. A failed `edit` leaves the notification as it was.
     private func change(
         _ id: Notifications.NotificationId, _ urgency: NotificationsCoalescer<Notifications.Notification>.Urgency,
-        _ edit: (Notifications.Notification) -> Notifications.Notification
+        _ edit: (Notifications.Notification) throws -> Notifications.Notification
     ) async throws {
-        let admit: NotificationsCoalescer<Notifications.Notification>.Admit = try core.lock.guarded {
-            guard let old = core.live[id.value] else {
-                throw Notifications.NotificationError.notFound(id.value)
+        try await core.lanes.run(id.value) {
+            let admit: NotificationsCoalescer<Notifications.Notification>.Admit = try core.lock.guarded {
+                guard let old = core.live[id.value] else {
+                    throw Notifications.NotificationError.notFound(id.value)
+                }
+                let next = try edit(old)
+                core.live[id.value] = next
+                return core.coalescer.offer(id.value, next, urgency, nowMs: nowMs())
             }
-            let next = edit(old)
-            core.live[id.value] = next
-            return core.coalescer.offer(id.value, next, urgency, nowMs: nowMs())
-        }
-        switch admit {
-        case .now(let n):
-            try await post(n, quiet: urgency == .regular)
-        case .queued:
-            armFlush()
-        case .dropped:
-            break
+            switch admit {
+            case .now(let n):
+                try await post(n, quiet: urgency == .regular, donate: urgency != .regular)
+            case .queued:
+                armFlush()
+            case .dropped:
+                break
+            }
         }
     }
 
     /// Posts queued updates when the bucket allows, one timer at a time.
+    /// Each goes through its id's lane and only while the id is still
+    /// shown: a cancel or timeout taken in between wins.
     private func armFlush() {
         let due: Int64? = core.lock.guarded {
             if core.flushArmed { return nil }
@@ -254,11 +296,15 @@ public final class NotificationsBackendImpl: NotificationsBackend {
                 return self.core.coalescer.poll(nowMs: nowMs())
             }
             Task {
-                for (_, n) in ready {
-                    do {
-                        try await self.post(n, quiet: true)
-                    } catch {
-                        self.core.emit(.failed(Notifications.Failure(id: n.id, message: "\(error)")))
+                for (id, _) in ready {
+                    await self.core.lanes.run(id) {
+                        // The latest content, unless the id left the screen.
+                        guard let n = self.core.lock.guarded({ self.core.live[id] }) else { return }
+                        do {
+                            try await self.post(n, quiet: true, donate: false)
+                        } catch {
+                            self.core.emit(.failed(Notifications.Failure(id: n.id, message: "\(error)")))
+                        }
                     }
                 }
                 self.armFlush()
@@ -269,8 +315,8 @@ public final class NotificationsBackendImpl: NotificationsBackend {
     // MARK: removing and listing
 
     public func cancel(id: Notifications.NotificationId) async throws {
-        forget([id.value])
-        core.store.remove(id.value)
+        await remove([id.value])
+        await core.store.remove(id.value)
     }
 
     public func cancel_group(group: Notifications.GroupId) async throws {
@@ -281,30 +327,30 @@ public final class NotificationsBackendImpl: NotificationsBackend {
         for d in delivered where d.request.content.threadIdentifier == group.value {
             if let id = d.request.content.userInfo[NotificationsKeys.id] as? String { ids.append(id) }
         }
-        forget(ids)
-        core.store.removeAll { $0.group?.id.value == group.value }
+        await remove(Array(Set(ids)))
+        await core.store.removeAll(extra: ids) { $0.group?.id.value == group.value }
     }
 
+    /// Removes only this plugin's notifications (`istmo.id` in
+    /// `userInfo`): the app's own delivered and pending ones stay.
     public func cancel_all() async throws {
-        core.lock.guarded {
-            core.live.removeAll()
-            core.coalescer.clear()
-        }
-        core.store.removeAll { _ in true }
-        core.center.removeAllDeliveredNotifications()
-        core.center.removeAllPendingNotificationRequests()
+        let shown: [String] = core.lock.guarded { Array(core.live.keys) }
+        let delivered = await core.center.deliveredNotifications()
+        let ours = delivered.compactMap { $0.request.content.userInfo[NotificationsKeys.id] as? String }
+        await remove(Array(Set(shown + ours)))
+        await core.store.removeAll { _ in true }
+        await core.store.removeAllRequests()
     }
 
-    private func forget(_ ids: [String]) {
+    /// Takes `ids` off the screen: their state first (a flush or timeout
+    /// waiting in a lane then finds nothing), then each lane removes the
+    /// delivered notification after the call in flight on it.
+    private func remove(_ ids: [String]) async {
         guard !ids.isEmpty else { return }
-        core.lock.guarded {
-            for id in ids {
-                core.live.removeValue(forKey: id)
-                core.coalescer.cancel(id)
-            }
+        core.forgetState(ids)
+        for id in ids {
+            await core.lanes.run(id) { await core.removeDelivered([id]) }
         }
-        core.center.removeDeliveredNotifications(withIdentifiers: ids)
-        core.center.removePendingNotificationRequests(withIdentifiers: ids)
     }
 
     public func pending() async throws -> [Notifications.PendingNotification] {

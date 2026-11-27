@@ -81,13 +81,6 @@ enum NotificationsRender {
                 let name = message.sender?.name ?? conversation.user.name
                 lines.append("\(name): \(message.text)")
             }
-        case .messaging(let conversation):
-            // Communication notification: the last message is the body.
-            if let last = conversation.messages.last {
-                lines.append(last.text)
-            } else if let body = n.body {
-                lines.append(body)
-            }
         default:
             if let body = n.body { lines.append(body) }
         }
@@ -296,6 +289,17 @@ extension Notifications.Notification {
             timestampMs: timestampMs, chronometer: chronometer, count: count,
             lockScreen: lockScreen ?? spec.lockScreen, hideInForeground: hideInForeground, missed: missed,
             android: android, apple: apple, linuxHints: linuxHints)
+    }
+
+    /// `Notification::normalize`: a conversation keeps its last 25
+    /// messages.
+    func normalized() -> Notifications.Notification {
+        guard case .messaging(let c) = style, c.messages.count > NotificationsValidate.maxMessages else { return self }
+        let conversation = Notifications.Conversation(user: c.user, title: c.title, isGroup: c.isGroup,
+                                                      messages: Array(c.messages.suffix(NotificationsValidate.maxMessages)))
+        return with(title: title, subtitle: subtitle, body: body, style: .messaging(conversation), icon: icon,
+                    actions: actions, progress: progress, statusText: statusText, count: count,
+                    ongoing: ongoing, url: url, userData: userData)
     }
 
     /// Keeps the last 25 messages of a conversation (`Notification::normalize`).
