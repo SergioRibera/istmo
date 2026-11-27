@@ -608,8 +608,11 @@ wins.
   virtual display (no copy, `Scaling::Native`).
 - Resizes: on API 34+ from `onCapturedContentResize` (rotation
   included), below from a `DisplayListener` on the default display. Each
-  one opens a new reader (new `pool_generation`) and emits
-  `SourceResized`; the old reader closes once its last image is back.
+  one resizes the virtual display, opens a new reader (new
+  `pool_generation`), points the producer at it (the GL thread first,
+  with the fan-out) and only then retires the old reader: its queued
+  images are drained at once, and it closes once the last image Rust
+  holds is back. Frame `size` is each image's own.
 - `sources` lists every display; only the default one is `ById`, the
   rest `PickerOnly([])` (MediaProjection mirrors the default display).
 
