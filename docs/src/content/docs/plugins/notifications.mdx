@@ -1,0 +1,208 @@
+---
+title: Notifications
+description: Local notifications on every target with live progress, actions and inline replies, conversations and scheduling, simulated where a platform lacks a feature.
+sidebar:
+  order: 14
+---
+
+import PluginTypes from '../../../generated/plugins/notifications-types.mdx';
+
+`istmo-notifications` shows local notifications on Android, iOS, macOS,
+Windows, Linux and the web, and updates them in place. One model works
+everywhere: a feature the platform has is used, a feature it lacks is
+simulated (a progress line in the body, a button that opens the app for
+a reply, a "More" action for the buttons that do not fit), and only
+what cannot be done honestly fails with `NotificationError::Unsupported`.
+`capabilities()` reports each feature as `Native`, `Simulated`,
+`WhileRunning` or `Unsupported`.
+
+Push (APNs, FCM, Web Push) is a separate plugin; a push handler calls
+this one to show something.
+
+## Install
+
+```toml
+[dependencies]
+istmo-notifications = "0.1.1-alpha.7"
+```
+
+```rust
+use istmo_notifications::{DesktopNotifications, NotificationsClient, NotificationsHost};
+
+let host = DesktopNotifications::default();
+runtime.register_host(NotificationsHost::new(host.clone()));
+// Delivers missed reminders and the tap that launched the app now,
+// instead of on the first call.
+host.attach(&runtime);
+let client = NotificationsClient::from_runtime(&runtime)?;
+```
+
+`UnavailableNotifications` is the host for targets without a backend;
+`FakeNotifications` (feature `testing`) records calls and feeds
+responses in app tests.
+
+## Show, update, finish
+
+```rust
+use istmo_notifications::{Action, Notification, Progress};
+
+let live = client
+    .show_live(
+        Notification::new("dl:42", "Downloading report.pdf")?
+            .with_progress(Progress::fraction(0.0).with_label("report.pdf"))
+            .with_action(Action::button("cancel", "Cancel")?.destructive())
+            .ongoing(),
+    )
+    .await?;
+live.progress(0.4);
+live.finish(Notification::new("dl:42", "Download complete")?).await?;
+```
+
+`LiveNotification::progress` never waits: the value goes into a queue
+shared by every live notification of the runtime and one sender keeps
+one call in flight. On the host, updates are coalesced (the latest per
+id wins) and posted no faster than the platform allows (Android 4 per
+second, Apple 2, Windows 20, Linux 10, web 4). Updates are silent unless
+`NotificationPatch::alert_again`; an update for a notification the user
+dismissed is dropped unless it alerts. A `LiveNotification` dropped
+without `finish` or `detach` is cancelled.
+
+The `_checked` client methods (`show_checked`, `schedule_checked`,
+`update_checked`, `append_message_checked`) validate before the call
+and return `NotificationError`; the generated `show`, `schedule`, ...
+send what they are given.
+
+## Actions and replies
+
+```rust
+use istmo_notifications::{Action, ChatMessage, Conversation, Notification, Participant, Style};
+
+let chat = Notification::new("chat:42", "Ana")?
+    .with_style(Style::Messaging(
+        Conversation::new(Participant::new("me", "Me"))
+            .with_message(ChatMessage::received(Participant::new("ana", "Ana"), "Lunch?")),
+    ))
+    .with_action(Action::reply("reply", "Reply")?)
+    .with_action(Action::select("rsvp", "RSVP", ["Yes", "No"])?)
+    .with_action(Action::snooze("later", "Later", std::time::Duration::from_secs(600))?);
+client.show_checked(chat).await?;
+client.append_message_checked("chat:42", ChatMessage::sent("On my way")).await?;
+```
+
+- Where there is no inline reply field, the reply action becomes a
+  button that opens the app with `input_requested = true`.
+- Where there is no choice picker, each choice becomes a button whose
+  response carries the choice as `reply`.
+- Snoozes hide the notification and show it again without the app's
+  code, then report `NotificationEvent::Snoozed`.
+- Beyond the platform's maximum, the first `max - 1` actions stay and a
+  "More" action opens the app with `ResponseAction::More` and the rest
+  in `overflow_actions`.
+- Action ids starting with `istmo.` are the plugin's own (`istmo.more`,
+  `istmo.call.answer`, `istmo.call.decline`, `istmo.call.hang_up`).
+
+## Responses
+
+```rust
+use istmo_notifications::{NotificationResponses, Response};
+
+let responses = NotificationResponses::acquire()?.stream();
+while let Ok(r) = responses.recv_async().await {
+    match r.kind() {
+        Response::Reply(text) => chat.send(&r.id, text).await,
+        Response::Action("read") => chat.mark_read(&r.id).await,
+        Response::Open => router.open(&r.id),
+        _ => {}
+    }
+    if let Some(ack) = r.ack {
+        client.complete(ack).await?;
+    }
+}
+```
+
+Responses are published on the `istmo.notifications.responses` early
+queue (64 kept before the first subscriber), so the tap that launched
+the app is not lost. A response with a URL (the action's, else the
+notification's) is also published as a `DeepLink` with source
+`notification:<id>` or `notification:<id>:<action>`. Background actions
+(`Action::background`) carry an `AckToken`: call `complete(ack)` when
+done, so the OS may suspend the app again.
+
+## Scheduling
+
+```rust
+use istmo_notifications::{CalendarRule, Notification, Trigger, Weekday};
+
+client.schedule_checked(Notification::new("water", "Drink water")?, Trigger::daily(9, 30)).await?;
+client
+    .schedule_checked(
+        Notification::new("standup", "Standup")?,
+        Trigger::Calendar(
+            CalendarRule::daily(10, 0)
+                .on(&[Weekday::Mon, Weekday::Wed, Weekday::Fri])
+                .in_zone("Europe/Madrid"),
+        ),
+    )
+    .await?;
+```
+
+A calendar rule fires at `hour:minute` on the days that match every set
+field (weekdays, day of month, month), in its IANA zone or the device's
+local wall clock. A time in a DST gap fires as late as the gap is long
+(`02:30` becomes `03:30`); a time in an overlap fires once, at the
+earlier instant; a day that does not exist (the 31st in April) is
+skipped. `CalendarRule::next_occurrences` lets an app check its own
+rules.
+
+`Notification::missed` says what happens when a delivery was missed
+(the device was off, or the app was closed where scheduling runs
+in-process): `MissedPolicy::Drop`, or `DeliverLate(ms)` (default one
+hour), which delivers once and reports `NotificationEvent::DeliveredLate`.
+
+## Platforms
+
+| | Android | iOS / macOS | Windows | Linux | Web |
+| --- | --- | --- | --- | --- | --- |
+| Silent update | native | re-add, quiet | native | native | native |
+| Progress bar | native | text line | native | native or text line | text line |
+| Inline reply | native | native | native | native where the server has it | button |
+| Choices | native | buttons | native | buttons | buttons |
+| Schedule and repeat | native | native | native | while running | while running |
+| Taps when closed | native | native | native | portal only | service worker |
+| Delivered list | native | native | native | while running | service worker |
+
+### Callouts
+
+- **macOS needs an `.app` bundle.** `UNUserNotificationCenter` only works
+  from a bundled, signed app with a bundle id; an unbundled binary gets
+  `NotificationError::NotBundled` everywhere.
+- **Linux without the portal loses taps while the app is closed.** The
+  freedesktop notification server never starts the app; the portal
+  (Flatpak, Snap, registered host apps) can.
+- **Web scheduling only runs while the page is open.**
+- **Android small icons must be monochrome**: a vector drawable or an
+  alpha-only PNG.
+- **Exact alarms are a Play policy decision.** `USE_EXACT_ALARM` is for
+  alarm and calendar apps; other apps ask for `SCHEDULE_EXACT_ALARM` and
+  fall back to inexact delivery (`ScheduledInfo::exact` says which).
+
+### Desktop
+
+`DesktopNotifications` keeps scheduled notifications in
+`<data dir>/istmo-notifications/schedule.bin` and delivers them while
+the app runs; at start, missed ones follow their policy. Only one
+process may own that file: an app that forwards its arguments to a
+running instance builds the host with `without_store()` in the
+forwarding process. Image bytes are written once to
+`<cache dir>/istmo-notifications/images` under a content-hash name and
+removed with the last notification using them.
+
+### Status
+
+The Rust core and the desktop host are in place; the Android, Apple,
+Windows, Linux and web backends are being written. Until a target has
+one, it answers `Unsupported`.
+
+## Wire types
+
+<PluginTypes />

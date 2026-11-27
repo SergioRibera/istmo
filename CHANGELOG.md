@@ -4,6 +4,26 @@
 
 ### Added
 
+- `istmo-notifications` plugin (`istmo.notifications`, local only), core
+  and desktop host: one notification model for every target, with what a
+  platform lacks simulated and reported per feature in `capabilities()`.
+  Styles (big text, inbox, picture, conversation, call), actions with
+  inline replies, choices and snoozes (a "More" action past the
+  platform's maximum), groups, channels, progress, sounds, interruption
+  levels, timeouts. `LiveNotification` streams progress through one
+  shared sender per runtime; the host coalesces updates per id under a
+  per-app token bucket (alerts and finishes jump the queue, dismissed
+  notifications drop silent updates). Scheduling once, on an interval or
+  on a `CalendarRule` (IANA zones, DST gaps and overlaps, `until`) with a
+  `MissedPolicy`; `tests/schedule_vectors.tsv` pins the rule for every
+  port. Responses (tap, action, reply, with an ack token for background
+  actions) on the `istmo.notifications.responses` early queue, and as a
+  `DeepLink` when they carry a URL. `DesktopNotifications` runs
+  validation, render fallbacks, coalescing, the in-process scheduler and
+  its store, image files and events over a platform `Backend`;
+  `UnavailableNotifications`, `FakeNotifications` (feature `testing`).
+  Platform backends (Android, Apple, Windows, Linux, web) are not in
+  this release yet.
 - `istmo-autostart` plugin (`istmo.autostart`, desktop only): start the
   app at login from a user action (`SMAppService.mainApp` on macOS 13+,
   a LaunchAgent before that or for bare binaries, MSIX `StartupTask` or
@@ -207,6 +227,12 @@
 
 ### Changed (breaking)
 
+- **The built-in `istmo.notifications` contract is gone** from
+  `istmo-plugins` (`NotificationsClient`, `NotificationRequest`, ...)
+  and `istmo-plugins-schema` (`notifications()`); `istmo-notifications`
+  takes the same plugin id. Apps passing
+  `istmo_plugins_schema::notifications()` to `extra_contracts` drop it;
+  the plugin crate hands its contract over itself.
 - **iOS apps refer to plugin types as `<Plugin>.<Type>`.** Each plugin's
   generated Swift message types are nested in a `public enum <Plugin>`
   namespace (`Camera.SessionConfig`, `ScreenCapture.SessionConfig`,
