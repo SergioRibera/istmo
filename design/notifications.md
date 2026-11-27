@@ -1172,6 +1172,9 @@ in that module.
   `buildPhase: resources` source: they land in the bundle root.
   Hand-made Xcode projects add that directory's files to Copy Bundle
   Resources.
+- Static channels for iOS: the same wire `Vec<ChannelSpec>` bytes as
+  Android's `res/raw` file, staged next to the sounds as
+  `istmo_notification_channels.bin` (bundle root; added at integration).
 - The keys and sounds go away when the table is removed; an emptied
   merge now also clears the `istmo:plugins` block (it used to keep the
   last keys).
@@ -1929,8 +1932,8 @@ cross-clippied without an SDK. Checklist:
   those into the `.app`.
 - Static channels: desktop through `static_channels!()` +
   `with_channels`; iOS reads `istmo_notification_channels.bin` (wire
-  `Vec<ChannelSpec>`) from the bundle when present (not written by
-  istmo-build yet: follow-up).
+  `Vec<ChannelSpec>`) from the bundle when present; istmo-build stages
+  it next to the sounds (integration).
 
 ### Open (Apple)
 

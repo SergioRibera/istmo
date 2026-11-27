@@ -559,7 +559,9 @@ missing from `sounds` fail the build. What each target gets:
   entitlements, merged into the `istmo:plugins` blocks of `Info.plist`
   and the `.entitlements` file; the sounds are staged in
   `ios/.istmo/NotificationSounds` and copied into the bundle root by the
-  xcodegen fragment.
+  xcodegen fragment, with the static channels as
+  `istmo_notification_channels.bin` (the wire bytes Android gets in
+  `res/raw`).
 - **Desktop and web** — rustc envs for the app crate:
   `ISTMO_NOTIFICATION_CHANNELS` (read by
   `istmo_notifications::static_channels!()`), `ISTMO_NOTIFICATION_ACCENT`,

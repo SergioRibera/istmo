@@ -572,7 +572,9 @@ el build. Lo que recibe cada plataforma:
   entitlements, combinados en los bloques `istmo:plugins` de
   `Info.plist` y del archivo `.entitlements`; los sonidos se preparan en
   `ios/.istmo/NotificationSounds` y el fragmento de xcodegen los copia a
-  la raíz del bundle.
+  la raíz del bundle, junto con los canales estáticos en
+  `istmo_notification_channels.bin` (los mismos bytes que Android recibe
+  en `res/raw`).
 - **Escritorio y web**: variables de rustc para el crate de la app:
   `ISTMO_NOTIFICATION_CHANNELS` (la lee
   `istmo_notifications::static_channels!()`), `ISTMO_NOTIFICATION_ACCENT`,

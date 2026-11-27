@@ -513,13 +513,13 @@ fn monochrome_layer_stands_in_for_the_small_icon() {
 }
 
 #[test]
-fn stages_ios_sounds() {
+fn stages_ios_sounds_and_channels() {
     let root = temp_dir("ios");
     write_sources(&root);
     let dir = root.join("ios/.istmo/NotificationSounds");
     let notifications = parse(FULL).unwrap().rooted(&root);
     assert_eq!(
-        notifications.write_ios_sounds(&dir).unwrap(),
+        notifications.write_ios_resources(&dir).unwrap(),
         Some(dir.clone())
     );
     let mut files: Vec<String> = fs::read_dir(&dir)
@@ -530,12 +530,20 @@ fn stages_ios_sounds() {
     assert_eq!(
         files,
         [
+            "istmo_notification_channels.bin",
             "istmo_notification_sound_ding.caf",
             "istmo_notification_sound_pop.wav"
         ]
     );
+    // The same wire bytes Android reads from `res/raw`.
     assert_eq!(
-        AppNotifications::default().write_ios_sounds(&dir).unwrap(),
+        fs::read(dir.join("istmo_notification_channels.bin")).unwrap(),
+        notifications.channels_wire()
+    );
+    assert_eq!(
+        AppNotifications::default()
+            .write_ios_resources(&dir)
+            .unwrap(),
         None
     );
     assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);

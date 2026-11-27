@@ -31,7 +31,7 @@
 //! - **Apple** — `Info.plist` and entitlement keys
 //!   ([`AppNotifications::info_plist`], [`AppNotifications::entitlements`])
 //!   merged into the `istmo:plugins` blocks, and the sounds staged in
-//!   `ios/.istmo/NotificationSounds`.
+//!   `ios/.istmo/NotificationSounds` with the static channels.
 //! - **Desktop / web** — `cargo::rustc-env` values for the app crate
 //!   ([`AppNotifications::emit_desktop`]), read by the plugin's
 //!   `static_channels!()`.
@@ -82,6 +82,10 @@ pub const IOS_INFO_KEY: &str = "IstmoNotifications";
 /// Staged sound directory, relative to the iOS project root; its files
 /// are bundle resources (copied flat into the bundle root).
 pub const IOS_SOUNDS_DIR: &str = ".istmo/NotificationSounds";
+/// Bundle resource holding the static channels (wire `Vec<ChannelSpec>`),
+/// `<bundle root>/istmo_notification_channels.bin`, staged in
+/// [`IOS_SOUNDS_DIR`].
+pub const IOS_CHANNELS: &str = ANDROID_CHANNELS;
 
 /// Hex wire bytes of the static channels (`Vec<ChannelSpec>`).
 pub const ENV_CHANNELS: &str = "ISTMO_NOTIFICATION_CHANNELS";
@@ -985,18 +989,26 @@ impl AppNotifications {
         out
     }
 
-    /// Copy the Apple-playable sounds into `dir` (`ios/.istmo/NotificationSounds`)
-    /// under the names [`Self::info_plist`] lists, removing stale ones.
-    /// Returns `dir` when it holds a sound.
+    /// Stage the iOS bundle resources into `dir`
+    /// (`ios/.istmo/NotificationSounds`, copied flat into the bundle root):
+    /// the Apple-playable sounds under the names [`Self::info_plist`]
+    /// lists, and the static channels as `istmo_notification_channels.bin`
+    /// (wire `Vec<ChannelSpec>`, the bytes Android gets in `res/raw`).
+    /// Removes stale files. Returns `dir` when it holds anything.
     ///
     /// # Errors
     ///
     /// An unreadable sound or a failed write.
-    pub fn write_ios_sounds(&self, dir: &Path) -> Result<Option<PathBuf>, NotificationsError> {
+    pub fn write_ios_resources(&self, dir: &Path) -> Result<Option<PathBuf>, NotificationsError> {
         let mut written = Vec::new();
         for sound in self.sounds().iter().filter(|s| s.format.apple()) {
             let dest = dir.join(ios_sound_file(sound));
             write(&dest, &sound.read()?)?;
+            written.push(dest);
+        }
+        if !self.channels.is_empty() {
+            let dest = dir.join(format!("{IOS_CHANNELS}.bin"));
+            write(&dest, &self.channels_wire())?;
             written.push(dest);
         }
         remove_stale_in(dir, &written, |_| true)?;

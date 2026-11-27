@@ -168,6 +168,9 @@ fn ios_keys_entitlements_and_sounds() {
         b"caf"
     );
     assert!(!sounds.join("istmo_notification_sound_ding.ogg").exists());
+    // The static channels ship in the bundle root next to the sounds.
+    let channels = fs::read(sounds.join("istmo_notification_channels.bin")).unwrap();
+    assert!(!channels.is_empty());
     let fragment = fs::read_to_string(app.join("istmo-plugins.yml")).unwrap();
     assert!(fragment.contains("NotificationSounds"), "{fragment}");
 
@@ -183,6 +186,7 @@ fn ios_keys_entitlements_and_sounds() {
     let entitlements = fs::read_to_string(app.join("Chat.entitlements")).unwrap();
     assert!(!entitlements.contains("usernotifications"));
     assert!(!sounds.join("istmo_notification_sound_ding.caf").exists());
+    assert!(!sounds.join("istmo_notification_channels.bin").exists());
     let fragment = fs::read_to_string(app.join("istmo-plugins.yml")).unwrap();
     assert!(!fragment.contains("NotificationSounds"));
     let _ = fs::remove_dir_all(&root);

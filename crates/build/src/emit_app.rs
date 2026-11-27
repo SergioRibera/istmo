@@ -606,7 +606,7 @@ impl<'a> AppPass<'a> {
             .filter(|dir| fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some()));
         let notification_sounds = report_notifications(
             self.notifications
-                .write_ios_sounds(&project.notification_sounds_path()),
+                .write_ios_resources(&project.notification_sounds_path()),
         )
         .flatten();
         sync_ios_project(
@@ -858,7 +858,7 @@ struct IosSync<'a> {
     native_dirs: &'a [(String, PathBuf)],
     dep_manifests: &'a [Manifest],
     asset_folder: Option<&'a Path>,
-    /// `ios/.istmo/NotificationSounds`, when it holds a sound.
+    /// `ios/.istmo/NotificationSounds`, when it holds a sound or the channel list.
     notification_sounds: Option<&'a Path>,
     swift_packages: &'a [SwiftRepository],
     notifications: &'a AppNotifications,
