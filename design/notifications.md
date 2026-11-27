@@ -834,9 +834,8 @@ logs the failure and carries on until the natives land).
   `NotificationPatch::progress` / `alerting`, `Notification::normalize`
   (keeps the last 25 messages), `CalendarRule::{daily, on, on_day,
   in_month, in_zone, until}`, `Trigger::{first_fire, next_after, repeats}`
-  plus `*_in(.., &TimeZone)` variants for tests, `pub use` of nothing
-  from jiff (the `_in` variants take `jiff::tz::TimeZone`; jiff is a
-  public dependency of those functions only).
+  plus `*_in(.., &jiff::tz::TimeZone)` variants that stand in for the
+  device zone (tests); jiff is a public dependency of those functions.
 - Unknown IANA zone: `InvalidField { field: "trigger.time_zone",
   problem: OutOfRange }`.
 
@@ -984,8 +983,9 @@ sets, Friday the 13th, `until`, local wall clock. Runner:
   `runtime/ios/ci/typecheck-goldens.sh` (swiftc 5.10
   `-warnings-as-errors`) passes with every plugin's Swift in one module;
   `check_swift_namespaces` passes.
-- Not done: wasm32 build check of the crate (no web code yet besides the
-  live sender), any platform backend, any device run.
+- `cargo check --target wasm32-unknown-unknown` passes (fenix stable
+  combine with the wasm32 std); clippy 1.100 is clean on the crate.
+- Not done: any platform backend, any device run.
 
 ### Left for the platform agents
 

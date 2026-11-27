@@ -566,7 +566,7 @@ mod tests {
             ..RenderLimits::default()
         };
         let rendered = render(&n, &none);
-        assert!(rendered.actions.is_empty());
+        assert_eq!(rendered.actions, Vec::new());
         assert_eq!(rendered.overflow.len(), 4);
     }
 

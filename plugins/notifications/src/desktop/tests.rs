@@ -197,7 +197,10 @@ fn show_renders_merges_the_channel_and_lists_it() {
     pollster::block_on(s.client.cancel(NotificationId::try_from("dl").unwrap())).unwrap();
     assert_eq!(s.backend.removes(), ["dl"]);
     assert!(!icon.exists());
-    assert!(pollster::block_on(s.client.delivered()).unwrap().is_empty());
+    assert_eq!(
+        pollster::block_on(s.client.delivered()).unwrap(),
+        Vec::new()
+    );
 }
 
 #[test]
@@ -248,7 +251,7 @@ fn dismissed_notifications_drop_silent_updates() {
             .set_progress(id.clone(), Some(Progress::fraction(0.5))),
     )
     .unwrap();
-    assert!(s.backend.shows().is_empty());
+    assert_eq!(s.backend.shows(), Vec::new());
     let patch = NotificationPatch::default().alerting();
     pollster::block_on(s.client.update(id.clone(), patch)).unwrap();
     let shows = s.backend.shows();

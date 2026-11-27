@@ -284,7 +284,7 @@ mod tests {
         let info = e.add(n("a"), Trigger::After(1_000), 0);
         assert_eq!(info.next_fire_ms, Some(1_000));
         assert_eq!(e.next_deadline(), Some(1_000));
-        assert!(e.due(999).is_empty());
+        assert_eq!(e.due(999), Vec::new());
         let fired: Vec<_> = e
             .due(2_000)
             .into_iter()
