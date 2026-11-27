@@ -302,9 +302,14 @@ waits at most 60 s for the activator. `windows_app!()` reads `[app] id`
 - A process COM starts has `-istmo-notification -Embedding` on its
   command line: `launched_by_notification()` tells, `app_args()` strips
   them. Its response carries `launched_app = true`.
+- Single-instance apps: every instance calls `install` first; the one
+  that forwards to a running primary calls
+  `DesktopNotifications::revoke_activator()` as soon as it knows, so COM
+  routes later taps to the primary.
 - `DesktopNotifications::unregister(&app)` removes toasts, scheduled
   toasts and the keys (for uninstallers).
-- Limits: no elevated processes (`Elevated`), build 17763 or later,
+- Limits: no elevated processes
+ (`Elevated`), build 17763 or later,
   local image files only, only `ms-winsoundevent:` sounds for unpackaged
   apps, 5 buttons and 5 inputs, 5 KB of toast XML. Progress updates are
   data-binding updates (no popup). Deliveries within the next 14 days

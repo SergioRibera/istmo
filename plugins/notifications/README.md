@@ -198,9 +198,15 @@ fn main() {
   `app_args()` gives the arguments without them. The response arrives on
   the responses lane with `launched_app = true` once the host is attached.
   A console-subsystem exe detaches from the console COM gave it.
-- If another instance of a single-instance app is still starting when
-  COM launches a second one, the activation reaches the second; forward
-  it yourself (open item, see the design notes).
+- Single-instance apps: every instance calls `install` first; the one
+  that finds a primary running and forwards to it calls
+  `DesktopNotifications::revoke_activator()` as soon as it knows, so COM
+  routes later taps to the primary. An activation that already reached
+  the forwarding instance (COM started it during the primary's startup)
+  arrives on its responses lane: forward it with the rest of the launch.
+- `cancel` and `cancel_all` also remove toasts an earlier process showed
+  (by tag, and the whole `istmo` toast group for `cancel_all`).
+
 - `DesktopNotifications::unregister(&app)` removes toasts, scheduled
   toasts and both registry keys (uninstallers).
 - Limits: elevated processes are refused (`Elevated`), builds before

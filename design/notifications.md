@@ -1080,6 +1080,103 @@ API additions: `DesktopNotifications::settle`, `Progress::validate`,
 `Coalescer::{set_rate, dismissed_len}`, `Engine::{merge, local,
 set_local, snapshot}`. `Engine::add` no longer stores dead entries.
 
+### Review fixes (desktop: host, Linux, Windows)
+
+Branch `notif-fix-desktop`. Supersede the host, Linux and Windows notes
+they contradict.
+
+- **Images without file IO under the state lock.** `Live.images` is an
+  `Arc<ImageFiles>`; one `Arc` = one use of the cached files. A post
+  that reuses the shown files clones the `Arc` under the state lock (no
+  image-cache lock, no `retain`); `Inner::release` takes the cache lock
+  only when `Arc::into_inner` hands back the last use. A progress update
+  therefore copies no `ImageFiles` and takes the image cache zero times
+  (was: one `Vec` clone and two cache locks, the first inside the state
+  lock while `collect` might be writing files). The cache is never
+  locked while the state lock is held.
+- **Cancels reach earlier processes.** `remove_ids` calls
+  `Backend::remove` also for ids the table does not know (a missing
+  backend is then not an error); dismissed ids the host knows are still
+  skipped. New `Backend::remove_all` (default no-op) runs after
+  `cancel_all`'s per-id removals; Windows removes the whole `istmo`
+  toast group from the history. fdo cannot map unknown ids (no-op), the
+  portal removes by id.
+- **Arm window rolls forward.** `arm_native` records `State.arm_at` =
+  the earliest `next occurrence - ARM_WINDOW_MS` among entries whose next
+  occurrence lies past the window; it is part of the timer deadline and
+  `run_due` arms again when it passes. Occurrences cut by `ARM_CAP` need
+  no wake: the deliveries before them change the engine, which arms.
+  Only the store's owner sets it.
+- **Windows: scheduled occurrences tracked per tag** (`windows/marks.rs`,
+  pure, tested on Linux), replacing the `armed` flag. Marks = fire times
+  of scheduled toasts this process added or kept, plus, at backend
+  start, the pending scheduled toasts and the history toasts whose
+  arguments carry a fire time within 24 h (an earlier process). Before
+  every alerting show (`New` and `Replace { alert: true }`, so a repeat
+  replacing the previous occurrence is covered) `take_due(tag, now)`
+  picks the latest mark in `[now - 24 h, now + 60 s]` and forgets it and
+  older ones; no mark = no `WinRT` call. With a mark: due scheduled
+  toasts of the tag are removed; if the one for that fire time was still
+  pending the host's toast pops normally, else the history is checked
+  for exactly that fire time (was: any fire time within 24 h, which also
+  matched the previous occurrence of a repeat). `arm` unmarks future
+  toasts it removes; marks due within 60 s stay for the history check
+  (the arm in `run_due`'s `persist` used to run before the show and
+  cleared the flag, so the last scheduled entry popped twice).
+- **Windows shown table bounded.** `ShownTable` (insertion order, at
+  most `2 * MAX_ACTIVE` = 40, oldest evicted and unhooked); the
+  `Dismissed(UserCanceled)` and `Failed` handlers forget their own toast
+  (checked by `ToastNotification` identity, not unhooked from inside its
+  event). Forgetting one early only turns the next silent update into a
+  full replace with `SuppressPopup`.
+- **Windows activator revoke.** `DesktopNotifications::revoke_activator()`
+  (`CoRevokeClassObject` on the COM thread, which then leaves the MTA).
+  Decision: `install` keeps registering the class object at once (a
+  COM-started process has 60 s); a forwarding instance of a
+  single-instance app revokes as soon as it knows it is not the primary.
+  Rejected: an explicit `serve_activations()` the primary calls (the
+  cold-start process does not know yet that it will be primary, and
+  apps without single-instance logic would need a second call).
+  Supersedes the "No forwarding" open item for user-started instances;
+  an activation already routed into a forwarding instance stays the
+  app's to forward.
+- **Toast XML.** `escape` drops what XML 1.0 cannot carry (controls but
+  tab / LF / CR, U+FFFE, U+FFFF; Rust strings hold no lone surrogates);
+  bound values are filtered the same way. `build_fitting` counts the
+  escaped length of the bound values toward the 5 KB (conservative:
+  placeholders count too). `file_uri` maps `\\?\UNC\server\share\..` to
+  `file://server/share/..` and keeps `\\?\C:\..` as before.
+- **Not done (measured):** skipping the XML build on the data-binding
+  path. `build_fitting` takes about 0.9 µs for a progress toast with an
+  icon and two buttons (release, 9950X3D); the `WinRT` update it guards
+  is a cross-process call, so the template hash stays computed from the
+  full XML.
+- **Linux fdo.** A server restart drops job views too (Plasma serves
+  both) and reports them `Dismissed(Other)`; a job server
+  (`org.kde.JobViewServer`) losing its owner does the same for its views
+  (watched once job views are used). `cancelRequested` is accepted only
+  from the job server's owner (`Owner`, like the fdo signals). `info()`
+  that fails while a first owner appears reports `changed()` itself
+  (`State.appeared` generation; the flag used to be set after the
+  appearance had already looked at it). Unknown closes are kept as early
+  closes only while a `Notify` is in flight (`State.notifying`), and the
+  ring is cleared when the last one returns: our own
+  `CloseNotification`'s echo no longer lingers. `Notify` hints are
+  allocated with room for the usual set.
+- **Linux portal.** The posted set is insertion-ordered and bounded
+  (512, oldest forgotten: the portal has no closed signal); an update of
+  a known id clones nothing.
+- Tests: host (`progress_updates_reuse_images_without_the_image_cache`,
+  `cancels_reach_the_backend_for_ids_of_an_earlier_process`,
+  `the_arm_window_rolls_forward_while_the_app_runs`), marks, toast XML
+  characters and size, verbatim UNC URIs, posted bound, and
+  `tests/linux_dbus.rs` `kde_job_views_follow_their_server` (fake job
+  server: spoofed cancel ignored, owner's cancel dismisses, job server
+  gone dismisses). The Windows parts beyond the pure modules are
+  cross-clippy only; the probe gained repeat, `cancel_all` and revoke
+  steps.
+
+
 ## Implementation notes (istmo-build, as built)
 
 Branch `notif-build`, step 2 of section 8: `crates/build/src/notifications.rs`

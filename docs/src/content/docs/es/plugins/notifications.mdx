@@ -310,8 +310,13 @@ AUMID, como mucho 128 caracteres), `[app] name` y
 - Un proceso que arranca COM lleva `-istmo-notification -Embedding` en
   la línea de comandos: `launched_by_notification()` lo dice,
   `app_args()` los quita. Su respuesta trae `launched_app = true`.
+- Apps de una sola instancia: todas las instancias llaman primero a
+  `install`; la que reenvía a una instancia principal ya abierta llama a
+  `DesktopNotifications::revoke_activator()` en cuanto lo sabe, para que
+  COM mande los siguientes toques a la principal.
 - `DesktopNotifications::unregister(&app)` borra los toasts, los toasts
   programados y las claves (para desinstaladores).
+
 - Límites: sin procesos elevados (`Elevated`), build 17763 o posterior,
   solo imágenes en archivos locales, solo sonidos `ms-winsoundevent:` en
   apps sin paquete, 5 botones y 5 entradas, 5 KB de XML por toast. Las

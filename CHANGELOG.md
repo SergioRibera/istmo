@@ -64,7 +64,13 @@
   a COM activator for taps and buttons on a closed app, registry-only
   registration (`DesktopNotifications::install` / `unregister`,
   `windows_app!()`), elevated processes refused. New `Backend::arm` hook
-  (default no-op) hands backends the upcoming deliveries.
+  (default no-op) hands backends the upcoming deliveries, re-armed when
+  an entry enters the 14-day window. `DesktopNotifications::revoke_activator`
+  for forwarding instances of single-instance apps. New
+  `Backend::remove_all` hook (default no-op, Windows clears the toast
+  group) for `cancel_all`; `remove` is now also called for ids the host
+  has no record of (shown by an earlier process).
+
 
 - `istmo-notifications` Android backend (Kotlin, API 21+):
   `NotificationCompat` styles, inline replies and choices, call style,
