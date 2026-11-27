@@ -3,6 +3,8 @@
 
 use std::time::Duration;
 
+use super::super::output::Delivery;
+
 use crate::types::{
     BackendId, BorderState, BufferIdentity, BufferMemory, Colour, ColourRange, ColourSpace,
     ConsentModel, CopyStage, CursorMode, CursorState, Damage, DamageSupport, Exhaustion, FrameMeta,
@@ -160,6 +162,17 @@ pub(crate) fn damage_of(rects: impl IntoIterator<Item = Rect>, size: Size) -> Da
     Damage::clipped(rects, size)
 }
 
+/// What a frame's damage leaves owed after its delivery: a dropped frame
+/// (pool exhausted, paused, paced away) hands its damage on to the next
+/// one, or damage-driven consumers miss what it changed.
+pub(crate) fn owed_damage(delivery: Delivery, sent: Damage) -> Damage {
+    if delivery == Delivery::Dropped {
+        sent
+    } else {
+        Damage::Unchanged
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +185,24 @@ mod tests {
         );
         assert_eq!(period(FrameRate::Native, None), Duration::from_secs(1) / 60);
         assert_eq!(period(FrameRate::Max(0), None), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn dropped_frames_hand_their_damage_on() {
+        let rect = Damage::Rects(vec![Rect::new(1, 2, 3, 4)]);
+        assert_eq!(owed_damage(Delivery::Dropped, rect.clone()), rect);
+        assert_eq!(
+            owed_damage(Delivery::Delivered, Damage::Full),
+            Damage::Unchanged
+        );
+        assert_eq!(
+            owed_damage(Delivery::Deferred, Damage::Full),
+            Damage::Unchanged
+        );
+        // The owed damage merges into the next frame's.
+        let next = Damage::Rects(vec![Rect::new(10, 10, 1, 1)]);
+        let merged = owed_damage(Delivery::Dropped, rect).merge(next);
+        assert!(matches!(merged, Damage::Rects(r) if r.len() == 2));
     }
 
     #[test]

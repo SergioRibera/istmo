@@ -64,7 +64,9 @@ use super::super::backend::{
 };
 use super::super::output::{Delivery, FrameOut};
 use super::super::watch::SourceFeed;
-use super::common::{FrameFacts, StreamFacts, damage_of, frame_meta, negotiated, period};
+use super::common::{
+    FrameFacts, StreamFacts, damage_of, frame_meta, negotiated, owed_damage, period,
+};
 use super::d3d::{self, Gpu, Readback};
 use super::listing::{self, Target as WinTarget};
 use super::os::{self, PhysicalPixels};
@@ -1135,14 +1137,10 @@ impl Worker {
                 continue;
             }
             last_capture = Some(Instant::now());
-            match self.deliver(
-                &frame,
-                std::mem::replace(&mut damage, Damage::Unchanged),
-                cursor_mode,
-                &mut skipped,
-            ) {
+            let sent = std::mem::replace(&mut damage, Damage::Unchanged);
+            match self.deliver(&frame, sent.clone(), cursor_mode, &mut skipped) {
                 Ok(Delivery::Closed) => break,
-                Ok(_) => {}
+                Ok(delivery) => damage = owed_damage(delivery, sent),
                 Err(err) => {
                     drop(frame);
                     self.out.fail(err);
@@ -1210,8 +1208,8 @@ impl Worker {
                     .exhausted(exhausted, self.pool_depth, self.exhaustion);
                 *skipped = skipped.saturating_add(1);
                 return match self.exhaustion {
-                    // The frame is released at once; the damage is lost,
-                    // so the next one is full.
+                    // The frame is released at once; its damage goes to
+                    // the next one (`owed_damage`).
                     Exhaustion::Stall | Exhaustion::DropNewest => Ok(Delivery::Dropped),
                     Exhaustion::CopyToCpu => {
                         let image = self.readback.read(ID, &self.dup.gpu, &texture)?;

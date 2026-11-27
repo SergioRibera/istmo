@@ -77,7 +77,7 @@ use super::super::backend::{
 use super::super::output::{Delivery, FrameOut};
 use super::super::watch::SourceFeed;
 use super::access;
-use super::common::{FrameFacts, StreamFacts, damage_of, frame_meta, negotiated};
+use super::common::{FrameFacts, StreamFacts, damage_of, frame_meta, negotiated, owed_damage};
 use super::d3d::{self, Gpu, Readback};
 use super::listing::{self, Target as WinTarget};
 use super::os;
@@ -930,6 +930,7 @@ impl Backend for WgcBackend {
                     pool_depth: depth,
                     exhaustion,
                     readback: Readback::default(),
+                    owed: Damage::Full,
                 };
                 worker.run();
                 let _finished = done_tx.send(());
@@ -1030,6 +1031,8 @@ struct Worker {
     pool_depth: u8,
     exhaustion: Exhaustion,
     readback: Readback,
+    /// Damage of dropped frames, owed to the next delivered one.
+    owed: Damage,
 }
 
 impl Worker {
@@ -1070,8 +1073,10 @@ impl Worker {
                 continue;
             };
             if !self.out.wants_frames() {
-                // Paused: WGC frames are released at once.
+                // Paused: WGC frames are released at once; the next
+                // delivered frame is fully damaged.
                 let _closed = frame.Close();
+                self.owed = Damage::Full;
                 self.out.wait_while_paused(FRAME_WAIT);
                 continue;
             }
@@ -1202,108 +1207,116 @@ impl Worker {
             // This frame is still in an old-size buffer.
             let _closed = frame.Close();
             self.resize(content)?;
+            self.owed = Damage::Full;
             return Ok(Delivery::Dropped);
         }
         let texture = texture_of(&frame)?;
         let desc = d3d::texture_desc(&texture);
         let size = Size::new(desc.Width, desc.Height);
-        let damage = if self.dirty {
+        let damage = std::mem::replace(&mut self.owed, Damage::Unchanged).merge(if self.dirty {
             dirty_of(&frame, size)
         } else {
             Damage::Full
-        };
+        });
+        let sent = damage.clone();
         let content_rect = Rect::from_size(content)
             .intersect(Rect::from_size(size))
             .unwrap_or_else(|| Rect::from_size(size));
-        match self.path {
-            Path::Cpu => {
-                let image = self.readback.read(ID, &self.gpu, &texture)?;
-                let _closed = frame.Close();
-                let mut meta = self.meta(&frame, size, BufferMemory::Cpu, image.stride, damage);
-                meta.content_rect = content_rect;
-                meta.skipped_before = std::mem::take(skipped);
-                Ok(self
-                    .out
-                    .deliver(meta, NativeBuffer::from_bytes(image.bytes)))
-            }
-            Path::Texture | Path::Shared => {
-                let slot = if self.path == Path::Texture {
-                    self.texture_slot(&texture)
-                } else {
-                    (0..u32::from(self.pool_depth))
-                        .find(|s| !self.pool.is_held(*s))
-                        .unwrap_or(0)
-                };
-                let lease = match self.pool.hold(slot) {
-                    Ok(lease) => lease,
-                    Err(err @ HoldError::SlotOutOfRange { .. }) => {
-                        let _closed = frame.Close();
-                        return Err(wgc_err("pool", err));
-                    }
-                    Err(HoldError::Exhausted(exhausted)) => {
-                        self.out
-                            .exhausted(exhausted, self.pool_depth, self.exhaustion);
-                        *skipped = skipped.saturating_add(1);
-                        return match self.exhaustion {
-                            // WGC frames are released at once.
-                            Exhaustion::Stall | Exhaustion::DropNewest => {
-                                let _closed = frame.Close();
-                                Ok(Delivery::Dropped)
-                            }
-                            Exhaustion::CopyToCpu => {
-                                let image = self.readback.read(ID, &self.gpu, &texture)?;
-                                let _closed = frame.Close();
-                                let mut meta = self.meta(
-                                    &frame,
-                                    size,
-                                    BufferMemory::Cpu,
-                                    image.stride,
-                                    Damage::Full,
-                                );
-                                meta.content_rect = content_rect;
-                                meta.copied = Some(CopyStage::ExhaustionReadback);
-                                meta.skipped_before = std::mem::take(skipped);
-                                Ok(self
-                                    .out
-                                    .deliver(meta, NativeBuffer::from_bytes(image.bytes)))
-                            }
-                        };
-                    }
-                };
-                let mut meta = self.meta(&frame, size, BufferMemory::D3d11Texture, 0, damage);
-                meta.content_rect = content_rect;
-                meta.skipped_before = std::mem::take(skipped);
-                meta.buffer = lease.identity();
-                let identity = lease.identity().into();
-                let buffer = if self.path == Path::Texture {
-                    let backing =
-                        D3d11Frame::new(texture, self.gpu.device.clone(), None, self.gpu.luid);
-                    // The frame goes back to the pool once the consumer
-                    // dropped every clone.
-                    NativeBuffer::from_platform(backing)
-                        .with_identity(identity)
-                        .with_release(move || {
-                            let _closed = frame.Close();
-                            drop(lease);
-                        })
-                } else {
-                    let (target, handle) = self.shared_slot(lease.identity().slot, size)?;
-                    self.gpu.copy(&target, &texture);
-                    self.gpu.finish(ID, COPY_WAIT)?;
+        let delivery = 'deliver: {
+            match self.path {
+                Path::Cpu => {
+                    let image = self.readback.read(ID, &self.gpu, &texture)?;
                     let _closed = frame.Close();
-                    let backing = D3d11Frame::new(
-                        target,
-                        self.gpu.device.clone(),
-                        Some(handle),
-                        self.gpu.luid,
-                    );
-                    NativeBuffer::from_platform(backing)
-                        .with_identity(identity)
-                        .with_release(move || drop(lease))
-                };
-                Ok(self.out.deliver(meta, buffer))
+                    let mut meta = self.meta(&frame, size, BufferMemory::Cpu, image.stride, damage);
+                    meta.content_rect = content_rect;
+                    meta.skipped_before = std::mem::take(skipped);
+                    Ok(self
+                        .out
+                        .deliver(meta, NativeBuffer::from_bytes(image.bytes)))
+                }
+                Path::Texture | Path::Shared => {
+                    let slot = if self.path == Path::Texture {
+                        self.texture_slot(&texture)
+                    } else {
+                        (0..u32::from(self.pool_depth))
+                            .find(|s| !self.pool.is_held(*s))
+                            .unwrap_or(0)
+                    };
+                    let lease = match self.pool.hold(slot) {
+                        Ok(lease) => lease,
+                        Err(err @ HoldError::SlotOutOfRange { .. }) => {
+                            let _closed = frame.Close();
+                            return Err(wgc_err("pool", err));
+                        }
+                        Err(HoldError::Exhausted(exhausted)) => {
+                            self.out
+                                .exhausted(exhausted, self.pool_depth, self.exhaustion);
+                            *skipped = skipped.saturating_add(1);
+                            break 'deliver match self.exhaustion {
+                                // WGC frames are released at once.
+                                Exhaustion::Stall | Exhaustion::DropNewest => {
+                                    let _closed = frame.Close();
+                                    Ok(Delivery::Dropped)
+                                }
+                                Exhaustion::CopyToCpu => {
+                                    let image = self.readback.read(ID, &self.gpu, &texture)?;
+                                    let _closed = frame.Close();
+                                    let mut meta = self.meta(
+                                        &frame,
+                                        size,
+                                        BufferMemory::Cpu,
+                                        image.stride,
+                                        Damage::Full,
+                                    );
+                                    meta.content_rect = content_rect;
+                                    meta.copied = Some(CopyStage::ExhaustionReadback);
+                                    meta.skipped_before = std::mem::take(skipped);
+                                    Ok(self
+                                        .out
+                                        .deliver(meta, NativeBuffer::from_bytes(image.bytes)))
+                                }
+                            };
+                        }
+                    };
+                    let mut meta = self.meta(&frame, size, BufferMemory::D3d11Texture, 0, damage);
+                    meta.content_rect = content_rect;
+                    meta.skipped_before = std::mem::take(skipped);
+                    meta.buffer = lease.identity();
+                    let identity = lease.identity().into();
+                    let buffer = if self.path == Path::Texture {
+                        let backing =
+                            D3d11Frame::new(texture, self.gpu.device.clone(), None, self.gpu.luid);
+                        // The frame goes back to the pool once the consumer
+                        // dropped every clone.
+                        NativeBuffer::from_platform(backing)
+                            .with_identity(identity)
+                            .with_release(move || {
+                                let _closed = frame.Close();
+                                drop(lease);
+                            })
+                    } else {
+                        let (target, handle) = self.shared_slot(lease.identity().slot, size)?;
+                        self.gpu.copy(&target, &texture);
+                        self.gpu.finish(ID, COPY_WAIT)?;
+                        let _closed = frame.Close();
+                        let backing = D3d11Frame::new(
+                            target,
+                            self.gpu.device.clone(),
+                            Some(handle),
+                            self.gpu.luid,
+                        );
+                        NativeBuffer::from_platform(backing)
+                            .with_identity(identity)
+                            .with_release(move || drop(lease))
+                    };
+                    Ok(self.out.deliver(meta, buffer))
+                }
             }
+        };
+        if let Ok(done) = delivery {
+            self.owed = owed_damage(done, sent);
         }
+        delivery
     }
 }
 
