@@ -37,7 +37,7 @@ const REPLY_KEY: &str = "inline-reply";
 /// The action key of a click on the notification itself.
 const DEFAULT_KEY: &str = "default";
 /// Closes of ids `Notify` has not returned yet (the signal thread can
-/// see them first).
+/// see them first); kept only while a `Notify` is in flight.
 const EARLY_CLOSES: usize = 16;
 /// Buttons shown; the spec has no limit, servers show about three.
 const MAX_ACTIONS: u32 = 3;
@@ -81,11 +81,18 @@ struct State {
     /// `info()` answered without a server. The host keeps that answer
     /// until `changed()`, so the next server that shows up reports one.
     info_stale: bool,
+    /// Bumped when a first owner takes the server's name: an `info()`
+    /// whose read failed while one appeared reports the change itself.
+    appeared: u64,
 
     by_id: HashMap<NotificationId, Entry>,
     by_server: HashMap<u32, NotificationId>,
     by_job: HashMap<String, NotificationId>,
     early_closes: VecDeque<(u32, u32)>,
+    /// `Notify` calls in flight. A close of an unknown id while none is
+    /// can only be one of ours (`CloseNotification`) or of a notification
+    /// already forgotten: it is dropped, not kept as an early close.
+    notifying: usize,
     /// The job-view cancel listener runs.
     job_listener: bool,
 }
@@ -99,6 +106,8 @@ pub(super) struct Fdo {
     /// `show_job` spawns a listener holding the backend weakly.
     me: Weak<Self>,
     owner: Owner,
+    /// The owner of the KDE job server: job-view signals come from it.
+    job_owner: Owner,
 }
 
 impl std::fmt::Debug for Fdo {
@@ -137,6 +146,7 @@ impl Fdo {
             state: Mutex::default(),
             me: me.clone(),
             owner: Owner::new(NAME),
+            job_owner: Owner::new(kde_job::SERVER),
         });
         let weak = Arc::downgrade(&fdo);
         spawn("istmo-notif-fdo", move || {
@@ -205,35 +215,51 @@ impl Fdo {
     /// A first owner took the server's name (D-Bus activation, or a
     /// server started after the one that left).
     fn server_appeared(&self) {
-        let stale = std::mem::take(&mut lock(&self.state).info_stale);
+        let stale = {
+            let mut state = lock(&self.state);
+            state.appeared += 1;
+            std::mem::take(&mut state.info_stale)
+        };
         if stale {
             self.sink.changed();
         }
     }
 
-    /// The server's bus name changed owner: what it showed is gone.
+    /// The server's bus name changed owner: what it showed is gone, job
+    /// views included (on Plasma one process serves both).
     fn server_restarted(&self) {
         let gone: Vec<NotificationId> = {
             let mut state = lock(&self.state);
             state.server = None;
             self.owner.forget();
+            self.job_owner.forget();
             state.by_server.clear();
+            state.by_job.clear();
             state.early_closes.clear();
-            let notes: Vec<NotificationId> = state
-                .by_id
-                .iter()
-                .filter(|(_, entry)| matches!(entry, Entry::Note { .. }))
-                .map(|(id, _)| id.clone())
-                .collect();
-            for id in &notes {
-                state.by_id.remove(id);
-            }
-            notes
+            state.by_id.drain().map(|(id, _)| id).collect()
         };
         for id in &gone {
             self.sink.dismissed(id, DismissReason::Other);
         }
         self.sink.changed();
+    }
+
+    /// The job server's name changed owner: its views are gone. The host
+    /// hears of them as dismissed, like notes after a server restart (a
+    /// silent update would otherwise pop a new view).
+    fn job_server_restarted(&self) {
+        let gone: Vec<NotificationId> = {
+            let mut state = lock(&self.state);
+            self.job_owner.forget();
+            let jobs: Vec<NotificationId> = state.by_job.drain().map(|(_, id)| id).collect();
+            for id in &jobs {
+                state.by_id.remove(id);
+            }
+            jobs
+        };
+        for id in &gone {
+            self.sink.dismissed(id, DismissReason::Other);
+        }
     }
 
     fn signal(&self, message: &zbus::Message) {
@@ -316,6 +342,9 @@ impl Fdo {
                 };
                 Some((id, activated))
             } else {
+                if state.notifying == 0 {
+                    return;
+                }
                 if state.early_closes.len() == EARLY_CLOSES {
                     state.early_closes.pop_front();
                 }
@@ -328,7 +357,7 @@ impl Fdo {
         }
     }
 
-    /// A cancel in a job view.
+    /// A cancel in a job view (from the job server's owner).
     fn job_cancelled(&self, path: &str) {
         let (id, key) = {
             let mut state = lock(&self.state);
@@ -366,6 +395,19 @@ impl Fdo {
         if std::mem::replace(&mut lock(&self.state).job_listener, true) {
             return Ok(());
         }
+        let owners = zbus::blocking::fdo::DBusProxy::new(&self.conn)
+            .and_then(|proxy| proxy.receive_name_owner_changed_with_args(&[(0, kde_job::SERVER)]))
+            .map_err(platform)?;
+        let weak: Weak<Self> = Arc::downgrade(self);
+        spawn("istmo-notif-kjob-owner", move || {
+            for change in owners {
+                let Some(fdo) = weak.upgrade() else { return };
+                // Only an owner that goes away takes its views along.
+                if change.args().is_ok_and(|args| args.old_owner().is_some()) {
+                    fdo.job_server_restarted();
+                }
+            }
+        })?;
         let cancels = MessageIterator::for_match_rule(
             MatchRule::builder()
                 .msg_type(Type::Signal)
@@ -381,8 +423,10 @@ impl Fdo {
         spawn("istmo-notif-kjob", move || {
             for message in cancels {
                 let Some(fdo) = weak.upgrade() else { return };
-                if let Ok(message) = message
-                    && let Some(path) = message.header().path()
+                let Ok(message) = message else { continue };
+                let header = message.header();
+                if let (Some(path), Some(sender)) = (header.path(), header.sender())
+                    && fdo.job_owner.is(&fdo.conn, sender.as_str())
                 {
                     fdo.job_cancelled(path.as_str());
                 }
@@ -455,11 +499,22 @@ impl Fdo {
 
 impl Backend for Fdo {
     fn info(&self) -> BackendInfo {
+        let appeared = lock(&self.state).appeared;
         match self.server() {
             Ok(server) => server.info.clone(),
             Err(err) => {
                 tracing::debug!(%err, "notifications: no notification server");
-                lock(&self.state).info_stale = true;
+                let raced = {
+                    let mut state = lock(&self.state);
+                    // A server that appeared during the failed read did
+                    // not see the flag: report it here.
+                    let raced = state.appeared != appeared;
+                    state.info_stale = !raced;
+                    raced
+                };
+                if raced {
+                    self.sink.changed();
+                }
                 let mut info = BackendInfo::basic("fdo");
                 info.capabilities.max_actions = 0;
                 info.limits.max_actions = 0;
@@ -497,7 +552,8 @@ impl Backend for Fdo {
             tracing::debug!(%err, "notifications: job view not ended");
         }
         let post = notify_args(&server, &self.app_id, shown);
-        let server_id: u32 = self
+        lock(&self.state).notifying += 1;
+        let notified: Result<u32, NotificationError> = self
             .conn
             .call_method(
                 Some(NAME),
@@ -516,9 +572,19 @@ impl Backend for Fdo {
                 ),
             )
             .and_then(|reply| reply.body().deserialize())
-            .map_err(platform)?;
+            .map_err(platform);
         let early = {
             let mut state = lock(&self.state);
+            state.notifying -= 1;
+            let server_id = match notified {
+                Ok(server_id) => server_id,
+                Err(err) => {
+                    if state.notifying == 0 {
+                        state.early_closes.clear();
+                    }
+                    return Err(err);
+                }
+            };
             if replaces != 0 && replaces != server_id {
                 state.by_server.remove(&replaces);
             }
@@ -539,6 +605,9 @@ impl Backend for Fdo {
             if early.is_some() {
                 state.by_server.remove(&server_id);
                 state.by_id.remove(&n.id);
+            }
+            if state.notifying == 0 {
+                state.early_closes.clear();
             }
             early
         };
@@ -588,7 +657,9 @@ struct Post<'a> {
 )]
 fn notify_args<'a>(server: &Server, app_id: &'a str, shown: &Shown<'a>) -> Post<'a> {
     let n = shown.notification;
-    let mut hints: HashMap<&'a str, Value<'a>> = HashMap::new();
+    // Room for the usual hints: no rehash while they go in.
+    let mut hints: HashMap<&'a str, Value<'a>> = HashMap::with_capacity(12 + n.linux_hints.len());
+
     let mut actions = Vec::new();
     let mut reply_key = None;
     if server.has("actions") {

@@ -529,6 +529,113 @@ fn fdo_backend_against_a_fake_server() {
     assert_eq!(int(&hints, "value"), None);
 }
 
+/// A fake `org.kde.JobViewServer`: hands out view paths.
+struct FakeJobs {
+    next: Mutex<u32>,
+    views: flume::Sender<String>,
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "the D-Bus method shape of JobViewServerV2"
+)]
+#[interface(name = "org.kde.JobViewServerV2")]
+impl FakeJobs {
+    #[zbus(name = "requestView")]
+    fn request_view(
+        &self,
+        desktop_entry: String,
+        capabilities: i32,
+        hints: HashMap<String, OwnedValue>,
+    ) -> zbus::zvariant::OwnedObjectPath {
+        drop((desktop_entry, capabilities, hints));
+        let number = {
+            let mut next = self.next.lock().unwrap();
+            *next += 1;
+            *next
+        };
+        let path = format!("/JobView/{number}");
+
+        let _sent = self.views.send(path.clone());
+        zbus::zvariant::OwnedObjectPath::try_from(path).unwrap()
+    }
+}
+
+fn fake_jobs() -> (Connection, flume::Receiver<String>) {
+    let (tx, rx) = flume::unbounded();
+    let conn = zbus::blocking::connection::Builder::session()
+        .unwrap()
+        .serve_at(
+            "/JobViewServer",
+            FakeJobs {
+                next: Mutex::new(0),
+                views: tx,
+            },
+        )
+        .unwrap()
+        .name("org.kde.JobViewServer")
+        .unwrap()
+        .build()
+        .unwrap();
+    (conn, rx)
+}
+
+fn cancel_requested(conn: &Connection, path: &str) {
+    conn.emit_signal(
+        None::<&str>,
+        path,
+        "org.kde.JobViewV3",
+        "cancelRequested",
+        &(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn kde_job_views_follow_their_server() {
+    if std::env::var_os(CHILD).is_none() {
+        return run_child("kde_job_views_follow_their_server");
+    }
+    let (_server, _calls) = fake_server("Plasma", &["actions", "body"]);
+    let (jobs, views) = fake_jobs();
+    let s = setup(
+        LinuxOptions::new()
+            .with_app_id("dev.istmo.notif_test")
+            .with_route(LinuxRoute::Server),
+    );
+    let events = s.host.events();
+    let progress = |name: &str| {
+        Notification::new(name, "Copying")
+            .unwrap()
+            .with_progress(Progress::fraction(0.5))
+    };
+    pollster::block_on(s.client.show_checked(progress("j1"))).unwrap();
+    let view = views.recv_timeout(TIMEOUT).expect("a job view");
+    // A cancel from anyone but the job server is ignored.
+    let spoofer = Connection::session().unwrap();
+    cancel_requested(&spoofer, &view);
+    std::thread::sleep(Duration::from_millis(300));
+    s.host.settle();
+    assert!(
+        !events
+            .try_iter()
+            .any(|e| matches!(e, NotificationEvent::Dismissed(_))),
+        "a spoofed cancel ended the job"
+    );
+    cancel_requested(&jobs, &view);
+    let dismissal = next_dismissal(&events);
+    assert_eq!(dismissal.id, id("j1"));
+    assert_eq!(dismissal.reason, DismissReason::User);
+
+    // The job server goes away: its views are gone, the host hears so.
+    pollster::block_on(s.client.show_checked(progress("j2"))).unwrap();
+    let _second = views.recv_timeout(TIMEOUT).expect("a second job view");
+    drop(jobs);
+    let dismissal = next_dismissal(&events);
+    assert_eq!(dismissal.id, id("j2"));
+    assert_eq!(dismissal.reason, DismissReason::Other);
+}
+
 #[test]
 fn live_session_smoke() {
     // `1`: the automatic route; `portal`: the notification portal.

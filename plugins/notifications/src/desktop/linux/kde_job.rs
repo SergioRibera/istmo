@@ -27,7 +27,8 @@ pub(super) struct JobProps<'a> {
 
 impl JobProps<'_> {
     fn dict(&self) -> HashMap<&'static str, Value<'_>> {
-        let mut out = HashMap::with_capacity(3);
+        // `request` adds two more.
+        let mut out = HashMap::with_capacity(5);
         out.insert("title", Value::from(self.title));
         if let Some(info) = self.info {
             out.insert("infoMessage", Value::from(info));
