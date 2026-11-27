@@ -165,6 +165,10 @@ struct State {
     loaded: bool,
     /// Bumped on every engine change; the store keeps the newest.
     store_generation: u64,
+    /// When an entry past the [`ARM_WINDOW_MS`] window of the last
+    /// [`Backend::arm`] enters it: the window rolls forward then, also
+    /// while nothing else changes.
+    arm_at: Option<i64>,
 }
 
 impl State {
@@ -430,6 +434,7 @@ impl DesktopNotificationsBuilder {
                 next_ticket: 0,
                 loaded: false,
                 store_generation: 0,
+                arm_at: None,
             }),
             lane_free: Condvar::new(),
             events: Mutex::default(),
@@ -814,6 +819,10 @@ impl Inner {
         let now = self.now();
         let horizon = now.saturating_add(ARM_WINDOW_MS);
         let mut upcoming = Vec::new();
+        // Occurrences past the cap are re-armed by the deliveries before
+        // them (each one changes the engine); only the window edge needs
+        // a wake of its own.
+        let mut edge: Option<i64> = None;
         for entry in &entries {
             let mut notification = entry.notification.clone();
             if notification.validate().is_err()
@@ -836,10 +845,15 @@ impl Inner {
                 }
                 next = entry.trigger.next_after(entry.anchor_ms, fire_ms);
             }
+            if let Some(at) = next.filter(|&at| at > horizon) {
+                let enters = at.saturating_sub(ARM_WINDOW_MS);
+                edge = Some(edge.map_or(enters, |edge| edge.min(enters)));
+            }
         }
         upcoming
             .sort_by(|a, b| (a.fire_ms, &a.notification.id).cmp(&(b.fire_ms, &b.notification.id)));
         upcoming.truncate(ARM_CAP);
+        self.lock().arm_at = edge;
         backend.arm(&upcoming);
     }
 
@@ -896,6 +910,7 @@ impl Inner {
             state.engine.next_deadline(),
             state.coalescer.next_due(),
             expiry,
+            state.arm_at,
         ]
         .into_iter()
         .flatten()
@@ -1182,7 +1197,7 @@ impl Inner {
     fn run_due(self: &Arc<Self>) -> Option<i64> {
         self.zone_check();
         let now = self.now();
-        let (due, queued, expired) = {
+        let (due, queued, expired, roll) = {
             let mut state = self.lock();
             if !state.loaded {
                 return None;
@@ -1213,11 +1228,20 @@ impl Inner {
                 .filter(|(_, live)| !live.dismissed && live.expires_ms.is_some_and(|at| at <= now))
                 .map(|(id, _)| id.clone())
                 .collect();
-            (due, queued, expired)
+            // The arm window's edge passed: arm again (a delivery below
+            // arms through `persist` anyway).
+            let roll = state.arm_at.is_some_and(|at| at <= now);
+            if roll {
+                state.arm_at = None;
+            }
+            (due, queued, expired, roll)
         };
         if !due.is_empty() {
             self.persist();
+        } else if roll {
+            self.arm_native();
         }
+
         for (entry, ticket) in due {
             let id = entry.notification.id.clone();
             if let Err(err) = self.show_now(entry.notification, entry.late, Some(ticket)) {

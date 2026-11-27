@@ -962,3 +962,56 @@ fn cancels_reach_the_backend_for_ids_of_an_earlier_process() {
     assert_eq!(s.backend.removes(), ["a"]);
     assert_eq!(s.backend.remove_alls.load(Ordering::SeqCst), 1);
 }
+
+/// A [`Recorder`] that also records what it is armed with.
+#[derive(Debug)]
+struct Armed {
+    rec: Arc<Recorder>,
+    arms: Mutex<Vec<Vec<(String, i64)>>>,
+}
+
+impl Backend for Armed {
+    fn info(&self) -> BackendInfo {
+        self.rec.info()
+    }
+
+    fn show(&self, shown: &Shown<'_>) -> Result<(), NotificationError> {
+        self.rec.show(shown)
+    }
+
+    fn remove(&self, id: &NotificationId) -> Result<(), NotificationError> {
+        self.rec.remove(id)
+    }
+
+    fn arm(&self, upcoming: &[Upcoming]) {
+        lock(&self.arms).push(
+            upcoming
+                .iter()
+                .map(|u| (u.notification.id.value.clone(), u.fire_ms))
+                .collect(),
+        );
+    }
+}
+
+#[test]
+fn the_arm_window_rolls_forward_while_the_app_runs() {
+    const DAY: i64 = 86_400_000;
+    let (now, clock) = clock!(1_000_000);
+    let rec = Recorder::new(Rate::LINUX);
+    let armed = Arc::new(Armed {
+        rec: rec.clone(),
+        arms: Mutex::default(),
+    });
+    let s = setup_on("roll", rec, armed.clone(), clock, true);
+    let fire = 1_000_000 + 15 * DAY;
+    pollster::block_on(s.client.schedule_checked(n("far"), Trigger::At(fire))).unwrap();
+    assert_eq!(lock(&armed.arms).last(), Some(&Vec::new()));
+    // The timer wakes when the entry enters the window.
+    assert_eq!(s.host.armed(), Some(fire - ARM_WINDOW_MS));
+    now.store(fire - ARM_WINDOW_MS, Ordering::SeqCst);
+    assert_eq!(s.host.tick(), Some(fire));
+    assert_eq!(
+        lock(&armed.arms).last(),
+        Some(&vec![("far".to_owned(), fire)])
+    );
+}
