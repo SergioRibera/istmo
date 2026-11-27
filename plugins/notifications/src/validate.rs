@@ -429,6 +429,11 @@ impl Notification {
 impl NotificationPatch {
     /// Checks the fields it sets against the [limits](self), and that it
     /// does not set a field it also clears.
+    ///
+    /// Call actions (`istmo.answer`, `istmo.decline`, `istmo.hang_up`)
+    /// are refused only when the patch itself sets a non-call style: a
+    /// patch without a style may target a call notification, and the
+    /// host checks the patched notification as a whole.
     pub fn validate(&self) -> Result<(), InvalidField> {
         if let Some(title) = &self.title {
             at(label(title, MAX_TITLE_CHARS), || "title".to_owned())?;
@@ -447,7 +452,8 @@ impl NotificationPatch {
             at(image(icon), || "icon".to_owned())?;
         }
         if let Some(list) = &self.actions {
-            actions(list, matches!(self.style, Some(Style::Call(_))))?;
+            let may_be_call = matches!(self.style, None | Some(Style::Call(_)));
+            actions(list, may_be_call)?;
         }
         if let Some(bar) = &self.progress {
             progress(bar, "progress")?;
@@ -735,6 +741,27 @@ mod tests {
             ("progress".to_owned(), Problem::NotAllowedHere)
         );
         assert!(NotificationPatch::progress(None).validate().is_ok());
+    }
+
+    #[test]
+    fn patches_may_carry_call_actions_unless_they_set_another_style() {
+        let answer = Action {
+            id: ActionId {
+                value: ActionId::CALL_ANSWER.to_owned(),
+            },
+            ..Action::button("x", "Answer").unwrap()
+        };
+        // The patched notification may be a call: the host decides.
+        let mut patch = NotificationPatch {
+            actions: Some(vec![answer]),
+            ..NotificationPatch::default()
+        };
+        assert!(patch.validate().is_ok());
+        patch.style = Some(Style::Plain);
+        assert_eq!(
+            problem(patch.validate()),
+            ("actions[0].id".to_owned(), Problem::Reserved)
+        );
     }
 
     #[test]
