@@ -263,12 +263,24 @@ internal class ProjectionGrants(private val handler: Handler) {
         return projection
     }
 
-    /** A live grant, removed (audio-only sessions carry no grant field). */
-    fun takeAny(): Projection? {
-        while (true) {
-            val id = grants.keys.firstOrNull() ?: return null
-            val projection = grants.remove(id) ?: continue
-            if (projection.isStopped) continue
+    /**
+     * The one live grant, removed (audio-only sessions carry no grant
+     * field); `null` without one. With several waiting, which one the
+     * caller meant is unknown (another may be for a video `open`): none
+     * is taken.
+     */
+    fun takeOnly(): Projection? {
+        synchronized(this) {
+            val live = grants.entries.filter { !it.value.isStopped }
+            if (live.size > 1) {
+                fail(
+                    CaptureError.Protocol(
+                        BackendDetail(PROJECTION, "open_audio", "${live.size} grants wait: use each before asking for another"),
+                    ),
+                )
+            }
+            val (id, projection) = live.firstOrNull() ?: return null
+            if (grants.remove(id) == null) return null
             projection.listener = null
             return projection
         }

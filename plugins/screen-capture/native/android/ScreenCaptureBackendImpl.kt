@@ -842,7 +842,7 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
             val plan = AudioPlan.of(appContext, config, selection)
             // `AudioConfig` carries no consent: the projection comes from
             // an earlier `request_projection`.
-            val projection = grants.takeAny() ?: fail(CaptureError.ConsentRequired)
+            val projection = grants.takeOnly() ?: fail(CaptureError.ConsentRequired)
             if (!projection.used.compareAndSet(false, true)) fail(CaptureError.GrantExpired)
             val id = IstmoRuntime.allocHandleId(ScreenCaptureDispatcher.PLUGIN_ID)
             val session = AudioSession(id, projection, plan, audio)
