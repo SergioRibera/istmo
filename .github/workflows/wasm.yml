@@ -50,6 +50,8 @@ jobs:
           --all-targets -- -D warnings
       - name: Camera web backend
         run: cargo check --target wasm32-unknown-unknown -p istmo-camera --features web
+      - name: Notifications web host
+        run: cargo clippy --target wasm32-unknown-unknown -p istmo-notifications --all-targets -- -D warnings
       # The runner must match the `wasm-bindgen` the build resolved.
       - name: Install wasm-bindgen-test-runner
         run: |
@@ -58,5 +60,9 @@ jobs:
           cargo install wasm-bindgen-cli --version "$version" --locked
       - name: Tests
         run: cargo test --target wasm32-unknown-unknown -p istmo --test wasm_runtime
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+      - name: Notifications web tests
+        run: cargo test --target wasm32-unknown-unknown -p istmo-notifications --test web
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
