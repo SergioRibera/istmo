@@ -60,9 +60,11 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
     if !hex.len().is_multiple_of(2) {
         return Err("odd number of hex digits".to_owned());
     }
-    hex.as_bytes()
-        .chunks_exact(2)
-        .map(|pair| Ok((digit(pair[0])? << 4) | digit(pair[1])?))
+    // Even length checked above: no remainder.
+    let (pairs, _rest) = hex.as_bytes().as_chunks::<2>();
+    pairs
+        .iter()
+        .map(|&[high, low]| Ok((digit(high)? << 4) | digit(low)?))
         .collect()
 }
 

@@ -14,8 +14,8 @@ use crate::render::{RenderLimits, Rendered, Resolved, render};
 use crate::schedule::{Due, Engine, Entry, Store, StoreError};
 use crate::{
     AckToken, ActionId, ChannelId, ChannelSpec, DeliveredNotification, DismissReason, Dismissal,
-    Failure, InvalidField, Notification, NotificationError, NotificationEvent, NotificationId,
-    NotificationResponse, PendingNotification, Problem, ResponseAction, ScheduledInfo, Trigger,
+    Failure, Notification, NotificationError, NotificationEvent, NotificationId,
+    NotificationResponse, PendingNotification, ResponseAction, ScheduledInfo, Trigger,
 };
 
 /// Events kept for the first subscriber.
@@ -378,12 +378,13 @@ impl State {
         {
             return Err(NotificationError::UnknownChannel(channel.value.clone()));
         }
-        // A trigger that never fires (a rule past its `until`) is refused
-        // rather than kept forever.
-        if trigger.first_fire(now_ms).is_none() {
-            return Err(InvalidField::new("trigger", Problem::OutOfRange).into());
-        }
+        // A trigger that never fires (a rule past its `until`) is refused:
+        // the engine does not store it.
+        let dead = trigger.never_fires();
         let info = self.engine.add(notification, trigger, now_ms);
+        if info.next_fire_ms.is_none() {
+            return Err(dead.into());
+        }
         self.generation += 1;
         Ok(info)
     }

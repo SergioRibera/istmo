@@ -195,6 +195,15 @@ impl Store {
     /// Syncs the directory holding the file (its entry after a rename or
     /// a removal). Directories cannot be opened as files on Windows,
     /// where the rename is already durable.
+    #[cfg_attr(
+        not(unix),
+        allow(
+            clippy::unused_self,
+            clippy::unnecessary_wraps,
+            clippy::missing_const_for_fn,
+            reason = "only Unix syncs the directory; one signature for every target"
+        )
+    )]
     fn sync_dir(&self) -> std::io::Result<()> {
         #[cfg(unix)]
         if let Some(dir) = self.path.parent() {
