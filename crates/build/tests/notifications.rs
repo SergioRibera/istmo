@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use istmo_build::{AppConfig, AppOpts, ManifestError, PlistFragments, emit_app_with};
+use istmo_build::{AppConfig, AppOpts, Manifest, ManifestError, PlistFragments, emit_app_with};
 
 const TOML: &str = r##"[app]
 id = "com.example.chat"
@@ -113,14 +113,19 @@ fn android_permissions_land_in_the_sidecar() {
         "android {\n    namespace = \"com.example.chat\"\n}\n",
     )
     .unwrap();
-    emit_app_with(AppOpts {
-        root: Some(root.clone()),
-        android_root: Some(android_root.clone()),
-        ios: Some(false),
-        lib_name: Some("app".into()),
-        ..AppOpts::default()
-    });
-    let sidecar = fs::read_to_string(android_root.join(".istmo/istmo-permissions.xml")).unwrap();
+    let plugin = Manifest::parse("[plugin]\nid = \"istmo.notifications\"\n").unwrap();
+    let emit = |extra_manifests: Vec<Manifest>| {
+        emit_app_with(AppOpts {
+            root: Some(root.clone()),
+            android_root: Some(android_root.clone()),
+            ios: Some(false),
+            lib_name: Some("app".into()),
+            extra_manifests,
+            ..AppOpts::default()
+        });
+        fs::read_to_string(android_root.join(".istmo/istmo-permissions.xml")).unwrap_or_default()
+    };
+    let sidecar = emit(vec![plugin]);
     for permission in [
         "POST_NOTIFICATIONS",
         "RECEIVE_BOOT_COMPLETED",
@@ -133,6 +138,9 @@ fn android_permissions_land_in_the_sidecar() {
         );
     }
     assert!(!sidecar.contains("POST_PROMOTED_NOTIFICATIONS"));
+    // Without the plugin the table asks for nothing.
+    let sidecar = emit(Vec::new());
+    assert!(!sidecar.contains("POST_NOTIFICATIONS"), "{sidecar}");
     let _ = fs::remove_dir_all(&root);
 }
 

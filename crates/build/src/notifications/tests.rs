@@ -348,17 +348,54 @@ fn info_plist_and_entitlements() {
 fn android_values() {
     let xml = parse(FULL).unwrap().render_android_values().unwrap();
     assert!(xml.contains("<color name=\"istmo_notification_accent\">#FFE0662B</color>"));
-    assert!(xml.contains("<bool name=\"istmo_notifications_full_screen\">true</bool>"));
-    assert!(xml.contains("<bool name=\"istmo_notifications_live_updates\">true</bool>"));
-    assert!(xml.contains(
-        "<string name=\"istmo_notifications_exact_alarms\" translatable=\"false\">use</string>"
-    ));
-    let plain = parse("[app.notifications]\n")
-        .unwrap()
-        .render_android_values()
+    // The opt-in flags only add permissions; Kotlin reads the manifest.
+    assert!(!xml.contains("<bool"));
+    assert!(!xml.contains("<string"));
+    assert_eq!(
+        parse("[app.notifications]\n")
+            .unwrap()
+            .render_android_values(),
+        None
+    );
+}
+
+#[test]
+fn channels_as_an_inline_array() {
+    let inline = parse(
+        "[app]\nnotification_channel = [{ id = \"a\", name = \"A\" }, { id = \"b\", name = \"B\" }]\n",
+    )
+    .unwrap();
+    let ids: Vec<&str> = inline.channels.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["a", "b"]);
+    assert!(parse("[app]\nnotification_channel = [1]\n").is_err());
+}
+
+#[test]
+fn the_service_worker_is_staged_by_default() {
+    assert!(AppNotifications::default().web_service_worker());
+    assert!(parse("[app.notifications]\n").unwrap().web_service_worker());
+    assert!(
+        !parse("[app.notifications]\nweb_service_worker = false\n")
+            .unwrap()
+            .web_service_worker()
+    );
+    let root = temp_dir("default-worker");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("sw.js"), b"// sw").unwrap();
+    let lines = AppNotifications::default()
+        .desktop_env_lines(
+            &root.join("out"),
+            Some(&root.join("sw.js")),
+            Some(&root.join("web")),
+        )
         .unwrap();
-    assert!(!plain.contains("istmo_notification_accent"));
-    assert!(plain.contains(">none</string>"));
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].starts_with(&format!("cargo::rustc-env={ENV_SERVICE_WORKER}=")));
+    assert_eq!(
+        fs::read(root.join("web").join(SERVICE_WORKER_FILE)).unwrap(),
+        b"// sw"
+    );
+    let _ = fs::remove_dir_all(&root);
 }
 
 fn write_sources(root: &Path) {
@@ -557,7 +594,7 @@ fn desktop_env_lines() {
     fs::write(root.join("sw.js"), b"// sw").unwrap();
     let out = root.join("out");
     let mut notifications = parse(FULL).unwrap().rooted(&root);
-    let lines = notifications.desktop_env_lines(&out, None).unwrap();
+    let lines = notifications.desktop_env_lines(&out, None, None).unwrap();
     let sound_dir = out.join("istmo-notification-sounds");
     assert_eq!(
         lines,
@@ -567,7 +604,6 @@ fn desktop_env_lines() {
                 notifications.channels_hex().unwrap()
             ),
             "cargo::rustc-env=ISTMO_NOTIFICATION_ACCENT=FFE0662B".to_owned(),
-            "cargo::rustc-env=ISTMO_NOTIFICATION_APPLE=time_sensitive,communication".to_owned(),
             format!(
                 "cargo::rustc-env=ISTMO_NOTIFICATION_SOUND_DIR={}",
                 sound_dir.display()
@@ -579,14 +615,14 @@ fn desktop_env_lines() {
     assert!(sound_dir.join("ding.ogg").is_file());
     // `web_service_worker = false` stages nothing.
     let none = notifications
-        .desktop_env_lines(&out, Some(&root.join("sw.js")))
+        .desktop_env_lines(&out, Some(&root.join("sw.js")), None)
         .unwrap();
     assert!(!none.iter().any(|l| l.contains(ENV_SERVICE_WORKER)));
     if let Some(config) = notifications.config.as_mut() {
         config.web_service_worker = true;
     }
     let with_worker = notifications
-        .desktop_env_lines(&out, Some(&root.join("sw.js")))
+        .desktop_env_lines(&out, Some(&root.join("sw.js")), Some(&root.join("web")))
         .unwrap();
     let staged = out
         .join("istmo-notifications-web")
@@ -596,5 +632,10 @@ fn desktop_env_lines() {
         &format!("cargo::rustc-env={ENV_SERVICE_WORKER}={}", staged.display())
     );
     assert_eq!(fs::read(&staged).unwrap(), b"// sw");
+    assert_eq!(
+        fs::read(root.join("web").join(SERVICE_WORKER_FILE)).unwrap(),
+        b"// sw"
+    );
+    assert!(root.join("web").join(".gitignore").is_file());
     let _ = fs::remove_dir_all(&root);
 }

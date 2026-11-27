@@ -140,9 +140,12 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
     // Every crate gets the env, plugin crates included: a crate that
     // calls `runtime!` without the env would wire nothing automatically.
     let wiring = crate::emit::emit_wiring_for(&dep_manifests, pass.app_manifest);
-    // Plugin crates run `emit()` too: only apps (a native project or a
-    // binary to ship) get the desktop icon, runtime env and assets.
-    if !pass.android_active && !pass.ios_active && !pass.app.krate.has_binaries() {
+    // Plugin crates run `emit()` too: only apps (a native project, a
+    // binary to ship, or a wasm32 `cdylib` a web bundler loads) get the
+    // desktop icon, runtime env and assets.
+    let web_app = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|arch| arch == "wasm32")
+        && pass.app.krate.has_crate_type("cdylib");
+    if !pass.android_active && !pass.ios_active && !pass.app.krate.has_binaries() && !web_app {
         return;
     }
     pass.track_inputs();
@@ -162,7 +165,11 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
         &pass.root,
         desktop_staging.as_deref(),
     );
-    emit_notifications_env(&pass.notifications, &pass.dep_manifests_by_links);
+    emit_notifications_env(
+        &pass.notifications,
+        &pass.dep_manifests_by_links,
+        &pass.root,
+    );
     if !pass.android_active && !pass.ios_active {
         return;
     }
@@ -643,7 +650,16 @@ impl<'a> AppPass<'a> {
                 ..PluginEntry::default()
             });
         }
-        let notification_permissions = self.notifications.android_permissions();
+        // Only when the app links the plugin: the table alone must not
+        // add permissions to an app that shows no notifications.
+        let notification_permissions = if dep_manifests
+            .iter()
+            .any(|m| m.plugins.iter().any(|p| p.id == NOTIFICATIONS_PLUGIN_ID))
+        {
+            self.notifications.android_permissions()
+        } else {
+            Vec::new()
+        };
         if !notification_permissions.is_empty() {
             wired_entries.push(PluginEntry {
                 id: "app.notifications".to_owned(),
@@ -994,36 +1010,38 @@ fn emit_desktop_icon(
 /// Desktop and web targets: hand `[app.notifications]` and the static
 /// channels to the plugin's host as rustc envs (see
 /// [`AppNotifications::desktop_env_lines`]); on wasm32 also stage the
-/// plugin's service worker.
+/// plugin's service worker, in `OUT_DIR` and in `<crate>/.istmo/web`.
+/// Only for apps that link the plugin; the service worker is staged by
+/// default, also without an `[app.notifications]` table.
 fn emit_notifications_env(
     notifications: &AppNotifications,
     dep_manifests_by_links: &[(String, Manifest)],
+    root: &Path,
 ) {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if notifications.is_empty() || matches!(target_os.as_str(), "android" | "ios") {
+    let linked = links_plugin(dep_manifests_by_links, NOTIFICATIONS_PLUGIN_ID);
+    if !linked || matches!(target_os.as_str(), "android" | "ios") {
         return;
     }
     let Some(out_dir) = std::env::var_os("OUT_DIR").map(PathBuf::from) else {
         return;
     };
     let wants_worker = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|arch| arch == "wasm32")
-        && notifications
-            .config
-            .as_ref()
-            .is_some_and(|config| config.web_service_worker);
+        && notifications.web_service_worker();
     let service_worker = wants_worker.then(service_worker_source).flatten();
-    if wants_worker
-        && service_worker.is_none()
-        && links_plugin(dep_manifests_by_links, NOTIFICATIONS_PLUGIN_ID)
-    {
+    if wants_worker && service_worker.is_none() {
         crate::directive::warning(&format!(
             "[app.notifications] web_service_worker: istmo-notifications hands over no `{}` asset; \
              nothing staged",
             crate::notifications::SERVICE_WORKER_FILE
         ));
     }
-    let lines =
-        report_notifications(notifications.desktop_env_lines(&out_dir, service_worker.as_deref()));
+    let web_dir = root.join(crate::notifications::WEB_DIR);
+    let lines = report_notifications(notifications.desktop_env_lines(
+        &out_dir,
+        service_worker.as_deref(),
+        Some(&web_dir),
+    ));
     for line in lines.unwrap_or_default() {
         println!("{line}");
     }
