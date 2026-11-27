@@ -104,16 +104,6 @@ impl ImageCache {
         }
     }
 
-    /// One more use of every cached file of `files` (a post reusing the
-    /// shown files owns its own uses).
-    pub(crate) fn retain(&mut self, files: &ImageFiles) {
-        for (_, path) in &files.entries {
-            if let Some(uses) = self.uses.get_mut(path) {
-                *uses += 1;
-            }
-        }
-    }
-
     /// Releases every cached file of `files` (paths given by the app are
     /// left alone).
     pub(crate) fn release(&mut self, files: &ImageFiles) {

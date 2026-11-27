@@ -11,7 +11,9 @@
 //! [`NotificationError::Unsupported`]).
 //!
 //! Locks: the host never holds a lock while it calls the backend, and
-//! takes the state lock before the image cache, never the other way.
+//! never takes the image cache (which writes and removes files) while it
+//! holds the state lock: a post reusing the shown files shares them
+//! through an `Arc`, so the state lock never waits on file IO.
 //! Backend calls for one id go through that id's lane, one at a time in
 //! the order they were issued (a newer post never lands before an older
 //! one, a cancel lands after the post it follows); calls for different
@@ -123,7 +125,10 @@ struct Live {
     notification: Arc<Notification>,
     /// What the backend last got.
     rendered: crate::render::Rendered,
-    images: ImageFiles,
+    /// Shared with posts in flight: each `Arc` is one use of the cached
+    /// files, released by whoever drops the last clone
+    /// ([`Inner::release`]).
+    images: Arc<ImageFiles>,
     /// The images must be collected again before the next post.
     images_stale: bool,
     delivered_ms: i64,
@@ -940,22 +945,16 @@ impl Inner {
             fresh,
             event,
         } = post;
-        let reused = {
-            let state = lane.state();
-            let reused = state
-                .table
-                .get(&notification.id)
-                .filter(|live| !fresh && !live.dismissed && !live.images_stale)
-                .map(|live| live.images.clone());
-            // Under the state lock: the shown record cannot release the
-            // files between the read and this use.
-            if let Some(files) = reused.as_ref().filter(|files| !files.is_empty()) {
-                lock(&self.images).retain(files);
-            }
-            reused
-        };
+        // The clone is this post's use: the shown record cannot release
+        // the files while the post holds it.
+        let reused = lane
+            .state()
+            .table
+            .get(&notification.id)
+            .filter(|live| !fresh && !live.dismissed && !live.images_stale)
+            .map(|live| Arc::clone(&live.images));
         lane.unlock();
-        let images = reused.unwrap_or_else(|| lock(&self.images).collect(&notification));
+        let images = reused.unwrap_or_else(|| Arc::new(lock(&self.images).collect(&notification)));
         let rendered = render(&notification, &host.limits);
         let shown = backend.show(&Shown {
             notification: &notification,
@@ -964,7 +963,7 @@ impl Inner {
             mode,
         });
         if let Err(err) = shown {
-            self.release(&images);
+            self.release(images);
             return Err(err);
         }
         let now = self.now();
@@ -1001,22 +1000,26 @@ impl Inner {
                         dismissed: false,
                         expires_ms,
                     });
-                    ImageFiles::default()
+                    Arc::default()
                 }
             }
         };
         lane.unlock();
-        self.release(&replaced);
+        self.release(replaced);
         if let Some(event) = event {
             self.emit(event);
         }
         Ok(())
     }
 
-    /// Releases the cached files of `files`.
-    fn release(&self, files: &ImageFiles) {
-        if !files.is_empty() {
-            lock(&self.images).release(files);
+    /// Drops one use of `files`; the last one releases the cached files.
+    /// A replaced record that shares them with its successor releases
+    /// nothing and takes no lock.
+    fn release(&self, files: Arc<ImageFiles>) {
+        if let Some(files) = Arc::into_inner(files)
+            && !files.is_empty()
+        {
+            lock(&self.images).release(&files);
         }
     }
 
@@ -1152,7 +1155,7 @@ impl Inner {
             let Some(live) = removed else {
                 continue;
             };
-            self.release(&live.images);
+            self.release(live.images);
             if live.dismissed {
                 continue;
             }
@@ -1387,7 +1390,7 @@ impl Inner {
             }
             images
         };
-        self.release(&released);
+        self.release(released);
         self.emit(NotificationEvent::Dismissed(Dismissal {
             id: id.clone(),
             reason,

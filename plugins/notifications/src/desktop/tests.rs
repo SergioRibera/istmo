@@ -909,3 +909,30 @@ fn acks_and_dismissals_are_bounded_and_tokens_unguessable() {
     assert_eq!(state.dismissed.len(), MAX_DISMISSED);
     assert_eq!(state.coalescer.dismissed_len(), MAX_DISMISSED);
 }
+
+#[test]
+fn progress_updates_reuse_images_without_the_image_cache() {
+    let (_now, clock) = clock!(0);
+    let s = setup_with("reuse", Rate::new(1_000, 1_000), clock, false);
+    let shown = n("dl").with_icon(NotificationImage::png(vec![4, 5, 6]));
+    pollster::block_on(s.client.show_checked(shown)).unwrap();
+    let icon = s.backend.shows()[0].icon.clone().unwrap();
+    // A file write elsewhere holds the cache: a progress update and the
+    // state lock must not wait for it.
+    let cache = lock(&s.host.inner.images);
+    let (tx, rx) = flume::bounded(1);
+    let client = client_of(&s);
+    std::thread::spawn(move || {
+        let done = pollster::block_on(client.set_progress(id("dl"), Some(Progress::fraction(0.5))));
+        let _sent = tx.send(done);
+    });
+    let done = rx.recv_timeout(std::time::Duration::from_secs(5));
+    drop(cache);
+    done.expect("the update waited for the image cache")
+        .unwrap();
+    let shows = s.backend.shows();
+    assert_eq!(shows[0].icon.as_deref(), Some(icon.as_path()));
+    // The shared use is still one: the cancel removes the file.
+    pollster::block_on(s.client.cancel(id("dl"))).unwrap();
+    assert!(!icon.exists());
+}
