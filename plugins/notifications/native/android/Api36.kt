@@ -75,8 +75,13 @@ internal object Api36 {
         n.live && n.ongoing && n.title.isNotEmpty() && n.android?.colorized != true &&
             (n.style is Style.Plain || n.style is Style.BigText || n.style is Style.Call)
 
-    /** Applies the framework-only parts to the built [built] notification. */
-    fun finish(context: Context, built: AndroidNotification, n: Notification, progress: Boolean): AndroidNotification {
+    /**
+     * Applies the framework-only parts to the built [built] notification;
+     * `null` when they could not be applied (reflection fails with
+     * checked exceptions too), so the caller can fall back to the compat
+     * progress bar.
+     */
+    fun finish(context: Context, built: AndroidNotification, n: Notification, progress: Boolean): AndroidNotification? {
         val promote = n.live && promotable(n)
         val status = n.statusText
         if (!progress && !promote && status == null) return built
@@ -92,9 +97,9 @@ internal object Api36 {
                 }
             }
             b.build()
-        } catch (e: RuntimeException) {
+        } catch (e: Exception) {
             Log.w(TAG, "API 36 notification parts not applied", e)
-            built
+            null
         }
     }
 
@@ -149,7 +154,7 @@ internal object Api36 {
 
     private fun invoke(method: Method?, target: Any, vararg args: Any): Any? = try {
         method?.invoke(target, *args)
-    } catch (e: ReflectiveOperationException) {
+    } catch (e: Exception) {
         Log.w(TAG, "${method?.name} failed", e)
         null
     }

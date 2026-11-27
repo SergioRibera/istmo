@@ -23,16 +23,16 @@ import androidx.core.app.Person as AndroidPerson
  * [Api36].
  *
  * Rendering rules (the Android column of the design matrix):
- * - at most [MAX_ACTIONS] buttons; with more, the first two stay and a
- *   "More" action opens the app with the rest (`ResponseAction.More`,
- *   icons stripped to keep the intent small);
+ * - at most [MAX_ACTIONS] buttons; with more, the whole actions that fit
+ *   in two buttons stay and a "More" action opens the app with the rest
+ *   (`ResponseAction.More`, icons stripped to keep the intent small);
  * - replies and choices are `RemoteInput`s (free-form replies from API
  *   24, choices from API 28); below that a reply is a button opening the
  *   app with `inputRequested` and each choice its own button;
  * - `Style.Call` is `NotificationCompat.CallStyle` when the notification
  *   asks for a full-screen intent (API 31+ refuses call-style
  *   notifications that are neither that nor a foreground service), else
- *   a plain notification with the call buttons;
+ *   a plain notification with the call buttons and the app's own actions;
  * - images are decoded here (PNG / JPEG bytes, files, drawables by name)
  *   and scaled down to the size the slot shows.
  */
@@ -40,17 +40,33 @@ internal class NotificationRenderer(private val context: Context) {
     private val res = context.resources
     private val pkg = context.packageName
 
-    /** Builds [n] on [channelId]; [alert] false = silent update (`setOnlyAlertOnce`). */
+    /**
+     * Builds [n] on [channelId]; [alert] false = silent update
+     * (`setOnlyAlertOnce`). When the API 36 parts cannot be applied, the
+     * compat notification is built again with the compat progress bar.
+     */
     fun build(n: Notification, channelId: String, channel: ChannelSpec?, alert: Boolean, wire: ByteArray?): AndroidNotification {
+        val progressStyle = Api36.wantsProgressStyle(n)
+        val built = compose(n, channelId, channel, alert, wire, progressStyle)
+        if (Build.VERSION.SDK_INT < 36) return built
+        Api36.finish(context, built, n, progressStyle)?.let { return it }
+        if (!progressStyle) return built
+        val plain = compose(n, channelId, channel, alert, wire, progressStyle = false)
+        return Api36.finish(context, plain, n, progress = false) ?: plain
+    }
+
+    private fun compose(n: Notification, channelId: String, channel: ChannelSpec?, alert: Boolean, wire: ByteArray?, progressStyle: Boolean): AndroidNotification {
         val id = n.id.value
         val b = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(smallIcon(n.android?.smallIcon))
             .setContentTitle(n.title)
             .setOnlyAlertOnce(!alert)
-            .setAutoCancel(n.android?.keepOnTap != true)
+            // Never auto-cancel: a system auto-cancel sends no delete intent, so the
+            // plugin would keep the id. The trampoline cancels it instead.
+            .setAutoCancel(false)
             .setOngoing(n.ongoing)
             .setDeleteIntent(Intents.dismiss(context, id))
-            .setContentIntent(Intents.activity(context, id, "istmo.open", template(n, ResponseAction.Open), cancel = false, mutable = false))
+            .setContentIntent(Intents.activity(context, id, "istmo.open", template(n, ResponseAction.Open), cancel = n.android?.keepOnTap != true, mutable = false))
         n.body?.let { b.setContentText(it) }
         n.subtitle?.let { b.setSubText(it) }
         (n.android?.color?.toInt() ?: accent())?.let { b.setColor(it) }
@@ -76,7 +92,6 @@ internal class NotificationRenderer(private val context: Context) {
             b.setFullScreenIntent(Intents.activity(context, id, "istmo.fullscreen", template(n, ResponseAction.Open), cancel = false, mutable = false), true)
         }
 
-        val progressStyle = Api36.wantsProgressStyle(n)
         val callStyle = style(b, n)
         if (!callStyle) actions(b, n)
         if (n.progress != null && !progressStyle) {
@@ -91,8 +106,7 @@ internal class NotificationRenderer(private val context: Context) {
         if (wire != null && wire.size <= MAX_WIRE_EXTRA) extras.putByteArray(EXTRA_WIRE, wire)
         b.addExtras(extras)
 
-        val built = b.build()
-        return if (Build.VERSION.SDK_INT >= 36) Api36.finish(context, built, n, progressStyle) else built
+        return b.build()
     }
 
     /** The group summary posted while [group] has 2 or more members. */
@@ -110,7 +124,9 @@ internal class NotificationRenderer(private val context: Context) {
             .setGroupSummary(true)
             .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
             .setOnlyAlertOnce(true)
-            .setAutoCancel(true)
+            // Cancelling a summary cancels its children: only the person does it.
+            .setAutoCancel(false)
+            .setDeleteIntent(Intents.summaryDismiss(context, group.id.value))
             .setContentIntent(Intents.activity(context, "istmo.group.${group.id.value}", "istmo.open", template(latest, ResponseAction.Open), cancel = false, mutable = false))
             .apply { accent()?.let { setColor(it) } }
             .build()
@@ -164,16 +180,15 @@ internal class NotificationRenderer(private val context: Context) {
         }
         val native = Build.VERSION.SDK_INT < 31 || (n.android?.fullScreen == true && canUseFullScreenIntent())
         if (!native) {
-            // Simulated: the same buttons on a plain notification.
+            // Simulated: the call buttons, then the app's own actions, on a
+            // plain notification (`render::effective_actions`).
             b.setCategory(NotificationCompat.CATEGORY_CALL)
-            val buttons = when (info.kind) {
+            val reserved = n.actions.any { it.id.value.startsWith(RESERVED_PREFIX) }
+            val keys = when (info.kind) {
                 CallKind.Ongoing -> listOf(CALL_HANG_UP)
                 else -> listOf(CALL_DECLINE, CALL_ANSWER)
             }
-            for (key in buttons) {
-                val action = own[key] ?: callAction(key, key != CALL_ANSWER)
-                b.addAction(NotificationCompat.Action.Builder(null as IconCompat?, action.title, intent(key, key != CALL_ANSWER)).build())
-            }
+            actions(b, n, if (reserved) n.actions else keys.map { callAction(it, it != CALL_ANSWER) } + n.actions)
             return true
         }
         val caller = person(info.caller)
@@ -204,27 +219,36 @@ internal class NotificationRenderer(private val context: Context) {
 
     // ---- Actions ------------------------------------------------------
 
-    private fun actions(b: NotificationCompat.Builder, n: Notification) {
-        if (n.actions.isEmpty()) return
-        val id = n.id.value
-        var kept = n.actions
-        var overflow: List<Action> = emptyList()
-        if (n.actions.size > MAX_ACTIONS) {
-            kept = n.actions.take(MAX_ACTIONS - 1)
-            overflow = n.actions.drop(MAX_ACTIONS - 1).map { it.copy(icon = null) }
-        }
-        var shown = 0
-        val room = if (overflow.isEmpty()) MAX_ACTIONS else MAX_ACTIONS - 1
-        for (action in kept) {
-            for (built in action(n, action)) {
-                if (shown == room) break
-                b.addAction(built)
-                shown++
+    /** Buttons [action] becomes: simulated choices (below API 28) one per choice. */
+    private fun buttonCount(action: Action): Int {
+        val kind = action.kind
+        return if (kind is ActionKind.Select && Build.VERSION.SDK_INT < 28) kind.value.size else 1
+    }
+
+    /**
+     * Adds [list] as buttons, the cut of `render::render`: when the buttons
+     * are more than [MAX_ACTIONS], the whole actions whose buttons fit in
+     * `MAX_ACTIONS - 1` stay and the first one that does not goes, with
+     * every action after it, into "More" (whole actions, never part of a
+     * choice set).
+     */
+    private fun actions(b: NotificationCompat.Builder, n: Notification, list: List<Action> = n.actions) {
+        if (list.isEmpty()) return
+        val total = list.sumOf(::buttonCount)
+        var cut = list.size
+        if (total > MAX_ACTIONS) {
+            var used = 0
+            cut = 0
+            while (cut < list.size && used + buttonCount(list[cut]) <= MAX_ACTIONS - 1) {
+                used += buttonCount(list[cut])
+                cut++
             }
         }
-        if (overflow.isNotEmpty()) {
+        for (i in 0 until cut) for (built in action(n, list[i])) b.addAction(built)
+        if (cut < list.size) {
+            val overflow = list.drop(cut).map { it.copy(icon = null) }
             val response = template(n, ResponseAction.More, overflow = overflow)
-            val intent = Intents.activity(context, id, MORE, response, cancel = false, mutable = false)
+            val intent = Intents.activity(context, n.id.value, MORE, response, cancel = false, mutable = false)
             b.addAction(NotificationCompat.Action.Builder(null as IconCompat?, MORE_LABEL, intent).build())
         }
     }
@@ -371,10 +395,15 @@ internal class NotificationRenderer(private val context: Context) {
         return if (color == 0) null else androidx.core.content.ContextCompat.getColor(context, color)
     }
 
-    /** `Sound::Named(name)`: the bundled `raw/istmo_notification_sound_<name>` (istmo-build), else `raw/<name>`. */
+    /**
+     * `Sound::Named(name)`: the bundled `raw/istmo_notification_sound_<name>`
+     * (istmo-build), else `raw/<name>`. The URI names the resource
+     * (`android.resource://<pkg>/raw/<entry>`), not its integer id: channel
+     * sounds are fixed once created, and ids change between builds.
+     */
     fun soundUri(name: String): Uri? {
-        val raw = res.getIdentifier(SOUND_PREFIX + name, "raw", pkg).takeIf { it != 0 } ?: res.getIdentifier(name, "raw", pkg)
-        return if (raw == 0) null else Uri.parse("android.resource://$pkg/$raw")
+        val entry = listOf(SOUND_PREFIX + name, name).firstOrNull { res.getIdentifier(it, "raw", pkg) != 0 } ?: return null
+        return Uri.parse("android.resource://$pkg/raw/$entry")
     }
 
     fun appLabel(): String = context.applicationInfo.loadLabel(context.packageManager).toString()
@@ -449,6 +478,7 @@ internal class NotificationRenderer(private val context: Context) {
         const val SOUND_PREFIX = "istmo_notification_sound_"
 
         const val MORE = "istmo.more"
+        private const val RESERVED_PREFIX = "istmo."
         private const val MORE_LABEL = "More"
         const val CALL_ANSWER = "istmo.call.answer"
         const val CALL_DECLINE = "istmo.call.decline"

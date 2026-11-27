@@ -25,6 +25,7 @@ internal object Intents {
     const val ACTION_OPEN = "dev.istmo.notifications.OPEN"
     const val ACTION_BACKGROUND = "dev.istmo.notifications.BACKGROUND"
     const val ACTION_DISMISS = "dev.istmo.notifications.DISMISS"
+    const val ACTION_SUMMARY_DISMISS = "dev.istmo.notifications.SUMMARY_DISMISS"
     const val ACTION_SNOOZE = "dev.istmo.notifications.SNOOZE"
     const val ACTION_ALARM = "dev.istmo.notifications.ALARM"
 
@@ -95,6 +96,15 @@ internal object Intents {
             .setAction(ACTION_DISMISS)
             .setData(data(id, "istmo.dismiss"))
             .putExtra(EXTRA_ID, id)
+        return PendingIntent.getBroadcast(context, 0, intent, flags(false))
+    }
+
+    /** Delete intent of the summary of [group] (the extra id carries the group id). */
+    fun summaryDismiss(context: Context, group: String): PendingIntent {
+        val intent = Intent(context, IstmoNotificationReceiver::class.java)
+            .setAction(ACTION_SUMMARY_DISMISS)
+            .setData(data(group, "istmo.summary.dismiss"))
+            .putExtra(EXTRA_ID, group)
         return PendingIntent.getBroadcast(context, 0, intent, flags(false))
     }
 
