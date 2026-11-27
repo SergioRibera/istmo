@@ -10,7 +10,10 @@
 
 #![cfg_attr(
     not(target_os = "macos"),
-    allow(dead_code, reason = "used by the macOS backend; elsewhere compiled only for its tests")
+    allow(
+        dead_code,
+        reason = "used by the macOS backend; elsewhere compiled only for its tests"
+    )
 )]
 
 use std::path::Path;
