@@ -75,10 +75,17 @@ impl NotificationResponse {
         }
     }
 
-    /// The deep link this response publishes, when it has a URL.
+    /// The deep link this response publishes: only a tap on the
+    /// notification or a button opens a URL; a dismissal or a "More"
+    /// never does.
     #[must_use]
     pub fn deep_link(&self, received_at_ms: Option<u64>) -> Option<DeepLink> {
-        self.url.as_ref().map(|url| DeepLink {
+        let opens = match self.action {
+            ResponseAction::Open | ResponseAction::Button(_) => true,
+            ResponseAction::Dismiss | ResponseAction::More => false,
+        };
+        let url = self.url.as_ref().filter(|_| opens)?;
+        Some(DeepLink {
             uri: url.clone(),
             source: Some(response_source(self)),
             received_at_ms,
@@ -194,4 +201,37 @@ impl NotificationResponseStream {
 fn decode(bytes: &[u8]) -> Result<NotificationResponse, IstmoError> {
     let (value, _) = codec::decode::<NotificationResponse>(bytes)?;
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ActionId, NotificationId};
+
+    fn response(action: ResponseAction) -> NotificationResponse {
+        NotificationResponse {
+            id: NotificationId::try_from("n").unwrap(),
+            action,
+            reply: None,
+            input_requested: false,
+            user_data: None,
+            url: Some("app://x".to_owned()),
+            launched_app: false,
+            overflow_actions: Vec::new(),
+            ack: None,
+        }
+    }
+
+    #[test]
+    fn only_opening_responses_publish_their_url() {
+        let button = ResponseAction::Button(ActionId::try_from("go").unwrap());
+        for action in [ResponseAction::Open, button] {
+            let link = response(action).deep_link(Some(5)).unwrap();
+            assert_eq!(link.uri, "app://x");
+            assert_eq!(link.received_at_ms, Some(5));
+        }
+        for action in [ResponseAction::Dismiss, ResponseAction::More] {
+            assert_eq!(response(action).deep_link(None), None);
+        }
+    }
 }
