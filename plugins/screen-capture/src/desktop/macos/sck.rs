@@ -317,8 +317,7 @@ impl SckBackend {
     }
 
     fn hdr(&self, policy: HdrPolicy, format: PixelFormat) -> Result<bool, CaptureError> {
-        let can = sck_map::at_least(self.os, sck_map::HDR)
-            && matches!(format, PixelFormat::Ar30 | PixelFormat::Rgba16f);
+        let can = sck_map::at_least(self.os, sck_map::HDR) && format == PixelFormat::Ar30;
         match policy {
             HdrPolicy::Sdr => Ok(false),
             HdrPolicy::PreferHdr => Ok(can),

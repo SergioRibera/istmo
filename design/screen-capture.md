@@ -401,7 +401,9 @@ this section wins. Nothing here ran on a Mac, an iPhone or an iPad yet
 - `watch_sources` lists again every second (SCK has no change
   notification; the host's diff drops unchanged listings).
 - Formats: BGRA → `Bgra8`, `l10r` → `Ar30`, `420v` → `Nv12` (video
-  range; `420f` is read but never asked for), `RGhA` → `Rgba16f` (15+).
+  range; `420f` is read but never asked for). `RGhA` (`Rgba16f`) is not a
+  documented stream format: never offered, read only if a buffer arrives
+  in it.
   `xf44` (10-bit 4:4:4 biplanar) has no `PixelFormat` and is not offered.
   Each format in three memories, none a copy: `IoSurface` and
   `CvPixelBuffer` (the same retained `IoSurfaceFrame`, `kind` as asked)
@@ -444,9 +446,8 @@ this section wins. Nothing here ran on a Mac, an iPhone or an iPad yet
 - Screenshots: `SCScreenshotManager` sample buffers on 14+, a one-frame
   `SCStream` before (and when a 14+ sample has no `IOSurface`). Multiple
   displays compose on the CPU like Linux.
-- HDR: `captureDynamicRange = .hdrLocalDisplay` on 15+ for `Ar30` /
-  `Rgba16f` with `PreferHdr` / `RequireHdr`; colour reported as
-  Display P3 PQ (`Ar30`) or scRGB linear (`Rgba16f`). SDR RGB asks for
+- HDR: `captureDynamicRange = .hdrLocalDisplay` on 15+ for `Ar30` with
+  `PreferHdr` / `RequireHdr`; colour reported as Display P3 PQ. SDR RGB asks for
   `kCGColorSpaceSRGB`.
 - Access: `Backend::access` / `request_access` answer the standing grant;
   `CGPreflightScreenCaptureAccess` → `Granted`, else `NotDetermined`

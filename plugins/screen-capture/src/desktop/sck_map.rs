@@ -80,7 +80,9 @@ impl FourCc {
         reason = "names a format SCK offers that `PixelFormat` cannot; only the tests read it"
     )]
     pub(crate) const XF44: Self = Self::of(*b"xf44");
-    /// `kCVPixelFormatType_64RGBAHalf`.
+    /// `kCVPixelFormatType_64RGBAHalf`: not among `SCStreamConfiguration`'s
+    /// documented pixel formats (BGRA, l10r, 420v, 420f), so never asked
+    /// for; read only if a buffer arrives in it.
     pub(crate) const RGBA_HALF: Self = Self::of(*b"RGhA");
 
     const fn of(code: [u8; 4]) -> Self {
@@ -109,8 +111,8 @@ impl FourCc {
             PixelFormat::Bgra8 => Some(Self::BGRA),
             PixelFormat::Ar30 => Some(Self::L10R),
             PixelFormat::Nv12 => Some(Self::YUV420_VIDEO),
-            PixelFormat::Rgba16f => Some(Self::RGBA_HALF),
             PixelFormat::Bgrx8
+            | PixelFormat::Rgba16f
             | PixelFormat::Rgba8
             | PixelFormat::Rgbx8
             | PixelFormat::Xr30
@@ -120,15 +122,10 @@ impl FourCc {
     }
 }
 
-/// The formats SCK delivers on `os`, best first.
-#[must_use]
-pub(crate) fn formats(os: OsVersion) -> Vec<PixelFormat> {
-    let mut formats = vec![PixelFormat::Bgra8, PixelFormat::Ar30, PixelFormat::Nv12];
-    if at_least(os, HDR) {
-        formats.push(PixelFormat::Rgba16f);
-    }
-    formats
-}
+/// The formats SCK delivers, best first: the documented
+/// `SCStreamConfiguration.pixelFormat` values the plugin can name.
+pub(crate) const FORMATS: [PixelFormat; 3] =
+    [PixelFormat::Bgra8, PixelFormat::Ar30, PixelFormat::Nv12];
 
 /// Every memory a frame can be handed over in, none of them a copy:
 /// the retained `IOSurface`, the `CVPixelBuffer` around it, or the
@@ -200,7 +197,7 @@ pub(crate) fn caps(os: OsVersion, granted: bool) -> BackendCaps {
         SourceListing::AfterGrant
     };
     caps.consent = ConsentModel::SystemSetting;
-    caps.video = formats(os)
+    caps.video = FORMATS
         .into_iter()
         .flat_map(|format| {
             MEMORIES.into_iter().map(move |memory| FormatCaps {
@@ -229,7 +226,6 @@ pub(crate) fn caps(os: OsVersion, granted: bool) -> BackendCaps {
             vec![
                 Colour::SRGB,
                 colour(PixelFormat::Ar30, ColourRange::Full, true),
-                colour(PixelFormat::Rgba16f, ColourRange::Full, true),
             ]
         } else {
             vec![Colour::SRGB]
@@ -723,11 +719,17 @@ mod tests {
             Some((PixelFormat::Nv12, ColourRange::Full))
         );
         assert_eq!(FourCc::XF44.format(), None);
-        for format in formats(version(15, 0)) {
+        for format in FORMATS {
             let code = FourCc::for_format(format).expect("asked for");
             assert_eq!(code.format().map(|(f, _)| f), Some(format));
         }
         assert_eq!(FourCc::for_format(PixelFormat::P010), None);
+        // Undocumented for streams: read if it arrives, never asked for.
+        assert_eq!(FourCc::for_format(PixelFormat::Rgba16f), None);
+        assert_eq!(
+            FourCc::RGBA_HALF.format(),
+            Some((PixelFormat::Rgba16f, ColourRange::Full))
+        );
     }
 
     #[test]
@@ -737,12 +739,6 @@ mod tests {
         assert_eq!(monterey.audio.sources, Vec::new(), "audio needs 13");
         assert!(!monterey.colour.hdr);
         assert!(!monterey.window.child_popups);
-        assert!(
-            !monterey
-                .video
-                .iter()
-                .any(|f| f.format == PixelFormat::Rgba16f)
-        );
         let sequoia = caps(version(15, 1), true);
         assert_eq!(sequoia.listing, SourceListing::Enumerable);
         assert!(sequoia.colour.hdr);
@@ -754,7 +750,13 @@ mod tests {
                 .contains(&AudioSourceKind::ExcludeSelf)
         );
         // Every format in every memory, none of them a copy.
-        assert_eq!(sequoia.video.len(), 4 * MEMORIES.len());
+        assert_eq!(sequoia.video.len(), FORMATS.len() * MEMORIES.len());
+        assert!(
+            !sequoia
+                .video
+                .iter()
+                .any(|f| f.format == PixelFormat::Rgba16f)
+        );
         assert!(sequoia.video.iter().all(|f| f.copies.is_empty()));
         assert_eq!(sequoia.pool.min_depth, 3);
         assert_eq!(sequoia.pool.max_depth, 8);

@@ -111,7 +111,7 @@ ISTMO_SC_TEST_MACOS_AUDIO=1 cargo test -p istmo-screen-capture --test macos_live
   desde el menú del sistema → `ConsentRevoked`.
 - `watch_sources`: enchufar/desenchufar pantallas, abrir/cerrar ventanas
   (sondeo cada 1 s).
-- HDR (15+, pantalla XDR): `PreferHdr` con `Ar30`/`Rgba16f`; mira si los
+- HDR (15+, pantalla XDR): `PreferHdr` con `Ar30`; mira si los
   valores superan el blanco SDR.
 - `exclude_own_process` y `exclude` (ventanas `window:<id>`, apps
   `app:<bundle>`) desaparecen del fotograma.

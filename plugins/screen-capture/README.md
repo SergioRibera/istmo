@@ -323,7 +323,7 @@ drops. Ask for `BufferMemory::IoSurface` or `CvPixelBuffer` and read the
 backing through `frame.buffer.downcast_ref::<IoSurfaceFrame>()`
 (`io_surface_ptr`, `pixel_buffer_ptr`, `surface_id`), or ask for `Cpu`:
 the surface locked read-only, still no copy. Formats: `Bgra8`, `Ar30`,
-`Nv12` (video range), `Rgba16f` on 15+. Timestamps are host time
+`Nv12` (video range). Timestamps are host time
 (`PtsClock::HostTime`); `wall_us` is the UNIX-epoch time of each frame.
 
 `SourceSelector::Picker` shows the system's content-sharing picker on
