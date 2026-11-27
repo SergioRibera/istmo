@@ -24,7 +24,9 @@ use std::time::Duration;
 use objc2::Message;
 use objc2::rc::Retained;
 use objc2_foundation::{NSError, NSProcessInfo};
-use objc2_screen_capture_kit::SCStreamErrorDomain;
+use objc2_screen_capture_kit::{
+    SCContentFilter, SCShareableContent, SCStream, SCStreamErrorDomain,
+};
 
 use crate::types::{CaptureError, OsVersion};
 
@@ -46,19 +48,30 @@ pub(crate) use self::stream::{AudioSettings, Kind, Settings, Sink, Stream, scree
 /// snapshots and filters (immutable once made), streams (their methods
 /// are called from any thread and serialised by the framework), and the
 /// plugin's own output / observer objects, whose ivars are `Send + Sync`.
+/// Only the classes listed here (and the plugin's own objects, in their
+/// modules) may be wrapped: a main-thread-only `AppKit` object can never
+/// be made `Send` by accident.
 #[derive(Debug)]
-struct Shared<T: Message>(Retained<T>);
+struct Shared<T: ThreadSafe>(Retained<T>);
+
+/// Objective-C classes usable from any thread (see [`Shared`]). Private to
+/// this module: nothing outside it can add a class.
+trait ThreadSafe: Message {}
+
+impl ThreadSafe for SCShareableContent {}
+impl ThreadSafe for SCContentFilter {}
+impl ThreadSafe for SCStream {}
 
 #[expect(
     clippy::non_send_fields_in_send_ty,
     reason = "the wrapped objects are thread-safe; see the type documentation"
 )]
 // SAFETY: see the type documentation.
-unsafe impl<T: Message> Send for Shared<T> {}
+unsafe impl<T: ThreadSafe> Send for Shared<T> {}
 // SAFETY: see the type documentation.
-unsafe impl<T: Message> Sync for Shared<T> {}
+unsafe impl<T: ThreadSafe> Sync for Shared<T> {}
 
-impl<T: Message> std::ops::Deref for Shared<T> {
+impl<T: ThreadSafe> std::ops::Deref for Shared<T> {
     type Target = T;
 
     fn deref(&self) -> &T {

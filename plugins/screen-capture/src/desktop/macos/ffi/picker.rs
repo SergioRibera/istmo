@@ -65,6 +65,9 @@ define_class!(
     }
 );
 
+// The observer's only state is a `flume` sender (`Send + Sync`).
+impl super::ThreadSafe for PickerObserver {}
+
 impl PickerObserver {
     fn new(tx: flume::Sender<Outcome>) -> Retained<Self> {
         let this = Self::alloc().set_ivars(ObserverIvars { tx });

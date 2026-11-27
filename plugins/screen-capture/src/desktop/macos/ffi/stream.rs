@@ -234,6 +234,9 @@ impl Drop for InCallback {
     }
 }
 
+// The output's only state is an `Arc<dyn Sink>` (`Send + Sync`).
+impl super::ThreadSafe for StreamOutput {}
+
 impl StreamOutput {
     fn new(sink: Arc<dyn Sink>) -> Retained<Self> {
         let this = Self::alloc().set_ivars(OutputIvars { sink });
