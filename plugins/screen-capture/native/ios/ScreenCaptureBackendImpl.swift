@@ -356,7 +356,12 @@ public final class ScreenCaptureBackendImpl: ScreenCaptureBackend, HandleRelease
             if (config.audio != nil) != (audio != nil) { throw Self.unmet(backend, .audio) }
             let chosen = try Self.negotiate(config.video.formats, backend: backend)
             let audioRequest = try config.audio.map { try Self.audioRequest($0, backend: backend) }
-            let depth = Self.poolDepth(config.video.poolDepth)
+            // A preview layer holds up to `layerHeld` buffers of its own: the
+            // queue is that much deeper (within its maximum) so the sink keeps
+            // what it asked for.
+            let asked = Self.poolDepth(config.video.poolDepth)
+            let depth = preview == nil
+                ? asked : min(asked + UInt8(ScreenCaptureLiveSession.layerHeld), ScreenCaptureTables.pool.maxDepth)
             // `exact` repeats are not made on iOS: it is enforced as `max`.
             let fps = ScreenCaptureChoice.enforced(config.video.fps)
             let request = ScreenCaptureRequest(
@@ -734,6 +739,8 @@ final class ScreenCaptureLiveSession: ScreenCaptureFeed, @unchecked Sendable {
     /// Most distinct surfaces one pool generation may show (twice the
     /// deepest queue), as on macOS.
     private static let maxSurfaces = 2 * Int(ScreenCaptureTables.pool.maxDepth)
+    /// Buffers an `AVSampleBufferDisplayLayer` may hold at once.
+    static let layerHeld = 2
 
     init(backend: ScreenCapture.BackendId, capturer: ScreenCapturer, request: ScreenCaptureRequest,
          video: IstmoFrameSender<ScreenCapture.FrameMeta>?, audio: ScreenCaptureAudioOut?,
@@ -745,7 +752,9 @@ final class ScreenCaptureLiveSession: ScreenCaptureFeed, @unchecked Sendable {
         self.video = video
         audioOut = audio
         self.layer = layer
-        ledger = ScreenCaptureLedger(depth: Int(depth))
+        // A preview layer keeps the frame it shows and the next one.
+        ledger = ScreenCaptureLedger(
+            depth: Int(depth), reserved: layer == nil ? 0 : min(Self.layerHeld, max(0, Int(depth) - 2)))
         self.exhaustion = exhaustion
         generation = Self.generations.next()
         shape = ScreenCaptureShape(format: chosen.format, memory: chosen.memory,
@@ -929,6 +938,12 @@ final class ScreenCaptureLiveSession: ScreenCaptureFeed, @unchecked Sendable {
     }
 
     private static func enqueue(_ sample: CMSampleBuffer, into layer: AVSampleBufferDisplayLayer) {
+        // Host-time stamps and no control timebase: show each frame on
+        // arrival instead of waiting for a presentation time.
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true)
+            as? [NSMutableDictionary], let first = attachments.first {
+            first[kCMSampleAttachmentKey_DisplayImmediately] = true
+        }
         if #available(iOS 17.0, *) {
             layer.sampleBufferRenderer.enqueue(sample)
         } else {

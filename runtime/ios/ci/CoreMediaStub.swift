@@ -114,3 +114,5 @@ public func CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
     blockBufferAllocator: CFAllocator?, blockBufferMemoryAllocator: CFAllocator?, flags: UInt32,
     blockBufferOut: UnsafeMutablePointer<CMBlockBuffer?>?
 ) -> OSStatus { 0 }
+
+public var kCMSampleAttachmentKey_DisplayImmediately: CFString { NSObject() }

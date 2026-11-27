@@ -427,11 +427,17 @@ enum ScreenCapturePcm {
 final class ScreenCaptureLedger: @unchecked Sendable {
     private let lock = NSLock()
     private var poolDepth: Int
+    /// Buffers someone else holds outside this count (a preview layer's
+    /// displayed and next frame).
+    private let reserved: Int
     private var inFlight = 0
     private var exhausted = false
     private var episodes: UInt32 = 0
 
-    init(depth: Int) { poolDepth = depth }
+    init(depth: Int, reserved: Int = 0) {
+        poolDepth = depth
+        self.reserved = reserved
+    }
 
     /// The pool depth holds are counted against.
     var depth: Int { lock.withLock { poolDepth } }
@@ -444,7 +450,7 @@ final class ScreenCaptureLedger: @unchecked Sendable {
     /// exhaustion episode and whether it just began.
     func hold() -> (episode: UInt32, isNew: Bool)? {
         lock.withLock {
-            if inFlight < poolDepth - 1 {
+            if inFlight < poolDepth - 1 - reserved {
                 inFlight += 1
                 exhausted = false
                 return nil

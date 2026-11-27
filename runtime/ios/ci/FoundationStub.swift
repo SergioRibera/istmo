@@ -123,6 +123,12 @@ open class NSNumber: NSValue {
 }
 
 open class NSDictionary: NSObject {}
+open class NSMutableDictionary: NSDictionary {
+    open subscript(key: Any) -> Any? {
+        get { nil }
+        set {}
+    }
+}
 
 open class NSError: NSObject, @unchecked Sendable, Error {
     public var domain: String { "" }
