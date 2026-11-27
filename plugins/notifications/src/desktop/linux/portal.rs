@@ -19,7 +19,7 @@
 //!   updates.
 //! * The portal has no closed signal: dismissals are not reported.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use istmo_core::sync::lock;
@@ -78,7 +78,44 @@ pub(super) struct Shared {
     sink: BackendSink,
     /// Ids posted by this process (anything else was posted by an
     /// earlier one: the activation started this process).
-    posted: Mutex<HashSet<NotificationId>>,
+    posted: Mutex<Posted>,
+}
+
+/// Ids posted while this process has more than this many are forgotten
+/// oldest first: the portal never tells when one left the screen.
+const MAX_POSTED: usize = 512;
+
+/// The ids this process posted, bounded by [`MAX_POSTED`].
+#[derive(Debug, Default)]
+struct Posted {
+    order: VecDeque<NotificationId>,
+    ids: HashSet<NotificationId>,
+}
+
+impl Posted {
+    /// Records `id` (an update of a known id copies nothing).
+    fn insert(&mut self, id: &NotificationId) {
+        if self.ids.contains(id) {
+            return;
+        }
+        if self.order.len() == MAX_POSTED
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.ids.remove(&oldest);
+        }
+        self.ids.insert(id.clone());
+        self.order.push_back(id.clone());
+    }
+
+    fn remove(&mut self, id: &NotificationId) {
+        if self.ids.remove(id) {
+            self.order.retain(|have| have != id);
+        }
+    }
+
+    fn contains(&self, id: &NotificationId) -> bool {
+        self.ids.contains(id)
+    }
 }
 
 impl Shared {
@@ -521,7 +558,8 @@ impl Backend for Portal {
                 &(n.id.as_str(), dict),
             )
             .map_err(platform)?;
-        lock(&self.shared.posted).insert(n.id.clone());
+        lock(&self.shared.posted).insert(&n.id);
+
         Ok(())
     }
 
@@ -561,6 +599,23 @@ fn read_image(path: &std::path::Path) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn posted_ids_are_bounded_oldest_first() {
+        let id = |i: usize| NotificationId::try_from(format!("n{i}")).unwrap();
+        let mut posted = Posted::default();
+        for i in 0..MAX_POSTED + 10 {
+            posted.insert(&id(i));
+            posted.insert(&id(i));
+        }
+        assert_eq!(posted.order.len(), MAX_POSTED);
+        assert_eq!(posted.ids.len(), MAX_POSTED);
+        assert!(!posted.contains(&id(9)));
+        assert!(posted.contains(&id(10)));
+        posted.remove(&id(10));
+        assert!(!posted.contains(&id(10)));
+        assert_eq!(posted.order.len(), MAX_POSTED - 1);
+    }
 
     #[test]
     fn app_paths() {
