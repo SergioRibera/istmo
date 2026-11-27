@@ -18,10 +18,13 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::app_config::AppMetadata;
-use crate::app_icon::{ANDROID_ICON_RESOURCE, AdaptiveIconConfig, AppIcon, IconConfig, IconError};
+use crate::app_icon::{
+    ANDROID_ICON_RESOURCE, AdaptiveIconConfig, AppIcon, IconConfig, IconError, IconLayer,
+};
 use crate::launcher_actions::LauncherActions;
 use crate::manifest::Manifest;
 use crate::native_deps::NativeDeps;
+use crate::notifications::{AppNotifications, NotificationsError};
 
 /// Metadata file, relative to the Android project root.
 pub const ANDROID_METADATA_FILE: &str = ".istmo/istmo.json";
@@ -97,8 +100,9 @@ struct App<'a> {
     /// Android a launcher icon.
     icon: Option<String>,
     /// [`ANDROID_RES_DIR`] holds resources the Gradle plugin must add as
-    /// a resource directory: the launcher icon or the
-    /// `[[app.launcher_action]]` shortcuts.
+    /// a resource directory: the launcher icon, the
+    /// `[[app.launcher_action]]` shortcuts or the `[app.notifications]`
+    /// resources.
     generated_res: bool,
 }
 
@@ -127,16 +131,16 @@ impl AndroidProject {
         self.root.join(ANDROID_METADATA_FILE)
     }
 
-    /// Render [`ANDROID_METADATA_FILE`]. `launcher_actions`: whether the
-    /// app declares `[[app.launcher_action]]` (their resources live in
-    /// [`ANDROID_RES_DIR`] too).
+    /// Render [`ANDROID_METADATA_FILE`]. `generated_res`: whether
+    /// [`ANDROID_RES_DIR`] holds resources besides the launcher icon
+    /// (`[[app.launcher_action]]` shortcuts, `[app.notifications]`).
     #[must_use]
     pub fn render_metadata(
         &self,
         app: &AppMetadata,
         plugins: &[AndroidPlugin],
         deps: &NativeDeps,
-        launcher_actions: bool,
+        generated_res: bool,
     ) -> String {
         let metadata = Metadata {
             schema: SCHEMA,
@@ -153,7 +157,7 @@ impl AndroidProject {
                     .icon
                     .has_android_launcher()
                     .then(|| format!("@mipmap/{ANDROID_ICON_RESOURCE}")),
-                generated_res: app.icon.has_android_launcher() || launcher_actions,
+                generated_res: app.icon.has_android_launcher() || generated_res,
             },
             plugins,
             gradle: deps
@@ -194,6 +198,17 @@ impl AndroidProject {
         target_package: &str,
     ) -> Result<(), IconError> {
         actions.write_android(&self.root.join(ANDROID_RES_DIR), target_package)
+    }
+
+    /// Write the `[app.notifications]` resources under
+    /// [`ANDROID_RES_DIR`] (or remove stale ones); `monochrome` stands in
+    /// for a missing small icon.
+    pub fn write_notifications(
+        &self,
+        notifications: &AppNotifications,
+        monochrome: Option<&IconLayer>,
+    ) -> Result<(), NotificationsError> {
+        notifications.write_android(&self.root.join(ANDROID_RES_DIR), monochrome)
     }
 }
 

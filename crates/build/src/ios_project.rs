@@ -89,6 +89,14 @@ impl IosProject {
         self.generated_dir().join(ASSET_FOLDER_DIR)
     }
 
+    /// `<root>/.istmo/NotificationSounds`, the staged
+    /// `[app.notifications] sounds`: bundle resources copied flat into the
+    /// bundle root, where `UNNotificationSound(named:)` looks.
+    #[must_use]
+    pub fn notification_sounds_path(&self) -> PathBuf {
+        self.root.join(crate::notifications::IOS_SOUNDS_DIR)
+    }
+
     /// Write `Istmo.xcconfig` and `build-rust.sh`.
     pub fn write_generated(&self, app: &AppMetadata) {
         let dir = self.generated_dir();
@@ -112,13 +120,15 @@ impl IosProject {
     /// `plugin_min_ios` the strictest plugin `[min_versions] ios` with
     /// the plugin that requires it, checked again from Xcode;
     /// `swift_packages` the merged `[[swift_package]]` entries, declared
-    /// as packages and linked into the app target.
+    /// as packages and linked into the app target; `notification_sounds`
+    /// the staged sound directory, when it holds a sound.
     pub fn write_xcodegen_fragment(
         &self,
         app: &AppMetadata,
         plugin_dirs: &[(String, PathBuf)],
         plugin_min_ios: Option<&(OsVersion, String)>,
         asset_folder: Option<&Path>,
+        notification_sounds: Option<&Path>,
         swift_packages: &[SwiftRepository],
     ) {
         let fragment_dir = self.app_path();
@@ -144,8 +154,10 @@ impl IosProject {
             .image
             .as_ref()
             .map(|_| relative(&self.generated_dir().join(ASSET_CATALOG_DIR)));
-        let has_sources =
-            !plugin_dirs.is_empty() || icon_catalog.is_some() || asset_folder.is_some();
+        let has_sources = !plugin_dirs.is_empty()
+            || icon_catalog.is_some()
+            || asset_folder.is_some()
+            || notification_sounds.is_some();
         if has_sources {
             yaml.push_str("    sources:\n");
         }
@@ -169,6 +181,13 @@ impl IosProject {
         if let Some(dir) = asset_folder {
             writeln!(yaml, "      - path: {}", yaml_string(&relative(dir))).ok();
             yaml.push_str("        type: folder\n");
+            yaml.push_str("        buildPhase: resources\n");
+        }
+        // A group, not a folder reference: the sounds must sit in the
+        // bundle root for `UNNotificationSound(named:)`.
+        if let Some(dir) = notification_sounds {
+            writeln!(yaml, "      - path: {}", yaml_string(&relative(dir))).ok();
+            yaml.push_str("        type: group\n");
             yaml.push_str("        buildPhase: resources\n");
         }
 
@@ -514,6 +533,7 @@ mod tests {
             &[],
             None,
             None,
+            None,
             &[
                 repo("https://a.example/x/Kit.git", "1.2.0", &["Kit", "KitUI"]),
                 repo("https://b.example/y/Kit", "3.0.0", &["Other"]),
@@ -539,6 +559,27 @@ mod tests {
              \x20       product: \"Other\"\n\
              \x20   settings:\n";
         assert!(yaml.contains(expected_packages), "{yaml}");
+    }
+
+    #[test]
+    fn notification_sounds_are_bundle_root_resources() {
+        let root =
+            std::env::temp_dir().join(format!("istmo-xcodegen-sounds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Demo")).unwrap();
+        let project = IosProject::new(&root, "Demo");
+        let sounds = project.notification_sounds_path();
+        std::fs::create_dir_all(&sounds).unwrap();
+        project.write_xcodegen_fragment(&app(false), &[], None, None, Some(&sounds), &[]);
+        let yaml = std::fs::read_to_string(root.join("Demo").join(FRAGMENT_FILE)).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            yaml.contains(
+                "    sources:\n      - path: \"../.istmo/NotificationSounds\"\n        \
+                 type: group\n        buildPhase: resources\n"
+            ),
+            "{yaml}"
+        );
     }
 
     #[test]

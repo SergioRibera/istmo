@@ -472,25 +472,46 @@ fn join_fragments(fragments: &[String]) -> String {
     out
 }
 
+/// Keys the app's own `istmo.toml` tables add to the merged plugin
+/// fragments (`[app.notifications]`), merged under the name
+/// [`APP_FRAGMENT_OWNER`].
+#[derive(Debug, Default)]
+pub(super) struct AppPlistFragments {
+    pub(super) info_plist: plist::Dictionary,
+    pub(super) entitlements: plist::Dictionary,
+}
+
+/// Owner name of [`AppPlistFragments`] in merge warnings.
+const APP_FRAGMENT_OWNER: &str = "istmo.toml [app]";
+
 /// Merge every plugin's `Info.plist.fragment` / `App.entitlements.fragment`
-/// and write them into the app (see [`crate::apple_plist`]).
+/// and the app's own keys, and write them into the app (see
+/// [`crate::apple_plist`]).
 pub(super) fn emit_ios_plist_fragments(
     ios_root: &Path,
     app_dir: &str,
     entries: &[(String, PathBuf)],
+    app: &AppPlistFragments,
 ) {
     let app_path = ios_root.join(app_dir);
     let info_plist = app_path.join("Info.plist");
     merge_plist_fragments(
         entries,
         INFO_PLIST_FRAGMENT,
+        &app.info_plist,
         &info_plist,
         &app_path.join("Info.plist.plugins.xml"),
     );
     let entitlements = find_entitlements(&app_path)
         .unwrap_or_else(|| app_path.join(format!("{app_dir}.entitlements")));
     let sidecar = entitlements.with_extension("entitlements.plugins.xml");
-    merge_plist_fragments(entries, ENTITLEMENTS_FRAGMENT, &entitlements, &sidecar);
+    merge_plist_fragments(
+        entries,
+        ENTITLEMENTS_FRAGMENT,
+        &app.entitlements,
+        &entitlements,
+        &sidecar,
+    );
 }
 
 fn find_entitlements(app_path: &Path) -> Option<PathBuf> {
@@ -507,6 +528,7 @@ fn find_entitlements(app_path: &Path) -> Option<PathBuf> {
 fn merge_plist_fragments(
     entries: &[(String, PathBuf)],
     fragment_name: &str,
+    app: &plist::Dictionary,
     target: &Path,
     sidecar: &Path,
 ) {
@@ -521,7 +543,13 @@ fn merge_plist_fragments(
             println!("cargo::warning=istmo-build: {err}");
         }
     }
+    if !app.is_empty() {
+        fragments.add(APP_FRAGMENT_OWNER, app.clone());
+    }
     if fragments.is_empty() {
+        // Nothing left to merge: clear what an earlier configuration wrote.
+        remove_generated(sidecar);
+        patch_marker_file(target, PLUGINS_MARK_START, PLUGINS_MARK_END, &[]);
         return;
     }
     if let Ok(source) = fs::read_to_string(target) {

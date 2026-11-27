@@ -34,13 +34,16 @@ use crate::contract::Contract;
 use crate::doctor::Doctor;
 use crate::emit::ResolvedWiring;
 use crate::handover::{
-    NativePlatform, collect_dep_contracts, collect_dep_manifests_by_links, collect_dep_native_deps,
-    collect_dep_native_dirs,
+    NativePlatform, collect_dep_assets, collect_dep_contracts, collect_dep_manifests_by_links,
+    collect_dep_native_deps, collect_dep_native_dirs,
 };
 use crate::ios_project::IosProject;
 use crate::launcher_actions::LauncherActions;
 use crate::manifest::{IstmoToml, Manifest, PluginEntry};
 use crate::native_deps::{NativeDeps, SwiftRepository};
+use crate::notifications::{
+    AppNotifications, NotificationsError, PLUGIN_ID as NOTIFICATIONS_PLUGIN_ID,
+};
 use crate::plugin_registry::{
     KOTLIN_REGISTRY_PACKAGE, RegistryEntry, generate_swift_app_entry,
     generate_swift_plugin_registry,
@@ -59,7 +62,7 @@ use codegen::{
 };
 pub use detect::{detect_android_package, detect_ios_app_dir};
 use native_patch::{
-    ServiceEmitOpts, emit_ios_plist_fragments, emit_service_and_background,
+    AppPlistFragments, ServiceEmitOpts, emit_ios_plist_fragments, emit_service_and_background,
     emit_wired_android_permissions, resolve_wired_plugin_entries,
 };
 
@@ -159,6 +162,7 @@ pub(crate) fn emit_app_from(opts: &AppOpts, root: &Path, toml: &IstmoToml) {
         &pass.root,
         desktop_staging.as_deref(),
     );
+    emit_notifications_env(&pass.notifications, &pass.dep_manifests_by_links);
     if !pass.android_active && !pass.ios_active {
         return;
     }
@@ -215,6 +219,8 @@ struct AppPass<'a> {
     ios_plugins_subdir: String,
     app: AppMetadata,
     dep_manifests_by_links: Vec<(String, Manifest)>,
+    /// `[app.notifications]` + channels with absolute paths.
+    notifications: AppNotifications,
 }
 
 /// Where one contract's Kotlin goes.
@@ -270,6 +276,7 @@ impl<'a> AppPass<'a> {
             ios_app_dir,
             ios_app_dir_detected,
             ios_plugins_subdir,
+            notifications: config.notifications.rooted(&app.krate.manifest_dir),
             app,
             dep_manifests_by_links: collect_dep_manifests_by_links(),
         }
@@ -305,6 +312,9 @@ impl<'a> AppPass<'a> {
             .launcher_actions
             .rooted(&self.app.krate.manifest_dir);
         for source in actions.source_files() {
+            crate::directive::rerun_if_changed(source);
+        }
+        for source in self.notifications.source_files() {
             crate::directive::rerun_if_changed(source);
         }
         if self.android_active {
@@ -573,6 +583,7 @@ impl<'a> AppPass<'a> {
                     .config
                     .launcher_actions
                     .rooted(&self.app.krate.manifest_dir),
+                &self.notifications,
             );
         }
     }
@@ -593,6 +604,11 @@ impl<'a> AppPass<'a> {
         // Pruning keeps the staging root itself; an emptied one is not shipped.
         let asset_folder = Some(project.asset_folder_path())
             .filter(|dir| fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some()));
+        let notification_sounds = report_notifications(
+            self.notifications
+                .write_ios_sounds(&project.notification_sounds_path()),
+        )
+        .flatten();
         sync_ios_project(
             &project,
             &IosSync {
@@ -604,7 +620,9 @@ impl<'a> AppPass<'a> {
                 native_dirs: &native_dirs,
                 dep_manifests,
                 asset_folder: asset_folder.as_deref(),
+                notification_sounds: notification_sounds.as_deref(),
                 swift_packages: &swift_packages,
+                notifications: &self.notifications,
             },
         );
     }
@@ -622,6 +640,14 @@ impl<'a> AppPass<'a> {
             wired_entries.push(PluginEntry {
                 id: "app.android_permissions".to_owned(),
                 android_permissions: self.config.android_permissions.clone(),
+                ..PluginEntry::default()
+            });
+        }
+        let notification_permissions = self.notifications.android_permissions();
+        if !notification_permissions.is_empty() {
+            wired_entries.push(PluginEntry {
+                id: "app.notifications".to_owned(),
+                android_permissions: notification_permissions,
                 ..PluginEntry::default()
             });
         }
@@ -713,6 +739,7 @@ fn sync_android_project(
     dep_manifests_by_links: &[(String, Manifest)],
     app_manifest: Option<&Manifest>,
     launcher_actions: &LauncherActions,
+    notifications: &AppNotifications,
 ) {
     let project = AndroidProject::new(android_root);
     let plugins = AndroidPlugin::link(
@@ -755,14 +782,47 @@ fn sync_android_project(
             conflict.discarded.join(", "),
         );
     }
+    if !notifications.is_empty() && !links_plugin(dep_manifests_by_links, NOTIFICATIONS_PLUGIN_ID) {
+        crate::directive::warning(
+            "[app.notifications] / [[app.notification_channel]] are read by \
+             istmo-notifications: depend on it, or they have no effect",
+        );
+    }
+    let generated_res = !launcher_actions.is_empty() || !notifications.is_empty();
     write_if_changed(
         &project.metadata_path(),
-        &project.render_metadata(app, &plugins, &deps, !launcher_actions.is_empty()),
+        &project.render_metadata(app, &plugins, &deps, generated_res),
     );
     report_icon(project.write_icon(icon, &app.icon));
     report_icon(
         project.write_launcher_actions(launcher_actions, shortcuts_target.unwrap_or_default()),
     );
+    let monochrome = app
+        .icon
+        .android
+        .as_ref()
+        .and_then(|a| a.monochrome.as_ref());
+    report_notifications(project.write_notifications(notifications, monochrome));
+}
+
+/// Whether a linked crate declares the plugin `id`.
+fn links_plugin(manifests_by_links: &[(String, Manifest)], id: &str) -> bool {
+    manifests_by_links
+        .iter()
+        .any(|(_, manifest)| manifest.plugins.iter().any(|p| p.id == id))
+}
+
+/// Crate error policy for `[app.notifications]` output, as
+/// [`report_icon`]. Returns whether it succeeded.
+fn report_notifications<T>(result: Result<T, NotificationsError>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(err) if err.is_write() => {
+            crate::directive::warning(&err.to_string());
+            None
+        }
+        Err(err) => panic!("istmo-build: {err}"),
+    }
 }
 
 /// Native dependencies of every linked plugin crate plus the app's own
@@ -798,7 +858,10 @@ struct IosSync<'a> {
     native_dirs: &'a [(String, PathBuf)],
     dep_manifests: &'a [Manifest],
     asset_folder: Option<&'a Path>,
+    /// `ios/.istmo/NotificationSounds`, when it holds a sound.
+    notification_sounds: Option<&'a Path>,
     swift_packages: &'a [SwiftRepository],
+    notifications: &'a AppNotifications,
 }
 
 /// Write the iOS side: plugin registry, `IstmoApp.run()` entry,
@@ -830,9 +893,18 @@ fn sync_ios_project(project: &IosProject, sync: &IosSync<'_>) {
         sync.native_dirs,
         plugin_min_ios.as_ref(),
         sync.asset_folder,
+        sync.notification_sounds,
         sync.swift_packages,
     );
-    emit_ios_plist_fragments(project.root(), project.app_dir(), sync.native_dirs);
+    emit_ios_plist_fragments(
+        project.root(),
+        project.app_dir(),
+        sync.native_dirs,
+        &AppPlistFragments {
+            info_plist: sync.notifications.info_plist(),
+            entitlements: sync.notifications.entitlements(),
+        },
+    );
 }
 
 /// Delete a file istmo-build generated earlier and no longer emits.
@@ -919,6 +991,63 @@ fn emit_desktop_icon(
     .unwrap_or_else(|err| panic!("istmo-build: {err}"));
 }
 
+/// Desktop and web targets: hand `[app.notifications]` and the static
+/// channels to the plugin's host as rustc envs (see
+/// [`AppNotifications::desktop_env_lines`]); on wasm32 also stage the
+/// plugin's service worker.
+fn emit_notifications_env(
+    notifications: &AppNotifications,
+    dep_manifests_by_links: &[(String, Manifest)],
+) {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if notifications.is_empty() || matches!(target_os.as_str(), "android" | "ios") {
+        return;
+    }
+    let Some(out_dir) = std::env::var_os("OUT_DIR").map(PathBuf::from) else {
+        return;
+    };
+    let wants_worker = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|arch| arch == "wasm32")
+        && notifications
+            .config
+            .as_ref()
+            .is_some_and(|config| config.web_service_worker);
+    let service_worker = wants_worker.then(service_worker_source).flatten();
+    if wants_worker
+        && service_worker.is_none()
+        && links_plugin(dep_manifests_by_links, NOTIFICATIONS_PLUGIN_ID)
+    {
+        crate::directive::warning(&format!(
+            "[app.notifications] web_service_worker: istmo-notifications hands over no `{}` asset; \
+             nothing staged",
+            crate::notifications::SERVICE_WORKER_FILE
+        ));
+    }
+    let lines =
+        report_notifications(notifications.desktop_env_lines(&out_dir, service_worker.as_deref()));
+    for line in lines.unwrap_or_default() {
+        println!("{line}");
+    }
+}
+
+/// The plugin's service worker, from its `[[assets]]` handover.
+fn service_worker_source() -> Option<PathBuf> {
+    collect_dep_assets()
+        .into_iter()
+        .filter(|(_, payload)| {
+            payload
+                .plugin_ids
+                .iter()
+                .any(|id| id == NOTIFICATIONS_PLUGIN_ID)
+        })
+        .flat_map(|(_, payload)| payload.resolved)
+        .find(|asset| {
+            Path::new(&asset.bundle_path)
+                .file_name()
+                .is_some_and(|name| name == crate::notifications::SERVICE_WORKER_FILE)
+        })
+        .map(|asset| asset.source().to_path_buf())
+}
+
 /// Bake runtime environment variables used by `istmo::path` and the
 /// desktop `istmo::assets` backend at compile time.
 ///
@@ -926,6 +1055,7 @@ fn emit_desktop_icon(
 /// - `ISTMO_APP_BUNDLE_ID` — sourced from `[app] id` in `istmo.toml`
 ///   with a `CARGO_PKG_NAME` fallback. `istmo::path` reads this to
 ///   derive per-app subdirectories on Linux, macOS and Windows.
+/// - `ISTMO_APP_NAME` — `[app] name`, else the package name (first line).
 /// - `ISTMO_APP_ASSETS_DIR` — set only when `[app] assets_dir` is
 ///   present. Relative paths resolve against the crate root; absolute
 ///   paths pass through verbatim. Used as tier 2 in the desktop asset
@@ -944,6 +1074,10 @@ fn emit_runtime_env(
         .as_ref()
         .map_or_else(|| app.krate.package.clone(), |id| id.as_str().to_owned());
     println!("cargo::rustc-env=ISTMO_APP_BUNDLE_ID={bundle_id}");
+    // Display name for desktop registrations (Windows notification AUMID).
+    // A newline would end the directive; such a name is cut there.
+    let name = app.name.lines().next().unwrap_or_default();
+    println!("cargo::rustc-env=ISTMO_APP_NAME={name}");
     println!(
         "cargo::rustc-env=ISTMO_SINGLE_INSTANCE={}",
         u8::from(config.single_instance())
