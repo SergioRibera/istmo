@@ -213,6 +213,12 @@ impl MemDc {
         // SAFETY: `dc` and the bitmap are live; the previous object is
         // selected back in drop.
         let previous = unsafe { SelectObject(dc, HGDIOBJ(dib.handle().0)) };
+        if previous.is_invalid() {
+            // GDI would draw into the DC's 1×1 default bitmap instead.
+            // SAFETY: deletes the DC created above, which holds nothing.
+            let _deleted = unsafe { DeleteDC(dc) };
+            return Err(gdi_err("SelectObject", "the DIB could not be selected"));
+        }
         Ok(Self { dc, previous })
     }
 }
