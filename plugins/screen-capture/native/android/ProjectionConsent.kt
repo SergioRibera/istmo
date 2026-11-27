@@ -274,6 +274,9 @@ internal class ProjectionGrants(private val handler: Handler) {
         }
     }
 
+    /** Whether a grant still holds a running projection. */
+    fun anyLive(): Boolean = grants.values.any { !it.isStopped }
+
     fun stopAll() {
         val held = grants.values.toList()
         grants.clear()

@@ -357,6 +357,11 @@ permissions. Apps that capture audio add `RECORD_AUDIO` themselves.
   60 s or when the projection stops). Audio-only sessions take such a
   grant: `AudioConfig` has no consent fields. From API 34 a picker
   source lets the person share one app instead of the screen.
+- One projection at a time: Android stops a running projection when a
+  new one starts, so a call that needs a new consent while a session,
+  a screenshot or a grant is live answers `BackendUnavailable`
+  (`NotOnThisSession`) instead. Pass the grant, or close the session
+  first.
 - Frames: a virtual display mirrors the default display into an
   `ImageReader`. The native tier is `RGBA_8888` `HardwareBuffer`s handed
   over without a copy; each `Image` stays open until Rust drops the

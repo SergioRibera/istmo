@@ -87,6 +87,10 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
 
     private val main = Handler(Looper.getMainLooper())
     private val permissionRequests = ConcurrentHashMap<String, PermissionRequest>()
+    private val claimLock = Any()
+
+    /** Screenshots and consents in progress (each owns or is about to own a projection). */
+    private var claims = 0
 
     init {
         ProjectionForeground.onStopRequested = ::stopFromNotification
@@ -351,7 +355,7 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
         if (request.mode == ProjectionMode.SingleApp && Build.VERSION.SDK_INT < Api.U) {
             fail(CaptureError.Unsatisfiable(Unmet(PROJECTION, listOf(Requirement.Kind(SourceKind.Application)))))
         }
-        return grants.put(consent.request(request.mode))
+        return grants.put(newProjection(request.mode))
     }
 
     // ---- Planning -----------------------------------------------------
@@ -450,8 +454,48 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
     }
 
     /** The grant's projection, or a new one from the dialog. */
-    private suspend fun projection(consent: ConsentConfig, mode: ProjectionMode): Projection =
-        consent.grant?.let(grants::take) ?: this.consent.request(mode)
+    private suspend fun projection(consent: ConsentConfig, mode: ProjectionMode, own: Int = 0): Projection =
+        consent.grant?.let(grants::take) ?: newProjection(mode, own)
+
+    /**
+     * A projection from the dialog, refused while another one runs (a
+     * session, an audio session, a waiting grant, a screenshot or a
+     * consent in progress): Android stops the running projection when a
+     * new one starts, so a screenshot would silently end a live stream.
+     * [own] = the caller's own [claims] (a screenshot holds one).
+     */
+    private suspend fun newProjection(mode: ProjectionMode, own: Int = 0): Projection {
+        synchronized(claimLock) {
+            if (sessions.isNotEmpty() || audioSessions.isNotEmpty() || grants.anyLive() || claims > own) {
+                fail(
+                    CaptureError.BackendUnavailable(
+                        BackendReason(
+                            PROJECTION,
+                            Availability.NotOnThisSession(
+                                "a projection is running; a new consent would stop it (use its grant or close it first)",
+                            ),
+                        ),
+                    ),
+                )
+            }
+            claims += 1
+        }
+        try {
+            return consent.request(mode)
+        } finally {
+            synchronized(claimLock) { claims -= 1 }
+        }
+    }
+
+    /** Run a screenshot holding a claim, so no new consent stops its projection. */
+    private suspend fun <T> claimed(block: suspend () -> T): T {
+        synchronized(claimLock) { claims += 1 }
+        try {
+            return block()
+        } finally {
+            synchronized(claimLock) { claims -= 1 }
+        }
+    }
 
     // ---- Sessions -----------------------------------------------------
 
@@ -590,47 +634,51 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
     }
 
     override suspend fun screenshot(request: ScreenshotRequest, sink: IstmoFrameSender<FrameMeta>): ScreenshotInfo =
-        closingOnFailure(sink) {
-            val plan = planShot(request, cpu = false)
-            val projection = projection(request.consent, plan.mode)
-            val delivered = CompletableDeferred<Unit>()
-            val session = ProjectionSession(
-                id = 0L,
-                handler = handler,
-                displays = displays,
-                projection = projection,
-                plan = plan,
-                video = sink,
-                preview = null,
-                fit = PreviewFit.Fit,
-                audioSender = null,
-                playback = { _, _, _ -> fail(CaptureError.Unsatisfiable(Unmet(PROJECTION, listOf(Requirement.Audio)))) },
-                onEnded = {},
-            )
-            session.onFirstFrame = { delivered.complete(Unit) }
-            val negotiated = session.start()
-            try {
-                withTimeout(SHOT_TIMEOUT_MS) { delivered.await() }
-            } catch (e: TimeoutCancellationException) {
-                val error = CaptureError.Protocol(BackendDetail(PROJECTION, "screenshot", "no frame within 5 s"))
-                handler.call { session.end(StopReason.Failed, error.toString()) }
-                fail(error)
-            }
-            // Ends the stream after the queued frame; a held
-            // `HardwareBuffer` keeps its reader until Rust drops it.
-            session.close()
-            ScreenshotInfo(1u, PROJECTION, negotiated)
+        closingOnFailure(sink) { claimed { shoot(request, sink) } }
+
+    private suspend fun shoot(request: ScreenshotRequest, sink: IstmoFrameSender<FrameMeta>): ScreenshotInfo {
+        val plan = planShot(request, cpu = false)
+        val projection = projection(request.consent, plan.mode, own = 1)
+        val delivered = CompletableDeferred<Unit>()
+        val session = ProjectionSession(
+            id = 0L,
+            handler = handler,
+            displays = displays,
+            projection = projection,
+            plan = plan,
+            video = sink,
+            preview = null,
+            fit = PreviewFit.Fit,
+            audioSender = null,
+            playback = { _, _, _ -> fail(CaptureError.Unsatisfiable(Unmet(PROJECTION, listOf(Requirement.Audio)))) },
+            onEnded = {},
+        )
+        session.onFirstFrame = { delivered.complete(Unit) }
+        val negotiated = session.start()
+        try {
+            withTimeout(SHOT_TIMEOUT_MS) { delivered.await() }
+        } catch (e: TimeoutCancellationException) {
+            val error = CaptureError.Protocol(BackendDetail(PROJECTION, "screenshot", "no frame within 5 s"))
+            handler.call { session.end(StopReason.Failed, error.toString()) }
+            fail(error)
         }
+        // Ends the stream after the queued frame; a held
+        // `HardwareBuffer` keeps its reader until Rust drops it.
+        session.close()
+        return ScreenshotInfo(1u, PROJECTION, negotiated)
+    }
 
     override suspend fun screenshot_pixels(request: ScreenshotRequest, layout: PixelLayout): RawImage {
         if (layout.format == CpuPixelFormat.Rgba16f) Selection(request.backend).unsatisfiable(Requirement.Formats)
         val plan = planShot(request, cpu = true)
-        val projection = projection(request.consent, plan.mode)
-        if (!projection.used.compareAndSet(false, true)) fail(CaptureError.GrantExpired)
-        return try {
-            grabPixels(projection, plan, layout)
-        } finally {
-            projection.stop()
+        return claimed {
+            val projection = projection(request.consent, plan.mode, own = 1)
+            if (!projection.used.compareAndSet(false, true)) fail(CaptureError.GrantExpired)
+            try {
+                grabPixels(projection, plan, layout)
+            } finally {
+                projection.stop()
+            }
         }
     }
 
