@@ -331,21 +331,40 @@ enum ScreenCapturePcm {
         guard CMSampleBufferIsValid(sample), CMSampleBufferDataIsReady(sample),
               let description = CMSampleBufferGetFormatDescription(sample),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee,
-              asbd.mFormatID == kAudioFormatLinearPCM,
-              let block = CMSampleBufferGetDataBuffer(sample) else { return nil }
-        let length = CMBlockBufferGetDataLength(block)
-        guard length > 0 else { return nil }
-        var raw = [UInt8](repeating: 0, count: length)
-        let copied = raw.withUnsafeMutableBytes { dest in
-            CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: dest.baseAddress!)
-        }
-        guard copied == 0 else { return nil }
+              asbd.mFormatID == kAudioFormatLinearPCM else { return nil }
         let channels = Int(asbd.mChannelsPerFrame)
         let frames = CMSampleBufferGetNumSamples(sample)
-        guard channels > 0, frames > 0 else { return nil }
-        guard let samples = decode(raw, asbd: asbd, frames: frames) else { return nil }
+        guard channels > 0, frames > 0,
+              let raw = contiguous(sample, asbd: asbd, frames: frames),
+              let samples = decode(raw, asbd: asbd, frames: frames) else { return nil }
         return Chunk(bytes: encode(samples, format: format), frames: UInt32(clamping: frames),
                      rate: UInt32(max(0, asbd.mSampleRate.rounded())), channels: UInt8(clamping: channels))
+    }
+
+    /// The sample's PCM with planes back to back, read through its audio
+    /// buffer list (as macOS does): each plane may carry alignment padding
+    /// in the block buffer, so its bytes are cut to `frames` samples.
+    static func contiguous(_ sample: CMSampleBuffer, asbd: AudioStreamBasicDescription, frames: Int) -> [UInt8]? {
+        let planar = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0
+        let buffers = planar ? Int(asbd.mChannelsPerFrame) : 1
+        let list = AudioBufferList.allocate(maximumBuffers: buffers)
+        defer { free(list.unsafeMutablePointer) }
+        var block: CMBlockBuffer?
+        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sample, bufferListSizeNeededOut: nil, bufferListOut: list.unsafeMutablePointer,
+            bufferListSize: AudioBufferList.sizeInBytes(maximumBuffers: buffers),
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &block)
+        guard status == 0, block != nil else { return nil }
+        let bytes = Int(asbd.mBitsPerChannel) / 8
+        let perBuffer = frames * bytes * (planar ? 1 : Int(asbd.mChannelsPerFrame))
+        var raw: [UInt8] = []
+        raw.reserveCapacity(perBuffer * buffers)
+        for buffer in list {
+            guard let data = buffer.mData, Int(buffer.mDataByteSize) >= perBuffer else { return nil }
+            raw.append(contentsOf: UnsafeRawBufferPointer(start: data, count: perBuffer))
+        }
+        return raw.count == perBuffer * buffers ? raw : nil
     }
 
     /// Interleaved `Float` samples from linear PCM in any of the layouts

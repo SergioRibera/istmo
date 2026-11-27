@@ -106,6 +106,7 @@ public typealias CFTypeRef = AnyObject
 public typealias CFArray = AnyObject
 public typealias CFDictionary = AnyObject
 public typealias CFString = AnyObject
+public typealias CFAllocator = AnyObject
 
 public protocol NSObjectProtocol: AnyObject {}
 
@@ -156,3 +157,6 @@ public final class Bundle {
     public static let main = Bundle()
     public func object(forInfoDictionaryKey key: String) -> Any? { nil }
 }
+
+/// libc's `free` (Foundation re-exports Darwin).
+public func free(_ ptr: UnsafeMutableRawPointer?) {}

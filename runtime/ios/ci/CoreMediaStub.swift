@@ -80,3 +80,37 @@ public func CMGetAttachment(_ target: CFTypeRef, key: CFString,
 public func CMBlockBufferGetDataLength(_ theBuffer: CMBlockBuffer) -> Int { 0 }
 public func CMBlockBufferCopyDataBytes(_ theSourceBuffer: CMBlockBuffer, atOffset offsetToData: Int,
                                        dataLength: Int, destination: UnsafeMutableRawPointer) -> OSStatus { 0 }
+
+public struct AudioBuffer {
+    public var mNumberChannels: UInt32
+    public var mDataByteSize: UInt32
+    public var mData: UnsafeMutableRawPointer?
+}
+
+public struct AudioBufferList {
+    public var mNumberBuffers: UInt32
+    public var mBuffers: AudioBuffer
+    public static func sizeInBytes(maximumBuffers: Int) -> Int { 0 }
+    public static func allocate(maximumBuffers: Int) -> UnsafeMutableAudioBufferListPointer {
+        UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1))
+    }
+}
+
+public struct UnsafeMutableAudioBufferListPointer: RandomAccessCollection {
+    public var unsafeMutablePointer: UnsafeMutablePointer<AudioBufferList>
+    public init(_ p: UnsafeMutablePointer<AudioBufferList>) { unsafeMutablePointer = p }
+    public var startIndex: Int { 0 }
+    public var endIndex: Int { 0 }
+    public subscript(index: Int) -> AudioBuffer {
+        AudioBuffer(mNumberChannels: 0, mDataByteSize: 0, mData: nil)
+    }
+}
+
+public var kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment: UInt32 { 1 << 0 }
+
+public func CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+    _ sbuf: CMSampleBuffer, bufferListSizeNeededOut: UnsafeMutablePointer<Int>?,
+    bufferListOut: UnsafeMutablePointer<AudioBufferList>?, bufferListSize: Int,
+    blockBufferAllocator: CFAllocator?, blockBufferMemoryAllocator: CFAllocator?, flags: UInt32,
+    blockBufferOut: UnsafeMutablePointer<CMBlockBuffer?>?
+) -> OSStatus { 0 }
