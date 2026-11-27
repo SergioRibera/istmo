@@ -183,6 +183,19 @@ public final class ScreenCaptureBackendImpl: ScreenCaptureBackend, HandleRelease
         }
     }
 
+    /// The backend audio-only sessions run on. `AudioConfig` names no
+    /// backend, and neither backend joins `Auto` yet, so this is the one
+    /// the OS has (ScreenCaptureKit on 27, ReplayKit before), not `Auto`.
+    static func audioBackend() throws -> ScreenCapture.BackendId {
+        let id: ScreenCapture.BackendId = sckRuns ? .iosSck : .iosReplayKit
+        let availability = availability(id)
+        guard isReady(availability) else {
+            throw ScreenCapture.CaptureError.backendUnavailable(
+                ScreenCapture.BackendReason(backend: id, availability: availability))
+        }
+        return id
+    }
+
     /// Whether a picker can honour `selector`, under `consent`.
     private static func checkSource(_ selector: ScreenCapture.SourceSelector, consent: ScreenCapture.ConsentConfig,
                                     backend: ScreenCapture.BackendId) throws {
@@ -442,7 +455,7 @@ public final class ScreenCaptureBackendImpl: ScreenCaptureBackend, HandleRelease
 
     public func open_audio(config: ScreenCapture.AudioConfig, audio: IstmoFrameSender<ScreenCapture.AudioMeta>) async throws -> ScreenCapture.AudioCaptureSession {
         do {
-            let backend = try Self.choose(.auto(ScreenCapture.AutoSelect(prefer: .zeroCopy, exclude: [])))
+            let backend = try Self.audioBackend()
             let request = try Self.audioRequest(config, backend: backend)
             let capturer = try Self.capturer(backend)
             let negotiated = ScreenCapture.AudioNegotiated(source: config.source, rate: request.rate,
