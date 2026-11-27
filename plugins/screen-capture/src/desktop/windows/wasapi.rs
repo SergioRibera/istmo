@@ -241,7 +241,9 @@ use activation::Activated;
 
 /// An `IAudioClient` for process loopback of `pid`'s tree.
 fn activate_process(pid: u32, include: bool) -> Result<IAudioClient, CaptureError> {
-    let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
+    // Boxed: an activation that overruns its wait may still read them, so
+    // on that path they are leaked instead of freed.
+    let mut params = Box::new(AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
         Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
             ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
@@ -253,8 +255,8 @@ fn activate_process(pid: u32, include: bool) -> Result<IAudioClient, CaptureErro
                 },
             },
         },
-    };
-    let variant = PROPVARIANT {
+    });
+    let variant = Box::new(PROPVARIANT {
         Anonymous: PROPVARIANT_0 {
             Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
                 vt: VT_BLOB,
@@ -265,32 +267,35 @@ fn activate_process(pid: u32, include: bool) -> Result<IAudioClient, CaptureErro
                     blob: BLOB {
                         cbSize: u32::try_from(std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>())
                             .unwrap_or(0),
-                        pBlobData: (&raw mut params).cast(),
+                        pBlobData: (&raw mut *params).cast(),
                     },
                 },
             }),
         },
-    };
+    });
     let (tx, rx) = flume::bounded(1);
     let handler: IActivateAudioInterfaceCompletionHandler = Activated(tx).into();
     // SAFETY: `variant` points to `params`, both alive until the
-    // activation completed (waited for below); the handler is a live COM
-    // object.
+    // activation completed (waited for below) or forever (leaked when the
+    // wait runs out); the handler is a live COM object.
     let operation = unsafe {
         ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&raw const variant),
+            Some(&raw const *variant),
             &handler,
         )
     }
     .map_err(|e| hr("ActivateAudioInterfaceAsync", &e))?;
-    rx.recv_timeout(SETUP_WAIT).map_err(|_| {
-        error(
+    if rx.recv_timeout(SETUP_WAIT).is_err() {
+        // The pending activation may still read them.
+        std::mem::forget(variant);
+        std::mem::forget(params);
+        return Err(error(
             "ActivateAudioInterfaceAsync",
             "the activation did not complete",
-        )
-    })?;
+        ));
+    }
     let mut result = windows_core::HRESULT(0);
     let mut unknown: Option<windows_core::IUnknown> = None;
     // SAFETY: the operation completed; both out values are live locals.
