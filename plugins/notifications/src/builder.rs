@@ -23,8 +23,21 @@ pub(crate) fn system_time_ms(time: SystemTime) -> i64 {
 }
 
 /// The current Unix-epoch time in milliseconds.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn now_ms() -> i64 {
     system_time_ms(SystemTime::now())
+}
+
+/// The current Unix-epoch time in milliseconds: `Date.now()`
+/// (`SystemTime::now` panics on `wasm32-unknown-unknown`).
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn now_ms() -> i64 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Date.now() is an integral number of milliseconds well inside i64"
+    )]
+    let now = js_sys::Date::now() as i64;
+    now
 }
 
 impl Notification {
