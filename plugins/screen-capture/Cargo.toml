@@ -171,6 +171,16 @@ istmo-build = { workspace = true }
 istmo-build = { workspace = true }
 pollster = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# `tests/macos_picker.rs` runs NSApplication on the main thread: the
+# content-sharing picker is presented from the main queue.
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication"] }
+
+[[test]]
+name = "macos_picker"
+harness = false
+
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # The live PipeWire test asks niri's Mutter ScreenCast API for a stream
 # directly (no portal dialog); same zbus and runtime as ashpd.

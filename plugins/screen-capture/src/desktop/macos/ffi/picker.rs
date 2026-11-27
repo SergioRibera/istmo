@@ -14,7 +14,7 @@ use objc2_screen_capture_kit::{
     SCContentSharingPickerObserver, SCStream,
 };
 
-use crate::types::{CaptureError, PickerOptions, SourceKind};
+use crate::types::{Availability, BackendReason, CaptureError, PickerOptions, SourceKind};
 
 use super::{Filter, Shared, error_of};
 
@@ -22,6 +22,9 @@ use super::{Filter, Shared, error_of};
 const PICK_TIMEOUT: Duration = Duration::from_secs(120);
 /// How often a pending pick checks whether its caller still waits.
 const PICK_POLL: Duration = Duration::from_millis(250);
+/// How long the main queue may take to run a no-op before the process
+/// counts as having no main run loop.
+const MAIN_QUEUE_PROBE: Duration = Duration::from_secs(2);
 
 type Outcome = Result<Shared<SCContentFilter>, CaptureError>;
 
@@ -94,18 +97,44 @@ fn modes(options: &PickerOptions) -> SCContentSharingPickerMode {
     modes
 }
 
+/// Whether the main queue runs: the picker is presented from it, and a
+/// process with no main run loop (a CLI, libtest's main thread) never
+/// shows it. Asked once per pick with a no-op, so a missing run loop is
+/// an error at once instead of a two-minute wait.
+///
+/// # Errors
+/// `BackendUnavailable(NotOnThisSession)` when the main queue did not run
+/// the no-op within [`MAIN_QUEUE_PROBE`].
+fn main_queue_runs() -> Result<(), CaptureError> {
+    let (tx, rx) = flume::bounded::<()>(1);
+    DispatchQueue::main().exec_async(move || {
+        let _sent = tx.try_send(());
+    });
+    rx.recv_timeout(MAIN_QUEUE_PROBE).map_err(|_| {
+        CaptureError::BackendUnavailable(BackendReason {
+            backend: super::ID,
+            availability: Availability::NotOnThisSession(
+                "the content-sharing picker needs a running main run loop (NSApplication)"
+                    .to_owned(),
+            ),
+        })
+    })
+}
+
 /// Show the shared picker and wait for the person's choice, while
 /// `waiting()` holds. The picker needs a running `NSApplication` (an app
 /// with a main run loop).
 ///
 /// # Errors
 /// `ConsentDenied` when cancelled; `ConsentRequired` when nobody waits
-/// any more or the person took too long; the framework's error when the
-/// picker could not start.
+/// any more or the person took too long; `BackendUnavailable` when the
+/// main queue does not run (no `NSApplication`); the framework's error
+/// when the picker could not start.
 pub(crate) fn pick(
     options: &PickerOptions,
     waiting: impl Fn() -> bool,
 ) -> Result<Filter, CaptureError> {
+    main_queue_runs()?;
     let (tx, rx) = flume::bounded(1);
     let observer = Shared(PickerObserver::new(tx));
     let modes = modes(options);

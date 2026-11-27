@@ -1,9 +1,9 @@
 //! The ScreenCaptureKit backend against a real Mac. It needs the Screen
 //! Recording grant for the process running the tests (the terminal, or
 //! the IDE) and a relaunch after granting it, so it runs only with
-//! `ISTMO_SC_TEST_MACOS` set; `ISTMO_SC_TEST_MACOS_PICKER` adds the
-//! picker test (someone has to pick), `ISTMO_SC_TEST_MACOS_AUDIO` the
-//! audio-only one (something should be playing).
+//! `ISTMO_SC_TEST_MACOS` set; `ISTMO_SC_TEST_MACOS_AUDIO` adds the
+//! audio-only test (something should be playing). The picker needs a
+//! main run loop, which libtest has not: it is `tests/macos_picker.rs`.
 
 #![cfg(target_os = "macos")]
 
@@ -14,10 +14,10 @@ use std::time::{Duration, Instant};
 use istmo_core::{Overflow, SinkPolicy};
 use istmo_screen_capture::{
     AccessRequest, AccessScope, AccessStatus, AudioConfig, AudioSource, BackendId, BufferMemory,
-    CaptureEvent, ConsentConfig, CopyStage, Exhaustion, FormatChoice, FormatRequest, FormatTier,
-    FrameRate, IoSurfaceFrame, PickerOptions, PixelFormat, PixelLayout, PtsClock, SampleFormat,
-    ScreenCaptureClientExt, ScreenshotRequest, SessionConfig, SourceFilter, SourceKind,
-    SourceListing, SourceSelector,
+    CaptureError, CaptureEvent, ConsentConfig, CopyStage, Exhaustion, FormatChoice, FormatRequest,
+    FormatTier, FrameRate, IoSurfaceFrame, PickerOptions, PixelFormat, PixelLayout, PtsClock,
+    SampleFormat, ScreenCaptureClientExt, ScreenshotRequest, SessionConfig, SourceFilter,
+    SourceKind, SourceListing, SourceSelector,
 };
 
 const SCK: BackendId = BackendId::MacosSck;
@@ -209,10 +209,11 @@ fn a_consumer_holding_every_frame_exhausts_once_then_reads_back() {
 }
 
 #[test]
-fn the_picker_shows_with_allow_picker() {
-    if !common::enabled("ISTMO_SC_TEST_MACOS_PICKER") {
+fn the_picker_refuses_at_once_without_a_main_run_loop() {
+    if !common::enabled(GATE) {
         return;
     }
+    // libtest's main thread runs no run loop: the picker can never show.
     let live = common::live();
     let request = ScreenshotRequest::of(SourceSelector::Picker(PickerOptions::default()))
         .backend(common::fixed(SCK))
@@ -220,10 +221,13 @@ fn the_picker_shows_with_allow_picker() {
             allow_picker: true,
             ..ConsentConfig::default()
         });
-    let image = common::block(live.client.screenshot_cpu(request, PixelLayout::default()))
-        .expect("pick something in the picker");
-    eprintln!("picked: {}x{}", image.width, image.height);
-    assert!(image.width > 0);
+    let started = Instant::now();
+    let refused = common::block(live.client.screenshot_cpu(request, PixelLayout::default()));
+    assert!(
+        matches!(refused, Err(CaptureError::BackendUnavailable(_))),
+        "{refused:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(10), "fails fast");
 }
 
 #[test]
