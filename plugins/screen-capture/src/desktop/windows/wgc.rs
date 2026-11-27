@@ -78,7 +78,7 @@ use super::super::output::{Delivery, FrameOut};
 use super::super::watch::SourceFeed;
 use super::access;
 use super::common::{FrameFacts, StreamFacts, damage_of, frame_meta, negotiated, owed_damage};
-use super::d3d::{self, Gpu, Readback};
+use super::d3d::{self, Gpu, LateCopies, Readback};
 use super::listing::{self, Target as WinTarget};
 use super::os;
 
@@ -105,6 +105,8 @@ const START_WAIT: Duration = Duration::from_secs(5);
 const SCREENSHOT_WAIT: Duration = Duration::from_secs(2);
 /// How long the GPU may take to finish a copy.
 const COPY_WAIT: Duration = Duration::from_millis(100);
+/// A screenshot has one frame: it waits longer before giving up.
+const SHOT_COPY_WAIT: Duration = Duration::from_secs(1);
 /// How often a window's minimised state is read.
 const VISIBILITY_CHECK: Duration = Duration::from_millis(250);
 /// How long dropping a session waits for its thread.
@@ -846,7 +848,7 @@ impl Backend for WgcBackend {
                 let format = d3d::dxgi_format(chosen.format).unwrap_or(DXGI_FORMAT_B8G8R8A8_UNORM);
                 let (copy, handle) = gpu.shared_texture(ID, size, format)?;
                 gpu.copy(&copy, &texture);
-                gpu.finish(ID, COPY_WAIT)?;
+                gpu.finish(ID, SHOT_COPY_WAIT)?;
                 let mut meta = frame_meta(source, facts(BufferMemory::D3d11Texture, 0));
                 meta.copied = Some(CopyStage::LiveBufferSnapshot);
                 let backing =
@@ -967,6 +969,7 @@ impl Backend for WgcBackend {
                     pool_depth: depth,
                     exhaustion,
                     readback: Readback::default(),
+                    late: LateCopies::default(),
                     owed: Damage::Full,
                 };
                 worker.run();
@@ -1068,6 +1071,7 @@ struct Worker {
     pool_depth: u8,
     exhaustion: Exhaustion,
     readback: Readback,
+    late: LateCopies,
     /// Damage of dropped frames, owed to the next delivered one.
     owed: Damage,
 }
@@ -1347,8 +1351,17 @@ impl Worker {
                     } else {
                         let (target, handle) = self.shared_slot(lease.identity().slot, size)?;
                         self.gpu.copy(&target, &texture);
-                        self.gpu.finish(ID, COPY_WAIT)?;
+                        let finished = self.gpu.try_finish(ID, COPY_WAIT)?;
                         let _closed = frame.Close();
+                        if self.late.record(finished) {
+                            return Err(wgc_err("GPU copy", "the GPU stopped finishing copies"));
+                        }
+                        if !finished {
+                            // A busy GPU: this frame is dropped, its slot freed.
+                            drop(lease);
+                            *skipped = skipped.saturating_add(1);
+                            break 'deliver Ok(Delivery::Dropped);
+                        }
                         let backing = D3d11Frame::new(
                             target,
                             self.gpu.device.clone(),

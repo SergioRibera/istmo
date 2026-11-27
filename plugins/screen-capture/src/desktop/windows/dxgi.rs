@@ -67,7 +67,7 @@ use super::super::watch::SourceFeed;
 use super::common::{
     FrameFacts, StreamFacts, damage_of, frame_meta, negotiated, owed_damage, period,
 };
-use super::d3d::{self, Gpu, Readback};
+use super::d3d::{self, Gpu, LateCopies, Readback};
 use super::listing::{self, Target as WinTarget};
 use super::os::{self, PhysicalPixels};
 
@@ -91,6 +91,8 @@ const ACQUIRE_WAIT: Duration = Duration::from_millis(100);
 const SCREENSHOT_WAIT: Duration = Duration::from_secs(2);
 /// How long the GPU may take to finish a copy into the pool.
 const COPY_WAIT: Duration = Duration::from_millis(100);
+/// A screenshot has one frame: it waits longer before giving up.
+const SHOT_COPY_WAIT: Duration = Duration::from_secs(1);
 /// How often a lost duplication is re-created.
 const RETRY: Duration = Duration::from_millis(250);
 /// Re-creation attempts after `ACCESS_LOST` before the session fails
@@ -775,7 +777,7 @@ impl Backend for DxgiBackend {
                             .ok_or_else(|| dxgi_err("screenshot", "format"))?;
                         let (copy, handle) = dup.gpu.shared_texture(ID, dup.size, format)?;
                         dup.gpu.copy(&copy, &texture);
-                        dup.gpu.finish(ID, COPY_WAIT)?;
+                        dup.gpu.finish(ID, SHOT_COPY_WAIT)?;
                         let meta = frame_meta(
                             source,
                             frame_facts(
@@ -868,6 +870,7 @@ impl Backend for DxgiBackend {
             exhaustion: plan.exhaustion,
             readback: Readback::default(),
             pointer: Pointer::default(),
+            late: LateCopies::default(),
             last: None,
         };
         let (done_tx, done) = flume::bounded(1);
@@ -982,6 +985,7 @@ struct Worker {
     exhaustion: Exhaustion,
     readback: Readback,
     pointer: Pointer,
+    late: LateCopies,
     /// The last delivered frame, re-sent on pointer-only updates under
     /// `CursorMode::Metadata`.
     last: Option<(crate::types::FrameMeta, NativeBuffer)>,
@@ -1237,7 +1241,16 @@ impl Worker {
         };
         let (target, handle) = self.slot(lease.identity().slot)?;
         self.dup.gpu.copy(&target, &texture);
-        self.dup.gpu.finish(ID, COPY_WAIT)?;
+        let finished = self.dup.gpu.try_finish(ID, COPY_WAIT)?;
+        if self.late.record(finished) {
+            return Err(dxgi_err("GPU copy", "the GPU stopped finishing copies"));
+        }
+        if !finished {
+            // A busy GPU: this frame is dropped, its slot freed.
+            drop(lease);
+            *skipped = skipped.saturating_add(1);
+            return Ok(Delivery::Dropped);
+        }
         let mut meta = frame_meta(
             &self.source,
             frame_facts(

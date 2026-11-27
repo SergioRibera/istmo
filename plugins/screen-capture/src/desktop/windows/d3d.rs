@@ -8,6 +8,7 @@
     reason = "Direct3D 11 / DXGI COM calls are unsafe in the windows crate"
 )]
 
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{GENERIC_ALL, HMODULE, LUID};
@@ -184,6 +185,8 @@ pub(crate) struct Gpu {
     pub(crate) device: ID3D11Device,
     pub(crate) context: ID3D11DeviceContext,
     pub(crate) luid: u64,
+    /// The event query `finish` reuses.
+    query: Arc<Mutex<Option<ID3D11Query>>>,
 }
 
 impl Gpu {
@@ -229,6 +232,7 @@ impl Gpu {
             device,
             context,
             luid,
+            query: Arc::default(),
         })
     }
 
@@ -324,8 +328,26 @@ impl Gpu {
     }
 
     /// Submit the queued work and wait (at most `timeout`) until the GPU
-    /// finished it, so a frame leaves as `SyncKind::Ready`.
+    /// finished it, so a frame leaves as `SyncKind::Ready`; a copy that
+    /// overran is an error (screenshots).
     pub(crate) fn finish(&self, backend: BackendId, timeout: Duration) -> Result<(), CaptureError> {
+        if self.try_finish(backend, timeout)? {
+            Ok(())
+        } else {
+            Err(CaptureError::protocol(
+                backend,
+                "GPU copy",
+                "the copy did not finish in time",
+            ))
+        }
+    }
+
+    /// The query `finish` waits on, made once per device.
+    fn event_query(&self, backend: BackendId) -> Result<ID3D11Query, CaptureError> {
+        let mut cached = self.query.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(query) = cached.as_ref() {
+            return Ok(query.clone());
+        }
         let desc = D3D11_QUERY_DESC {
             Query: D3D11_QUERY_EVENT,
             MiscFlags: 0,
@@ -339,6 +361,20 @@ impl Gpu {
         created.map_err(|e| hr(backend, "CreateQuery", &e))?;
         let query =
             query.ok_or_else(|| CaptureError::protocol(backend, "CreateQuery", "no query"))?;
+        *cached = Some(query.clone());
+        drop(cached);
+        Ok(query)
+    }
+
+    /// [`Self::finish`] for streams: `Ok(false)` when the GPU did not
+    /// finish within `timeout` (a busy GPU, a preemption), so the caller
+    /// drops that frame instead of failing.
+    pub(crate) fn try_finish(
+        &self,
+        backend: BackendId,
+        timeout: Duration,
+    ) -> Result<bool, CaptureError> {
+        let query = self.event_query(backend)?;
         // SAFETY: `query` is a live event query of this device.
         unsafe { self.context.End(&query) };
         // SAFETY: submits the context's queued commands.
@@ -357,19 +393,36 @@ impl Gpu {
             };
             // S_FALSE (not finished yet) arrives as `Ok` with `done` false.
             if polled.is_ok() && done.as_bool() {
-                return Ok(());
+                return Ok(true);
             }
             if let Err(err) = polled {
                 return Err(self.failure(backend, "GetData", &err));
             }
             if Instant::now() >= deadline {
-                return Err(CaptureError::protocol(
-                    backend,
-                    "GPU copy",
-                    "the copy did not finish in time",
-                ));
+                return Ok(false);
             }
             std::thread::sleep(Duration::from_micros(200));
+        }
+    }
+}
+
+/// Stream copies that overran their wait, in a row: a few are dropped
+/// frames, a long run is a GPU that stopped finishing work.
+#[derive(Debug, Default)]
+pub(crate) struct LateCopies(u32);
+
+impl LateCopies {
+    /// Overruns in a row after which the session fails.
+    pub(crate) const LIMIT: u32 = 30;
+
+    /// Record one copy; `true` once [`Self::LIMIT`] overran in a row.
+    pub(crate) const fn record(&mut self, finished: bool) -> bool {
+        if finished {
+            self.0 = 0;
+            false
+        } else {
+            self.0 = self.0.saturating_add(1);
+            self.0 >= Self::LIMIT
         }
     }
 }
@@ -476,5 +529,23 @@ impl Readback {
     /// Forget the staging texture (a new device or size).
     pub(crate) fn reset(&mut self) {
         self.staging = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_late_copy_drops_a_frame_and_a_long_run_fails() {
+        let mut late = LateCopies::default();
+        for _ in 1..LateCopies::LIMIT {
+            assert!(!late.record(false));
+        }
+        assert!(!late.record(true), "a finished copy resets the run");
+        for _ in 1..LateCopies::LIMIT {
+            assert!(!late.record(false));
+        }
+        assert!(late.record(false));
     }
 }
