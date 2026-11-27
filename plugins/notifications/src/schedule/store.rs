@@ -97,21 +97,21 @@ impl Store {
 
     /// Encodes `entries` in the store layout.
     pub fn encode<'a>(entries: impl IntoIterator<Item = &'a Entry>) -> Result<Vec<u8>, StoreError> {
-        let stored: Vec<Stored> = entries
+        // Borrowed tuples encode exactly like `Stored`: no copy of the
+        // notifications.
+        let stored: Vec<(&Notification, &Trigger, i64, Option<i64>)> = entries
             .into_iter()
             .map(|entry| {
                 (
-                    entry.notification.clone(),
-                    entry.trigger.clone(),
+                    &entry.notification,
+                    &entry.trigger,
                     entry.anchor_ms,
                     entry.next_fire_ms,
                 )
             })
             .collect();
-        let body = codec::encode(&stored).map_err(StoreError::Codec)?;
-        let mut out = Vec::with_capacity(body.len() + 1);
-        out.push(STORE_FORMAT);
-        out.extend_from_slice(&body);
+        let mut out = codec::encode(&stored).map_err(StoreError::Codec)?;
+        out.insert(0, STORE_FORMAT);
         Ok(out)
     }
 
@@ -159,7 +159,9 @@ impl Store {
     }
 
     /// Replaces the file with `encoded` (from [`Self::encode`])
-    /// atomically; `None` removes it.
+    /// atomically; `None` removes it. On Unix the file is private to the
+    /// user (`0600`) and the directory is synced after the rename, so
+    /// the new file survives a crash.
     pub fn write(&self, encoded: Option<&[u8]>) -> Result<(), StoreError> {
         let io = |source| StoreError::Io {
             path: self.path.clone(),
@@ -167,8 +169,9 @@ impl Store {
         };
         let Some(bytes) = encoded else {
             return match fs::remove_file(&self.path) {
-                Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(io(err)),
-                _ => Ok(()),
+                Ok(()) => self.sync_dir().map_err(io),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(io(err)),
             };
         };
         if let Some(dir) = self.path.parent() {
@@ -177,7 +180,7 @@ impl Store {
         let mut tmp = self.path.clone().into_os_string();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
-        let written = fs::File::create(&tmp).and_then(|mut file| {
+        let written = private_file(&tmp).and_then(|mut file| {
             file.write_all(bytes)?;
             file.sync_all()
         });
@@ -185,8 +188,43 @@ impl Store {
             let _cleanup = fs::remove_file(&tmp);
             return Err(io(err));
         }
-        fs::rename(&tmp, &self.path).map_err(io)
+        fs::rename(&tmp, &self.path).map_err(io)?;
+        self.sync_dir().map_err(io)
     }
+
+    /// Syncs the directory holding the file (its entry after a rename or
+    /// a removal). Directories cannot be opened as files on Windows,
+    /// where the rename is already durable.
+    fn sync_dir(&self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(dir) = self.path.parent() {
+            let dir = if dir.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                dir
+            };
+            fs::File::open(dir)?.sync_all()?;
+        }
+        Ok(())
+    }
+}
+
+/// Creates (or truncates) `path`, readable and writable by the user only
+/// on Unix: the schedule holds notification texts and user data.
+fn private_file(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        options.mode(0o600);
+        let file = options.open(path)?;
+        // A leftover temporary file keeps its old mode: set it again.
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        Ok(file)
+    }
+    #[cfg(not(unix))]
+    options.open(path)
 }
 
 #[cfg(test)]
@@ -234,5 +272,41 @@ mod tests {
             Store::decode(&[STORE_FORMAT, 0xff, 0xff]),
             Err(StoreError::Codec(_))
         ));
+    }
+
+    #[test]
+    fn borrowed_encoding_matches_the_stored_layout() {
+        let entries = [entry("a", Trigger::Every(60_000))];
+        let owned: Vec<Stored> = entries
+            .iter()
+            .map(|e| {
+                (
+                    e.notification.clone(),
+                    e.trigger.clone(),
+                    e.anchor_ms,
+                    e.next_fire_ms,
+                )
+            })
+            .collect();
+        let mut expected = vec![STORE_FORMAT];
+        expected.extend(codec::encode(&owned).unwrap());
+        assert_eq!(Store::encode(&entries).unwrap(), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_is_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("istmo-notif-mode-{}", std::process::id()));
+        let store = Store::new(dir.join("schedule.bin"));
+        // A leftover temporary file with a wider mode is narrowed.
+        fs::create_dir_all(&dir).unwrap();
+        let tmp = dir.join("schedule.bin.tmp");
+        fs::write(&tmp, b"x").unwrap();
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o644)).unwrap();
+        store.save(&[entry("a", Trigger::After(1))]).unwrap();
+        let mode = fs::metadata(store.path()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _cleanup = fs::remove_dir_all(dir);
     }
 }
