@@ -13,3 +13,10 @@ auto_register = false
 # ongoing 36) are gated at run time and reported in `capabilities`.
 android = 21
 ios = "14.0"
+
+# The web service worker. istmo-build finds it among the handed-over
+# assets and stages it for `[app.notifications] web_service_worker`
+# (`ISTMO_NOTIFICATION_SERVICE_WORKER` on wasm32). Assets have no target
+# filter: mobile bundles carry the 4 KiB script too.
+[[assets]]
+path = "web/istmo-notifications-sw.js"
