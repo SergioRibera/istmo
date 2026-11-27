@@ -7,6 +7,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -20,17 +21,17 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSCellImagePosition, NSControlStateValueMixed,
-    NSControlStateValueOff, NSControlStateValueOn, NSEventMask, NSEventModifierFlags, NSEventType,
-    NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuItemBadge, NSScreen, NSStatusBar,
-    NSStatusItem, NSVariableStatusItemLength,
+    NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSEventMask, NSEventModifierFlags,
+    NSEventType, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuItemBadge, NSScreen,
+    NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
 };
 use objc2_foundation::{NSData, NSObject, NSObjectProtocol, NSSize, NSString};
 
 use crate::host::{Backend, Dirty, MenuDirty, Shared, TrayState};
 use crate::image::DecodedIcon;
 use crate::{
-    Anchor, AnchorPrecision, EventSupport, HostState, MenuSupport, Pointer, PrimaryAction, Rect,
-    Support, TrayBackend, TrayCapabilities, TrayError, TrayEvent,
+    Anchor, AnchorPrecision, EventSupport, HostState, MenuSupport, Orientation, Pointer,
+    PrimaryAction, Rect, ScrollDelta, Support, TrayBackend, TrayCapabilities, TrayError, TrayEvent,
 };
 
 /// Menu bar icon height, in points.
@@ -100,7 +101,24 @@ pub fn run_event_loop(dock_icon: bool) -> ! {
 thread_local! {
     /// The main thread's status items.
     static ITEMS: RefCell<HashMap<NativeHandleId, Item>> = RefCell::new(HashMap::new());
+    /// `NSImage`s per decoded icon and size in points, so an animation
+    /// encodes each frame once. Dropped once the icon is gone.
+    static IMAGES: RefCell<HashMap<(usize, u64), CachedImage>> = RefCell::new(HashMap::new());
+    /// The radio items' on-state dot.
+    static RADIO_DOT: RefCell<Option<Retained<NSImage>>> = const { RefCell::new(None) };
+    /// The scroll-wheel monitor, installed with the first status item.
+    static SCROLL_MONITOR: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
 }
+
+struct CachedImage {
+    icon: Weak<DecodedIcon>,
+    image: Retained<NSImage>,
+}
+
+/// Scroll steps per line, as KDE and Win32 count a wheel notch.
+const STEPS_PER_LINE: f64 = 120.0;
+/// Trackpad (precise) deltas are in points; about this many per line.
+const POINTS_PER_LINE: f64 = 10.0;
 
 /// One status item and what it was built from.
 struct Item {
@@ -121,6 +139,11 @@ fn apply_pending(mtm: MainThreadMarker, shared: &Arc<Shared>) {
     for (tray, dirty) in shared.take_pending() {
         apply(mtm, shared, tray, &dirty);
     }
+    IMAGES.with(|images| {
+        images
+            .borrow_mut()
+            .retain(|_, cached| cached.icon.strong_count() > 0);
+    });
 }
 
 fn apply(mtm: MainThreadMarker, shared: &Arc<Shared>, tray: NativeHandleId, dirty: &Dirty) {
@@ -184,6 +207,7 @@ fn create(mtm: MainThreadMarker, shared: &Arc<Shared>, tray: NativeHandleId) -> 
     let entry = state.trays.get(&tray)?;
     let status = NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
     status.setAutosaveName(Some(&NSString::from_str(&entry.id)));
+    install_scroll_monitor();
     let target = Target::new(mtm, Arc::downgrade(shared), tray);
     let menu = NSMenu::new(mtm);
     menu.setAutoenablesItems(false);
@@ -252,7 +276,33 @@ fn rebuild_menu(mtm: MainThreadMarker, tray: NativeHandleId, entry: &TrayState) 
     });
 }
 
-fn image(icon: &DecodedIcon, points: f64) -> Option<Retained<NSImage>> {
+fn image(icon: &Arc<DecodedIcon>, points: f64) -> Option<Retained<NSImage>> {
+    let key = (Arc::as_ptr(icon) as usize, points.to_bits());
+    let cached = IMAGES.with(|images| {
+        images
+            .borrow()
+            .get(&key)
+            // A dead entry's address may belong to a new icon.
+            .filter(|cached| cached.icon.upgrade().is_some_and(|c| Arc::ptr_eq(&c, icon)))
+            .map(|cached| cached.image.clone())
+    });
+    if cached.is_some() {
+        return cached;
+    }
+    let image = make_image(icon, points)?;
+    IMAGES.with(|images| {
+        images.borrow_mut().insert(
+            key,
+            CachedImage {
+                icon: Arc::downgrade(icon),
+                image: image.clone(),
+            },
+        )
+    });
+    Some(image)
+}
+
+fn make_image(icon: &DecodedIcon, points: f64) -> Option<Retained<NSImage>> {
     let image = if let Some(name) = icon.name() {
         NSImage::imageWithSystemSymbolName_accessibilityDescription(
             &NSString::from_str(name),
@@ -391,13 +441,7 @@ fn configure(menu_item: &NSMenuItem, node: &MenuNode, entry: &TrayState) {
             } else {
                 NSControlStateValueOff
             });
-            let dot = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-                &NSString::from_str("circle.fill"),
-                None,
-            );
-            if let Some(dot) = &dot {
-                dot.setSize(NSSize::new(6.0, 6.0));
-            }
+            let dot = radio_dot();
             // SAFETY: the image is retained by the item.
             unsafe { menu_item.setOnStateImage(dot.as_deref()) };
         }
@@ -423,6 +467,96 @@ fn configure(menu_item: &NSMenuItem, node: &MenuNode, entry: &TrayState) {
             badge
         });
         menu_item.setBadge(badge.as_deref());
+    }
+}
+
+fn radio_dot() -> Option<Retained<NSImage>> {
+    RADIO_DOT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            let dot = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                &NSString::from_str("circle.fill"),
+                None,
+            )?;
+            dot.setSize(NSSize::new(6.0, 6.0));
+            *slot = Some(dot);
+        }
+        slot.clone()
+    })
+}
+
+/// Watches scroll-wheel events for the ones over a status item. Status
+/// item windows belong to the app, so a local monitor sees them; the
+/// event is always passed on.
+fn install_scroll_monitor() {
+    SCROLL_MONITOR.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_some() {
+            return;
+        }
+        let handler = block2::RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
+            // SAFETY: AppKit passes a live event for the duration of the
+            // call.
+            on_scroll(unsafe { event.as_ref() });
+            event.as_ptr()
+        });
+        // SAFETY: the handler returns the event it was given, a valid
+        // pointer; AppKit copies the block.
+        *slot = unsafe {
+            NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+                NSEventMask::ScrollWheel,
+                &handler,
+            )
+        };
+    });
+}
+
+fn on_scroll(event: &NSEvent) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(window) = event.window(mtm) else {
+        return;
+    };
+    let target = ITEMS.with(|items| {
+        let items = items.try_borrow().ok()?;
+        items
+            .values()
+            .find(|item| {
+                item.status
+                    .button(mtm)
+                    .and_then(|button| button.window())
+                    .is_some_and(|w| Retained::as_ptr(&w) == Retained::as_ptr(&window))
+            })
+            .map(|item| item.target.clone())
+    });
+    let Some(target) = target else {
+        return;
+    };
+    let per_unit = if event.hasPreciseScrollingDeltas() {
+        STEPS_PER_LINE / POINTS_PER_LINE
+    } else {
+        STEPS_PER_LINE
+    };
+    // AppKit's deltas are positive up / left, flipped once more with
+    // natural scrolling; the event says down / right is positive.
+    let sign = if event.isDirectionInvertedFromDevice() {
+        1.0
+    } else {
+        -1.0
+    };
+    for (delta, orientation) in [
+        (event.scrollingDeltaY(), Orientation::Vertical),
+        (event.scrollingDeltaX(), Orientation::Horizontal),
+    ] {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "rounded wheel steps fit an i32"
+        )]
+        let delta = (delta * per_unit * sign).round() as i32;
+        if delta != 0 {
+            target.emit(TrayEvent::Scroll(ScrollDelta { delta, orientation }));
+        }
     }
 }
 
@@ -565,9 +699,11 @@ impl Target {
     /// A click on the status button with `PrimaryAction::Activate`.
     fn on_button(&self) {
         let mtm = self.mtm();
-        let kind = NSApplication::sharedApplication(mtm)
+        let (kind, clicks) = NSApplication::sharedApplication(mtm)
             .currentEvent()
-            .map(|event| event.r#type());
+            .map_or((None, 1), |event| {
+                (Some(event.r#type()), event.clickCount())
+            });
         let tray = self.ivars().tray;
         let found = ITEMS.with(|items| {
             let items = items.try_borrow().ok()?;
@@ -589,7 +725,31 @@ impl Target {
                 }
             }
             Some(NSEventType::OtherMouseUp) => self.emit(TrayEvent::SecondaryActivate(pointer)),
+            // The second click of a double click: the first one already
+            // sent `Activate`. Activates the default item, as Windows does.
+            _ if clicks >= 2 => {
+                self.emit(TrayEvent::DoubleClick(pointer));
+                self.activate_default();
+            }
             _ => self.emit(TrayEvent::Activate(pointer)),
+        }
+    }
+
+    fn activate_default(&self) {
+        let Some(shared) = self.ivars().shared.upgrade() else {
+            return;
+        };
+        let tray = self.ivars().tray;
+        let default = shared.lock().trays.get(&tray).and_then(|entry| {
+            entry
+                .menu
+                .nodes()
+                .iter()
+                .find(|node| node.is_default && node.enabled && node.visible)
+                .map(|node| node.id)
+        });
+        if let Some(item) = default {
+            shared.activate_item(tray, item);
         }
     }
 }
@@ -613,15 +773,15 @@ const fn capabilities() -> TrayCapabilities {
             header: Support::Native,
             subtitle: Support::Native,
             badge: Support::Native,
-            default_item: Support::Unsupported,
+            default_item: Support::Emulated,
             mnemonics: Support::Unsupported,
             live_while_open: Support::Native,
         },
         events: EventSupport {
             activate: Support::Native,
             secondary: Support::Native,
-            double_click: Support::Unsupported,
-            scroll: Support::Unsupported,
+            double_click: Support::Native,
+            scroll: Support::Native,
             menu_open_close: Support::Native,
         },
         anchor: Some(AnchorPrecision::IconRect),

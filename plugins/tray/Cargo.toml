@@ -55,6 +55,8 @@ web-sys = { version = "0.3", default-features = false, features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+# The scroll-wheel event monitor's handler.
+block2 = { version = "0.6", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "NSArray",
@@ -65,6 +67,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 ] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
+    "block2",
     "NSApplication",
     "NSButton",
     "NSButtonCell",
