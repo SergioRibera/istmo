@@ -13,7 +13,7 @@ use crate::types::{
 };
 
 use super::super::output::{Delivery, FrameOut};
-use super::super::sck_map::{self, FrameStatus, ID, SlotMap};
+use super::super::sck_map::{self, FrameStatus, ID, SlotChange, SlotMap};
 use super::ffi::{Filter, Kind, PixelBuffer, Sample, Settings, Sink, Stream};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -182,7 +182,7 @@ impl LiveSink {
         let pool = PoolAccounting::new(usize::from(depth));
         // A generation of its own, so slots know the pool's.
         let generation = pool.reallocate(usize::from(depth));
-        let slots = SlotMap::new(usize::from(depth), generation);
+        let slots = SlotMap::new(generation);
         Self {
             out,
             pool,
@@ -204,7 +204,7 @@ impl LiveSink {
         let mut state = lock(&self.state);
         state.shape = shape;
         let generation = self.pool.reallocate(usize::from(self.depth));
-        state.slots = SlotMap::new(usize::from(self.depth), generation);
+        state.slots.restart(generation);
     }
 
     fn status(&self, status: FrameStatus) -> bool {
@@ -253,15 +253,27 @@ impl LiveSink {
             .unwrap_or_default();
         let mut state = lock(&self.state);
         let size = pixels.size();
-        if state.size.is_some_and(|known| known != size) {
+        let resized = state.size.is_some_and(|known| known != size);
+        if resized {
             self.out.event(CaptureEvent::SourceResized(size));
         }
         state.size = Some(size);
         let pool = &self.pool;
         let depth = usize::from(self.depth);
-        let (slot, _reallocated) = state
+        if resized {
+            // Surfaces of another size: SCK allocated a new pool.
+            state.slots.restart(pool.reallocate(depth));
+        }
+        let (slot, change) = state
             .slots
             .slot(pixels.surface_id(), || pool.reallocate(depth));
+        if let SlotChange::Grew(seen) = change
+            && seen > depth
+        {
+            // SCK cycles through more surfaces than the queue depth: the
+            // pool is at least that deep, holds stay counted.
+            pool.resize(seen);
+        }
         let mut meta = meta_for(&state.shape, sample, &pixels, pts);
         meta.skipped_before = std::mem::take(&mut state.skipped);
         let shape = state.shape.clone();

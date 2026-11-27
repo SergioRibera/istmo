@@ -715,6 +715,9 @@ final class ScreenCaptureLiveSession: ScreenCaptureFeed, @unchecked Sendable {
     private var generation: UInt64
 
     private static let generations = ScreenCaptureGenerations()
+    /// Most distinct surfaces one pool generation may show (twice the
+    /// deepest queue), as on macOS.
+    private static let maxSurfaces = 2 * Int(ScreenCaptureTables.pool.maxDepth)
 
     init(backend: ScreenCapture.BackendId, capturer: ScreenCapturer, request: ScreenCaptureRequest,
          video: IstmoFrameSender<ScreenCapture.FrameMeta>?, audio: ScreenCaptureAudioOut?,
@@ -838,13 +841,21 @@ final class ScreenCaptureLiveSession: ScreenCaptureFeed, @unchecked Sendable {
         }
         let surfaceId = pixels.surface.map { IOSurfaceGetID($0) } ?? 0
         let identity: (seq: UInt64, buffer: ScreenCapture.BufferIdentity, skipped: UInt32) = lock.withLock {
+            if current.resized {
+                // Buffers of another size: the producer made a new pool.
+                slots = [:]
+                generation = Self.generations.next()
+            }
             if slots[surfaceId] == nil {
-                // More surfaces than the pool: SCK reallocated it.
-                if slots.count >= ledger.depth {
+                // The pool may be deeper than `queueDepth`: slots grow with
+                // the surfaces seen; only past what one pool holds is it a
+                // new pool.
+                if slots.count >= Self.maxSurfaces {
                     slots = [:]
                     generation = Self.generations.next()
                 }
                 slots[surfaceId] = UInt32(slots.count)
+                ledger.grow(to: slots.count)
             }
             defer {
                 seq += 1

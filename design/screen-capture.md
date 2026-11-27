@@ -414,8 +414,10 @@ this section wins. Nothing here ran on a Mac, an iPhone or an iPad yet
   its `IOSurface`; `pixel_buffer_ptr`, `io_surface_ptr`, `surface_id`.
   Plane offsets are from the surface's base address.
 - Pools: `queueDepth` = the negotiated `pool_depth` (3..=8, default 4).
-  Surfaces get slots by `IOSurfaceGetID`; one more surface than the depth
-  starts a new generation. The pool rule and `Exhaustion` as on Linux:
+  Surfaces get slots by `IOSurfaceGetID`. Nothing documents that SCK's
+  surface pool equals `queueDepth`, so the slots (and the hold limit)
+  grow with the distinct surfaces seen; a new size, or more than 16
+  surfaces, starts a new generation. The pool rule and `Exhaustion` as on Linux:
   `Stall` / `DropNewest` hand the surface back at once (`skipped_before`
   counts it), `CopyToCpu` copies the surface out
   (`CopyStage::ExhaustionReadback`).

@@ -406,19 +406,26 @@ enum ScreenCapturePcm {
 /// never left without a buffer: a frame is handed out only while fewer
 /// than `depth - 1` are out. Releases come from Rust, on any thread.
 final class ScreenCaptureLedger: @unchecked Sendable {
-    let depth: Int
     private let lock = NSLock()
+    private var poolDepth: Int
     private var inFlight = 0
     private var exhausted = false
     private var episodes: UInt32 = 0
 
-    init(depth: Int) { self.depth = depth }
+    init(depth: Int) { poolDepth = depth }
+
+    /// The pool depth holds are counted against.
+    var depth: Int { lock.withLock { poolDepth } }
+
+    /// The producer showed `surfaces` distinct buffers: its pool is at
+    /// least that deep (nothing documents it equals `queueDepth`).
+    func grow(to surfaces: Int) { lock.withLock { poolDepth = max(poolDepth, surfaces) } }
 
     /// `nil` when a frame may go out (and is now counted), else the
     /// exhaustion episode and whether it just began.
     func hold() -> (episode: UInt32, isNew: Bool)? {
         lock.withLock {
-            if inFlight < depth - 1 {
+            if inFlight < poolDepth - 1 {
                 inFlight += 1
                 exhausted = false
                 return nil

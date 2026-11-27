@@ -123,6 +123,7 @@ fn iosurface_frames_without_a_copy_then_cpu_frames() {
         let negotiated = session.negotiated().clone();
         eprintln!("{format:?}/{memory:?}: {negotiated:#?}");
         assert_eq!(negotiated.copies, Vec::<CopyStage>::new());
+        let mut surfaces = std::collections::HashSet::new();
         let mut frames = 0;
         let deadline = Instant::now() + Duration::from_secs(10);
         while frames < 10 && Instant::now() < deadline {
@@ -147,6 +148,7 @@ fn iosurface_frames_without_a_copy_then_cpu_frames() {
                     .downcast_ref::<IoSurfaceFrame>()
                     .expect("an IOSurface frame");
                 assert!(frame.buffer.platform_ptr().is_some());
+                surfaces.insert(surface.surface_id());
                 eprintln!(
                     "surface {} slot {:?}",
                     surface.surface_id(),
@@ -156,6 +158,12 @@ fn iosurface_frames_without_a_copy_then_cpu_frames() {
             frames += 1;
         }
         assert_eq!(frames, 10, "ten frames");
+        // SCK's pool size is undocumented: the slots grow with it.
+        eprintln!(
+            "{} distinct surfaces, queue depth {}",
+            surfaces.len(),
+            negotiated.pool_depth
+        );
         common::block(session.close()).expect("close");
     }
 }

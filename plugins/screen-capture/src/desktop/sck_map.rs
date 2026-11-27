@@ -637,22 +637,38 @@ pub(crate) const fn screen_recording(granted: bool, requested: bool) -> AccessSt
     }
 }
 
+/// Most distinct surfaces one pool generation may show before the slots
+/// count as a new pool: nothing documents SCK's pool size (it need not
+/// equal `queueDepth`), so the slots grow with what is seen, up to twice
+/// the deepest queue (`POOL.max_depth`, 8).
+pub(crate) const MAX_SURFACES: usize = 16;
+
+/// What a surface id meant to the slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlotChange {
+    /// A surface seen before, or a new one within the known pool.
+    Known,
+    /// A new surface: the pool is at least this many surfaces deep.
+    Grew(usize),
+    /// More surfaces than one pool holds: a new generation began.
+    Reallocated,
+}
+
 /// Buffer slots for the `IOSurface`s of one stream's pool: each surface
-/// id gets a slot the first time it is seen; a surface beyond `depth`
-/// means SCK reallocated its pool, so the slots start over in a new
-/// generation.
+/// id gets a slot the first time it is seen. The slots grow with the
+/// surfaces SCK cycles through (its pool may be deeper than the queue
+/// depth); only past [`MAX_SURFACES`], or on [`Self::restart`] (a new
+/// size), do they start over in a new generation.
 #[derive(Debug)]
 pub(crate) struct SlotMap {
-    depth: usize,
     ids: Vec<u32>,
     generation: u64,
 }
 
 impl SlotMap {
     #[must_use]
-    pub(crate) fn new(depth: usize, generation: u64) -> Self {
+    pub(crate) const fn new(generation: u64) -> Self {
         Self {
-            depth: depth.max(1),
             ids: Vec::new(),
             generation,
         }
@@ -664,21 +680,39 @@ impl SlotMap {
         self.generation
     }
 
-    /// The slot of surface `id`, and whether the pool was reallocated
-    /// first (`next_generation` is asked for the new generation).
-    pub(crate) fn slot(&mut self, id: u32, next_generation: impl FnOnce() -> u64) -> (u32, bool) {
+    /// How many distinct surfaces this generation has shown.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn surfaces(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Forget every surface: a new pool in `generation`.
+    pub(crate) fn restart(&mut self, generation: u64) {
+        self.ids.clear();
+        self.generation = generation;
+    }
+
+    /// The slot of surface `id`, and what it changed
+    /// (`next_generation` is asked for a new generation).
+    pub(crate) fn slot(
+        &mut self,
+        id: u32,
+        next_generation: impl FnOnce() -> u64,
+    ) -> (u32, SlotChange) {
         if let Some(index) = self.ids.iter().position(|known| *known == id) {
-            return (u32::try_from(index).unwrap_or(u32::MAX), false);
+            return (u32::try_from(index).unwrap_or(u32::MAX), SlotChange::Known);
         }
-        let reallocated = self.ids.len() >= self.depth;
-        if reallocated {
-            self.ids.clear();
-            self.generation = next_generation();
-        }
+        let change = if self.ids.len() >= MAX_SURFACES {
+            self.restart(next_generation());
+            SlotChange::Reallocated
+        } else {
+            SlotChange::Grew(self.ids.len() + 1)
+        };
         self.ids.push(id);
         (
             u32::try_from(self.ids.len() - 1).unwrap_or(u32::MAX),
-            reallocated,
+            change,
         )
     }
 }
@@ -1058,22 +1092,34 @@ mod tests {
 
     #[test]
     fn surfaces_get_slots_and_a_new_pool_a_new_generation() {
+        assert_eq!(MAX_SURFACES, 2 * usize::from(POOL.max_depth));
         let mut next = 10;
-        let mut slots = SlotMap::new(3, 1);
+        let mut slots = SlotMap::new(1);
         let mut take = |slots: &mut SlotMap, id| {
             slots.slot(id, || {
                 next += 1;
                 next
             })
         };
-        assert_eq!(take(&mut slots, 7), (0, false));
-        assert_eq!(take(&mut slots, 8), (1, false));
-        assert_eq!(take(&mut slots, 7), (0, false));
-        assert_eq!(take(&mut slots, 9), (2, false));
+        assert_eq!(take(&mut slots, 7), (0, SlotChange::Grew(1)));
+        assert_eq!(take(&mut slots, 8), (1, SlotChange::Grew(2)));
+        assert_eq!(take(&mut slots, 7), (0, SlotChange::Known));
+        assert_eq!(take(&mut slots, 9), (2, SlotChange::Grew(3)));
+        // A pool deeper than the queue: the slots grow, same generation.
+        assert_eq!(take(&mut slots, 4), (3, SlotChange::Grew(4)));
         assert_eq!(slots.generation(), 1);
-        assert_eq!(take(&mut slots, 4), (0, true));
+        for id in 100..u32::try_from(MAX_SURFACES).expect("small") + 96 {
+            let (_, change) = take(&mut slots, id);
+            assert!(matches!(change, SlotChange::Grew(_)));
+        }
+        assert_eq!(slots.surfaces(), MAX_SURFACES);
+        // Past what one pool holds: a new generation.
+        assert_eq!(take(&mut slots, 5000), (0, SlotChange::Reallocated));
         assert_eq!(slots.generation(), 11);
-        assert_eq!(take(&mut slots, 7), (1, false));
+        assert_eq!(take(&mut slots, 7), (1, SlotChange::Grew(2)));
+        slots.restart(20);
+        assert_eq!(slots.surfaces(), 0);
+        assert_eq!(slots.generation(), 20);
     }
 
     #[test]

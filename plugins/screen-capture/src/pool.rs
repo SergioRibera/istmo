@@ -231,8 +231,9 @@ impl PoolAccounting {
 
     /// The producer changed its pool size without reallocating the
     /// buffers still out: the limit follows at once, even below the
-    /// current holds (new holds wait until enough come back).
-    #[cfg(test)]
+    /// current holds (new holds wait until enough come back). ScreenCaptureKit
+    /// grows it as its pool shows more surfaces than the queue depth.
+    #[cfg(any(test, all(target_os = "macos", feature = "macos-sck")))]
     pub(crate) fn resize(&self, depth: usize) {
         self.inner.lock().depth = depth;
     }
