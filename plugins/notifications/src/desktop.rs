@@ -43,8 +43,8 @@ use istmo_core::{HostCtx, Runtime};
 use jiff::tz::TimeZone;
 
 pub use backend::{
-    Activation, Backend, BackendInfo, BackendSink, Carried, ImageFiles, ImageSlot, NullBackend,
-    ShowMode, Shown,
+    ARM_CAP, ARM_WINDOW_MS, Activation, Backend, BackendInfo, BackendSink, Carried, ImageFiles,
+    ImageSlot, NullBackend, ShowMode, Shown, Upcoming,
 };
 
 use crate::coalesce::{Admit, Coalescer, Rate, Urgency};
@@ -255,6 +255,8 @@ pub(crate) struct Inner {
     store: Option<Store>,
     /// Serialises store writes; holds the generation last written.
     store_written: Mutex<u64>,
+    /// Serialises `Backend::arm` calls (see `arm_native`).
+    arming: Mutex<()>,
     timer: OnceLock<HostTimer<Self>>,
     reports: Worker<Report>,
     clock: fn() -> i64,
@@ -404,6 +406,7 @@ impl DesktopNotificationsBuilder {
             images: Mutex::new(ImageCache::new(self.images)),
             store: self.store.map(Store::new),
             store_written: Mutex::new(0),
+            arming: Mutex::new(()),
             timer: OnceLock::new(),
             reports: Worker::default(),
             clock: self.clock,
@@ -751,28 +754,89 @@ impl Inner {
             state.engine = engine;
             state.loaded = true;
         }
-        self.persist();
+        // `run_due` persists (and arms) what it changes; the arm below
+        // covers a load that changed nothing.
+        self.write_store();
         self.run_due();
+        self.arm_native();
     }
 
-    /// Writes the engine's entries if they changed since the last write.
-    /// Only the snapshot (reference counts) is taken under the state
-    /// lock; encoding and IO run outside it.
-    fn persist(&self) {
-        let Some(store) = &self.store else {
+    /// Hands the next deliveries to the backend ([`Backend::arm`]). Only
+    /// the store's owner arms: a forwarding process has an empty schedule
+    /// and would disarm the owner's. Only the snapshot is taken under the
+    /// state lock; rendering and the backend call run outside it, one arm
+    /// at a time so a later snapshot is never overtaken by an older one.
+    fn arm_native(self: &Arc<Self>) {
+        if self.store.is_none() {
             return;
+        }
+        let Ok((backend, host)) = self.backend_info() else {
+            return;
+        };
+        let _one_at_a_time = lock(&self.arming);
+        let (entries, channels) = {
+            let state = self.lock();
+            if !state.loaded {
+                return;
+            }
+            (state.engine.snapshot(), state.channels.clone())
+        };
+        let now = self.now();
+        let horizon = now.saturating_add(ARM_WINDOW_MS);
+        let mut upcoming = Vec::new();
+        for entry in &entries {
+            let mut notification = entry.notification.clone();
+            if notification.validate().is_err()
+                || merge_channel(&mut notification, &channels).is_err()
+            {
+                continue;
+            }
+            notification.normalize();
+            let rendered = render(&notification, &host.limits);
+            let mut next = entry.next_fire_ms;
+            let mut count = 0;
+            while let Some(fire_ms) = next.filter(|&at| at <= horizon && count < ARM_CAP) {
+                if fire_ms > now {
+                    upcoming.push(Upcoming {
+                        notification: notification.clone(),
+                        rendered: rendered.clone(),
+                        fire_ms,
+                    });
+                    count += 1;
+                }
+                next = entry.trigger.next_after(entry.anchor_ms, fire_ms);
+            }
+        }
+        upcoming
+            .sort_by(|a, b| (a.fire_ms, &a.notification.id).cmp(&(b.fire_ms, &b.notification.id)));
+        upcoming.truncate(ARM_CAP);
+        backend.arm(&upcoming);
+    }
+
+    /// Writes the engine's entries if they changed since the last write,
+    /// then re-arms the backend's own deliveries.
+    fn persist(self: &Arc<Self>) {
+        if self.write_store() {
+            self.arm_native();
+        }
+    }
+
+    /// Writes the engine's entries if they changed; `true` when it tried.
+    fn write_store(&self) -> bool {
+        let Some(store) = &self.store else {
+            return false;
         };
         let (generation, mut entries) = {
             let state = self.lock();
             // Before the load the file still holds what must be read.
             if !state.loaded {
-                return;
+                return false;
             }
             (state.store_generation, state.engine.snapshot())
         };
         let mut written = lock(&self.store_written);
         if *written >= generation {
-            return;
+            return false;
         }
         let bytes = if entries.is_empty() {
             Ok(None)
@@ -784,6 +848,7 @@ impl Inner {
             Ok(()) => *written = generation,
             Err(err) => tracing::warn!(%err, "notifications: schedule store not written"),
         }
+        true
     }
 
     const fn changed_engine(state: &mut State) {
@@ -817,7 +882,7 @@ impl Inner {
 
     /// Re-reads the device's zone; when it changed, floating calendar
     /// rules move to it. The new deadline when anything moved.
-    fn zone_check(&self) -> Option<Moved> {
+    fn zone_check(self: &Arc<Self>) -> Option<Moved> {
         // Cached by jiff (re-read every few minutes): cheap, and never
         // under the state lock.
         let local = TimeZone::system();

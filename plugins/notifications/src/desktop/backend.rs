@@ -203,6 +203,32 @@ pub trait Backend: Send + Sync + 'static {
     /// The app finished a background response: release whatever keeps
     /// the process alive for it. Default: nothing to release.
     fn complete(&self, _ack: AckToken) {}
+
+    /// The next scheduled deliveries, soonest first (at most [`ARM_CAP`]
+    /// within [`ARM_WINDOW_MS`]), for a platform that can deliver them
+    /// itself while the app is closed (Windows scheduled toasts). Called
+    /// with the whole set after every schedule change, only in the
+    /// process that owns the store. The host still delivers each one
+    /// itself when it runs at that time: the backend makes that second
+    /// delivery replace its own quietly. Default: the host alone
+    /// delivers.
+    fn arm(&self, _upcoming: &[Upcoming]) {}
+}
+
+/// How far ahead [`Backend::arm`] looks.
+pub const ARM_WINDOW_MS: i64 = 14 * 24 * 3_600_000;
+/// Most deliveries [`Backend::arm`] gets.
+pub const ARM_CAP: usize = 50;
+
+/// One future delivery handed to [`Backend::arm`].
+#[derive(Debug, Clone)]
+pub struct Upcoming {
+    /// Validated, normalised, with the channel's defaults merged in.
+    pub notification: Notification,
+    /// Body with simulated lines, the buttons to show.
+    pub rendered: Rendered,
+    /// When it fires, Unix-epoch milliseconds.
+    pub fire_ms: i64,
 }
 
 /// A platform activation: a tap, a button, a reply.
