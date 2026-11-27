@@ -185,6 +185,9 @@ pub(crate) struct Gpu {
     pub(crate) device: ID3D11Device,
     pub(crate) context: ID3D11DeviceContext,
     pub(crate) luid: u64,
+    /// The context's lock, held around call sequences that must stay in
+    /// order against a consumer using the same context.
+    multithread: ID3D11Multithread,
     /// The event query `finish` reuses.
     query: Arc<Mutex<Option<ID3D11Query>>>,
 }
@@ -223,17 +226,30 @@ impl Gpu {
                 "no device returned",
             ));
         };
-        if let Ok(multithread) = context.cast::<ID3D11Multithread>() {
-            // SAFETY: `multithread` is the live context's interface.
-            let _was = unsafe { multithread.SetMultithreadProtected(true) };
-        }
+        // The frames promise a multithread-protected device: without the
+        // interface there is no such device.
+        let multithread = context
+            .cast::<ID3D11Multithread>()
+            .map_err(|e| hr(backend, "ID3D11Multithread", &e))?;
+        // SAFETY: `multithread` is the live context's interface.
+        let _was = unsafe { multithread.SetMultithreadProtected(true) };
         let luid = device_luid(&device).unwrap_or(0);
         Ok(Self {
             device,
             context,
             luid,
+            multithread,
             query: Arc::default(),
         })
+    }
+
+    /// Hold the context's lock until the guard drops: the calls in
+    /// between run as one sequence for every thread using the context.
+    pub(crate) fn lock(&self) -> ContextLock<'_> {
+        // SAFETY: the context is multithread-protected; `Leave` runs in the
+        // guard's drop, on this thread.
+        unsafe { self.multithread.Enter() };
+        ContextLock(&self.multithread)
     }
 
     /// Why the driver removed the device (TDR, driver update, GPU
@@ -375,10 +391,12 @@ impl Gpu {
         timeout: Duration,
     ) -> Result<bool, CaptureError> {
         let query = self.event_query(backend)?;
+        let locked = self.lock();
         // SAFETY: `query` is a live event query of this device.
         unsafe { self.context.End(&query) };
         // SAFETY: submits the context's queued commands.
         unsafe { self.context.Flush() };
+        drop(locked);
         let deadline = Instant::now() + timeout;
         loop {
             let mut done = windows_core::BOOL(0);
@@ -424,6 +442,17 @@ impl LateCopies {
             self.0 = self.0.saturating_add(1);
             self.0 >= Self::LIMIT
         }
+    }
+}
+
+/// The immediate context's lock (`ID3D11Multithread::Enter`), left on
+/// drop.
+pub(crate) struct ContextLock<'a>(&'a ID3D11Multithread);
+
+impl Drop for ContextLock<'_> {
+    fn drop(&mut self) {
+        // SAFETY: balances the `Enter` of `Gpu::lock`, on the same thread.
+        unsafe { self.0.Leave() };
     }
 }
 
@@ -489,6 +518,9 @@ impl Readback {
                 texture
             }
         };
+        // Copy, map, read and unmap as one sequence: a consumer on the same
+        // context cannot slip in between.
+        let _locked = gpu.lock();
         gpu.copy(&staging, src);
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         // SAFETY: `staging` is a CPU-readable staging texture of this
