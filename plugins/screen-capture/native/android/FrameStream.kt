@@ -135,6 +135,9 @@ internal class FrameStream(
     var onDelivered: ((FrameMeta) -> Unit)? = null
 
     private var reader: Reader? = null
+
+    /** Earlier readers the producer may still render into. */
+    private val stale = ArrayList<Reader>()
     private var ended = false
     private var failed = false
     private var seq = 0L
@@ -194,6 +197,10 @@ internal class FrameStream(
         val surface: Surface get() = reader.surface
 
         override fun onImageAvailable(reader: ImageReader) {
+            if (retired) {
+                drain(reader)
+                return
+            }
             while (!retired) {
                 val image = try {
                     reader.acquireNextImage()
@@ -219,10 +226,29 @@ internal class FrameStream(
             return slots.getOrPut(buffer.id) { slots.size }.toUInt()
         }
 
-        /** No new images; the reader closes once its last image is back. */
+        /**
+         * Images still queued by a producer that has not switched yet are
+         * closed at once: a reader nobody acquires from would stall it.
+         */
+        private fun drain(reader: ImageReader) {
+            while (!closed) {
+                val image = try {
+                    reader.acquireNextImage()
+                } catch (e: RuntimeException) {
+                    return
+                } ?: return
+                image.close()
+            }
+        }
+
+        /**
+         * No new frames; queued images are drained, and the reader closes
+         * once the last image Rust holds is back. Call only after the
+         * producer renders elsewhere.
+         */
         fun retire() {
             retired = true
-            reader.setOnImageAvailableListener(null, null)
+            drain(reader)
             closeIfDrained()
         }
 
@@ -251,9 +277,14 @@ internal class FrameStream(
         Offer.Cpu -> ImageReader.newInstance(width, height, android.graphics.PixelFormat.RGBA_8888, poolDepth)
     }
 
-    /** Start (or restart, after a resize or a format change) with a fresh pool. Capture thread. */
+    /**
+     * Start (or restart, after a resize or a format change) with a fresh
+     * pool. The previous reader keeps its surface valid, its images
+     * dropped, until [retireStale] once the producer renders into the new
+     * one. Capture thread.
+     */
     fun open(width: Int, height: Int): Surface {
-        reader?.retire()
+        reader?.let(stale::add)
         dropHeld()
         val next = Reader(width, height)
         reader = next
@@ -261,6 +292,12 @@ internal class FrameStream(
         handler.removeCallbacks(ticker)
         schedule()
         return next.surface
+    }
+
+    /** The producer renders into the current reader: let the earlier ones go. Capture thread. */
+    fun retireStale() {
+        for (old in stale) old.retire()
+        stale.clear()
     }
 
     /** The current pool's identity (bumps on every `open`). */
@@ -280,6 +317,8 @@ internal class FrameStream(
         handler.removeCallbacks(ticker)
         handler.removeCallbacks(flusher)
         dropHeld()
+        // The virtual display is released before the stream closes.
+        retireStale()
         reader?.retire()
         reader = null
     }
@@ -428,6 +467,8 @@ internal class FrameStream(
 
     private fun meta(
         owner: Reader,
+        /** The image's own size: the producer may override the reader's. */
+        size: Size,
         format: PixelFormat,
         planes: List<PlaneLayout>,
         slot: UInt,
@@ -439,7 +480,7 @@ internal class FrameStream(
             ptsNs = ptsNs.toULong(),
             ptsClock = PtsClock.Monotonic,
             wallUs = CaptureClock.wallUsOf(ptsNs).toULong(),
-            size = Size(owner.width.toUInt(), owner.height.toUInt()),
+            size = size,
             contentRect = contentRect,
             format = format,
             memory = offer.memory,
@@ -481,7 +522,8 @@ internal class FrameStream(
             buffer.close()
             throw IllegalStateException("HardwareBuffer format 0x${Integer.toHexString(raw)} has no PixelFormat")
         }
-        val meta = meta(lease.owner, format, emptyList(), lease.owner.slot(buffer), ptsNs, repeat)
+        val size = Size(image.width.toUInt(), image.height.toUInt())
+        val meta = meta(lease.owner, size, format, emptyList(), lease.owner.slot(buffer), ptsNs, repeat)
         val hold = lease.hold()
         return try {
             sender.submit(buffer, meta, hold)
@@ -500,10 +542,11 @@ internal class FrameStream(
         val rowStride = plane.rowStride
         val view = plane.buffer.duplicate()
         view.rewind()
-        val length = minOf(view.remaining(), rowStride * (owner.height - 1) + owner.width * plane.pixelStride)
+        val length = minOf(view.remaining(), rowStride * (image.height - 1) + image.width * plane.pixelStride)
         view.limit(length)
         val meta = meta(
             owner,
+            Size(image.width.toUInt(), image.height.toUInt()),
             offer.format,
             listOf(PlaneLayout(0u, rowStride.toUInt(), length.toULong())),
             UNKNOWN_SLOT,

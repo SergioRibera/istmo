@@ -110,11 +110,17 @@ internal class PreviewFanOut(
 
     /**
      * New content size and sink surface (a new reader after a resize),
-     * queued on the GL thread ahead of the frame callbacks that follow.
+     * queued on the GL thread ahead of the frame callbacks that follow;
+     * [onSwitched] runs (GL thread) once frames go to [output].
      */
-    fun resizeLater(width: Int, height: Int, output: Surface) {
+    fun resizeLater(width: Int, height: Int, output: Surface, onSwitched: () -> Unit) {
         handler.post {
-            if (!released) guarded { resizeLocked(width, height, output) }
+            if (!released) {
+                guarded {
+                    resizeLocked(width, height, output)
+                    onSwitched()
+                }
+            }
         }
     }
 

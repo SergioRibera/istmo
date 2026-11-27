@@ -274,21 +274,39 @@ internal class ProjectionSession(
         outWidth = w
         outHeight = h
         val display = virtualDisplay ?: return
-        val live = stream
-        val readerSurface = live?.open(w, h)
-        live?.contentRect = contentRect()
-        val gl = fanOut
-        if (gl != null && readerSurface != null) {
-            // Queued on the GL thread ahead of the next frame callback.
-            gl.resizeLater(w, h, readerSurface)
-        } else if (readerSurface != null && !paused) {
-            display.surface = readerSurface
-            target = readerSurface
-        } else if (readerSurface != null) {
-            target = readerSurface
+        try {
+            // The display first: whatever it renders at the new size lands
+            // in the old reader (dropped) or the new one, never the
+            // reverse.
+            display.resize(w, h, plan.display.densityDpi)
+            val live = stream
+            if (live != null) {
+                val readerSurface = live.open(w, h)
+                live.contentRect = contentRect()
+                switchProducer(live, readerSurface)
+            }
+        } catch (e: Throwable) {
+            end(StopReason.Failed, e.toString())
+            return
         }
-        display.resize(w, h, plan.display.densityDpi)
         hub.publish(CaptureEvent.SourceResized(Size(w.toUInt(), h.toUInt())))
+    }
+
+    /**
+     * Point the producer (the fan-out's GLES output, or the virtual
+     * display) at [surface], a reader [live] just opened, then let the
+     * readers it rendered into before go. Capture thread.
+     */
+    private fun switchProducer(live: FrameStream, surface: Surface) {
+        val gl = fanOut
+        if (gl != null) {
+            // Queued on the GL thread ahead of the next frame callback.
+            gl.resizeLater(outWidth, outHeight, surface) { handler.post { live.retireStale() } }
+            return
+        }
+        target = surface
+        if (!paused) virtualDisplay?.surface = surface
+        live.retireStale()
     }
 
     // ---- Control (any thread; runs on the capture thread) -----------
@@ -343,13 +361,7 @@ internal class ProjectionSession(
         live.configure(offer, tier, pool)
         val surface = live.open(outWidth, outHeight)
         live.contentRect = contentRect()
-        val gl = fanOut
-        if (gl != null) {
-            gl.resizeLater(outWidth, outHeight, surface)
-        } else {
-            target = surface
-            if (!paused) virtualDisplay?.surface = surface
-        }
+        switchProducer(live, surface)
     }
 
     fun setAudioPaused(value: Boolean) {
