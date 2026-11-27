@@ -68,7 +68,10 @@ class IstmoProjectionService : Service() {
 
     private fun notification(): Notification {
         val label = applicationInfo.loadLabel(packageManager)
-        val icon = applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.ic_menu_camera
+        // A monochrome icon the plugin ships (`res/drawable`): a launcher
+        // icon (adaptive, coloured) renders as a blob in the status bar.
+        val icon = resources.getIdentifier(NOTIFICATION_ICON, "drawable", packageName).takeIf { it != 0 }
+            ?: android.R.drawable.ic_menu_camera
         val builder = if (Build.VERSION.SDK_INT >= Api.O) {
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(
@@ -106,6 +109,7 @@ class IstmoProjectionService : Service() {
         private const val CHANNEL_NAME = "Screen capture"
         private const val CONTENT_TEXT = "Capturing the screen"
         private const val STOP_LABEL = "Stop"
+        private const val NOTIFICATION_ICON = "istmo_screen_capture_notification"
     }
 }
 

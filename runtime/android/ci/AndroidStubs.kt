@@ -10,6 +10,7 @@ open class Context {
     open val packageName: String get() = ""
     open val packageManager: android.content.pm.PackageManager get() = android.content.pm.PackageManager()
     open val applicationInfo: android.content.pm.ApplicationInfo get() = android.content.pm.ApplicationInfo()
+    open val resources: android.content.res.Resources get() = android.content.res.Resources()
     open fun getSystemService(name: String): Any? = null
     open fun checkSelfPermission(permission: String): Int = -1
     open fun getSharedPreferences(name: String, mode: Int): SharedPreferences = SharedPreferences()
