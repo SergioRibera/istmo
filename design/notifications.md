@@ -2253,3 +2253,106 @@ cross-clippied without an SDK. Checklist:
   not running, 64-cap accounting with snoozes.
 - macOS native scheduling (needs a `Backend` hook); call style through
   `INStartCallIntent`; action icons (`UNNotificationActionIcon`, iOS 15).
+
+### Review fixes (Apple, branch `notif-fix-apple`)
+
+Supersedes the iOS bullets on scheduling, categories, `launched_app`,
+snooze and attachments above, and the macOS ones on activation,
+categories and levels.
+
+- **iOS validation**: `NotificationsValidate.swift` ports
+  `src/validate.rs` (Notification, NotificationPatch, Trigger /
+  CalendarRule, Progress, ChatMessage, ChannelSpec as `channels[i].*`);
+  `show` / `schedule` / `update` (patch, then the patched notification
+  whole) / `set_progress` / `append_message` / `set_channels` answer the
+  same `Invalid { field, problem }` as desktop. `Every(< 60 s)` is
+  `trigger.every` (was clamped); an unknown zone is `trigger.time_zone`
+  (was a silent fall back). Shows normalise to 25 messages.
+- **iOS scheduling** (`NotificationsSchedule.swift`, pure parts in
+  `NotificationsCalendar.swift`): `CalendarRule` / trigger timing /
+  lateness ported (`NotificationsCalendar`, `NotificationsTiming`,
+  `NotificationsPlan`). Every armed request is one occurrence, a
+  non-repeating `UNCalendarNotificationTrigger` at the computed instant
+  (UTC components, seconds rounded up): DST gaps resolve like Rust (02:30
+  -> 03:30, not UN's 03:00), `Every` stays on its anchor's grid,
+  `until_ms` is exact. Ids `<id>` (one-shot), `<id>@<fire ms>`
+  (repeat), `<id>#s` (snooze). Soonest occurrences across all entries,
+  at most 60 and at most 64 minus snoozes. Store format 2 adds
+  `next_fire_ms` and `armed_through_ms`; overdue occurrences up to
+  `armed_through` were the system's, later ones go through
+  `MissedPolicy` (60 s, latest missed occurrence, `DeliveredLate`).
+  Every store change and top-up runs in one serial lane
+  (`NotificationsSerial`); a top-up removes every pending request of
+  ours that is not wanted (no store entry included). Trade-off: a repeat
+  keeps firing while the app is away only for the occurrences it got
+  slots for (a minutely `Every` alone covers an hour), instead of a
+  repeating trigger that drifted and ignored DST / `until_ms`.
+- **Snooze** re-adds under `<id>#s` (a repeat's requests stay), inside
+  the store lane, freeing an armed slot first; more than 64 snoozes =
+  `TooMany(64)`. Cancel removes it.
+- **iOS lanes**: show / update / flush / timeout removal / cancel go
+  through a per-id `NotificationsSerial`; cancel forgets the live state
+  first, so a flush queued behind it finds nothing (no resurrection).
+  Timeouts carry the show's generation. `cancel_all` / `cancel_group`
+  remove only requests and delivered notifications with `istmo.id`;
+  delivered ones are matched by `istmo.id`, so scheduled occurrences and
+  snoozed copies go too. A past `At` removes the stored entry before it
+  shows.
+- **Permission**: posts (show, updates, due-now scheduled ones) fail
+  with `PermissionDenied` while the status is denied (cached 2 s) on iOS
+  and macOS.
+- **Categories** (iOS and macOS): one serialized registration that
+  reads the registered set and registers the union of the app's ones and
+  ours; a read trusted for 2 s, so categories the app sets later are
+  merged back on the next show. Past 128, only ours that no delivered or
+  pending notification uses go. macOS never registers blind (an
+  unanswered read skips registration). Category ids hash reply
+  placeholder and submit title on macOS too.
+- **`launched_app`**: per launch, consumed by the first response, at
+  most 10 s after the launch (iOS: `install()`, which the registry runs
+  before `UIApplicationMain`; macOS: `didFinishLaunching` that carried
+  the notification key or a non-default launch). Remaining guess: a
+  response within 10 s of an unrelated launch reports `true`.
+- **macOS delegate**: an existing delegate is kept and gets everything
+  without `istmo.id` (and `openSettingsForNotification`); a delegate set
+  later forwards with `desktop::macos::forward_will_present` /
+  `forward_did_receive` (`unsafe`, raw `UNNotification*` / block
+  pointers). A start after `finishedLaunching` logs a warning.
+- **macOS presentation / levels**: 10.15 gets `.alert` instead of
+  `LIST | BANNER` (silent updates: nothing in the foreground). Levels and
+  the critical sound read `IstmoNotifications.TimeSensitive` /
+  `Critical` from the bundle's `Info.plist` (packaging writes the iOS
+  keys) and fall back one step like iOS.
+- **Attachments**: a file without extension is typed by its first bytes
+  (PNG / JPEG / GIF); a copy the system refused, or whose add failed, is
+  deleted. iOS avatars from files are `INImage(imageData:)`.
+- **Donations**: silent updates and occurrences armed ahead of time
+  build the communication content without donating the interaction
+  again (macOS: silent updates).
+- **Messaging body** with a communication layout is `n.body`, as
+  `render.rs` (was the last message; `updating(from:)` sets the content
+  from the intent anyway).
+- **Deep links**: an empty URL publishes none (Rust
+  `NotificationResponse::deep_link` too).
+- **istmo-build**: `apple.communication` with an app `Info.plist` that
+  defines `NSUserActivityTypes` outside the istmo block and lacks
+  `INSendMessageIntent` / `INStartCallIntent` fails the build
+  (`NotificationsError::ActivityTypes`); istmo-build never edits the
+  app's own entries.
+- **Stubs**: delegate methods and `add(_:withCompletionHandler:)` carry
+  `@Sendable` completion handlers as in current SDKs (the plugin's
+  witnesses match them exactly); `UNTimeIntervalNotificationTrigger`
+  answers `nextTriggerDate()`; the calendar trigger's stays nil (the
+  plugin computes fire times itself). `TimeZone.current` /
+  `secondsFromGMT(for:)` added.
+- **Checks**: `tests/native/ios/check.sh` builds the pure Swift
+  (`NotificationsCalendar`, `NotificationsValidate`) with the generated
+  types and real swift-corelibs-foundation and runs the schedule
+  vectors (30 rows), timing, missed deliveries, the arming plan and the
+  validation cases of `src/validate.rs`. corelibs reads zones only from
+  `/usr/share/zoneinfo`: on NixOS run it with `SWIFT_RUN="bwrap
+  --dev-bind / / --tmpfs /usr --ro-bind /usr/bin /usr/bin --ro-bind
+  $TZDIR /usr/share/zoneinfo"` inside `nix-shell -p swift
+  swiftPackages.Foundation swiftPackages.Dispatch tzdata`.
+- Still open: every device fact above; whether `updating(from:)`
+  without a fresh donation keeps the communication look.
