@@ -1079,3 +1079,138 @@ asynchronous (tests that report and then assert call `settle()`).
 API additions: `DesktopNotifications::settle`, `Progress::validate`,
 `Coalescer::{set_rate, dismissed_len}`, `Engine::{merge, local,
 set_local, snapshot}`. `Engine::add` no longer stores dead entries.
+
+## Implementation notes (istmo-build, as built)
+
+Branch `notif-build`, step 2 of section 8: `crates/build/src/notifications.rs`
+(`istmo_build::notifications`), wired into `emit_app`. Everything below
+is the contract the platform agents build against; names are constants
+in that module.
+
+### Parsing (`AppConfig.notifications: AppNotifications`)
+
+- `[app.notifications]` keys: `small_icon` (`.xml` / `.png`), `accent`
+  (`#RRGGBB` = opaque, `#AARRGGBB`), `sounds` (array of paths),
+  `exact_alarms` (`none` default / `schedule` / `use`), `full_screen`,
+  `live_updates` (default false), `apple = { time_sensitive,
+  communication, critical }` (default false), `web_service_worker`
+  (default **true**). Unknown keys fail, also inside `apple`.
+- Sound name = file stem, `[a-z][a-z0-9_]*`, <= 64 (an Android resource
+  name). Extensions: `wav ogg mp3` play on Android, `wav caf aif aiff` on
+  Apple; per name at most one Android-playable and one Apple-playable
+  file (`ding.caf` + `ding.ogg` is fine, `ding.wav` + `ding.ogg` is not).
+  Duration is not checked (needs decoding).
+- `[[app.notification_channel]]` (or one `[app.notification_channel]`
+  table), keys = `ChannelSpec` fields: `id` and `name` required;
+  `importance` `passive|normal|high|urgent|critical` (default `normal`);
+  `sound` `default|silent|<name in sounds>` (system names are not
+  accepted for static channels); `vibration` <= 32 u32;
+  `light_color` like `accent`; `show_badge` (default **true**);
+  `lock_screen` `public|hide_content|hidden`; `bypass_dnd` (default
+  false); `group` non-blank <= 128 chars. Limits mirror `ids.rs` /
+  `ChannelSpec::validate` (the build also refuses a blank `group`, which
+  the plugin allows). Duplicate ids fail.
+- `StaticChannel` mirrors `ChannelSpec` field for field with wincode
+  derives (`id: String` encodes like `ChannelId { value }`; enum variant
+  order = wire tags). `plugins/notifications/tests/static_channels.rs`
+  decodes istmo-build's bytes as `Vec<ChannelSpec>`; keep both in step
+  when `ChannelSpec` changes.
+
+### Android (written into `android/.istmo/res` when compiling for Android)
+
+| Resource | Content |
+|---|---|
+| `drawable/istmo_notification_icon.xml` | `small_icon` vector, copied |
+| `drawable-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/istmo_notification_icon.png` | `small_icon` PNG as white + source alpha, 24/36/48/72/96 px; a PNG with no transparent pixel fails the build |
+| (fallback) | no `small_icon`: `[app.icon.android] monochrome` (PNG: central 2/3 cropped; XML: copied as is) |
+| `values/istmo_notifications.xml` | `color/istmo_notification_accent` (`#AARRGGBB`, only when `accent`), `bool/istmo_notifications_full_screen`, `bool/istmo_notifications_live_updates`, `string/istmo_notifications_exact_alarms` (`none`/`schedule`/`use`) |
+| `raw/istmo_notification_channels.bin` | wire bytes of `Vec<ChannelSpec>` (no header, istmo codec = bincode 2 standard), only when channels exist |
+| `raw/istmo_notification_sound_<name>.<ext>` | Android-playable sounds; `Sound::Named("ding")` = `R.raw.istmo_notification_sound_ding`, URI `android.resource://<pkg>/raw/istmo_notification_sound_ding` |
+
+- The Kotlin backend resolves these with `resources.getIdentifier(name,
+  type, context.packageName)` (the R class is the app's, not the
+  plugin's); 0 = not configured (no small icon: fall back to the app
+  icon; no channels file: no static channels). No manifest meta-data:
+  the resources need no `AndroidManifest.xml` markers.
+- Read the channels with the generated codec: varint count, then
+  `readChannelSpec` per entry. Create them in `NotificationManagerCompat`
+  at backend start (create is idempotent; existing ones keep their
+  settings).
+- Stale `istmo_notification*` files under `.istmo/res` are removed when
+  the configuration changes. `istmo.json` `app.generated_res` is true
+  whenever either table exists: **no Gradle plugin change**.
+- Permissions (sidecar `android/.istmo/istmo-permissions.xml`), whenever
+  either table exists: `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`;
+  `exact_alarms = "schedule"` -> `SCHEDULE_EXACT_ALARM`; `"use"` ->
+  `USE_EXACT_ALARM` + `SCHEDULE_EXACT_ALARM maxSdkVersion=32`;
+  `full_screen` -> `USE_FULL_SCREEN_INTENT`; `live_updates` ->
+  `POST_PROMOTED_NOTIFICATIONS`. The Android agent still declares the
+  base two (plus receivers, trampoline) in the plugin's own manifest so
+  apps without the tables work; the sidecar deduplicates.
+
+### Apple (iOS project generator; macOS is packaging's job)
+
+- Merged as app keys (`istmo.toml [app]` owner) into the `istmo:plugins`
+  blocks of `<App>/Info.plist` and `<App>/*.entitlements` (sidecars
+  `Info.plist.plugins.xml` / `*.entitlements.plugins.xml`); arrays
+  concatenate with plugin fragments.
+- `Info.plist`, whenever `[app.notifications]` exists:
+  `IstmoNotifications` = dict `{ TimeSensitive: bool, Communication:
+  bool, Critical: bool, Sounds: { <name>: "<bundle file>" } }`; with
+  `communication`: `NSUserActivityTypes` += `INSendMessageIntent`,
+  `INStartCallIntent`. The Swift backend reads
+  `Bundle.main.object(forInfoDictionaryKey: "IstmoNotifications")`:
+  `Critical` false -> map `Interruption::Critical` to time sensitive,
+  `TimeSensitive` false -> `Urgent` to active; `Sounds[name]` is the
+  `UNNotificationSoundName` (an unknown name: treat as a system / bundle
+  name as given).
+- Entitlements: `com.apple.developer.usernotifications.time-sensitive`,
+  `...communication`, `...critical-alerts` = true for the set flags.
+- Sounds: Apple-playable files copied to
+  `ios/.istmo/NotificationSounds/istmo_notification_sound_<name>.<ext>`
+  and listed in `istmo-plugins.yml` as a `type: group`,
+  `buildPhase: resources` source: they land in the bundle root.
+  Hand-made Xcode projects add that directory's files to Copy Bundle
+  Resources.
+- The keys and sounds go away when the table is removed; an emptied
+  merge now also clears the `istmo:plugins` block (it used to keep the
+  last keys).
+
+### Desktop and web (rustc envs of the app crate, non-mobile targets)
+
+| Env | Value |
+|---|---|
+| `ISTMO_NOTIFICATION_CHANNELS` | upper-case hex of the same wire bytes; only with channels |
+| `ISTMO_NOTIFICATION_ACCENT` | `AARRGGBB` (8 hex digits, no `#`), only with `accent` (Windows `IconBackgroundColor`) |
+| `ISTMO_NOTIFICATION_APPLE` | comma list of the set flags (`time_sensitive,communication,critical`), only when one is set (macOS backend) |
+| `ISTMO_NOTIFICATION_SOUND_DIR` | `OUT_DIR/istmo-notification-sounds`, every sound as `<name>.<ext>` (all formats; the backend picks: Linux `ogg`/`wav` for the fdo `sound-file` hint, macOS `caf`/`aiff`/`wav`; packaged apps ship their own copy) |
+| `ISTMO_NOTIFICATION_SERVICE_WORKER` | wasm32 with `web_service_worker`: `OUT_DIR/istmo-notifications-web/istmo-notifications-sw.js` |
+| `ISTMO_APP_NAME` | `[app] name` (else the package), every app (Windows AUMID `DisplayName`); `ISTMO_APP_BUNDLE_ID` and `ISTMO_APP_ICON_PNG` (`istmo::app_icon!()`) already existed |
+
+- Plugin side (this branch): `istmo_notifications::static_channels!()`
+  expands in the app to `channels_from_build(option_env!(
+  "ISTMO_NOTIFICATION_CHANNELS"))` (unreadable value: warn, no
+  channels); `DesktopNotifications::platform()` is the builder
+  `Default` uses, so apps write
+  `DesktopNotifications::platform().with_channels(static_channels!()).build()`.
+  Backends that want the other envs read them the same way (a macro in
+  the plugin crate, expanded in the app); none is wired yet.
+- Web: the plugin must hand its worker over as an asset:
+  `[[assets]] path = "assets/web/istmo-notifications-sw.js"` in
+  `plugins/notifications/istmo.toml` (the web agent adds it with the
+  file). istmo-build finds it in the `DEP_*_ISTMO_ASSETS` payload of
+  `istmo.notifications` by file name and copies it; with the plugin
+  linked but no such asset it warns. Serving it at the site root is the
+  app's bundler step (the env names the file).
+
+### Not done / open
+
+- No device or Xcode / Gradle run; the outputs are checked by unit and
+  integration tests (`crates/build/src/notifications/tests.rs`,
+  `crates/build/tests/notifications.rs`, goldens
+  `crates/build/tests/golden/notifications_{values,info_plist,entitlements}.xml.expected`).
+- Sound length (30 s Apple limit) and Android vector validity are not
+  checked. A monochrome XML fallback keeps its 108 dp viewport (glyph
+  looks small).
+- `istmo doctor` does not report missing notification entitlements in
+  provisioning profiles.

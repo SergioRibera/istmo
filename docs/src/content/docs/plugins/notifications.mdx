@@ -197,6 +197,16 @@ forwarding process. Image bytes are written once to
 `<cache dir>/istmo-notifications/images` under a content-hash name and
 removed with the last notification using them.
 
+Channels declared in `istmo.toml`
+([`[[app.notification_channel]]`](/istmo/build-scripts/istmo-toml-reference/#appnotifications-and-appnotification_channel))
+reach the desktop host through the app crate's build env:
+
+```rust
+let host = istmo_notifications::DesktopNotifications::platform()
+    .with_channels(istmo_notifications::static_channels!())
+    .build();
+```
+
 ### Status
 
 The Rust core and the desktop host are in place; the Android, Apple,

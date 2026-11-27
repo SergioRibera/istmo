@@ -201,6 +201,16 @@ proceso que reenvía. Los bytes de imagen se escriben una vez en
 `<cache dir>/istmo-notifications/images` con un nombre por hash de
 contenido y se borran con la última notificación que los usa.
 
+Los canales declarados en `istmo.toml`
+([`[[app.notification_channel]]`](/istmo/es/build-scripts/istmo-toml-reference/#appnotifications-y-appnotification_channel))
+llegan al host de escritorio por el entorno de build del crate de la app:
+
+```rust
+let host = istmo_notifications::DesktopNotifications::platform()
+    .with_channels(istmo_notifications::static_channels!())
+    .build();
+```
+
 ### Estado
 
 El núcleo en Rust y el host de escritorio están listos; los backends de

@@ -501,6 +501,85 @@ el build.
   Windows y el menú del Dock de macOS no tienen forma estática:
   configúralas con `set_actions` al arrancar.
 
+### `[app.notifications]` y `[[app.notification_channel]]`
+
+Ajustes de compilación del plugin
+[`istmo-notifications`](/istmo/es/plugins/notifications/). Las dos tablas
+son opcionales, y todas sus claves también.
+
+```toml
+[app.notifications]
+small_icon   = "assets/notif.xml"   # Android: vector .xml o un .png transparente
+accent       = "#E0662B"            # #RRGGBB o #AARRGGBB
+sounds       = ["assets/ding.caf", "assets/ding.ogg"]  # Sound::Named("ding")
+exact_alarms = "none"               # "none" | "schedule" | "use"
+full_screen  = false                # USE_FULL_SCREEN_INTENT
+live_updates = false                # POST_PROMOTED_NOTIFICATIONS (Android 16)
+apple = { time_sensitive = false, communication = false, critical = false }
+web_service_worker = true           # prepara el service worker del plugin en builds web
+
+[[app.notification_channel]]
+id          = "messages"            # obligatorio: 1..=64 de [A-Za-z0-9._:-], único
+name        = "Mensajes"            # obligatorio: como mucho 256 caracteres
+description = "Mensajes nuevos"     # como mucho 4096 caracteres
+importance  = "high"                # passive | normal (por defecto) | high | urgent | critical
+sound       = "ding"                # default | silent | un nombre de `sounds`
+vibration   = [0, 250, 100, 250]    # milisegundos apagado / encendido, como mucho 32 pasos
+light_color = "#00FF00"
+show_badge  = true                  # por defecto true
+lock_screen = "hide_content"        # public | hide_content | hidden
+bypass_dnd  = false
+group       = "Chats"               # como mucho 128 caracteres
+```
+
+- `small_icon`: Android dibuja el icono pequeño solo con su canal alfa:
+  un PNG se convierte en una máscara blanca en cada densidad (24 dp) y
+  un PNG sin ningún píxel transparente hace fallar el build; un vector
+  drawable se copia. Sin él se usa `[app.icon.android] monochrome` (sus
+  72 dp centrales).
+- `sounds`: el nombre del archivo sin extensión es el nombre del sonido
+  (`[a-z][a-z0-9_]*`, como mucho 64 caracteres). Android reproduce
+  `.wav`, `.ogg` y `.mp3`, Apple `.wav`, `.caf` y `.aiff` (30 s como
+  mucho): da un archivo por nombre para cada uno, por ejemplo `ding.caf`
+  y `ding.ogg`.
+- `exact_alarms`: `schedule` declara `SCHEDULE_EXACT_ALARM` (lo concede
+  el usuario; denegado por defecto en Android 14+), `use` declara
+  `USE_EXACT_ALARM` (Android 13+, solo apps de alarma y calendario según
+  la política de Play) y `SCHEDULE_EXACT_ALARM` hasta la API 32.
+- `apple`: `time_sensitive`, `communication` y `critical` añaden los
+  entitlements `com.apple.developer.usernotifications.time-sensitive`,
+  `.communication` y `.critical-alerts` (las alertas críticas necesitan
+  la aprobación de Apple); `communication` además lista
+  `INSendMessageIntent` e `INStartCallIntent` en `NSUserActivityTypes`.
+- Los canales siguen `ChannelSpec::validate` del plugin. Se crean al
+  arrancar el backend nativo; `set_channels` añade los dinámicos.
+
+Las claves desconocidas, los valores inválidos, los ids de canal
+repetidos y los sonidos de canal que no están en `sounds` hacen fallar
+el build. Lo que recibe cada plataforma:
+
+- **Android**: en el `android/.istmo/res` generado,
+  `drawable*/istmo_notification_icon`, `values/istmo_notifications.xml`
+  (color `istmo_notification_accent`, bools
+  `istmo_notifications_full_screen` e `istmo_notifications_live_updates`,
+  string `istmo_notifications_exact_alarms`),
+  `raw/istmo_notification_channels.bin` (los canales en formato wire) y
+  `raw/istmo_notification_sound_<nombre>.<ext>`. Los permisos
+  (`POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED` y los opcionales de
+  arriba) van a `android/.istmo/istmo-permissions.xml`.
+- **iOS**: un diccionario `IstmoNotifications` (los flags y un mapa
+  `Sounds` de nombre a archivo del bundle), `NSUserActivityTypes` y los
+  entitlements, combinados en los bloques `istmo:plugins` de
+  `Info.plist` y del archivo `.entitlements`; los sonidos se preparan en
+  `ios/.istmo/NotificationSounds` y el fragmento de xcodegen los copia a
+  la raíz del bundle.
+- **Escritorio y web**: variables de rustc para el crate de la app:
+  `ISTMO_NOTIFICATION_CHANNELS` (la lee
+  `istmo_notifications::static_channels!()`), `ISTMO_NOTIFICATION_ACCENT`,
+  `ISTMO_NOTIFICATION_APPLE`, `ISTMO_NOTIFICATION_SOUND_DIR` (sonidos
+  preparados en `OUT_DIR`) y, en wasm32, `ISTMO_NOTIFICATION_SERVICE_WORKER`.
+  El empaquetado de macOS firma con los mismos entitlements.
+
 ## `[[remote_override]]`
 
 Sobrescribe el `default_deployment` de un plugin desde la app:

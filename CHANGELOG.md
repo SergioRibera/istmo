@@ -24,6 +24,23 @@
   `UnavailableNotifications`, `FakeNotifications` (feature `testing`).
   Platform backends (Android, Apple, Windows, Linux, web) are not in
   this release yet.
+- `istmo.toml` `[app.notifications]` (`small_icon`, `accent`, `sounds`,
+  `exact_alarms`, `full_screen`, `live_updates`, `apple`,
+  `web_service_worker`) and `[[app.notification_channel]]`, checked with
+  the plugin's limits (unknown keys, bad values, duplicate channel ids
+  and unknown channel sounds fail the build). Android gets the small
+  icon (a PNG becomes a white mask per density, opaque PNGs are refused,
+  `[app.icon.android] monochrome` is the fallback), the accent and flags
+  in `values/istmo_notifications.xml`, the channels as wire bytes in
+  `raw/istmo_notification_channels.bin` and the sounds in `raw/`, all in
+  `android/.istmo/res`, plus the permissions in the sidecar. iOS gets an
+  `IstmoNotifications` `Info.plist` dictionary, `NSUserActivityTypes`
+  and the time-sensitive / communication / critical-alerts entitlements
+  in the `istmo:plugins` blocks, and the sounds as bundle resources from
+  `ios/.istmo/NotificationSounds`. Desktop and web builds get
+  `ISTMO_NOTIFICATION_*` rustc envs; `istmo_notifications::static_channels!()`
+  decodes the channels for `DesktopNotifications::platform().with_channels(..)`.
+- `ISTMO_APP_NAME` rustc env (`[app] name`) for every app crate.
 - `istmo-autostart` plugin (`istmo.autostart`, desktop only): start the
   app at login from a user action (`SMAppService.mainApp` on macOS 13+,
   a LaunchAgent before that or for bare binaries, MSIX `StartupTask` or
@@ -227,6 +244,9 @@
 
 ### Changed (breaking)
 
+- The `istmo:plugins` blocks of `Info.plist` and the entitlements are
+  emptied once no plugin fragment or app key is left; they used to keep
+  the last merged keys.
 - **The built-in `istmo.notifications` contract is gone** from
   `istmo-plugins` (`NotificationsClient`, `NotificationRequest`, ...)
   and `istmo-plugins-schema` (`notifications()`); `istmo-notifications`
