@@ -35,20 +35,45 @@ use super::super::watch::{SourceFeed, WATCH_POLL};
 
 /// How long one change's events may keep coming before the relisting.
 const SETTLE: Duration = Duration::from_millis(50);
+/// A window being dragged or resized reports a move every few ms; each
+/// relisting opens processes and reads titles, so moves alone relist
+/// once they paused this long.
+const MOVE_SETTLE: Duration = Duration::from_millis(250);
+/// The longest a stream of moves delays the relisting.
+const MOVE_SETTLE_MAX: Duration = Duration::from_secs(1);
+
+/// What changed since the last relisting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+enum Change {
+    #[default]
+    None,
+    /// Only window positions or sizes.
+    Moved,
+    /// Windows or monitors came, went, were renamed, hidden...
+    Listed,
+}
+
+/// How long to let events gather before relisting after `change`.
+const fn settle_for(change: Change) -> Duration {
+    match change {
+        Change::Moved => MOVE_SETTLE,
+        Change::None | Change::Listed => SETTLE,
+    }
+}
 
 const CLASS: PCWSTR = w!("IstmoScreenCaptureWatch");
 
 thread_local! {
     /// Set by the window procedure and the hooks of this thread; the
     /// watch loop on the same thread takes it.
-    static DIRTY: Cell<bool> = const { Cell::new(false) };
+    static DIRTY: Cell<Change> = const { Cell::new(Change::None) };
 }
 
-fn mark() {
-    DIRTY.with(|d| d.set(true));
+fn mark(change: Change) {
+    DIRTY.with(|d| d.set(d.get().max(change)));
 }
 
-fn take() -> bool {
+fn take() -> Change {
     DIRTY.with(Cell::take)
 }
 
@@ -59,7 +84,7 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if msg == WM_DISPLAYCHANGE || msg == WM_SETTINGCHANGE {
-        mark();
+        mark(Change::Listed);
     }
     // SAFETY: the arguments are the ones Windows passed in.
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -67,7 +92,7 @@ unsafe extern "system" fn window_proc(
 
 unsafe extern "system" fn on_event(
     _hook: HWINEVENTHOOK,
-    _event: u32,
+    event: u32,
     hwnd: HWND,
     object: i32,
     child: i32,
@@ -76,7 +101,11 @@ unsafe extern "system" fn on_event(
 ) {
     // Window-level events only (not carets, cursors, menu items).
     if object == OBJID_WINDOW.0 && child == CHILDID_SELF.cast_signed() && !hwnd.0.is_null() {
-        mark();
+        mark(if event == EVENT_OBJECT_LOCATIONCHANGE {
+            Change::Moved
+        } else {
+            Change::Listed
+        });
     }
 }
 
@@ -203,20 +232,44 @@ pub(crate) fn run(
         if !feed.publish(list()) {
             return Ok(());
         }
-        loop {
+        let mut change = loop {
             if feed.is_closed() {
                 return Ok(());
             }
             Listener::pump(WATCH_POLL);
-            if take() {
-                break;
+            let change = take();
+            if change != Change::None {
+                break change;
             }
-        }
+        };
         // One change is often several events (create, show, rename):
-        // take them all before listing again.
-        let until = Instant::now() + SETTLE;
+        // take them all before listing again. Moves wait until they pause.
+        let started = Instant::now();
+        let mut until = started + settle_for(change);
         while Instant::now() < until {
             Listener::pump(until.saturating_duration_since(Instant::now()));
+            let more = take();
+            change = change.max(more);
+            if more == Change::Moved && change == Change::Moved {
+                until = (Instant::now() + MOVE_SETTLE).min(started + MOVE_SETTLE_MAX);
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn moves_settle_longer_than_listing_changes() {
+        assert!(settle_for(Change::Moved) > settle_for(Change::Listed));
+        // A listing change outranks the moves around it.
+        assert_eq!(Change::Moved.max(Change::Listed), Change::Listed);
+        mark(Change::Moved);
+        mark(Change::Listed);
+        mark(Change::Moved);
+        assert_eq!(take(), Change::Listed);
+        assert_eq!(take(), Change::None);
     }
 }
