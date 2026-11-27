@@ -28,6 +28,8 @@ mod images;
 #[cfg(target_os = "linux")]
 pub mod linux;
 mod timer;
+#[cfg(any(windows, test))]
+pub mod windows;
 
 #[cfg(test)]
 mod tests;
