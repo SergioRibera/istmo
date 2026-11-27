@@ -518,6 +518,11 @@ fn content_rect(area: Area, size: Size) -> Rect {
     }
 }
 
+/// The pool depth a stream asked for, within what GDI offers.
+fn pool_depth(asked: u8) -> u8 {
+    asked.clamp(POOL.min_depth, POOL.max_depth)
+}
+
 fn offers() -> Vec<Offer> {
     vec![Offer {
         format: FORMAT,
@@ -741,7 +746,7 @@ impl Backend for GdiBackend {
             return Err(own_window_refused());
         }
         let size = area.rect().size();
-        let depth = plan.pool_depth.max(2);
+        let depth = pool_depth(plan.pool_depth);
         let mut negotiated = negotiated(
             &plan.source,
             stream_facts(size, tier, depth, plan.exhaustion, mode),
@@ -1074,6 +1079,13 @@ impl AsRef<[u8]> for ArcDib {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pool_depth_stays_within_the_caps() {
+        assert_eq!(pool_depth(0), POOL.min_depth);
+        assert_eq!(pool_depth(4), 4);
+        assert_eq!(pool_depth(200), POOL.max_depth);
+    }
 
     #[test]
     fn windows_are_drawn_only_where_printwindow_cannot_block_forever() {
