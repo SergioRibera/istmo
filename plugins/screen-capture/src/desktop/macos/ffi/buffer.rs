@@ -21,8 +21,8 @@ use objc2_core_video::{
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString, NSValue};
 use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
 use objc2_screen_capture_kit::{
-    SCStreamFrameInfoContentRect, SCStreamFrameInfoDirtyRects, SCStreamFrameInfoScaleFactor,
-    SCStreamFrameInfoStatus,
+    SCStreamFrameInfoContentRect, SCStreamFrameInfoContentScale, SCStreamFrameInfoDirtyRects,
+    SCStreamFrameInfoScaleFactor, SCStreamFrameInfoStatus,
 };
 
 use crate::types::{CaptureError, Colour, PlaneLayout, Size};
@@ -91,11 +91,12 @@ impl Sample {
         }
         let info = array.objectAtIndex(0);
         // SAFETY: the keys are immutable framework constants.
-        let (status, rect, scale, dirty) = unsafe {
+        let (status, rect, scale, content_scale, dirty) = unsafe {
             (
                 SCStreamFrameInfoStatus,
                 SCStreamFrameInfoContentRect,
                 SCStreamFrameInfoScaleFactor,
+                SCStreamFrameInfoContentScale,
                 SCStreamFrameInfoDirtyRects,
             )
         };
@@ -107,6 +108,7 @@ impl Sample {
             status: number(status).map(|n| i64::try_from(n.integerValue()).unwrap_or(i64::MIN)),
             content_rect: info.objectForKey(rect).as_deref().and_then(rect_of),
             scale_factor: number(scale).map(|n| n.doubleValue()),
+            content_scale: number(content_scale).map(|n| n.doubleValue()),
             dirty_rects: info.objectForKey(dirty).map(|value| {
                 value
                     .downcast_ref::<NSArray>()

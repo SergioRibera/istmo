@@ -61,8 +61,10 @@ ISTMO_SC_TEST_MACOS=1 cargo test -p istmo-screen-capture --test macos_live iosur
   (en píxeles) donde cambió algo; con la pantalla quieta, nada nuevo
   (estado `Idle`).
 - Dato a confirmar: `content_rect` = `contentRect` (puntos) ×
-  `scaleFactor`. Si en una ventana con letterbox el rectángulo sale el
-  doble o la mitad de lo esperado, la unidad es otra: anótalo.
+  `scaleFactor` / `contentScale`. Captura una ventana con
+  `OutputSize::Fit` (y otra nativa) y comprueba el recorte: si el
+  rectángulo sale el doble o la mitad de lo esperado, la fórmula es otra:
+  anota `contentRect`, `scaleFactor` y `contentScale` del fotograma.
 
 ### 4. Agotamiento del pool
 

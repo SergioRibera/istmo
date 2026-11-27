@@ -485,6 +485,9 @@ pub(crate) struct Attachments {
     pub(crate) content_rect: Option<RectF>,
     /// `SCStreamFrameInfoScaleFactor`: pixels per point.
     pub(crate) scale_factor: Option<f64>,
+    /// `SCStreamFrameInfoContentScale`: the content's scale relative to
+    /// the output (not 1 with `scalesToFit` or window capture).
+    pub(crate) content_scale: Option<f64>,
     /// `SCStreamFrameInfoDirtyRects`, pixels.
     pub(crate) dirty_rects: Option<Vec<RectF>>,
 }
@@ -497,12 +500,19 @@ impl Attachments {
         self.status.map_or(FrameStatus::Complete, FrameStatus::from)
     }
 
-    /// The valid area of a `size` buffer, in pixels.
+    /// The valid area of a `size` buffer, in pixels: the content rect's
+    /// points times `scaleFactor / contentScale` (what OBS's SCK capture
+    /// uses; unconfirmed on a device, see the Apple checklist).
     #[must_use]
     pub(crate) fn content_rect(&self, size: Size) -> Rect {
         let full = Rect::from_size(size);
+        let content_scale = self
+            .content_scale
+            .filter(|scale| scale.is_finite() && *scale > 0.0)
+            .unwrap_or(1.0);
+        let scale = self.scale_factor.unwrap_or(1.0) / content_scale;
         self.content_rect
-            .and_then(|rect| rect.covering(self.scale_factor.unwrap_or(1.0)))
+            .and_then(|rect| rect.covering(scale))
             .and_then(|rect| rect.intersect(full))
             .unwrap_or(full)
     }
@@ -906,6 +916,31 @@ mod tests {
             ..Attachments::default()
         };
         assert_eq!(off.content_rect(Size::new(4, 4)), Rect::new(0, 0, 4, 4));
+        // Content scaled into the output: points times scale over content scale.
+        let shrunk = Attachments {
+            content_rect: Some(RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 50.0,
+            }),
+            scale_factor: Some(2.0),
+            content_scale: Some(0.5),
+            ..Attachments::default()
+        };
+        assert_eq!(
+            shrunk.content_rect(Size::new(800, 400)),
+            Rect::new(0, 0, 400, 200)
+        );
+        // A nonsense content scale is ignored.
+        let zero = Attachments {
+            content_scale: Some(0.0),
+            ..shrunk
+        };
+        assert_eq!(
+            zero.content_rect(Size::new(800, 400)),
+            Rect::new(0, 0, 200, 100)
+        );
     }
 
     #[test]

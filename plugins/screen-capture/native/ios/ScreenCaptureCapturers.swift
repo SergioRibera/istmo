@@ -343,6 +343,7 @@ final class SckCapturer: NSObject, ScreenCapturer, SCStreamOutput, SCStreamDeleg
             info.contentRect = CGRect(dictionaryRepresentation: dictionary as CFDictionary)
         }
         info.scaleFactor = (first[.scaleFactor] as? NSNumber)?.doubleValue
+        info.contentScale = (first[.contentScale] as? NSNumber)?.doubleValue
         if let rects = first[.dirtyRects] as? [Any] {
             info.dirtyRects = rects.compactMap { value -> CGRect? in
                 if let value = value as? NSDictionary { return CGRect(dictionaryRepresentation: value as CFDictionary) }

@@ -83,16 +83,22 @@ struct ScreenCaptureFrameInfo {
     var contentRect: CGRect?
     /// Pixels per point.
     var scaleFactor: Double?
+    /// `SCStreamFrameInfo.contentScale`: the content's scale relative to
+    /// the output.
+    var contentScale: Double?
     /// Pixels; `nil` = not reported (all may have changed), empty = none.
     var dirtyRects: [CGRect]?
     /// `CGImagePropertyOrientation` raw value.
     var orientation: UInt32?
 
-    /// The valid area of a `size` buffer.
+    /// The valid area of a `size` buffer: points times
+    /// `scaleFactor / contentScale` (as macOS; unconfirmed on a device).
     func contentRect(in size: ScreenCapture.Size) -> ScreenCapture.Rect {
         let full = ScreenCapture.Rect(x: 0, y: 0, width: size.width, height: size.height)
         guard let rect = contentRect else { return full }
-        let scale = scaleFactor ?? 1
+        var contentScale = self.contentScale ?? 1
+        if !contentScale.isFinite || contentScale <= 0 { contentScale = 1 }
+        let scale = (scaleFactor ?? 1) / contentScale
         guard let covered = Self.covering(rect, scale: scale) else { return full }
         return Self.intersect(covered, full) ?? full
     }
