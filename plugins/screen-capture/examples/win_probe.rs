@@ -170,6 +170,24 @@ mod probe {
         report: Arc<Report>,
     }
 
+    /// The calling thread's DPI awareness, as the probe's host runs.
+    #[allow(unsafe_code, reason = "two argument-free Win32 queries")]
+    fn dpi_awareness() -> &'static str {
+        use windows::Win32::UI::HiDpi::{
+            DPI_AWARENESS_PER_MONITOR_AWARE, DPI_AWARENESS_SYSTEM_AWARE, DPI_AWARENESS_UNAWARE,
+            GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
+        };
+        // SAFETY: no arguments; returns this thread's context handle.
+        let context = unsafe { GetThreadDpiAwarenessContext() };
+        // SAFETY: a context handle the OS just returned.
+        match unsafe { GetAwarenessFromDpiAwarenessContext(context) } {
+            DPI_AWARENESS_UNAWARE => "unaware",
+            DPI_AWARENESS_SYSTEM_AWARE => "system aware",
+            DPI_AWARENESS_PER_MONITOR_AWARE => "per-monitor aware",
+            _ => "unknown",
+        }
+    }
+
     fn block<F: std::future::Future>(future: F) -> F::Output {
         pollster::block_on(future)
     }
@@ -1166,6 +1184,9 @@ mod probe {
                 "release"
             }
         ));
+        // The probe ships no manifest: a DPI-unaware host, the case
+        // `DuplicateOutput1` is said to refuse.
+        report.info("process DPI awareness", dpi_awareness());
         let RuntimeInit { runtime, outbound } = match Runtime::init(RuntimeConfig::inline()) {
             Ok(init) => init,
             Err(err) => {

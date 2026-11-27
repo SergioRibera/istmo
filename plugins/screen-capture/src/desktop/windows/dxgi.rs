@@ -238,10 +238,12 @@ fn listing_of() -> SourceList {
 
 /// Why a duplication could not be made (now).
 enum DupError {
-    /// The secure desktop or another session owns the screen: retry.
-    NotNow(CaptureError),
+    /// The secure desktop or another session owns the screen: paused,
+    /// retried without a limit.
+    NotNow(PauseReason, CaptureError),
     /// The output is duplicated elsewhere (this process, or the
-    /// four-process limit): retry a bounded number of times.
+    /// four-process limit), or its mode cannot be duplicated now: retry a
+    /// bounded number of times.
     Busy(CaptureError),
     /// The monitor is gone.
     Lost,
@@ -251,27 +253,33 @@ enum DupError {
 /// What a failed `DuplicateOutput[1]` means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DupFailure {
-    /// Secure desktop or another session: wait it out.
-    NotNow,
+    /// `E_ACCESSDENIED` (UAC, lock screen) or another session: wait it
+    /// out, paused for this reason.
+    NotNow(PauseReason),
     /// `E_INVALIDARG`: this process already duplicates the output (a
     /// screenshot during a stream, or a lost duplication still alive).
     OwnBusy,
     /// `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE`: too many processes
     /// duplicate it.
     OthersBusy,
+    /// `DXGI_ERROR_UNSUPPORTED`: a mode duplication does not handle (8 bpp,
+    /// DWM off) or the other GPU of a hybrid laptop. Not a secure
+    /// desktop, and possibly for good.
+    Unsupported,
     Fatal,
 }
 
 fn classify(code: windows_core::HRESULT) -> DupFailure {
-    if code == E_ACCESSDENIED
-        || code == DXGI_ERROR_UNSUPPORTED
-        || code == DXGI_ERROR_SESSION_DISCONNECTED
-    {
-        DupFailure::NotNow
+    if code == E_ACCESSDENIED {
+        DupFailure::NotNow(PauseReason::SecureDesktop)
+    } else if code == DXGI_ERROR_SESSION_DISCONNECTED {
+        DupFailure::NotNow(PauseReason::SystemPaused)
     } else if code == E_INVALIDARG {
         DupFailure::OwnBusy
     } else if code == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE {
         DupFailure::OthersBusy
+    } else if code == DXGI_ERROR_UNSUPPORTED {
+        DupFailure::Unsupported
     } else {
         DupFailure::Fatal
     }
@@ -279,7 +287,7 @@ fn classify(code: windows_core::HRESULT) -> DupFailure {
 
 fn dup_error(err: &windows_core::Error) -> DupError {
     match classify(err.code()) {
-        DupFailure::NotNow => DupError::NotNow(hr("DuplicateOutput", err)),
+        DupFailure::NotNow(reason) => DupError::NotNow(reason, hr("DuplicateOutput", err)),
         DupFailure::OwnBusy => DupError::Busy(dxgi_err(
             "DuplicateOutput",
             "the output is already duplicated in this process",
@@ -288,6 +296,11 @@ fn dup_error(err: &windows_core::Error) -> DupError {
             "DuplicateOutput",
             "too many processes duplicate this output",
         )),
+        DupFailure::Unsupported => DupError::Busy(dxgi_err(
+            "DuplicateOutput",
+            "DXGI_ERROR_UNSUPPORTED: this display mode or adapter cannot be duplicated \
+             (8 bpp or DWM off, or the other GPU of a hybrid system)",
+        )),
         DupFailure::Fatal => DupError::Fatal(hr("DuplicateOutput", err)),
     }
 }
@@ -295,7 +308,7 @@ fn dup_error(err: &windows_core::Error) -> DupError {
 impl From<DupError> for CaptureError {
     fn from(err: DupError) -> Self {
         match err {
-            DupError::NotNow(err) | DupError::Busy(err) | DupError::Fatal(err) => err,
+            DupError::NotNow(_, err) | DupError::Busy(err) | DupError::Fatal(err) => err,
             DupError::Lost => Self::SourceLost,
         }
     }
@@ -335,7 +348,14 @@ impl Dup {
                 Requirement::Hdr,
             )));
         }
-        let duplicated = if let Some(output5) = output5 {
+        let plain = || {
+            let output1 = output
+                .cast::<IDXGIOutput1>()
+                .map_err(|e| DupError::Fatal(hr("IDXGIOutput1", &e)))?;
+            // SAFETY: the device is on the output's adapter.
+            unsafe { output1.DuplicateOutput(&gpu.device) }.map_err(|err| dup_error(&err))
+        };
+        let dup = if let Some(output5) = output5 {
             let supported: [DXGI_FORMAT; 3] = [
                 DXGI_FORMAT_R16G16B16A16_FLOAT,
                 DXGI_FORMAT_R10G10B10A2_UNORM,
@@ -343,15 +363,22 @@ impl Dup {
             ];
             // SAFETY: the device is on the output's adapter; the format
             // list is live for the call.
-            unsafe { output5.DuplicateOutput1(&gpu.device, 0, &supported) }
+            match unsafe { output5.DuplicateOutput1(&gpu.device, 0, &supported) } {
+                Ok(dup) => dup,
+                // `DuplicateOutput1` refuses some hosts (DPI awareness,
+                // drivers) where the BGRA `DuplicateOutput` works.
+                Err(err)
+                    if classify(err.code()) == DupFailure::Unsupported
+                        && hdr != HdrPolicy::RequireHdr =>
+                {
+                    tracing::debug!(%err, "DuplicateOutput1 unsupported; trying DuplicateOutput");
+                    plain()?
+                }
+                Err(err) => return Err(dup_error(&err)),
+            }
         } else {
-            let output1 = output
-                .cast::<IDXGIOutput1>()
-                .map_err(|e| DupError::Fatal(hr("IDXGIOutput1", &e)))?;
-            // SAFETY: the device is on the output's adapter.
-            unsafe { output1.DuplicateOutput(&gpu.device) }
+            plain()?
         };
-        let dup = duplicated.map_err(|err| dup_error(&err))?;
         // SAFETY: `dup` is live.
         let desc: DXGI_OUTDUPL_DESC = unsafe { dup.GetDesc() };
         let format = d3d::pixel_format(desc.ModeDesc.Format).ok_or_else(|| {
@@ -797,7 +824,12 @@ impl Backend for DxgiBackend {
             return Err(CaptureError::unsatisfiable(Some(ID), Requirement::Picker));
         }
         let device = device_of(&plan.source)?;
-        let dup = Dup::new(&device, plan.hdr, plan.gpu)?;
+        // Same DPI context as the screenshot and the capture thread:
+        // physical pixels, which `DuplicateOutput1` wants.
+        let dup = {
+            let _pixels = PhysicalPixels::enter();
+            Dup::new(&device, plan.hdr, plan.gpu)?
+        };
         let (chosen, path) = choose(&plan.formats, dup.format)?;
         let mode = select::cursor_mode(plan.cursor, &CURSOR_MODES);
         // A metadata cursor re-sends the last frame on pointer-only
@@ -982,11 +1014,10 @@ impl Worker {
             }
             match Dup::new(&self.device, self.hdr, self.gpu_preference) {
                 Ok(dup) => break dup,
-                Err(DupError::NotNow(err)) => {
+                Err(DupError::NotNow(reason, err)) => {
                     if !paused {
                         tracing::debug!(%err, "dxgi duplication unavailable; paused");
-                        self.out
-                            .event(CaptureEvent::Paused(PauseReason::SecureDesktop));
+                        self.out.event(CaptureEvent::Paused(reason));
                         paused = true;
                     }
                 }
@@ -1265,11 +1296,20 @@ mod tests {
 
     #[test]
     fn duplication_failures_are_told_apart() {
-        assert_eq!(classify(E_ACCESSDENIED), DupFailure::NotNow);
+        assert_eq!(
+            classify(E_ACCESSDENIED),
+            DupFailure::NotNow(PauseReason::SecureDesktop)
+        );
         assert_eq!(
             classify(DXGI_ERROR_SESSION_DISCONNECTED),
-            DupFailure::NotNow
+            DupFailure::NotNow(PauseReason::SystemPaused)
         );
+        // Never an endless secure-desktop pause.
+        assert_eq!(classify(DXGI_ERROR_UNSUPPORTED), DupFailure::Unsupported);
+        assert!(matches!(
+            dup_error(&DXGI_ERROR_UNSUPPORTED.into()),
+            DupError::Busy(_)
+        ));
         assert_eq!(classify(E_INVALIDARG), DupFailure::OwnBusy);
         assert_eq!(
             classify(DXGI_ERROR_NOT_CURRENTLY_AVAILABLE),
