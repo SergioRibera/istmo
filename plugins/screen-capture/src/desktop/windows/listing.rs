@@ -210,6 +210,15 @@ fn non_empty(s: &str) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+/// `DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS.edidIdsValid`: bit 2 (bit 1 is
+/// `friendlyNameForced`).
+const EDID_IDS_VALID: u32 = 0x4;
+
+/// Whether the EDID manufacturer and product ids of a target are valid.
+const fn edid_ids_valid(flags: u32) -> bool {
+    flags & EDID_IDS_VALID != 0
+}
+
 /// Target names per GDI device name, for every active path.
 fn target_names() -> Vec<(String, TargetName)> {
     let mut paths_len = 0_u32;
@@ -279,7 +288,7 @@ fn target_names() -> Vec<(String, TargetName)> {
             }
             // SAFETY: the flags union is a plain `u32` bit field.
             let flags = unsafe { target.flags.Anonymous.value };
-            let edid_ids = flags & 0x2 != 0;
+            let edid_ids = edid_ids_valid(flags);
             Some((
                 wide_to_string(&source.viewGdiDeviceName),
                 TargetName {
@@ -650,6 +659,14 @@ pub(crate) fn under_cursor(backend: BackendId, scanout: bool) -> Result<Source, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edid_ids_are_bit_two_of_the_target_flags() {
+        // friendlyNameFromEdid | edidIdsValid
+        assert!(edid_ids_valid(0x5));
+        // friendlyNameForced alone
+        assert!(!edid_ids_valid(0x2));
+    }
 
     #[test]
     fn ids_round_trip() {
