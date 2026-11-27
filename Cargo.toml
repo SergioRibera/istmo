@@ -159,6 +159,10 @@ istmo-ios = { workspace = true }
 [dev-dependencies]
 pollster = { workspace = true }
 flume = { workspace = true }
+# `tests/notifications_hosts.rs` compiles the documented `hosts:` line.
+# Path only, no version: stripped on publish (the plugin is released
+# after the facade).
+istmo-notifications = { path = "plugins/notifications" }
 
 # `tests/wasm_runtime.rs` runs under `wasm-bindgen-test-runner`.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
