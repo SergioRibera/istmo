@@ -308,7 +308,7 @@ impl std::fmt::Debug for Inner {
 /// The notifications host for Linux, Windows and macOS.
 ///
 /// Register it with the runtime
-/// (`hosts: [NotificationsClient => DesktopNotifications::default()]`).
+/// (`hosts: [Notifications => DesktopNotifications::default()]`).
 /// Clones share one host: keep one to [`attach`](Self::attach) it to the
 /// runtime at start, so missed scheduled notifications are delivered and
 /// taps that started the process reach the app before its first call.
