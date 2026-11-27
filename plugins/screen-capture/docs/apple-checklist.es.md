@@ -166,12 +166,19 @@ Desde Swift (o Rust vía el cliente), con `allowPicker: true` y
    (`IstmoRuntime.shared.registerObject(layer)`): la vista previa se ve,
    `PreviewFit` cambia el encuadre; con `open_preview_with_frames` llegan
    además fotogramas al sumidero.
-6. ReplayKit: mandar la app a segundo plano → `paused(backgrounded)`;
-   volver → `resumed`.
-7. Audio: en 27 `System` / `ExcludeSelf` con contenido que suene; en
+6. ReplayKit, y SCK sin `UIBackgroundModes: screen-capture` (o con una
+   app compartida en vez de la pantalla): mandar la app a segundo plano →
+   `paused(backgrounded)`; volver → `resumed`. SCK de la pantalla con el
+   modo de fondo: sigue capturando (anota si el sistema la corta igual, y
+   si App Store Connect acepta la clave).
+7. Picker sólo con `SourceKind::Application`: debe abrir
+   `presentForCurrentApplication()` (confirma el nombre en el SDK de 27)
+   y el `Source` debe salir `Application`; con la pantalla, `Monitor`
+   (`SCContentFilter.style`).
+8. Audio: en 27 `System` / `ExcludeSelf` con contenido que suene; en
    ReplayKit `Application(...)` (sólo el audio de la propia app). Anota
    el formato real (ReplayKit suele dar 16 bits big-endian en
    `.audioApp`: la conversión lo soporta, pero hay que verlo).
-8. Detener la captura desde el Centro de control → `consentRevoked` /
+9. Detener la captura desde el Centro de control → `consentRevoked` /
    `stopped`.
-9. Cuando pase: añadir el backend a `ScreenCaptureBackendImpl.joinsAuto`.
+10. Cuando pase: añadir el backend a `ScreenCaptureBackendImpl.joinsAuto`.

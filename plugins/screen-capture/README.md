@@ -335,9 +335,14 @@ System or application audio needs macOS 13.
 The Swift backend in `native/ios` is picker-only: set
 `ConsentConfig.allowPicker`, and name a backend (`.fixed(.iosSck)` on
 iOS 27, `.fixed(.iosReplayKit)` before) until they join `Auto`.
-ScreenCaptureKit (27) captures what the person picks, also in the
-background with the `screen-capture` background mode; ReplayKit captures
-the app's own screen in the foreground only. Frames reach Rust as
+ScreenCaptureKit (27) captures what the person picks; a picker offering
+only `SourceKind::Application` presents it for this app's own content
+(`presentForCurrentApplication`). A full-display capture keeps running
+in the background only when the app declares the `screen-capture`
+background mode (`UIBackgroundModes`; App Store review of that key is
+unconfirmed), otherwise the session reports `Paused(Backgrounded)`
+while backgrounded. ReplayKit captures the app's own screen in the
+foreground only. Frames reach Rust as
 retained `CVPixelBuffer`s / `IOSurface`s. `open_preview` renders into an
 `AVSampleBufferDisplayLayer` registered with
 `IstmoRuntime.shared.registerObject(layer)`.

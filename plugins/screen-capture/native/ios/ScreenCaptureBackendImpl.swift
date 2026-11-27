@@ -196,6 +196,13 @@ public final class ScreenCaptureBackendImpl: ScreenCaptureBackend, HandleRelease
         return id
     }
 
+    /// Whether `selector` asks for this app's own content only (a picker
+    /// offering applications and nothing else).
+    static func appOnly(_ selector: ScreenCapture.SourceSelector) -> Bool {
+        if case let .picker(options) = selector { return options.kinds == [.application] }
+        return false
+    }
+
     /// Whether a picker can honour `selector`, under `consent`.
     private static func checkSource(_ selector: ScreenCapture.SourceSelector, consent: ScreenCapture.ConsentConfig,
                                     backend: ScreenCapture.BackendId) throws {
@@ -269,7 +276,8 @@ public final class ScreenCaptureBackendImpl: ScreenCaptureBackend, HandleRelease
         let feed = ScreenCaptureOneShot(backend: backend)
         let source = try await capturer.start(
             ScreenCaptureRequest(pixelFormat: pixelFormat, fps: .native, size: .native,
-                                 queueDepth: Int(ScreenCaptureTables.pool.minDepth), video: true, audio: nil),
+                                 queueDepth: Int(ScreenCaptureTables.pool.minDepth), video: true, audio: nil,
+                                 appOnly: Self.appOnly(request.source)),
             feed: feed)
         let shot = await feed.wait(timeoutNs: 10_000_000_000)
         await capturer.stop()
@@ -347,7 +355,8 @@ public final class ScreenCaptureBackendImpl: ScreenCaptureBackend, HandleRelease
             let request = ScreenCaptureRequest(
                 pixelFormat: backend == .iosSck ? ScreenCaptureFourcc.code(for: chosen.format) : nil,
                 fps: fps, size: config.video.size, queueDepth: Int(depth),
-                video: video != nil || preview != nil, audio: audioRequest)
+                video: video != nil || preview != nil, audio: audioRequest,
+                appOnly: Self.appOnly(config.source))
             let capturer = try Self.capturer(backend)
             let audioOut = audio.map { sender in
                 ScreenCaptureAudioOut(sender: sender, negotiated: ScreenCapture.AudioNegotiated(

@@ -66,8 +66,18 @@ public struct SCStreamError: Error, Sendable {
     public var code: Code
 }
 
+@available(iOS 27.0, macOS 14.0, *)
+public enum SCShareableContentStyle: Int, Sendable {
+    case none = 0
+    case window = 1
+    case display = 2
+    case application = 3
+}
+
 @available(iOS 27.0, macOS 12.3, *)
 open class SCContentFilter: NSObject {
+    @available(iOS 27.0, macOS 14.0, *)
+    open var style: SCShareableContentStyle { .none }
     @available(iOS 27.0, macOS 14.0, *)
     open var contentRect: CGRect { .zero }
     @available(iOS 27.0, macOS 14.0, *)
@@ -127,4 +137,5 @@ open class SCContentSharingPicker: NSObject {
     open func add(_ observer: SCContentSharingPickerObserver) {}
     open func remove(_ observer: SCContentSharingPickerObserver) {}
     open func present() {}
+    open func presentForCurrentApplication() {}
 }

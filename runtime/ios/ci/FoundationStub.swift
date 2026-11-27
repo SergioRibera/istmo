@@ -151,3 +151,8 @@ public final class NotificationCenter {
 public extension DispatchQueue {
     static var main: DispatchQueue { DispatchQueue(label: "main", qos: .userInitiated) }
 }
+
+public final class Bundle {
+    public static let main = Bundle()
+    public func object(forInfoDictionaryKey key: String) -> Any? { nil }
+}

@@ -30,6 +30,9 @@ struct ScreenCaptureRequest {
     var queueDepth: Int
     var video: Bool
     var audio: ScreenCaptureAudioRequest?
+    /// Only this app's own content (a picker asked for applications
+    /// only): ScreenCaptureKit presents its picker for the current app.
+    var appOnly = false
 }
 
 struct ScreenCaptureAudioRequest {
@@ -188,13 +191,15 @@ final class SckCapturer: NSObject, ScreenCapturer, SCStreamOutput, SCStreamDeleg
     private var picks: UInt64 = 0
     /// Longest a person may take to pick, as on macOS.
     private static let pickTimeoutNs: UInt64 = 120_000_000_000
+    /// App life-cycle observers, removed on stop.
+    private var observers: [NSObjectProtocol] = []
 
     override init() {
         super.init()
     }
 
     func start(_ request: ScreenCaptureRequest, feed: ScreenCaptureFeed) async throws -> ScreenCapture.Source {
-        let filter = try await choose()
+        let filter = try await choose(appOnly: request.appOnly)
         let stream = SCStream(filter: filter, configuration: configuration(request, filter: filter), delegate: self)
         if request.video {
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
@@ -217,10 +222,11 @@ final class SckCapturer: NSObject, ScreenCapturer, SCStreamOutput, SCStreamDeleg
                 }
             }
         }
+        observeBackground(feed: feed, style: filter.style)
         let scale = Double(filter.pointPixelScale)
         let rect = filter.contentRect
         return ScreenCapture.Source(
-            id: ScreenCapture.SourceId(backend: backend, value: "picked"), kind: .monitor, name: "picked content",
+            id: ScreenCapture.SourceId(backend: backend, value: "picked"), kind: Self.kind(of: filter), name: "picked content",
             appId: nil, pid: nil,
             geometry: ScreenCaptureFrameInfo.covering(rect, scale: 1),
             physicalSize: ScreenCaptureFrameInfo.covering(rect, scale: scale).map {
@@ -232,12 +238,45 @@ final class SckCapturer: NSObject, ScreenCapturer, SCStreamOutput, SCStreamDeleg
             make: nil, model: nil, connector: nil, description: nil, capture: .pickerOnly([backend]))
     }
 
-    /// Show the shared picker; the person's choice comes back through the
-    /// observer methods below.
+    /// What the person shared, by the filter's style: the display, or an
+    /// app's content (iOS has no windows to pick).
+    private static func kind(of filter: SCContentFilter) -> ScreenCapture.SourceKind {
+        switch filter.style {
+        case .application, .window: return .application
+        case .display, .none: return .monitor
+        @unknown default: return .monitor
+        }
+    }
+
+    /// Whether the app declares the `screen-capture` background mode
+    /// (`UIBackgroundModes`), which keeps a full-display capture running
+    /// in the background.
+    private static var capturesInBackground: Bool {
+        let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String]
+        return modes?.contains("screen-capture") ?? false
+    }
+
+    /// Report `paused(.backgrounded)` while the app is in the background,
+    /// unless the capture keeps running there (the display, with the
+    /// `screen-capture` background mode); `resumed` back in the foreground.
+    private func observeBackground(feed: ScreenCaptureFeed, style: SCShareableContentStyle) {
+        if style == .display, Self.capturesInBackground { return }
+        let center = NotificationCenter.default
+        let background = center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil
+        ) { [weak feed] _ in feed?.paused(.backgrounded) }
+        let foreground = center.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil
+        ) { [weak feed] _ in feed?.resumed() }
+        lock.withLock { observers = [background, foreground] }
+    }
+
+    /// Show the shared picker (for this app's content only with `appOnly`);
+    /// the person's choice comes back through the observer methods below.
     /// The pick ends with the person's choice, after `pickTimeoutNs`, or
     /// when the calling task is cancelled (all `consentRequired`); a new
     /// pick on this capturer ends the one before it.
-    private func choose() async throws -> SCContentFilter {
+    private func choose(appOnly: Bool) async throws -> SCContentFilter {
         let id: UInt64 = lock.withLock {
             picks += 1
             return picks
@@ -257,7 +296,11 @@ final class SckCapturer: NSObject, ScreenCapturer, SCStreamOutput, SCStreamDeleg
                     let picker = SCContentSharingPicker.shared
                     picker.add(self)
                     picker.isActive = true
-                    picker.present()
+                    if appOnly {
+                        picker.presentForCurrentApplication()
+                    } else {
+                        picker.present()
+                    }
                 }
                 Task { [weak self] in
                     try? await Task.sleep(nanoseconds: Self.pickTimeoutNs)
@@ -338,6 +381,13 @@ final class SckCapturer: NSObject, ScreenCapturer, SCStreamOutput, SCStreamDeleg
     }
 
     func stop() async {
+        let center = NotificationCenter.default
+        for observer in lock.withLock({ () -> [NSObjectProtocol] in
+            defer { observers = [] }
+            return observers
+        }) {
+            center.removeObserver(observer)
+        }
         guard let stream = lock.withLock({ () -> SCStream? in
             defer { self.stream = nil; self.feed = nil }
             return self.stream
