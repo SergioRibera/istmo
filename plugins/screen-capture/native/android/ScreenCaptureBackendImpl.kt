@@ -26,6 +26,7 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -698,19 +699,38 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
                 image.close()
             }
         }, handler)
-        val virtualDisplay = handler.call {
-            projection.projection.createVirtualDisplay(
-                ProjectionSession.VIRTUAL_DISPLAY_NAME, display.width, display.height, display.densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader.surface, null, handler,
-            )
+        val virtualDisplay = try {
+            handler.call {
+                projection.projection.createVirtualDisplay(
+                    ProjectionSession.VIRTUAL_DISPLAY_NAME, display.width, display.height, display.densityDpi,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader.surface, null, handler,
+                )
+            }
+        } catch (e: SecurityException) {
+            handler.post { reader.close() }
+            fail(CaptureError.ConsentRevoked)
+        } catch (e: RuntimeException) {
+            handler.post { reader.close() }
+            fail(CaptureError.Protocol(BackendDetail(PROJECTION, "createVirtualDisplay", e.toString())))
+        }
+        if (virtualDisplay == null) {
+            // Nothing will render: fail now rather than after the timeout.
+            handler.post { reader.close() }
+            fail(CaptureError.Protocol(BackendDetail(PROJECTION, "createVirtualDisplay", "returned null")))
         }
         return try {
             withTimeout(SHOT_TIMEOUT_MS) { result.await() }
         } catch (e: TimeoutCancellationException) {
             fail(CaptureError.Protocol(BackendDetail(PROJECTION, "screenshot_pixels", "no frame within 5 s")))
+        } catch (e: BackendException) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RuntimeException) {
+            fail(CaptureError.Protocol(BackendDetail(PROJECTION, "screenshot_pixels", e.toString())))
         } finally {
             handler.post {
-                virtualDisplay?.release()
+                virtualDisplay.release()
                 reader.close()
             }
         }
