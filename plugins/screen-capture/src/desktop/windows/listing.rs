@@ -39,7 +39,10 @@ use windows::Win32::Devices::Display::{
     DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
     QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
 };
-use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HWND, LPARAM, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HWND, LPARAM, POINT, RECT, WIN32_ERROR,
+    WPARAM,
+};
 use windows::Win32::Graphics::Dwm::{
     DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
 };
@@ -219,39 +222,76 @@ const fn edid_ids_valid(flags: u32) -> bool {
     flags & EDID_IDS_VALID != 0
 }
 
+/// Attempts at reading the display paths while the topology changes
+/// under the call (exactly when the watcher relists).
+const PATH_QUERIES: u32 = 4;
+
+/// What to do after one `QueryDisplayConfig`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Queried {
+    Done,
+    /// The topology grew between the size query and the call: size again.
+    Again,
+    Failed,
+}
+
+fn queried(status: WIN32_ERROR) -> Queried {
+    if status == ERROR_SUCCESS {
+        Queried::Done
+    } else if status == ERROR_INSUFFICIENT_BUFFER {
+        Queried::Again
+    } else {
+        Queried::Failed
+    }
+}
+
+/// The active display paths.
+fn active_paths() -> Option<Vec<DISPLAYCONFIG_PATH_INFO>> {
+    for _ in 0..PATH_QUERIES {
+        let mut paths_len = 0_u32;
+        let mut modes_len = 0_u32;
+        // SAFETY: both out pointers are live locals.
+        let sized = unsafe {
+            GetDisplayConfigBufferSizes(
+                QDC_ONLY_ACTIVE_PATHS,
+                &raw mut paths_len,
+                &raw mut modes_len,
+            )
+        };
+        if sized != ERROR_SUCCESS {
+            return None;
+        }
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); paths_len as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); modes_len as usize];
+        // SAFETY: the arrays hold `paths_len` / `modes_len` elements, the
+        // counts QueryDisplayConfig may write and then updates.
+        let status = unsafe {
+            QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &raw mut paths_len,
+                paths.as_mut_ptr(),
+                &raw mut modes_len,
+                modes.as_mut_ptr(),
+                None,
+            )
+        };
+        match queried(status) {
+            Queried::Done => {
+                paths.truncate(paths_len as usize);
+                return Some(paths);
+            }
+            Queried::Again => {}
+            Queried::Failed => return None,
+        }
+    }
+    None
+}
+
 /// Target names per GDI device name, for every active path.
 fn target_names() -> Vec<(String, TargetName)> {
-    let mut paths_len = 0_u32;
-    let mut modes_len = 0_u32;
-    // SAFETY: both out pointers are live locals.
-    let sized = unsafe {
-        GetDisplayConfigBufferSizes(
-            QDC_ONLY_ACTIVE_PATHS,
-            &raw mut paths_len,
-            &raw mut modes_len,
-        )
-    };
-    if sized != ERROR_SUCCESS {
+    let Some(paths) = active_paths() else {
         return Vec::new();
-    }
-    let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); paths_len as usize];
-    let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); modes_len as usize];
-    // SAFETY: the arrays hold `paths_len` / `modes_len` elements, the
-    // counts QueryDisplayConfig may write and then updates.
-    let queried = unsafe {
-        QueryDisplayConfig(
-            QDC_ONLY_ACTIVE_PATHS,
-            &raw mut paths_len,
-            paths.as_mut_ptr(),
-            &raw mut modes_len,
-            modes.as_mut_ptr(),
-            None,
-        )
     };
-    if queried != ERROR_SUCCESS {
-        return Vec::new();
-    }
-    paths.truncate(paths_len as usize);
     paths
         .iter()
         .filter_map(|path| {
@@ -659,6 +699,16 @@ pub(crate) fn under_cursor(backend: BackendId, scanout: bool) -> Result<Source, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_topology_change_mid_query_asks_again() {
+        assert_eq!(queried(ERROR_SUCCESS), Queried::Done);
+        assert_eq!(queried(ERROR_INSUFFICIENT_BUFFER), Queried::Again);
+        assert_eq!(
+            queried(windows::Win32::Foundation::ERROR_INVALID_PARAMETER),
+            Queried::Failed
+        );
+    }
 
     #[test]
     fn edid_ids_are_bit_two_of_the_target_flags() {
