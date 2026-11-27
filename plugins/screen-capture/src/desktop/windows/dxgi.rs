@@ -30,7 +30,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use istmo_core::NativeBuffer;
-use windows::Win32::Foundation::{E_ACCESSDENIED, RECT};
+use windows::Win32::Foundation::{E_ACCESSDENIED, E_INVALIDARG, RECT};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
@@ -38,10 +38,10 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_MODE_ROTATION_ROTATE180, DXGI_MODE_ROTATION_ROTATE270,
 };
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_SESSION_DISCONNECTED, DXGI_ERROR_UNSUPPORTED,
-    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_MOVE_RECT,
-    DXGI_OUTDUPL_POINTER_SHAPE_INFO, IDXGIOutput1, IDXGIOutput5, IDXGIOutputDuplication,
-    IDXGIResource,
+    DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_NOT_CURRENTLY_AVAILABLE, DXGI_ERROR_SESSION_DISCONNECTED,
+    DXGI_ERROR_UNSUPPORTED, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO,
+    DXGI_OUTDUPL_MOVE_RECT, DXGI_OUTDUPL_POINTER_SHAPE_INFO, IDXGIOutput1, IDXGIOutput5,
+    IDXGIOutputDuplication, IDXGIResource,
 };
 use windows::core::Interface as _;
 
@@ -240,15 +240,62 @@ fn listing_of() -> SourceList {
 enum DupError {
     /// The secure desktop or another session owns the screen: retry.
     NotNow(CaptureError),
+    /// The output is duplicated elsewhere (this process, or the
+    /// four-process limit): retry a bounded number of times.
+    Busy(CaptureError),
     /// The monitor is gone.
     Lost,
     Fatal(CaptureError),
 }
 
+/// What a failed `DuplicateOutput[1]` means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DupFailure {
+    /// Secure desktop or another session: wait it out.
+    NotNow,
+    /// `E_INVALIDARG`: this process already duplicates the output (a
+    /// screenshot during a stream, or a lost duplication still alive).
+    OwnBusy,
+    /// `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE`: too many processes
+    /// duplicate it.
+    OthersBusy,
+    Fatal,
+}
+
+fn classify(code: windows_core::HRESULT) -> DupFailure {
+    if code == E_ACCESSDENIED
+        || code == DXGI_ERROR_UNSUPPORTED
+        || code == DXGI_ERROR_SESSION_DISCONNECTED
+    {
+        DupFailure::NotNow
+    } else if code == E_INVALIDARG {
+        DupFailure::OwnBusy
+    } else if code == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE {
+        DupFailure::OthersBusy
+    } else {
+        DupFailure::Fatal
+    }
+}
+
+fn dup_error(err: &windows_core::Error) -> DupError {
+    match classify(err.code()) {
+        DupFailure::NotNow => DupError::NotNow(hr("DuplicateOutput", err)),
+        DupFailure::OwnBusy => DupError::Busy(dxgi_err(
+            "DuplicateOutput",
+            "the output is already duplicated in this process",
+        )),
+        DupFailure::OthersBusy => DupError::Busy(dxgi_err(
+            "DuplicateOutput",
+            "too many processes duplicate this output",
+        )),
+        DupFailure::Fatal => DupError::Fatal(hr("DuplicateOutput", err)),
+    }
+}
+
 impl From<DupError> for CaptureError {
     fn from(err: DupError) -> Self {
         match err {
-            DupError::NotNow(err) | DupError::Fatal(err) => err,
+            DupError::NotNow(err) | DupError::Busy(err) | DupError::Fatal(err) => err,
             DupError::Lost => Self::SourceLost,
         }
     }
@@ -257,7 +304,9 @@ impl From<DupError> for CaptureError {
 /// A live duplication of one output.
 struct Dup {
     gpu: Gpu,
-    output: IDXGIOutputDuplication,
+    /// `None` once released: a lost duplication must be released
+    /// before the output can be duplicated again.
+    output: Option<IDXGIOutputDuplication>,
     size: Size,
     format: PixelFormat,
     orientation: Orientation,
@@ -302,17 +351,7 @@ impl Dup {
             // SAFETY: the device is on the output's adapter.
             unsafe { output1.DuplicateOutput(&gpu.device) }
         };
-        let dup = duplicated.map_err(|err| {
-            let code = err.code();
-            if code == E_ACCESSDENIED
-                || code == DXGI_ERROR_UNSUPPORTED
-                || code == DXGI_ERROR_SESSION_DISCONNECTED
-            {
-                DupError::NotNow(hr("DuplicateOutput", &err))
-            } else {
-                DupError::Fatal(hr("DuplicateOutput", &err))
-            }
-        })?;
+        let dup = duplicated.map_err(|err| dup_error(&err))?;
         // SAFETY: `dup` is live.
         let desc: DXGI_OUTDUPL_DESC = unsafe { dup.GetDesc() };
         let format = d3d::pixel_format(desc.ModeDesc.Format).ok_or_else(|| {
@@ -329,26 +368,32 @@ impl Dup {
         }
         Ok(Self {
             gpu,
-            output: dup,
+            output: Some(dup),
             size: Size::new(desc.ModeDesc.Width, desc.ModeDesc.Height),
             format,
             orientation: orientation_of(desc.Rotation),
         })
     }
 
+    /// Release the duplication (after `ACCESS_LOST`); `acquire` then
+    /// answers `ACCESS_LOST` until a new one replaces it.
+    fn release(&mut self) {
+        self.output = None;
+    }
+
     /// The next frame, or `None` on timeout.
     fn acquire(&self, timeout: Duration) -> Result<Option<Acquired>, windows_core::Error> {
+        let Some(output) = &self.output else {
+            return Err(DXGI_ERROR_ACCESS_LOST.into());
+        };
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource: Option<IDXGIResource> = None;
         let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
         // SAFETY: both out values are live locals; the previous frame was
         // released (every `Acquired` releases on drop).
-        match unsafe {
-            self.output
-                .AcquireNextFrame(ms, &raw mut info, &raw mut resource)
-        } {
+        match unsafe { output.AcquireNextFrame(ms, &raw mut info, &raw mut resource) } {
             Ok(()) => Ok(Some(Acquired {
-                dup: self.output.clone(),
+                dup: output.clone(),
                 info,
                 resource,
             })),
@@ -924,6 +969,11 @@ impl Worker {
     /// Re-create the duplication after `ACCESS_LOST`: pauses while the
     /// secure desktop is up, bumps the pool generation and renegotiates.
     fn recreate(&mut self) -> Result<(), CaptureError> {
+        // DXGI: "the application must release the IDXGIOutputDuplication
+        // interface and create a new one"; a live one makes
+        // `DuplicateOutput` answer `E_INVALIDARG`.
+        self.last = None;
+        self.dup.release();
         let mut paused = false;
         let mut attempts = 0_u32;
         let dup = loop {
@@ -941,7 +991,7 @@ impl Worker {
                     }
                 }
                 Err(DupError::Lost) => return Err(CaptureError::SourceLost),
-                Err(DupError::Fatal(err)) => {
+                Err(DupError::Busy(err) | DupError::Fatal(err)) => {
                     attempts += 1;
                     if attempts >= RETRIES {
                         return Err(err);
@@ -1211,6 +1261,23 @@ mod tests {
             orientation_of(DXGI_MODE_ROTATION_ROTATE270).rotation,
             Rotation::R270
         );
+    }
+
+    #[test]
+    fn duplication_failures_are_told_apart() {
+        assert_eq!(classify(E_ACCESSDENIED), DupFailure::NotNow);
+        assert_eq!(
+            classify(DXGI_ERROR_SESSION_DISCONNECTED),
+            DupFailure::NotNow
+        );
+        assert_eq!(classify(E_INVALIDARG), DupFailure::OwnBusy);
+        assert_eq!(
+            classify(DXGI_ERROR_NOT_CURRENTLY_AVAILABLE),
+            DupFailure::OthersBusy
+        );
+        assert_eq!(classify(DXGI_ERROR_ACCESS_LOST), DupFailure::Fatal);
+        let busy = dup_error(&E_INVALIDARG.into());
+        assert!(matches!(busy, DupError::Busy(_)));
     }
 
     #[test]
