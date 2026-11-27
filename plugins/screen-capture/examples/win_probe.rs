@@ -425,6 +425,94 @@ mod probe {
         block(probe.client.open_session(&probe.runtime, config, policy))
     }
 
+    /// A checksum of a texture's pixels, read back through a staging
+    /// texture on the frame's own device.
+    #[allow(unsafe_code, reason = "a D3D11 staging readback")]
+    fn texture_sum(frame: &D3d11Frame) -> Option<u64> {
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
+            D3D11_USAGE_STAGING,
+        };
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        // SAFETY: a live texture; `desc` is a writable out value.
+        unsafe { frame.texture().GetDesc(&raw mut desc) };
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.BindFlags = 0;
+        desc.MiscFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0.cast_unsigned();
+        let mut staging = None;
+        // SAFETY: `desc` and the out pointer are live locals.
+        unsafe {
+            frame
+                .device()
+                .CreateTexture2D(&raw const desc, None, Some(&raw mut staging))
+        }
+        .ok()?;
+        let staging = staging?;
+        // SAFETY: the device is live.
+        let context = unsafe { frame.device().GetImmediateContext() }.ok()?;
+        // SAFETY: same size and format, same device.
+        unsafe { context.CopyResource(&staging, frame.texture()) };
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        // SAFETY: a CPU-readable staging texture; `mapped` is live.
+        unsafe { context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&raw mut mapped)) }.ok()?;
+        let len = usize::try_from(mapped.RowPitch).ok()? * usize::try_from(desc.Height).ok()?;
+        let sum = (!mapped.pData.is_null()).then(|| {
+            // SAFETY: the mapping holds `Height` rows of `RowPitch` bytes
+            // until Unmap below.
+            let bytes = unsafe { std::slice::from_raw_parts(mapped.pData.cast::<u8>(), len) };
+            bytes.iter().map(|b| u64::from(*b)).sum()
+        });
+        // SAFETY: unmaps what was mapped above; `bytes` is gone.
+        unsafe { context.Unmap(&staging, 0) };
+        sum
+    }
+
+    /// WGC discards its frames on `Close`: does a zero-copy frame the
+    /// consumer still holds keep its pixels once the session closed?
+    fn held_across_close(probe: &Probe) {
+        let report = &probe.report;
+        let check = "windows-wgc frame held across close";
+        let config = SessionConfig::default()
+            .backend(fixed(BackendId::WindowsWgc))
+            .fps(FrameRate::Native);
+        let session = match open(probe, config, SinkPolicy::latest()) {
+            Ok(session) => session,
+            Err(err) => return report.fail(check, err),
+        };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let frame = loop {
+            if let Some(frame) = session.video().try_recv() {
+                break Some(frame);
+            }
+            if Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let Some(frame) = frame else {
+            return report.skip(check, "no frame in 3 s");
+        };
+        let Some(texture) = frame.buffer.downcast_ref::<D3d11Frame>() else {
+            return report.skip(check, "not a D3D11 frame");
+        };
+        let before = texture_sum(texture);
+        let closed_at = Instant::now();
+        let closed = block(session.close());
+        let waited = closed_at.elapsed();
+        let after = texture_sum(texture);
+        let detail = format!(
+            "close {:?} after {} ms (the plugin waits up to 500 ms for held frames), checksum before {before:?} after {after:?}",
+            closed.err(),
+            waited.as_millis()
+        );
+        if before.is_some() && before == after {
+            report.pass(check, detail);
+        } else {
+            report.warn(check, detail);
+        }
+    }
+
     fn non_black(bytes: &[u8], stride: u32, width: u32, height: u32) -> f64 {
         let mut lit = 0_u32;
         let mut seen = 0_u32;
@@ -603,6 +691,10 @@ mod probe {
                 }
                 Err(err) => report.fail(&format!("{name} screenshot as a D3D11 texture"), err),
             }
+        }
+
+        if backend == BackendId::WindowsWgc {
+            held_across_close(probe);
         }
 
         // A 5 s stream with the backend's own (copy-free where it can) format.

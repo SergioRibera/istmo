@@ -190,8 +190,11 @@ subscriber, then streams these events:
   (or a `D3d11Texture` tier) frames are the frame pool's own textures,
   no copy: `frame.buffer.downcast_ref::<D3d11Frame>()` gives the
   `ID3D11Texture2D` and the plugin's device (multithread-protected, so
-  it may be used from the consumer's threads). Those textures cannot be
-  shared with another device; for that, pass
+  it may be used from the consumer's threads). WGC discards its frames
+  when the source resizes and when the session ends: the plugin waits
+  up to 500 ms for such frames to be dropped first, so drop them
+  promptly. Those textures cannot be shared with another device; for
+  that, pass
   `GpuPreference::Same(GpuIdentity::Luid(..))` and a tier allowing
   `CopyStage::CrossDevice`: each frame is then copied into a texture
   with an NT handle (`D3d11Frame::shared_handle`, for

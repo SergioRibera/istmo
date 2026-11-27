@@ -105,6 +105,10 @@ const START_WAIT: Duration = Duration::from_secs(5);
 const SCREENSHOT_WAIT: Duration = Duration::from_secs(2);
 /// How long the GPU may take to finish a copy.
 const COPY_WAIT: Duration = Duration::from_millis(100);
+/// How long a resize or the end of a session waits for the consumer to
+/// drop the frame pool's own textures: WGC discards every frame on
+/// `Recreate` and `Close`.
+const RELEASE_WAIT: Duration = Duration::from_millis(500);
 /// A screenshot has one frame: it waits longer before giving up.
 const SHOT_COPY_WAIT: Duration = Duration::from_secs(1);
 /// How often a window's minimised state is read.
@@ -1144,12 +1148,34 @@ impl Worker {
             }
         }
         // Close the capture (and with it the border) before the thread
-        // ends; frames still held stay valid until dropped.
+        // ends, once the consumer let go of the pool's textures (or the
+        // wait ran out: WGC does not say what a held frame shows then).
+        self.settle();
         drop(self.capture.take());
+    }
+
+    /// Wait, at most [`RELEASE_WAIT`], until no zero-copy frame is held.
+    /// `false` when some still were.
+    fn settle(&self) -> bool {
+        if self.path != Path::Texture {
+            return true;
+        }
+        let released = self.pool.released();
+        let deadline = Instant::now() + RELEASE_WAIT;
+        while (0..u32::from(self.pool_depth)).any(|slot| self.pool.is_held(slot)) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                tracing::debug!("wgc frames still held across Recreate / Close");
+                return false;
+            }
+            let _released = released.recv_timeout(left.min(Duration::from_millis(10)));
+        }
+        true
     }
 
     /// The content size changed: new buffers, a new generation.
     fn resize(&mut self, size: Size) -> Result<(), CaptureError> {
+        self.settle();
         if let Some(capture) = self.capture.as_mut() {
             capture.recreate(size)?;
         }
