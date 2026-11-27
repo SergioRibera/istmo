@@ -206,8 +206,11 @@ subscriber, then streams these events:
   something. The secure desktop pauses the session
   (`Paused(SecureDesktop)`).
 - **GDI** is the CPU fallback (`BitBlt`, `PrintWindow` for windows).
-  Awaiting a GDI screenshot of one of the app's own windows on that
-  window's thread deadlocks (`PrintWindow` sends it `WM_PRINT`).
+  `PrintWindow` waits for the window's thread to handle `WM_PRINT`, so
+  GDI refuses the app's own windows (that thread may be the one awaiting
+  the capture; use WGC for them), skips windows that stopped answering,
+  and gives other windows 500 ms per frame: a screenshot then fails, a
+  stream drops the frame and fails after 20 misses in a row.
 - No fence or keyed mutex travels with a frame: the plugin pushes it
   once the GPU finished writing (`SyncKind::Ready`), and dropping it
   means every read of it is done.

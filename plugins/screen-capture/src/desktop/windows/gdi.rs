@@ -27,9 +27,10 @@ use windows::Win32::Graphics::Gdi::{
     SRCCOPY, SelectObject,
 };
 use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::WindowsAndMessaging::{
     CURSOR_SHOWING, CURSORINFO, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo, GetWindowRect,
-    HICON, ICONINFO, PW_RENDERFULLCONTENT,
+    GetWindowThreadProcessId, HICON, ICONINFO, IsHungAppWindow, PW_RENDERFULLCONTENT,
 };
 
 use crate::pool::{HoldError, PoolAccounting};
@@ -71,6 +72,12 @@ const IDLE_WAIT: Duration = Duration::from_millis(100);
 const SOURCE_CHECK: Duration = Duration::from_millis(250);
 /// How long dropping a session waits for its thread.
 const JOIN_WAIT: Duration = Duration::from_secs(2);
+/// How long `PrintWindow` of another process's window may take: its
+/// owner thread draws it, and may be busy or hung.
+const PRINT_WAIT: Duration = Duration::from_millis(500);
+/// Frames in a row a window may miss (hung, or slower than
+/// [`PRINT_WAIT`]) before its stream fails.
+const PRINT_MISSES: u32 = 20;
 
 const FORMAT: PixelFormat = PixelFormat::Bgrx8;
 const CURSOR_MODES: [CursorMode; 3] = [
@@ -393,6 +400,107 @@ fn draw(area: Area, dib: &Dib, mode: CursorMode) -> Result<Option<CursorState>, 
     Ok(state)
 }
 
+/// How a window may be drawn from this thread: `PrintWindow` waits for
+/// the window's owner thread to handle `WM_PRINT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrintRoute {
+    /// This thread owns the window: the message is handled inline.
+    Direct,
+    /// Another process's responsive window: drawn on a helper thread,
+    /// bounded by [`PRINT_WAIT`].
+    Helper,
+    /// Another thread of this process owns the window: it may be the
+    /// very thread waiting for this capture (a deadlock), so refused.
+    OwnProcess,
+    /// The owner is not answering messages (`IsHungAppWindow`).
+    Hung,
+}
+
+const fn print_route(own_process: bool, own_thread: bool, hung: bool) -> PrintRoute {
+    if own_process {
+        if own_thread {
+            PrintRoute::Direct
+        } else {
+            PrintRoute::OwnProcess
+        }
+    } else if hung {
+        PrintRoute::Hung
+    } else {
+        PrintRoute::Helper
+    }
+}
+
+/// The route to draw `hwnd` from the calling thread.
+fn route_of(hwnd: isize) -> PrintRoute {
+    let window = listing::hwnd(hwnd);
+    let mut pid = 0_u32;
+    // SAFETY: `pid` is a live out value; a stale handle answers 0.
+    let thread = unsafe { GetWindowThreadProcessId(window, Some(&raw mut pid)) };
+    // SAFETY: no arguments.
+    let own_pid = unsafe { GetCurrentProcessId() };
+    // SAFETY: no arguments.
+    let own_thread = unsafe { GetCurrentThreadId() };
+    // SAFETY: any handle value is accepted.
+    let hung = unsafe { IsHungAppWindow(window) }.as_bool();
+    print_route(pid == own_pid, thread == own_thread, hung)
+}
+
+fn own_window_refused() -> CaptureError {
+    gdi_err(
+        "PrintWindow",
+        "a window of this process can only be drawn by GDI from its own thread",
+    )
+}
+
+/// What a bounded grab gave.
+enum Drawn {
+    Done(Option<CursorState>),
+    /// The window did not draw in time (or is hung): no frame.
+    Missed,
+}
+
+/// [`draw`], with `PrintWindow` of another process's window on a helper
+/// thread bounded by [`PRINT_WAIT`]. `in_flight` is set while a helper
+/// runs; a helper that overran is never joined, and no new one starts
+/// while it is still stuck. The DIB a stuck helper draws into is its own
+/// `Arc`, never handed out again by the caller.
+fn draw_bounded(
+    area: Area,
+    dib: &Arc<Dib>,
+    mode: CursorMode,
+    in_flight: &Arc<AtomicBool>,
+) -> Result<Drawn, CaptureError> {
+    let Area::Window(hwnd, _) = area else {
+        return draw(area, dib, mode).map(Drawn::Done);
+    };
+    match route_of(hwnd) {
+        PrintRoute::Direct => draw(area, dib, mode).map(Drawn::Done),
+        PrintRoute::OwnProcess => Err(own_window_refused()),
+        PrintRoute::Hung => Ok(Drawn::Missed),
+        PrintRoute::Helper => {
+            if in_flight.swap(true, Ordering::SeqCst) {
+                return Ok(Drawn::Missed);
+            }
+            let (tx, rx) = flume::bounded(1);
+            let target = Arc::clone(dib);
+            let flag = Arc::clone(in_flight);
+            let spawned = std::thread::Builder::new()
+                .name("istmo-screen-capture-gdi-print".to_owned())
+                .spawn(move || {
+                    let _pixels = PhysicalPixels::enter();
+                    let _sent = tx.send(draw(area, &target, mode));
+                    flag.store(false, Ordering::SeqCst);
+                });
+            if let Err(err) = spawned {
+                in_flight.store(false, Ordering::SeqCst);
+                return Err(gdi_err("spawn print thread", err));
+            }
+            rx.recv_timeout(PRINT_WAIT)
+                .map_or(Ok(Drawn::Missed), |drawn| drawn.map(Drawn::Done))
+        }
+    }
+}
+
 /// The visible frame of a window grab (without the invisible resize
 /// borders), relative to the window rectangle.
 fn content_rect(area: Area, size: Size) -> Rect {
@@ -581,8 +689,14 @@ impl Backend for GdiBackend {
         let mut first = None;
         for source in sources {
             let area = area_of(source)?;
-            let dib = Dib::new(area.rect().size())?;
-            let cursor = draw(area, &dib, mode)?;
+            let dib = Arc::new(Dib::new(area.rect().size())?);
+            let in_flight = Arc::new(AtomicBool::new(false));
+            let Drawn::Done(cursor) = draw_bounded(area, &dib, mode, &in_flight)? else {
+                return Err(gdi_err(
+                    "PrintWindow",
+                    "the window did not draw in time (busy or not responding)",
+                ));
+            };
             let size = dib.size;
             let mut meta = frame_meta(
                 source,
@@ -598,7 +712,7 @@ impl Backend for GdiBackend {
             }
             frames.push(Captured {
                 meta,
-                buffer: istmo_core::NativeBuffer::from_bytes(dib),
+                buffer: istmo_core::NativeBuffer::from_bytes(ArcDib(dib)),
                 source: source.clone(),
             });
         }
@@ -617,6 +731,12 @@ impl Backend for GdiBackend {
         let tier = choose_tier(&plan.formats)?;
         let mode = select::cursor_mode(plan.cursor, &CURSOR_MODES);
         let area = area_of(&plan.source)?;
+        // The capture thread never owns a window.
+        if let Area::Window(hwnd, _) = area
+            && route_of(hwnd) == PrintRoute::OwnProcess
+        {
+            return Err(own_window_refused());
+        }
         let size = area.rect().size();
         let depth = plan.pool_depth.max(2);
         let mut negotiated = negotiated(
@@ -639,6 +759,8 @@ impl Backend for GdiBackend {
             exhaustion: plan.exhaustion,
             tier,
             area,
+            printing: Arc::new(AtomicBool::new(false)),
+            missed: 0,
         };
         let (done_tx, done) = flume::bounded(1);
         let thread = std::thread::Builder::new()
@@ -735,11 +857,15 @@ struct Worker {
     shared: Arc<Shared>,
     pool: PoolAccounting,
     /// One DIB per slot, all of the current size.
-    slots: Vec<Arc<Dib>>,
+    slots: Vec<Option<Arc<Dib>>>,
     pool_depth: u8,
     exhaustion: Exhaustion,
     tier: u8,
     area: Area,
+    /// A `PrintWindow` helper is running.
+    printing: Arc<AtomicBool>,
+    /// Frames missed in a row (window hung or slow).
+    missed: u32,
 }
 
 impl Worker {
@@ -833,18 +959,25 @@ impl Worker {
     fn slot_dib(&mut self, slot: u32) -> Result<Arc<Dib>, CaptureError> {
         let size = self.area.rect().size();
         let index = usize::try_from(slot).unwrap_or(usize::MAX);
-        if let Some(dib) = self.slots.get(index)
+        if let Some(Some(dib)) = self.slots.get(index)
             && dib.size == size
         {
             return Ok(Arc::clone(dib));
         }
         let dib = Arc::new(Dib::new(size)?);
-        if index < self.slots.len() {
-            self.slots[index] = Arc::clone(&dib);
-        } else {
-            self.slots.push(Arc::clone(&dib));
+        if self.slots.len() <= index {
+            self.slots.resize_with(index + 1, || None);
         }
+        self.slots[index] = Some(Arc::clone(&dib));
         Ok(dib)
+    }
+
+    /// Drop the DIB of `slot`, so the next frame there gets a new one.
+    fn forget_slot(&mut self, slot: u32) {
+        let index = usize::try_from(slot).unwrap_or(usize::MAX);
+        if let Some(dib) = self.slots.get_mut(index) {
+            *dib = None;
+        }
     }
 
     fn capture_one(&mut self, skipped: &mut u32) -> Result<Delivery, CaptureError> {
@@ -879,7 +1012,27 @@ impl Worker {
             Some(lease) => self.slot_dib(lease.identity().slot)?,
             None => Arc::new(Dib::new(self.area.rect().size())?),
         };
-        let cursor = draw(self.area, &dib, mode)?;
+        let cursor = match draw_bounded(self.area, &dib, mode, &self.printing)? {
+            Drawn::Done(cursor) => {
+                self.missed = 0;
+                cursor
+            }
+            Drawn::Missed => {
+                // A helper may still draw into this DIB: never reuse it.
+                if let Some(lease) = &lease {
+                    self.forget_slot(lease.identity().slot);
+                }
+                self.missed += 1;
+                *skipped = skipped.saturating_add(1);
+                if self.missed >= PRINT_MISSES {
+                    return Err(gdi_err(
+                        "PrintWindow",
+                        "the window stopped drawing (busy or not responding)",
+                    ));
+                }
+                return Ok(Delivery::Dropped);
+            }
+        };
         let mut meta = frame_meta(
             &self.source,
             facts(dib.size, dib.stride(), cursor, self.source.flags.protected),
@@ -918,6 +1071,15 @@ impl AsRef<[u8]> for ArcDib {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_are_drawn_only_where_printwindow_cannot_block_forever() {
+        assert_eq!(print_route(true, true, false), PrintRoute::Direct);
+        assert_eq!(print_route(true, false, false), PrintRoute::OwnProcess);
+        assert_eq!(print_route(true, false, true), PrintRoute::OwnProcess);
+        assert_eq!(print_route(false, false, false), PrintRoute::Helper);
+        assert_eq!(print_route(false, false, true), PrintRoute::Hung);
+    }
 
     #[test]
     fn a_screenshot_of_the_primary_monitor_has_pixels() {
