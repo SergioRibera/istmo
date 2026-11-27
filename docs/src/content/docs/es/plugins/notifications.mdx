@@ -241,6 +241,57 @@ no `with_app_id`, si no el nombre del ejecutable.
   levanta una ventana: devuelve el token de activación XDG que envió el
   servidor o el portal, para que el compositor le dé el foco.
 
+### Web
+
+`WebNotifications` muestra a través del service worker del plugin cuando
+hay uno activo (botones, imágenes, toques con la página cerrada, lista de
+entregadas con `getNotifications()`), y con `new Notification()` en la
+página si no (sin botones ni toques con la página cerrada). Chrome en
+Android rechaza las notificaciones de página: ahí el service worker hace
+falta incluso para mostrar, y sin él `show` falla con
+`Unsupported(Show)`. Firefox y Safari no tienen botones, imágenes ni
+insignias; `capabilities()` sigue lo que tenga el navegador
+(`Notification.maxActions`, `image`, `requireInteraction`, `silent`,
+`renotify`, `timestamp`). La respuesta en línea y las opciones se
+convierten en botones que abren la app con `input_requested`; no hay un
+prompt dentro de la página.
+
+Registrar el service worker:
+
+1. Sirve `istmo-notifications-sw.js` (en el crate bajo `web/`, también
+   `istmo_notifications::web_assets::SERVICE_WORKER_JS`) junto a la
+   página de la app, mismo origen, como `text/javascript`.
+2. Registra el host y llama a `attach` al arrancar:
+
+   ```rust
+   let notifications = WebNotifications::default(); // registra ./istmo-notifications-sw.js
+   // hosts: [NotificationsClient => notifications.clone()]
+   notifications.attach(&runtime);
+   ```
+
+3. Una app con su propio service worker le añade
+   `importScripts("istmo-notifications-sw.js");` y construye el host con
+   `.service_worker(ServiceWorker::Existing)`. El valor por defecto nunca
+   reemplaza el registro de otro script: lo usa, así que ese script debe
+   importar el del plugin.
+4. Pide el permiso desde un manejador de clic: Firefox y Safari solo
+   preguntan durante un gesto del usuario.
+
+El mismo `tag` reemplaza en el sitio; las actualizaciones que avisan
+ponen `renotify`, las silenciosas no (y ponen `silent` donde falta
+`renotify`). Las actualizaciones se agrupan a 4 por segundo. Las
+notificaciones programadas viven en IndexedDB (base de datos
+`istmo-notifications`, formato del store del núcleo) y se disparan con un
+`setTimeout` mientras la página está abierta; las pestañas en segundo
+plano frenan los temporizadores, así que ahí pueden llegar tarde. El
+worker guarda cada toque en IndexedDB y enfoca una ventana de la app o
+abre una; la página vacía la cola al cargar y al recibir el mensaje del
+worker, así que cada toque llega a una sola pestaña, también a la que
+abrió. Los bytes de imagen pasan a URLs `data:` para el worker y a URLs
+Blob en la página, revocadas con su última notificación. Una página
+cargada después reconstruye su tabla a partir de las notificaciones que
+siguen en pantalla, sin sus imágenes incrustadas.
+
 ### Estado
 
 El núcleo en Rust y el host de escritorio están listos; los backends de

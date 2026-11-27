@@ -135,6 +135,29 @@ call), `UnavailableNotifications` where there is no backend.
   `SCHEDULE_EXACT_ALARM` and fall back to inexact delivery
   (`ScheduledInfo::exact`).
 
+## Web
+
+`WebNotifications` (on `wasm32`) shows through the plugin's service
+worker, or through page notifications when there is none (no buttons,
+no taps while the page is closed, nothing at all on Chrome for Android).
+To set it up:
+
+1. Serve `web/istmo-notifications-sw.js` from this crate (also
+   `istmo_notifications::web_assets::SERVICE_WORKER_JS`) next to the
+   app's page, same origin, as `text/javascript`.
+2. Register `NotificationsHost::new(WebNotifications::default())`; keep a
+   clone and call `attach(&runtime)` at start, so taps that opened the
+   page and missed reminders are handled before the first call.
+3. With your own service worker, add
+   `importScripts("istmo-notifications-sw.js");` to it and use
+   `WebNotifications::builder().service_worker(ServiceWorker::Existing)`.
+4. Call `request_permission` from a click handler (Firefox and Safari
+   only prompt during a user gesture).
+
+Taps are queued in IndexedDB by the worker and drained by the page, so
+each reaches one tab, also when it opened the app. Scheduled
+notifications are kept in IndexedDB and fire while the page is open.
+
 ## Status
 
 The Rust core (types, validation, render fallbacks, coalescing,

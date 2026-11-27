@@ -236,6 +236,54 @@ else `with_app_id`, else the executable's name.
   a window: it hands back the XDG activation token the server or portal
   sent, so the compositor lets the window take focus.
 
+### Web
+
+`WebNotifications` shows through the plugin's service worker when one is
+active (buttons, pictures, taps while the page is closed, a delivered
+list from `getNotifications()`), and through `new Notification()` on the
+page otherwise (no buttons, no taps while closed). Chrome on Android
+refuses page notifications: there the service worker is required even
+to show, and without it `show` fails with `Unsupported(Show)`. Firefox
+and Safari have no buttons, pictures or badges; `capabilities()` follows
+what the browser has (`Notification.maxActions`, `image`,
+`requireInteraction`, `silent`, `renotify`, `timestamp`). Reply and
+choices become buttons that open the app with `input_requested`; there
+is no in-page prompt.
+
+Register the service worker:
+
+1. Serve `istmo-notifications-sw.js` (in the crate under `web/`, also
+   `istmo_notifications::web_assets::SERVICE_WORKER_JS`) next to the
+   app's page, same origin, as `text/javascript`.
+2. Register the host and attach it at start:
+
+   ```rust
+   let notifications = WebNotifications::default(); // registers ./istmo-notifications-sw.js
+   // hosts: [NotificationsClient => notifications.clone()]
+   notifications.attach(&runtime);
+   ```
+
+3. An app with its own service worker adds
+   `importScripts("istmo-notifications-sw.js");` to it and builds the
+   host with `.service_worker(ServiceWorker::Existing)`. The default
+   never replaces a registration of another script: it uses it, so that
+   script must import the plugin's.
+4. Ask for permission from a click handler: Firefox and Safari only
+   prompt during a user gesture.
+
+Same `tag` replaces in place; alerting updates set `renotify`, silent
+ones do not (and set `silent` where `renotify` is missing). Updates are
+coalesced to 4 per second. Scheduled notifications live in IndexedDB
+(database `istmo-notifications`, core store format) and fire from a
+`setTimeout` while the page is open; background tabs throttle timers,
+so deliveries there can be late. A tap is queued in IndexedDB by the
+worker, which focuses a window of the app or opens one; the page drains
+the queue on load and on the worker's message, so each tap reaches one
+tab, also the tab it opened. Image bytes become `data:` URLs for the
+worker and Blob URLs on the page, revoked with their last notification.
+A page loaded later rebuilds its table from the notifications still on
+screen, without their embedded images.
+
 ### Status
 
 The Rust core and the desktop host are in place; the Android, Apple,

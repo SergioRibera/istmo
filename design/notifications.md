@@ -1376,3 +1376,125 @@ tray / launcher-actions setup. No `unsafe`.
 - Suspend / resume of KDE jobs; `descriptionLabel` fields.
 - `image-data` stays out (decoding); servers without `image-path`
   support show no image.
+
+## Implementation notes (web, as built)
+
+Branch `notif-web`, the web part of step 3 of section 8.
+
+### Layout
+
+- `src/web.rs` + `src/web/`: `caps.rs` (detected `Browser` to
+  `Capabilities` / `RenderLimits`), `images.rs` (which images a
+  notification shows, FNV keys, `data:` URLs), `payload.rs` (the
+  options and `data` handed to the browser, records), `state.rs` (the
+  host's state machine) are pure and unit-tested natively (`mod web` is
+  compiled for `cfg(test)` too). `host.rs`, `js.rs`, `idb.rs`,
+  `timer.rs` are `wasm32` only.
+- `src/web_assets.rs` (every target): `SERVICE_WORKER_JS`
+  (`include_str!` of `web/istmo-notifications-sw.js`),
+  `SERVICE_WORKER_FILE`, `DB_NAME`, `DB_VERSION`; a unit test checks the
+  script names the same database, version and data version. `/web` is in
+  the crate's `include`. The asset sits at `web/`, not `assets/web/`.
+- New wasm32 dependencies: `wasm-bindgen`, `js-sys`, `send_wrapper`
+  (camera precedent). No `web-sys`: every browser API is reached through
+  `js_sys::Reflect` on `globalThis` at call time, so the host runs and is
+  tested in Node with stubs. Dev-dependency `wasm-bindgen-test`.
+- Fixed in the core: `builder::now_ms` reads `js_sys::Date::now()` on
+  `wasm32` (`SystemTime::now` panics there; responses and
+  `ChatMessage::received` hit it).
+
+### Decisions
+
+- **Separate host, not the desktop one**: the desktop host is threads +
+  files and is cfg'd out on wasm; `web/state.rs` repeats its rules
+  (channels, coalescer at `Rate::WEB`, engine, delivered table with
+  dismissed entries, acks, snooze, host-run timeouts, event backlog of
+  64) as a pure state machine. Keep the two in step.
+- **One serial browser task** (`Op::Show` / `Op::Close` over a flume
+  channel): `showNotification` resolves after its images load, so two
+  concurrent calls could land out of order. The state records a post
+  when it is queued; a failed show removes it again.
+- **Trait futures are `Send`**: JS work that awaits runs through
+  `js::local` (spawn_local + oneshot), JS objects live in one
+  `SendWrapper<RefCell<JsState>>`, Rust state behind mutexes.
+- **Records in `data`**: each notification carries its wire bytes with
+  embedded image bytes removed (`payload::strip`). A later page adopts
+  what `getNotifications()` lists, and responses, updates and snoozes of
+  notifications an earlier page showed resolve against the record (an
+  update after a reload drops embedded images unless it sets them).
+- **Taps go through IndexedDB, always**: the worker queues
+  `{kind, id, action, launched, record, time}` in store `responses`,
+  then focuses a window (or `openWindow(data.open || scope)`) and posts
+  `{istmo: "istmo.notifications", kind: "drain"}` to every window. The
+  page drains in one readwrite transaction (`getAll` + `clear`) on load
+  and on each message: exactly one tab gets each entry, also the one
+  `openWindow` started. Background buttons (`data.background`) do not
+  focus or open. `launched` = no window existed and it was not a
+  background button. The worker closes the notification on click; the
+  host keeps it as dismissed without a `Dismissed` event (an alerting
+  update shows it again).
+- **Images**: `data:` URLs for the worker (self-contained, survive the
+  page; base64 in Rust), Blob URLs on the page; both cached by
+  `(fnv1a64, len, mime, blob)` and reference counted per notification;
+  Blob URLs revoked with their last user. `NotificationImage::File` is a
+  URL on the web (validation already accepts `/path`); `Named` is
+  ignored. Icon fallback: the last sender's avatar, the conversation
+  user's, the caller's. No badge (the model has no badge image).
+- **Options**: `requireInteraction` for ongoing, Urgent, Critical;
+  `silent` for `Sound::Silent` / Passive, and for silent replaces where
+  `renotify` is missing; `renotify` only for alerting replaces;
+  `timestamp` from `timestamp_ms`, else the chronometer base. Page
+  notifications never get `actions` or `image` (Chrome throws).
+- **Service worker choice** (`ServiceWorker`): `Register(url)` (default
+  `istmo-notifications-sw.js`) registers unless the page's scope already
+  has a registration for another script, which is then used (never
+  replaced; it must `importScripts` ours); `Existing` uses
+  `getRegistration()`; `None` = page only. `ready` is raced against 10 s;
+  a worker that activates later is adopted then.
+- **Chrome Android**: `new Notification` throwing a `TypeError` with
+  permission granted sets `page_refused`; capabilities drop to
+  `web:none` and `show` answers `Unsupported(Show)` until a worker is
+  active. There is no way to know before trying.
+- **Timer**: one `setTimeout` with one reused closure, re-armed only
+  when the deadline changes, each wait capped at 30 s (sleep, throttled
+  background tabs).
+- **Store**: IndexedDB store `schedule`, key `entries`, the core store
+  format bytes (`Store::encode` / `decode`). Writes are spawned tasks
+  that create their transaction before the first await, so they land in
+  order; a generation counter skips unchanged writes. Missing IndexedDB
+  (private modes, Node) = in-memory schedule, no worker queue.
+- **Permission**: `Notification.permission` maps granted / denied /
+  default to Granted / Denied / NotDetermined; no `Notification` =
+  Unavailable. `request_permission` awaits `requestPermission()`;
+  Firefox and Safari need a user gesture (documented).
+- Following the core review: schedules whose trigger never fires are
+  refused (`Invalid { field: "trigger", problem: OutOfRange }`); image
+  bytes are read through `&[u8]` coercion so an `Arc<[u8]>` payload type
+  still compiles.
+
+### Asset contract for istmo-build (`web_service_worker`)
+
+Copy `web/istmo-notifications-sw.js` (or write `SERVICE_WORKER_JS`) to
+the web output next to the app's `index.html`, under that exact name,
+served same-origin as `text/javascript`. Nothing else is needed; the
+host registers it at the relative URL. An app with its own worker
+imports it instead.
+
+### Verification
+
+- Native unit tests: `web::{caps,images,payload,state}` (24) and the
+  `web_assets` script check.
+- `tests/web.rs` (wasm-bindgen-test, Node 24, wasm-bindgen-cli 0.2.130):
+  page show / click (response on the lane) / close (Dismissed),
+  page refusal (`Unsupported(Show)`, `web:none`), a scheduled
+  notification firing from `setTimeout`, and the worker path against a
+  stubbed registration (two buttons + "More", progress as text, silent
+  update replacing by tag without `renotify`, `delivered()` from
+  `getNotifications`, cancel closing it). IndexedDB is not available in
+  Node: the store and the worker's queue are untested by automation.
+- The service worker script passes `node --check`; it never ran in a
+  browser here (no headless Chromium run).
+- `.github/workflows/wasm.yml` gained the crate's wasm32 clippy and
+  `tests/web.rs`.
+- Not done: a real browser run (Chrome desktop and Android, Firefox,
+  Safari).

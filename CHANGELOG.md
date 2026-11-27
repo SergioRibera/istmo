@@ -50,6 +50,15 @@
   `org.freedesktop.Application.ActivateAction`). `LinuxOptions` sets the
   app id and the route; `take_activation_token()` hands back the XDG
   activation token of the latest activation.
+- `istmo-notifications` web host (`WebNotifications`, `wasm32`): the
+  plugin's service worker (`web/istmo-notifications-sw.js`, also
+  `web_assets::SERVICE_WORKER_JS`) for buttons, pictures, taps while the
+  page is closed and the delivered list, page notifications without it;
+  capabilities from feature detection; schedules from a `setTimeout`
+  while the page runs, stored in IndexedDB in the core store format;
+  taps queued by the worker in IndexedDB and drained by the page.
+  `now_ms` reads `Date.now()` on `wasm32` (`SystemTime::now` panics
+  there).
 - `istmo-autostart` plugin (`istmo.autostart`, desktop only): start the
   app at login from a user action (`SMAppService.mainApp` on macOS 13+,
   a LaunchAgent before that or for bare binaries, MSIX `StartupTask` or
