@@ -12,6 +12,11 @@
 //!
 //! Locks: the host never holds a lock while it calls the backend, and
 //! takes the state lock before the image cache, never the other way.
+//! Backend calls for one id go through that id's lane, one at a time in
+//! the order they were issued (a newer post never lands before an older
+//! one, a cancel lands after the post it follows); calls for different
+//! ids run in parallel. What a backend reports through its sink is
+//! handled on the report worker thread.
 
 #![expect(
     clippy::significant_drop_tightening,
@@ -25,12 +30,15 @@ mod timer;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::hash_map::{Entry as Slot, RandomState};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::BuildHasher as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use istmo_core::sync::lock;
 use istmo_core::{HostCtx, Runtime};
+use jiff::tz::TimeZone;
 
 pub use backend::{
     Activation, Backend, BackendInfo, BackendSink, Carried, ImageFiles, ImageSlot, NullBackend,
@@ -38,7 +46,7 @@ pub use backend::{
 };
 
 use crate::coalesce::{Admit, Coalescer, Rate, Urgency};
-use crate::render::{Labels, RenderLimits, Rendered, Resolved, render};
+use crate::render::{Labels, RenderLimits, Resolved, render};
 use crate::schedule::{Engine, Store, Wakeup};
 use crate::{
     AckToken, ActionId, Capabilities, ChannelId, ChannelSpec, ChatMessage, DeliveredNotification,
@@ -49,7 +57,7 @@ use crate::{
     ScheduledInfo, Style, Support, Trigger,
 };
 use images::ImageCache;
-use timer::{HostTimer, ManualTimer, Tick, Timer};
+use timer::{HostTimer, ManualTimer, Moved, Serve, Tick, Timer, Worker};
 
 /// Events kept for the first subscriber.
 const BACKLOG: usize = 64;
@@ -58,6 +66,9 @@ const SUBSCRIBER_DEPTH: usize = 256;
 /// Dismissed notifications kept (for an alerting update to show them
 /// again); older ones are forgotten.
 const MAX_DISMISSED: usize = 256;
+/// Ack tokens of background responses kept; the oldest unanswered one
+/// is forgotten past this.
+const MAX_ACKS: usize = 256;
 
 /// Starts the platform backend, handing it the sink it reports through.
 pub type StartBackend =
@@ -72,10 +83,11 @@ fn platform_backend(_sink: BackendSink) -> Result<Arc<dyn Backend>, Notification
 /// A shown notification as the host keeps it.
 #[derive(Debug)]
 struct Live {
-    /// Latest content (queued updates included).
-    notification: Notification,
+    /// Latest content (queued updates included). Shared with the post in
+    /// flight, so a progress update copies nothing.
+    notification: Arc<Notification>,
     /// What the backend last got.
-    rendered: Rendered,
+    rendered: crate::render::Rendered,
     images: ImageFiles,
     /// The images must be collected again before the next post.
     images_stale: bool,
@@ -94,12 +106,42 @@ struct State {
     coalescer: Coalescer<()>,
     engine: Engine,
     channels: HashMap<ChannelId, ChannelSpec>,
-    acks: HashMap<u64, NotificationId>,
-    next_ack: u64,
+    /// Ack tokens of background responses, oldest first.
+    acks: VecDeque<(u64, NotificationId)>,
+    /// Keys the ack tokens: tokens are a keyed hash of a counter, not
+    /// guessable from one another.
+    ack_keys: RandomState,
+    ack_counter: u64,
+    /// Ids with a backend call in flight (their lane is taken).
+    lanes: HashSet<NotificationId>,
+    /// Callers waiting for a lane: a release wakes them only when
+    /// there are any (no futex call on the uncontended path).
+    lane_waiters: usize,
+    /// Scheduled deliveries taken from the engine and not yet shown, by
+    /// the ticket they were taken with; a cancel removes them.
+    delivering: HashMap<NotificationId, u64>,
+    next_ticket: u64,
     /// Store loaded and missed deliveries applied.
     loaded: bool,
     /// Bumped on every engine change; the store keeps the newest.
     store_generation: u64,
+}
+
+impl State {
+    /// A fresh ack token for `id`.
+    fn new_ack(&mut self, id: NotificationId) -> u64 {
+        loop {
+            self.ack_counter += 1;
+            let value = self.ack_keys.hash_one(self.ack_counter);
+            if value != 0 && self.acks.iter().all(|(token, _)| *token != value) {
+                if self.acks.len() == MAX_ACKS {
+                    self.acks.pop_front();
+                }
+                self.acks.push_back((value, id));
+                return value;
+            }
+        }
+    }
 }
 
 /// Subscribers of the events, with a backlog until the first one.
@@ -145,18 +187,66 @@ impl EventHub {
     }
 }
 
+/// What the host derives from [`Backend::info`], read once at start and
+/// again after [`BackendSink::changed`].
+#[derive(Debug)]
+struct HostInfo {
+    info: BackendInfo,
+    /// The backend's limits with the host's labels.
+    limits: RenderLimits,
+    /// The wire report: the backend's with the host's simulations.
+    capabilities: Capabilities,
+}
+
+impl HostInfo {
+    fn new(info: BackendInfo, labels: &Labels) -> Self {
+        let mut limits = info.limits.clone();
+        limits.labels.clone_from(labels);
+        Self {
+            limits,
+            capabilities: overlay(&info),
+            info,
+        }
+    }
+}
+
+/// The cached [`HostInfo`].
+#[derive(Debug, Default)]
+struct InfoSlot {
+    host: Option<Arc<HostInfo>>,
+    /// Bumped when the backend reports a change: a read that started
+    /// before it does not replace the newer one.
+    version: u64,
+}
+
+/// A backend report, handled on the report worker.
+enum Report {
+    Activated(Activation),
+    Dismissed(NotificationId, DismissReason),
+    Failed(Option<NotificationId>, String),
+    Changed,
+    /// Answered once everything queued before it was handled.
+    Settle(flume::Sender<()>),
+}
+
 /// The shared host behind every clone of [`DesktopNotifications`].
 pub(crate) struct Inner {
     start: StartBackend,
     backend: OnceLock<Result<Arc<dyn Backend>, NotificationError>>,
+    info: Mutex<InfoSlot>,
     runtime: OnceLock<Weak<Runtime>>,
+    /// Set once the store is loaded; every call waits for it.
+    loaded: OnceLock<()>,
     state: Mutex<State>,
+    /// Signalled when a lane is released.
+    lane_free: Condvar,
     events: Mutex<EventHub>,
     images: Mutex<ImageCache>,
     store: Option<Store>,
     /// Serialises store writes; holds the generation last written.
     store_written: Mutex<u64>,
     timer: OnceLock<HostTimer<Self>>,
+    reports: Worker<Report>,
     clock: fn() -> i64,
     labels: Labels,
 }
@@ -279,23 +369,33 @@ impl DesktopNotificationsBuilder {
         let inner = Arc::new(Inner {
             start: self.start,
             backend: OnceLock::new(),
+            info: Mutex::default(),
             runtime: OnceLock::new(),
+            loaded: OnceLock::new(),
             state: Mutex::new(State {
                 table: HashMap::new(),
                 dismissed: VecDeque::new(),
+                // Replaced by the backend's rate when its info is first read.
                 coalescer: Coalescer::new(Rate::LINUX, now),
                 engine: Engine::default(),
                 channels,
-                acks: HashMap::new(),
-                next_ack: 1,
+                acks: VecDeque::new(),
+                ack_keys: RandomState::new(),
+                ack_counter: 0,
+                lanes: HashSet::new(),
+                lane_waiters: 0,
+                delivering: HashMap::new(),
+                next_ticket: 0,
                 loaded: false,
                 store_generation: 0,
             }),
+            lane_free: Condvar::new(),
             events: Mutex::default(),
             images: Mutex::new(ImageCache::new(self.images)),
             store: self.store.map(Store::new),
             store_written: Mutex::new(0),
             timer: OnceLock::new(),
+            reports: Worker::default(),
             clock: self.clock,
             labels: self.labels,
         });
@@ -358,6 +458,20 @@ impl DesktopNotifications {
             Some(HostTimer::Manual(timer)) => *lock(&timer.armed),
             _ => None,
         }
+    }
+
+    /// Waits until every backend report made before the call (through a
+    /// [`BackendSink`]) is handled. Reports are handled on the host's
+    /// report worker, never on the reporting thread; tests and backends
+    /// that need the effect of a report call this. Returns at once on
+    /// the report worker itself.
+    pub fn settle(&self) {
+        if timer::on_worker() {
+            return;
+        }
+        let (tx, rx) = flume::bounded(1);
+        self.inner.report(Report::Settle(tx));
+        let _settled = rx.recv();
     }
 
     /// A sink reporting to this host.
@@ -438,16 +552,49 @@ fn action_of(key: &str) -> &str {
     key.split_once('#').map_or(key, |(action, _)| action)
 }
 
-/// What a post needs, prepared under the state lock.
+/// One post to make, prepared in the id's lane.
 struct Post {
-    notification: Notification,
-    rendered: Rendered,
-    images: ImageFiles,
-    /// The images are new: released if the post fails.
-    fresh: bool,
-    /// Images of the previous content, released once the post went out.
-    old_images: Option<ImageFiles>,
+    notification: Arc<Notification>,
     mode: ShowMode,
+    /// Collect the images again (a full show); otherwise the shown
+    /// ones are reused unless an update touched them.
+    fresh: bool,
+    /// Emitted once the post went out.
+    event: Option<NotificationEvent>,
+}
+
+/// The lane of one id, held while its backend call runs. Dropping it
+/// (also on unwind) frees the lane.
+struct Lane<'a> {
+    inner: &'a Inner,
+    id: NotificationId,
+    /// The state lock, when held.
+    guard: Option<MutexGuard<'a, State>>,
+}
+
+impl Lane<'_> {
+    /// The state, locking it if needed.
+    fn state(&mut self) -> &mut State {
+        let inner = self.inner;
+        self.guard.get_or_insert_with(|| inner.lock())
+    }
+
+    /// Lets go of the state lock (before a backend call).
+    fn unlock(&mut self) {
+        self.guard = None;
+    }
+}
+
+impl Drop for Lane<'_> {
+    fn drop(&mut self) {
+        let mut state = self.guard.take().unwrap_or_else(|| self.inner.lock());
+        state.lanes.remove(&self.id);
+        let waiting = state.lane_waiters > 0;
+        drop(state);
+        if waiting {
+            self.inner.lane_free.notify_all();
+        }
+    }
 }
 
 impl Inner {
@@ -459,7 +606,30 @@ impl Inner {
         lock(&self.state)
     }
 
+    /// Takes the lane of `id`, waiting while another call holds it. The
+    /// state stays locked from the wait on, so the caller sees what the
+    /// previous call left.
+    fn acquire(&self, id: &NotificationId) -> Lane<'_> {
+        let mut state = self.lock();
+        while state.lanes.contains(id) {
+            state.lane_waiters += 1;
+            state = self
+                .lane_free
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+            state.lane_waiters -= 1;
+        }
+        state.lanes.insert(id.clone());
+        Lane {
+            inner: self,
+            id: id.clone(),
+            guard: Some(state),
+        }
+    }
+
     fn backend(self: &Arc<Self>) -> Result<&Arc<dyn Backend>, NotificationError> {
+        // The start function's sink calls only queue reports, so they
+        // never re-enter this initialisation.
         self.backend
             .get_or_init(|| {
                 (self.start)(BackendSink {
@@ -470,37 +640,73 @@ impl Inner {
             .map_err(Clone::clone)
     }
 
+    /// The backend and what the host derived from its info.
+    fn backend_info(
+        self: &Arc<Self>,
+    ) -> Result<(Arc<dyn Backend>, Arc<HostInfo>), NotificationError> {
+        let backend = Arc::clone(self.backend()?);
+        let cached = {
+            let slot = lock(&self.info);
+            slot.host.clone().ok_or(slot.version)
+        };
+        let host = match cached {
+            Ok(host) => host,
+            Err(version) => self.read_info(backend.as_ref(), version),
+        };
+        Ok((backend, host))
+    }
+
+    /// Reads the backend's info (no lock held) and caches it unless a
+    /// change was reported since `version`; applies its rate.
+    fn read_info(&self, backend: &dyn Backend, version: u64) -> Arc<HostInfo> {
+        let host = Arc::new(HostInfo::new(backend.info(), &self.labels));
+        {
+            let mut slot = lock(&self.info);
+            if slot.version != version {
+                return host;
+            }
+            slot.host = Some(Arc::clone(&host));
+        }
+        let now = self.now();
+        self.lock().coalescer.set_rate(host.info.rate, now);
+        host
+    }
+
     fn emit(&self, event: NotificationEvent) {
         lock(&self.events).emit(event);
+    }
+
+    fn report(self: &Arc<Self>, report: Report) {
+        self.reports.send(self, report);
     }
 
     fn runtime(&self) -> Option<Arc<Runtime>> {
         self.runtime.get().and_then(Weak::upgrade)
     }
 
-    /// Binds the runtime of the first call (and loads once).
+    /// Binds the runtime of the first call; waits for the load.
     fn bind_ctx(self: &Arc<Self>, ctx: &HostCtx) {
         if self.runtime.get().is_none()
             && let Ok(runtime) = ctx.runtime()
         {
-            self.bind(&runtime);
+            let _set = self.runtime.set(Arc::downgrade(&runtime));
         }
+        self.ensure_loaded();
     }
 
     fn bind(self: &Arc<Self>, runtime: &Arc<Runtime>) {
         let _set = self.runtime.set(Arc::downgrade(runtime));
-        self.load();
+        self.ensure_loaded();
+    }
+
+    /// Loads once; every other caller waits until the load is done, so
+    /// no call sees the engine before the stored entries are in it.
+    fn ensure_loaded(self: &Arc<Self>) {
+        self.loaded.get_or_init(|| self.load());
     }
 
     /// Loads the store, sweeps stale images and delivers what was missed.
     fn load(self: &Arc<Self>) {
-        {
-            let mut state = self.lock();
-            if state.loaded {
-                return;
-            }
-            state.loaded = true;
-        }
         let stored = match self.store.as_ref().map(Store::load) {
             Some(Ok(entries)) => entries,
             Some(Err(err)) => {
@@ -510,45 +716,53 @@ impl Inner {
             None => Vec::new(),
         };
         lock(&self.images).sweep(std::time::SystemTime::now());
-        let rate = self.backend().map(|backend| backend.info().rate).ok();
+        // Starts the backend and takes its rate.
+        if let Err(err) = self.backend_info() {
+            tracing::debug!(%err, "notifications: no desktop backend");
+        }
+        let local = TimeZone::system();
         {
             let mut state = self.lock();
-            // Entries scheduled before the load replace stored ones with
-            // the same id.
-            let mut engine = Engine::with_entries(jiff::tz::TimeZone::system(), stored);
-            for entry in state.engine.entries() {
-                engine.add(
-                    entry.notification.clone(),
-                    entry.trigger.clone(),
-                    entry.anchor_ms,
-                );
+            let mut engine = Engine::with_entries(local, stored);
+            // Entries scheduled before the load (a snooze reported
+            // early) replace stored ones with the same id.
+            let early = std::mem::replace(&mut state.engine, Engine::new(TimeZone::UTC));
+            if !early.is_empty() {
+                Self::changed_engine(&mut state);
             }
+            engine.merge(early);
             state.engine = engine;
-            if let Some(rate) = rate {
-                state.coalescer = Coalescer::new(rate, (self.clock)());
-            }
+            state.loaded = true;
         }
+        self.persist();
         self.run_due();
     }
 
     /// Writes the engine's entries if they changed since the last write.
+    /// Only the snapshot (reference counts) is taken under the state
+    /// lock; encoding and IO run outside it.
     fn persist(&self) {
         let Some(store) = &self.store else {
             return;
         };
-        let (generation, bytes) = {
+        let (generation, mut entries) = {
             let state = self.lock();
-            let bytes = if state.engine.is_empty() {
-                Ok(None)
-            } else {
-                Store::encode(state.engine.entries()).map(Some)
-            };
-            (state.store_generation, bytes)
+            // Before the load the file still holds what must be read.
+            if !state.loaded {
+                return;
+            }
+            (state.store_generation, state.engine.snapshot())
         };
         let mut written = lock(&self.store_written);
         if *written >= generation {
             return;
         }
+        let bytes = if entries.is_empty() {
+            Ok(None)
+        } else {
+            entries.sort_by(|a, b| a.order().cmp(&b.order()));
+            Store::encode(entries.iter().map(AsRef::as_ref)).map(Some)
+        };
         match bytes.and_then(|bytes| store.write(bytes.as_deref())) {
             Ok(()) => *written = generation,
             Err(err) => tracing::warn!(%err, "notifications: schedule store not written"),
@@ -584,220 +798,264 @@ impl Inner {
         deadline
     }
 
-    fn limits(&self, info: &BackendInfo) -> RenderLimits {
-        let mut limits = info.limits.clone();
-        limits.labels.clone_from(&self.labels);
-        limits
-    }
-
-    /// Prepares the post of `notification` (validated, normalised) under
-    /// the state lock.
-    fn prepare(
-        &self,
-        state: &State,
-        limits: &RenderLimits,
-        notification: Notification,
-        mode: ShowMode,
-    ) -> Post {
-        let rendered = render(&notification, limits);
-        let current = state
-            .table
-            .get(&notification.id)
-            .filter(|live| !live.dismissed);
-        let (images, fresh, old_images) = match current {
-            Some(live) if !live.images_stale => (live.images.clone(), false, None),
-            current => (
-                lock(&self.images).collect(&notification),
-                true,
-                current.map(|live| live.images.clone()),
-            ),
+    /// Re-reads the device's zone; when it changed, floating calendar
+    /// rules move to it. The new deadline when anything moved.
+    fn zone_check(&self) -> Option<Moved> {
+        // Cached by jiff (re-read every few minutes): cheap, and never
+        // under the state lock.
+        let local = TimeZone::system();
+        let now = self.now();
+        let deadline = {
+            let mut state = self.lock();
+            if !state.loaded || !state.engine.set_local(local, now) {
+                return None;
+            }
+            Self::changed_engine(&mut state);
+            Self::next_deadline(&state)
         };
-        Post {
-            notification,
-            rendered,
-            images,
-            fresh,
-            old_images,
-            mode,
-        }
+        self.persist();
+        Some(Moved(deadline))
     }
 
-    /// Sends a prepared post and records it.
+    /// Sends `post` through the backend from inside its lane: images are
+    /// collected and the body rendered with the state unlocked, the
+    /// result recorded under it.
     fn post(
         &self,
+        lane: &mut Lane<'_>,
         backend: &dyn Backend,
-        info: &BackendInfo,
+        host: &HostInfo,
         post: Post,
     ) -> Result<(), NotificationError> {
-        let result = backend.show(&Shown {
-            notification: &post.notification,
-            rendered: &post.rendered,
-            images: &post.images,
-            mode: post.mode,
-        });
-        if let Err(err) = result {
-            if post.fresh {
-                lock(&self.images).release(&post.images);
+        let Post {
+            notification,
+            mode,
+            fresh,
+            event,
+        } = post;
+        let reused = {
+            let state = lane.state();
+            let reused = state
+                .table
+                .get(&notification.id)
+                .filter(|live| !fresh && !live.dismissed && !live.images_stale)
+                .map(|live| live.images.clone());
+            // Under the state lock: the shown record cannot release the
+            // files between the read and this use.
+            if let Some(files) = reused.as_ref().filter(|files| !files.is_empty()) {
+                lock(&self.images).retain(files);
             }
+            reused
+        };
+        lane.unlock();
+        let images = reused.unwrap_or_else(|| lock(&self.images).collect(&notification));
+        let rendered = render(&notification, &host.limits);
+        let shown = backend.show(&Shown {
+            notification: &notification,
+            rendered: &rendered,
+            images: &images,
+            mode,
+        });
+        if let Err(err) = shown {
+            self.release(&images);
             return Err(err);
         }
         let now = self.now();
-        let id = post.notification.id.clone();
-        let expires_ms = if info.timeouts {
+        let expires_ms = if host.info.timeouts {
             None
         } else {
-            post.notification
+            notification
                 .timeout_ms
                 .map(|ms| now.saturating_add(i64::try_from(ms).unwrap_or(i64::MAX)))
         };
-        let mut state = self.lock();
-        let delivered_ms = state
-            .table
-            .get(&id)
-            .filter(|live| !live.dismissed && post.mode != ShowMode::New)
-            .map_or(now, |live| live.delivered_ms);
-        forget_dismissed(&mut state, &id);
-        state.table.insert(
-            id,
-            Live {
-                notification: post.notification,
-                rendered: post.rendered,
-                images: post.images,
-                images_stale: false,
-                delivered_ms,
-                dismissed: false,
-                expires_ms,
-            },
-        );
-        drop(state);
-        if let Some(old) = &post.old_images {
-            lock(&self.images).release(old);
+        let replaced = {
+            let state = lane.state();
+            forget_dismissed(state, &notification.id);
+            match state.table.entry(notification.id.clone()) {
+                Slot::Occupied(mut slot) => {
+                    let live = slot.get_mut();
+                    if live.dismissed || mode == ShowMode::New {
+                        live.delivered_ms = now;
+                    }
+                    live.notification = notification;
+                    live.rendered = rendered;
+                    live.images_stale = false;
+                    live.dismissed = false;
+                    live.expires_ms = expires_ms;
+                    std::mem::replace(&mut live.images, images)
+                }
+                Slot::Vacant(slot) => {
+                    slot.insert(Live {
+                        notification,
+                        rendered,
+                        images,
+                        images_stale: false,
+                        delivered_ms: now,
+                        dismissed: false,
+                        expires_ms,
+                    });
+                    ImageFiles::default()
+                }
+            }
+        };
+        lane.unlock();
+        self.release(&replaced);
+        if let Some(event) = event {
+            self.emit(event);
         }
         Ok(())
     }
 
-    /// A full show: replaces whatever has this id.
+    /// Releases the cached files of `files`.
+    fn release(&self, files: &ImageFiles) {
+        if !files.is_empty() {
+            lock(&self.images).release(files);
+        }
+    }
+
+    /// A full show: replaces whatever has this id. `ticket` is the
+    /// engine ticket of a scheduled delivery: a cancel since it was
+    /// taken skips the show.
     fn show_now(
         self: &Arc<Self>,
         mut notification: Notification,
-        late: bool,
+        overdue: bool,
+        ticket: Option<u64>,
     ) -> Result<(), NotificationError> {
         notification.validate()?;
         notification.normalize();
-        let backend = Arc::clone(self.backend()?);
-        let info = backend.info();
-        let limits = self.limits(&info);
+        let (backend, host) = self.backend_info()?;
         let now = self.now();
-        let post = {
-            let mut state = self.lock();
+        let mut lane = self.acquire(&notification.id);
+        let mode = {
+            let state = lane.state();
+            if let Some(ticket) = ticket {
+                if state.delivering.get(&notification.id) != Some(&ticket) {
+                    return Ok(());
+                }
+                state.delivering.remove(&notification.id);
+            }
             merge_channel(&mut notification, &state.channels)?;
             let shown = state
                 .table
                 .get(&notification.id)
                 .is_some_and(|live| !live.dismissed);
             state.coalescer.shown(&notification.id, now);
-            let mode = if shown {
+            if shown {
                 ShowMode::Replace { alert: true }
             } else {
                 ShowMode::New
-            };
-            self.prepare(&state, &limits, notification, mode)
+            }
         };
-        let id = post.notification.id.clone();
-        self.post(backend.as_ref(), &info, post)?;
-        self.emit(if late {
+        let id = notification.id.clone();
+        let event = if overdue {
             NotificationEvent::DeliveredLate(id)
         } else {
             NotificationEvent::Delivered(id)
-        });
+        };
+        let post = Post {
+            notification: Arc::new(notification),
+            mode,
+            fresh: true,
+            event: Some(event),
+        };
+        self.post(&mut lane, backend.as_ref(), &host, post)?;
+        drop(lane);
         self.rearm();
         Ok(())
     }
 
-    /// Changes the shown `id` with `change`; posts through the coalescer.
+    /// Changes the shown `id` with `edit` (which returns whether it
+    /// touched the images); posts through the coalescer. `edit` checks
+    /// what it changes: the host does not validate the whole
+    /// notification again.
     fn change(
         self: &Arc<Self>,
         id: &NotificationId,
         urgency: Urgency,
-        change: impl FnOnce(&mut Live) -> Result<(), NotificationError>,
+        edit: impl FnOnce(&mut Notification) -> Result<bool, NotificationError>,
     ) -> Result<(), NotificationError> {
-        let backend = Arc::clone(self.backend()?);
-        let info = backend.info();
-        let limits = self.limits(&info);
+        let (backend, host) = self.backend_info()?;
         let now = self.now();
+        let mut lane = self.acquire(id);
         let post = {
-            let mut state = self.lock();
+            let state = lane.state();
             let live = state
                 .table
                 .get_mut(id)
                 .ok_or_else(|| NotificationError::NotFound(id.value.clone()))?;
-            let before = live.notification.clone();
-            change(live)?;
-            if let Err(err) = live.notification.validate() {
-                live.notification = before;
-                return Err(err.into());
-            }
-            live.notification.normalize();
+            // Copies only when someone else still holds the content.
+            let touched = edit(Arc::make_mut(&mut live.notification))?;
+            live.images_stale |= touched;
             let was_dismissed = live.dismissed;
+            let content = Arc::clone(&live.notification);
             match state.coalescer.offer(id, (), urgency, now) {
                 Admit::Dropped | Admit::Queued => None,
-                Admit::Now(()) => {
-                    let notification = state.table[id].notification.clone();
-                    let mode = if was_dismissed {
+                Admit::Now(()) => Some(Post {
+                    notification: content,
+                    mode: if was_dismissed {
                         ShowMode::New
                     } else {
                         ShowMode::Replace {
                             alert: urgency != Urgency::Regular,
                         }
-                    };
-                    Some(self.prepare(&state, &limits, notification, mode))
-                }
+                    },
+                    fresh: false,
+                    event: None,
+                }),
             }
         };
         if let Some(post) = post {
-            self.post(backend.as_ref(), &info, post)?;
+            self.post(&mut lane, backend.as_ref(), &host, post)?;
         }
+        drop(lane);
         self.rearm();
         Ok(())
     }
 
-    /// Takes `ids` off the screen and out of the schedule.
+    /// Takes `ids` off the screen and out of the schedule. Each id waits
+    /// for the backend call in flight on it, so the removal lands last.
     fn remove_ids(self: &Arc<Self>, ids: &[NotificationId]) -> Result<(), NotificationError> {
-        let mut shown = Vec::with_capacity(ids.len());
-        let mut released = Vec::new();
         {
             let mut state = self.lock();
             let mut engine_changed = false;
             for id in ids {
-                state.coalescer.cancel(id);
                 engine_changed |= state.engine.remove(id);
-                forget_dismissed(&mut state, id);
-                if let Some(live) = state.table.remove(id)
-                    && !live.dismissed
-                {
-                    shown.push(id.clone());
-                    released.push(live.images);
-                }
-                state.acks.retain(|_, acked| acked != id);
+                // A scheduled delivery taken but not shown yet is off.
+                state.delivering.remove(id);
+                state.coalescer.cancel(id);
             }
             if engine_changed {
                 Self::changed_engine(&mut state);
             }
         }
-        {
-            let mut cache = lock(&self.images);
-            for files in &released {
-                cache.release(files);
-            }
-        }
         self.persist();
+        let mut backend = None;
         let mut first_error = None;
-        if !shown.is_empty() {
-            let backend = Arc::clone(self.backend()?);
-            for id in &shown {
-                if let Err(err) = backend.remove(id) {
-                    first_error.get_or_insert(err);
-                }
+        for id in ids {
+            let mut lane = self.acquire(id);
+            let removed = {
+                let state = lane.state();
+                state.coalescer.cancel(id);
+                forget_dismissed(state, id);
+                state.acks.retain(|(_, acked)| acked != id);
+                state.table.remove(id)
+            };
+            lane.unlock();
+            let Some(live) = removed else {
+                continue;
+            };
+            self.release(&live.images);
+            if live.dismissed {
+                continue;
+            }
+            if backend.is_none() {
+                backend = Some(Arc::clone(self.backend()?));
+            }
+            if let Some(backend) = &backend
+                && let Err(err) = backend.remove(id)
+            {
+                first_error.get_or_insert(err);
             }
         }
         self.rearm();
@@ -806,13 +1064,24 @@ impl Inner {
 
     /// Runs what is due: scheduled deliveries, queued updates, timeouts.
     fn run_due(self: &Arc<Self>) -> Option<i64> {
+        self.zone_check();
         let now = self.now();
         let (due, queued, expired) = {
             let mut state = self.lock();
             if !state.loaded {
                 return None;
             }
-            let due = state.engine.due(now);
+            let due: Vec<_> = state
+                .engine
+                .due(now)
+                .into_iter()
+                .map(|due| {
+                    state.next_ticket += 1;
+                    let ticket = state.next_ticket;
+                    state.delivering.insert(due.notification.id.clone(), ticket);
+                    (due, ticket)
+                })
+                .collect();
             if !due.is_empty() {
                 Self::changed_engine(&mut state);
             }
@@ -833,32 +1102,39 @@ impl Inner {
         if !due.is_empty() {
             self.persist();
         }
-        for entry in due {
+        for (entry, ticket) in due {
             let id = entry.notification.id.clone();
-            if let Err(err) = self.show_now(entry.notification, entry.late) {
+            if let Err(err) = self.show_now(entry.notification, entry.late, Some(ticket)) {
+                let mut state = self.lock();
+                if state.delivering.get(&id) == Some(&ticket) {
+                    state.delivering.remove(&id);
+                }
+                drop(state);
                 self.failed(Some(&id), &err.to_string());
             }
         }
         if !queued.is_empty()
-            && let Ok(backend) = self.backend().map(Arc::clone)
+            && let Ok((backend, host)) = self.backend_info()
         {
-            let info = backend.info();
-            let limits = self.limits(&info);
             for id in queued {
-                let post = {
-                    let state = self.lock();
-                    let Some(live) = state.table.get(&id).filter(|live| !live.dismissed) else {
-                        continue;
-                    };
-                    let notification = live.notification.clone();
-                    self.prepare(
-                        &state,
-                        &limits,
-                        notification,
-                        ShowMode::Replace { alert: false },
-                    )
+                let mut lane = self.acquire(&id);
+                let content = lane
+                    .state()
+                    .table
+                    .get(&id)
+                    .filter(|live| !live.dismissed)
+                    .map(|live| Arc::clone(&live.notification));
+                let Some(notification) = content else {
+                    continue;
                 };
-                if let Err(err) = self.post(backend.as_ref(), &info, post) {
+                let post = Post {
+                    notification,
+                    mode: ShowMode::Replace { alert: false },
+                    fresh: false,
+                    event: None,
+                };
+                if let Err(err) = self.post(&mut lane, backend.as_ref(), &host, post) {
+                    drop(lane);
                     self.failed(Some(&id), &err.to_string());
                 }
             }
@@ -898,7 +1174,7 @@ impl Inner {
                     reply.clone(),
                     launched_app,
                 );
-                (resolved, background, live.notification.clone())
+                (resolved, background, Arc::clone(&live.notification))
             })
         };
         let response = match resolved {
@@ -955,21 +1231,20 @@ impl Inner {
         background: bool,
     ) -> NotificationResponse {
         if background {
-            let mut state = self.lock();
-            let value = state.next_ack;
-            state.next_ack += 1;
-            state.acks.insert(value, response.id.clone());
+            let value = self.lock().new_ack(response.id.clone());
             response.ack = Some(AckToken { value });
         }
         response
     }
 
     /// Hides `notification` and shows it again after `ms`.
-    fn snooze(self: &Arc<Self>, notification: Notification, ms: u64) {
+    fn snooze(self: &Arc<Self>, notification: Arc<Notification>, ms: u64) {
         let id = notification.id.clone();
         if let Err(err) = self.remove_ids(std::slice::from_ref(&id)) {
             tracing::debug!(%err, "notifications: snoozed notification not removed");
         }
+        // The table let go of it: no copy unless someone else holds it.
+        let notification = Arc::unwrap_or_clone(notification);
         {
             let now = self.now();
             let mut state = self.lock();
@@ -998,13 +1273,14 @@ impl Inner {
             state.dismissed.push_back(id.clone());
             while state.dismissed.len() > MAX_DISMISSED {
                 if let Some(old) = state.dismissed.pop_front() {
+                    // A post in flight on `old` records it again.
                     state.table.remove(&old);
                     state.coalescer.cancel(&old);
                 }
             }
             images
         };
-        lock(&self.images).release(&released);
+        self.release(&released);
         self.emit(NotificationEvent::Dismissed(Dismissal {
             id: id.clone(),
             reason,
@@ -1018,15 +1294,35 @@ impl Inner {
         }));
     }
 
-    fn backend_changed(self: &Arc<Self>) {
-        let Ok(backend) = self.backend() else {
+    /// The backend reported a change: its info is read again and its
+    /// rate applies at once (queued updates stay queued).
+    fn backend_changed(&self) {
+        // `get`: a change reported while the backend starts is covered
+        // by the read that follows the start.
+        let Some(Ok(backend)) = self.backend.get() else {
             return;
         };
-        let rate = backend.info().rate;
-        let now = self.now();
-        let mut state = self.lock();
-        if state.coalescer.rate() != rate && state.coalescer.queued() == 0 {
-            state.coalescer = Coalescer::new(rate, now);
+        let version = {
+            let mut slot = lock(&self.info);
+            slot.version += 1;
+            slot.host = None;
+            slot.version
+        };
+        self.read_info(backend.as_ref(), version);
+        self.rearm();
+    }
+}
+
+impl Serve<Report> for Inner {
+    fn serve(self: &Arc<Self>, report: Report) {
+        match report {
+            Report::Activated(activation) => self.activated(activation),
+            Report::Dismissed(id, reason) => self.dismissed(&id, reason),
+            Report::Failed(id, message) => self.failed(id.as_ref(), &message),
+            Report::Changed => self.backend_changed(),
+            Report::Settle(done) => {
+                let _answered = done.send(());
+            }
         }
     }
 }
@@ -1039,13 +1335,17 @@ impl Tick for Inner {
     fn now_ms(&self) -> i64 {
         self.now()
     }
+
+    fn idle(self: &Arc<Self>) -> Option<Moved> {
+        self.zone_check()
+    }
 }
 
 impl Notifications for DesktopNotifications {
     async fn capabilities(&self, ctx: HostCtx) -> Capabilities {
         self.inner.bind_ctx(&ctx);
-        match self.inner.backend() {
-            Ok(backend) => overlay(&backend.info()),
+        match self.inner.backend_info() {
+            Ok((_, host)) => host.capabilities.clone(),
             Err(err) => {
                 tracing::debug!(%err, "notifications: no desktop backend");
                 Capabilities::none("unavailable")
@@ -1123,7 +1423,7 @@ impl Notifications for DesktopNotifications {
         notification: Notification,
     ) -> Result<(), NotificationError> {
         self.inner.bind_ctx(&ctx);
-        self.inner.show_now(notification, false)
+        self.inner.show_now(notification, false, None)
     }
 
     async fn schedule(
@@ -1176,10 +1476,17 @@ impl Notifications for DesktopNotifications {
                 .clear
                 .iter()
                 .any(|field| matches!(field, PatchField::Icon | PatchField::Actions));
-        self.inner.change(&id, urgency, |live| {
-            live.notification.apply(patch);
-            live.images_stale |= touches_images;
-            Ok(())
+        self.inner.change(&id, urgency, |notification| {
+            let before = notification.clone();
+            notification.apply(patch);
+            // The whole notification: a patch alone cannot tell (call
+            // actions need a call style, fields depend on each other).
+            if let Err(err) = notification.validate() {
+                *notification = before;
+                return Err(err.into());
+            }
+            notification.normalize();
+            Ok(touches_images)
         })
     }
 
@@ -1190,9 +1497,13 @@ impl Notifications for DesktopNotifications {
         progress: Option<Progress>,
     ) -> Result<(), NotificationError> {
         self.inner.bind_ctx(&ctx);
-        self.inner.change(&id, Urgency::Regular, |live| {
-            live.notification.progress = progress;
-            Ok(())
+        if let Some(bar) = &progress {
+            bar.validate()?;
+        }
+        // Only the bar changes: nothing else to check again.
+        self.inner.change(&id, Urgency::Regular, |notification| {
+            notification.progress = progress;
+            Ok(false)
         })
     }
 
@@ -1204,17 +1515,18 @@ impl Notifications for DesktopNotifications {
     ) -> Result<(), NotificationError> {
         self.inner.bind_ctx(&ctx);
         message.validate()?;
-        self.inner.change(&id, Urgency::Alert, |live| {
-            let Style::Messaging(conversation) = &mut live.notification.style else {
+        self.inner.change(&id, Urgency::Alert, |notification| {
+            let Style::Messaging(conversation) = &mut notification.style else {
                 return Err(InvalidField::new("style", Problem::NotAllowedHere).into());
             };
-            live.images_stale |= message.image.is_some()
+            let touched = message.image.is_some()
                 || message
                     .sender
                     .as_ref()
                     .is_some_and(|sender| sender.avatar.is_some());
             conversation.messages.push(message);
-            Ok(())
+            notification.normalize();
+            Ok(touched)
         })
     }
 
@@ -1231,7 +1543,7 @@ impl Notifications for DesktopNotifications {
             state
                 .table
                 .values()
-                .map(|live| &live.notification)
+                .map(|live| &*live.notification)
                 .chain(
                     state
                         .engine
@@ -1276,8 +1588,8 @@ impl Notifications for DesktopNotifications {
         ctx: HostCtx,
     ) -> Result<Vec<DeliveredNotification>, NotificationError> {
         self.inner.bind_ctx(&ctx);
-        let backend = self.inner.backend()?;
-        if backend.info().lists_delivered {
+        let (backend, host) = self.inner.backend_info()?;
+        if host.info.lists_delivered {
             return backend.delivered();
         }
         let mut out: Vec<DeliveredNotification> = self
@@ -1300,7 +1612,12 @@ impl Notifications for DesktopNotifications {
 
     async fn complete(&self, ctx: HostCtx, ack: AckToken) -> Result<(), NotificationError> {
         self.inner.bind_ctx(&ctx);
-        if self.inner.lock().acks.remove(&ack.value).is_none() {
+        let known = {
+            let mut state = self.inner.lock();
+            let at = state.acks.iter().position(|(token, _)| *token == ack.value);
+            at.and_then(|at| state.acks.remove(at)).is_some()
+        };
+        if !known {
             return Err(NotificationError::NotFound(format!("ack {}", ack.value)));
         }
         if let Ok(backend) = self.inner.backend() {

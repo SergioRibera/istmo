@@ -99,7 +99,7 @@ impl Trigger {
 
     /// The error a host answers when this trigger has no occurrence
     /// (a calendar rule past its `until_ms`, or matching no day).
-    pub(crate) fn never_fires(&self) -> NeverFires {
+    pub(crate) const fn never_fires(&self) -> NeverFires {
         NeverFires(match self {
             Self::Calendar(rule) if rule.until_ms.is_some() => "trigger.until_ms",
             _ => "trigger",

@@ -2,7 +2,7 @@
 //! recording backend, a manual timer and a fake clock.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use istmo_core::Runtime;
@@ -30,7 +30,10 @@ struct Recorder {
     info: Mutex<BackendInfo>,
     shows: Mutex<Vec<ShowCall>>,
     removes: Mutex<Vec<String>>,
+    /// Thread of each remove.
+    remove_threads: Mutex<Vec<Option<String>>>,
     completed: Mutex<Vec<AckToken>>,
+    info_reads: AtomicUsize,
 }
 
 impl Recorder {
@@ -41,7 +44,9 @@ impl Recorder {
             info: Mutex::new(info),
             shows: Mutex::default(),
             removes: Mutex::default(),
+            remove_threads: Mutex::default(),
             completed: Mutex::default(),
+            info_reads: AtomicUsize::new(0),
         })
     }
 
@@ -56,6 +61,7 @@ impl Recorder {
 
 impl Backend for Recorder {
     fn info(&self) -> BackendInfo {
+        self.info_reads.fetch_add(1, Ordering::SeqCst);
         lock(&self.info).clone()
     }
 
@@ -78,6 +84,7 @@ impl Backend for Recorder {
 
     fn remove(&self, id: &NotificationId) -> Result<(), NotificationError> {
         lock(&self.removes).push(id.value.clone());
+        lock(&self.remove_threads).push(std::thread::current().name().map(str::to_owned));
         Ok(())
     }
 
@@ -117,9 +124,20 @@ fn temp(name: &str) -> PathBuf {
 }
 
 fn setup_with(name: &str, rate: Rate, clock: fn() -> i64, store: bool) -> Setup {
-    let dir = temp(name);
     let backend = Recorder::new(rate);
-    let mut builder = DesktopNotifications::with_backend(backend.clone())
+    setup_on(name, backend.clone(), backend, clock, store)
+}
+
+/// A host over `shown` (which records into `backend`).
+fn setup_on(
+    name: &str,
+    backend: Arc<Recorder>,
+    shown: Arc<dyn Backend>,
+    clock: fn() -> i64,
+    store: bool,
+) -> Setup {
+    let dir = temp(name);
+    let mut builder = DesktopNotifications::with_backend(shown)
         .images_in(dir.join("images"))
         .with_clock(clock)
         .manual_timer()
@@ -246,6 +264,7 @@ fn dismissed_notifications_drop_silent_updates() {
     pollster::block_on(s.client.show_checked(n("dl"))).unwrap();
     s.backend.shows();
     s.host.sink().dismissed(&id, DismissReason::User);
+    s.host.settle();
     pollster::block_on(
         s.client
             .set_progress(id.clone(), Some(Progress::fraction(0.5))),
@@ -288,6 +307,7 @@ fn activations_publish_responses_deep_links_and_acks() {
         launched_app: false,
         carried: None,
     });
+    s.host.settle();
     let response = responses.try_recv().unwrap().unwrap();
     assert_eq!(response.kind(), Response::Action("read"));
     assert_eq!(response.user_data.as_deref(), Some("42"));
@@ -306,6 +326,7 @@ fn activations_publish_responses_deep_links_and_acks() {
         launched_app: false,
         carried: None,
     });
+    s.host.settle();
     let response = responses.try_recv().unwrap().unwrap();
     assert_eq!(response.kind(), Response::Reply("Yes"));
     assert_eq!(response.ack, None);
@@ -320,6 +341,7 @@ fn activations_publish_responses_deep_links_and_acks() {
             url: None,
         }),
     });
+    s.host.settle();
     let response = responses.try_recv().unwrap().unwrap();
     assert_eq!(response.kind(), Response::Open);
     assert!(response.launched_app);
@@ -344,6 +366,7 @@ fn snooze_hides_and_shows_again() {
         launched_app: false,
         carried: None,
     });
+    s.host.settle();
     assert_eq!(s.backend.removes(), ["r"]);
     let pending = pollster::block_on(s.client.pending()).unwrap();
     assert_eq!(pending[0].next_fire_ms, Some(600_000));
@@ -524,10 +547,356 @@ fn schedules_that_never_fire_are_refused() {
         .unwrap_err();
     assert_eq!(
         err,
-        NotificationError::Invalid(InvalidField::new(
-            "trigger.until_ms",
-            Problem::OutOfRange
-        ))
+        NotificationError::Invalid(InvalidField::new("trigger.until_ms", Problem::OutOfRange))
     );
     assert_eq!(pollster::block_on(s.client.pending()).unwrap(), Vec::new());
+}
+
+/// A backend that holds the show of one id until released, and tells
+/// when a show starts.
+struct Gate {
+    inner: Arc<Recorder>,
+    held: String,
+    release: flume::Receiver<()>,
+    entered: flume::Sender<String>,
+}
+
+impl Gate {
+    /// The gate, its release (drop it to open) and the started shows.
+    fn new(
+        inner: Arc<Recorder>,
+        held: &str,
+    ) -> (Arc<Self>, flume::Sender<()>, flume::Receiver<String>) {
+        let (release_tx, release) = flume::bounded(0);
+        let (entered, entered_rx) = flume::unbounded();
+        let gate = Arc::new(Self {
+            inner,
+            held: held.to_owned(),
+            release,
+            entered,
+        });
+        (gate, release_tx, entered_rx)
+    }
+}
+
+impl Backend for Gate {
+    fn info(&self) -> BackendInfo {
+        self.inner.info()
+    }
+
+    fn show(&self, shown: &Shown<'_>) -> Result<(), NotificationError> {
+        let id = shown.notification.id.value.clone();
+        let held = id == self.held;
+        let _told = self.entered.send(id);
+        if held {
+            // Disconnected once released: later shows pass at once.
+            let _released = self.release.recv();
+        }
+        self.inner.show(shown)
+    }
+
+    fn remove(&self, id: &NotificationId) -> Result<(), NotificationError> {
+        self.inner.remove(id)
+    }
+}
+
+fn client_of(s: &Setup) -> NotificationsClient {
+    NotificationsClient::from_runtime(&s.rt).unwrap()
+}
+
+fn id(value: &str) -> NotificationId {
+    NotificationId::try_from(value).unwrap()
+}
+
+#[test]
+fn a_new_show_with_the_same_id_takes_its_new_images() {
+    let (_now, clock) = clock!(0);
+    let s = setup_with("reshow", Rate::LINUX, clock, false);
+    let icon = |byte: u8| NotificationImage::png(vec![byte]);
+    pollster::block_on(s.client.show_checked(n("a").with_icon(icon(1)))).unwrap();
+    let first = s.backend.shows()[0].icon.clone().unwrap();
+    pollster::block_on(s.client.show_checked(n("a").with_icon(icon(2)))).unwrap();
+    let second = s.backend.shows()[0].icon.clone().unwrap();
+    assert_ne!(first, second);
+    assert_eq!(std::fs::read(&second).unwrap(), [2]);
+    assert!(!first.exists(), "the replaced image is released");
+    // A progress update reuses the shown files.
+    pollster::block_on(
+        s.client
+            .set_progress(id("a"), Some(Progress::fraction(0.5))),
+    )
+    .unwrap();
+    assert_eq!(s.backend.shows()[0].icon.as_ref(), Some(&second));
+    assert!(second.exists());
+}
+
+#[test]
+fn a_cancel_waits_for_the_post_in_flight_and_wins() {
+    let (_now, clock) = clock!(0);
+    let backend = Recorder::new(Rate::LINUX);
+    let (gate, release, entered) = Gate::new(backend.clone(), "slow");
+    let s = setup_on("lane-cancel", backend, gate, clock, false);
+    let showing = client_of(&s);
+    let show = std::thread::spawn(move || {
+        let slow = n("slow").with_icon(NotificationImage::png(vec![7]));
+        pollster::block_on(showing.show_checked(slow))
+    });
+    assert_eq!(entered.recv().unwrap(), "slow");
+    let cancelling = client_of(&s);
+    let cancel = std::thread::spawn(move || pollster::block_on(cancelling.cancel(id("slow"))));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(!cancel.is_finished(), "the cancel waits for the show");
+    drop(release);
+    show.join().unwrap().unwrap();
+    cancel.join().unwrap().unwrap();
+    let icon = s.backend.shows()[0].icon.clone().unwrap();
+    assert_eq!(s.backend.removes(), ["slow"]);
+    assert!(!icon.exists());
+    assert_eq!(
+        pollster::block_on(s.client.delivered()).unwrap(),
+        Vec::new()
+    );
+}
+
+#[test]
+fn posts_for_one_id_land_in_the_order_they_were_made() {
+    let (_now, clock) = clock!(0);
+    let backend = Recorder::new(Rate::LINUX);
+    let (gate, release, entered) = Gate::new(backend.clone(), "x");
+    let s = setup_on("lane-order", backend, gate, clock, false);
+    let first = client_of(&s);
+    let one =
+        std::thread::spawn(move || pollster::block_on(first.show_checked(n("x").with_body("one"))));
+    assert_eq!(entered.recv().unwrap(), "x");
+    let second = client_of(&s);
+    let two = std::thread::spawn(move || {
+        pollster::block_on(second.show_checked(n("x").with_body("two")))
+    });
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    drop(release);
+    one.join().unwrap().unwrap();
+    two.join().unwrap().unwrap();
+    let bodies: Vec<_> = s
+        .backend
+        .shows()
+        .into_iter()
+        .map(|show| show.body)
+        .collect();
+    assert_eq!(bodies, [Some("one".to_owned()), Some("two".to_owned())]);
+    let delivered = pollster::block_on(s.client.delivered()).unwrap();
+    assert_eq!(delivered[0].body.as_deref(), Some("two"));
+}
+
+#[test]
+fn a_scheduled_delivery_cancelled_after_it_was_taken_is_not_shown() {
+    let (now, clock) = clock!(0);
+    let backend = Recorder::new(Rate::LINUX);
+    let (gate, release, entered) = Gate::new(backend.clone(), "a");
+    let s = setup_on("lane-due", backend, gate, clock, false);
+    for name in ["a", "b"] {
+        pollster::block_on(s.client.schedule_checked(n(name), Trigger::After(1_000))).unwrap();
+    }
+    now.store(1_000, Ordering::SeqCst);
+    let host = s.host.clone();
+    // Both are taken from the engine; `a` is held on its way out.
+    let tick = std::thread::spawn(move || host.tick());
+    assert_eq!(entered.recv().unwrap(), "a");
+    pollster::block_on(s.client.cancel(id("b"))).unwrap();
+    drop(release);
+    tick.join().unwrap();
+    let shown: Vec<_> = s.backend.shows().into_iter().map(|show| show.id).collect();
+    assert_eq!(shown, ["a"]);
+}
+
+#[test]
+fn calls_wait_until_the_store_is_loaded() {
+    let (_now, clock) = clock!(0);
+    let dir = temp("load");
+    let store = Store::new(dir.join("schedule.bin"));
+    store
+        .save(&[crate::schedule::Entry {
+            notification: n("kept"),
+            trigger: Trigger::After(600_000),
+            anchor_ms: 0,
+            next_fire_ms: Some(600_000),
+        }])
+        .unwrap();
+    let backend = Recorder::new(Rate::LINUX);
+    let (release, started) = flume::bounded::<()>(0);
+    let host = DesktopNotifications::builder(Box::new(move |_sink| {
+        // The backend starts slowly, inside the load.
+        let _released = started.recv();
+        Ok(Arc::clone(&backend) as Arc<dyn Backend>)
+    }))
+    .images_in(dir.join("images"))
+    .store_at(dir.join("schedule.bin"))
+    .with_clock(clock)
+    .manual_timer()
+    .build();
+    let rt = Runtime::mock()
+        .host(NotificationsHost::new(host.clone()))
+        .runtime;
+    let attaching = (host, Arc::clone(&rt));
+    let attach = std::thread::spawn(move || attaching.0.attach(&attaching.1));
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let client = NotificationsClient::from_runtime(&rt).unwrap();
+    let cancel = std::thread::spawn(move || pollster::block_on(client.cancel(id("kept"))));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(!cancel.is_finished(), "the cancel waits for the load");
+    drop(release);
+    attach.join().unwrap();
+    cancel.join().unwrap().unwrap();
+    let client = NotificationsClient::from_runtime(&rt).unwrap();
+    assert_eq!(pollster::block_on(client.pending()).unwrap(), Vec::new());
+    assert!(!dir.join("schedule.bin").exists());
+    let _cleanup = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn sink_calls_while_the_backend_starts_do_not_reenter_the_host() {
+    let (_now, clock) = clock!(0);
+    let backend = Recorder::new(Rate::LINUX);
+    let dir = temp("reenter");
+    let host = DesktopNotifications::builder(Box::new(move |sink: BackendSink| {
+        sink.changed();
+        sink.dismissed(&id("x"), DismissReason::User);
+        Ok(Arc::clone(&backend) as Arc<dyn Backend>)
+    }))
+    .images_in(dir.join("images"))
+    .without_store()
+    .with_clock(clock)
+    .manual_timer()
+    .build();
+    let rt = Runtime::mock()
+        .host(NotificationsHost::new(host.clone()))
+        .runtime;
+    host.attach(&rt);
+    host.settle();
+    let client = NotificationsClient::from_runtime(&rt).unwrap();
+    pollster::block_on(client.show_checked(n("x"))).unwrap();
+    let _cleanup = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn reports_are_handled_off_the_reporting_thread() {
+    let (_now, clock) = clock!(0);
+    let s = setup_with("worker", Rate::LINUX, clock, false);
+    let reminder = n("r").with_action(
+        Action::snooze("later", "Later", std::time::Duration::from_secs(600)).unwrap(),
+    );
+    pollster::block_on(s.client.show_checked(reminder)).unwrap();
+    s.host.sink().activated(Activation {
+        id: id("r"),
+        key: Some("later".to_owned()),
+        reply: None,
+        launched_app: false,
+        carried: None,
+    });
+    s.host.settle();
+    // The snooze removed it from the report worker, not from here.
+    assert_eq!(
+        *lock(&s.backend.remove_threads),
+        [Some("istmo-notifications-reports".to_owned())]
+    );
+}
+
+#[test]
+fn info_is_read_once_and_a_new_rate_applies_with_a_queue() {
+    let (now, clock) = clock!(0);
+    let s = setup_with("info", Rate::new(1, 1), clock, false);
+    pollster::block_on(s.client.show_checked(n("dl"))).unwrap();
+    for step in 1..=5u8 {
+        let bar = Progress::fraction(f32::from(step) / 10.0);
+        pollster::block_on(s.client.set_progress(id("dl"), Some(bar))).unwrap();
+    }
+    assert_eq!(s.backend.info_reads.load(Ordering::SeqCst), 1);
+    s.backend.shows();
+    assert_eq!(s.host.armed(), Some(1_000));
+    // The backend speeds up: the queued update keeps its place and goes
+    // at the new rate.
+    lock(&s.backend.info).rate = Rate::new(100, 100);
+    s.host.sink().changed();
+    s.host.settle();
+    assert_eq!(s.backend.info_reads.load(Ordering::SeqCst), 2);
+    assert_eq!(s.host.armed(), Some(10));
+    now.store(10, Ordering::SeqCst);
+    s.host.tick();
+    let shows = s.backend.shows();
+    assert_eq!(shows.len(), 1);
+    assert_eq!(shows[0].body.as_deref(), Some("50%"));
+}
+
+#[test]
+fn patches_of_a_call_may_carry_call_actions() {
+    let (_now, clock) = clock!(0);
+    let s = setup_with("call", Rate::LINUX, clock, false);
+    let call = n("call").with_style(Style::Call(crate::CallInfo {
+        caller: Participant::new("ana", "Ana"),
+        kind: crate::CallKind::Incoming,
+        video: false,
+    }));
+    pollster::block_on(s.client.show_checked(call)).unwrap();
+    let answer = Action {
+        id: ActionId {
+            value: ActionId::CALL_ANSWER.to_owned(),
+        },
+        ..Action::button("x", "Answer now").unwrap()
+    };
+    let patch = NotificationPatch {
+        actions: Some(vec![answer.clone()]),
+        ..NotificationPatch::default()
+    };
+    pollster::block_on(s.client.update(id("call"), patch)).unwrap();
+    // On a notification that is not a call the host refuses it.
+    pollster::block_on(s.client.show_checked(n("plain"))).unwrap();
+    let patch = NotificationPatch {
+        actions: Some(vec![answer]),
+        ..NotificationPatch::default()
+    };
+    let err = NotificationError::from(
+        pollster::block_on(s.client.update(id("plain"), patch)).unwrap_err(),
+    );
+    assert!(matches!(err, NotificationError::Invalid(_)), "{err:?}");
+}
+
+#[test]
+fn acks_and_dismissals_are_bounded_and_tokens_unguessable() {
+    let (_now, clock) = clock!(0);
+    let s = setup_with("bounded", Rate::new(1_000, 1_000), clock, false);
+    let chat = n("chat").with_action(Action::button("read", "Read").unwrap().background());
+    pollster::block_on(s.client.show_checked(chat)).unwrap();
+    let activate = || {
+        s.host.sink().activated(Activation {
+            id: id("chat"),
+            key: Some("read".to_owned()),
+            reply: None,
+            launched_app: false,
+            carried: None,
+        });
+    };
+    activate();
+    activate();
+    s.host.settle();
+    let (first, second) = {
+        let state = s.host.inner.lock();
+        (state.acks[0].0, state.acks[1].0)
+    };
+    assert_ne!(first, 1);
+    assert_ne!(second, first.wrapping_add(1));
+    for _ in 0..MAX_ACKS {
+        activate();
+    }
+    s.host.settle();
+    assert_eq!(s.host.inner.lock().acks.len(), MAX_ACKS);
+    // The oldest was forgotten.
+    assert!(pollster::block_on(s.client.complete(AckToken { value: first })).is_err());
+    for i in 0..MAX_DISMISSED + 20 {
+        let name = format!("d{i}");
+        pollster::block_on(s.client.show_checked(n(&name))).unwrap();
+        s.host.sink().dismissed(&id(&name), DismissReason::User);
+    }
+    s.host.settle();
+    let state = s.host.inner.lock();
+    assert_eq!(state.dismissed.len(), MAX_DISMISSED);
+    assert_eq!(state.coalescer.dismissed_len(), MAX_DISMISSED);
 }

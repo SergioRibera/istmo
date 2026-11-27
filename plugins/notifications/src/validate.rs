@@ -490,6 +490,13 @@ impl NotificationPatch {
     }
 }
 
+impl Progress {
+    /// Checks the bar against the [limits](self).
+    pub fn validate(&self) -> Result<(), InvalidField> {
+        progress(self, "progress")
+    }
+}
+
 impl ChatMessage {
     /// Checks the message against the [limits](self).
     pub fn validate(&self) -> Result<(), InvalidField> {

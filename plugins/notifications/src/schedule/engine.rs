@@ -31,12 +31,12 @@ pub struct Entry {
 
 impl Entry {
     /// Soonest first, ties by id.
-    fn order(&self) -> (i64, &NotificationId) {
+    pub(crate) fn order(&self) -> (i64, &NotificationId) {
         (self.next_fire_ms.unwrap_or(i64::MAX), &self.notification.id)
     }
 
     /// A calendar rule without its own zone: follows the device's zone.
-    fn floating(&self) -> bool {
+    const fn floating(&self) -> bool {
         matches!(&self.trigger, Trigger::Calendar(rule) if rule.time_zone.is_none())
     }
 }
@@ -278,9 +278,9 @@ impl Engine {
                 Arc::make_mut(entry).next_fire_ms = next;
                 deliver.map(|_| entry.notification.clone())
             } else {
-                self.entries.remove(&id).and_then(|entry| {
-                    deliver.map(|_| Arc::unwrap_or_clone(entry).notification)
-                })
+                self.entries
+                    .remove(&id)
+                    .and_then(|entry| deliver.map(|_| Arc::unwrap_or_clone(entry).notification))
             };
             if let (Some(notification), Some(late)) = (notification, deliver) {
                 out.push(Due { notification, late });
