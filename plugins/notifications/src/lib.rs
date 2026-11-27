@@ -48,6 +48,7 @@
 use istmo_core::HostCtx;
 use istmo_macros::{plugin, stream};
 
+mod build_config;
 mod builder;
 mod client;
 pub mod coalesce;
@@ -66,6 +67,7 @@ pub mod validate;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
+pub use build_config::channels_from_build;
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 pub use desktop::DesktopNotifications;
 #[cfg(feature = "testing")]

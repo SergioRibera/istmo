@@ -280,7 +280,7 @@ impl Default for DesktopNotifications {
     /// `<data dir>/istmo-notifications/schedule.bin`, images under
     /// `<cache dir>/istmo-notifications/images`.
     fn default() -> Self {
-        Self::builder(Box::new(platform_backend)).build()
+        Self::platform().build()
     }
 }
 
@@ -410,6 +410,13 @@ impl DesktopNotificationsBuilder {
 }
 
 impl DesktopNotifications {
+    /// What [`Default`] builds, to configure first: usually
+    /// `.with_channels(istmo_notifications::static_channels!())`.
+    #[must_use]
+    pub fn platform() -> DesktopNotificationsBuilder {
+        Self::builder(Box::new(platform_backend))
+    }
+
     /// A host over the backend `start` returns (called once, on first
     /// use, with the sink the backend reports through).
     #[must_use]
