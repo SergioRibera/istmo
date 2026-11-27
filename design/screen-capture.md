@@ -461,9 +461,11 @@ this section wins. Nothing here ran on a Mac, an iPhone or an iPad yet
   `sampleRate`, `channelCount`, `excludesCurrentProcessAudio` for
   `ExcludeSelf`; `Application(name)` matches a bundle id or an
   application name), a 2×2 BGRA screen output at 1 fps dropped. Planar
-  `f32` interleaved into the asked format; `wall_us` from each chunk's
-  own host-clock timestamp, `discontinuity` when a chunk does not start
-  where the previous ended (±100 ms). The asked rate / channels are
+  `f32` interleaved into the asked format; `wall_us` on the shared
+  sample-count clock (`desktop/audio_clock.rs`, as PipeWire and WASAPI),
+  anchored at the wall time of the chunk's host-clock timestamp;
+  `discontinuity` when a chunk does not start where the previous ended
+  (±100 ms) or the clock re-anchored. The asked rate / channels are
   passed to SCK; chunks carry what arrived, a mismatch is logged once.
   `open_with_audio` runs a second stream for the audio.
 - `PtsClock::HostTime` is read on macOS (`clock.rs`); the pacer's

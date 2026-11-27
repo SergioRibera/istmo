@@ -1,8 +1,10 @@
 //! System / application audio through ScreenCaptureKit (macOS 13+): an
 //! `SCStream` of the main display with `capturesAudio`, its video kept
 //! to a 2×2 frame a second and dropped. Chunks arrive as planar `f32` on
-//! the host time clock; they are interleaved into the asked format and
-//! timed per chunk (`wall_us` from the chunk's own timestamp).
+//! the host time clock; they are interleaved into the asked format.
+//! `wall_us` follows the sample count (`audio_clock`, the clock every
+//! desktop audio backend shares), anchored at the wall time of the
+//! chunk's own timestamp; `pts_ns` stays on host time.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -12,6 +14,7 @@ use crate::types::{
     OsVersion, PtsClock, Requirement,
 };
 
+use super::super::audio_clock::SampleClock;
 use super::super::backend::{AudioBackend, BackendSession};
 use super::super::clock;
 use super::super::output::AudioOut;
@@ -136,7 +139,7 @@ impl AudioBackend for SckAudio {
         let sink = Arc::new(AudioSink {
             out,
             negotiated: negotiated.clone(),
-            timeline: Mutex::new(AudioTimeline::default()),
+            timeline: Mutex::default(),
             warned: AtomicBool::new(false),
         });
         // The screen output is added too: without one SCK logs every
@@ -157,9 +160,17 @@ impl BackendSession for AudioSession {}
 struct AudioSink {
     out: AudioOut,
     negotiated: AudioNegotiated,
-    timeline: Mutex<AudioTimeline>,
+    timeline: Mutex<Timeline>,
     /// A rate / channel mismatch was logged once.
     warned: AtomicBool,
+}
+
+/// The stream's audio timing: gaps in the chunk timestamps, and the
+/// shared sample-count clock for `wall_us`.
+#[derive(Debug, Default)]
+struct Timeline {
+    gaps: AudioTimeline,
+    clock: SampleClock,
 }
 
 impl AudioSink {
@@ -197,20 +208,27 @@ impl AudioSink {
             .or_else(ffi::host_time_ns)
             .unwrap_or_default();
         let frames = u32::try_from(frames).unwrap_or(u32::MAX);
-        let discontinuity = self
-            .timeline
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .chunk(pts_ns, u64::from(frames), rate);
+        let (gap, stamp) = {
+            let mut timeline = self.timeline.lock().unwrap_or_else(PoisonError::into_inner);
+            let gap = timeline.gaps.chunk(pts_ns, u64::from(frames), rate);
+            let start_us = clock::wall_us_for(pts_ns, PtsClock::HostTime);
+            (gap, timeline.clock.stamp(u64::from(frames), rate, start_us))
+        };
+        if let Some(drift_us) = stamp.reanchored_by_us {
+            tracing::debug!(
+                drift_us,
+                "screen-capture audio: re-anchored the chunk clock"
+            );
+        }
         let meta = AudioMeta {
             seq: 0,
             pts_ns,
-            wall_us: clock::wall_us_for(pts_ns, PtsClock::HostTime),
+            wall_us: stamp.wall_us,
             rate,
             channels,
             format: self.negotiated.format,
             frames,
-            discontinuity,
+            discontinuity: gap || stamp.reanchored_by_us.is_some(),
         };
         // `false` once the sink is gone: the host ends the session.
         let _open = self.out.deliver(meta, pcm);

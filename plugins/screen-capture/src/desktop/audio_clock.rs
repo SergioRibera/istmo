@@ -8,7 +8,8 @@
 #![cfg_attr(
     not(any(
         all(target_os = "linux", feature = "linux-audio"),
-        all(windows, feature = "windows-audio")
+        all(windows, feature = "windows-audio"),
+        all(target_os = "macos", feature = "macos-sck")
     )),
     allow(dead_code, reason = "used by the platform audio backends only")
 )]
