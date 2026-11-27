@@ -23,21 +23,23 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
 use istmo_core::sync::lock;
 use istmo_core::{HostCtx, Runtime};
+use jiff::tz::TimeZone;
 use js_sys::{Array, Uint8Array};
 use send_wrapper::SendWrapper;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 
-use super::caps::Browser;
+use super::caps::{Browser, UserAgent, refuses_page_notifications};
 use super::images::{self, ImageKey, Source};
+use super::lease::{Lease, Message, Step};
 use super::payload::{self, DATA_VERSION, Options, Payload, Urls};
-use super::state::{Activated, Post, State};
+use super::state::{Activated, Post, State, decode_records};
 use super::timer::Timeout;
 use super::{idb, js};
 use crate::coalesce::Urgency;
 use crate::render::Labels;
-use crate::schedule::{Store, Wakeup};
-use crate::web_assets::SERVICE_WORKER_FILE;
+use crate::schedule::Wakeup;
+use crate::web_assets::{CHANNEL_NAME, LOCK_NAME, SERVICE_WORKER_FILE};
 use crate::{
     AckToken, Capabilities, ChannelId, ChannelSpec, ChatMessage, DeliveredNotification,
     DismissReason, Feature, GroupId, InvalidField, Notification, NotificationError,
@@ -141,7 +143,8 @@ impl WebNotificationsBuilder {
                 browser: Mutex::new(Browser::default()),
                 phase: Mutex::new(Phase::Idle),
                 runtime: OnceLock::new(),
-                written: Mutex::new(0),
+                lease: Mutex::new(None),
+                reloads: Mutex::new(Reloads::default()),
                 timer: Timeout::new(
                     move || {
                         if let Some(inner) = timer_host.upgrade() {
@@ -177,7 +180,7 @@ impl WebNotificationsBuilder {
 /// The notifications host for the web (`wasm32-unknown-unknown`).
 ///
 /// Register it with the runtime
-/// (`hosts: [NotificationsClient => WebNotifications::default()]`) and
+/// (`hosts: [Notifications => WebNotifications::default()]`) and
 /// [`attach`](Self::attach) a clone at start, so taps queued by the
 /// service worker and missed scheduled notifications are handled before
 /// the app's first call.
@@ -237,6 +240,16 @@ enum Phase {
     Ready,
 }
 
+/// Reloads of the schedule from `IndexedDB`, one at a time.
+#[derive(Debug, Default)]
+struct Reloads {
+    running: bool,
+    /// Another tab wrote while a reload ran: read again after it.
+    again: bool,
+    /// Lead once the next reload is applied (the lock or lease arrived).
+    promote: bool,
+}
+
 /// A page notification and its handlers (dropping them detaches them).
 struct PageNote {
     note: JsValue,
@@ -273,6 +286,10 @@ struct JsState {
     /// hold.
     urls: HashMap<NotificationId, (Urls, Vec<CacheKey>)>,
     listener: Option<Closure<dyn FnMut(JsValue)>>,
+    /// The tabs' `BroadcastChannel` (schedule changes, the lease).
+    channel: Option<JsValue>,
+    /// `controllerchange` is heard (a worker may arrive later).
+    watching_controller: bool,
 }
 
 impl JsState {
@@ -359,8 +376,9 @@ pub(crate) struct Inner {
     browser: Mutex<Browser>,
     phase: Mutex<Phase>,
     runtime: OnceLock<Weak<Runtime>>,
-    /// Store generation last handed to `IndexedDB`.
-    written: Mutex<u64>,
+    /// The `BroadcastChannel` lease, where Web Locks are missing.
+    lease: Mutex<Option<Lease>>,
+    reloads: Mutex<Reloads>,
     timer: Timeout,
     js: SendWrapper<RefCell<JsState>>,
     ops: flume::Sender<Op>,
@@ -379,6 +397,29 @@ impl std::fmt::Debug for Inner {
 /// Unix-epoch milliseconds from the browser's clock.
 fn now() -> i64 {
     crate::builder::now_ms()
+}
+
+/// Whether this browser is known to refuse `new Notification()` (see
+/// [`refuses_page_notifications`]).
+fn page_refused_up_front() -> bool {
+    let navigator = js::global_get("navigator").unwrap_or(JsValue::UNDEFINED);
+    let hints = js::get(&navigator, "userAgentData");
+    let hint_platform = hints
+        .as_ref()
+        .and_then(|h| js::get(h, "platform"))
+        .and_then(|v| v.as_string());
+    let user_agent = js::get(&navigator, "userAgent")
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    refuses_page_notifications(&UserAgent {
+        hint_mobile: hints
+            .as_ref()
+            .and_then(|h| js::get(h, "mobile"))
+            .and_then(|v| v.as_bool()),
+        hint_platform: hint_platform.as_deref(),
+        text: &user_agent,
+        touch: js::has(&js::global(), "ontouchstart"),
+    })
 }
 
 /// What the browser offers, by feature detection.
@@ -408,7 +449,7 @@ fn detect(service_worker: bool) -> Browser {
     Browser {
         api: true,
         service_worker,
-        page_refused: false,
+        page_refused: page_refused_up_front(),
         max_actions,
         image: js::has(&proto, "image"),
         require_interaction: js::has(&proto, "requireInteraction"),
@@ -436,13 +477,71 @@ fn platform(err: &JsValue) -> NotificationError {
     NotificationError::Platform(PlatformError::message(js::message(err)))
 }
 
+/// How this tab finds out whether it runs the schedule.
+#[derive(Debug, PartialEq)]
+enum Election {
+    /// `navigator.locks`: an exclusive lock held for the tab's life.
+    Locks(JsValue),
+    /// No Web Locks: the `BroadcastChannel` lease.
+    Lease,
+    /// Neither (or no store): this tab schedules on its own.
+    Alone,
+}
+
+/// `{istmo: MESSAGE, kind}` for the tabs' channel.
+fn message(kind: &str) -> JsValue {
+    let data = js::object();
+    js::set(&data, "istmo", &JsValue::from_str(MESSAGE));
+    js::set(&data, "kind", &JsValue::from_str(kind));
+    data
+}
+
+fn post_message(channel: &JsValue, data: &JsValue) {
+    if let Err(err) = js::call(channel, "postMessage", std::slice::from_ref(data)) {
+        tracing::debug!(err = %js::message(&err), "notifications: tab message not sent");
+    }
+}
+
+/// A lease message as sent on the channel.
+fn lease_data(message: Message) -> JsValue {
+    let (op, tab) = match message {
+        Message::Beat(tab) => ("beat", tab),
+        Message::Claim(tab) => ("claim", tab),
+        Message::Resign(tab) => ("resign", tab),
+    };
+    let data = self::message("lease");
+    js::set(&data, "op", &JsValue::from_str(op));
+    js::set(&data, "tab", &JsValue::from(tab));
+    data
+}
+
+/// The lease message in `data`, if it is one.
+fn lease_message(data: &JsValue) -> Option<Message> {
+    let tab = js::get(data, "tab")?.as_f64()?;
+    if !(0.0..=f64::from(u32::MAX)).contains(&tab) || tab.fract() != 0.0 {
+        return None;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "checked integral and within u32"
+    )]
+    let tab = tab as u32;
+    match js::get(data, "op")?.as_string()?.as_str() {
+        "beat" => Some(Message::Beat(tab)),
+        "claim" => Some(Message::Claim(tab)),
+        "resign" => Some(Message::Resign(tab)),
+        _ => None,
+    }
+}
+
 /// `navigator.serviceWorker`.
 fn container() -> Option<JsValue> {
     js::get(&js::global_get("navigator")?, "serviceWorker")
 }
 
 /// A promise resolving with `undefined` after `ms`.
-fn sleep(ms: i32) -> js_sys::Promise {
+pub(super) fn sleep(ms: i32) -> js_sys::Promise {
     js_sys::Promise::new(&mut |resolve, _reject| {
         let _timer = js::call(
             &js::global(),
@@ -621,25 +720,20 @@ impl Inner {
         if let Some(registration) = &registration {
             self.adopt_registration(registration.clone()).await;
         }
+        let mut election = Election::Alone;
         if self.config.store
             && let Some(db) = idb::open().await
         {
-            match idb::load_schedule(&db).await {
-                Ok(Some(bytes)) => match Store::decode(&bytes) {
-                    Ok(entries) => self.state().load_entries(entries),
-                    Err(err) => {
-                        tracing::warn!(%err, "notifications: stored schedule unreadable; starting empty");
-                    }
-                },
-                Ok(None) => {}
-                Err(err) => {
-                    tracing::warn!(err = %js::message(&err), "notifications: stored schedule not read");
-                }
-            }
             self.js.borrow_mut().db = Some(db);
-            if registration.is_some() {
-                self.drain().await;
+            election = self.coordinate();
+            if election != Election::Alone {
+                // Another tab may run the schedule: follow until elected.
+                self.state().set_leader(false);
             }
+            self.reload().await;
+            // Also when no worker was found yet: a tap may have been
+            // queued while no page ran, or while this one loaded.
+            self.drain().await;
         }
         let previous = std::mem::replace(&mut *lock(&self.phase), Phase::Ready);
         let waiters = match previous {
@@ -651,6 +745,11 @@ impl Inner {
         }
         self.persist();
         self.run_due();
+        match election {
+            Election::Locks(locks) => self.request_lock(&locks),
+            Election::Lease => self.start_lease(),
+            Election::Alone => {}
+        }
     }
 
     /// The service worker registration to show with, per the config.
@@ -664,7 +763,13 @@ impl Inner {
         match &self.config.service_worker {
             ServiceWorker::None => return None,
             ServiceWorker::Existing => {
-                existing.as_ref()?;
+                if existing.is_none() {
+                    tracing::info!(
+                        "notifications: no service worker registered yet; page notifications until the app's worker takes control"
+                    );
+                    self.watch_controller(&container);
+                    return None;
+                }
             }
             ServiceWorker::Register(url) => {
                 let foreign = existing.as_ref().and_then(|registration| {
@@ -681,10 +786,23 @@ impl Inner {
                         %script,
                         "notifications: the page already has a service worker; using it (it must importScripts the plugin's)"
                     );
-                } else if let Err(err) = js::call(&container, "register", &[JsValue::from_str(url)])
-                {
-                    tracing::warn!(err = %js::message(&err), "notifications: service worker not registered");
-                    return None;
+                } else {
+                    // A missing script (404), a wrong MIME type or a scope
+                    // the URL may not claim rejects here: fall back to page
+                    // notifications at once instead of waiting for `ready`.
+                    let registered =
+                        match js::call(&container, "register", &[JsValue::from_str(url)]) {
+                            Ok(promise) => js::settle(promise).await,
+                            Err(err) => Err(err),
+                        };
+                    if let Err(err) = registered {
+                        tracing::warn!(
+                            err = %js::message(&err),
+                            %url,
+                            "notifications: service worker not registered; page notifications only (serve the plugin's script at this URL)"
+                        );
+                        return None;
+                    }
                 }
             }
         }
@@ -701,8 +819,7 @@ impl Inner {
                     if let Ok(registration) = js::settle(ready).await
                         && registration.is_object()
                     {
-                        me.adopt_registration(registration).await;
-                        me.drain().await;
+                        me.adopt_late(registration).await;
                     }
                 });
                 None
@@ -712,6 +829,50 @@ impl Inner {
                 None
             }
         }
+    }
+
+    /// A worker that became active after the load: adopt it unless one
+    /// already is.
+    async fn adopt_late(&self, registration: JsValue) {
+        if self.js.borrow().registration.is_some() {
+            return;
+        }
+        self.adopt_registration(registration).await;
+        self.drain().await;
+    }
+
+    /// `ServiceWorker::Existing` without a registration yet: look again
+    /// whenever a worker takes control of the page.
+    fn watch_controller(&self, container: &JsValue) {
+        if std::mem::replace(&mut self.js.borrow_mut().watching_controller, true) {
+            return;
+        }
+        let me = self.me.clone();
+        let container_ = container.clone();
+        let listener = Closure::<dyn FnMut()>::new(move || {
+            let Some(inner) = me.upgrade() else {
+                return;
+            };
+            let container = container_.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let Ok(promise) = js::call(&container, "getRegistration", &[]) else {
+                    return;
+                };
+                if let Ok(registration) = js::settle(promise).await
+                    && registration.is_object()
+                {
+                    inner.adopt_late(registration).await;
+                }
+            });
+        });
+        let _added = js::call(
+            container,
+            "addEventListener",
+            &[
+                JsValue::from_str("controllerchange"),
+                listener.into_js_value(),
+            ],
+        );
     }
 
     /// Starts using `registration`: notifications it shows that the
@@ -853,36 +1014,267 @@ impl Inner {
         self.timer.arm(deadline);
     }
 
-    /// Hands the schedule to `IndexedDB` if it changed since the last write.
+    /// Writes the records changed since the last write to `IndexedDB`
+    /// (one per entry, never the whole schedule) and tells the other
+    /// tabs to reload.
     fn persist(&self) {
-        if !self.config.store || !matches!(*lock(&self.phase), Phase::Ready) {
+        if !matches!(*lock(&self.phase), Phase::Ready) {
             return;
         }
-        let (generation, bytes) = self.state().store_bytes();
-        {
-            let mut written = lock(&self.written);
-            if *written >= generation {
-                return;
-            }
-            *written = generation;
+        let writes = self.state().take_writes();
+        if writes.is_empty() {
+            return;
         }
-        let bytes = match bytes {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                tracing::warn!(%err, "notifications: schedule not encoded");
-                return;
-            }
-        };
-        let Some(db) = self.js.borrow().db.clone() else {
+        let Some(db) = self.js.borrow().db.clone().filter(|_| self.config.store) else {
+            // In memory only: nothing to write.
             return;
         };
+        let writes: Vec<(NotificationId, Option<Vec<u8>>)> = writes
+            .into_iter()
+            .filter_map(|(id, record)| match record {
+                Ok(record) => Some((id, record)),
+                Err(err) => {
+                    tracing::warn!(%err, id = %id, "notifications: scheduled entry not encoded");
+                    None
+                }
+            })
+            .collect();
+        let channel = self.js.borrow().channel.clone();
         // Tasks start in spawn order and each creates its transaction
         // before its first await: writes land in order.
         wasm_bindgen_futures::spawn_local(async move {
-            if let Err(err) = idb::save_schedule(&db, bytes.as_deref()).await {
-                tracing::warn!(err = %js::message(&err), "notifications: schedule not stored");
+            match idb::write_records(&db, &writes).await {
+                Ok(()) => {
+                    if let Some(channel) = channel {
+                        post_message(&channel, &message("changed"));
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(err = %js::message(&err), "notifications: schedule not stored");
+                }
             }
         });
+    }
+
+    /// Reads the schedule again (another tab wrote, or this one was
+    /// elected). Reloads run one at a time; one asked for while another
+    /// runs follows it.
+    async fn reload(&self) {
+        {
+            let mut reloads = lock(&self.reloads);
+            if reloads.running {
+                reloads.again = true;
+                return;
+            }
+            reloads.running = true;
+        }
+        loop {
+            let db = self.js.borrow().db.clone();
+            if let Some(db) = db {
+                let mark = self.state().edit_mark();
+                match idb::load_records(&db).await {
+                    Ok(records) => {
+                        let (entries, errors) = decode_records(records.iter().map(Vec::as_slice));
+                        for err in errors {
+                            tracing::warn!(%err, "notifications: stored entry unreadable; skipped");
+                        }
+                        self.state().replace_entries(mark, entries);
+                    }
+                    Err(err) => {
+                        tracing::warn!(err = %js::message(&err), "notifications: stored schedule not read");
+                    }
+                }
+            }
+            let mut reloads = lock(&self.reloads);
+            if std::mem::take(&mut reloads.again) {
+                continue;
+            }
+            reloads.running = false;
+            if std::mem::take(&mut reloads.promote) {
+                self.state().set_leader(true);
+                tracing::debug!("notifications: this tab runs the schedule");
+            }
+            break;
+        }
+        self.run_due();
+        self.rearm();
+    }
+
+    /// This tab was elected: reload, then run the schedule (missed
+    /// entries follow their policy here, in the leader only).
+    async fn lead(&self) {
+        lock(&self.reloads).promote = true;
+        self.reload().await;
+    }
+
+    /// Sets up the tabs' channel; how this tab gets elected.
+    fn coordinate(&self) -> Election {
+        let channel = js::global_get("BroadcastChannel")
+            .and_then(|ctor| ctor.dyn_into::<js_sys::Function>().ok())
+            .and_then(|ctor| {
+                js_sys::Reflect::construct(&ctor, &Array::of1(&JsValue::from_str(CHANNEL_NAME)))
+                    .ok()
+            });
+        if let Some(channel) = &channel {
+            let me = self.me.clone();
+            let listener = Closure::<dyn FnMut(JsValue)>::new(move |event: JsValue| {
+                if let Some(inner) = me.upgrade()
+                    && let Some(data) = js::get(&event, "data")
+                {
+                    inner.heard(&data);
+                }
+            });
+            let _added = js::call(
+                channel,
+                "addEventListener",
+                &[JsValue::from_str("message"), listener.into_js_value()],
+            );
+            self.js.borrow_mut().channel = Some(channel.clone());
+        }
+        let locks = js::global_get("navigator")
+            .and_then(|navigator| js::get(&navigator, "locks"))
+            .filter(|locks| js::has(locks, "request"));
+        match (locks, channel) {
+            (Some(locks), _) => Election::Locks(locks),
+            (None, Some(_)) => Election::Lease,
+            (None, None) => {
+                tracing::info!(
+                    "notifications: no Web Locks or BroadcastChannel; each tab runs its own schedule"
+                );
+                Election::Alone
+            }
+        }
+    }
+
+    /// A message from another tab.
+    fn heard(&self, data: &JsValue) {
+        if js::get(data, "istmo")
+            .and_then(|v| v.as_string())
+            .as_deref()
+            != Some(MESSAGE)
+        {
+            return;
+        }
+        match js::get(data, "kind").and_then(|v| v.as_string()).as_deref() {
+            Some("changed") => {
+                let me = self.me();
+                wasm_bindgen_futures::spawn_local(async move { me.reload().await });
+            }
+            Some("lease") => {
+                let Some(message) = lease_message(data) else {
+                    return;
+                };
+                let step = lock(&self.lease)
+                    .as_mut()
+                    .and_then(|lease| lease.receive(message, now()));
+                self.lease_steps(step.into_iter().collect());
+            }
+            _ => {}
+        }
+    }
+
+    /// Asks for the scheduler lock; held for the page's life (released
+    /// by the browser when the tab closes).
+    fn request_lock(&self, locks: &JsValue) {
+        let me = self.me.clone();
+        let granted = Closure::<dyn FnMut(JsValue) -> JsValue>::new(move |_lock: JsValue| {
+            if let Some(inner) = me.upgrade() {
+                wasm_bindgen_futures::spawn_local(async move { inner.lead().await });
+            }
+            // Never settles: the lock stays held.
+            js_sys::Promise::new(&mut |_resolve, _reject| {}).into()
+        });
+        let options = js::object();
+        js::set(&options, "mode", &JsValue::from_str("exclusive"));
+        let requested = js::call(
+            locks,
+            "request",
+            &[
+                JsValue::from_str(LOCK_NAME),
+                options,
+                granted.into_js_value(),
+            ],
+        );
+        let me = self.me();
+        wasm_bindgen_futures::spawn_local(async move {
+            let settled = match requested {
+                Ok(promise) => js::settle(promise).await.map(drop),
+                Err(err) => Err(err),
+            };
+            if let Err(err) = settled {
+                // E.g. a sandboxed or opaque origin.
+                tracing::warn!(err = %js::message(&err), "notifications: Web Locks refused; electing over BroadcastChannel");
+                if me.js.borrow().channel.is_some() {
+                    me.start_lease();
+                } else {
+                    me.lead().await;
+                }
+            }
+        });
+    }
+
+    /// Starts the `BroadcastChannel` lease ([`super::lease`]).
+    fn start_lease(&self) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "Math.random() is in [0, 1): the product fits u32"
+        )]
+        let me_id = (js_sys::Math::random() * f64::from(u32::MAX)) as u32;
+        *lock(&self.lease) = Some(Lease::new(me_id));
+        let me = self.me.clone();
+        let tick = Closure::<dyn FnMut()>::new(move || {
+            if let Some(inner) = me.upgrade() {
+                let steps = lock(&inner.lease)
+                    .as_mut()
+                    .map(|lease| lease.tick(now()))
+                    .unwrap_or_default();
+                inner.lease_steps(steps);
+            }
+        });
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a small constant number of milliseconds"
+        )]
+        let every = JsValue::from_f64((super::lease::CLAIM_MS / 2) as f64);
+        let _interval = js::call(&js::global(), "setInterval", &[tick.into_js_value(), every]);
+        let me = self.me.clone();
+        let resign = Closure::<dyn FnMut()>::new(move || {
+            if let Some(inner) = me.upgrade() {
+                let message = lock(&inner.lease).as_mut().and_then(Lease::resign);
+                if let Some(message) = message {
+                    inner.state().set_leader(false);
+                    inner.lease_steps(vec![Step::Send(message)]);
+                }
+            }
+        });
+        let _added = js::call(
+            &js::global(),
+            "addEventListener",
+            &[JsValue::from_str("pagehide"), resign.into_js_value()],
+        );
+    }
+
+    fn lease_steps(&self, steps: Vec<Step>) {
+        for step in steps {
+            match step {
+                Step::Send(message) => {
+                    let channel = self.js.borrow().channel.clone();
+                    if let Some(channel) = channel {
+                        post_message(&channel, &lease_data(message));
+                    }
+                }
+                Step::Lead => {
+                    let me = self.me();
+                    wasm_bindgen_futures::spawn_local(async move { me.lead().await });
+                }
+                Step::Follow => {
+                    tracing::debug!("notifications: another tab runs the schedule");
+                    self.state().set_leader(false);
+                    self.rearm();
+                }
+            }
+        }
     }
 
     fn options(&self) -> Options {
@@ -1038,14 +1430,21 @@ impl Inner {
     }
 
     /// Runs what is due: scheduled deliveries, queued updates, timeouts.
+    /// The leader re-reads the device's zone first (it may change while
+    /// the page is open; jiff caches the lookup).
     fn run_due(&self) {
         if !matches!(*lock(&self.phase), Phase::Ready) {
             return;
         }
-        let tick = self.state().tick(now());
-        if !tick.due.is_empty() {
-            self.persist();
-        }
+        let now = now();
+        let tick = {
+            let mut state = self.state();
+            if state.is_leader() {
+                state.set_zone(TimeZone::system(), now);
+            }
+            state.tick(now)
+        };
+        self.persist();
         for due in tick.due {
             let me = self.me();
             wasm_bindgen_futures::spawn_local(async move {
@@ -1314,8 +1713,22 @@ impl Notifications for WebNotifications {
         self.inner.bind_ctx(&ctx);
         let asked = js::local(|| async {
             let ctor = js::global_get("Notification")?;
-            let promise = js::call(&ctor, "requestPermission", &[]).ok()?;
-            js::settle(promise).await.ok()?.as_string()
+            // Old Safari only takes a callback (and returns `undefined`);
+            // the others return a promise. Both settle this one.
+            let asked = js_sys::Promise::new(&mut |resolve, reject| match js::call(
+                &ctor,
+                "requestPermission",
+                &[resolve.clone().into()],
+            ) {
+                Ok(returned) if js::has(&returned, "then") => {
+                    let _chained = js::call(&returned, "then", &[resolve.into(), reject.into()]);
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    let _rejected = reject.call1(&JsValue::NULL, &err);
+                }
+            });
+            js::settle(asked.into()).await.ok()?.as_string()
         })
         .await
         .flatten();

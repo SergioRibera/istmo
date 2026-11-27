@@ -1,10 +1,13 @@
-//! `IndexedDB`, the few calls the host needs: the schedule bytes and the
-//! queue of clicks and closes the service worker leaves.
+//! `IndexedDB`, the few calls the host needs: the scheduled records and
+//! the queue of clicks and closes the service worker leaves.
 //!
-//! Database [`DB_NAME`] version [`DB_VERSION`], stores `schedule` (the
-//! core store format under the key `entries`) and `responses`
+//! Database [`DB_NAME`] version [`DB_VERSION`], stores
+//! [`SCHEDULE_STORE`] (one record per scheduled notification, key = its
+//! id, value = a one-entry core store) and [`QUEUE_STORE`]
 //! (auto-increment keys, one object per click or close). The worker
-//! script creates the same stores; keep both in step.
+//! script creates the same stores; keep both in step. Writes touch only
+//! the records they change, so tabs never overwrite each other's
+//! entries.
 
 #![allow(
     clippy::future_not_send,
@@ -19,11 +22,16 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 
 use super::js;
-use crate::web_assets::{DB_NAME, DB_VERSION};
+use crate::NotificationId;
+use crate::web_assets::{DB_NAME, DB_VERSION, QUEUE_STORE, SCHEDULE_STORE};
 
-const SCHEDULE: &str = "schedule";
-const QUEUE: &str = "responses";
-const ENTRIES: &str = "entries";
+/// The store of the previous layout (the whole schedule under one key),
+/// dropped on upgrade: nothing shipped with it.
+const OLD_SCHEDULE: &str = "schedule";
+
+/// How long an open may wait (another tab's older connection blocks an
+/// upgrade until it closes) before the host goes on in memory.
+const OPEN_WAIT_MS: i32 = 5_000;
 
 /// The success and failure callbacks of a [`Waiter`].
 type Handlers = (Closure<dyn FnMut()>, Closure<dyn FnMut()>);
@@ -94,8 +102,53 @@ impl Waiter {
     }
 }
 
+/// Creates the stores of this layout (an `upgradeneeded` handler).
+fn upgrade(db: &JsValue) {
+    let names = js::get(db, "objectStoreNames");
+    let exists = |name: &str| {
+        names
+            .as_ref()
+            .and_then(|names| js::call(names, "contains", &[JsValue::from_str(name)]).ok())
+            .is_some_and(|v| v.is_truthy())
+    };
+    if exists(OLD_SCHEDULE) {
+        let _deleted = js::call(db, "deleteObjectStore", &[JsValue::from_str(OLD_SCHEDULE)]);
+    }
+    if !exists(SCHEDULE_STORE) {
+        let _created = js::call(
+            db,
+            "createObjectStore",
+            &[JsValue::from_str(SCHEDULE_STORE)],
+        );
+    }
+    if !exists(QUEUE_STORE) {
+        let options = js::object();
+        js::set(&options, "autoIncrement", &JsValue::TRUE);
+        let _created = js::call(
+            db,
+            "createObjectStore",
+            &[JsValue::from_str(QUEUE_STORE), options],
+        );
+    }
+}
+
+/// Closes `db` when a newer version wants to upgrade (another tab
+/// loaded a newer app), so this tab never blocks it.
+fn close_on_versionchange(db: &JsValue) {
+    let target = db.clone();
+    let close = Closure::<dyn FnMut()>::new(move || {
+        let _closed = js::call(&target, "close", &[]);
+    });
+    js::set(db, "onversionchange", close.as_ref());
+    // Lives as long as the connection: one per page.
+    close.forget();
+}
+
 /// Opens the database, creating the stores on first use; `None` where
-/// `IndexedDB` is missing or refused (some private modes).
+/// `IndexedDB` is missing, refused (some private modes) or blocked for
+/// longer than [`OPEN_WAIT_MS`] by another tab's older connection.
+/// `blocked` is not a failure: the open goes on once that connection
+/// closes, and a connection that arrives after the wait is closed.
 pub(super) async fn open() -> Option<JsValue> {
     let factory = js::global_get("indexedDB")?;
     let request = js::call(
@@ -104,46 +157,64 @@ pub(super) async fn open() -> Option<JsValue> {
         &[JsValue::from_str(DB_NAME), JsValue::from(DB_VERSION)],
     )
     .ok()?;
-    let upgrade = {
+    let on_upgrade = {
         let request = request.clone();
         Closure::<dyn FnMut()>::new(move || {
-            let Some(db) = js::get(&request, "result") else {
-                return;
-            };
-            let names = js::get(&db, "objectStoreNames");
-            let exists = |name: &str| {
-                names
-                    .as_ref()
-                    .and_then(|names| js::call(names, "contains", &[JsValue::from_str(name)]).ok())
-                    .is_some_and(|v| v.is_truthy())
-            };
-            if !exists(SCHEDULE) {
-                let _created = js::call(&db, "createObjectStore", &[JsValue::from_str(SCHEDULE)]);
-            }
-            if !exists(QUEUE) {
-                let options = js::object();
-                js::set(&options, "autoIncrement", &JsValue::TRUE);
-                let _created = js::call(
-                    &db,
-                    "createObjectStore",
-                    &[JsValue::from_str(QUEUE), options],
-                );
+            if let Some(db) = js::get(&request, "result") {
+                upgrade(&db);
             }
         })
     };
-    js::set(&request, "onupgradeneeded", upgrade.as_ref());
-    let waiter = Waiter::new(&request, "onsuccess", &["onerror", "onblocked"]);
-    let opened = waiter.done(Some("result")).await;
-    js::set(&request, "onupgradeneeded", &JsValue::NULL);
-    drop(upgrade);
-    match opened {
-        Ok(db) if db.is_object() => Some(db),
-        Ok(_) => None,
-        Err(err) => {
-            tracing::warn!(err = %js::message(&err), "notifications: IndexedDB unavailable; schedule kept in memory");
+    js::set(&request, "onupgradeneeded", on_upgrade.as_ref());
+    let on_blocked = Closure::<dyn FnMut()>::new(|| {
+        tracing::info!(
+            "notifications: IndexedDB upgrade waits for another tab of the app to close its connection"
+        );
+    });
+    js::set(&request, "onblocked", on_blocked.as_ref());
+    let settled = {
+        let request = request.clone();
+        js_sys::Promise::new(&mut |resolve, reject| {
+            js::set(&request, "onsuccess", &resolve);
+            js::set(&request, "onerror", &reject);
+        })
+    };
+    let raced = js_sys::Promise::race(&Array::of2(&settled, &super::host::sleep(OPEN_WAIT_MS)));
+    let outcome = js::settle(raced.into()).await;
+    let db = js::get(&request, "result").filter(|db| db.is_object() && outcome.is_ok());
+    let opened = match (&outcome, db) {
+        (Ok(event), Some(db)) if !event.is_undefined() => Some(db),
+        (Ok(_), _) => {
+            tracing::warn!(
+                "notifications: IndexedDB did not open in time; schedule kept in memory"
+            );
+            // A late success must not leave an open connection behind.
+            let late = request.clone();
+            let close = Closure::once_into_js(move || {
+                if let Some(db) = js::get(&late, "result") {
+                    let _closed = js::call(&db, "close", &[]);
+                }
+            });
+            js::set(&request, "onsuccess", &close);
             None
         }
+        (Err(err), _) => {
+            tracing::warn!(err = %js::message(&err_of(&request, err)), "notifications: IndexedDB unavailable; schedule kept in memory");
+            None
+        }
+    };
+    js::set(&request, "onupgradeneeded", &JsValue::NULL);
+    js::set(&request, "onblocked", &JsValue::NULL);
+    drop((on_upgrade, on_blocked));
+    if let Some(db) = &opened {
+        close_on_versionchange(db);
     }
+    opened
+}
+
+/// The request's error, else the rejection value.
+fn err_of(request: &JsValue, rejection: &JsValue) -> JsValue {
+    js::get(request, "error").unwrap_or_else(|| rejection.clone())
 }
 
 fn store(db: &JsValue, name: &str, mode: &str) -> Result<(JsValue, JsValue), JsValue> {
@@ -156,25 +227,39 @@ fn store(db: &JsValue, name: &str, mode: &str) -> Result<(JsValue, JsValue), JsV
     Ok((tx, store))
 }
 
-/// The stored schedule bytes.
-pub(super) async fn load_schedule(db: &JsValue) -> Result<Option<Vec<u8>>, JsValue> {
-    let (_tx, store) = store(db, SCHEDULE, "readonly")?;
-    let request = js::call(&store, "get", &[JsValue::from_str(ENTRIES)])?;
-    let value = Waiter::new(&request, "onsuccess", &["onerror"])
+/// Every stored record.
+pub(super) async fn load_records(db: &JsValue) -> Result<Vec<Vec<u8>>, JsValue> {
+    let (_tx, store) = store(db, SCHEDULE_STORE, "readonly")?;
+    let request = js::call(&store, "getAll", &[])?;
+    let values = Waiter::new(&request, "onsuccess", &["onerror"])
         .done(Some("result"))
         .await?;
-    Ok(value.is_object().then(|| Uint8Array::new(&value).to_vec()))
+    Ok(Array::from(&values)
+        .iter()
+        .filter(JsValue::is_object)
+        .map(|value| Uint8Array::new(&value).to_vec())
+        .collect())
 }
 
-/// Replaces the schedule bytes (`None` deletes them). The transaction is
-/// created before the first await, so writes land in call order.
-pub(super) async fn save_schedule(db: &JsValue, bytes: Option<&[u8]>) -> Result<(), JsValue> {
-    let (tx, store) = store(db, SCHEDULE, "readwrite")?;
-    let key = JsValue::from_str(ENTRIES);
-    match bytes {
-        Some(bytes) => js::call(&store, "put", &[Uint8Array::from(bytes).into(), key])?,
-        None => js::call(&store, "delete", &[key])?,
-    };
+/// Writes (`Some`) or deletes (`None`) the records of these ids in one
+/// transaction. The transaction is created before the first await, so
+/// writes of one tab land in call order.
+pub(super) async fn write_records(
+    db: &JsValue,
+    writes: &[(NotificationId, Option<Vec<u8>>)],
+) -> Result<(), JsValue> {
+    let (tx, store) = store(db, SCHEDULE_STORE, "readwrite")?;
+    for (id, record) in writes {
+        let key = JsValue::from_str(id.as_str());
+        match record {
+            Some(bytes) => js::call(
+                &store,
+                "put",
+                &[Uint8Array::from(bytes.as_slice()).into(), key],
+            )?,
+            None => js::call(&store, "delete", &[key])?,
+        };
+    }
     Waiter::new(&tx, "oncomplete", &["onerror", "onabort"])
         .done(None)
         .await
@@ -184,7 +269,7 @@ pub(super) async fn save_schedule(db: &JsValue, bytes: Option<&[u8]>) -> Result<
 /// Takes every queued click and close, in queue order, in one
 /// transaction (with several tabs open each entry reaches one).
 pub(super) async fn drain(db: &JsValue) -> Result<Vec<JsValue>, JsValue> {
-    let (tx, store) = store(db, QUEUE, "readwrite")?;
+    let (tx, store) = store(db, QUEUE_STORE, "readwrite")?;
     let all = js::call(&store, "getAll", &[])?;
     js::call(&store, "clear", &[])?;
     let got = Waiter::new(&all, "onsuccess", &["onerror"]);

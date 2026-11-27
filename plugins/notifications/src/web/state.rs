@@ -6,8 +6,17 @@
 //! clicks and closes back. Same rules as the desktop host: validation,
 //! channel defaults, render fallbacks, coalescing at [`super::caps::RATE`],
 //! the in-process scheduler, the delivered table, acks and events.
+//!
+//! Several tabs share one store. Only the leader tab runs the schedule
+//! ([`State::set_leader`]); every tab keeps its engine as a mirror of
+//! the store, writes the records it changed ([`State::take_writes`],
+//! one record per entry, never the whole set) and reloads when another
+//! tab wrote ([`State::replace_entries`], local changes the reload does
+//! not include yet win).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+use jiff::tz::TimeZone;
 
 use crate::coalesce::{Admit, Coalescer, Urgency};
 use crate::render::{RenderLimits, Rendered, Resolved, render};
@@ -136,9 +145,21 @@ pub(crate) struct State {
     next_ack: u64,
     limits: RenderLimits,
     events: EventHub,
-    /// Bumped on every engine change.
-    generation: u64,
+    /// Whether this tab runs the schedule: delivers due entries and
+    /// applies [`crate::MissedPolicy`].
+    leader: bool,
+    /// Local engine edits, counted.
+    edits: u64,
+    /// The edit number of each id's latest local change, kept until a
+    /// reload that started after it has been applied.
+    touched: HashMap<NotificationId, u64>,
+    /// Ids whose stored record must be rewritten or deleted.
+    unwritten: HashSet<NotificationId>,
 }
+
+/// One stored record to write: the entry in the core store format (a
+/// one-entry store), or `None` to delete it.
+pub(crate) type Write = (NotificationId, Result<Option<Vec<u8>>, StoreError>);
 
 /// Notifications in a known channel get the channel's defaults.
 fn merge_channel(
@@ -180,7 +201,10 @@ impl State {
             next_ack: 1,
             limits,
             events: EventHub::default(),
-            generation: 0,
+            leader: true,
+            edits: 0,
+            touched: HashMap::new(),
+            unwritten: HashSet::new(),
         }
     }
 
@@ -318,10 +342,12 @@ impl State {
     /// on screen.
     pub(crate) fn remove(&mut self, ids: &[NotificationId]) -> Vec<NotificationId> {
         let mut shown = Vec::with_capacity(ids.len());
-        let mut engine_changed = false;
         for id in ids {
             self.coalescer.cancel(id);
-            engine_changed |= self.engine.remove(id);
+            self.engine.remove(id);
+            // Also when this mirror does not hold it: another tab may
+            // have scheduled it since the last reload.
+            self.touch(id);
             if let Some(at) = self.dismissed.iter().position(|seen| seen == id) {
                 self.dismissed.remove(at);
             }
@@ -331,9 +357,6 @@ impl State {
                 shown.push(id.clone());
             }
             self.acks.retain(|_, acked| acked != id);
-        }
-        if engine_changed {
-            self.generation += 1;
         }
         shown
     }
@@ -381,11 +404,12 @@ impl State {
         // A trigger that never fires (a rule past its `until`) is refused:
         // the engine does not store it.
         let dead = trigger.never_fires();
+        let id = notification.id.clone();
         let info = self.engine.add(notification, trigger, now_ms);
         if info.next_fire_ms.is_none() {
             return Err(dead.into());
         }
-        self.generation += 1;
+        self.touch(&id);
         Ok(info)
     }
 
@@ -394,16 +418,31 @@ impl State {
     pub(crate) fn snooze(&mut self, notification: Notification, ms: u64, now_ms: i64) {
         let id = notification.id.clone();
         self.engine.add(notification, Trigger::After(ms), now_ms);
-        self.generation += 1;
+        self.touch(&id);
         self.emit(NotificationEvent::Snoozed(id));
     }
 
-    /// Takes what is due at `now_ms`.
+    /// Takes what is due at `now_ms`. Only the leader takes scheduled
+    /// entries (and applies their missed policy); every tab runs its
+    /// coalescer and timeouts.
     pub(crate) fn tick(&mut self, now_ms: i64) -> Tick {
-        let due = self.engine.due(now_ms);
-        if !due.is_empty() {
-            self.generation += 1;
-        }
+        let due = if self.leader {
+            let ids: Vec<NotificationId> = self
+                .engine
+                .snapshot()
+                .iter()
+                .filter(|entry| entry.next_fire_ms.is_some_and(|at| at <= now_ms))
+                .map(|entry| entry.notification.id.clone())
+                .collect();
+            // Delivered, moved to their next time, or dropped by their
+            // missed policy: each record changes.
+            for id in &ids {
+                self.touch(id);
+            }
+            self.engine.due(now_ms)
+        } else {
+            Vec::new()
+        };
         let queued_ids: Vec<NotificationId> = self
             .coalescer
             .poll(now_ms)
@@ -434,7 +473,7 @@ impl State {
     pub(crate) fn next_deadline(&self) -> Option<i64> {
         let expiry = self.table.values().filter_map(|live| live.expires_ms).min();
         [
-            self.engine.next_deadline(),
+            self.engine.next_deadline().filter(|_| self.leader),
             self.coalescer.next_due(),
             expiry,
         ]
@@ -610,30 +649,116 @@ impl State {
         self.channels.remove(id);
     }
 
-    /// Merges stored entries under the ones scheduled before the load.
-    pub(crate) fn load_entries(&mut self, stored: Vec<Entry>) {
-        let mut engine = Engine::with_entries(jiff::tz::TimeZone::system(), stored);
-        for entry in self.engine.entries() {
-            engine.add(
-                entry.notification.clone(),
-                entry.trigger.clone(),
-                entry.anchor_ms,
-            );
-        }
-        self.engine = engine;
-        self.generation += 1;
+    /// Records a local change of `id`'s scheduled entry.
+    fn touch(&mut self, id: &NotificationId) {
+        self.edits += 1;
+        self.touched.insert(id.clone(), self.edits);
+        self.unwritten.insert(id.clone());
     }
 
-    /// The store bytes (core store format) and their generation; `None`
-    /// bytes = nothing scheduled.
-    pub(crate) fn store_bytes(&self) -> (u64, Result<Option<Vec<u8>>, StoreError>) {
-        let bytes = if self.engine.is_empty() {
-            Ok(None)
-        } else {
-            Store::encode(self.engine.entries()).map(Some)
-        };
-        (self.generation, bytes)
+    /// Whether this tab runs the schedule.
+    pub(crate) const fn is_leader(&self) -> bool {
+        self.leader
     }
+
+    /// Makes this tab the one running the schedule, or a follower.
+    pub(crate) const fn set_leader(&mut self, leader: bool) {
+        self.leader = leader;
+    }
+
+    /// The mark of a reload starting now; hand it back to
+    /// [`Self::replace_entries`].
+    pub(crate) const fn edit_mark(&self) -> u64 {
+        self.edits
+    }
+
+    /// The device's zone is `local` now (the leader checks it on each
+    /// wake): floating calendar rules move to it and their records are
+    /// rewritten. Whether anything changed.
+    pub(crate) fn set_zone(&mut self, local: TimeZone, now_ms: i64) -> bool {
+        if !self.leader || !self.engine.set_local(local, now_ms) {
+            return false;
+        }
+        let ids: Vec<NotificationId> = self
+            .engine
+            .snapshot()
+            .iter()
+            .map(|entry| entry.notification.id.clone())
+            .collect();
+        for id in &ids {
+            self.touch(id);
+        }
+        true
+    }
+
+    /// Replaces the schedule with `stored`, read from the store by a
+    /// reload that started at `mark`. Ids changed here after `mark` keep
+    /// their local state (the read may predate their write).
+    pub(crate) fn replace_entries(&mut self, mark: u64, stored: Vec<Entry>) {
+        let local = self.engine.local().clone();
+        let newer: Vec<&NotificationId> = self
+            .touched
+            .iter()
+            .filter(|(_, at)| **at > mark)
+            .map(|(id, _)| id)
+            .collect();
+        let kept: Vec<Entry> = self
+            .engine
+            .snapshot()
+            .into_iter()
+            .filter(|entry| newer.contains(&&entry.notification.id))
+            .map(std::sync::Arc::unwrap_or_clone)
+            .collect();
+        let mut engine = Engine::with_entries(local.clone(), stored);
+        for id in newer {
+            engine.remove(id);
+        }
+        engine.merge(Engine::with_entries(local, kept));
+        self.engine = engine;
+        self.touched.retain(|_, at| *at > mark);
+    }
+
+    /// The records to write since the last call: one per changed id.
+    pub(crate) fn take_writes(&mut self) -> Vec<Write> {
+        if self.unwritten.is_empty() {
+            return Vec::new();
+        }
+        let entries: HashMap<NotificationId, std::sync::Arc<Entry>> = self
+            .engine
+            .snapshot()
+            .into_iter()
+            .map(|entry| (entry.notification.id.clone(), entry))
+            .collect();
+        let mut out: Vec<Write> = self
+            .unwritten
+            .drain()
+            .map(|id| {
+                let record = entries
+                    .get(&id)
+                    .map(|entry| Store::encode(std::iter::once(entry.as_ref())))
+                    .transpose();
+                (id, record)
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+}
+
+/// The entries of stored records (each a one-entry store); unreadable
+/// records are skipped and reported.
+pub(crate) fn decode_records<'a>(
+    records: impl IntoIterator<Item = &'a [u8]>,
+) -> (Vec<Entry>, Vec<StoreError>) {
+    let mut entries = Vec::new();
+    let mut errors = Vec::new();
+    for record in records {
+        match Store::decode(record) {
+            Ok(decoded) => entries.extend(decoded),
+            Err(err) => errors.push(err),
+        }
+    }
+    (entries, errors)
 }
 
 /// The listing entry of `n`.
@@ -841,7 +966,7 @@ mod tests {
     #[test]
     fn schedules_persist_in_the_core_store_format_and_missed_ones_follow_policy() {
         let mut s = state();
-        assert_eq!(s.store_bytes().1.unwrap(), None);
+        assert_eq!(s.take_writes().len(), 0);
         s.schedule(Notification::new("a", "t").unwrap(), Trigger::At(10_000), 0)
             .unwrap();
         s.schedule(
@@ -852,13 +977,17 @@ mod tests {
             0,
         )
         .unwrap();
-        let (generation, bytes) = s.store_bytes();
-        assert_eq!(generation, 2);
-        let bytes = bytes.unwrap().unwrap();
-        assert_eq!(bytes[0], crate::schedule::STORE_FORMAT);
+        let mut db = Records::default();
+        db.apply(s.take_writes());
+        assert_eq!(db.0.len(), 2);
+        assert!(
+            db.0.values()
+                .all(|bytes| bytes[0] == crate::schedule::STORE_FORMAT)
+        );
+        assert_eq!(s.take_writes().len(), 0, "written once");
         // A later page, two minutes past the time.
         let mut later = state();
-        later.load_entries(Store::decode(&bytes).unwrap());
+        db.reload(&mut later);
         assert_eq!(later.pending().len(), 2);
         let tick = later.tick(130_000);
         let fired: Vec<_> = tick
@@ -867,6 +996,145 @@ mod tests {
             .map(|d| (d.notification.id.value.as_str(), d.late))
             .collect();
         assert_eq!(fired, [("a", true)]);
+        // Both one-shots leave the store, the dropped one too.
+        db.apply(later.take_writes());
+        assert_eq!(db.0.len(), 0);
+    }
+
+    /// The store of a test: one record per id.
+    #[derive(Default)]
+    struct Records(std::collections::BTreeMap<NotificationId, Vec<u8>>);
+
+    impl Records {
+        fn apply(&mut self, writes: Vec<Write>) {
+            for (id, record) in writes {
+                match record.unwrap() {
+                    Some(bytes) => self.0.insert(id, bytes),
+                    None => self.0.remove(&id),
+                };
+            }
+        }
+
+        fn reload(&self, s: &mut State) {
+            let mark = s.edit_mark();
+            let (entries, errors) = decode_records(self.0.values().map(Vec::as_slice));
+            assert_eq!(errors.len(), 0);
+            s.replace_entries(mark, entries);
+        }
+    }
+
+    fn ids_pending(s: &State) -> Vec<String> {
+        s.pending()
+            .into_iter()
+            .map(|p| p.notification.id.value)
+            .collect()
+    }
+
+    #[test]
+    fn only_the_leader_delivers_and_followers_write_their_own_records() {
+        let mut db = Records::default();
+        let mut leader = state();
+        let mut follower = state();
+        follower.set_leader(false);
+        follower
+            .schedule(Notification::new("a", "t").unwrap(), Trigger::At(10_000), 0)
+            .unwrap();
+        // The follower waits for nothing scheduled and delivers nothing.
+        assert_eq!(follower.next_deadline(), None);
+        assert_eq!(follower.tick(20_000).due.len(), 0);
+        assert_eq!(ids_pending(&follower), ["a"]);
+        db.apply(follower.take_writes());
+        // The leader hears about it, reloads and delivers it once.
+        db.reload(&mut leader);
+        assert_eq!(leader.next_deadline(), Some(10_000));
+        let due: Vec<_> = leader.tick(10_000).due;
+        assert_eq!(due.len(), 1);
+        db.apply(leader.take_writes());
+        // No tab resurrects the delivered one-shot.
+        db.reload(&mut follower);
+        assert_eq!(ids_pending(&follower).len(), 0);
+        assert_eq!(follower.take_writes().len(), 0);
+        assert_eq!(db.0.len(), 0);
+    }
+
+    #[test]
+    fn a_follower_schedule_survives_another_tabs_write() {
+        let mut db = Records::default();
+        let mut a = state();
+        let mut b = state();
+        b.set_leader(false);
+        a.schedule(Notification::new("x", "t").unwrap(), Trigger::At(50_000), 0)
+            .unwrap();
+        b.schedule(Notification::new("y", "t").unwrap(), Trigger::At(60_000), 0)
+            .unwrap();
+        // Whole-set overwrites lost one of the two; per-entry records keep both.
+        db.apply(a.take_writes());
+        db.apply(b.take_writes());
+        db.reload(&mut a);
+        db.reload(&mut b);
+        assert_eq!(ids_pending(&a), ["x", "y"]);
+        assert_eq!(ids_pending(&b), ["x", "y"]);
+    }
+
+    #[test]
+    fn a_reload_older_than_a_local_change_keeps_the_change() {
+        let mut db = Records::default();
+        let mut s = state();
+        s.schedule(
+            Notification::new("old", "t").unwrap(),
+            Trigger::At(9_000),
+            0,
+        )
+        .unwrap();
+        db.apply(s.take_writes());
+        // A reload starts, then `new` is scheduled and `old` cancelled
+        // before its read lands.
+        let mark = s.edit_mark();
+        let (stored, _) = decode_records(db.0.values().map(Vec::as_slice));
+        s.schedule(
+            Notification::new("new", "t").unwrap(),
+            Trigger::At(8_000),
+            0,
+        )
+        .unwrap();
+        s.remove(&[id("old")]);
+        s.replace_entries(mark, stored);
+        assert_eq!(ids_pending(&s), ["new"]);
+        // A later reload that includes the writes settles it.
+        db.apply(s.take_writes());
+        db.reload(&mut s);
+        assert_eq!(ids_pending(&s), ["new"]);
+    }
+
+    #[test]
+    fn a_follower_cancel_deletes_entries_its_mirror_misses() {
+        let mut db = Records::default();
+        let mut a = state();
+        a.schedule(Notification::new("z", "t").unwrap(), Trigger::At(9_000), 0)
+            .unwrap();
+        db.apply(a.take_writes());
+        let mut b = state();
+        b.set_leader(false);
+        b.remove(&[id("z")]);
+        db.apply(b.take_writes());
+        assert_eq!(db.0.len(), 0);
+    }
+
+    #[test]
+    fn only_the_leader_moves_floating_rules_to_a_new_zone() {
+        let mut s = state();
+        s.set_leader(false);
+        let rule = Trigger::Calendar(CalendarRule::daily(8, 0));
+        s.schedule(Notification::new("c", "t").unwrap(), rule, 0)
+            .unwrap();
+        let _ = s.take_writes();
+        // A fixed offset never equals the system's named zone.
+        let zone = TimeZone::fixed(jiff::tz::offset(9));
+        assert!(!s.set_zone(zone.clone(), 0));
+        s.set_leader(true);
+        assert!(s.set_zone(zone.clone(), 0));
+        assert_eq!(s.take_writes().len(), 1);
+        assert!(!s.set_zone(zone, 0), "same zone again: nothing moves");
     }
 
     #[test]

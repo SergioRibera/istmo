@@ -10,19 +10,23 @@
  * to it instead. Only notifications the plugin showed (`data.istmo`)
  * are handled; others are left to the app's own listeners.
  *
- * A click or a close is queued in IndexedDB first, then every window of
- * the app is told to drain the queue. The page drains it when it loads
- * too, so a tap that opened the app reaches it, and with several tabs
- * open each entry reaches exactly one.
+ * A click or a close is queued in IndexedDB first, then one window of
+ * the app is told to drain the queue: the one a click focused or
+ * opened, the focused one for a close; every window only when there is
+ * no such window. The page drains the queue when it loads too, so a tap
+ * that opened the app reaches it, and with several tabs open each entry
+ * reaches exactly one.
  */
 (function () {
   "use strict";
 
   const DB_NAME = "istmo-notifications";
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   const DATA_VERSION = 1;
-  const SCHEDULE = "schedule";
+  const SCHEDULE = "scheduled";
   const QUEUE = "responses";
+  /* The previous layout's store, dropped on upgrade. */
+  const OLD_SCHEDULE = "schedule";
   const MESSAGE = "istmo.notifications";
 
   function ours(notification) {
@@ -35,6 +39,9 @@
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       request.onupgradeneeded = function () {
         const db = request.result;
+        if (db.objectStoreNames.contains(OLD_SCHEDULE)) {
+          db.deleteObjectStore(OLD_SCHEDULE);
+        }
         if (!db.objectStoreNames.contains(SCHEDULE)) {
           db.createObjectStore(SCHEDULE);
         }
@@ -43,14 +50,20 @@
         }
       };
       request.onsuccess = function () {
-        resolve(request.result);
+        const db = request.result;
+        /* Never block a newer version's upgrade. */
+        db.onversionchange = function () {
+          db.close();
+        };
+        resolve(db);
       };
       request.onerror = function () {
         reject(request.error);
       };
-      request.onblocked = function () {
-        reject(new Error("istmo-notifications: database upgrade blocked"));
-      };
+      /*
+       * `blocked` is not a failure: the open completes once the older
+       * connection closes (pages close theirs on `versionchange`).
+       */
     });
   }
 
@@ -73,19 +86,30 @@
     }
   }
 
-  function windows() {
-    return self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  /* The app's windows: same-origin pages inside this worker's scope. */
+  async function windows() {
+    const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const scope = self.registration.scope;
+    return all.filter(function (c) {
+      return typeof c.url === "string" && c.url.startsWith(scope);
+    });
   }
 
-  function drain(clients) {
-    for (const client of clients) {
-      client.postMessage({ istmo: MESSAGE, kind: "drain" });
+  /* The window showing `open`, else the focused one, else a visible one, else any. */
+  function pick(clients, open) {
+    let target = null;
+    if (open) {
+      try {
+        target = new URL(open, self.registration.scope).href;
+      } catch (_err) {
+        target = null;
+      }
     }
-  }
-
-  /* The focused window, else a visible one, else any. */
-  function pick(clients) {
     return (
+      (target &&
+        clients.find(function (c) {
+          return c.url === target;
+        })) ||
       clients.find(function (c) {
         return c.focused;
       }) ||
@@ -95,6 +119,18 @@
       clients[0] ||
       null
     );
+  }
+
+  /* Tells `target` to drain, or every window when there is no target. */
+  async function drain(target) {
+    const message = { istmo: MESSAGE, kind: "drain" };
+    if (target) {
+      target.postMessage(message);
+      return;
+    }
+    for (const client of await windows()) {
+      client.postMessage(message);
+    }
   }
 
   self.addEventListener("notificationclick", function (event) {
@@ -120,19 +156,22 @@
         }).catch(function (err) {
           console.warn("istmo-notifications: click not queued", err);
         });
+        let target = null;
         if (!background) {
-          const client = pick(before);
+          const client = pick(before, data.open);
           if (client) {
             try {
-              await client.focus();
+              target = (await client.focus()) || client;
             } catch (_err) {
-              /* Focus is best effort. */
+              /* Focus is best effort; the window still drains. */
+              target = client;
             }
           } else if (self.clients.openWindow) {
-            await self.clients.openWindow(data.open || self.registration.scope);
+            /* `null` for a URL outside the origin: then every window drains. */
+            target = await self.clients.openWindow(data.open || self.registration.scope);
           }
         }
-        drain(await windows());
+        await drain(target);
       })()
     );
   });
@@ -143,19 +182,22 @@
       return;
     }
     event.waitUntil(
-      enqueue({
-        kind: "close",
-        id: data.id,
-        action: "",
-        launched: false,
-        record: data.record,
-        time: Date.now(),
+      (async function () {
+        await enqueue({
+          kind: "close",
+          id: data.id,
+          action: "",
+          launched: false,
+          record: data.record,
+          time: Date.now(),
+        });
+        const shown = (await windows()).find(function (c) {
+          return c.focused || c.visibilityState === "visible";
+        });
+        await drain(shown || null);
+      })().catch(function (err) {
+        console.warn("istmo-notifications: close not queued", err);
       })
-        .then(windows)
-        .then(drain)
-        .catch(function (err) {
-          console.warn("istmo-notifications: close not queued", err);
-        })
     );
   });
 })();

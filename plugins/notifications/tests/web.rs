@@ -270,3 +270,48 @@ async fn the_service_worker_gets_buttons_and_lists_what_it_shows() {
         0
     );
 }
+
+#[wasm_bindgen_test]
+async fn a_failed_registration_falls_back_to_the_page_at_once() {
+    run(PAGE_STUB);
+    // The script is missing (404): `register` rejects, `ready` never settles.
+    run(r#"
+        globalThis.navigator.serviceWorker = {
+            ready: new Promise(() => {}),
+            getRegistration() { return Promise.resolve(undefined); },
+            register() { return Promise.reject(new TypeError("bad HTTP response code (404)")); },
+            addEventListener() {},
+            startMessages() {},
+        };
+    "#);
+    let s = setup(ServiceWorker::default());
+    let started = js_sys::Date::now();
+    let caps = s.client.capabilities().await.unwrap();
+    assert_eq!(caps.backend, "web:page");
+    assert!(
+        js_sys::Date::now() - started < 2_000.0,
+        "no wait for a worker that cannot come"
+    );
+    s.client.show(n("p")).await.unwrap();
+    assert_eq!(made().length(), 1);
+}
+
+#[wasm_bindgen_test]
+async fn callback_only_permission_requests_settle() {
+    run(PAGE_STUB);
+    // Old Safari: `requestPermission(callback)` returns nothing.
+    run(r#"
+        Notification.permission = "default";
+        Notification.requestPermission = (done) => {
+            setTimeout(() => { Notification.permission = "granted"; done("granted"); }, 5);
+            return undefined;
+        };
+    "#);
+    let s = setup(ServiceWorker::None);
+    let status = s
+        .client
+        .request_permission(istmo_notifications::PermissionRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(status.state, PermissionState::Granted);
+}

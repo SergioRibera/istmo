@@ -36,6 +36,11 @@ mod images;
     not(target_arch = "wasm32"),
     allow(dead_code, reason = "used by the wasm32 host; natively only tested")
 )]
+mod lease;
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(dead_code, reason = "used by the wasm32 host; natively only tested")
+)]
 mod payload;
 #[cfg_attr(
     not(target_arch = "wasm32"),

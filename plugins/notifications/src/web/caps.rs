@@ -144,6 +144,33 @@ impl Browser {
     }
 }
 
+/// What the page tells about the browser it runs in, for
+/// [`refuses_page_notifications`].
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct UserAgent<'a> {
+    /// `navigator.userAgentData.mobile` (Chromium only).
+    pub(crate) hint_mobile: Option<bool>,
+    /// `navigator.userAgentData.platform` (Chromium only).
+    pub(crate) hint_platform: Option<&'a str>,
+    /// `navigator.userAgent`.
+    pub(crate) text: &'a str,
+    /// `'ontouchstart' in globalThis`.
+    pub(crate) touch: bool,
+}
+
+/// Whether `new Notification()` will throw: Chromium on Android (Chrome,
+/// Edge, Samsung Internet) only shows through a service worker. Known
+/// up front from User-Agent Client Hints, else from a touch Android
+/// Chromium user agent; Firefox for Android shows page notifications.
+/// The host still falls back on the `TypeError` when this misses.
+pub(crate) fn refuses_page_notifications(agent: &UserAgent<'_>) -> bool {
+    if let (Some(mobile), Some(name)) = (agent.hint_mobile, agent.hint_platform) {
+        return mobile && name.eq_ignore_ascii_case("android");
+    }
+    let ua = agent.text;
+    agent.touch && ua.contains("Android") && ua.contains("Chrome/") && !ua.contains("Firefox/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +262,29 @@ mod tests {
                 .capabilities()
                 .has(Feature::PermissionRequest)
         );
+    }
+
+    #[test]
+    fn chromium_on_android_is_known_to_refuse_page_notifications() {
+        let hints = |mobile, platform| UserAgent {
+            hint_mobile: Some(mobile),
+            hint_platform: Some(platform),
+            ..UserAgent::default()
+        };
+        assert!(refuses_page_notifications(&hints(true, "Android")));
+        assert!(!refuses_page_notifications(&hints(false, "Android")));
+        assert!(!refuses_page_notifications(&hints(false, "Windows")));
+        let chrome_android = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 \
+                              (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36";
+        let firefox_android =
+            "Mozilla/5.0 (Android 14; Mobile; rv:130.0) Gecko/130.0 Firefox/130.0";
+        let by_ua = |text, touch| UserAgent {
+            text,
+            touch,
+            ..UserAgent::default()
+        };
+        assert!(refuses_page_notifications(&by_ua(chrome_android, true)));
+        assert!(!refuses_page_notifications(&by_ua(chrome_android, false)));
+        assert!(!refuses_page_notifications(&by_ua(firefox_android, true)));
     }
 }
