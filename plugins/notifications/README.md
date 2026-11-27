@@ -119,7 +119,12 @@ call), `UnavailableNotifications` where there is no backend.
   `NotificationError::NotBundled`.
 - **Linux without the portal loses taps while closed.** The
   freedesktop notification server never starts the app; only the
-  portal (Flatpak, Snap, registered host apps) can.
+  portal (Flatpak, Snap, registered host apps) can, through exported
+  actions: package a D-Bus `.service` file for the app id and set
+  `DBusActivatable=true`. `desktop::linux::LinuxOptions` sets the app id
+  (default: `FLATPAK_ID`, else the executable's name) or forces the
+  server or the portal. Progress is a bar on dunst, mako, swaync and
+  xfce4-notifyd, a job view on KDE Plasma, text elsewhere.
 - **Web scheduling only runs while the page is open.** Browsers have no
   notification scheduler.
 - **Android small icons must be monochrome.** Use a vector or an

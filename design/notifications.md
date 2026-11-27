@@ -1224,3 +1224,155 @@ in that module.
   looks small).
 - `istmo doctor` does not report missing notification entitlements in
   provisioning profiles.
+
+## Implementation notes (Linux, as built)
+
+Branch `notif-linux`, step 3 (Linux part). `src/desktop/linux.rs` +
+`desktop/linux/{fdo,portal,kde_job,app_activation}.rs`; zbus 5 blocking
+(`blocking-api` + `async-io`, no tokio, no serde of our own), the
+tray / launcher-actions setup. No `unsafe`.
+
+### Shape
+
+- Public `desktop::linux::{LinuxOptions, LinuxRoute, take_activation_token}`.
+  `LinuxOptions::new().with_app_id(..).with_route(..).start()` is a
+  `StartBackend` for `DesktopNotifications::builder`, so the shared
+  builder has no Linux-only method (`with_app_id` of section 6 lives
+  here). `platform_backend` gained a `cfg(target_os = "linux")` arm.
+- Route `Auto`: sandboxed (`/.flatpak-info`, `container=flatpak`,
+  `SNAP`) or `org.freedesktop.host.portal.Registry.Register(app_id)`
+  accepted on the host -> portal (when its `version` property reads),
+  else fdo. `Server` / `Portal` force one. The `container` variable of
+  toolbox / podman is not a sandbox signal: those share the host bus.
+- One session connection per backend. Signals are read on named threads
+  (`istmo-notif-fdo`, `-owner`, `-kjob`, `-portal`) holding the backend
+  weakly; no backend lock is held across a sink call or a D-Bus call. No
+  sink call happens inside the start function.
+- Signals are accepted only from the current owner of
+  `org.freedesktop.Notifications` / `org.freedesktop.portal.Desktop`
+  (cached unique name, re-asked on a mismatch); a spoofed
+  `ActionInvoked` is dropped (tested).
+
+### fdo
+
+- `GetCapabilities` + `GetServerInformation` read once, cached as the
+  `BackendInfo`; `NameOwnerChanged` with an old owner (server gone or
+  restarted) drops the cache, reports every shown notification
+  `Dismissed(Other)` (the new server has none; a silent update would
+  otherwise pop a new one) and calls `sink.changed()`. A first owner
+  (D-Bus activation by our `Notify`) is not a restart.
+- Ids: `NotificationId` <-> `u32` both ways; `replaces_id` whenever a
+  mapping exists (also for `ShowMode::New` after a dismissal the server
+  did not report). A close that arrives before `Notify` returned is kept
+  in a 16-entry ring and applied when the mapping lands.
+- Actions: `default` first (empty label), then `rendered.actions`
+  keys; the first `Input::Reply` becomes `inline-reply` when the server
+  lists it, with `x-kde-reply-placeholder-text` /
+  `x-kde-reply-submit-button-text` from `ReplyOptions`;
+  `NotificationReplied` -> that action's key + text. `max_actions` 3
+  (the spec has no limit; GNOME and Plasma show three), 0 without the
+  `actions` capability.
+- Closes: reason 1 Timeout, 2 User, 3 App, else Other; after an
+  `ActionInvoked` on that id the close is reported as `Other` (servers
+  close a notification once an action ran; it is no dismissal).
+  Decision: the host has no "removed without event" sink call, so the
+  close still goes through `dismissed`.
+- Hints: `urgency` (Passive 0, Normal / High 1, Urgent / Critical 2),
+  `category` (calls `call.incoming` / `call`, messaging and
+  `Category::Message` `im.received`, `Transfer` `transfer`, nothing for
+  the rest), `desktop-entry` = app id, one image as `image-path` (a
+  `file://` URI, or the icon name for `Named`): picture, else icon,
+  else the caller / last sender's avatar; `x-kde-urls` with the picture
+  where listed. `suppress-sound` for `Sound::Silent` and silent updates,
+  `sound-name` (or `sound-file` for a path). `resident` for ongoing
+  (expire 0); `transient` when a timeout is set (the plugin removes it
+  then anyway). `linux_hints` last, overriding. Body escaped when the
+  server lists `body-markup`. `expire_timeout` = `timeout_ms` or -1;
+  `timeouts: false`, so the host still removes it (GNOME ignores the
+  value).
+- `image-data` is never sent: it needs decoded pixels and the plugin
+  never decodes images (section 2 rejected list).
+- `value`: only to servers whose name contains dunst, mako, swaync /
+  SwayNotificationCenter or xfce; then `limits.progress_bar` and the
+  progress label is appended as a body line by the backend (render
+  drops it when the bar is native).
+
+### KDE job views
+
+- When the server is `Plasma` and `org.kde.JobViewServer` has an owner,
+  a notification with progress becomes a job view
+  (`/JobViewServer` `org.kde.JobViewServerV2.requestView(app id, 1
+  (killable), {immediate, transient, title, infoMessage, percent})`,
+  then `org.kde.JobViewV3.update`, both `NoReply`-safe: `update` /
+  `terminate` are sent without waiting). `infoMessage` = progress label,
+  else the rendered body. Progress removed (finish) -> `terminate(0, "",
+  {})` and a plain `Notify`; cancel -> `terminate`.
+- `cancelRequested`: the first destructive rendered action's key as an
+  activation (the app answers it and ends the job), else `Dismissed(User)`
+  and the job ends. Suspend / resume are not offered (capability 1 only).
+- Not verified on Plasma (no KDE session here): only the bus contract
+  as read from plasma-workspace's XML and kjobwidgets.
+
+### Portal
+
+- Action name `istmo-notification` for every button and the default
+  action; target = `a{sv}` {`istmo-id`, `istmo-key`, `istmo-user-data`,
+  `istmo-url`} -> `Activation.carried`. Exported (`app.istmo-notification`)
+  when the connection can own the app id (`DoNotQueue`) and serve
+  `org.freedesktop.Application` at the GApplication path
+  (`/org/example/App_1`); otherwise plain actions (`ActionInvoked`, running
+  only). `launched_app` = the id was not posted by this process.
+- Parameters are parsed by shape, not position: the dict with
+  `istmo-id` is the target, a dict with `activation-token` the platform
+  data, a string the reply (`im.reply-with-text`). The spec puts the
+  reply second for exported actions and third for `ActionInvoked`; both
+  work.
+- v2: `purpose` on reply buttons and the plugin's call buttons
+  (`call.accept` / `call.decline` / `call.hang-up`) only when
+  `SupportedOptions.button-purpose` lists it; `category` (`call.incoming`,
+  `call.ongoing`, `im.received` also for any notification with a reply
+  button, `alarm.ringing`) only when listed; `display-hint` persistent
+  (ongoing), transient (timeout), hide-on-lock-screen /
+  hide-content-on-lock-screen, show-as-new (alerting update); `sound`
+  `silent` / `default`. `CallStyle` is reported native when
+  `call.incoming` + `call.accept` are supported, but `limits.call` stays
+  false so render still adds the call buttons the purposes go on.
+- Icons as `("bytes", ay)` (read from the cached file, 2 MiB cap) or
+  `("themed", [name])`. Deviation: v2 deprecates `bytes` in favour of a
+  sealed memfd `file-descriptor`; sealing needs `memfd_create` (unsafe or
+  a new dependency) and the live portal accepted bytes. Named sounds are
+  not sent (same memfd requirement).
+- No picture, no dismissal events (the portal has no closed signal), no
+  native timeouts.
+
+### Verification
+
+- Unit tests: app id order, `file://` escaping, close reasons, markup
+  escaping, percent, capability mapping (fdo and portal), app paths.
+- `tests/linux_dbus.rs`: private `dbus-daemon`, child re-exec with the
+  bus address. Fake fdo server: Notify arguments (actions, hints,
+  escaped body + label, expire), silent `replaces_id` update, action
+  invoke + activation token, inline reply, default action, close
+  reasons (user, timeout, after action), `CloseNotification` on cancel,
+  spoofed signals ignored, restart with other capabilities (dismissals,
+  capability re-read, text progress, no actions). Fake portal (v2):
+  `AddNotification` dict (default action, category, purposes, target),
+  exported `ActivateAction` with reply + token, non-exported
+  `ActionInvoked`, `RemoveNotification`.
+- Live (`ISTMO_NOTIF_TEST_LIVE=1`, `=portal`), run once on niri with
+  Quickshell as notification server and xdg-desktop-portal (GNOME
+  backend): fdo route shows, updates and cancels (`fdo:quickshell`,
+  inline reply listed); forced portal route (`portal:2`, exported
+  actions owned) shows, updates and removes. Taps were not clicked by
+  hand.
+- Not verified: Plasma (job views, inline reply), GNOME Shell, dunst /
+  mako / swaync drawing `value`, a real Flatpak (sandbox detection,
+  D-Bus activation of exported actions, host registry acceptance), the
+  portal's handling of `display-hint` / `sound` on a real backend.
+
+### Open (Linux)
+
+- memfd `file-descriptor` icons and sounds for portal v2.
+- Suspend / resume of KDE jobs; `descriptionLabel` fields.
+- `image-data` stays out (decoding); servers without `image-path`
+  support show no image.

@@ -207,6 +207,35 @@ let host = istmo_notifications::DesktopNotifications::platform()
     .build();
 ```
 
+### Linux
+
+`DesktopNotifications::default()` picks the service itself: the
+notification portal inside Flatpak or Snap, and for host apps whose app
+id the portal's registry accepts (an installed `<app id>.desktop`);
+the freedesktop notification server otherwise. To set the app id or
+force a route, build the host with
+`DesktopNotifications::builder(LinuxOptions::new().with_app_id(id).with_route(LinuxRoute::Server).start())`
+(`istmo_notifications::desktop::linux`). The app id is `FLATPAK_ID`,
+else `with_app_id`, else the executable's name.
+
+- **Server**: updates go through `replaces_id`, silent ones carry
+  `suppress-sound`. Progress is a bar on dunst, mako, swaync and
+  xfce4-notifyd (`value` hint), a job view with a cancel button on KDE
+  Plasma (`kuiserver`; a cancel answers the notification's first
+  destructive action), a text line elsewhere. Inline replies are native
+  where the server lists `inline-reply` (Plasma, swaync). Dismissals are
+  reported while the app runs; the close a server sends after an action
+  is reported as `DismissReason::Other`.
+- **Portal**: no dismissal events. When the plugin can own the app id
+  on the bus, actions are exported and the portal starts the app for a
+  tap while it is closed; that needs a D-Bus `.service` file for the app
+  id and `DBusActivatable=true` in the desktop file (packaging writes
+  both). Reply buttons and call buttons use the portal's purposes where
+  it supports them.
+- Call `desktop::linux::take_activation_token()` when a response raises
+  a window: it hands back the XDG activation token the server or portal
+  sent, so the compositor lets the window take focus.
+
 ### Status
 
 The Rust core and the desktop host are in place; the Android, Apple,

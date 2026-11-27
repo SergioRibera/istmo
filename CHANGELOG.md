@@ -41,6 +41,15 @@
   `ISTMO_NOTIFICATION_*` rustc envs; `istmo_notifications::static_channels!()`
   decodes the channels for `DesktopNotifications::platform().with_channels(..)`.
 - `ISTMO_APP_NAME` rustc env (`[app] name`) for every app crate.
+- `istmo-notifications` Linux backend: `org.freedesktop.Notifications`
+  (updates through `replaces_id`, the `value` progress hint on dunst,
+  mako, swaync and xfce4-notifyd, KDE inline replies, close reasons as
+  dismissals while running), KDE Plasma job views for progress, and the
+  notification portal v1 / v2 in Flatpak, Snap and registered host apps
+  (reply and call purposes, exported actions through
+  `org.freedesktop.Application.ActivateAction`). `LinuxOptions` sets the
+  app id and the route; `take_activation_token()` hands back the XDG
+  activation token of the latest activation.
 - `istmo-autostart` plugin (`istmo.autostart`, desktop only): start the
   app at login from a user action (`SMAppService.mainApp` on macOS 13+,
   a LaunchAgent before that or for bare binaries, MSIX `StartupTask` or
