@@ -9,6 +9,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import dev.istmo.plugins.googlesignin.SignInCodecsImpl
 import dev.istmo.plugins.googlesignin.SignInDispatcher
+import dev.istmo.plugins.notifications.NotificationsBackendImpl
+import dev.istmo.plugins.notifications.NotificationsCodecsImpl
+import dev.istmo.plugins.notifications.NotificationsDispatcher
 import dev.istmo.runtime.AdMobCodecsImpl
 import dev.istmo.runtime.AdMobDispatcher
 import dev.istmo.runtime.AdMobFactoryImpl
@@ -44,6 +47,11 @@ class RustMobileActivity : NativeActivity() {
         runtime.registerHandler(
             AdMobDispatcher.PLUGIN_ID,
             AdMobDispatcher(AdMobFactoryImpl(this), AdMobCodecsImpl()),
+        )
+        // istmo-notifications ships its own Android backend (context-bound).
+        runtime.registerHandler(
+            NotificationsDispatcher.PLUGIN_ID,
+            NotificationsDispatcher(NotificationsBackendImpl(applicationContext), NotificationsCodecsImpl()),
         )
 
         super.onCreate(savedInstanceState)
