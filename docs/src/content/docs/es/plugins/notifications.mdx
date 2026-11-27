@@ -394,13 +394,18 @@ día.
 `INSendMessageIntent` en `NSUserActivityTypes`, que convierte las
 conversaciones en notificaciones de comunicación con el avatar del
 remitente (iOS 15, macOS 12). Sin ellos los niveles bajan y las
-conversaciones se muestran como líneas del cuerpo.
+conversaciones se muestran como líneas del cuerpo. istmo-build escribe
+estas claves solo para iOS: en macOS el backend busca
+`INSendMessageIntent` en `NSUserActivityTypes` del bundle en ejecución
+y el entitlement de comunicación, así que el empaquetado debe ponerlos
+en la `.app`.
 
 ### Estado
 
-El núcleo en Rust y el host de escritorio están listos; los backends de
-Android, Apple, Windows, Linux y web están en desarrollo. Hasta que un
-target tenga el suyo, responde `Unsupported`.
+El núcleo en Rust, el host de escritorio y los backends de Android, iOS,
+macOS, Windows, Linux y web están listos. Los backends nativos se
+comprueban con compiladores y servidores falsos; faltan pruebas en
+dispositivos.
 
 ## Tipos de wire
 

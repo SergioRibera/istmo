@@ -22,8 +22,6 @@
   validation, render fallbacks, coalescing, the in-process scheduler and
   its store, image files and events over a platform `Backend`;
   `UnavailableNotifications`, `FakeNotifications` (feature `testing`).
-  Platform backends (Android, Apple, Windows, Linux, web) are not in
-  this release yet.
 - `istmo.toml` `[app.notifications]` (`small_icon`, `accent`, `sounds`,
   `exact_alarms`, `full_screen`, `live_updates`, `apple`,
   `web_service_worker`) and `[[app.notification_channel]]`, checked with

@@ -256,6 +256,5 @@ completion handler until `complete(ack)` (at most 25 s).
 ## Status
 
 The Rust core (types, validation, render fallbacks, coalescing,
-scheduling, the desktop host) is in place. The Android, Apple, Windows,
-Linux and web backends are being written; until one lands, its target
-answers `Unsupported`.
+scheduling, the desktop host) and the Android, iOS, macOS, Windows,
+Linux and web backends are in place. None has run on a device yet.

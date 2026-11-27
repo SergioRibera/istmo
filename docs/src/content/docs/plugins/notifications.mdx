@@ -380,13 +380,16 @@ weekdays takes one request per weekday.
 `INSendMessageIntent` in `NSUserActivityTypes`, which turns
 conversations into communication notifications with the sender's avatar
 (iOS 15, macOS 12). Without them the levels fall back and conversations
-show as body lines.
+show as body lines. istmo-build writes these keys for iOS only: on macOS
+the backend checks `INSendMessageIntent` in the running bundle's
+`NSUserActivityTypes` and the communication entitlement, so packaging
+must put both into the `.app`.
 
 ### Status
 
-The Rust core and the desktop host are in place; the Android, Apple,
-Windows, Linux and web backends are being written. Until a target has
-one, it answers `Unsupported`.
+The Rust core, the desktop host and the Android, iOS, macOS, Windows,
+Linux and web backends are in place. The native backends are checked
+by compilers and fakes; device runs are still open.
 
 ## Wire types
 
