@@ -38,6 +38,7 @@ use crate::handover::{
     collect_dep_native_dirs,
 };
 use crate::ios_project::IosProject;
+use crate::launcher_actions::LauncherActions;
 use crate::manifest::{IstmoToml, Manifest, PluginEntry};
 use crate::native_deps::{NativeDeps, SwiftRepository};
 use crate::plugin_registry::{
@@ -297,6 +298,13 @@ impl<'a> AppPass<'a> {
     /// Icon sources and the native project files the pass reads.
     fn track_inputs(&self) {
         for source in self.app.icon.source_files() {
+            crate::directive::rerun_if_changed(source);
+        }
+        let actions = self
+            .config
+            .launcher_actions
+            .rooted(&self.app.krate.manifest_dir);
+        for source in actions.source_files() {
             crate::directive::rerun_if_changed(source);
         }
         if self.android_active {
@@ -561,6 +569,10 @@ impl<'a> AppPass<'a> {
                 icon,
                 &self.dep_manifests_by_links,
                 self.app_manifest,
+                &self
+                    .config
+                    .launcher_actions
+                    .rooted(&self.app.krate.manifest_dir),
             );
         }
     }
@@ -629,6 +641,9 @@ impl<'a> AppPass<'a> {
                 ios_info_plist_overrides: &self.config.info_plist,
                 document_types: &self.config.document_types,
                 url_schemes: &self.config.url_schemes,
+                launcher_actions: &self.config.launcher_actions,
+                // Shortcuts target `[app] id`; without it no resources are written.
+                android_shortcuts: self.app.id.is_some(),
                 lib_name: &self.app.krate.lib_name,
             },
         );
@@ -697,12 +712,38 @@ fn sync_android_project(
     icon: Option<&AppIcon>,
     dep_manifests_by_links: &[(String, Manifest)],
     app_manifest: Option<&Manifest>,
+    launcher_actions: &LauncherActions,
 ) {
     let project = AndroidProject::new(android_root);
     let plugins = AndroidPlugin::link(
         &collect_dep_native_dirs(NativePlatform::Android),
         dep_manifests_by_links,
     );
+    // Shortcuts name the application id; without one they cannot be
+    // written (and a stale set is removed).
+    let shortcuts_target = app.id.as_ref().map(crate::app_config::AppId::as_str);
+    let none = LauncherActions::default();
+    let launcher_actions = if shortcuts_target.is_some() {
+        launcher_actions
+    } else {
+        if !launcher_actions.is_empty() {
+            crate::directive::warning(
+                "[[app.launcher_action]] needs [app] id (the shortcuts' targetPackage); \
+                 static launcher actions skipped",
+            );
+        }
+        &none
+    };
+    if !launcher_actions.is_empty()
+        && !plugins
+            .iter()
+            .any(|p| p.id == crate::launcher_actions::PLUGIN_ID)
+    {
+        crate::directive::warning(
+            "[[app.launcher_action]] shortcuts open `IstmoLauncherActionActivity`: \
+             depend on istmo-launcher-actions, or they will not start",
+        );
+    }
     let deps = merged_native_deps(app_manifest);
     for conflict in deps.conflicts() {
         println!(
@@ -716,9 +757,12 @@ fn sync_android_project(
     }
     write_if_changed(
         &project.metadata_path(),
-        &project.render_metadata(app, &plugins, &deps),
+        &project.render_metadata(app, &plugins, &deps, !launcher_actions.is_empty()),
     );
     report_icon(project.write_icon(icon, &app.icon));
+    report_icon(
+        project.write_launcher_actions(launcher_actions, shortcuts_target.unwrap_or_default()),
+    );
 }
 
 /// Native dependencies of every linked plugin crate plus the app's own

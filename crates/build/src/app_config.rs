@@ -24,6 +24,7 @@ use toml_edit::{DocumentMut, Item, Table, Value};
 use crate::app_icon::IconConfig;
 use crate::autostart::AutostartConfig;
 use crate::document_types::DocumentTypes;
+use crate::launcher_actions::LauncherActions;
 use crate::manifest::{
     AndroidPermission, InfoPlistEntry, ManifestError, expect_bool, expect_integer, expect_string,
     expect_table, parse_android_permissions,
@@ -50,6 +51,7 @@ const KNOWN_APP_KEYS: &[&str] = &[
     "assets_dir",
     "document_type",
     "url_scheme",
+    "launcher_action",
     "single_instance",
     "autostart",
 ];
@@ -188,6 +190,9 @@ pub struct AppConfig {
     pub document_types: DocumentTypes,
     /// `[[app.url_scheme]]`: the custom URL schemes the app answers.
     pub url_schemes: UrlSchemes,
+    /// `[[app.launcher_action]]`: the static launcher actions (icon
+    /// paths relative to the crate).
+    pub launcher_actions: LauncherActions,
     /// Desktop: forward documents opened while the app runs to the
     /// running instance. Unset means "on when `document_types` or
     /// `url_schemes` is not empty"; see [`Self::single_instance`].
@@ -293,6 +298,11 @@ impl AppConfig {
             url_schemes: table
                 .get("url_scheme")
                 .map(UrlSchemes::parse)
+                .transpose()?
+                .unwrap_or_default(),
+            launcher_actions: table
+                .get("launcher_action")
+                .map(LauncherActions::parse)
                 .transpose()?
                 .unwrap_or_default(),
             single_instance: boolean("single_instance", "app.single_instance")?,
@@ -543,6 +553,27 @@ impl AppMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launcher_actions_are_parsed_and_checked() {
+        let config = AppConfig::parse(
+            "[[app.launcher_action]]\nid = \"compose\"\ntitle = \"New note\"\nurl = \"notes://compose\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.launcher_actions.iter().count(), 1);
+        assert!(
+            AppConfig::parse(
+                "[[app.launcher_action]]\nid = \"a\"\ntitle = \"A\"\nurl = \"https://x\"\n"
+            )
+            .is_err()
+        );
+        assert!(
+            AppConfig::parse("[app]\n")
+                .unwrap()
+                .launcher_actions
+                .is_empty()
+        );
+    }
 
     #[test]
     fn single_instance_follows_document_types() {

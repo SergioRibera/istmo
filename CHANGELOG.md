@@ -18,6 +18,30 @@
 - `istmo.toml` `[app.autostart] marker / windows_task_id`, emitted as
   `ISTMO_AUTOSTART_MARKER` / `ISTMO_AUTOSTART_TASK_ID` for the app
   crate; unknown keys and invalid markers fail the build.
+- `istmo-launcher-actions` plugin (`istmo.launcher_actions`, local only):
+  the app icon's menu, badge, progress, attention and recent documents.
+  Activating an action publishes its URL as a `DeepLink` on
+  `istmo.deeplinks` (`source = "launcher-action:<id>"` on Android, iOS
+  and macOS). Android: `ShortcutManager` dynamic shortcuts (API 25+),
+  `requestPinShortcut` (API 26+), rate limiting, PNG icons, and the
+  `IstmoLauncherActionActivity` trampoline. iOS: `shortcutItems` with SF
+  Symbols, the badge count (`setBadgeCount` on 16+), and
+  `IstmoLauncherActions.perform(_:)` for the scene delegate. Linux:
+  `com.canonical.Unity.LauncherEntry` (count, progress, urgent) on one
+  kept session-bus connection that also answers `Query`. Windows: Jump
+  List tasks, taskbar progress, `FlashWindowEx` and recent documents on
+  one COM thread that keeps its objects. macOS: Dock badge label,
+  `requestUserAttention`, a Dock menu added to the app delegate's class,
+  `NSDocumentController` recent documents. Unsupported features answer
+  `LauncherError::Unsupported`; `capabilities()` reports them.
+- `istmo.toml` `[[app.launcher_action]]` (`id`, `title`, `subtitle`,
+  `url`, `icon`, `ios_symbol`; unknown keys fail): Android static
+  shortcuts in the generated `.istmo/res` plus the `android.app.shortcuts`
+  `<meta-data>` in the `istmo:documents` block, and iOS
+  `UIApplicationShortcutItems`. Static shortcuts need `[app] id`.
+- `android/.istmo/istmo.json` `app.generated_res`: the Gradle plugin adds
+  `.istmo/res` as a resource directory when it is set (launcher icon or
+  launcher actions), no longer only with an icon.
 - `istmo.toml` `[plugin] targets = ["android", "ios", "desktop", "web"]`:
   an app generates a plugin's Kotlin / Swift sources, registry entries
   and shared type groups only for the mobile targets it lists. Default:

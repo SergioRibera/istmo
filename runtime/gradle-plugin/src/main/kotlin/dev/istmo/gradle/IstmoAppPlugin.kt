@@ -158,7 +158,7 @@ class IstmoAppPlugin : Plugin<Project> {
         app.minSdk?.let { min -> override("minSdk", config.minSdk, min) { config.minSdk = it } }
         config.manifestPlaceholders[LABEL_PLACEHOLDER] = app.name
         config.manifestPlaceholders[ICON_PLACEHOLDER] = app.icon ?: DEFAULT_ICON
-        if (app.icon != null) {
+        if (app.generatedRes) {
             android.sourceSets.getByName("main").res.srcDir(File(androidRoot, GENERATED_RES_DIR))
         }
     }

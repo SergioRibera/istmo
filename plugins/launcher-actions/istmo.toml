@@ -1,0 +1,15 @@
+[plugin]
+id = "istmo.launcher_actions"
+client_type = "::istmo_launcher_actions::LauncherActionsClient"
+android_package = "dev.istmo.plugins.launcher_actions"
+default_deployment = "local"
+# ShortcutManager is a system service: the application context will do.
+android_backend = "dev.istmo.plugins.launcher_actions.LauncherActionsBackendImpl"
+android_backend_arg = "context"
+
+[min_versions]
+# The backend answers `Unsupported` below API 25 (no ShortcutManager);
+# nothing in it needs a higher floor than the runtime's.
+android = 21
+# `UIApplicationShortcutItem` is iOS 9; the Swift runtime package needs 14.
+ios = "14.0"

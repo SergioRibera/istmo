@@ -34,6 +34,7 @@ members = [
     "plugins/screen-capture",
     "plugins/tray",
     "plugins/autostart",
+    "plugins/launcher-actions",
     "examples/camera-demo",
     "examples/data-store-demo",
     "examples/live-activity-demo",
@@ -226,6 +227,9 @@ pre-release-replacements = [
     { file = "plugins/opener/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
     { file = "plugins/share/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
     { file = "plugins/tray/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
+    { file = "docs/src/content/docs/es/plugins/launcher-actions.mdx", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
+    { file = "docs/src/content/docs/plugins/launcher-actions.mdx", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
+    { file = "plugins/launcher-actions/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
     { file = "runtime/README.md", search = '(istmo[a-z-]*\s*=\s*(?:\{\s*version\s*=\s*)?"|istmo-runtime:|sergioribera\.istmo"\) version "|SergioRibera/istmo\.git", from: "|match(?:ea)? `)[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?', replace = '${1}{{version}}', prerelease = true },
 ]
 
