@@ -88,6 +88,8 @@ const POLL: Duration = Duration::from_millis(10);
 /// How long the engine may stay silent before the thread fills the gap
 /// with silence.
 const GAP: Duration = Duration::from_millis(40);
+/// The longest silence filled at once.
+const MAX_FILL: Duration = Duration::from_millis(200);
 /// How long setup (activation included) may take.
 const SETUP_WAIT: Duration = Duration::from_secs(5);
 /// How long dropping a session waits for its thread.
@@ -442,29 +444,41 @@ fn open_stream(config: &AudioConfig, target: Target) -> Result<Stream, CaptureEr
 /// The capture loop's clock and gap filling.
 struct Timeline {
     clock: SampleClock,
-    started: Instant,
-    /// Frames delivered since `started`.
-    frames: u64,
-    /// When the engine last delivered a packet.
-    last_data: Instant,
+    /// How far the delivered audio reaches: the arrival of the last
+    /// packet, moved on by each silence fill.
+    covered: Instant,
     rate: u32,
 }
 
 impl Timeline {
     /// Frames of silence the stream owes: none while packets keep
-    /// coming, else how far it fell behind the wall clock (once that
-    /// exceeds the gap threshold).
+    /// coming, else the time since the delivered audio ended (once that
+    /// exceeds the gap threshold), at most [`MAX_FILL`] at once. Measured
+    /// from the last packet, not from the session start, so the drift
+    /// between the engine and the system clock never piles up into one
+    /// long fill.
     fn owed(&self) -> u64 {
-        let elapsed = self.started.elapsed();
-        let due = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX) * u64::from(self.rate)
-            / 1_000_000;
-        let gap = u64::try_from(GAP.as_micros()).unwrap_or(0) * u64::from(self.rate) / 1_000_000;
-        if self.last_data.elapsed() < GAP {
+        let behind = self.covered.elapsed();
+        if behind <= GAP {
             return 0;
         }
-        let behind = due.saturating_sub(self.frames);
-        if behind > gap { behind } else { 0 }
+        frames_in(behind.min(MAX_FILL), self.rate)
     }
+
+    /// A packet arrived now.
+    fn packet(&mut self) {
+        self.covered = Instant::now();
+    }
+
+    /// `frames` of silence were delivered.
+    fn filled(&mut self, frames: u64) {
+        let us = frames.saturating_mul(1_000_000) / u64::from(self.rate.max(1));
+        self.covered += Duration::from_micros(us);
+    }
+}
+
+fn frames_in(duration: Duration, rate: u32) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX) * u64::from(rate) / 1_000_000
 }
 
 fn deliver(
@@ -477,7 +491,6 @@ fn deliver(
     discontinuity: bool,
 ) -> bool {
     let stamp = timeline.clock.stamp(frames, negotiated.rate, wall_now_us());
-    timeline.frames = timeline.frames.saturating_add(frames);
     let meta = AudioMeta {
         seq: 0,
         pts_ns,
@@ -561,7 +574,7 @@ fn drain(
         } else {
             qpc.saturating_mul(100)
         };
-        timeline.last_data = Instant::now();
+        timeline.packet();
         if !deliver(
             out,
             timeline,
@@ -615,10 +628,8 @@ fn run(
     let mut last_check = Instant::now();
     let mut timeline = Timeline {
         clock: SampleClock::default(),
-        started: Instant::now(),
-        frames: 0,
+        covered: Instant::now(),
         rate: stream.negotiated.rate,
-        last_data: Instant::now(),
     };
     while !stop.load(Ordering::SeqCst) && !out.is_closed() {
         std::thread::sleep(POLL);
@@ -667,6 +678,7 @@ fn run(
             ) {
                 break;
             }
+            timeline.filled(owed);
         }
     }
     // SAFETY: stops the started client.
@@ -797,28 +809,35 @@ mod tests {
 
     #[test]
     fn gaps_owe_silence_only_past_the_threshold() {
-        let timeline = Timeline {
+        let mut timeline = Timeline {
             clock: SampleClock::default(),
-            started: Instant::now(),
-            frames: 0,
+            covered: Instant::now(),
             rate: 48_000,
-            last_data: Instant::now(),
         };
-        assert_eq!(timeline.owed(), 0, "nothing owed at the start");
-        let past = Instant::now()
-            .checked_sub(Duration::from_millis(500))
+        assert_eq!(timeline.owed(), 0, "nothing owed right after a packet");
+        timeline.covered = Instant::now()
+            .checked_sub(Duration::from_millis(100))
             .expect("past");
-        let flowing = Timeline {
-            started: past,
-            ..timeline
+        let owed = timeline.owed();
+        assert!((4_700..=5_500).contains(&owed), "{owed}");
+        timeline.filled(owed);
+        assert_eq!(timeline.owed(), 0, "the fill caught up");
+    }
+
+    #[test]
+    fn a_long_silence_is_filled_in_bounded_chunks() {
+        let mut timeline = Timeline {
+            clock: SampleClock::default(),
+            covered: Instant::now()
+                .checked_sub(Duration::from_secs(3))
+                .expect("past"),
+            rate: 48_000,
         };
-        assert_eq!(flowing.owed(), 0, "packets keep coming: nothing owed");
-        let silent = Timeline {
-            last_data: past,
-            ..flowing
-        };
-        let owed = silent.owed();
-        assert!((23_000..=26_000).contains(&owed), "{owed}");
+        assert_eq!(timeline.owed(), frames_in(MAX_FILL, 48_000));
+        timeline.filled(timeline.owed());
+        assert!(timeline.owed() > 0, "the rest comes in later fills");
+        timeline.packet();
+        assert_eq!(timeline.owed(), 0);
     }
 
     #[test]
