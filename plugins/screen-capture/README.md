@@ -220,7 +220,12 @@ subscriber, then streams these events:
 - Borderless WGC capture: `WindowsOptions::borderless` (`Prefer` /
   `Require`) with `CapturePolicy::allow_borderless`, build 20348+. The
   OS consent runs at most once; `access(AccessScope::BorderlessCapture)`
-  reads it without prompting, `request_access` prompts.
+  reads it without prompting, `request_access` prompts (on a plugin
+  thread, up to 2 min). Opening a session never prompts: `Require`
+  before an answer is `ConsentRequired`. The capability lives in a
+  package manifest (`graphicsCaptureWithoutBorder`), so unpackaged apps
+  read `Restricted`. A hidden border is the best case: another app
+  capturing the same window with a border shows it anyway.
 - Audio: `AudioSource::System` (default render endpoint loopback),
   `ExcludeSelf` and `Application(executable or pid)` (process loopback,
   build 20348+).

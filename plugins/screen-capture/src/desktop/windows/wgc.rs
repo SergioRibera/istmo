@@ -377,16 +377,33 @@ fn borderless(
             shown
         };
     }
-    let mut status = access::borderless_status();
-    if status == AccessStatus::NotDetermined {
-        status = access::request_borderless()?;
-    }
-    if status == AccessStatus::Granted {
-        Ok((true, BorderState::Hidden))
-    } else if require {
-        Err(CaptureError::ConsentDenied)
-    } else {
-        shown
+    // Never prompts: the consent is `request_access`'s, on its own thread.
+    border_decision(require, access::borderless_grant()).map(|hidden| {
+        // `Hidden` is the best case: the OS ignores the request without
+        // the grant, and shows a border anyway while another app capturing
+        // the same item requires one.
+        (
+            hidden,
+            if hidden {
+                BorderState::Hidden
+            } else {
+                BorderState::Shown
+            },
+        )
+    })
+}
+
+/// Whether to ask for no border, given the standing grant.
+fn border_decision(require: bool, grant: access::Grant) -> Result<bool, CaptureError> {
+    match grant.status {
+        AccessStatus::Granted => Ok(true),
+        _ if !require => Ok(false),
+        AccessStatus::NotDetermined => Err(CaptureError::ConsentRequired),
+        _ if grant.undeclared => Err(wgc_err(
+            "borderless capture",
+            "needs package identity declaring the graphicsCaptureWithoutBorder capability",
+        )),
+        _ => Err(CaptureError::ConsentDenied),
     }
 }
 
@@ -1472,6 +1489,31 @@ mod tests {
                 Some(ID),
                 Requirement::Borderless
             ))
+        );
+    }
+
+    #[test]
+    fn opening_never_prompts_for_borderless() {
+        let grant = |status, undeclared| access::Grant { status, undeclared };
+        assert_eq!(
+            border_decision(true, grant(AccessStatus::Granted, false)),
+            Ok(true)
+        );
+        assert_eq!(
+            border_decision(false, grant(AccessStatus::NotDetermined, false)),
+            Ok(false)
+        );
+        assert_eq!(
+            border_decision(true, grant(AccessStatus::NotDetermined, false)),
+            Err(CaptureError::ConsentRequired)
+        );
+        assert!(matches!(
+            border_decision(true, grant(AccessStatus::Restricted, true)),
+            Err(CaptureError::Protocol(_))
+        ));
+        assert_eq!(
+            border_decision(true, grant(AccessStatus::Denied, false)),
+            Err(CaptureError::ConsentDenied)
         );
     }
 }
