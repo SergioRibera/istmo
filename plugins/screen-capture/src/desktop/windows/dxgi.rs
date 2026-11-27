@@ -773,9 +773,8 @@ impl Backend for DxgiBackend {
                         (meta, NativeBuffer::from_bytes(image.bytes))
                     }
                     Path::Texture => {
-                        let format = d3d::dxgi_format(dup.format)
-                            .ok_or_else(|| dxgi_err("screenshot", "format"))?;
-                        let (copy, handle) = dup.gpu.shared_texture(ID, dup.size, format)?;
+                        let (size, format) = like(&texture);
+                        let (copy, handle) = dup.gpu.shared_texture(ID, size, format)?;
                         dup.gpu.copy(&copy, &texture);
                         dup.gpu.finish(ID, SHOT_COPY_WAIT)?;
                         let meta = frame_meta(
@@ -966,6 +965,14 @@ impl Drop for Session {
 struct Slot {
     texture: ID3D11Texture2D,
     handle: Arc<SharedHandle>,
+    /// Size and format it was made with.
+    shape: (Size, DXGI_FORMAT),
+}
+
+/// The size and format of a texture, for a copy target.
+fn like(texture: &ID3D11Texture2D) -> (Size, DXGI_FORMAT) {
+    let desc = d3d::texture_desc(texture);
+    (Size::new(desc.Width, desc.Height), desc.Format)
 }
 
 struct Worker {
@@ -1156,20 +1163,29 @@ impl Worker {
         self.last = None;
     }
 
-    fn slot(&mut self, index: u32) -> Result<(ID3D11Texture2D, Arc<SharedHandle>), CaptureError> {
+    /// The pool texture of `index`, shaped like `source` (the acquired
+    /// desktop image): `CopyResource` needs the very same size and format.
+    fn slot(
+        &mut self,
+        index: u32,
+        source: &ID3D11Texture2D,
+    ) -> Result<(ID3D11Texture2D, Arc<SharedHandle>), CaptureError> {
         let index = usize::try_from(index).unwrap_or(usize::MAX);
         if self.slots.len() <= index {
             self.slots.resize_with(index + 1, || None);
         }
-        if let Some(slot) = &self.slots[index] {
+        let shape = like(source);
+        if let Some(slot) = &self.slots[index]
+            && slot.shape == shape
+        {
             return Ok((slot.texture.clone(), Arc::clone(&slot.handle)));
         }
-        let format = d3d::dxgi_format(self.dup.format).ok_or_else(|| dxgi_err("pool", "format"))?;
-        let (texture, handle) = self.dup.gpu.shared_texture(ID, self.dup.size, format)?;
+        let (texture, handle) = self.dup.gpu.shared_texture(ID, shape.0, shape.1)?;
         let handle = Arc::new(handle);
         self.slots[index] = Some(Slot {
             texture: texture.clone(),
             handle: Arc::clone(&handle),
+            shape,
         });
         Ok((texture, handle))
     }
@@ -1252,7 +1268,7 @@ impl Worker {
                 };
             }
         };
-        let (target, handle) = self.slot(lease.identity().slot)?;
+        let (target, handle) = self.slot(lease.identity().slot, &texture)?;
         self.dup.gpu.copy(&target, &texture);
         let finished = self.dup.gpu.try_finish(ID, COPY_WAIT)?;
         if self.late.record(finished) {
