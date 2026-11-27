@@ -20,9 +20,27 @@
 //! crate, also [`crate::web_assets::SERVICE_WORKER_JS`]) must be served
 //! by the app; see `ServiceWorker`.
 
+// Natively these are compiled for their unit tests only; the host that
+// uses everything in them is wasm32-only.
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(dead_code, reason = "used by the wasm32 host; natively only tested")
+)]
 mod caps;
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(dead_code, reason = "used by the wasm32 host; natively only tested")
+)]
 mod images;
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(dead_code, reason = "used by the wasm32 host; natively only tested")
+)]
 mod payload;
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(dead_code, reason = "used by the wasm32 host; natively only tested")
+)]
 mod state;
 
 #[cfg(target_arch = "wasm32")]
