@@ -22,6 +22,8 @@
 //!   the app.
 //! * Desktop (Linux, Windows, macOS): [`DesktopNotifications`], a Rust
 //!   host over a platform [`Backend`](desktop::Backend).
+//! * Web (`wasm32`): `WebNotifications`, over the Notification API and
+//!   the plugin's service worker ([`web_assets`]).
 //! * Anything else: [`UnavailableNotifications`].
 //! * Tests: `FakeNotifications` (feature `testing`).
 //!
@@ -64,8 +66,9 @@ pub mod schedule;
 mod types;
 mod unavailable;
 pub mod validate;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod web;
+pub mod web_assets;
 
 pub use build_config::channels_from_build;
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
@@ -80,6 +83,8 @@ pub use responses::{
 };
 pub use types::*;
 pub use unavailable::UnavailableNotifications;
+#[cfg(target_arch = "wasm32")]
+pub use web::{ServiceWorker, WebNotifications, WebNotificationsBuilder};
 
 /// Wire identifier of the plugin.
 pub const NOTIFICATIONS_PLUGIN_ID: &str = "istmo.notifications";
