@@ -238,6 +238,7 @@ check-generated-native:
     runtime/android/ci/compile-goldens.sh
     runtime/ios/ci/typecheck-goldens.sh
     scripts/check-plugin-native.sh screen-capture dev.istmo.plugins.screencapture screen_capture
+    plugins/notifications/tests/native/android/check.sh
 
 # ---- Docs -----------------------------------------------------------
 #

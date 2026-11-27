@@ -102,6 +102,9 @@ jobs:
         run: KOTLIN_CLASSPATH="$RUNNER_TEMP/coroutines.jar" runtime/android/ci/compile-goldens.sh
       - name: Compile plugin backends against their generated Kotlin
         run: KOTLIN_CLASSPATH="$RUNNER_TEMP/coroutines.jar" SKIP_SWIFT=1 scripts/check-plugin-native.sh screen-capture dev.istmo.plugins.screencapture screen_capture
+      - name: Notifications Android backend (vectors, coalescer, android.jar compile)
+        # ANDROID_HOME is preinstalled on the GitHub Ubuntu runners.
+        run: KOTLIN_CLASSPATH="$RUNNER_TEMP/coroutines.jar" plugins/notifications/tests/native/android/check.sh
 
   ios:
     runs-on: macos-latest
