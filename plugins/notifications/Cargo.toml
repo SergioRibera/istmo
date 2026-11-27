@@ -1,0 +1,71 @@
+[package]
+name = "istmo-notifications"
+version = "0.1.1-alpha.7"
+description = "Local notifications for the istmo framework on Android, iOS, macOS, Windows, Linux and the web: live progress updates, actions and inline replies, conversations, scheduling, with simulations where a platform lacks a feature."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+include = ["/src", "/build.rs", "/istmo.toml", "/README.md", "/LICENSE*"]
+keywords = ["istmo", "notifications", "toast", "reminders", "progress"]
+categories = ["gui", "os", "api-bindings"]
+links = "istmo_notifications"
+
+[features]
+# `FakeNotifications`: an in-memory host that records calls, for app tests.
+testing = []
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+# `DeepLinks::publish` for responses that carry a URL.
+istmo-plugins = { workspace = true }
+flume = { workspace = true }
+oneshot = { workspace = true }
+tracing = { workspace = true }
+# Calendar rules: civil dates, IANA zones, DST gaps and overlaps. Default
+# features bundle the tz database where the OS has none (Windows, wasm);
+# no serde.
+jiff = "1.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The live-update sender blocks on its one call in flight.
+pollster = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The live-update sender runs as a local task; `js` gives jiff the
+# browser's time zone.
+wasm-bindgen-futures = "0.4"
+jiff = { version = "1.0", features = ["js"] }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+istmo-build = { workspace = true }
+pollster = { workspace = true }
+
+[lints.rust]
+# The workspace lints, except `unsafe_code`: denied crate-wide so the
+# Windows (COM) and macOS (objc2) backends can allow it per module, like
+# plugins/tray. Keep in sync with [workspace.lints].
+unknown_lints = { level = "allow", priority = -2 }
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unreachable_pub = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+redundant_pub_crate = "allow"
+unused_async_trait_impl = "allow"
+# Every unsafe block states the invariants it relies on.
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"

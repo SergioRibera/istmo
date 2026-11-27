@@ -35,6 +35,7 @@ members = [
     "plugins/tray",
     "plugins/autostart",
     "plugins/launcher-actions",
+    "plugins/notifications",
     "examples/camera-demo",
     "examples/data-store-demo",
     "examples/live-activity-demo",
@@ -115,6 +116,7 @@ istmo-webview = { path = "plugins/webview", version = "0.1.1-alpha.7" }
 istmo-biometric = { path = "plugins/biometric", version = "0.1.1-alpha.7" }
 istmo-camera = { path = "plugins/camera", version = "0.1.1-alpha.7" }
 istmo-tray = { path = "plugins/tray", version = "0.1.1-alpha.7" }
+istmo-notifications = { path = "plugins/notifications", version = "0.1.1-alpha.7" }
 
 [package]
 name = "istmo"

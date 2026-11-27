@@ -1,0 +1,15 @@
+[plugin]
+id = "istmo.notifications"
+client_type = "::istmo_notifications::NotificationsClient"
+android_package = "dev.istmo.plugins.notifications"
+default_deployment = "local"
+# No Kotlin / Swift backend ships yet: apps register one by hand until
+# the native backends land, so the generated registry must not name a
+# `NotificationsBackendImpl` that does not exist.
+auto_register = false
+
+[min_versions]
+# NotificationCompat covers API 21; newer features (channels 26, promoted
+# ongoing 36) are gated at run time and reported in `capabilities`.
+android = 21
+ios = "14.0"
