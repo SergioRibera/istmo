@@ -470,14 +470,16 @@ impl Backend for SckBackend {
     }
 
     fn sources(&self) -> Result<SourceList, CaptureError> {
-        if !Self::granted() {
-            // Not enumerable before the grant; listing would prompt.
-            return Ok(SourceList {
-                sources: Vec::new(),
-                listing: SourceListing::AfterGrant,
-            });
-        }
-        Ok(listing(&Content::fetch()?, self.os))
+        ffi::pooled(|| {
+            if !Self::granted() {
+                // Not enumerable before the grant; listing would prompt.
+                return Ok(SourceList {
+                    sources: Vec::new(),
+                    listing: SourceListing::AfterGrant,
+                });
+            }
+            Ok(listing(&Content::fetch()?, self.os))
+        })
     }
 
     fn watch(&self, feed: &mut SourceFeed) -> Result<(), CaptureError> {
@@ -496,7 +498,7 @@ impl Backend for SckBackend {
     }
 
     fn resolve_special(&self, selector: &SourceSelector) -> Result<Source, CaptureError> {
-        match selector {
+        ffi::pooled(|| match selector {
             SourceSelector::Focused if sck_map::at_least(self.os, sck_map::WINDOW_ACTIVE) => {
                 let content = self.content()?;
                 let displays = content.displays();
@@ -513,71 +515,73 @@ impl Backend for SckBackend {
                 Some(ID),
                 Requirement::SourceSelector,
             )),
-        }
+        })
     }
 
     fn screenshot(&self, plan: &ScreenshotPlan) -> Result<Shot, CaptureError> {
-        let chosen = self.negotiate(&plan.formats)?;
-        let hdr = self.hdr(plan.hdr, chosen.format)?;
-        let cursor = Self::cursor_mode(plan.cursor);
-        let targets: Vec<(Filter, Source, Size, ConsentModel)> = match &plan.target {
-            Target::Sources { sources, .. } => sources
-                .iter()
-                .map(|source| {
-                    self.prepare(source, &Exclusions::default())
-                        .map(|p| (p.filter, p.source, p.native, ConsentModel::SystemSetting))
-                })
-                .collect::<Result<_, _>>()?,
-            Target::Picker(options) => {
-                let filter = ffi::pick(options, || !plan.caller.is_gone())?;
-                let (source, native) = self.picked(&filter);
-                vec![(filter, source, native, ConsentModel::PickerPerSession)]
-            }
-        };
-        let mut frames = Vec::with_capacity(targets.len());
-        let mut negotiated = None;
-        for (filter, source, native, consent) in targets {
-            let window = source.kind == SourceKind::Window;
-            let settings = self.settings(
-                native,
-                chosen.format,
-                FrameRate::Native,
-                sck_map::POOL.min_depth,
-                cursor,
-                false,
-                hdr,
-                window,
-            )?;
-            let sample = self.shoot(&filter, &settings)?;
-            let shape = Shape {
-                format: chosen.format,
-                memory: chosen.memory,
-                colour: session::colour_of(chosen.format, hdr),
-                tier: chosen.tier,
-                source_id: source.id.clone(),
+        ffi::pooled(|| {
+            let chosen = self.negotiate(&plan.formats)?;
+            let hdr = self.hdr(plan.hdr, chosen.format)?;
+            let cursor = Self::cursor_mode(plan.cursor);
+            let targets: Vec<(Filter, Source, Size, ConsentModel)> = match &plan.target {
+                Target::Sources { sources, .. } => sources
+                    .iter()
+                    .map(|source| {
+                        self.prepare(source, &Exclusions::default())
+                            .map(|p| (p.filter, p.source, p.native, ConsentModel::SystemSetting))
+                    })
+                    .collect::<Result<_, _>>()?,
+                Target::Picker(options) => {
+                    let filter = ffi::pick(options, || !plan.caller.is_gone())?;
+                    let (source, native) = self.picked(&filter);
+                    vec![(filter, source, native, ConsentModel::PickerPerSession)]
+                }
             };
-            let (meta, buffer) = session::still(&shape, &sample)?;
-            if negotiated.is_none() {
-                negotiated = Some(Self::negotiated(
-                    source.clone(),
-                    meta.size,
-                    &chosen,
+            let mut frames = Vec::with_capacity(targets.len());
+            let mut negotiated = None;
+            for (filter, source, native, consent) in targets {
+                let window = source.kind == SourceKind::Window;
+                let settings = self.settings(
+                    native,
+                    chosen.format,
+                    FrameRate::Native,
+                    sck_map::POOL.min_depth,
                     cursor,
+                    false,
                     hdr,
-                    1,
-                    Exhaustion::Stall,
-                    consent,
-                ));
+                    window,
+                )?;
+                let sample = self.shoot(&filter, &settings)?;
+                let shape = Shape {
+                    format: chosen.format,
+                    memory: chosen.memory,
+                    colour: session::colour_of(chosen.format, hdr),
+                    tier: chosen.tier,
+                    source_id: source.id.clone(),
+                };
+                let (meta, buffer) = session::still(&shape, &sample)?;
+                if negotiated.is_none() {
+                    negotiated = Some(Self::negotiated(
+                        source.clone(),
+                        meta.size,
+                        &chosen,
+                        cursor,
+                        hdr,
+                        1,
+                        Exhaustion::Stall,
+                        consent,
+                    ));
+                }
+                frames.push(Captured {
+                    meta,
+                    buffer,
+                    source,
+                });
             }
-            frames.push(Captured {
-                meta,
-                buffer,
-                source,
-            });
-        }
-        let negotiated =
-            negotiated.ok_or_else(|| CaptureError::protocol(ID, "screenshot", "no source"))?;
-        Ok(Shot { frames, negotiated })
+            let negotiated =
+                negotiated.ok_or_else(|| CaptureError::protocol(ID, "screenshot", "no source"))?;
+            Ok(Shot { frames, negotiated })
+        })
     }
 
     fn open(
@@ -585,63 +589,65 @@ impl Backend for SckBackend {
         plan: StreamPlan,
         out: FrameOut,
     ) -> Result<(Box<dyn BackendSession>, NegotiatedStream), CaptureError> {
-        let chosen = self.negotiate(&plan.formats)?;
-        let hdr = self.hdr(plan.hdr, chosen.format)?;
-        let cursor = Self::cursor_mode(plan.cursor);
-        let (filter, source, native, consent) = if let Some(options) = &plan.picker {
-            let filter = ffi::pick(options, || !plan.caller.is_gone())?;
-            let (source, native) = self.picked(&filter);
-            (filter, source, native, ConsentModel::PickerPerSession)
-        } else {
-            let exclude = exclusions(&plan.exclude, plan.exclude_own_process);
-            let prepared = self.prepare(&plan.source, &exclude)?;
-            (
-                prepared.filter,
-                prepared.source,
-                prepared.native,
-                ConsentModel::SystemSetting,
-            )
-        };
-        let size = sck_map::output_size(plan.size, native);
-        let settings = self.settings(
-            size,
-            chosen.format,
-            plan.fps,
-            plan.pool_depth,
-            cursor,
-            !matches!(plan.size, OutputSize::Native),
-            hdr,
-            source.kind == SourceKind::Window,
-        )?;
-        let shape = Shape {
-            format: chosen.format,
-            memory: chosen.memory,
-            colour: session::colour_of(chosen.format, hdr),
-            tier: chosen.tier,
-            source_id: source.id.clone(),
-        };
-        let depth = settings.queue_depth;
-        let sink = Arc::new(LiveSink::new(out, shape, depth, plan.exhaustion));
-        let stream = Stream::start(&filter, &settings, true, false, Arc::clone(&sink) as _)?;
-        let negotiated = Self::negotiated(
-            source,
-            size,
-            &chosen,
-            cursor,
-            hdr,
-            depth,
-            plan.exhaustion,
-            consent,
-        );
-        let session = SckSession {
-            stream,
-            sink,
-            settings,
-            negotiated: negotiated.clone(),
-            os: self.os,
-            hdr_policy: plan.hdr,
-        };
-        Ok((Box::new(session), negotiated))
+        ffi::pooled(|| {
+            let chosen = self.negotiate(&plan.formats)?;
+            let hdr = self.hdr(plan.hdr, chosen.format)?;
+            let cursor = Self::cursor_mode(plan.cursor);
+            let (filter, source, native, consent) = if let Some(options) = &plan.picker {
+                let filter = ffi::pick(options, || !plan.caller.is_gone())?;
+                let (source, native) = self.picked(&filter);
+                (filter, source, native, ConsentModel::PickerPerSession)
+            } else {
+                let exclude = exclusions(&plan.exclude, plan.exclude_own_process);
+                let prepared = self.prepare(&plan.source, &exclude)?;
+                (
+                    prepared.filter,
+                    prepared.source,
+                    prepared.native,
+                    ConsentModel::SystemSetting,
+                )
+            };
+            let size = sck_map::output_size(plan.size, native);
+            let settings = self.settings(
+                size,
+                chosen.format,
+                plan.fps,
+                plan.pool_depth,
+                cursor,
+                !matches!(plan.size, OutputSize::Native),
+                hdr,
+                source.kind == SourceKind::Window,
+            )?;
+            let shape = Shape {
+                format: chosen.format,
+                memory: chosen.memory,
+                colour: session::colour_of(chosen.format, hdr),
+                tier: chosen.tier,
+                source_id: source.id.clone(),
+            };
+            let depth = settings.queue_depth;
+            let sink = Arc::new(LiveSink::new(out, shape, depth, plan.exhaustion));
+            let stream = Stream::start(&filter, &settings, true, false, Arc::clone(&sink) as _)?;
+            let negotiated = Self::negotiated(
+                source,
+                size,
+                &chosen,
+                cursor,
+                hdr,
+                depth,
+                plan.exhaustion,
+                consent,
+            );
+            let session = SckSession {
+                stream,
+                sink,
+                settings,
+                negotiated: negotiated.clone(),
+                os: self.os,
+                hdr_policy: plan.hdr,
+            };
+            Ok((Box::new(session) as Box<dyn BackendSession>, negotiated))
+        })
     }
 }
 

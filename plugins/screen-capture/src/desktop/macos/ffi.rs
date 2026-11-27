@@ -66,6 +66,14 @@ impl<T: Message> std::ops::Deref for Shared<T> {
     }
 }
 
+/// Run `f` inside its own autorelease pool. The host calls backends on
+/// long-lived worker threads (the source watcher lists every second)
+/// whose implicit pool never drains, so objects the framework hands back
+/// autoreleased would pile up for the thread's whole life.
+pub(crate) fn pooled<T>(f: impl FnOnce() -> T) -> T {
+    objc2::rc::autoreleasepool(|_| f())
+}
+
 /// The running macOS version.
 #[must_use]
 pub(crate) fn os_version() -> OsVersion {
