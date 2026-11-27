@@ -38,7 +38,7 @@ echo "jvm: calendar rule vectors, coalescer cases, schedule engine and store"
 # shellcheck disable=SC2086 # KOTLINC may carry its own arguments.
 $kotlinc -Werror ${cp:+-classpath "$cp"} -d "$work/jvm" \
     "$runtime/Bincode.kt" "$runtime/PluginHandler.kt" "$work/gen"/*.kt \
-    "$native/CalendarRule.kt" "$native/Coalescer.kt" "$native/ScheduleStore.kt" "$here/NativeChecks.kt"
+    "$native/CalendarRule.kt" "$native/Coalescer.kt" "$native/ScheduleStore.kt" "$native/Validate.kt" "$here/NativeChecks.kt"
 ${KOTLIN:-kotlin} -cp "$work/jvm${cp:+:$cp}" NativeChecksKt "$plugin/tests/schedule_vectors.tsv"
 
 if [ -n "${SKIP_ANDROID:-}" ]; then

@@ -171,6 +171,9 @@ object Triggers {
 
     private fun toLong(value: ULong): Long = if (value > Long.MAX_VALUE.toULong()) Long.MAX_VALUE else value.toLong()
 
+    /** `a - b` for `b >= 0`, saturating. */
+    internal fun saturatingSub(a: Long, b: Long): Long = saturatingAdd(a, -b)
+
     internal fun saturatingAdd(a: Long, b: Long): Long {
         val r = a + b
         return if (((a xor r) and (b xor r)) < 0) (if (a < 0) Long.MIN_VALUE else Long.MAX_VALUE) else r

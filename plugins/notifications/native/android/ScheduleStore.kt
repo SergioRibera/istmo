@@ -24,7 +24,8 @@ data class DueNotification(val notification: Notification, val late: Boolean)
  */
 class ScheduleEngine(entries: List<ScheduleEntry> = emptyList(), private val local: () -> TimeZone = TimeZone::getDefault) {
     private val entries = LinkedHashMap<String, ScheduleEntry>().apply {
-        for (entry in entries) put(entry.notification.id.value, entry)
+        // Entries that never fire again are dropped (`Engine::with_entries`).
+        for (entry in entries) if (entry.nextFireMs != null) put(entry.notification.id.value, entry)
     }
 
     /**
@@ -117,11 +118,26 @@ class ScheduleEngine(entries: List<ScheduleEntry> = emptyList(), private val loc
                 maxOf(at, Triggers.saturatingAdd(entry.anchorMs, if (steps != 0L && period > Long.MAX_VALUE / steps) Long.MAX_VALUE else steps * period))
             }
             is Trigger.Calendar -> {
+                val next = { after: Long -> Triggers.nextAfter(trigger, entry.anchorMs, after, zone) }
+                // Search back from now, doubling the window, for the first
+                // window holding an occurrence: the walk then starts close
+                // to the latest one however long ago `at` was.
                 var last = at
+                var back = FIRST_PROBE_MS
+                while (true) {
+                    val probe = Triggers.saturatingSub(nowMs, back)
+                    if (probe <= at) break
+                    val found = next(probe)
+                    if (found != null && found <= nowMs) {
+                        last = found
+                        break
+                    }
+                    back = if (back > Long.MAX_VALUE / 2) Long.MAX_VALUE else back * 2
+                }
                 for (i in 0 until MAX_MISSED_WALK) {
-                    val next = Triggers.nextAfter(trigger, entry.anchorMs, last, zone)
-                    if (next == null || next > nowMs) break
-                    last = next
+                    val found = next(last)
+                    if (found == null || found > nowMs) break
+                    last = found
                 }
                 last
             }
@@ -130,7 +146,11 @@ class ScheduleEngine(entries: List<ScheduleEntry> = emptyList(), private val loc
     companion object {
         /** `schedule::LATE_AFTER_MS`. */
         const val LATE_AFTER_MS = 60_000L
+        /** Calendar occurrences walked forward from where the backward search started (`MAX_MISSED_WALK`). */
         private const val MAX_MISSED_WALK = 4_096
+
+        /** First probe of the backward search (`FIRST_PROBE_MS`). */
+        private const val FIRST_PROBE_MS = 1_000L
     }
 }
 

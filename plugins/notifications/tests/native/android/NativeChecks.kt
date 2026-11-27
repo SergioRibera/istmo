@@ -1,7 +1,9 @@
 // JVM checks of the plain-Kotlin parts of the Android backend: the
 // calendar rule against `tests/schedule_vectors.tsv`, the coalescer
 // against the unit cases of `src/coalesce.rs`, trigger timing, missed
-// deliveries and the store round trip. Run by `check.sh`.
+// deliveries, the store round trip and the validation rules of
+// `src/validate.rs`. Run by `check.sh`.
+import dev.istmo.plugins.notifications.*
 import dev.istmo.plugins.notifications.CalendarRule
 import dev.istmo.plugins.notifications.CalendarRules
 import dev.istmo.plugins.notifications.Coalescer
@@ -212,6 +214,27 @@ private fun schedule() {
     late.add(notification("l"), Trigger.After(1_000u), 0)
     eq("late", late.due(1_000 + 120_000).map { it.late }, listOf(true))
 
+
+    // `engine.rs` tests: the daily reminder missed three days rejoins its rule,
+    // twenty years asleep still counts from the latest occurrence, and a
+    // per-minute repeat woken 30 s after an occurrence is on time.
+    val nine = Trigger.Calendar(CalendarRule(9u, 0u, emptyList(), null, null, "UTC", null))
+    val asleep = ScheduleEngine(local = { utc })
+    asleep.add(notification("daily"), nine, 0)
+    val woken = 3 * 86_400_000L + 9 * 3_600_000L + 1_800_000L
+    eq("three days late", asleep.due(woken).map { it.late }, listOf(true))
+    eq("three days rejoin", asleep.nextDeadline(), 4 * 86_400_000L + 9 * 3_600_000L)
+    val decades = ScheduleEngine(local = { utc })
+    decades.add(notification("daily"), nine, 0)
+    val day = 20L * 366
+    eq("twenty years", decades.due(day * 86_400_000L + 9 * 3_600_000L + 1_800_000L).map { it.late }, listOf(true))
+    val minutes = ScheduleEngine(local = { utc })
+    minutes.add(notification("m", MissedPolicy.Drop), every, 0)
+    eq("per minute three days", minutes.due(3 * 86_400_000L + 30_000).map { it.late }, listOf(false))
+    eq("per minute next", minutes.nextDeadline(), 3 * 86_400_000L + 60_000)
+    // Dead entries read from a store are dropped (`Engine::with_entries`).
+    val ended = Trigger.Calendar(CalendarRule(9u, 0u, emptyList(), null, null, "UTC", 1_000))
+    check("dead dropped", ScheduleEngine(listOf(ScheduleEntry(notification("dead"), ended, 0, null)), { utc }).isEmpty())
     // Store round trip.
     val dir = File(System.getProperty("java.io.tmpdir"), "istmo-notif-check-${System.nanoTime()}")
     val store = ScheduleStore(File(dir, "schedule.bin"), NotificationsCodecsImpl())
@@ -225,10 +248,80 @@ private fun schedule() {
     println("schedule engine and store: done")
 }
 
+
+private fun invalid(got: InvalidField?, field: String, problem: Problem) = eq("invalid $field", got, InvalidField(field, problem))
+
+private fun action(id: String, title: String, kind: ActionKind = ActionKind.Button) =
+    Action(ActionId(id), title, kind, opensApp = false, destructive = false, requiresUnlock = false, url = null, icon = null)
+
+private fun patch(progress: Progress? = null, actions: List<Action>? = null, style: Style? = null, clear: List<PatchField> = emptyList()) =
+    NotificationPatch(null, null, null, style, null, actions, progress, null, null, null, null, null, clear, false)
+
+private fun bar(value: Float?) = Progress(value, null, emptyList(), emptyList())
+
+private fun rule(hour: Int, weekdays: List<Weekday> = emptyList(), day: Int? = null, month: Int? = null, zone: String? = null) =
+    CalendarRule(hour.toUByte(), 0u, weekdays, day?.toUByte(), month?.toUByte(), zone, null)
+
+/** The cases of `src/validate.rs`'s tests, same fields and problems. */
+private fun validate() {
+    val n = notification("a").copy(title = "Title")
+    eq("valid", Validate.notification(n), null)
+    invalid(Validate.notification(n.copy(title = "  ")), "title", Problem.Empty)
+    invalid(Validate.notification(n.copy(title = "a\nb")), "title", Problem.BadCharset)
+    eq("multiline body", Validate.notification(n.copy(body = "line 1\nline 2")), null)
+    invalid(Validate.notification(n.copy(body = "x".repeat(Validate.MAX_BODY_CHARS + 1))), "body", Problem.TooLong)
+    // Characters, not UTF-16 units: 256 emoji are 512 units and still fit.
+    eq("title chars", Validate.notification(n.copy(title = "😀".repeat(Validate.MAX_TITLE_CHARS))), null)
+
+    invalid(Validate.notification(n.copy(actions = listOf(action("a", "A"), action("a", "B")))), "actions[1].id", Problem.Duplicate)
+    val answer = action("istmo.call.answer", "Answer")
+    invalid(Validate.notification(n.copy(actions = listOf(answer))), "actions[0].id", Problem.Reserved)
+    val call = Style.Call(CallInfo(Participant("ana", "Ana", null, isBot = false, important = false), CallKind.Incoming, false))
+    eq("call actions", Validate.notification(n.copy(style = call, actions = listOf(answer))), null)
+    invalid(Validate.notification(n.copy(actions = listOf(action("s", "Pick", ActionKind.Select(emptyList()))))), "actions[0].choices", Problem.Empty)
+    invalid(Validate.notification(n.copy(actions = listOf(action("z", "Later", ActionKind.Snooze(10u))))), "actions[0].snooze", Problem.OutOfRange)
+
+    eq("url scheme", Validate.notification(n.copy(url = "app://files/42")), null)
+    eq("url mailto", Validate.notification(n.copy(url = "mailto:a@b.c")), null)
+    for (bad in listOf("files/42", "1app://x", "app://a b", ":x")) invalid(Validate.notification(n.copy(url = bad)), "url", Problem.BadUrl)
+
+    invalid(Validate.notification(n.copy(icon = NotificationImage.Png(ByteArray(Validate.MAX_IMAGE_BYTES + 1)))), "icon", Problem.TooLarge)
+    invalid(Validate.notification(n.copy(userData = "x".repeat(Validate.MAX_USER_DATA_LEN + 1))), "user_data", Problem.TooLarge)
+    invalid(Validate.notification(n.copy(icon = NotificationImage.File("icon.png"))), "icon", Problem.NotAllowedHere)
+
+    invalid(Validate.notification(n.copy(progress = bar(1.5f))), "progress.value", Problem.OutOfRange)
+    check("nan bar", Validate.notification(n.copy(progress = bar(Float.NaN))) != null)
+    eq("indeterminate", Validate.notification(n.copy(progress = bar(null))), null)
+    invalid(Validate.notification(n.copy(timeoutMs = 0u)), "timeout_ms", Problem.OutOfRange)
+    invalid(Validate.notification(n.copy(id = NotificationId("a b"))), "id", Problem.BadCharset)
+
+    eq("patch", Validate.patch(patch(progress = bar(0.2f))), null)
+    invalid(Validate.patch(patch(progress = bar(0.2f), clear = listOf(PatchField.Progress))), "progress", Problem.NotAllowedHere)
+    eq("patch clear", Validate.patch(patch(clear = listOf(PatchField.Progress))), null)
+    eq("patch call actions", Validate.patch(patch(actions = listOf(answer))), null)
+    invalid(Validate.patch(patch(actions = listOf(answer), style = Style.Plain)), "actions[0].id", Problem.Reserved)
+
+    eq("every min", Validate.trigger(Trigger.Every(Validate.MIN_REPEAT_MS)), null)
+    invalid(Validate.trigger(Trigger.Every(1_000u)), "trigger.every", Problem.OutOfRange)
+    eq("daily", Validate.trigger(Trigger.Calendar(CalendarRule(23u, 59u, emptyList(), null, null, null, null))), null)
+    invalid(Validate.trigger(Trigger.Calendar(rule(24))), "trigger.hour", Problem.OutOfRange)
+    invalid(Validate.rule(rule(9, day = 30, month = 2)), "trigger.day_of_month", Problem.OutOfRange)
+    eq("feb 29", Validate.rule(rule(9, day = 29, month = 2)), null)
+    invalid(Validate.rule(rule(9, weekdays = listOf(Weekday.Mon, Weekday.Mon))), "trigger.weekdays", Problem.Duplicate)
+    invalid(Validate.rule(rule(9, zone = "Mars/Olympus")), "trigger.time_zone", Problem.OutOfRange)
+    eq("berlin", Validate.rule(rule(9, zone = "Europe/Berlin")), null)
+
+    val channel = ChannelSpec(ChannelId("c"), "Chats", null, Interruption.Normal, null, null, null, true, null, false, null)
+    eq("channel", Validate.channels(listOf(channel)), null)
+    invalid(Validate.channels(listOf(channel, channel.copy(name = ""))), "channels[1].name", Problem.Empty)
+    invalid(Validate.channels(listOf(channel.copy(vibration = List(33) { 1u }))), "channels[0].vibration", Problem.TooLong)
+    println("validation cases: done")
+}
 fun main(args: Array<String>) {
     vectors(args[0])
     coalescer()
     schedule()
+    validate()
     if (failures.isNotEmpty()) {
         failures.forEach(System.err::println)
         exitProcess(1)
