@@ -319,6 +319,45 @@ AUMID, como mucho 128 caracteres), `[app] name` y
   Las entregas de los próximos 14 días (como mucho 50) también se
   programan en Windows, así aparecen con la app cerrada.
 
+### Android
+
+El backend en Kotlin (`NotificationsBackendImpl`) se registra con el
+registro generado y el contexto de la aplicación, así que funciona bajo
+cualquier actividad de istmo, `NativeActivity` incluida. Sus receivers y
+la actividad de los toques vienen del manifest propio del plugin.
+
+- **Permiso.** `request_permission` muestra el diálogo de
+  `POST_NOTIFICATIONS` en API 33+ (las versiones anteriores dicen
+  `Granted` salvo que el usuario apagara las notificaciones). Las
+  alarmas exactas, las intents a pantalla completa y las Live Updates
+  son páginas de ajustes: la llamada abre la página y devuelve el estado
+  enseguida.
+- **Canales.** Los canales de `[[app.notification_channel]]` se crean
+  en cada arranque; `set_channels` agrega más. Android conserva los
+  ajustes de un canal tras crearlo salvo nombre y descripción, y el
+  plugin sigue la misma regla por debajo de API 26, donde los canales se
+  simulan.
+- **Actualizaciones en vivo.** Salen como mucho 4 por segundo (ráfaga
+  de 4), la última de cada notificación. Con `live = true`, una
+  notificación persistente con título pide la promoción en Android 16
+  QPR1; `NotificationEvent::NotPromoted` avisa cuando el sistema la
+  rechazó. En API 36 un progreso sobre una notificación simple usa
+  `ProgressStyle` (segmentos y puntos); en el resto, la barra clásica.
+- **Programación.** Una sola alarma de `AlarmManager` para la entrada
+  más próxima, exacta cuando la app puede programar alarmas exactas
+  (`ScheduledInfo::exact`), que se rearma tras un reinicio, un cambio de
+  hora o de zona horaria y una actualización de la app. La programación
+  vive en `noBackupFilesDir`.
+- **Acciones en segundo plano.** Un botón con `background()` corre sin
+  abrir la app: si la app está corriendo, la respuesta trae un ack y el
+  proceso sigue vivo hasta `complete(ack)` o 9 segundos. Si el proceso
+  no corría, la respuesta espera en un archivo y llega en el próximo
+  arranque, sin ack.
+- **Llamadas.** `Style::Call` usa el diseño de llamada del sistema en
+  API 31+ solo con `android.full_screen` (y el permiso de pantalla
+  completa en 14+); si no, es una notificación simple con los botones de
+  la llamada.
+
 ### Estado
 
 El núcleo en Rust y el host de escritorio están listos; los backends de

@@ -67,6 +67,16 @@
   registration (`DesktopNotifications::install` / `unregister`,
   `windows_app!()`), elevated processes refused. New `Backend::arm` hook
   (default no-op) hands backends the upcoming deliveries.
+
+- `istmo-notifications` Android backend (Kotlin, API 21+):
+  `NotificationCompat` styles, inline replies and choices, call style,
+  groups with plugin-posted summaries, channels (static ones from
+  `res/raw/istmo_notification_channels.bin`), `ProgressStyle` and Live
+  Updates promotion on API 36 (reflection, apps keep compileSdk 34),
+  coalesced updates at 4 per second, one `AlarmManager` alarm for the
+  schedule re-armed on boot, clock and zone changes and app updates, a
+  tap activity and receivers that publish responses (queued in a file
+  while no runtime runs). Registered by the generated registry.
 - `istmo-autostart` plugin (`istmo.autostart`, desktop only): start the
   app at login from a user action (`SMAppService.mainApp` on macOS 13+,
   a LaunchAgent before that or for bare binaries, MSIX `StartupTask` or

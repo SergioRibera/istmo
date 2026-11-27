@@ -134,6 +134,11 @@ call), `UnavailableNotifications` where there is no backend.
   reserved for alarm and calendar apps; others ask for
   `SCHEDULE_EXACT_ALARM` and fall back to inexact delivery
   (`ScheduledInfo::exact`).
+- **Android registers itself.** The generated plugin registry builds the
+  Kotlin backend with the application context; its tap activity and
+  receivers come from the plugin manifest. Background actions started
+  while the app process was not running reach the app at its next start,
+  without an ack.
 
 ## Web
 

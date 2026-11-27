@@ -311,6 +311,41 @@ waits at most 60 s for the activator. `windows_app!()` reads `[app] id`
   (at most 50) are also scheduled with Windows, so they appear while the
   app is closed.
 
+### Android
+
+The Kotlin backend (`NotificationsBackendImpl`) registers itself
+through the generated registry with the application context, so it
+works under any istmo activity, `NativeActivity` included. Its
+receivers and the tap activity come from the plugin's own manifest.
+
+- **Permission.** `request_permission` shows the `POST_NOTIFICATIONS`
+  prompt on API 33+ (older versions report `Granted` unless the user
+  turned notifications off). Exact alarms, full-screen intents and
+  Live Updates are settings pages: the call opens the page and returns
+  the state at once.
+- **Channels.** `[[app.notification_channel]]` channels are created at
+  every start; `set_channels` adds more. Android keeps a channel's
+  settings after creation except name and description, and the plugin
+  follows the same rule below API 26, where channels are simulated.
+- **Live updates.** Updates go out at most 4 per second (burst 4), the
+  latest one per notification. With `live = true`, an ongoing
+  notification with a title asks for promotion on Android 16 QPR1;
+  `NotificationEvent::NotPromoted` says when the system refused it.
+  On API 36 a progress on a plain notification uses `ProgressStyle`
+  (segments and points), elsewhere the classic bar.
+- **Scheduling.** One `AlarmManager` alarm for the soonest entry, exact
+  when the app may schedule exact alarms (`ScheduledInfo::exact`),
+  re-armed after a reboot, a clock or time zone change and an app
+  update. The schedule lives in `noBackupFilesDir`.
+- **Background actions.** A button with `background()` runs without
+  opening the app: when the app is running, the response carries an ack
+  and the process stays up until `complete(ack)` or 9 seconds. When the
+  process was not running, the response waits in a file and arrives at
+  the next start, without an ack.
+- **Calls.** `Style::Call` is the system call layout on API 31+ only
+  with `android.full_screen` (and the full-screen grant on 14+);
+  otherwise it is a plain notification with the call buttons.
+
 ### Status
 
 The Rust core and the desktop host are in place; the Android, Apple,
