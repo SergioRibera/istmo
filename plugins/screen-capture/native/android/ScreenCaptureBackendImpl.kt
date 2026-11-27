@@ -254,16 +254,24 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
 
     // ---- Access -------------------------------------------------------
 
+    /** Below API 23 permissions are granted at install: held when declared. */
     private fun granted(permission: String): Boolean =
-        appContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        if (Build.VERSION.SDK_INT >= Api.M) {
+            appContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        } else {
+            appContext.packageManager.checkPermission(permission, appContext.packageName) ==
+                PackageManager.PERMISSION_GRANTED
+        }
 
     /**
      * Runtime permission state with the camera plugin's heuristic: never
      * requested (or the system still offers a rationale) is
-     * `NotDetermined`, requested and refused for good is `Denied`.
+     * `NotDetermined`, requested and refused for good is `Denied`. Below
+     * API 23 there is nothing to ask: not declared is `Denied`.
      */
     private fun permissionStatus(permission: String): AccessStatus {
         if (granted(permission)) return AccessStatus.Granted
+        if (Build.VERSION.SDK_INT < Api.M) return AccessStatus.Denied
         if (!permissionPrefs.getBoolean(permission, false)) return AccessStatus.NotDetermined
         val activity = activityRef.get() ?: return AccessStatus.Denied
         return if (activity.shouldShowRequestPermissionRationale(permission)) AccessStatus.NotDetermined else AccessStatus.Denied
@@ -310,7 +318,8 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
             AccessScope.Microphone -> Manifest.permission.RECORD_AUDIO
             AccessScope.ScreenRecording, AccessScope.BorderlessCapture -> null
         }
-        if (permission != null && !granted(permission)) requestPermission(permission)
+        // No runtime prompt before API 23.
+        if (permission != null && !granted(permission) && Build.VERSION.SDK_INT >= Api.M) requestPermission(permission)
         return access(request.scope)
     }
 

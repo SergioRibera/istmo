@@ -4,6 +4,7 @@ package android.content.pm
 
 open class PackageManager {
     open fun getPackageUid(packageName: String, flags: Int): Int = 0
+    open fun checkPermission(permName: String, packageName: String): Int = -1
 
     class NameNotFoundException : Exception()
 
