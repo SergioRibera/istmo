@@ -167,7 +167,9 @@ hour), which delivers once and reports `NotificationEvent::DeliveredLate`.
 | Progress bar | native | text line | native | native or text line | text line |
 | Inline reply | native | native | native | native where the server has it | button |
 | Choices | native | buttons | native | buttons | buttons |
-| Schedule and repeat | native | native | native | while running | while running |
+| Schedule and repeat | native | native (iOS), while running (macOS) | native | while running | while running |
+| Snooze | simulated | simulated (iOS), while running (macOS) | native | while running | while running |
+| Timeout | native (8.0+) | while running | native | while running | while running |
 | Taps when closed | native | native | native | portal only | service worker |
 | Delivered list | native | native | native | while running | service worker |
 
@@ -199,11 +201,14 @@ removed with the last notification using them.
 
 Channels declared in `istmo.toml`
 ([`[[app.notification_channel]]`](/istmo/build-scripts/istmo-toml-reference/#appnotifications-and-appnotification_channel))
-reach the desktop host through the app crate's build env:
+reach the desktop host through the app crate's build env, and so do the
+bundled sounds (Linux plays `Sound::Named(name)` from that directory;
+a packaged app passes the directory it installs them to):
 
 ```rust
 let host = istmo_notifications::DesktopNotifications::platform()
     .with_channels(istmo_notifications::static_channels!())
+    .with_sound_dir(istmo_notifications::bundled_sounds!())
     .build();
 ```
 
@@ -243,7 +248,9 @@ active (buttons, pictures, taps while the page is closed, a delivered
 list from `getNotifications()`), and through `new Notification()` on the
 page otherwise (no buttons, no taps while closed). Chrome on Android
 refuses page notifications: there the service worker is required even
-to show, and without it `show` fails with `Unsupported(Show)`. Firefox
+to show, and without it `show` fails with `Unsupported(Show)` (the host
+knows it up front from User-Agent Client Hints, or a touch Android
+Chromium user agent, and `capabilities()` says `web:none`). Firefox
 and Safari have no buttons, pictures or badges; `capabilities()` follows
 what the browser has (`Notification.maxActions`, `image`,
 `requireInteraction`, `silent`, `renotify`, `timestamp`). Reply and
@@ -252,14 +259,19 @@ is no in-page prompt.
 
 Register the service worker:
 
-1. Serve `istmo-notifications-sw.js` (in the crate under `web/`, also
-   `istmo_notifications::web_assets::SERVICE_WORKER_JS`) next to the
-   app's page, same origin, as `text/javascript`.
+1. Serve `istmo-notifications-sw.js` next to the app's page, same
+   origin, as `text/javascript`. A wasm32 build of the app stages it at
+   `.istmo/web/istmo-notifications-sw.js` in the crate (see
+   [`[app.notifications]`](/istmo/build-scripts/istmo-toml-reference/)
+   for a trunk hook that copies it); it is also
+   `istmo_notifications::web_assets::SERVICE_WORKER_JS`. When the
+   script cannot be registered (404, wrong MIME type, scope) the host
+   logs it and shows page notifications at once.
 2. Register the host and attach it at start:
 
    ```rust
    let notifications = WebNotifications::default(); // registers ./istmo-notifications-sw.js
-   // hosts: [NotificationsClient => notifications.clone()]
+   // hosts: [Notifications => notifications.clone()]
    notifications.attach(&runtime);
    ```
 
@@ -274,20 +286,31 @@ Register the service worker:
 Same `tag` replaces in place; alerting updates set `renotify`, silent
 ones do not (and set `silent` where `renotify` is missing). Updates are
 coalesced to 4 per second. Scheduled notifications live in IndexedDB
-(database `istmo-notifications`, core store format) and fire from a
-`setTimeout` while the page is open; background tabs throttle timers,
-so deliveries there can be late. A tap is queued in IndexedDB by the
-worker, which focuses a window of the app or opens one; the page drains
-the queue on load and on the worker's message, so each tap reaches one
-tab, also the tab it opened. Image bytes become `data:` URLs for the
+(database `istmo-notifications`, one record per notification in the
+core store format) and fire from a `setTimeout` while the page is
+open; background tabs throttle timers, so deliveries there can be
+late. With several tabs open one of them runs the schedule (a Web Lock
+held for its life; a `BroadcastChannel` lease where Web Locks are
+missing, which can overlap for a few seconds); the others write their
+schedules and cancels to IndexedDB and tell it to reload. Missed
+notifications follow their `MissedPolicy` in that tab only. A time zone
+change while the page is open moves calendar rules without a zone.
+
+A tap is queued in IndexedDB by the worker, which focuses a window of
+the app (the one showing the notification's `open` URL, else the
+focused one) or opens one, and tells only that window to drain the
+queue; every window hears it only when there is no such window. Pages
+drain the queue on load too, so each tap reaches one tab, also the tab
+it opened. Image bytes become `data:` URLs for the
 worker and Blob URLs on the page, revoked with their last notification.
 A page loaded later rebuilds its table from the notifications still on
 screen, without their embedded images.
 
 ### Windows
 
-Call `DesktopNotifications::install(&windows_app!())` first thing in
-`main`, before the runtime starts: when a toast started the app, COM
+Call
+`DesktopNotifications::install(&istmo_notifications::windows_app!())`
+first thing in `main`, before the runtime starts: when a toast started the app, COM
 waits at most 60 s for the activator. `windows_app!()` reads `[app] id`
 (the AUMID, at most 128 characters), `[app] name` and
 `[app.notifications] accent`; add the icon with `.with_icon_png(..)`.

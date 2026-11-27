@@ -106,7 +106,9 @@ call), `UnavailableNotifications` where there is no backend.
 | Progress bar | native | text line | native | native or text line | text line |
 | Inline reply | native | native | native | native where the server has it, else a button | button |
 | More actions than shown | "More" action | "More" action | "More" action | "More" action | "More" action |
-| Schedule and repeat | native | native | native | while running | while running |
+| Schedule and repeat | native | native (iOS), while running (macOS) | native | while running | while running |
+| Snooze | simulated | simulated (iOS), while running (macOS) | native | while running | while running |
+| Timeout | native (8.0+) | while running | native | while running | while running |
 | Taps when closed | native | native | native | portal only | service worker |
 
 `capabilities()` reports every feature as `Native`, `Simulated`,
@@ -147,9 +149,15 @@ worker, or through page notifications when there is none (no buttons,
 no taps while the page is closed, nothing at all on Chrome for Android).
 To set it up:
 
-1. Serve `web/istmo-notifications-sw.js` from this crate (also
-   `istmo_notifications::web_assets::SERVICE_WORKER_JS`) next to the
-   app's page, same origin, as `text/javascript`.
+1. Serve `istmo-notifications-sw.js` next to the app's page, same
+   origin, as `text/javascript`. A wasm32 build of the app (`emit()` in
+   its `build.rs`) stages it at `.istmo/web/istmo-notifications-sw.js`;
+   copy it into the output, e.g. a trunk `post_build` hook running
+   `cp .istmo/web/istmo-notifications-sw.js "$TRUNK_STAGING_DIR/"`, or
+   after `wasm-pack build`. It is also `web/istmo-notifications-sw.js`
+   in this crate and `istmo_notifications::web_assets::SERVICE_WORKER_JS`.
+   If it cannot be registered the host logs why and uses page
+   notifications at once.
 2. Register `NotificationsHost::new(WebNotifications::default())`; keep a
    clone and call `attach(&runtime)` at start, so taps that opened the
    page and missed reminders are handled before the first call.
@@ -159,9 +167,12 @@ To set it up:
 4. Call `request_permission` from a click handler (Firefox and Safari
    only prompt during a user gesture).
 
-Taps are queued in IndexedDB by the worker and drained by the page, so
-each reaches one tab, also when it opened the app. Scheduled
-notifications are kept in IndexedDB and fire while the page is open.
+Taps are queued in IndexedDB by the worker and drained by the window it
+focused or opened, so each reaches one tab, also when it opened the app.
+Scheduled notifications are kept in IndexedDB, one record each, and
+fire while a page is open; with several tabs one runs the schedule (Web
+Locks, else a `BroadcastChannel` lease) and the others hand it their
+changes.
 
 ## Windows
 

@@ -237,14 +237,14 @@ ignored, never an error unless the method exists only for it).
 | silent update | N (alert once) | S (passive, no sound) | S | N (binding / SuppressPopup) | N | N | N (`renotify=false`) |
 | progress bar | N (ProgressStyle 36+, else `setProgress`) | S (text) | S (text) | N (bar) | N (`value` on dunst/mako/swaync/xfce) / N (KDE job) / S (text) | S (text) | S (text) |
 | live update promotion | N (16 QPR1+, eligibility) | - (see live-activity) | - | - | - | - | - |
-| schedule at / after | N (AlarmManager, one alarm armed) | N | N | N (ScheduledToast) | R | R | R |
-| repeat daily / weekly / interval | N (Kotlin rule eval) | N (64 cap, top-up) | N | S (window re-armed) | R | R | R |
-| missed while off | S (boot / time change re-arm) | N | N | N | S (catch-up policy at start) | S | S |
+| schedule at / after | N (AlarmManager, one alarm armed) | N | R | N (ScheduledToast) | R | R | R |
+| repeat daily / weekly / interval | N (Kotlin rule eval) | N (64 cap, top-up) | R | S (window re-armed) | R | R | R |
+| missed while off | S (boot / time change re-arm) | N | S | N | S (catch-up policy at start) | S | S |
 | actions | N (3) | N (4) | N (10) | N (5) | N if `actions` cap | N | N (SW, maxActions; not FF/Safari) |
 | more actions than max | S (`More`) | S | S | S | S | S | S |
 | inline reply | N | N | N | N | N (`inline-reply` cap) else S | N (v2 purpose) else S | S |
 | choices | N (`setChoices`) | S (buttons) | S | N (selection) | S | S | S |
-| snooze | S | S | S | N (system) | S | S | S |
+| snooze | S | S | R | N (system) | R | R | R |
 | avatar / large icon | N (`Person.setIcon`, large icon) | N (communication capability) else S (attachment) | same as iOS | N (`appLogoOverride` circle) | N (`image-path`) | N (icon fd / bytes) | N (`icon`) |
 | picture | N (BigPicture) | N (attachment) | N | N (hero) | N (`image-path`) | - | N (`image`, Chromium) |
 | big text / inbox | N | S (body) | S | S (lines) | S (body) | S | S |
@@ -255,11 +255,11 @@ ignored, never an error unless the method exists only for it).
 | sound default / silent / named | N (channel) | N | N | N system names only | N (`sound-name`) | N (v2) | silent only |
 | interruption level | N (importance) | N (15+) | N | S (scenario) | N (urgency) | N (priority) | S (`requireInteraction`) |
 | ongoing / persistent | N | - | - | S (`reminder` scenario) | N (`resident`) | N (`persistent`) | N (`requireInteraction`) |
-| timeout | N | R | R | N (expiration) | N | R | R |
+| timeout | N (26+), - below | R | R | N (expiration) | R | R | R |
 | lock-screen privacy | N | S (category placeholder) | S | - | - | N (v2 hints) | - |
 | timestamp / chronometer | N | - | - | N (timestamp) | - | - | N (timestamp) |
 | list delivered | N | N | N | N (history) | R (own table) | R | N (SW) |
-| list scheduled | N (own store) | N | N | N | R | R | R |
+| list scheduled | N (own store) | N | S | N | R | R | R |
 | dismissal event | N (delete intent) | N (custom dismiss) | N | R | R | - | N |
 | tap when app closed | N | N | N | N (COM activator) | - | N (exported actions) | N (SW) |
 | background reply / action | N (receiver + `goAsync`) | N (completion handler) | N | N (COM, process started) | R | N (D-Bus activation) | N (SW) |
@@ -267,6 +267,15 @@ ignored, never an error unless the method exists only for it).
 | exact alarms permission | N (12+) | - | - | - | - | - | - |
 | DND state | N | - | - | - | - | - | - |
 | open settings | N (app / channel / exact alarm / promoted) | N | N | N | - | - | - |
+
+As built (2026-11-27), the matrix follows what `capabilities()`
+reports: macOS schedules through the desktop host's in-process engine
+(`WhileRunning`), so schedule, repeat, missed and the pending list are
+host-run there; a snooze on macOS, Linux and
+the web is a host re-schedule that only fires while the app runs
+(`WhileRunning`); fdo servers do not expire notifications reliably, so
+the host times them out (`WhileRunning`); Android has no timeout below
+API 26 (`setTimeoutAfter`). Earlier cells of this table were the plan.
 
 ### Simulations, precisely
 
@@ -354,6 +363,12 @@ pub struct NotificationResponse {
   `acquire()` / `from_runtime`, `stream()` with `recv` / `recv_async` /
   `try_recv`; `NotificationResponse::kind()` gives a flat
   `Response::{Open, Action(&str), Reply(&str), Dismissed, More}` view.
+- Dismissals are `NotificationEvent::Dismissed` (with a `DismissReason`)
+  on `events()`, on every platform that reports them; they are not
+  responses. `ResponseAction::Dismiss` (and `Response::Dismissed`) stays
+  reserved for a platform that delivers a dismissal as a response (an
+  Android delete intent while the app is closed is the candidate); no
+  shipped backend publishes it, and none has to (as built 2026-11-27).
 - Background actions (`opens_app = false`): the OS keeps the process
   alive only briefly. Android: `IstmoNotificationReceiver` uses
   `goAsync()`, starts the runtime if needed (`IstmoRuntime.ensureStarted`
@@ -1220,7 +1235,7 @@ in that module.
 | `drawable/istmo_notification_icon.xml` | `small_icon` vector, copied |
 | `drawable-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/istmo_notification_icon.png` | `small_icon` PNG as white + source alpha, 24/36/48/72/96 px; a PNG with no transparent pixel fails the build |
 | (fallback) | no `small_icon`: `[app.icon.android] monochrome` (PNG: central 2/3 cropped; XML: copied as is) |
-| `values/istmo_notifications.xml` | `color/istmo_notification_accent` (`#AARRGGBB`, only when `accent`), `bool/istmo_notifications_full_screen`, `bool/istmo_notifications_live_updates`, `string/istmo_notifications_exact_alarms` (`none`/`schedule`/`use`) |
+| `values/istmo_notifications.xml` | `color/istmo_notification_accent` (`#AARRGGBB`), only when `accent` (the flag bools / string were removed 2026-11-27: nothing read them; Kotlin checks the requested permissions) |
 | `raw/istmo_notification_channels.bin` | wire bytes of `Vec<ChannelSpec>` (no header, istmo codec = bincode 2 standard), only when channels exist |
 | `raw/istmo_notification_sound_<name>.<ext>` | Android-playable sounds; `Sound::Named("ding")` = `R.raw.istmo_notification_sound_ding`, URI `android.resource://<pkg>/raw/istmo_notification_sound_ding` |
 
@@ -1237,7 +1252,8 @@ in that module.
   the configuration changes. `istmo.json` `app.generated_res` is true
   whenever either table exists: **no Gradle plugin change**.
 - Permissions (sidecar `android/.istmo/istmo-permissions.xml`), whenever
-  either table exists: `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`;
+  either table exists and the app links `istmo.notifications` (a dep
+  manifest lists it; since 2026-11-27): `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`;
   `exact_alarms = "schedule"` -> `SCHEDULE_EXACT_ALARM`; `"use"` ->
   `USE_EXACT_ALARM` + `SCHEDULE_EXACT_ALARM maxSdkVersion=32`;
   `full_screen` -> `USE_FULL_SCREEN_INTENT`; `live_updates` ->
@@ -1282,9 +1298,8 @@ in that module.
 |---|---|
 | `ISTMO_NOTIFICATION_CHANNELS` | upper-case hex of the same wire bytes; only with channels |
 | `ISTMO_NOTIFICATION_ACCENT` | `AARRGGBB` (8 hex digits, no `#`), only with `accent` (Windows `IconBackgroundColor`) |
-| `ISTMO_NOTIFICATION_APPLE` | comma list of the set flags (`time_sensitive,communication,critical`), only when one is set (macOS backend) |
-| `ISTMO_NOTIFICATION_SOUND_DIR` | `OUT_DIR/istmo-notification-sounds`, every sound as `<name>.<ext>` (all formats; the backend picks: Linux `ogg`/`wav` for the fdo `sound-file` hint, macOS `caf`/`aiff`/`wav`; packaged apps ship their own copy) |
-| `ISTMO_NOTIFICATION_SERVICE_WORKER` | wasm32 with `web_service_worker`: `OUT_DIR/istmo-notifications-web/istmo-notifications-sw.js` |
+| `ISTMO_NOTIFICATION_SOUND_DIR` | `OUT_DIR/istmo-notification-sounds`, every sound as `<name>.<ext>`; read by `bundled_sounds!()` into `DesktopNotificationsBuilder::with_sound_dir`: on Linux the host rewrites `Sound::Named(name)` to the `<name>.oga` / `.ogg` / `.wav` path, which fdo sends as `sound-file`. Windows: unpackaged apps cannot play bundled sounds (only `ms-winsoundevent:`), packaged ones use `ms-appx:`; macOS: bundle `Library/Sounds` (packaging) |
+| `ISTMO_NOTIFICATION_SERVICE_WORKER` | wasm32 with `web_service_worker` (default true, also without a table): `OUT_DIR/istmo-notifications-web/istmo-notifications-sw.js`; also copied to `<crate>/.istmo/web/istmo-notifications-sw.js` (`WEB_DIR`, git-ignored) for the bundler |
 | `ISTMO_APP_NAME` | `[app] name` (else the package), every app (Windows AUMID `DisplayName`); `ISTMO_APP_BUNDLE_ID` and `ISTMO_APP_ICON_PNG` (`istmo::app_icon!()`) already existed |
 
 - Plugin side (this branch): `istmo_notifications::static_channels!()`
@@ -1312,6 +1327,45 @@ in that module.
   skips the staging (apps that write `SERVICE_WORKER_JS` themselves).
 - Linux needs nothing beyond the static channels (app id override:
   `LinuxOptions::with_app_id` through `DesktopNotifications::builder`).
+
+### Review fixes (2026-11-27, branch `notif-fix-web`)
+
+Supersede the parts of the sections above they contradict.
+
+- Outputs without a consumer are gone: `ISTMO_NOTIFICATION_APPLE` (see
+  the Apple notes) and the Android `bool/` / `string/` flag resources
+  (`values/istmo_notifications.xml` holds only the accent and is
+  written only with one). `ISTMO_NOTIFICATION_SOUND_DIR` now has a
+  reader: `bundled_sounds!()` + `with_sound_dir` (Linux only; the host
+  rewrites the name to a path, and fdo already sent names holding `/`
+  as `sound-file`, so the fdo backend is unchanged).
+- Desktop / web envs and the Android notification permissions are only
+  emitted when the app links the plugin (a dep manifest lists
+  `istmo.notifications`). A table without the plugin still warns.
+- `web_service_worker` defaults to true also without an
+  `[app.notifications]` table (`AppNotifications::web_service_worker`).
+- A wasm32 `cdylib` without a binary counts as an app for `emit()`
+  (desktop icon, runtime env, assets, notification envs); before, a web
+  app built by trunk / wasm-pack from a `lib.rs` got nothing.
+- The worker is also copied to `<crate>/.istmo/web/` (stable path,
+  `.gitignore` `*`): `OUT_DIR` is unknowable to a bundler. The docs give
+  a trunk `post_build` hook and the wasm-pack copy. Rejected: copying
+  into a dist directory (no repo convention; trunk and wasm-pack own
+  their output directories).
+- `[[assets]] targets = [...]` (same values and checks as `[plugin]
+  targets`, default all): `ResolvedAsset.targets`; the asset trees
+  filter by it (Android, iOS, desktop; the host tree is `web` on
+  wasm32). A file named by two entries ships to the union. The
+  notifications worker is `targets = ["web"]`.
+- `notification_channel = [{ ... }]` (inline array inside `[app]`) is
+  accepted besides `[[app.notification_channel]]` and one table.
+- The facade test `tests/notifications_hosts.rs` (path-only dev-dep on
+  the plugin, stripped on publish) compiles the documented
+  `hosts: [Notifications => ...]` line; the docs used
+  `NotificationsClient =>`, which does not compile. Rejected: wiring the
+  whole notifications page into `doc_pages` (its snippets are partial;
+  hidden `#` lines would show on the site).
+
 
 ### Not done / open
 
@@ -1599,6 +1653,72 @@ imports it instead.
 - Not done: a real browser run (Chrome desktop and Android, Firefox,
   Safari).
 
+### Review fixes (web, 2026-11-27, branch `notif-fix-web`)
+
+Supersede "Store", "Taps go through IndexedDB", "Service worker
+choice" and "Chrome Android" above where they differ.
+
+- **One tab runs the schedule.** Each tab used to run its own engine
+  and overwrite the whole `entries` key: duplicates, delivered
+  one-shots coming back, lost schedules, the missed policy applied per
+  tab. Now:
+  - Election: `navigator.locks.request(LOCK_NAME, {mode: "exclusive"})`,
+    held for the tab's life (the callback returns a promise that never
+    settles). Without Web Locks (or when the request rejects): a lease
+    over `BroadcastChannel` (`web/lease.rs`, pure, tested natively:
+    beat every 1 s, expiry 3.5 s, claim window 0.5 s, lowest tab id
+    wins, `pagehide` resigns). It can overlap for a few seconds (a
+    delivery may repeat); documented. Neither: every tab leads alone
+    (logged). No store (`without_store`, no IndexedDB): leads alone, as
+    before.
+  - Store layout v2 (`DB_VERSION` 2, no migration, pre-release): store
+    `scheduled`, one record per notification id, value = a one-entry
+    core store. The upgrade drops the old `schedule` store. Writes put /
+    delete only the ids a tab changed (`State::take_writes`, ids
+    "touched" by schedule, snooze, remove (also ids the mirror does not
+    hold: another tab may have scheduled them), the leader's due entries
+    and zone moves).
+  - Every tab keeps the engine as a mirror (`pending()`); after a write
+    it posts `{kind: "changed"}` on `BroadcastChannel` `CHANNEL_NAME`,
+    and every other tab reloads (`getAll`). Reloads run one at a time; a
+    reload keeps the local state of ids changed after it started
+    (`edit_mark` / `replace_entries`), so a read that predates a local
+    write does not undo it.
+  - Only the leader takes due entries, applies `MissedPolicy`, re-reads
+    the zone (`TimeZone::system()` on each wake; jiff caches it) and
+    arms the engine deadline; followers still run their coalescer and
+    timeouts. A newly elected tab reloads before it leads.
+- **Taps**: the worker tells only the window it focused or opened
+  (`focus()` result, `openWindow` result) to drain; a close tells the
+  focused or visible window; every window only when there is none.
+  Windows are filtered to the registration's scope, and the one whose
+  URL is the notification's `open` URL is preferred (it used to focus
+  any same-origin page).
+- **Registration**: `register()` is awaited; a rejection (404, MIME,
+  scope) falls back to page notifications at once, logged with the URL
+  (no 10 s `ready` wait). `ServiceWorker::Existing` without a
+  registration listens for `controllerchange` and adopts the app's
+  worker when it takes control (it used to look once).
+- **IndexedDB**: `blocked` is not a failure (it leaked the connection
+  that opened later); an open still pending after 5 s goes on in
+  memory and a late success is closed. Both page and worker close
+  their connection on `versionchange`. The queue is drained after the
+  open also when no worker was found yet (a tap queued while the
+  database was not open was never drained).
+- **Chrome Android up front**: `navigator.userAgentData` (`mobile` and
+  platform Android), else `ontouchstart` + an Android Chromium user
+  agent (not Firefox), set `page_refused` from the start
+  (`caps::refuses_page_notifications`, tested natively); the
+  `TypeError` fallback stays.
+- **Permission**: `requestPermission(callback)` and the promise form
+  both settle the request (old Safari returns `undefined`).
+- Tests: `tests/web.rs` (Node 24, wasm-bindgen-cli 0.2.130) gained a
+  failed registration (page fallback within 2 s) and a callback-only
+  permission request. The election, the store and the worker still
+  have no browser run (Node has no IndexedDB); their logic is in the
+  native tests of `web::{state,lease,caps}`. `node --check` passes on
+  the worker.
+
 ## Implementation notes (Windows, as built)
 
 Branch `notif-windows`, step 3 (Windows). `src/desktop/windows.rs` +
@@ -1749,7 +1869,7 @@ one falls back instead of failing the build.
 | `exact_alarms = "schedule"` / `"use"` | `<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM">` / `USE_EXACT_ALARM` | | inexact alarms |
 | `full_screen = true` | `USE_FULL_SCREEN_INTENT` | | `android.full_screen` ignored, `Style::Call` simulated on 31+ |
 | `live_updates = true` | `POST_PROMOTED_NOTIFICATIONS` | | promotion requested anyway; the system refuses (`NotPromoted`) |
-| flags | `bool/istmo_notifications_full_screen`, `bool/istmo_notifications_live_updates`, `string/istmo_notifications_exact_alarms` | written by istmo-build under `android/.istmo/res` | not read: the backend checks the merged manifest (`requestedPermissions`) and the runtime grants instead |
+| flags | none (the `bool/` / `string/` resources were removed 2026-11-27) | | the backend checks the merged manifest (`requestedPermissions`) and the runtime grants |
 
 `request_permission(exact_alarms)` opens `ACTION_REQUEST_SCHEDULE_EXACT_ALARM`
 only when `SCHEDULE_EXACT_ALARM` is in the merged manifest (read from
@@ -2021,9 +2141,9 @@ cross-clippied without an SDK. Checklist:
   step; communication notifications need `Communication` and
   `INSendMessageIntent` in `NSUserActivityTypes` (istmo-build adds it and
   `INStartCallIntent` plus the communication entitlement).
-- macOS: istmo-build passes the flags as rustc envs on the app crate
-  (`ISTMO_NOTIFICATION_APPLE`, `ISTMO_NOTIFICATION_SOUND_DIR`), which a
-  library cannot read; the macOS backend gates communication on
+- macOS: istmo-build passes no Apple flags to desktop builds (the
+  `ISTMO_NOTIFICATION_APPLE` env was removed 2026-11-27: a library
+  cannot read the app crate's rustc env, and nothing did); the macOS backend gates communication on
   `INSendMessageIntent` in the running bundle's `NSUserActivityTypes`
   and probes bundled sound files by extension. Packaging must write
   those into the `.app`.

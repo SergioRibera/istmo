@@ -226,11 +226,20 @@ path = "assets/fonts"          # a directory, walked recursively
 
 [[assets]]
 path = "assets/i18n/*.json"    # a glob
+
+[[assets]]
+path = "web/sw.js"
+targets = ["web"]              # only into web bundles
 ```
 
 - **`path`** *(required, non-empty string)* — relative to the crate
   root, and must stay inside it. A path that does not exist, or a glob
   that matches nothing, fails the build.
+- **`targets`** *(optional, non-empty array)* — `android`, `ios`,
+  `desktop`, `web`: the asset trees the entry is staged into (a wasm32
+  build stages the `web` ones, other host builds the `desktop` ones).
+  Every target by default. A file two entries name goes wherever either
+  sends it.
 
 The lookup key drops a leading `assets/`: the entry
 `assets/logo.png` is read with `istmo::assets::read("logo.png")`.
@@ -541,19 +550,22 @@ group       = "Chats"               # at most 128 characters
   `NSUserActivityTypes`.
 - Channels follow the plugin's `ChannelSpec::validate`. They are created
   when the native backend starts; `set_channels` adds dynamic ones.
+  `[[app.notification_channel]]` may also be one table, or an inline
+  array inside `[app]`: `notification_channel = [{ id = "a", name = "A" }]`.
 
 Unknown keys, invalid values, duplicate channel ids and channel sounds
 missing from `sounds` fail the build. What each target gets:
 
 - **Android** — into the generated `android/.istmo/res`:
   `drawable*/istmo_notification_icon`, `values/istmo_notifications.xml`
-  (`istmo_notification_accent` colour, `istmo_notifications_full_screen`
-  and `istmo_notifications_live_updates` bools,
-  `istmo_notifications_exact_alarms` string),
+  (the `istmo_notification_accent` colour, only with `accent`),
   `raw/istmo_notification_channels.bin` (the channels in wire format)
   and `raw/istmo_notification_sound_<name>.<ext>`. The permissions
   (`POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED` and the opt-ins above)
-  go into `android/.istmo/istmo-permissions.xml`.
+  go into `android/.istmo/istmo-permissions.xml`, only when the app
+  depends on `istmo-notifications`. `exact_alarms`, `full_screen` and
+  `live_updates` only add permissions: the backend reads what the
+  merged manifest requests.
 - **iOS** — an `IstmoNotifications` dictionary (the flags and a
   `Sounds` map from name to bundle file), `NSUserActivityTypes` and the
   entitlements, merged into the `istmo:plugins` blocks of `Info.plist`
@@ -562,12 +574,34 @@ missing from `sounds` fail the build. What each target gets:
   xcodegen fragment, with the static channels as
   `istmo_notification_channels.bin` (the wire bytes Android gets in
   `res/raw`).
-- **Desktop and web** — rustc envs for the app crate:
-  `ISTMO_NOTIFICATION_CHANNELS` (read by
-  `istmo_notifications::static_channels!()`), `ISTMO_NOTIFICATION_ACCENT`,
-  `ISTMO_NOTIFICATION_APPLE`, `ISTMO_NOTIFICATION_SOUND_DIR` (sounds
-  staged in `OUT_DIR`) and, for wasm32, `ISTMO_NOTIFICATION_SERVICE_WORKER`. Serve that file as `istmo-notifications-sw.js` next to `index.html` (same origin, `text/javascript`).
-  macOS packaging signs with the same entitlements.
+- **Desktop and web** — rustc envs for the app crate, when it depends
+  on `istmo-notifications`:
+  - `ISTMO_NOTIFICATION_CHANNELS`, read by
+    `istmo_notifications::static_channels!()`.
+  - `ISTMO_NOTIFICATION_ACCENT` (Windows, through `windows_app!()`).
+  - `ISTMO_NOTIFICATION_SOUND_DIR`: the sounds staged in `OUT_DIR`, read
+    by `istmo_notifications::bundled_sounds!()` and handed to
+    `DesktopNotifications::platform().with_sound_dir(..)`. Linux plays
+    `Sound::Named(name)` from there through the fdo `sound-file` hint
+    (`.oga`, `.ogg` or `.wav`). The path serves `cargo run`; a packaged
+    app installs the sounds and passes that directory. Windows plays
+    bundled sounds only from packaged apps (`ms-appx:`); unpackaged
+    apps get `ms-winsoundevent:` sounds only. macOS plays sounds from
+    the bundle's `Library/Sounds`, which packaging fills.
+  - wasm32 builds (also a `cdylib` without a binary, and also without an
+    `[app.notifications]` table): `ISTMO_NOTIFICATION_SERVICE_WORKER`,
+    the staged service worker in `OUT_DIR`, and a copy at
+    `.istmo/web/istmo-notifications-sw.js` in the crate (generated,
+    git-ignored). Serve it as `istmo-notifications-sw.js` next to
+    `index.html`, same origin, `text/javascript`: with trunk, a
+    `post_build` hook
+    (`[[hooks]] stage = "post_build"`, `command = "sh"`,
+    `command_arguments = ["-c", "cp .istmo/web/istmo-notifications-sw.js \"$TRUNK_STAGING_DIR/\""]`);
+    with wasm-pack, copy it next to the page after `wasm-pack build`.
+    `web_service_worker = false` stages nothing.
+
+  The `apple` flags have no desktop output: istmo-build writes no macOS
+  entitlements; a macOS app signs with them in its own packaging.
 
 ## `[[remote_override]]`
 

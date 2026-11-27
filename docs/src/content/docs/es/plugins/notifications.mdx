@@ -170,7 +170,9 @@ hora), que entrega una vez e informa `NotificationEvent::DeliveredLate`.
 | Barra de progreso | nativa | línea de texto | nativa | nativa o línea de texto | línea de texto |
 | Respuesta en línea | nativa | nativa | nativa | nativa si el servidor la tiene | botón |
 | Opciones | nativas | botones | nativas | botones | botones |
-| Programar y repetir | nativo | nativo | nativo | mientras corre | mientras corre |
+| Programar y repetir | nativo | nativo (iOS), mientras corre (macOS) | nativo | mientras corre | mientras corre |
+| Posponer | simulado | simulado (iOS), mientras corre (macOS) | nativo | mientras corre | mientras corre |
+| Tiempo de espera | nativo (8.0+) | mientras corre | nativo | mientras corre | mientras corre |
 | Toques con la app cerrada | nativo | nativo | nativo | solo con el portal | service worker |
 | Lista de entregadas | nativa | nativa | nativa | mientras corre | service worker |
 
@@ -203,11 +205,15 @@ contenido y se borran con la última notificación que los usa.
 
 Los canales declarados en `istmo.toml`
 ([`[[app.notification_channel]]`](/istmo/es/build-scripts/istmo-toml-reference/#appnotifications-y-appnotification_channel))
-llegan al host de escritorio por el entorno de build del crate de la app:
+llegan al host de escritorio por el entorno de build del crate de la app,
+igual que los sonidos propios (Linux reproduce `Sound::Named(nombre)`
+desde ese directorio; una app empaquetada pasa el directorio donde los
+instala):
 
 ```rust
 let host = istmo_notifications::DesktopNotifications::platform()
     .with_channels(istmo_notifications::static_channels!())
+    .with_sound_dir(istmo_notifications::bundled_sounds!())
     .build();
 ```
 
@@ -249,7 +255,9 @@ entregadas con `getNotifications()`), y con `new Notification()` en la
 página si no (sin botones ni toques con la página cerrada). Chrome en
 Android rechaza las notificaciones de página: ahí el service worker hace
 falta incluso para mostrar, y sin él `show` falla con
-`Unsupported(Show)`. Firefox y Safari no tienen botones, imágenes ni
+`Unsupported(Show)` (el host lo sabe de antemano por los User-Agent
+Client Hints, o por un user agent de Chromium táctil en Android, y
+`capabilities()` dice `web:none`). Firefox y Safari no tienen botones, imágenes ni
 insignias; `capabilities()` sigue lo que tenga el navegador
 (`Notification.maxActions`, `image`, `requireInteraction`, `silent`,
 `renotify`, `timestamp`). La respuesta en línea y las opciones se
@@ -258,14 +266,19 @@ prompt dentro de la página.
 
 Registrar el service worker:
 
-1. Sirve `istmo-notifications-sw.js` (en el crate bajo `web/`, también
-   `istmo_notifications::web_assets::SERVICE_WORKER_JS`) junto a la
-   página de la app, mismo origen, como `text/javascript`.
+1. Sirve `istmo-notifications-sw.js` junto a la página de la app, mismo
+   origen, como `text/javascript`. Un build wasm32 de la app lo prepara
+   en `.istmo/web/istmo-notifications-sw.js` dentro del crate (ver
+   [`[app.notifications]`](/istmo/es/build-scripts/istmo-toml-reference/)
+   para un hook de trunk que lo copia); también es
+   `istmo_notifications::web_assets::SERVICE_WORKER_JS`. Si el script no
+   se puede registrar (404, tipo MIME, scope), el host lo registra en el
+   log y muestra notificaciones de página enseguida.
 2. Registra el host y llama a `attach` al arrancar:
 
    ```rust
    let notifications = WebNotifications::default(); // registra ./istmo-notifications-sw.js
-   // hosts: [NotificationsClient => notifications.clone()]
+   // hosts: [Notifications => notifications.clone()]
    notifications.attach(&runtime);
    ```
 
@@ -281,12 +294,22 @@ El mismo `tag` reemplaza en el sitio; las actualizaciones que avisan
 ponen `renotify`, las silenciosas no (y ponen `silent` donde falta
 `renotify`). Las actualizaciones se agrupan a 4 por segundo. Las
 notificaciones programadas viven en IndexedDB (base de datos
-`istmo-notifications`, formato del store del núcleo) y se disparan con un
-`setTimeout` mientras la página está abierta; las pestañas en segundo
-plano frenan los temporizadores, así que ahí pueden llegar tarde. El
-worker guarda cada toque en IndexedDB y enfoca una ventana de la app o
-abre una; la página vacía la cola al cargar y al recibir el mensaje del
-worker, así que cada toque llega a una sola pestaña, también a la que
+`istmo-notifications`, un registro por notificación en el formato del
+store del núcleo) y se disparan con un `setTimeout` mientras la página
+está abierta; las pestañas en segundo plano frenan los temporizadores,
+así que ahí pueden llegar tarde. Con varias pestañas abiertas, una sola
+ejecuta la programación (un Web Lock que mantiene toda su vida; un
+lease sobre `BroadcastChannel` donde no hay Web Locks, que puede
+solaparse unos segundos); las demás escriben sus programaciones y
+cancelaciones en IndexedDB y le avisan que recargue. Las notificaciones
+perdidas siguen su `MissedPolicy` solo en esa pestaña. Un cambio de zona
+horaria con la página abierta mueve las reglas de calendario sin zona.
+
+El worker guarda cada toque en IndexedDB, enfoca una ventana de la app
+(la que muestra la URL `open` de la notificación, si no la enfocada) o
+abre una, y solo avisa a esa ventana que vacíe la cola; todas lo oyen
+solo cuando no hay tal ventana. Las páginas vacían la cola también al
+cargar, así que cada toque llega a una sola pestaña, también a la que
 abrió. Los bytes de imagen pasan a URLs `data:` para el worker y a URLs
 Blob en la página, revocadas con su última notificación. Una página
 cargada después reconstruye su tabla a partir de las notificaciones que
@@ -294,8 +317,9 @@ siguen en pantalla, sin sus imágenes incrustadas.
 
 ### Windows
 
-Llama a `DesktopNotifications::install(&windows_app!())` al principio de
-`main`, antes de arrancar el runtime: si un toast arrancó la app, COM
+Llama a
+`DesktopNotifications::install(&istmo_notifications::windows_app!())`
+al principio de `main`, antes de arrancar el runtime: si un toast arrancó la app, COM
 espera como mucho 60 s al activador. `windows_app!()` lee `[app] id` (el
 AUMID, como mucho 128 caracteres), `[app] name` y
 `[app.notifications] accent`; el icono se añade con `.with_icon_png(..)`.

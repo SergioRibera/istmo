@@ -28,7 +28,7 @@
   the plugin's limits (unknown keys, bad values, duplicate channel ids
   and unknown channel sounds fail the build). Android gets the small
   icon (a PNG becomes a white mask per density, opaque PNGs are refused,
-  `[app.icon.android] monochrome` is the fallback), the accent and flags
+  `[app.icon.android] monochrome` is the fallback), the accent
   in `values/istmo_notifications.xml`, the channels as wire bytes in
   `raw/istmo_notification_channels.bin` and the sounds in `raw/`, all in
   `android/.istmo/res`, plus the permissions in the sidecar. iOS gets an
@@ -39,6 +39,12 @@
   `ISTMO_NOTIFICATION_*` rustc envs; `istmo_notifications::static_channels!()`
   decodes the channels for `DesktopNotifications::platform().with_channels(..)`.
 - `ISTMO_APP_NAME` rustc env (`[app] name`) for every app crate.
+- `[[assets]] targets = [...]` (`android`, `ios`, `desktop`, `web`):
+  the asset trees an entry is staged into, every target by default.
+- `istmo_notifications::bundled_sounds!()` and
+  `DesktopNotificationsBuilder::with_sound_dir`: Linux plays bundled
+  `[app.notifications] sounds` by path. A wasm32 app also gets the
+  service worker at `.istmo/web/istmo-notifications-sw.js`.
 - `istmo-notifications` Linux backend: `org.freedesktop.Notifications`
   (updates through `replaces_id`, the `value` progress hint on dunst,
   mako, swaync and xfce4-notifyd, KDE inline replies, close reasons as
@@ -53,7 +59,8 @@
   `web_assets::SERVICE_WORKER_JS`) for buttons, pictures, taps while the
   page is closed and the delivered list, page notifications without it;
   capabilities from feature detection; schedules from a `setTimeout`
-  while the page runs, stored in IndexedDB in the core store format;
+  while a page runs, stored in IndexedDB one record per notification,
+  run by one elected tab (Web Locks, else a `BroadcastChannel` lease);
   taps queued by the worker in IndexedDB and drained by the page.
   `now_ms` reads `Date.now()` on `wasm32` (`SystemTime::now` panics
   there).

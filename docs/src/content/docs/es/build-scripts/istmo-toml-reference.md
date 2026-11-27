@@ -231,11 +231,20 @@ path = "assets/fonts"          # un directorio, recorrido recursivamente
 
 [[assets]]
 path = "assets/i18n/*.json"    # un glob
+
+[[assets]]
+path = "web/sw.js"
+targets = ["web"]              # solo en los bundles web
 ```
 
 - **`path`** *(obligatoria, string no vacío)* — relativo a la raíz del
   crate, y debe quedarse dentro de ella. Un path que no existe, o un
   glob que no coincide con nada, hace fallar el build.
+- **`targets`** *(opcional, array no vacío)* — `android`, `ios`,
+  `desktop`, `web`: los árboles de assets donde se prepara la entrada
+  (un build wasm32 prepara los `web`, los demás builds de host los
+  `desktop`). Todos por defecto. Un archivo que nombran dos entradas va
+  a donde lo mande cualquiera de ellas.
 
 La clave de búsqueda quita un `assets/` inicial: la entrada
 `assets/logo.png` se lee con `istmo::assets::read("logo.png")`. Los
@@ -553,6 +562,9 @@ group       = "Chats"               # como mucho 128 caracteres
   `INSendMessageIntent` e `INStartCallIntent` en `NSUserActivityTypes`.
 - Los canales siguen `ChannelSpec::validate` del plugin. Se crean al
   arrancar el backend nativo; `set_channels` añade los dinámicos.
+  `[[app.notification_channel]]` también puede ser una sola tabla, o un
+  array inline dentro de `[app]`:
+  `notification_channel = [{ id = "a", name = "A" }]`.
 
 Las claves desconocidas, los valores inválidos, los ids de canal
 repetidos y los sonidos de canal que no están en `sounds` hacen fallar
@@ -560,13 +572,14 @@ el build. Lo que recibe cada plataforma:
 
 - **Android**: en el `android/.istmo/res` generado,
   `drawable*/istmo_notification_icon`, `values/istmo_notifications.xml`
-  (color `istmo_notification_accent`, bools
-  `istmo_notifications_full_screen` e `istmo_notifications_live_updates`,
-  string `istmo_notifications_exact_alarms`),
+  (el color `istmo_notification_accent`, solo con `accent`),
   `raw/istmo_notification_channels.bin` (los canales en formato wire) y
   `raw/istmo_notification_sound_<nombre>.<ext>`. Los permisos
   (`POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED` y los opcionales de
-  arriba) van a `android/.istmo/istmo-permissions.xml`.
+  arriba) van a `android/.istmo/istmo-permissions.xml`, solo cuando la
+  app depende de `istmo-notifications`. `exact_alarms`, `full_screen` y
+  `live_updates` solo añaden permisos: el backend lee lo que pide el
+  manifest combinado.
 - **iOS**: un diccionario `IstmoNotifications` (los flags y un mapa
   `Sounds` de nombre a archivo del bundle), `NSUserActivityTypes` y los
   entitlements, combinados en los bloques `istmo:plugins` de
@@ -575,12 +588,36 @@ el build. Lo que recibe cada plataforma:
   la raíz del bundle, junto con los canales estáticos en
   `istmo_notification_channels.bin` (los mismos bytes que Android recibe
   en `res/raw`).
-- **Escritorio y web**: variables de rustc para el crate de la app:
-  `ISTMO_NOTIFICATION_CHANNELS` (la lee
-  `istmo_notifications::static_channels!()`), `ISTMO_NOTIFICATION_ACCENT`,
-  `ISTMO_NOTIFICATION_APPLE`, `ISTMO_NOTIFICATION_SOUND_DIR` (sonidos
-  preparados en `OUT_DIR`) y, en wasm32, `ISTMO_NOTIFICATION_SERVICE_WORKER`. Sirve ese archivo como `istmo-notifications-sw.js` junto a `index.html` (mismo origen, `text/javascript`).
-  El empaquetado de macOS firma con los mismos entitlements.
+- **Escritorio y web**: variables de rustc para el crate de la app,
+  cuando depende de `istmo-notifications`:
+  - `ISTMO_NOTIFICATION_CHANNELS`, la lee
+    `istmo_notifications::static_channels!()`.
+  - `ISTMO_NOTIFICATION_ACCENT` (Windows, con `windows_app!()`).
+  - `ISTMO_NOTIFICATION_SOUND_DIR`: los sonidos preparados en `OUT_DIR`,
+    los lee `istmo_notifications::bundled_sounds!()` y se pasan a
+    `DesktopNotifications::platform().with_sound_dir(..)`. Linux
+    reproduce `Sound::Named(nombre)` desde ahí con la pista fdo
+    `sound-file` (`.oga`, `.ogg` o `.wav`). La ruta sirve para
+    `cargo run`; una app empaquetada instala los sonidos y pasa ese
+    directorio. Windows solo reproduce sonidos propios en apps
+    empaquetadas (`ms-appx:`); las no empaquetadas solo tienen sonidos
+    `ms-winsoundevent:`. macOS reproduce los sonidos de
+    `Library/Sounds` del bundle, que llena el empaquetado.
+  - Builds wasm32 (también un `cdylib` sin binario, y también sin tabla
+    `[app.notifications]`): `ISTMO_NOTIFICATION_SERVICE_WORKER`, el
+    service worker preparado en `OUT_DIR`, y una copia en
+    `.istmo/web/istmo-notifications-sw.js` dentro del crate (generada,
+    ignorada por git). Sírvelo como `istmo-notifications-sw.js` junto a
+    `index.html`, mismo origen, `text/javascript`: con trunk, un hook
+    `post_build`
+    (`[[hooks]] stage = "post_build"`, `command = "sh"`,
+    `command_arguments = ["-c", "cp .istmo/web/istmo-notifications-sw.js \"$TRUNK_STAGING_DIR/\""]`);
+    con wasm-pack, cópialo junto a la página después de `wasm-pack build`.
+    `web_service_worker = false` no prepara nada.
+
+  Los flags `apple` no tienen salida de escritorio: istmo-build no
+  escribe entitlements de macOS; una app de macOS firma con ellos en su
+  propio empaquetado.
 
 ## `[[remote_override]]`
 
