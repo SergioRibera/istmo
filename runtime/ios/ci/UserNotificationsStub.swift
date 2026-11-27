@@ -130,12 +130,18 @@ open class UNNotificationTrigger: NSObject, @unchecked Sendable {
 }
 
 open class UNTimeIntervalNotificationTrigger: UNNotificationTrigger, @unchecked Sendable {
-    public init(timeInterval: TimeInterval, repeats: Bool) {}
-    open func nextTriggerDate() -> Date? { nil }
+    public let timeInterval: TimeInterval
+    public init(timeInterval: TimeInterval, repeats: Bool) { self.timeInterval = timeInterval }
+    /// Like the SDK: the interval from now (the real one counts from the
+    /// request's add).
+    open func nextTriggerDate() -> Date? { Date(timeIntervalSinceNow: timeInterval) }
 }
 
 open class UNCalendarNotificationTrigger: UNNotificationTrigger, @unchecked Sendable {
-    public init(dateMatching dateComponents: DateComponents, repeats: Bool) {}
+    public let dateComponents: DateComponents
+    public init(dateMatching dateComponents: DateComponents, repeats: Bool) { self.dateComponents = dateComponents }
+    /// Not modelled (the stub has no calendar math): the plugin computes
+    /// its fire times itself and never reads this.
     open func nextTriggerDate() -> Date? { nil }
 }
 
@@ -191,22 +197,27 @@ open class UNNotificationCategory: NSObject, Hashable, @unchecked Sendable {
     public func hash(into hasher: inout Hasher) { hasher.combine(ObjectIdentifier(self)) }
 }
 
+/// The SDK's methods are `@objc optional`; Swift without Objective-C
+/// interop models that with default implementations. Signatures as in
+/// the current SDK: completion handlers are `@Sendable`.
 public protocol UNUserNotificationCenterDelegate: NSObjectProtocol {
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void)
+        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void)
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void)
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void)
+    func userNotificationCenter(_ center: UNUserNotificationCenter, openSettingsFor notification: UNNotification?)
 }
 
 public extension UNUserNotificationCenterDelegate {
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {}
+        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void) {}
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void) {}
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {}
+    func userNotificationCenter(_ center: UNUserNotificationCenter, openSettingsFor notification: UNNotification?) {}
 }
 
 open class UNUserNotificationCenter: NSObject, @unchecked Sendable {
@@ -217,7 +228,8 @@ open class UNUserNotificationCenter: NSObject, @unchecked Sendable {
     open func notificationCategories() async -> Set<UNNotificationCategory> { [] }
     open func notificationSettings() async -> UNNotificationSettings { UNNotificationSettings() }
     open func add(_ request: UNNotificationRequest) async throws {}
-    open func add(_ request: UNNotificationRequest, withCompletionHandler completionHandler: ((Error?) -> Void)?) {}
+    open func add(_ request: UNNotificationRequest,
+                  withCompletionHandler completionHandler: (@Sendable (Error?) -> Void)?) {}
     open func pendingNotificationRequests() async -> [UNNotificationRequest] { [] }
     open func removePendingNotificationRequests(withIdentifiers identifiers: [String]) {}
     open func removeAllPendingNotificationRequests() {}

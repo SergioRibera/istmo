@@ -221,6 +221,8 @@ public extension Date {
 
 public struct TimeZone: Hashable, Sendable {
     public init?(identifier: String) {}
+    public static var current: TimeZone { TimeZone(identifier: "UTC")! }
+    public func secondsFromGMT(for date: Date) -> Int { 0 }
 }
 
 public struct DateComponents: Hashable, Sendable {
