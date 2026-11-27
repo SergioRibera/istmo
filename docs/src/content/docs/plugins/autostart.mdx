@@ -1,0 +1,190 @@
+---
+title: Autostart
+description: Start the app when the user logs in, and tell whether this launch was a login start, on macOS, Windows and Linux.
+sidebar:
+  order: 13
+---
+
+import PluginTypes from '../../../generated/plugins/autostart-types.mdx';
+
+`istmo-autostart` registers the app to start at login and tells the app
+whether the current launch was such a start, so it can open hidden in
+the tray instead of showing its window.
+
+Desktop only. Android has no "start my UI at login" (the nearest thing,
+`BOOT_COMPLETED`, is background work: see the task scheduler), and iOS
+and the web have nothing. The plugin's `istmo.toml` lists
+`targets = ["desktop"]`, so no Kotlin or Swift is generated; mobile and
+web builds register `UnavailableAutostart`.
+
+| Platform | Registration | Status |
+| -------- | ------------ | ------ |
+| macOS 13+, inside an `.app` | `SMAppService.mainApp` | `.enabled`, `.requiresApproval`, `.notRegistered` |
+| macOS < 13, or a bare binary | `~/Library/LaunchAgents/<id>.istmo-autostart.plist` | file present |
+| Windows, MSIX | `StartupTask` (`[app.autostart] windows_task_id`) | `StartupTaskState` |
+| Windows, unpackaged | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `<id>` | value present; `StartupApproved\Run` for the user's switch |
+| Linux, Flatpak | `org.freedesktop.portal.Background` | last portal answer, cached |
+| Linux | `$XDG_CONFIG_HOME/autostart/<id>.desktop` | file present; `Hidden=true` or `X-GNOME-Autostart-enabled=false` is the user's switch |
+
+`<id>` is the app id (`[app] id`, else the Cargo package name).
+
+## Install
+
+```toml
+[dependencies]
+istmo-autostart = "0.1.1-alpha.7"
+```
+
+Feature `linux-portal` (default) pulls `ashpd` for the Flatpak path.
+Without it a Flatpak build reports `Unsupported`.
+
+## Rules
+
+- Never enabled without a user action. There is no `autostart = true`
+  in `istmo.toml`: call `enable` from a "Start at login" switch. App
+  stores require it, and an app that adds itself to login items looks
+  like malware.
+- Never re-enabled behind the user's back. When the user turned the
+  entry off in the system settings (`DisabledByUser`, or
+  `RequiresApproval` on macOS), `enable` opens the settings page and
+  returns the state unchanged. Linux has no such page: there, `enable`
+  rewrites the entry, since it only runs from a user action.
+
+## Wire the host and the publisher
+
+```rust
+use istmo_autostart::{AutostartHost, AutostartPublisher, DesktopAutostart};
+
+let config = istmo_autostart::autostart_config!();
+// Early, on the main thread, before anything else reads the command line.
+let args = AutostartPublisher::install(&runtime, &config, std::env::args_os().skip(1))?;
+runtime.register_host(AutostartHost::new(DesktopAutostart::new(config)));
+// Hand `args` (marker removed) to DocumentsPublisher::start or your CLI parser.
+```
+
+`autostart_config!()` reads `ISTMO_APP_BUNDLE_ID`,
+`ISTMO_AUTOSTART_MARKER` and `ISTMO_AUTOSTART_TASK_ID`, which
+`istmo-build` emits for the app crate from `istmo.toml`.
+`AutostartConfig::new("com.example.notes").with_marker("--autostart")`
+builds the same thing by hand.
+
+`install` also rewrites an enabled entry whose executable path or
+marker is out of date (Linux `Exec=`, Windows `Run` value, macOS
+LaunchAgent), so an update that moved the binary keeps working. It never
+creates an entry.
+
+On Android, iOS and the web:
+
+```rust
+use istmo_autostart::{AutostartHost, UnavailableAutostart};
+
+runtime.register_host(AutostartHost::new(UnavailableAutostart));
+```
+
+## Turn it on and off
+
+```rust
+use istmo_autostart::{AutostartClient, AutostartError, AutostartOptions, AutostartState};
+
+let autostart = AutostartClient::from_runtime(&runtime)?;
+let state = autostart.status().await.map_err(AutostartError::from)?;
+let state = autostart
+    .enable(AutostartOptions { args: vec!["--tray".into()] })
+    .await
+    .map_err(AutostartError::from)?;
+if state == AutostartState::RequiresApproval {
+    // macOS: waiting in System Settings > General > Login Items.
+}
+autostart.disable().await.map_err(AutostartError::from)?;
+autostart.open_settings().await.map_err(AutostartError::from)?;
+```
+
+`AutostartOptions::args` go after the executable; the marker is added
+by the plugin. `SMAppService` and `StartupTask` start the app without
+arguments and ignore them.
+
+| Error | When |
+| ----- | ---- |
+| `Unsupported` | no autostart here (mobile, web, Flatpak without `linux-portal`, `open_settings` on Linux) |
+| `Denied` | the portal dialog or the `StartupTask` prompt said no |
+| `Backend(message)` | any other platform failure |
+
+## Was this a login start?
+
+`install` publishes a `LaunchReason` on the latest-value lane
+`istmo.autostart.launch`:
+
+```rust
+use istmo_autostart::{LaunchReason, LaunchReasonClient};
+
+let launch = LaunchReasonClient::from_runtime(&runtime)?;
+// `current()` is None until it is published; `stream()` waits for it.
+if launch.stream().recv()?.is_login() {
+    // Start hidden in the tray.
+}
+```
+
+The OS is asked first. A marker is only used where the OS says nothing,
+and only when the app configures one:
+
+| Platform | Signal |
+| -------- | ------ |
+| macOS login item | the `oapp` Apple Event carries `keyAELaunchedAsLogInItem`, read at `NSApplicationDidFinishLaunchingNotification` |
+| Windows MSIX | `AppInstance.GetActivatedEventArgs().Kind() == StartupTask` |
+| Linux with a systemd-managed session (GNOME 3.34+, Plasma 5.20+) | `/proc/self/cgroup` ends in `@autostart.service` |
+| Windows `Run`, other Linux sessions, Flatpak, macOS LaunchAgent | the marker only |
+
+- `Login(System)`: the OS said so. `Login(Marker)`: the marker was on
+  the command line.
+- `User`: this platform has a signal (or a marker is configured) and it
+  was absent.
+- `Unknown`: no signal here and no marker configured.
+
+No heuristics (boot time, parent process). On macOS the reason is
+published once `NSApplication` finishes launching, so `install` must run
+before the event loop starts; an app without an `NSApplication` event
+loop gets the marker-only answer at once.
+
+```toml
+[app.autostart]
+marker = "--autostart"        # optional; no key = no marker
+windows_task_id = "MyStartup" # optional, MSIX only
+```
+
+See the [istmo.toml reference](/istmo/build-scripts/istmo-toml-reference/#appautostart)
+for the rules on both keys.
+
+## Platform notes
+
+**macOS.** `SMAppService.mainApp` needs the app to be a signed `.app`
+bundle; a bare binary (`cargo run`) and macOS 12 or older use a
+LaunchAgent (`RunAtLoad`, `ProcessType = Interactive`) instead.
+`open_settings` opens Login Items in System Settings.
+
+**Windows.** An MSIX package must declare the startup task in its
+manifest:
+
+```xml
+<Extensions>
+  <uap5:Extension Category="windows.startupTask">
+    <uap5:StartupTask TaskId="IstmoAutostart" Enabled="false" DisplayName="My App" />
+  </uap5:Extension>
+</Extensions>
+```
+
+Unpackaged apps write a `Run` value with the quoted executable and the
+arguments. The plugin never touches `StartupApproved\Run`: Task
+Manager's switch is the user's. `open_settings` opens
+`ms-settings:startupapps`.
+
+**Linux.** The `.desktop` entry's `Exec=` is quoted per the Desktop
+Entry Specification. AppImages register `$APPIMAGE`, not the mount
+point; a Nix store executable registers the profile link that resolves
+to it (`~/.nix-profile/bin`, `/etc/profiles/per-user/$USER/bin`,
+`/run/current-system/sw/bin`), so updates keep the entry valid. In
+Flatpak the Background portal writes the host entry; the portal cannot
+be queried, so `status` reports its last answer.
+
+## Wire types
+
+<PluginTypes />

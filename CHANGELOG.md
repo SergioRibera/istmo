@@ -4,6 +4,20 @@
 
 ### Added
 
+- `istmo-autostart` plugin (`istmo.autostart`, desktop only): start the
+  app at login from a user action (`SMAppService.mainApp` on macOS 13+,
+  a LaunchAgent before that or for bare binaries, MSIX `StartupTask` or
+  the `HKCU\…\Run` key on Windows, the Background portal in Flatpak, an
+  XDG autostart entry on Linux), never re-enabling an entry the user
+  turned off. `AutostartPublisher::install` publishes the `LaunchReason`
+  of the process on the `istmo.autostart.launch` lane (macOS login-item
+  Apple Event, MSIX activation kind, systemd `@autostart.service`, else
+  the configured marker), strips the marker from argv and rewrites an
+  enabled entry whose executable path moved (AppImage, Nix profile
+  links). `UnavailableAutostart` for Android, iOS and the web.
+- `istmo.toml` `[app.autostart] marker / windows_task_id`, emitted as
+  `ISTMO_AUTOSTART_MARKER` / `ISTMO_AUTOSTART_TASK_ID` for the app
+  crate; unknown keys and invalid markers fail the build.
 - `istmo.toml` `[plugin] targets = ["android", "ios", "desktop", "web"]`:
   an app generates a plugin's Kotlin / Swift sources, registry entries
   and shared type groups only for the mobile targets it lists. Default:

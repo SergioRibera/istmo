@@ -1,0 +1,76 @@
+[package]
+name = "istmo-autostart"
+version = "0.1.1-alpha.7"
+description = "Start the app at login for the istmo framework: SMAppService / LaunchAgent on macOS, StartupTask / Run key on Windows, XDG autostart and the Background portal on Linux, and whether this launch was a login start."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+include = ["/src", "/build.rs", "/istmo.toml", "/README.md", "/LICENSE*"]
+keywords = ["istmo", "autostart", "login", "startup", "desktop"]
+categories = ["os", "api-bindings"]
+links = "istmo_autostart"
+
+[features]
+default = ["linux-portal"]
+# Flatpak: register through `org.freedesktop.portal.Background`. Without
+# it a sandboxed app reports `Unsupported` (its `~/.config/autostart`
+# is the sandbox's, which the session never reads).
+linux-portal = ["dep:ashpd", "dep:pollster"]
+
+[dependencies]
+istmo-core = { workspace = true }
+istmo-macros = { workspace = true }
+flume = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# `async-io` (not tokio): zbus must never need a tokio reactor; the
+# blocking host methods drive the portal future with pollster.
+ashpd = { version = "0.14", default-features = false, features = ["async-io", "background"], optional = true }
+pollster = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# MSIX: `StartupTask` and the activation kind of this launch.
+windows = { version = "0.62", features = [
+    "ApplicationModel",
+    "ApplicationModel_Activation",
+    "Foundation",
+    "Win32_System_WinRT",
+] }
+# Unpackaged: the `Run` and `StartupApproved\Run` values, without unsafe.
+windows-registry = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString"] }
+# macOS 13+: `SMAppService.mainApp`.
+objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+
+[build-dependencies]
+istmo-build = { workspace = true }
+
+[dev-dependencies]
+pollster = { workspace = true }
+
+[lints.rust]
+# Toolchains older than clippy 1.100 do not know `unused_async_trait_impl`.
+unknown_lints = { level = "allow", priority = -2 }
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unreachable_pub = "warn"
+# Only the macOS backend (Objective-C messages, WinRT apartment init).
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+redundant_pub_crate = "allow"
+undocumented_unsafe_blocks = "deny"
+# Plugin traits are async; sync backends implement them with `async fn`
+# rather than hand-built `std::future::ready` futures.
+unused_async_trait_impl = "allow"

@@ -887,6 +887,8 @@ fn emit_desktop_icon(
 ///   paths pass through verbatim. Used as tier 2 in the desktop asset
 ///   resolution chain (after the runtime `ISTMO_ASSETS_DIR` override,
 ///   before the `<exe_dir>/assets/` scan).
+/// - `ISTMO_AUTOSTART_MARKER` / `ISTMO_AUTOSTART_TASK_ID` — set only
+///   when `[app.autostart] marker` / `windows_task_id` is present.
 fn emit_runtime_env(
     app: &AppMetadata,
     config: &AppConfig,
@@ -902,6 +904,9 @@ fn emit_runtime_env(
         "cargo::rustc-env=ISTMO_SINGLE_INSTANCE={}",
         u8::from(config.single_instance())
     );
+    for line in config.autostart.rustc_env_lines() {
+        println!("{line}");
+    }
     // Priority: `[app] assets_dir` beats the auto-staged OUT_DIR
     // directory. The runtime `ISTMO_ASSETS_DIR` env var still overrides
     // both at read time.
