@@ -21,5 +21,8 @@ adb logcat -s notif-probe
 | `actions` | five actions (two plus More), background button, choices, snooze, replies |
 | `progress [n]`, `segments` | live progress coalesced to 4 per second and finish; `ProgressStyle` with segments and points |
 | `group` | three grouped notifications and the plugin's summary |
+| `group-shrink` | two grouped, one cancelled: the other survives (the summary is kept) |
+| `limit` | distinct ids until `TooMany(50)`, then removed |
+| `invalid` | unchecked `show` / `schedule` / `complete`: `Invalid(title)`, `Invalid(trigger.every)`, `NotFound` |
 | `schedule [s]`, `pending` | a one-shot after `s` seconds and an every-minute repeat |
 | `delivered`, `events [s]`, `cancel-all` | active list, the event stream for `s` seconds, cleanup |

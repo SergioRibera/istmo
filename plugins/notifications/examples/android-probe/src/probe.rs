@@ -7,9 +7,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use istmo_core::StreamItem;
 use istmo_notifications::{
-    Action, CallInfo, CallKind, ChatMessage, Conversation, Group, GroupId, Notification,
-    NotificationImage, NotificationPatch, NotificationResponses, NotificationsClient, Participant,
-    PermissionRequest, Progress, ProgressPoint, ProgressSegment, Style, Trigger,
+    AckToken, Action, CallInfo, CallKind, ChatMessage, Conversation, Group, GroupId, Notification,
+    NotificationId, NotificationImage, NotificationPatch, NotificationResponses,
+    NotificationsClient, Participant, PermissionRequest, Progress, ProgressPoint, ProgressSegment,
+    Style, Trigger,
 };
 
 type Outcome = Result<String, String>;
@@ -119,6 +120,9 @@ pub(crate) fn run(command: &str) -> String {
         "progress" => progress(arg.unwrap_or(40)),
         "segments" => segments(),
         "group" => group(),
+        "group-shrink" => group_shrink(),
+        "limit" => limit(),
+        "invalid" => invalid(),
         "schedule" => schedule(arg.unwrap_or(15)),
         "pending" => client().and_then(|c| block(c.pending())).map(|p| {
             p.iter()
@@ -384,6 +388,70 @@ fn group() -> Outcome {
         block(c.show_checked(note))?;
     }
     Ok("shown 3 grouped notifications (summary posted by the plugin)".to_owned())
+}
+
+/// Two grouped notifications, then one cancelled: the other must stay
+/// (cancelling the summary would take it along).
+fn group_shrink() -> Outcome {
+    let c = client()?;
+    let group = Group {
+        id: e(GroupId::try_from("probe.shrink"))?,
+        title: Some("Shrinking group".to_owned()),
+        summary: None,
+    };
+    for i in 1..=2 {
+        let mut note = n(&format!("probe.shrink.{i}"), &format!("Member {i}"))?;
+        note.group = Some(group.clone());
+        block(c.show_checked(note))?;
+    }
+    block(c.cancel(e(NotificationId::try_from("probe.shrink.1"))?))?;
+    std::thread::sleep(Duration::from_millis(500));
+    let left: Vec<_> = block(c.delivered())?
+        .into_iter()
+        .filter(|d| d.id.as_str().starts_with("probe.shrink."))
+        .map(|d| d.id.value)
+        .collect();
+    if left == ["probe.shrink.2"] {
+        Ok("probe.shrink.2 survived its sibling's cancel".to_owned())
+    } else {
+        Err(format!("left after the cancel: {left:?}"))
+    }
+}
+
+/// Shows distinct ids until the backend refuses one (`TooMany(50)`),
+/// then removes them.
+fn limit() -> Outcome {
+    let c = client()?;
+    let mut shown = 0;
+    let mut refusal = None;
+    for i in 0..60 {
+        match block(c.show_checked(n(&format!("probe.limit.{i}"), &format!("Limit {i}"))?)) {
+            Ok(()) => shown += 1,
+            Err(err) => {
+                refusal = Some(err);
+                break;
+            }
+        }
+    }
+    for i in 0..shown {
+        let _ = block(c.cancel(e(NotificationId::try_from(
+            format!("probe.limit.{i}").as_str(),
+        ))?));
+    }
+    Ok(format!("shown {shown}, then {refusal:?}"))
+}
+
+/// Unchecked calls: the Kotlin host answers what the desktop host does.
+fn invalid() -> Outcome {
+    let c = client()?;
+    let mut blank = n("probe.invalid", "x")?;
+    blank.title = " ".to_owned();
+    let show = block(c.show(blank));
+    let every = block(c.schedule(n("probe.invalid", "Every second")?, Trigger::Every(1_000)));
+    let ack = block(c.complete(AckToken { value: 987_654_321 }));
+    Ok(format!(
+        "show: {show:?}\nschedule: {every:?}\ncomplete: {ack:?}"
+    ))
 }
 
 fn schedule(seconds: u64) -> Outcome {
