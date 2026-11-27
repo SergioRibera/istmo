@@ -54,7 +54,7 @@ import kotlinx.coroutines.withTimeout
  * - Frames: a virtual display mirroring the default display into an
  *   `ImageReader`: `RGBA_8888` `HardwareBuffer`s with GPU usage handed to
  *   Rust without a copy (API 29+), or CPU-readable images copied into the
- *   sink (`CopyStage.ShmTransport`). Timestamps are the images'
+ *   sink (`CopyStage.GpuReadback`). Timestamps are the images'
  *   `CLOCK_MONOTONIC` ones; `wallUs` is sampled per frame.
  * - Preview: the virtual display renders straight into an app `Surface`
  *   (`IstmoRuntime.registerObject(surface)`); with frames as well, the
@@ -143,7 +143,7 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
                 FrameStream.MIN_POOL.toUByte(), FrameStream.MAX_POOL.toUByte(), FrameStream.DEFAULT_POOL.toUByte(),
                 listOf(Exhaustion.Stall, Exhaustion.DropNewest),
             ),
-            copies = listOf(CopyStage.ShmTransport, CopyStage.PreviewFanOut),
+            copies = listOf(CopyStage.GpuReadback, CopyStage.PreviewFanOut),
             protectedContent = ProtectedContent.MaskedUndetectable,
             window = WindowCaptureCaps(occluded = false, minimised = false, childPopups = false, border = false),
             provenance = CapsProvenance(

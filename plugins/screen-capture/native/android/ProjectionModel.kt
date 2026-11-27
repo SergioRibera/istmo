@@ -154,8 +154,8 @@ internal enum class Offer(val format: PixelFormat, val memory: BufferMemory, val
     /** `RGBA_8888` `HardwareBuffer`s, handed over without a copy (API 29+). */
     Gpu(PixelFormat.Rgba8, BufferMemory.HardwareBuffer, emptyList()),
 
-    /** `RGBA_8888` CPU-readable images, copied into Rust memory. */
-    Cpu(PixelFormat.Rgba8, BufferMemory.Cpu, listOf(CopyStage.ShmTransport)),
+    /** `RGBA_8888` CPU-readable images the GPU composed, read back into Rust memory. */
+    Cpu(PixelFormat.Rgba8, BufferMemory.Cpu, listOf(CopyStage.GpuReadback)),
     ;
 
     companion object {

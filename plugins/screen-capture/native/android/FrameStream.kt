@@ -76,7 +76,7 @@ internal class FrameOrigin(val source: SourceId, val scalePermille: UInt)
  *   frame's `skippedBefore` (`Stall` and `DropNewest` behave the same: a
  *   virtual display cannot be paused per buffer).
  * - [Offer.Cpu]: the image's rows are copied into the sink and the image
- *   closed (`CopyStage.ShmTransport`).
+ *   closed (`CopyStage.GpuReadback`: the GPU composed the image).
  *
  * Pacing follows `FrameRate`: `Max` / `OnDamage` defer a frame inside the
  * period and deliver the newest at its end (a virtual display only

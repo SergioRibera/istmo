@@ -582,7 +582,7 @@ wins.
 
 **Frames.**
 - Offers: `Rgba8` / `HardwareBuffer` (API 29+, no copy) and `Rgba8` /
-  `Cpu` (`ShmTransport`: the image rows are copied into the sink).
+  `Cpu` (`GpuReadback`: the GPU-composed rows are copied into the sink).
   Readers are `RGBA_8888` with `USAGE_GPU_SAMPLED_IMAGE`; a device that
   refuses that combination gets `PRIVATE` (then `format` stays `Rgba8`,
   the display composes RGBA).

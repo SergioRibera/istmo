@@ -361,7 +361,7 @@ permissions. Apps that capture audio add `RECORD_AUDIO` themselves.
   `ImageReader`. The native tier is `RGBA_8888` `HardwareBuffer`s handed
   over without a copy; each `Image` stays open until Rust drops the
   frame, and the consumer never gets the reader's last image. A CPU tier
-  copies each image into the sink (`CopyStage::ShmTransport`). Frames
+  copies each image into the sink (`CopyStage::GpuReadback`). Frames
   come already upright; rotation and app-window resizes give a new pool
   (`pool_generation`) and `SourceResized`.
 - Preview: `open_preview` renders straight into a `Surface` the app
