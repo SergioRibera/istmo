@@ -1140,7 +1140,6 @@ impl Inner {
             }
         }
         self.persist();
-        let mut backend = None;
         let mut first_error = None;
         for id in ids {
             let mut lane = self.acquire(id);
@@ -1152,19 +1151,26 @@ impl Inner {
                 state.table.remove(id)
             };
             lane.unlock();
-            let Some(live) = removed else {
-                continue;
+            // An id the table does not know may still be on screen, shown
+            // by an earlier process (a toast, a portal notification): the
+            // backend decides whether it can find it.
+            let known = match removed {
+                Some(live) => {
+                    let dismissed = live.dismissed;
+                    self.release(live.images);
+                    if dismissed {
+                        continue;
+                    }
+                    true
+                }
+                None => false,
             };
-            self.release(live.images);
-            if live.dismissed {
-                continue;
-            }
-            if backend.is_none() {
-                backend = Some(Arc::clone(self.backend()?));
-            }
-            if let Some(backend) = &backend
-                && let Err(err) = backend.remove(id)
-            {
+            let backend = match self.backend() {
+                Ok(backend) => backend,
+                Err(err) if known => return Err(err),
+                Err(_) => continue,
+            };
+            if let Err(err) = backend.remove(id) {
                 first_error.get_or_insert(err);
             }
         }
@@ -1685,7 +1691,14 @@ impl Notifications for DesktopNotifications {
                 )
                 .collect()
         };
-        self.inner.remove_ids(&ids)
+        let removed = self.inner.remove_ids(&ids);
+        // What earlier processes left on screen, where the platform can
+        // find it.
+        let rest = self
+            .inner
+            .backend()
+            .map_or(Ok(()), |backend| backend.remove_all());
+        removed.and(rest)
     }
 
     async fn pending(&self, ctx: HostCtx) -> Result<Vec<PendingNotification>, NotificationError> {

@@ -368,6 +368,18 @@ impl Backend for ToastBackend {
             .map_err(|err| platform(&err))
     }
 
+    fn remove_all(&self) -> Result<(), NotificationError> {
+        let entries: Vec<ShownToast> = lock(&self.shown).drain().map(|(_, entry)| entry).collect();
+        for entry in &entries {
+            entry.unhook();
+        }
+        // Also the toasts of earlier processes: every toast of this app is
+        // in the group.
+        Self::history()?
+            .RemoveGroupWithId(&self.group, &self.aumid)
+            .map_err(|err| platform(&err))
+    }
+
     fn delivered(&self) -> Result<Vec<DeliveredNotification>, NotificationError> {
         let history = Self::history()?
             .GetHistoryWithId(&self.aumid)

@@ -34,6 +34,7 @@ struct Recorder {
     remove_threads: Mutex<Vec<Option<String>>>,
     completed: Mutex<Vec<AckToken>>,
     info_reads: AtomicUsize,
+    remove_alls: AtomicUsize,
 }
 
 impl Recorder {
@@ -47,6 +48,7 @@ impl Recorder {
             remove_threads: Mutex::default(),
             completed: Mutex::default(),
             info_reads: AtomicUsize::new(0),
+            remove_alls: AtomicUsize::new(0),
         })
     }
 
@@ -85,6 +87,11 @@ impl Backend for Recorder {
     fn remove(&self, id: &NotificationId) -> Result<(), NotificationError> {
         lock(&self.removes).push(id.value.clone());
         lock(&self.remove_threads).push(std::thread::current().name().map(str::to_owned));
+        Ok(())
+    }
+
+    fn remove_all(&self) -> Result<(), NotificationError> {
+        self.remove_alls.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -914,8 +921,8 @@ fn acks_and_dismissals_are_bounded_and_tokens_unguessable() {
 fn progress_updates_reuse_images_without_the_image_cache() {
     let (_now, clock) = clock!(0);
     let s = setup_with("reuse", Rate::new(1_000, 1_000), clock, false);
-    let shown = n("dl").with_icon(NotificationImage::png(vec![4, 5, 6]));
-    pollster::block_on(s.client.show_checked(shown)).unwrap();
+    let first = n("dl").with_icon(NotificationImage::png(vec![4, 5, 6]));
+    pollster::block_on(s.client.show_checked(first)).unwrap();
     let icon = s.backend.shows()[0].icon.clone().unwrap();
     // A file write elsewhere holds the cache: a progress update and the
     // state lock must not wait for it.
@@ -935,4 +942,23 @@ fn progress_updates_reuse_images_without_the_image_cache() {
     // The shared use is still one: the cancel removes the file.
     pollster::block_on(s.client.cancel(id("dl"))).unwrap();
     assert!(!icon.exists());
+}
+
+#[test]
+fn cancels_reach_the_backend_for_ids_of_an_earlier_process() {
+    let (_now, clock) = clock!(0);
+    let s = setup_with("earlier", Rate::LINUX, clock, false);
+    // Shown by an earlier process: the host has no record of it.
+    pollster::block_on(s.client.cancel(id("old"))).unwrap();
+    assert_eq!(s.backend.removes(), ["old"]);
+    // A dismissed one the host knows is gone is not removed again.
+    pollster::block_on(s.client.show_checked(n("seen"))).unwrap();
+    s.host.sink().dismissed(&id("seen"), DismissReason::User);
+    s.host.settle();
+    pollster::block_on(s.client.cancel(id("seen"))).unwrap();
+    assert_eq!(s.backend.removes(), Vec::<String>::new());
+    pollster::block_on(s.client.show_checked(n("a"))).unwrap();
+    pollster::block_on(s.client.cancel_all()).unwrap();
+    assert_eq!(s.backend.removes(), ["a"]);
+    assert_eq!(s.backend.remove_alls.load(Ordering::SeqCst), 1);
 }

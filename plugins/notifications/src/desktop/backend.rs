@@ -191,8 +191,19 @@ pub trait Backend: Send + Sync + 'static {
     /// Put `shown` on screen, or replace the one with its id.
     fn show(&self, shown: &Shown<'_>) -> Result<(), NotificationError>;
 
-    /// Take `id` off the screen. Unknown ids are not an error.
+    /// Take `id` off the screen. Unknown ids are not an error: the host
+    /// also calls it for ids it has no record of (shown by an earlier
+    /// process), so a platform that can find those by id (Windows tag,
+    /// portal id) removes them too.
     fn remove(&self, id: &NotificationId) -> Result<(), NotificationError>;
+
+    /// Take every notification of this app off the screen, also those an
+    /// earlier process showed, where the platform can find them (Windows:
+    /// the toast group). Called by `cancel_all` after the host removed
+    /// each id it knows. Default: nothing more to remove.
+    fn remove_all(&self) -> Result<(), NotificationError> {
+        Ok(())
+    }
 
     /// What is on screen, when the platform can list it
     /// ([`BackendInfo::lists_delivered`]). Default: none.
