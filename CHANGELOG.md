@@ -68,6 +68,19 @@
   (`AudioReport`) says whether audio capture runs here. Rust sugar
   `open_audio_session` / `AudioSessionHandle`. Android and iOS answer
   `NoBackendCompiled`.
+- Screen capture on Apple platforms, not yet run on hardware (out of
+  `Auto` until then): `macos-sck` (Rust, objc2 ScreenCaptureKit; displays,
+  windows and applications, `IOSurface` / `CVPixelBuffer` / locked-memory
+  frames without a copy as `IoSurfaceFrame`, damage and content rect
+  from frame info, the content-sharing picker and `SCScreenshotManager` on
+  14+, system / application audio on 13+, Screen Recording grant through
+  `access` / `request_access` with `RequiresRestart`), and the iOS /
+  iPadOS Swift backend (ScreenCaptureKit 27 through the system picker,
+  ReplayKit in-app before; retained `CVPixelBuffer` frames, previews into
+  an `AVSampleBufferDisplayLayer`, app audio). Desktop backends can now
+  report standing grants, a picker beside their listing, and receive
+  `exclude` / `exclude_own_process`. `check-plugin-native.sh` type-checks
+  iOS natives against stub Apple media frameworks.
 - `istmo-media` crate: message types that mean the same in several media
   plugins (for now `AccessStatus`, used by camera and screen capture).
   Each shared type is generated once per app (Kotlin package

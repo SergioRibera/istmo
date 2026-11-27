@@ -8,11 +8,13 @@ control plane over istmo and a data plane over native frame sinks
 (`design/native-frames.md`) or straight into a platform surface.
 Implemented so far: the contract, selection, pools, pixel helper,
 desktop host and the Linux backends (wlr-screencopy, ext-image-copy,
-X11, portal over PipeWire with DMA-BUF zero-copy, PipeWire audio) and the
-Windows backends (WGC, DXGI Desktop Duplication, GDI, WASAPI audio), the
-latter not yet run on Windows. Later steps are listed under
-"Implementation order"; deviations are in the "Implementation notes"
-sections below.
+X11, portal over PipeWire with DMA-BUF zero-copy, PipeWire audio), the
+Windows backends (WGC, DXGI Desktop Duplication, GDI, WASAPI audio) and
+macOS ScreenCaptureKit (video and audio) with the iOS / iPadOS Swift
+backends (ScreenCaptureKit 27, ReplayKit in-app); the Windows and Apple
+backends have not run on their hardware yet. Later steps are listed
+under "Implementation order"; deviations are in the "Implementation
+notes" sections below.
 
 Per-platform facts, version tables and official sources live in
 `design/screen-capture-platforms.md`; this document refers to them by
@@ -367,6 +369,166 @@ direction (`ROTATE90` → `R90`, taken from the duplication sample's
 dirty-rect transform), cursor hotspots on rotated outputs, WGC dirty
 regions on 24H2, FP16 on an HDR display, process loopback, the
 borderless prompt for unpackaged apps.
+
+## Implementation notes (Apple, as built)
+
+Like the Linux notes: where this section and the text below disagree,
+this section wins. Nothing here ran on a Mac, an iPhone or an iPad yet
+(see "Not verified on Apple hardware" at the end).
+
+**macOS host (`macos-sck`, Rust).**
+- The Rust desktop host owns macOS, through objc2's generated bindings
+  (`objc2-screen-capture-kit`, `-core-media`, `-core-video`,
+  `-io-surface`, `-core-graphics`, 0.3), all target-gated. Every
+  framework call lives in `desktop/macos/ffi` (`unsafe` allowed there
+  only, one operation per block, a `SAFETY:` comment each);
+  `desktop/sck_map.rs` holds the rules as plain data and is unit-tested
+  on Linux.
+- Not in `Auto` until the Mac checklist passes
+  (`plugins/screen-capture/docs/apple-checklist.es.md`): reachable by
+  `Fixed(MacosSck)`, `Ordered` and the environment override.
+- Sources: `SCShareableContent` displays (`display:<CGDirectDisplayID>`,
+  pixel size and refresh from the display mode, `primary` from
+  `CGDisplayIsMain`, make / model as the CoreGraphics vendor / model
+  numbers in hex), layer-0 windows (`window:<CGWindowID>`, titles
+  local-only like every listing, `occluded` = not on screen, `primary` =
+  `isActive` on 13.1+), applications (`app:<bundle id>`, `pid:<pid>`
+  without one). Before the Screen Recording grant nothing is listed
+  (`SourceListing::AfterGrant`, `Provenance::Probe`) and capture by id
+  answers `ConsentRequired` (`AccessRequiresRestart` once this process
+  asked): listing would raise the framework's own prompt.
+- `watch_sources` lists again every second (SCK has no change
+  notification; the host's diff drops unchanged listings).
+- Formats: BGRA → `Bgra8`, `l10r` → `Ar30`, `420v` → `Nv12` (video
+  range; `420f` is read but never asked for), `RGhA` → `Rgba16f` (15+).
+  `xf44` (10-bit 4:4:4 biplanar) has no `PixelFormat` and is not offered.
+  Each format in three memories, none a copy: `IoSurface` and
+  `CvPixelBuffer` (the same retained `IoSurfaceFrame`, `kind` as asked)
+  and `Cpu` (the surface locked read-only and lent out as bytes, unlocked
+  when the last clone drops). A frame in another format than asked
+  reports what arrived.
+- `IoSurfaceFrame` (public on macOS): the retained `CVPixelBuffer` and
+  its `IOSurface`; `pixel_buffer_ptr`, `io_surface_ptr`, `surface_id`.
+  Plane offsets are from the surface's base address.
+- Pools: `queueDepth` = the negotiated `pool_depth` (3..=8, default 4).
+  Surfaces get slots by `IOSurfaceGetID`; one more surface than the depth
+  starts a new generation. The pool rule and `Exhaustion` as on Linux:
+  `Stall` / `DropNewest` hand the surface back at once (`skipped_before`
+  counts it), `CopyToCpu` copies the surface out
+  (`CopyStage::ExhaustionReadback`).
+- Frame info: status `Complete` delivers; `Idle` / `Blank` deliver
+  nothing (`Exact` repeats come from the host pacer); `Suspended` emits
+  `Paused(SystemPaused)` once, the next complete frame `Resumed`.
+  `contentRect` (points) × `scaleFactor` → `content_rect`, dirty rects
+  (pixels; an empty list is `Damage::Unchanged`) → `Damage::Rects`,
+  `scaleFactor` → `scale_permille`. Orientation is `AlreadyApplied`.
+- Clock: sample buffers are stamped on the host time clock
+  (`CMClockGetHostTimeClock`, `mach_absolute_time`), so `pts_clock` is
+  `HostTime` (not `MachContinuous`); `wall_us` is computed per frame from
+  it like `Monotonic` on Linux.
+- Regions stay crops in `content_rect` (`RegionCrop::InMeta`);
+  `sourceRect` is not used. `OutputSize` sets `width` / `height` with
+  `scalesToFit` (`Fit` keeps the aspect ratio).
+- Exclusions: `VideoConfig.exclude` (`window:` / `app:` / `pid:` ids) and
+  `exclude_own_process` build `initWithDisplay:excludingApplications:
+  exceptingWindows:`; `StreamPlan` carries them now.
+- Picker: `Backend::offers_picker` (14+) lets a listing backend answer
+  `SourceSelector::Picker` with `SCContentSharingPicker` (modes from
+  `PickerOptions`), only with `allow_picker` (`ConsentRequired`
+  otherwise); cancelling is `ConsentDenied`, 120 s or a caller that left
+  is `ConsentRequired`. The picker is presented from the main queue: the
+  app needs a running `NSApplication`. The picked source is
+  `picker`, its kind and size from the filter's `style`, `contentRect`
+  and `pointPixelScale`.
+- Screenshots: `SCScreenshotManager` sample buffers on 14+, a one-frame
+  `SCStream` before (and when a 14+ sample has no `IOSurface`). Multiple
+  displays compose on the CPU like Linux.
+- HDR: `captureDynamicRange = .hdrLocalDisplay` on 15+ for `Ar30` /
+  `Rgba16f` with `PreferHdr` / `RequireHdr`; colour reported as
+  Display P3 PQ (`Ar30`) or scRGB linear (`Rgba16f`). SDR RGB asks for
+  `kCGColorSpaceSRGB`.
+- Access: `Backend::access` / `request_access` answer the standing grant;
+  `CGPreflightScreenCaptureAccess` → `Granted`, else `NotDetermined`
+  until `request_access` ran `CGRequestScreenCaptureAccess` in this
+  process, `RequiresRestart` after (TCC tells no "denied" from "never
+  asked", and a grant applies to a relaunched process only).
+- Stop errors (`SCStreamErrorDomain`): `UserDeclined` → `ConsentDenied`,
+  `UserStopped` → `ConsentRevoked`, no source / display / window list,
+  removing and system-stopped streams → `SourceLost`, the rest
+  `Os(code)`.
+- Audio (13+): its own `SCStream` of the main display (`capturesAudio`,
+  `sampleRate`, `channelCount`, `excludesCurrentProcessAudio` for
+  `ExcludeSelf`; `Application(name)` matches a bundle id or an
+  application name), a 2×2 BGRA screen output at 1 fps dropped. Planar
+  `f32` interleaved into the asked format; `wall_us` from each chunk's
+  own host-clock timestamp, `discontinuity` when a chunk does not start
+  where the previous ended (±100 ms). The asked rate / channels are
+  passed to SCK; chunks carry what arrived, a mismatch is logged once.
+  `open_with_audio` runs a second stream for the audio.
+- `PtsClock::HostTime` is read on macOS (`clock.rs`); the pacer's
+  `Exact` repeats stay on `Monotonic`.
+
+**iOS / iPadOS host (Swift, `native/ios`).**
+- `iosSck` (iOS / iPadOS 27, behind `#if canImport(ScreenCaptureKit)` +
+  `#available(iOS 27, *)`): the shared `SCContentSharingPicker`
+  (default configuration), an `SCStream` on the chosen filter, screen and
+  audio outputs on one serial queue. `iosReplayKit` (before 27):
+  `RPScreenRecorder.startCapture`, `isMicrophoneEnabled = false`,
+  `Paused(Backgrounded)` / `Resumed` from the app's life-cycle
+  notifications, one capture at a time (`concurrency = 1`).
+- Both picker-only: `sources` is empty `PickerOnly`, `watch_sources`
+  `Unsatisfiable(Operation)`; `Picker` / `PrimaryMonitor` (and `Id` with
+  `allow_picker`) show the system UI; `AllMonitors` / several monitors
+  are `MultiMonitor`, `Region` / `Focused` / `UnderCursor` are refused;
+  without `allow_picker`, `ConsentRequired`. `access` answers
+  `PerSession` (`PickerPerSession` / `PerSessionSystemAlert`).
+- Neither joins `Auto` yet (`ScreenCaptureBackendImpl.joinsAuto` is
+  empty): `Auto` answers `NoBackend` naming why.
+- Frames: the sample's `CVPixelBuffer` (or its `IOSurface`, as the tier
+  asks) handed to Rust retained (`IstmoFrameSender.submitRetained`), no
+  copy. A process-wide ledger counts frames Rust still holds (the release
+  function finds its session by object pointer): the pool rule and
+  `Exhaustion` as on desktop (`CopyToCpu` copies the planes out,
+  `submitBytes`). Offers: SCK `Bgra8` / `Nv12`, ReplayKit the system's
+  format (`Provenance::UnknownUntilNegotiated`; frames say what arrived).
+- Pacing: `Max` / `OnDamage` drop frames that come early (no deferral,
+  `skipped_before` counts them); `Exact` is enforced as `Max` (no
+  repeats), and `NegotiatedStream.fps` says so. SCK also throttles at the
+  source (`minimumFrameInterval`).
+- Frame info as on macOS, plus `videoOrientation` (27) and ReplayKit's
+  `RPVideoSampleOrientationKey` (EXIF values) → `FrameMeta.orientation`
+  (`OrientationSupport::InMeta`); `Upright` is refused (no CPU turn).
+- Preview: `open_preview` resolves the registered
+  `AVSampleBufferDisplayLayer` (`sinkUnreachable` when it is not one),
+  sets `videoGravity` from `PreviewFit` and enqueues every sample buffer
+  (`sampleBufferRenderer` on 17+); `open_preview_with_frames` hands the
+  same buffers to the sink, no copy.
+- `screenshot` / `screenshot_pixels`: a capture started for one complete
+  frame (10 s), then stopped; pixels are cropped to `content_rect`, turned
+  upright on request and converted (BGRA as is, NV12 with BT.709) — the
+  one CPU copy the wire needs.
+- Audio: SCK `System` / `ExcludeSelf` (what the picked content plays);
+  ReplayKit `Application` only (the app's own audio, `.audioApp`). PCM in
+  any linear layout (float / 16 / 32-bit, either endianness, planar or
+  interleaved) → interleaved `F32` / `S16`.
+- The broadcast-upload extension (`RPSystemBroadcastPickerView`) is not
+  built (deferred, as decided).
+- `scripts/check-plugin-native.sh` type-checks the natives against stub
+  `CoreGraphics`, `IOSurface`, `CoreVideo`, `CoreMedia`, `QuartzCore`,
+  `AVFoundation`, `ReplayKit`, `ScreenCaptureKit` and `UIKit` modules
+  (`runtime/ios/ci/*Stub.swift`, written from Apple's documentation), and
+  `IstmoRuntime` now includes `IstmoFrameSender+Apple.swift`.
+
+**Not verified on Apple hardware.** Everything above compiles
+(`cargo clippy -D warnings` for `aarch64-apple-darwin`,
+`x86_64-apple-darwin`, `aarch64-apple-ios`; Swift 5.10 against the stubs)
+and the pure rules are unit-tested; none of it ran. Open: the TCC flow
+and relaunch, listing and every format / memory on a real `SCStream`,
+dirty-rect and content-rect units, the screenshot manager's buffers,
+the picker on a running `NSApplication`, HDR colour, audio layouts and
+rates, the iOS 27 API names (the stubs follow the macOS SDK and the iOS
+27 article; `videoOrientation`'s value type is assumed EXIF),
+ReplayKit's pixel format and orientation semantics, preview layers.
 
 ## Goals
 

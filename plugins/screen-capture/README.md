@@ -27,12 +27,18 @@ regions.
 | DXGI Desktop Duplication (monitors) | `windows-dxgi` | D3D11 texture (NT handle), CPU | none | no: by name only |
 | GDI `BitBlt` / `PrintWindow` | `windows-gdi` | CPU | none | no: by name only |
 | WASAPI loopback audio (alone or with video) | `windows-audio` | interleaved PCM | none | — |
+| macOS ScreenCaptureKit 12.3+ (displays, windows, apps; audio 13+) | `macos-sck` | `IOSurface`, `CVPixelBuffer`, locked `IOSurface` memory | Screen Recording (TCC); picker on 14+ | no: by name only |
+| iOS / iPadOS 27 ScreenCaptureKit (Swift) | — | `CVPixelBuffer`, `IOSurface` | system picker per session | no: by name only |
+| iOS ReplayKit in-app, before 27 (Swift) | — | `CVPixelBuffer`, `IOSurface` | system alert per session | no: by name only |
 
 The Windows backends stay out of `Auto` until their checklist passed on
 a real Windows session (`examples/win_probe.rs` runs it); name them with
-`BackendSelection::Fixed` / `Ordered`. Android, iOS, macOS and the web
-are designed (`design/screen-capture.md`) but not implemented yet. Their
-hosts answer `CaptureError::NoBackendCompiled`.
+`BackendSelection::Fixed` / `Ordered`. The Apple backends compile and
+pass their lints but have not run on a Mac, iPhone or iPad yet: they
+stay out of `Auto` until the checklist in `docs/apple-checklist.es.md`
+passes. Android and the web are designed (`design/screen-capture.md`)
+but not implemented yet; their hosts answer
+`CaptureError::NoBackendCompiled`.
 
 ## Install
 
@@ -41,10 +47,11 @@ hosts answer `CaptureError::NoBackendCompiled`.
 istmo-screen-capture = "0.1.1-alpha.7"
 ```
 
-The default features build every Linux backend except KMS and every
-Windows backend; each platform's dependencies are gated on its target.
-On Linux they need `libpipewire` and `libgbm` at build time
-(pkg-config) and at run time. On Windows nothing beyond the OS.
+The default features build every Linux backend except KMS, every
+Windows backend and ScreenCaptureKit on macOS; each platform's
+dependencies are gated on its target. On Linux they need `libpipewire`
+and `libgbm` at build time (pkg-config) and at run time. On Windows
+nothing beyond the OS.
 
 
 Register the desktop host with the runtime:
@@ -296,6 +303,44 @@ The plugin never gates capture on consent. Each backend's
 `ConsentModel` is in the report, so an app that wants consent-backed
 capture can exclude `NoneNeeded` backends itself.
 
+## macOS
+
+`macos-sck` (on by default, inert elsewhere) captures displays, windows
+and applications through ScreenCaptureKit. It needs the Screen Recording
+grant:
+
+- `access(AccessScope::ScreenRecording)` never prompts. `Granted`,
+  `NotDetermined`, or `RequiresRestart` once this process asked: macOS
+  applies a new grant to a relaunched process only.
+- `request_access` shows the system prompt (at most once per process).
+- Without the grant nothing is listed (`SourceListing::AfterGrant`) and
+  capture answers `ConsentRequired`; the plugin never lets the framework
+  prompt by itself.
+
+Frames are the stream's own `IOSurface`s, retained until the frame
+drops. Ask for `BufferMemory::IoSurface` or `CvPixelBuffer` and read the
+backing through `frame.buffer.downcast_ref::<IoSurfaceFrame>()`
+(`io_surface_ptr`, `pixel_buffer_ptr`, `surface_id`), or ask for `Cpu`:
+the surface locked read-only, still no copy. Formats: `Bgra8`, `Ar30`,
+`Nv12` (video range), `Rgba16f` on 15+. Timestamps are host time
+(`PtsClock::HostTime`); `wall_us` is the UNIX-epoch time of each frame.
+
+`SourceSelector::Picker` shows the system's content-sharing picker on
+14+ (with `allow_picker`; the app needs a running `NSApplication`).
+System or application audio needs macOS 13.
+
+## iOS and iPadOS
+
+The Swift backend in `native/ios` is picker-only: set
+`ConsentConfig.allowPicker`, and name a backend (`.fixed(.iosSck)` on
+iOS 27, `.fixed(.iosReplayKit)` before) until they join `Auto`.
+ScreenCaptureKit (27) captures what the person picks, also in the
+background with the `screen-capture` background mode; ReplayKit captures
+the app's own screen in the foreground only. Frames reach Rust as
+retained `CVPixelBuffer`s / `IOSurface`s. `open_preview` renders into an
+`AVSampleBufferDisplayLayer` registered with
+`IstmoRuntime.shared.registerObject(layer)`.
+
 ## Kotlin and Swift
 
 The generated clients offer the control plane:
@@ -329,6 +374,9 @@ tests:
 - `examples/win_probe.rs`: the whole checklist on a Windows desktop
   (build it with `--target x86_64-pc-windows-msvc`); prints PASS / FAIL
   and writes `win_probe_report.txt`
+- `ISTMO_SC_TEST_MACOS=1` (plus `_PICKER`, `_AUDIO`): ScreenCaptureKit on a
+  Mac (`tests/macos_live.rs`); the full Apple checklist, iOS included,
+  is `docs/apple-checklist.es.md`
 
 Design: `design/screen-capture.md`. Platform facts:
 `design/screen-capture-platforms.md`.
