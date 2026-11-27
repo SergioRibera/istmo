@@ -5,7 +5,7 @@
 //! audio-only test (something should be playing). The picker needs a
 //! main run loop, which libtest has not: it is `tests/macos_picker.rs`.
 
-#![cfg(target_os = "macos")]
+#![cfg(all(target_os = "macos", feature = "macos-sck"))]
 
 mod common;
 

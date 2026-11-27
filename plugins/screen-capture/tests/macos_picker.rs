@@ -4,10 +4,10 @@
 //! (`harness = false`): `main` runs `NSApplication` on the main thread
 //! while a worker drives the plugin, then exits with the result.
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "macos-sck"))]
 mod common;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "macos-sck"))]
 fn main() {
     use std::panic::catch_unwind;
 
@@ -30,7 +30,7 @@ fn main() {
     app.run();
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "macos-sck"))]
 fn the_picker_shows_with_allow_picker() {
     use istmo_screen_capture::{
         BackendId, ConsentConfig, PickerOptions, PixelLayout, ScreenCaptureClientExt,
@@ -50,5 +50,5 @@ fn the_picker_shows_with_allow_picker() {
     assert!(image.width > 0);
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(all(target_os = "macos", feature = "macos-sck")))]
 fn main() {}
