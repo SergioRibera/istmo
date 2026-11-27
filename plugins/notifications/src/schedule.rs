@@ -38,6 +38,16 @@ pub trait Wakeup: Send + Sync {
     fn arm(&self, deadline_ms: Option<i64>);
 }
 
+/// The field to blame when a trigger has no occurrence.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NeverFires(&'static str);
+
+impl From<NeverFires> for crate::NotificationError {
+    fn from(dead: NeverFires) -> Self {
+        crate::InvalidField::new(dead.0, crate::Problem::OutOfRange).into()
+    }
+}
+
 impl Trigger {
     /// The first occurrence strictly after `after_ms` of this trigger,
     /// armed at `anchor_ms`, in the device's local zone. Occurrences:
@@ -85,6 +95,15 @@ impl Trigger {
             Self::At(at) => Some((*at).max(anchor_ms)),
             _ => self.next_after_in(anchor_ms, anchor_ms.saturating_sub(1), local),
         }
+    }
+
+    /// The error a host answers when this trigger has no occurrence
+    /// (a calendar rule past its `until_ms`, or matching no day).
+    pub(crate) fn never_fires(&self) -> NeverFires {
+        NeverFires(match self {
+            Self::Calendar(rule) if rule.until_ms.is_some() => "trigger.until_ms",
+            _ => "trigger",
+        })
     }
 
     /// Whether it fires more than once.

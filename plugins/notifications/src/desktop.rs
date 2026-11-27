@@ -1143,7 +1143,11 @@ impl Notifications for DesktopNotifications {
             {
                 return Err(NotificationError::UnknownChannel(channel.value.clone()));
             }
+            let dead = trigger.never_fires();
             let info = state.engine.add(notification, trigger, now);
+            if info.next_fire_ms.is_none() {
+                return Err(dead.into());
+            }
             Inner::changed_engine(&mut state);
             info
         };

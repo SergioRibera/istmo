@@ -279,7 +279,9 @@ impl Notifications for FakeNotifications {
             FakeCall::Schedule(notification.clone(), trigger.clone()),
         );
         let now = crate::builder::now_ms();
-        Ok(lock(&self.state).scheduled.add(notification, trigger, now))
+        let dead = trigger.never_fires();
+        let info = lock(&self.state).scheduled.add(notification, trigger, now);
+        info.next_fire_ms.map(|_| info).ok_or_else(|| dead.into())
     }
 
     async fn update(

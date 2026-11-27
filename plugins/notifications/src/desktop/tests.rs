@@ -511,3 +511,23 @@ fn live_notifications_stream_progress_through_one_sender() {
     }
     panic!("dropping a live notification did not cancel it");
 }
+
+#[test]
+fn schedules_that_never_fire_are_refused() {
+    let (_now, clock) = clock!(86_400_000);
+    let s = setup_with("dead", Rate::LINUX, clock, false);
+    let ended = crate::CalendarRule {
+        until_ms: Some(1_000),
+        ..crate::CalendarRule::daily(9, 0).in_zone("UTC")
+    };
+    let err = pollster::block_on(s.client.schedule_checked(n("x"), Trigger::Calendar(ended)))
+        .unwrap_err();
+    assert_eq!(
+        err,
+        NotificationError::Invalid(InvalidField::new(
+            "trigger.until_ms",
+            Problem::OutOfRange
+        ))
+    );
+    assert_eq!(pollster::block_on(s.client.pending()).unwrap(), Vec::new());
+}
