@@ -1,0 +1,6 @@
+[app]
+id = "dev.istmo.notificationsprobe"
+name = "Notifications probe"
+
+[min_versions]
+android = 26
