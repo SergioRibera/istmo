@@ -1095,103 +1095,6 @@ API additions: `DesktopNotifications::settle`, `Progress::validate`,
 `Coalescer::{set_rate, dismissed_len}`, `Engine::{merge, local,
 set_local, snapshot}`. `Engine::add` no longer stores dead entries.
 
-### Review fixes (desktop: host, Linux, Windows)
-
-Branch `notif-fix-desktop`. Supersede the host, Linux and Windows notes
-they contradict.
-
-- **Images without file IO under the state lock.** `Live.images` is an
-  `Arc<ImageFiles>`; one `Arc` = one use of the cached files. A post
-  that reuses the shown files clones the `Arc` under the state lock (no
-  image-cache lock, no `retain`); `Inner::release` takes the cache lock
-  only when `Arc::into_inner` hands back the last use. A progress update
-  therefore copies no `ImageFiles` and takes the image cache zero times
-  (was: one `Vec` clone and two cache locks, the first inside the state
-  lock while `collect` might be writing files). The cache is never
-  locked while the state lock is held.
-- **Cancels reach earlier processes.** `remove_ids` calls
-  `Backend::remove` also for ids the table does not know (a missing
-  backend is then not an error); dismissed ids the host knows are still
-  skipped. New `Backend::remove_all` (default no-op) runs after
-  `cancel_all`'s per-id removals; Windows removes the whole `istmo`
-  toast group from the history. fdo cannot map unknown ids (no-op), the
-  portal removes by id.
-- **Arm window rolls forward.** `arm_native` records `State.arm_at` =
-  the earliest `next occurrence - ARM_WINDOW_MS` among entries whose next
-  occurrence lies past the window; it is part of the timer deadline and
-  `run_due` arms again when it passes. Occurrences cut by `ARM_CAP` need
-  no wake: the deliveries before them change the engine, which arms.
-  Only the store's owner sets it.
-- **Windows: scheduled occurrences tracked per tag** (`windows/marks.rs`,
-  pure, tested on Linux), replacing the `armed` flag. Marks = fire times
-  of scheduled toasts this process added or kept, plus, at backend
-  start, the pending scheduled toasts and the history toasts whose
-  arguments carry a fire time within 24 h (an earlier process). Before
-  every alerting show (`New` and `Replace { alert: true }`, so a repeat
-  replacing the previous occurrence is covered) `take_due(tag, now)`
-  picks the latest mark in `[now - 24 h, now + 60 s]` and forgets it and
-  older ones; no mark = no `WinRT` call. With a mark: due scheduled
-  toasts of the tag are removed; if the one for that fire time was still
-  pending the host's toast pops normally, else the history is checked
-  for exactly that fire time (was: any fire time within 24 h, which also
-  matched the previous occurrence of a repeat). `arm` unmarks future
-  toasts it removes; marks due within 60 s stay for the history check
-  (the arm in `run_due`'s `persist` used to run before the show and
-  cleared the flag, so the last scheduled entry popped twice).
-- **Windows shown table bounded.** `ShownTable` (insertion order, at
-  most `2 * MAX_ACTIVE` = 40, oldest evicted and unhooked); the
-  `Dismissed(UserCanceled)` and `Failed` handlers forget their own toast
-  (checked by `ToastNotification` identity, not unhooked from inside its
-  event). Forgetting one early only turns the next silent update into a
-  full replace with `SuppressPopup`.
-- **Windows activator revoke.** `DesktopNotifications::revoke_activator()`
-  (`CoRevokeClassObject` on the COM thread, which then leaves the MTA).
-  Decision: `install` keeps registering the class object at once (a
-  COM-started process has 60 s); a forwarding instance of a
-  single-instance app revokes as soon as it knows it is not the primary.
-  Rejected: an explicit `serve_activations()` the primary calls (the
-  cold-start process does not know yet that it will be primary, and
-  apps without single-instance logic would need a second call).
-  Supersedes the "No forwarding" open item for user-started instances;
-  an activation already routed into a forwarding instance stays the
-  app's to forward.
-- **Toast XML.** `escape` drops what XML 1.0 cannot carry (controls but
-  tab / LF / CR, U+FFFE, U+FFFF; Rust strings hold no lone surrogates);
-  bound values are filtered the same way. `build_fitting` counts the
-  escaped length of the bound values toward the 5 KB (conservative:
-  placeholders count too). `file_uri` maps `\\?\UNC\server\share\..` to
-  `file://server/share/..` and keeps `\\?\C:\..` as before.
-- **Not done (measured):** skipping the XML build on the data-binding
-  path. `build_fitting` takes about 0.9 µs for a progress toast with an
-  icon and two buttons (release, 9950X3D); the `WinRT` update it guards
-  is a cross-process call, so the template hash stays computed from the
-  full XML.
-- **Linux fdo.** A server restart drops job views too (Plasma serves
-  both) and reports them `Dismissed(Other)`; a job server
-  (`org.kde.JobViewServer`) losing its owner does the same for its views
-  (watched once job views are used). `cancelRequested` is accepted only
-  from the job server's owner (`Owner`, like the fdo signals). `info()`
-  that fails while a first owner appears reports `changed()` itself
-  (`State.appeared` generation; the flag used to be set after the
-  appearance had already looked at it). Unknown closes are kept as early
-  closes only while a `Notify` is in flight (`State.notifying`), and the
-  ring is cleared when the last one returns: our own
-  `CloseNotification`'s echo no longer lingers. `Notify` hints are
-  allocated with room for the usual set.
-- **Linux portal.** The posted set is insertion-ordered and bounded
-  (512, oldest forgotten: the portal has no closed signal); an update of
-  a known id clones nothing.
-- Tests: host (`progress_updates_reuse_images_without_the_image_cache`,
-  `cancels_reach_the_backend_for_ids_of_an_earlier_process`,
-  `the_arm_window_rolls_forward_while_the_app_runs`), marks, toast XML
-  characters and size, verbatim UNC URIs, posted bound, and
-  `tests/linux_dbus.rs` `kde_job_views_follow_their_server` (fake job
-  server: spoofed cancel ignored, owner's cancel dismisses, job server
-  gone dismisses). The Windows parts beyond the pure modules are
-  cross-clippy only; the probe gained repeat, `cancel_all` and revoke
-  steps.
-
-
 ## Implementation notes (istmo-build, as built)
 
 Branch `notif-build`, step 2 of section 8: `crates/build/src/notifications.rs`
@@ -1328,45 +1231,6 @@ in that module.
   skips the staging (apps that write `SERVICE_WORKER_JS` themselves).
 - Linux needs nothing beyond the static channels (app id override:
   `LinuxOptions::with_app_id` through `DesktopNotifications::builder`).
-
-### Review fixes (2026-11-27, branch `notif-fix-web`)
-
-Supersede the parts of the sections above they contradict.
-
-- Outputs without a consumer are gone: `ISTMO_NOTIFICATION_APPLE` (see
-  the Apple notes) and the Android `bool/` / `string/` flag resources
-  (`values/istmo_notifications.xml` holds only the accent and is
-  written only with one). `ISTMO_NOTIFICATION_SOUND_DIR` now has a
-  reader: `bundled_sounds!()` + `with_sound_dir` (Linux only; the host
-  rewrites the name to a path, and fdo already sent names holding `/`
-  as `sound-file`, so the fdo backend is unchanged).
-- Desktop / web envs and the Android notification permissions are only
-  emitted when the app links the plugin (a dep manifest lists
-  `istmo.notifications`). A table without the plugin still warns.
-- `web_service_worker` defaults to true also without an
-  `[app.notifications]` table (`AppNotifications::web_service_worker`).
-- A wasm32 `cdylib` without a binary counts as an app for `emit()`
-  (desktop icon, runtime env, assets, notification envs); before, a web
-  app built by trunk / wasm-pack from a `lib.rs` got nothing.
-- The worker is also copied to `<crate>/.istmo/web/` (stable path,
-  `.gitignore` `*`): `OUT_DIR` is unknowable to a bundler. The docs give
-  a trunk `post_build` hook and the wasm-pack copy. Rejected: copying
-  into a dist directory (no repo convention; trunk and wasm-pack own
-  their output directories).
-- `[[assets]] targets = [...]` (same values and checks as `[plugin]
-  targets`, default all): `ResolvedAsset.targets`; the asset trees
-  filter by it (Android, iOS, desktop; the host tree is `web` on
-  wasm32). A file named by two entries ships to the union. The
-  notifications worker is `targets = ["web"]`.
-- `notification_channel = [{ ... }]` (inline array inside `[app]`) is
-  accepted besides `[[app.notification_channel]]` and one table.
-- The facade test `tests/notifications_hosts.rs` (path-only dev-dep on
-  the plugin, stripped on publish) compiles the documented
-  `hosts: [Notifications => ...]` line; the docs used
-  `NotificationsClient =>`, which does not compile. Rejected: wiring the
-  whole notifications page into `doc_pages` (its snippets are partial;
-  hidden `#` lines would show on the site).
-
 
 ### Not done / open
 
@@ -1654,72 +1518,6 @@ imports it instead.
 - Not done: a real browser run (Chrome desktop and Android, Firefox,
   Safari).
 
-### Review fixes (web, 2026-11-27, branch `notif-fix-web`)
-
-Supersede "Store", "Taps go through IndexedDB", "Service worker
-choice" and "Chrome Android" above where they differ.
-
-- **One tab runs the schedule.** Each tab used to run its own engine
-  and overwrite the whole `entries` key: duplicates, delivered
-  one-shots coming back, lost schedules, the missed policy applied per
-  tab. Now:
-  - Election: `navigator.locks.request(LOCK_NAME, {mode: "exclusive"})`,
-    held for the tab's life (the callback returns a promise that never
-    settles). Without Web Locks (or when the request rejects): a lease
-    over `BroadcastChannel` (`web/lease.rs`, pure, tested natively:
-    beat every 1 s, expiry 3.5 s, claim window 0.5 s, lowest tab id
-    wins, `pagehide` resigns). It can overlap for a few seconds (a
-    delivery may repeat); documented. Neither: every tab leads alone
-    (logged). No store (`without_store`, no IndexedDB): leads alone, as
-    before.
-  - Store layout v2 (`DB_VERSION` 2, no migration, pre-release): store
-    `scheduled`, one record per notification id, value = a one-entry
-    core store. The upgrade drops the old `schedule` store. Writes put /
-    delete only the ids a tab changed (`State::take_writes`, ids
-    "touched" by schedule, snooze, remove (also ids the mirror does not
-    hold: another tab may have scheduled them), the leader's due entries
-    and zone moves).
-  - Every tab keeps the engine as a mirror (`pending()`); after a write
-    it posts `{kind: "changed"}` on `BroadcastChannel` `CHANNEL_NAME`,
-    and every other tab reloads (`getAll`). Reloads run one at a time; a
-    reload keeps the local state of ids changed after it started
-    (`edit_mark` / `replace_entries`), so a read that predates a local
-    write does not undo it.
-  - Only the leader takes due entries, applies `MissedPolicy`, re-reads
-    the zone (`TimeZone::system()` on each wake; jiff caches it) and
-    arms the engine deadline; followers still run their coalescer and
-    timeouts. A newly elected tab reloads before it leads.
-- **Taps**: the worker tells only the window it focused or opened
-  (`focus()` result, `openWindow` result) to drain; a close tells the
-  focused or visible window; every window only when there is none.
-  Windows are filtered to the registration's scope, and the one whose
-  URL is the notification's `open` URL is preferred (it used to focus
-  any same-origin page).
-- **Registration**: `register()` is awaited; a rejection (404, MIME,
-  scope) falls back to page notifications at once, logged with the URL
-  (no 10 s `ready` wait). `ServiceWorker::Existing` without a
-  registration listens for `controllerchange` and adopts the app's
-  worker when it takes control (it used to look once).
-- **IndexedDB**: `blocked` is not a failure (it leaked the connection
-  that opened later); an open still pending after 5 s goes on in
-  memory and a late success is closed. Both page and worker close
-  their connection on `versionchange`. The queue is drained after the
-  open also when no worker was found yet (a tap queued while the
-  database was not open was never drained).
-- **Chrome Android up front**: `navigator.userAgentData` (`mobile` and
-  platform Android), else `ontouchstart` + an Android Chromium user
-  agent (not Firefox), set `page_refused` from the start
-  (`caps::refuses_page_notifications`, tested natively); the
-  `TypeError` fallback stays.
-- **Permission**: `requestPermission(callback)` and the promise form
-  both settle the request (old Safari returns `undefined`).
-- Tests: `tests/web.rs` (Node 24, wasm-bindgen-cli 0.2.130) gained a
-  failed registration (page fallback within 2 s) and a callback-only
-  permission request. The election, the store and the worker still
-  have no browser run (Node has no IndexedDB); their logic is in the
-  native tests of `web::{state,lease,caps}`. `node --check` passes on
-  the worker.
-
 ## Implementation notes (Windows, as built)
 
 Branch `notif-windows`, step 3 (Windows). `src/desktop/windows.rs` +
@@ -1990,97 +1788,6 @@ change was made. The plugin keeps `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLET
 - Permission state: `NotDetermined` on 33+ until the prompt was shown
   once (a preference), then `Denied` while not granted.
 
-### Review fixes (Android)
-
-Branch `notif-fix-android`. Supersede the notes above they contradict.
-
-- **Validation.** `Validate.kt` is the port of `src/validate.rs` (same
-  limits, field paths and problems; characters counted as scalar values,
-  controls = category Cc). The backend runs it like the desktop host:
-  `show` / `schedule` (notification + trigger), `update` (patch, then the
-  whole patched notification), `set_progress` (the bar), `append_message`
-  (the message), `set_channels` (`channels[i].<field>`). An
-  `Every` under 60 s is `Invalid(trigger.every)` (was a 1 ms repeat).
-  The Rust tests are mirrored in `NativeChecks.kt`.
-- **Per-id lanes.** Every `notify` / `cancel` of one id runs in its lane
-  (a monitor per id, refcounted under the state lock); each post carries
-  the content version it was built from and is skipped inside the lane
-  when the table moved on (cancelled, or newer content set, which posts
-  on its own). A cancel lands after a post in flight: cancel wins.
-  Scheduled deliveries take tickets under the schedule lock
-  (`delivering`); a cancel revokes them there, so a due entry cancelled
-  before its show is never shown. Lock order: schedule lock before state
-  lock, lane before state lock, never a lane with the schedule lock.
-- **Group summaries.** Tag `istmo.group:<group>` with notification id 1
-  (items use id 0): no notification id can name a summary, so the
-  `istmo.` id prefix stays allowed (no cross-platform rule change).
-  Posted once a group has 2 members, then **kept until it has none**
-  (removing a summary makes the system cancel its children). Re-posted
-  only when the member set, the titles or the group texts change; every
-  summary post is charged to the coalescer. Summaries are not
-  auto-cancel and carry a delete intent that only forgets them (their
-  children report their own dismissals). Group membership is the
-  plugin's active set (id -> group), read back from
-  `getActiveNotifications` at start, so members shown before a restart
-  keep their summary.
-- **Taps.** Items are never auto-cancel (a system auto-cancel sends no
-  delete intent and the id stayed in the table: a later `set_progress`
-  resurrected it). The tap intent carries `cancel = !keep_on_tap` and the
-  trampoline removes the notification itself (off the main thread).
-- **Coalescer.** Reply re-posts (`complete` and the cold-process path)
-  go through it as regular updates; summaries spend a token. Dismissals
-  of ids the table does not hold (shown before a restart) join the
-  bounded dismissed list (256, as the core).
-- **50 per app.** The system silently refuses an app's 51st active
-  notification. A post of an id not active checks
-  `getActiveNotifications().size` (plus one when it would add a summary)
-  and fails `TooMany(50)` instead; `show` then restores the table and
-  emits no `Delivered`. Chosen over evicting the oldest for parity
-  (Apple / Windows refuse too). Below API 23 the count is the active set.
-- **Sounds.** `android.resource://<pkg>/raw/<entry>`, never the integer
-  id: channel sounds are fixed once created and ids move between builds.
-- **Channels.** The channels file (format 2: wire `Vec<ChannelSpec>` of
-  the *dynamic* channels, then wire `Vec<String>` of the system channels
-  the plugin created) no longer stores static ones, so the raw resource
-  stays authoritative. `set_channels` creates the merged spec (existing:
-  only name and description change). At start, channels the plugin
-  created that are neither static, dynamic nor `default` (a channel
-  removed from `istmo.toml`) are deleted. `set_channels` on a static id
-  renames it until the next start; `delete_channel` on a static id lasts
-  until the next start too.
-- **Schedule.** `ScheduleEngine` drops dead entries when built from the
-  store and finds the latest missed occurrence with the core's backward
-  doubling search (`FIRST_PROBE_MS`, then the capped walk). A failed save
-  or arm on the alarm / boot / start threads is logged, never thrown.
-- **Robustness.** Handler-thread tasks (coalesced posts, ack timeouts,
-  promotion checks) and the receiver threads catch `Exception`.
-  `Api36.finish` catches `Exception` (reflection throws checked ones) and
-  returns `null`; the renderer then builds the compat notification again
-  with the compat progress bar. Promotion is checked (one binder call a
-  second later) only after an alerting post or when the promotion
-  request changed.
-- **Cold start.** `Responses.attach` sets `hostAttached` and drains the
-  queue under the lock `enqueueIfDetached` takes: a background response
-  is never queued after the drain.
-- **Actions.** "More" cuts on whole actions like `render::render` (the
-  actions whose buttons fit in 2 stay; the first that does not goes with
-  every action after it). A simulated call (API 31+ without full screen)
-  shows the call buttons and then the app's own actions
-  (`render::effective_actions`).
-- **`complete`** of an unknown ack is `NotFound("ack <n>")`; at most 256
-  acks are held (the oldest finished).
-- **Timeout.** Android gives the delete intent no reason. A dismissal
-  within 1 s of `posted + timeout_ms` (the timeout restarts at each post)
-  is reported `Dismissed(Timeout)` and the id leaves the table; earlier
-  ones are `User`. A heuristic: a person dismissing in that last second
-  is reported as the timeout. Whether the delete intent fires on a
-  timeout at all is still unverified on a device.
-- **Shrinking.** istmo-build writes `res/raw/istmo_notifications_keep.xml`
-  (`tools:keep` of the `istmo_notification*` raw, drawable, color, bool
-  and string resources) whenever it writes Android resources: the
-  backend reads them by name, which `shrinkResources` cannot see.
-- Probe commands added: `group-shrink`, `limit`, `invalid`.
-
 ### Verification
 
 - `plugins/notifications/tests/native/android/check.sh` (just
@@ -2253,6 +1960,299 @@ cross-clippied without an SDK. Checklist:
   not running, 64-cap accounting with snoozes.
 - macOS native scheduling (needs a `Backend` hook); call style through
   `INStartCallIntent`; action icons (`UNNotificationActionIcon`, iOS 15).
+
+## Review fixes (platform branches)
+
+### Review fixes (desktop: host, Linux, Windows)
+
+Branch `notif-fix-desktop`. Supersede the host, Linux and Windows notes
+they contradict.
+
+- **Images without file IO under the state lock.** `Live.images` is an
+  `Arc<ImageFiles>`; one `Arc` = one use of the cached files. A post
+  that reuses the shown files clones the `Arc` under the state lock (no
+  image-cache lock, no `retain`); `Inner::release` takes the cache lock
+  only when `Arc::into_inner` hands back the last use. A progress update
+  therefore copies no `ImageFiles` and takes the image cache zero times
+  (was: one `Vec` clone and two cache locks, the first inside the state
+  lock while `collect` might be writing files). The cache is never
+  locked while the state lock is held.
+- **Cancels reach earlier processes.** `remove_ids` calls
+  `Backend::remove` also for ids the table does not know (a missing
+  backend is then not an error); dismissed ids the host knows are still
+  skipped. New `Backend::remove_all` (default no-op) runs after
+  `cancel_all`'s per-id removals; Windows removes the whole `istmo`
+  toast group from the history. fdo cannot map unknown ids (no-op), the
+  portal removes by id.
+- **Arm window rolls forward.** `arm_native` records `State.arm_at` =
+  the earliest `next occurrence - ARM_WINDOW_MS` among entries whose next
+  occurrence lies past the window; it is part of the timer deadline and
+  `run_due` arms again when it passes. Occurrences cut by `ARM_CAP` need
+  no wake: the deliveries before them change the engine, which arms.
+  Only the store's owner sets it.
+- **Windows: scheduled occurrences tracked per tag** (`windows/marks.rs`,
+  pure, tested on Linux), replacing the `armed` flag. Marks = fire times
+  of scheduled toasts this process added or kept, plus, at backend
+  start, the pending scheduled toasts and the history toasts whose
+  arguments carry a fire time within 24 h (an earlier process). Before
+  every alerting show (`New` and `Replace { alert: true }`, so a repeat
+  replacing the previous occurrence is covered) `take_due(tag, now)`
+  picks the latest mark in `[now - 24 h, now + 60 s]` and forgets it and
+  older ones; no mark = no `WinRT` call. With a mark: due scheduled
+  toasts of the tag are removed; if the one for that fire time was still
+  pending the host's toast pops normally, else the history is checked
+  for exactly that fire time (was: any fire time within 24 h, which also
+  matched the previous occurrence of a repeat). `arm` unmarks future
+  toasts it removes; marks due within 60 s stay for the history check
+  (the arm in `run_due`'s `persist` used to run before the show and
+  cleared the flag, so the last scheduled entry popped twice).
+- **Windows shown table bounded.** `ShownTable` (insertion order, at
+  most `2 * MAX_ACTIVE` = 40, oldest evicted and unhooked); the
+  `Dismissed(UserCanceled)` and `Failed` handlers forget their own toast
+  (checked by `ToastNotification` identity, not unhooked from inside its
+  event). Forgetting one early only turns the next silent update into a
+  full replace with `SuppressPopup`.
+- **Windows activator revoke.** `DesktopNotifications::revoke_activator()`
+  (`CoRevokeClassObject` on the COM thread, which then leaves the MTA).
+  Decision: `install` keeps registering the class object at once (a
+  COM-started process has 60 s); a forwarding instance of a
+  single-instance app revokes as soon as it knows it is not the primary.
+  Rejected: an explicit `serve_activations()` the primary calls (the
+  cold-start process does not know yet that it will be primary, and
+  apps without single-instance logic would need a second call).
+  Supersedes the "No forwarding" open item for user-started instances;
+  an activation already routed into a forwarding instance stays the
+  app's to forward.
+- **Toast XML.** `escape` drops what XML 1.0 cannot carry (controls but
+  tab / LF / CR, U+FFFE, U+FFFF; Rust strings hold no lone surrogates);
+  bound values are filtered the same way. `build_fitting` counts the
+  escaped length of the bound values toward the 5 KB (conservative:
+  placeholders count too). `file_uri` maps `\\?\UNC\server\share\..` to
+  `file://server/share/..` and keeps `\\?\C:\..` as before.
+- **Not done (measured):** skipping the XML build on the data-binding
+  path. `build_fitting` takes about 0.9 µs for a progress toast with an
+  icon and two buttons (release, 9950X3D); the `WinRT` update it guards
+  is a cross-process call, so the template hash stays computed from the
+  full XML.
+- **Linux fdo.** A server restart drops job views too (Plasma serves
+  both) and reports them `Dismissed(Other)`; a job server
+  (`org.kde.JobViewServer`) losing its owner does the same for its views
+  (watched once job views are used). `cancelRequested` is accepted only
+  from the job server's owner (`Owner`, like the fdo signals). `info()`
+  that fails while a first owner appears reports `changed()` itself
+  (`State.appeared` generation; the flag used to be set after the
+  appearance had already looked at it). Unknown closes are kept as early
+  closes only while a `Notify` is in flight (`State.notifying`), and the
+  ring is cleared when the last one returns: our own
+  `CloseNotification`'s echo no longer lingers. `Notify` hints are
+  allocated with room for the usual set.
+- **Linux portal.** The posted set is insertion-ordered and bounded
+  (512, oldest forgotten: the portal has no closed signal); an update of
+  a known id clones nothing.
+- Tests: host (`progress_updates_reuse_images_without_the_image_cache`,
+  `cancels_reach_the_backend_for_ids_of_an_earlier_process`,
+  `the_arm_window_rolls_forward_while_the_app_runs`), marks, toast XML
+  characters and size, verbatim UNC URIs, posted bound, and
+  `tests/linux_dbus.rs` `kde_job_views_follow_their_server` (fake job
+  server: spoofed cancel ignored, owner's cancel dismisses, job server
+  gone dismisses). The Windows parts beyond the pure modules are
+  cross-clippy only; the probe gained repeat, `cancel_all` and revoke
+  steps.
+
+### Review fixes (istmo-build, 2026-11-27, branch `notif-fix-web`)
+
+Supersede the parts of the sections above they contradict.
+
+- Outputs without a consumer are gone: `ISTMO_NOTIFICATION_APPLE` (see
+  the Apple notes) and the Android `bool/` / `string/` flag resources
+  (`values/istmo_notifications.xml` holds only the accent and is
+  written only with one). `ISTMO_NOTIFICATION_SOUND_DIR` now has a
+  reader: `bundled_sounds!()` + `with_sound_dir` (Linux only; the host
+  rewrites the name to a path, and fdo already sent names holding `/`
+  as `sound-file`, so the fdo backend is unchanged).
+- Desktop / web envs and the Android notification permissions are only
+  emitted when the app links the plugin (a dep manifest lists
+  `istmo.notifications`). A table without the plugin still warns.
+- `web_service_worker` defaults to true also without an
+  `[app.notifications]` table (`AppNotifications::web_service_worker`).
+- A wasm32 `cdylib` without a binary counts as an app for `emit()`
+  (desktop icon, runtime env, assets, notification envs); before, a web
+  app built by trunk / wasm-pack from a `lib.rs` got nothing.
+- The worker is also copied to `<crate>/.istmo/web/` (stable path,
+  `.gitignore` `*`): `OUT_DIR` is unknowable to a bundler. The docs give
+  a trunk `post_build` hook and the wasm-pack copy. Rejected: copying
+  into a dist directory (no repo convention; trunk and wasm-pack own
+  their output directories).
+- `[[assets]] targets = [...]` (same values and checks as `[plugin]
+  targets`, default all): `ResolvedAsset.targets`; the asset trees
+  filter by it (Android, iOS, desktop; the host tree is `web` on
+  wasm32). A file named by two entries ships to the union. The
+  notifications worker is `targets = ["web"]`.
+- `notification_channel = [{ ... }]` (inline array inside `[app]`) is
+  accepted besides `[[app.notification_channel]]` and one table.
+- The facade test `tests/notifications_hosts.rs` (path-only dev-dep on
+  the plugin, stripped on publish) compiles the documented
+  `hosts: [Notifications => ...]` line; the docs used
+  `NotificationsClient =>`, which does not compile. Rejected: wiring the
+  whole notifications page into `doc_pages` (its snippets are partial;
+  hidden `#` lines would show on the site).
+
+### Review fixes (web, 2026-11-27, branch `notif-fix-web`)
+
+Supersede "Store", "Taps go through IndexedDB", "Service worker
+choice" and "Chrome Android" above where they differ.
+
+- **One tab runs the schedule.** Each tab used to run its own engine
+  and overwrite the whole `entries` key: duplicates, delivered
+  one-shots coming back, lost schedules, the missed policy applied per
+  tab. Now:
+  - Election: `navigator.locks.request(LOCK_NAME, {mode: "exclusive"})`,
+    held for the tab's life (the callback returns a promise that never
+    settles). Without Web Locks (or when the request rejects): a lease
+    over `BroadcastChannel` (`web/lease.rs`, pure, tested natively:
+    beat every 1 s, expiry 3.5 s, claim window 0.5 s, lowest tab id
+    wins, `pagehide` resigns). It can overlap for a few seconds (a
+    delivery may repeat); documented. Neither: every tab leads alone
+    (logged). No store (`without_store`, no IndexedDB): leads alone, as
+    before.
+  - Store layout v2 (`DB_VERSION` 2, no migration, pre-release): store
+    `scheduled`, one record per notification id, value = a one-entry
+    core store. The upgrade drops the old `schedule` store. Writes put /
+    delete only the ids a tab changed (`State::take_writes`, ids
+    "touched" by schedule, snooze, remove (also ids the mirror does not
+    hold: another tab may have scheduled them), the leader's due entries
+    and zone moves).
+  - Every tab keeps the engine as a mirror (`pending()`); after a write
+    it posts `{kind: "changed"}` on `BroadcastChannel` `CHANNEL_NAME`,
+    and every other tab reloads (`getAll`). Reloads run one at a time; a
+    reload keeps the local state of ids changed after it started
+    (`edit_mark` / `replace_entries`), so a read that predates a local
+    write does not undo it.
+  - Only the leader takes due entries, applies `MissedPolicy`, re-reads
+    the zone (`TimeZone::system()` on each wake; jiff caches it) and
+    arms the engine deadline; followers still run their coalescer and
+    timeouts. A newly elected tab reloads before it leads.
+- **Taps**: the worker tells only the window it focused or opened
+  (`focus()` result, `openWindow` result) to drain; a close tells the
+  focused or visible window; every window only when there is none.
+  Windows are filtered to the registration's scope, and the one whose
+  URL is the notification's `open` URL is preferred (it used to focus
+  any same-origin page).
+- **Registration**: `register()` is awaited; a rejection (404, MIME,
+  scope) falls back to page notifications at once, logged with the URL
+  (no 10 s `ready` wait). `ServiceWorker::Existing` without a
+  registration listens for `controllerchange` and adopts the app's
+  worker when it takes control (it used to look once).
+- **IndexedDB**: `blocked` is not a failure (it leaked the connection
+  that opened later); an open still pending after 5 s goes on in
+  memory and a late success is closed. Both page and worker close
+  their connection on `versionchange`. The queue is drained after the
+  open also when no worker was found yet (a tap queued while the
+  database was not open was never drained).
+- **Chrome Android up front**: `navigator.userAgentData` (`mobile` and
+  platform Android), else `ontouchstart` + an Android Chromium user
+  agent (not Firefox), set `page_refused` from the start
+  (`caps::refuses_page_notifications`, tested natively); the
+  `TypeError` fallback stays.
+- **Permission**: `requestPermission(callback)` and the promise form
+  both settle the request (old Safari returns `undefined`).
+- Tests: `tests/web.rs` (Node 24, wasm-bindgen-cli 0.2.130) gained a
+  failed registration (page fallback within 2 s) and a callback-only
+  permission request. The election, the store and the worker still
+  have no browser run (Node has no IndexedDB); their logic is in the
+  native tests of `web::{state,lease,caps}`. `node --check` passes on
+  the worker.
+
+### Review fixes (Android)
+
+Branch `notif-fix-android`. Supersede the notes above they contradict.
+
+- **Validation.** `Validate.kt` is the port of `src/validate.rs` (same
+  limits, field paths and problems; characters counted as scalar values,
+  controls = category Cc). The backend runs it like the desktop host:
+  `show` / `schedule` (notification + trigger), `update` (patch, then the
+  whole patched notification), `set_progress` (the bar), `append_message`
+  (the message), `set_channels` (`channels[i].<field>`). An
+  `Every` under 60 s is `Invalid(trigger.every)` (was a 1 ms repeat).
+  The Rust tests are mirrored in `NativeChecks.kt`.
+- **Per-id lanes.** Every `notify` / `cancel` of one id runs in its lane
+  (a monitor per id, refcounted under the state lock); each post carries
+  the content version it was built from and is skipped inside the lane
+  when the table moved on (cancelled, or newer content set, which posts
+  on its own). A cancel lands after a post in flight: cancel wins.
+  Scheduled deliveries take tickets under the schedule lock
+  (`delivering`); a cancel revokes them there, so a due entry cancelled
+  before its show is never shown. Lock order: schedule lock before state
+  lock, lane before state lock, never a lane with the schedule lock.
+- **Group summaries.** Tag `istmo.group:<group>` with notification id 1
+  (items use id 0): no notification id can name a summary, so the
+  `istmo.` id prefix stays allowed (no cross-platform rule change).
+  Posted once a group has 2 members, then **kept until it has none**
+  (removing a summary makes the system cancel its children). Re-posted
+  only when the member set, the titles or the group texts change; every
+  summary post is charged to the coalescer. Summaries are not
+  auto-cancel and carry a delete intent that only forgets them (their
+  children report their own dismissals). Group membership is the
+  plugin's active set (id -> group), read back from
+  `getActiveNotifications` at start, so members shown before a restart
+  keep their summary.
+- **Taps.** Items are never auto-cancel (a system auto-cancel sends no
+  delete intent and the id stayed in the table: a later `set_progress`
+  resurrected it). The tap intent carries `cancel = !keep_on_tap` and the
+  trampoline removes the notification itself (off the main thread).
+- **Coalescer.** Reply re-posts (`complete` and the cold-process path)
+  go through it as regular updates; summaries spend a token. Dismissals
+  of ids the table does not hold (shown before a restart) join the
+  bounded dismissed list (256, as the core).
+- **50 per app.** The system silently refuses an app's 51st active
+  notification. A post of an id not active checks
+  `getActiveNotifications().size` (plus one when it would add a summary)
+  and fails `TooMany(50)` instead; `show` then restores the table and
+  emits no `Delivered`. Chosen over evicting the oldest for parity
+  (Apple / Windows refuse too). Below API 23 the count is the active set.
+- **Sounds.** `android.resource://<pkg>/raw/<entry>`, never the integer
+  id: channel sounds are fixed once created and ids move between builds.
+- **Channels.** The channels file (format 2: wire `Vec<ChannelSpec>` of
+  the *dynamic* channels, then wire `Vec<String>` of the system channels
+  the plugin created) no longer stores static ones, so the raw resource
+  stays authoritative. `set_channels` creates the merged spec (existing:
+  only name and description change). At start, channels the plugin
+  created that are neither static, dynamic nor `default` (a channel
+  removed from `istmo.toml`) are deleted. `set_channels` on a static id
+  renames it until the next start; `delete_channel` on a static id lasts
+  until the next start too.
+- **Schedule.** `ScheduleEngine` drops dead entries when built from the
+  store and finds the latest missed occurrence with the core's backward
+  doubling search (`FIRST_PROBE_MS`, then the capped walk). A failed save
+  or arm on the alarm / boot / start threads is logged, never thrown.
+- **Robustness.** Handler-thread tasks (coalesced posts, ack timeouts,
+  promotion checks) and the receiver threads catch `Exception`.
+  `Api36.finish` catches `Exception` (reflection throws checked ones) and
+  returns `null`; the renderer then builds the compat notification again
+  with the compat progress bar. Promotion is checked (one binder call a
+  second later) only after an alerting post or when the promotion
+  request changed.
+- **Cold start.** `Responses.attach` sets `hostAttached` and drains the
+  queue under the lock `enqueueIfDetached` takes: a background response
+  is never queued after the drain.
+- **Actions.** "More" cuts on whole actions like `render::render` (the
+  actions whose buttons fit in 2 stay; the first that does not goes with
+  every action after it). A simulated call (API 31+ without full screen)
+  shows the call buttons and then the app's own actions
+  (`render::effective_actions`).
+- **`complete`** of an unknown ack is `NotFound("ack <n>")`; at most 256
+  acks are held (the oldest finished).
+- **Timeout.** Android gives the delete intent no reason. A dismissal
+  within 1 s of `posted + timeout_ms` (the timeout restarts at each post)
+  is reported `Dismissed(Timeout)` and the id leaves the table; earlier
+  ones are `User`. A heuristic: a person dismissing in that last second
+  is reported as the timeout. Whether the delete intent fires on a
+  timeout at all is still unverified on a device.
+- **Shrinking.** istmo-build writes `res/raw/istmo_notifications_keep.xml`
+  (`tools:keep` of the `istmo_notification*` raw, drawable, color, bool
+  and string resources) whenever it writes Android resources: the
+  backend reads them by name, which `shrinkResources` cannot see.
+- Probe commands added: `group-shrink`, `limit`, `invalid`.
 
 ### Review fixes (Apple, branch `notif-fix-apple`)
 
