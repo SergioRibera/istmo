@@ -153,13 +153,18 @@ pub struct PluginEntry {
     pub targets: PluginTargets,
 }
 
-/// The `targets` a plugin's `istmo.toml` lists.
+/// The `targets` a plugin's `istmo.toml` lists, or an `[[assets]]`
+/// entry ships to.
 ///
 /// ```toml
 /// [plugin]
 /// targets = ["desktop", "web"]
+///
+/// [[assets]]
+/// path = "web/sw.js"
+/// targets = ["web"]
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, SchemaWrite, SchemaRead)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "one independent flag per target"
@@ -189,6 +194,17 @@ impl PluginTargets {
         match platform {
             crate::app_config::Platform::Android => self.android,
             crate::app_config::Platform::Ios => self.ios,
+        }
+    }
+
+    /// Every target either lists.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            android: self.android || other.android,
+            ios: self.ios || other.ios,
+            desktop: self.desktop || other.desktop,
+            web: self.web || other.web,
         }
     }
 }
@@ -377,6 +393,20 @@ pub struct WindowsManifestFragment {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, SchemaWrite, SchemaRead)]
 pub struct AssetEntry {
     pub path: String,
+    /// Targets whose bundles get it (`targets = ["web"]`); every target
+    /// by default.
+    pub targets: PluginTargets,
+}
+
+impl AssetEntry {
+    /// An entry for every target.
+    #[must_use]
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            targets: PluginTargets::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
@@ -1053,6 +1083,28 @@ path = "assets/**/*.png"
         assert_eq!(m.assets[0].path, "assets/img/");
         assert_eq!(m.assets[1].path, "assets/schema.sql");
         assert_eq!(m.assets[2].path, "assets/**/*.png");
+        assert_eq!(m.assets[0].targets, PluginTargets::default());
+    }
+
+    #[test]
+    fn asset_targets_narrow_where_an_entry_ships() {
+        let m = Manifest::parse("[[assets]]\npath = \"web/sw.js\"\ntargets = [\"web\"]\n")
+            .expect("parse");
+        assert_eq!(
+            m.assets[0].targets,
+            PluginTargets {
+                android: false,
+                ios: false,
+                desktop: false,
+                web: true,
+            }
+        );
+        let err = Manifest::parse("[[assets]]\npath = \"x\"\ntargets = [\"tv\"]\n")
+            .expect_err("must fail");
+        assert!(
+            matches!(&err, ManifestError::InvalidValue { key, .. } if key == "assets.targets"),
+            "{err:?}"
+        );
     }
 
     #[test]

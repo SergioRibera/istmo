@@ -59,9 +59,7 @@ fn glob_matches_only_declared_extensions() {
     fs::write(root.join("assets/audio/tap.wav"), b"wav").unwrap();
     fs::write(root.join("assets/audio/click.mp3"), b"mp3").unwrap();
     fs::write(root.join("assets/audio/hold.wav"), b"wav").unwrap();
-    let entries = vec![AssetEntry {
-        path: "assets/**/*.wav".to_owned(),
-    }];
+    let entries = vec![AssetEntry::new("assets/**/*.wav")];
     let resolved = resolve_assets(&entries, &root).expect("resolve");
     let keys: Vec<&str> = resolved.iter().map(|r| r.bundle_path.as_str()).collect();
     assert_eq!(keys, ["audio/hold.wav", "audio/tap.wav"]);
@@ -72,14 +70,13 @@ fn resolved_asset_source_paths_are_absolute() {
     let root = tmp_root("abs");
     fs::create_dir_all(root.join("assets")).unwrap();
     fs::write(root.join("assets/data.bin"), b"01").unwrap();
-    let entries = vec![AssetEntry {
-        path: "assets/data.bin".to_owned(),
-    }];
+    let entries = vec![AssetEntry::new("assets/data.bin")];
     let resolved = resolve_assets(&entries, &root).expect("resolve");
     assert_eq!(resolved.len(), 1);
     let ResolvedAsset {
         bundle_path,
         source_abs,
+        ..
     } = &resolved[0];
     assert_eq!(bundle_path, "data.bin");
     assert!(std::path::Path::new(source_abs).is_absolute());

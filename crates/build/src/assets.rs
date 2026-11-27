@@ -14,7 +14,7 @@ use std::path::{Component, Path, PathBuf};
 use globset::{Glob, GlobMatcher};
 use wincode::{SchemaRead, SchemaWrite};
 
-use crate::manifest::AssetEntry;
+use crate::manifest::{AssetEntry, PluginTargets};
 
 const GLOB_META: &[char] = &['*', '?', '[', ']'];
 
@@ -32,6 +32,8 @@ pub struct ResolvedAsset {
     /// Absolute source path, kept as UTF-8 so it crosses the build-script
     /// handover.
     pub source_abs: String,
+    /// Targets whose bundles get it (from its `[[assets]]` entry).
+    pub targets: PluginTargets,
 }
 
 impl ResolvedAsset {
@@ -122,10 +124,21 @@ pub fn resolve_assets(
 ) -> Result<Vec<ResolvedAsset>, AssetResolveError> {
     let mut out = Vec::new();
     for entry in entries {
+        let from = out.len();
         resolve_one(&entry.path, root, &mut out)?;
+        for asset in &mut out[from..] {
+            asset.targets = entry.targets;
+        }
     }
     out.sort();
-    out.dedup();
+    // One file named by two entries ships wherever either sends it.
+    out.dedup_by(|later, kept| {
+        let same = later.bundle_path == kept.bundle_path && later.source_abs == kept.source_abs;
+        if same {
+            kept.targets = kept.targets.union(later.targets);
+        }
+        same
+    });
     Ok(out)
 }
 
@@ -194,6 +207,7 @@ fn resolve_one(
         out.push(ResolvedAsset {
             bundle_path,
             source_abs,
+            targets: PluginTargets::default(),
         });
         Ok(())
     }
@@ -227,6 +241,7 @@ fn walk_dir(
             out.push(ResolvedAsset {
                 bundle_path,
                 source_abs,
+                targets: PluginTargets::default(),
             });
         }
     }
@@ -295,6 +310,7 @@ fn walk_glob(
             out.push(ResolvedAsset {
                 bundle_path,
                 source_abs,
+                targets: PluginTargets::default(),
             });
         }
     }
@@ -375,9 +391,7 @@ mod tests {
         let root = tmp_root("single");
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::write(root.join("assets/schema.sql"), b"select 1").unwrap();
-        let entries = vec![AssetEntry {
-            path: "assets/schema.sql".into(),
-        }];
+        let entries = vec![AssetEntry::new("assets/schema.sql")];
         let resolved = resolve_assets(&entries, &root).expect("resolve");
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].bundle_path, "schema.sql");
@@ -389,9 +403,7 @@ mod tests {
         fs::create_dir_all(root.join("assets/img/icons")).unwrap();
         fs::write(root.join("assets/img/logo.png"), b"png").unwrap();
         fs::write(root.join("assets/img/icons/gear.png"), b"png").unwrap();
-        let entries = vec![AssetEntry {
-            path: "assets/img/".into(),
-        }];
+        let entries = vec![AssetEntry::new("assets/img/")];
         let resolved = resolve_assets(&entries, &root).expect("resolve");
         let keys: Vec<&str> = resolved.iter().map(|r| r.bundle_path.as_str()).collect();
         assert_eq!(keys, ["img/icons/gear.png", "img/logo.png"]);
@@ -404,9 +416,7 @@ mod tests {
         fs::write(root.join("assets/sounds/a.wav"), b"a").unwrap();
         fs::write(root.join("assets/sounds/b.mp3"), b"b").unwrap();
         fs::write(root.join("assets/sounds/c.wav"), b"c").unwrap();
-        let entries = vec![AssetEntry {
-            path: "assets/**/*.wav".into(),
-        }];
+        let entries = vec![AssetEntry::new("assets/**/*.wav")];
         let resolved = resolve_assets(&entries, &root).expect("resolve");
         let keys: Vec<&str> = resolved.iter().map(|r| r.bundle_path.as_str()).collect();
         assert_eq!(keys, ["sounds/a.wav", "sounds/c.wav"]);
@@ -432,7 +442,7 @@ mod tests {
         fs::write(root.join("assets/x.txt"), b"x").unwrap();
         let entries: Vec<AssetEntry> = ["assets/img", "assets/x.txt", "assets/**/*.png", "*.png"]
             .into_iter()
-            .map(|path| AssetEntry { path: path.into() })
+            .map(AssetEntry::new)
             .collect();
         assert_eq!(
             declared_asset_dirs(&entries, &root),
@@ -443,9 +453,7 @@ mod tests {
     #[test]
     fn missing_file_reports_error() {
         let root = tmp_root("missing");
-        let entries = vec![AssetEntry {
-            path: "nope.bin".into(),
-        }];
+        let entries = vec![AssetEntry::new("nope.bin")];
         let err = resolve_assets(&entries, &root).expect_err("must fail");
         assert!(matches!(err, AssetResolveError::NotFound { .. }));
     }
@@ -454,9 +462,7 @@ mod tests {
     fn empty_glob_match_reports_error() {
         let root = tmp_root("empty-glob");
         fs::create_dir_all(root.join("assets")).unwrap();
-        let entries = vec![AssetEntry {
-            path: "assets/*.png".into(),
-        }];
+        let entries = vec![AssetEntry::new("assets/*.png")];
         let err = resolve_assets(&entries, &root).expect_err("must fail");
         assert!(matches!(err, AssetResolveError::NoMatches { .. }));
     }
@@ -466,15 +472,34 @@ mod tests {
         let root = tmp_root("dedup");
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::write(root.join("assets/x.txt"), b"x").unwrap();
+        let entries = vec![AssetEntry::new("assets/x.txt"), AssetEntry::new("assets/")];
+        let resolved = resolve_assets(&entries, &root).expect("resolve");
+        assert_eq!(resolved.len(), 1);
+    }
+
+    #[test]
+    fn a_file_named_twice_ships_to_both_entries_targets() {
+        let root = tmp_root("dedup-targets");
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::write(root.join("assets/x.txt"), b"x").unwrap();
+        let only = |web: bool| PluginTargets {
+            android: !web,
+            ios: false,
+            desktop: false,
+            web,
+        };
         let entries = vec![
             AssetEntry {
-                path: "assets/x.txt".into(),
+                targets: only(true),
+                ..AssetEntry::new("assets/x.txt")
             },
             AssetEntry {
-                path: "assets/".into(),
+                targets: only(false),
+                ..AssetEntry::new("assets/")
             },
         ];
         let resolved = resolve_assets(&entries, &root).expect("resolve");
         assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].targets, only(true).union(only(false)));
     }
 }

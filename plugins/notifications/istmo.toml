@@ -42,7 +42,8 @@ ios = "14.0"
 
 # The web service worker. istmo-build finds it among the handed-over
 # assets and stages it for `[app.notifications] web_service_worker`
-# (`ISTMO_NOTIFICATION_SERVICE_WORKER` on wasm32). Assets have no target
-# filter: mobile bundles carry the 4 KiB script too.
+# (`ISTMO_NOTIFICATION_SERVICE_WORKER` and `.istmo/web/` on wasm32).
+# Web bundles only: mobile and desktop asset trees do not get it.
 [[assets]]
 path = "web/istmo-notifications-sw.js"
+targets = ["web"]
