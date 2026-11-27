@@ -315,6 +315,8 @@ final class SckCapturer: NSObject, ScreenCapturer, SCStreamOutput, SCStreamDeleg
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             stream.stopCapture { _ in continuation.resume() }
         }
+        // Let a sample handler still running on the queue finish first.
+        queue.sync {}
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {

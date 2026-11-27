@@ -361,6 +361,10 @@ impl Drop for Stream {
                 let _removed = unsafe { self.capture.removeStreamOutput_type_error(output, kind) };
             }
         }
+        // A sample handler may still be running on the serial queue: a
+        // no-op behind it returns only once it finished, so the output
+        // object and its sink drop after the last callback.
+        self.queue.exec_sync(|| {});
     }
 }
 
