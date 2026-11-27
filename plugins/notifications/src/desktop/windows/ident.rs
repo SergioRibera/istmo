@@ -182,11 +182,23 @@ pub(crate) fn scheduled_id(tag: &str, fire_ms: i64, xml: &str) -> String {
 /// A `file:///` URI for a local absolute path (`C:\a b\c.png` →
 /// `file:///C:/a%20b/c.png`). Unpackaged apps can only use local
 /// images; `None` for anything that is not an absolute drive or UNC
-/// path.
+/// path. Verbatim paths (`\\?\C:\...`, `\\?\UNC\server\share\...`, what
+/// `canonicalize` returns) map to the same URIs as their plain forms.
 pub(crate) fn file_uri(path: &str) -> Option<String> {
-    let path = path.strip_prefix(r"\\?\").unwrap_or(path);
+    let (path, unc) = match path.strip_prefix(r"\\?\") {
+        Some(verbatim) => match verbatim.strip_prefix(r"UNC\") {
+            // A server name must follow.
+            Some(share) if share.is_empty() || share.starts_with('\\') => return None,
+            Some(share) => (share, true),
+            None => (verbatim, false),
+        },
+
+        None => (path, false),
+    };
     let bytes = path.as_bytes();
-    let (prefix, rest) = if bytes.len() >= 3
+    let (prefix, rest) = if unc {
+        ("file://", path)
+    } else if bytes.len() >= 3
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && matches!(bytes[2], b'\\' | b'/')
@@ -311,6 +323,12 @@ mod tests {
             file_uri(r"\\server\share\a.png").as_deref(),
             Some("file://server/share/a.png")
         );
+        assert_eq!(
+            file_uri(r"\\?\UNC\server\share\a b.png").as_deref(),
+            Some("file://server/share/a%20b.png")
+        );
+        assert_eq!(file_uri(r"\\?\UNC\"), None);
+        assert_eq!(file_uri(r"\\?\Volume{x}\a.png"), None);
         assert_eq!(file_uri("relative.png"), None);
         assert_eq!(file_uri("/tmp/a.png"), None);
         assert_eq!(

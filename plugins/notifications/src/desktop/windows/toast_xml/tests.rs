@@ -332,3 +332,34 @@ fn scheduled_toasts_use_only_file_images() {
         Some(std::path::Path::new(r"C:\p.png"))
     );
 }
+
+#[test]
+fn characters_xml_cannot_carry_are_dropped_from_texts_and_values() {
+    let n = Notification::new("n1", "a\u{FFFE}b\u{FFFF}c\u{1}d\te")
+        .unwrap()
+        .with_body("x\u{FFFF}y");
+    let t = toast(&n, &ImageFiles::default(), shown());
+    assert_eq!(values_text(&t), "title=abcd\te\nbody=xy\n");
+    let scheduled = Options {
+        bind: false,
+        ..shown()
+    };
+    let t = toast(&n, &ImageFiles::default(), scheduled);
+    assert!(
+        t.xml.contains("<text>abcd\te</text><text>xy</text>"),
+        "{}",
+        t.xml
+    );
+}
+
+#[test]
+fn bound_values_count_toward_the_size_limit() {
+    // Small XML, but the bound body brings the toast past 5 KB.
+    let body = "&".repeat(1_000);
+    let n = Notification::new("n1", "Title").unwrap().with_body(body);
+    let rendered = render(&n, &limits());
+    let bound = build(&n, &rendered, &ImageFiles::default(), shown());
+    assert!(bound.xml.len() < MAX_XML);
+    let err = build_fitting(&n, &rendered, &ImageFiles::default(), shown()).unwrap_err();
+    assert!(matches!(err, NotificationError::Invalid(_)), "{err:?}");
+}

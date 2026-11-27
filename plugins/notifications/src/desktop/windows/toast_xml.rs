@@ -77,20 +77,46 @@ pub(crate) struct Toast {
     pub(crate) template: u64,
 }
 
+/// The escaped form of `c`: `Some("")` for characters XML 1.0 cannot
+/// carry (controls but tab / LF / CR, the noncharacters U+FFFE and
+/// U+FFFF; Rust strings hold no lone surrogates), `None` when it goes
+/// as is.
+fn escaped(c: char) -> Option<&'static str> {
+    match c {
+        '&' => Some("&amp;"),
+        '<' => Some("&lt;"),
+        '>' => Some("&gt;"),
+        '"' => Some("&quot;"),
+        '\'' => Some("&apos;"),
+        '\n' | '\r' | '\t' => None,
+        '\u{FFFE}' | '\u{FFFF}' => Some(""),
+        c if c.is_control() => Some(""),
+        _ => None,
+    }
+}
+
 /// XML escaping for attribute values and text.
 fn escape(out: &mut String, value: &str) {
     for c in value.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            // Not representable in XML 1.0.
-            c if c.is_control() && !matches!(c, '\n' | '\r' | '\t') => {}
-            c => out.push(c),
+        match escaped(c) {
+            Some(text) => out.push_str(text),
+            None => out.push(c),
         }
     }
+}
+
+/// `value` without the characters XML cannot carry (bound values are
+/// put into the XML by Windows).
+fn xml_text(value: &str) -> String {
+    value.chars().filter(|&c| escaped(c) != Some("")).collect()
+}
+
+/// Bytes `value` takes once escaped.
+fn escaped_len(value: &str) -> usize {
+    value
+        .chars()
+        .map(|c| escaped(c).map_or(c.len_utf8(), str::len))
+        .sum()
 }
 
 /// Writes ` name="value"`.
@@ -112,7 +138,7 @@ impl Fields {
     /// The text to write for `value` under `key`.
     fn slot(&mut self, key: &'static str, value: &str) -> String {
         if self.bind {
-            self.values.push((key, value.to_owned()));
+            self.values.push((key, xml_text(value)));
             format!("{{{key}}}")
         } else {
             value.to_owned()
@@ -488,7 +514,8 @@ fn write_button(
 }
 
 /// [`build`] with the carried fields reduced until the XML fits
-/// [`MAX_XML`].
+/// [`MAX_XML`]. Bound values count as if written in place (Windows
+/// substitutes them into the XML it checks).
 pub(crate) fn build_fitting(
     n: &Notification,
     rendered: &Rendered,
@@ -498,7 +525,8 @@ pub(crate) fn build_fitting(
     for carry in [Carry::All, Carry::BodyData, Carry::Urls, Carry::Nothing] {
         options.carry = carry;
         let toast = build(n, rendered, images, options);
-        if toast.xml.len() <= MAX_XML {
+        let bound: usize = toast.values.iter().map(|(_, v)| escaped_len(v)).sum();
+        if toast.xml.len().saturating_add(bound) <= MAX_XML {
             if carry != Carry::All {
                 tracing::debug!(id = %n.id, ?carry, "notifications: toast too large; carried fields reduced");
             }
