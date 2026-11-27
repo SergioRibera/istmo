@@ -13,14 +13,18 @@ use std::ffi::c_void;
 use std::sync::{Arc, Weak};
 
 use istmo_core::NativeHandleId;
-use istmo_menu::{CheckState, ItemId, ItemKind, Label, Menu, Modifiers, Shortcut};
+use istmo_menu::{CheckState, ItemId, ItemKind, Label, Menu, MenuNode, Modifiers, Shortcut};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_BITFIELDS, BITMAPINFO, BITMAPV5HEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
-    DeleteObject, HBITMAP,
+    DeleteObject, HBITMAP, HMONITOR, InvalidateRect, MONITOR_DEFAULTTONEAREST, MonitorFromPoint,
+    MonitorFromRect,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi};
+use windows_sys::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, GetSystemMetricsForDpi,
+    MDT_EFFECTIVE_DPI, SetThreadDpiAwarenessContext,
+};
 use windows_sys::Win32::UI::Shell::{
     NIF_GUID, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_STATE, NIF_TIP, NIM_ADD, NIM_DELETE,
     NIM_MODIFY, NIM_SETVERSION, NIN_SELECT, NINF_KEY, NIS_HIDDEN, NOTIFYICON_VERSION_4,
@@ -28,18 +32,20 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ChangeWindowMessageFilterEx, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyIcon, DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW, HICON,
-    HMENU, ICONINFO, InsertMenuItemW, MENUITEMINFOW, MFS_CHECKED, MFS_DEFAULT, MFS_DISABLED,
+    DefWindowProcW, DestroyIcon, DestroyMenu, DispatchMessageW, EnumThreadWindows, GetClassNameW,
+    GetMenuItemInfoW, GetMessageW, GetSystemMetrics, GetWindowThreadProcessId, HICON, HMENU,
+    ICONINFO, InsertMenuItemW, MENUITEMINFOW, MFS_CHECKED, MFS_DEFAULT, MFS_DISABLED, MFS_HILITE,
     MFT_RADIOCHECK, MFT_SEPARATOR, MFT_STRING, MIIM_BITMAP, MIIM_FTYPE, MIIM_ID, MIIM_STATE,
     MIIM_STRING, MIIM_SUBMENU, MSG, MSGFLT_ALLOW, PostMessageW, PostQuitMessage, RegisterClassExW,
-    RegisterWindowMessageW, SM_CXSMICON, SetForegroundWindow, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage, WM_APP, WM_CONTEXTMENU, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_LBUTTONDBLCLK, WM_MBUTTONUP, WM_NULL, WM_SETTINGCHANGE, WNDCLASSEXW,
-    WS_OVERLAPPED,
+    RegisterWindowMessageW, SM_CXSMICON, SM_MENUDROPALIGNMENT, SetForegroundWindow,
+    SetMenuItemInfoW, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON,
+    TPM_VERTICAL, TPMPARAMS, TrackPopupMenuEx, TranslateMessage, WM_APP, WM_CONTEXTMENU,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDBLCLK, WM_MBUTTONUP, WM_NULL, WM_SETTINGCHANGE,
+    WNDCLASSEXW, WS_OVERLAPPED,
 };
-use windows_sys::core::GUID;
+use windows_sys::core::{BOOL, GUID};
 
-use crate::host::{Backend, Dirty, Shared};
+use crate::host::{Backend, Dirty, MenuDirty, Shared};
 use crate::image::{DecodedIcon, Raster};
 use crate::{
     Anchor, AnchorPrecision, EventSupport, HostState, MenuSupport, Pointer, PrimaryAction, Rect,
@@ -91,6 +97,14 @@ pub(super) fn start(shared: &Arc<Shared>) -> Result<Arc<dyn Backend>, TrayError>
     std::thread::Builder::new()
         .name("istmo-tray-win".to_owned())
         .spawn(move || {
+            // Per-monitor DPI for this thread's window and menus, whatever
+            // the process declared: icons and menus are drawn at each
+            // monitor's DPI instead of being stretched by the system.
+            // Fails (null) before Windows 10 1703, which keeps the
+            // process's awareness.
+            // SAFETY: changes only this thread's awareness context.
+            let _previous =
+                unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
             let hwnd = match create_window() {
                 Ok(hwnd) => hwnd,
                 Err(err) => {
@@ -192,6 +206,9 @@ thread_local! {
     /// The window thread's state. Never borrowed across a call that
     /// runs a nested message loop (`TrackPopupMenuEx`).
     static UI: RefCell<Option<Ui>> = const { RefCell::new(None) };
+    /// The menu being shown. Separate from `UI` so changes reach it
+    /// from inside the menu's own message loop.
+    static OPEN: RefCell<Option<OpenMenu>> = const { RefCell::new(None) };
 }
 
 /// One icon as the shell knows it.
@@ -207,6 +224,8 @@ struct Ui {
     added: HashMap<NativeHandleId, Added>,
     by_uid: HashMap<u32, NativeHandleId>,
     icons: IconCache,
+    /// Notification area icon size, in pixels.
+    size: u32,
 }
 
 impl Ui {
@@ -226,6 +245,7 @@ impl Ui {
             added: HashMap::new(),
             by_uid: HashMap::new(),
             icons: IconCache::default(),
+            size: tray_icon_size(),
         }
     }
 
@@ -234,6 +254,9 @@ impl Ui {
             return;
         };
         for (tray, dirty) in shared.take_pending() {
+            if dirty.menu != MenuDirty::Clean {
+                sync_open_menu(&shared, tray);
+            }
             self.apply(&shared, tray, &dirty);
         }
         self.icons.purge();
@@ -251,7 +274,7 @@ impl Ui {
                 return;
             }
         }
-        let size = icon_size();
+        let size = self.size;
         let state = shared.lock();
         let Some(entry) = state.trays.get(&tray) else {
             return;
@@ -273,13 +296,18 @@ impl Ui {
         nid.dwStateMask = NIS_HIDDEN;
         nid.dwState = if visible { 0 } else { NIS_HIDDEN };
         if adding {
-            self.by_uid.insert(uid, tray);
-            // SAFETY: `nid` is fully initialised for this window.
-            let ok = unsafe { Shell_NotifyIconW(NIM_ADD, &raw mut nid) };
-            if ok == 0 {
+            if !add_icon(&mut nid) {
+                // Explorer is not running (an app started before the
+                // shell) or refused the icon. `TaskbarCreated` adds it
+                // again once a taskbar exists.
                 tracing::warn!("tray: Shell_NotifyIconW(NIM_ADD) failed");
+                self.added.remove(&tray);
+                if self.added.is_empty() {
+                    shared.set_host(HostState::Missing);
+                }
                 return;
             }
+            self.by_uid.insert(uid, tray);
             nid.Anonymous.uVersion = NOTIFYICON_VERSION_4;
             // SAFETY: as above; `uVersion` is the active union field
             // for `NIM_SETVERSION`.
@@ -294,8 +322,14 @@ impl Ui {
         data_for(self.hwnd, added)
     }
 
-    /// Every icon again at the current size (DPI or theme change).
+    /// Every icon again when the icon size changed (DPI change, display
+    /// change). `WM_SETTINGCHANGE` comes often and rarely changes it.
     fn refresh_icons(&mut self) {
+        let size = tray_icon_size();
+        if size == self.size {
+            return;
+        }
+        self.size = size;
         self.icons.clear();
         let Some(shared) = self.shared.upgrade() else {
             return;
@@ -311,6 +345,22 @@ impl Ui {
     }
 
     fn anchor(&self, tray: NativeHandleId) -> Option<Anchor> {
+        let rect = self.icon_rect(tray)?;
+        Some(Anchor {
+            rect: Rect {
+                x: rect.left,
+                y: rect.top,
+                width: u32::try_from(rect.right - rect.left).unwrap_or(0),
+                height: u32::try_from(rect.bottom - rect.top).unwrap_or(0),
+            },
+            // SAFETY: plain query; any rectangle has a nearest monitor.
+            scale: scale(unsafe { MonitorFromRect(&raw const rect, MONITOR_DEFAULTTONEAREST) }),
+            precision: AnchorPrecision::IconRect,
+        })
+    }
+
+    /// The icon's rectangle on screen, in physical pixels.
+    fn icon_rect(&self, tray: NativeHandleId) -> Option<RECT> {
         let added = self.added.get(&tray)?;
         let identifier = NOTIFYICONIDENTIFIER {
             cbSize: u32::try_from(size_of::<NOTIFYICONIDENTIFIER>()).unwrap_or(u32::MAX),
@@ -326,20 +376,24 @@ impl Ui {
         };
         // SAFETY: both pointers are valid for the call.
         let hr = unsafe { Shell_NotifyIconGetRect(&raw const identifier, &raw mut rect) };
-        if hr < 0 {
-            return None;
-        }
-        Some(Anchor {
-            rect: Rect {
-                x: rect.left,
-                y: rect.top,
-                width: u32::try_from(rect.right - rect.left).unwrap_or(0),
-                height: u32::try_from(rect.bottom - rect.top).unwrap_or(0),
-            },
-            scale: f64::from(system_dpi()) / 96.0,
-            precision: AnchorPrecision::IconRect,
-        })
+        (hr >= 0).then_some(rect)
     }
+}
+
+/// `NIM_ADD`, once more after deleting a stale icon: a GUID still held
+/// by a run that never removed its icon (a crash) refuses the add.
+fn add_icon(nid: &mut NOTIFYICONDATAW) -> bool {
+    // SAFETY: `nid` is fully initialised for this thread's window.
+    if unsafe { Shell_NotifyIconW(NIM_ADD, nid) } != 0 {
+        return true;
+    }
+    if nid.uFlags & NIF_GUID == 0 {
+        return false;
+    }
+    // SAFETY: as above; deleting an icon that does not exist only fails.
+    let _deleted = unsafe { Shell_NotifyIconW(NIM_DELETE, nid) };
+    // SAFETY: as above.
+    unsafe { Shell_NotifyIconW(NIM_ADD, nid) != 0 }
 }
 
 fn data_for(hwnd: HWND, added: &Added) -> NOTIFYICONDATAW {
@@ -355,16 +409,39 @@ fn data_for(hwnd: HWND, added: &Added) -> NOTIFYICONDATAW {
     nid
 }
 
-fn system_dpi() -> u32 {
-    // SAFETY: no arguments; returns the system DPI.
-    unsafe { GetDpiForSystem() }
+const BASE_DPI: u32 = 96;
+
+/// The monitor's effective DPI (96 when unknown).
+fn monitor_dpi(monitor: HMONITOR) -> u32 {
+    let (mut x, mut y) = (0, 0);
+    // SAFETY: both out pointers are valid; a null or stale monitor only
+    // fails.
+    let hr = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &raw mut x, &raw mut y) };
+    if hr < 0 || x == 0 { BASE_DPI } else { x }
 }
 
-/// The small icon size at the system DPI.
-fn icon_size() -> u32 {
+fn scale(monitor: HMONITOR) -> f64 {
+    f64::from(monitor_dpi(monitor)) / f64::from(BASE_DPI)
+}
+
+fn monitor_at(point: POINT) -> HMONITOR {
+    // SAFETY: plain query; any point has a nearest monitor.
+    unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) }
+}
+
+/// The small icon size at `dpi`.
+fn small_icon(dpi: u32) -> u32 {
     // SAFETY: plain query.
-    let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, system_dpi()) };
+    let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) };
     u32::try_from(size).unwrap_or(16).max(16)
+}
+
+/// The notification area's icon size: the primary monitor's (its
+/// origin is always 0, 0), where the taskbar with the icons is. Read
+/// from the monitor, not the system DPI, which stays at its sign-in
+/// value until the user signs in again.
+fn tray_icon_size() -> u32 {
+    small_icon(monitor_dpi(monitor_at(POINT { x: 0, y: 0 })))
 }
 
 fn tooltip(tooltip: Option<&crate::Tooltip>, fallback: &str) -> String {
@@ -379,9 +456,18 @@ fn tooltip(tooltip: Option<&crate::Tooltip>, fallback: &str) -> String {
     )
 }
 
+/// Copies whole characters only: a cut surrogate pair shows as a box.
+/// `slot` is zeroed, so the text stays NUL-terminated.
 fn copy_tip(slot: &mut [u16; 128], text: &str) {
-    for (dst, src) in slot.iter_mut().zip(text.encode_utf16().take(TIP_CHARS)) {
-        *dst = src;
+    let mut at = 0;
+    for c in text.chars() {
+        let mut units = [0; 2];
+        let units = c.encode_utf16(&mut units);
+        let Some(dst) = slot[..TIP_CHARS].get_mut(at..at + units.len()) else {
+            break;
+        };
+        dst.copy_from_slice(units);
+        at += units.len();
     }
 }
 
@@ -408,11 +494,16 @@ struct IconCache {
 impl IconCache {
     fn get(&mut self, icon: &Arc<DecodedIcon>, size: u32) -> Option<HICON> {
         let key = (Arc::as_ptr(icon) as usize, size);
-        if let Some((_, hicon)) = self.entries.get(&key) {
-            return Some(*hicon);
+        if let Some((cached, hicon)) = self.entries.get(&key) {
+            // A dead entry's address may belong to a new icon.
+            if cached.upgrade().is_some_and(|c| Arc::ptr_eq(&c, icon)) {
+                return Some(*hicon);
+            }
         }
         let hicon = create_icon(&*icon.raster(size)?)?;
-        self.entries.insert(key, (Arc::downgrade(icon), hicon));
+        if let Some((_, stale)) = self.entries.insert(key, (Arc::downgrade(icon), hicon)) {
+            destroy_icon(stale);
+        }
         Some(hicon)
     }
 
@@ -565,119 +656,314 @@ fn shortcut_text(shortcut: &Shortcut) -> String {
     parts.join("+")
 }
 
+/// Where an item's bitmap comes from: it is replaced only when this
+/// changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bitmap {
+    None,
+    Mixed,
+    /// An item icon, by the decoded icon's address.
+    Icon(usize),
+}
+
+/// How one item looks: what `BuiltMenu::level` inserts and
+/// `BuiltMenu::sync` compares against.
+struct Look {
+    text: Vec<u16>,
+    ftype: u32,
+    state: u32,
+    bitmap: Bitmap,
+}
+
+impl Look {
+    fn of(node: &MenuNode, icons: &HashMap<ItemId, Arc<DecodedIcon>>) -> Self {
+        let mut ftype = 0;
+        let mut state = 0;
+        if !node.enabled || matches!(node.kind, ItemKind::Header) {
+            state |= MFS_DISABLED;
+        }
+        if node.is_default {
+            state |= MFS_DEFAULT;
+        }
+        let mut mixed = false;
+        match node.kind {
+            ItemKind::Separator => ftype = MFT_SEPARATOR,
+            ItemKind::Check(check) => match check.state {
+                CheckState::On => state |= MFS_CHECKED,
+                CheckState::Off => {}
+                // `Mixed` (and states added later): a dash in the icon
+                // column, unless the item has an icon of its own.
+                _ => mixed = true,
+            },
+            ItemKind::Radio(radio) => {
+                ftype = MFT_RADIOCHECK;
+                if radio.selected {
+                    state |= MFS_CHECKED;
+                }
+            }
+            // Actions, submenus, headers, and kinds added later.
+            _ => {}
+        }
+        let text = if matches!(node.kind, ItemKind::Separator) {
+            Vec::new()
+        } else {
+            ftype |= MFT_STRING;
+            let mut label = Label::parse(&node.label).with_marker('&');
+            if let Some(shortcut) = &node.shortcut {
+                label.push('\t');
+                label.push_str(&shortcut_text(shortcut));
+            }
+            wide(&label)
+        };
+        let bitmap = match icons.get(&node.id) {
+            Some(icon) => Bitmap::Icon(Arc::as_ptr(icon) as usize),
+            None if mixed => Bitmap::Mixed,
+            None => Bitmap::None,
+        };
+        Self {
+            text,
+            ftype,
+            state,
+            bitmap,
+        }
+    }
+}
+
+fn menu_item_info() -> MENUITEMINFOW {
+    // SAFETY: `MENUITEMINFOW` is plain data; all-zero is valid.
+    let mut item: MENUITEMINFOW = unsafe { std::mem::zeroed() };
+    item.cbSize = u32::try_from(size_of::<MENUITEMINFOW>()).unwrap_or(u32::MAX);
+    item
+}
+
 /// A popup menu built from the model, and the GDI objects it uses.
 struct BuiltMenu {
     menu: HMENU,
     bitmaps: Vec<HBITMAP>,
+    /// The items inserted, as they look now.
+    items: HashMap<ItemId, Look>,
+    /// Item bitmap size, in pixels.
+    size: u32,
 }
 
 impl Drop for BuiltMenu {
     fn drop(&mut self) {
-        // SAFETY: `menu` was created by `CreatePopupMenu` and is no
-        // longer shown; destroying it destroys its submenus.
-        let _destroyed = unsafe { DestroyMenu(self.menu) };
+        if !self.menu.is_null() {
+            // SAFETY: `menu` was created by `CreatePopupMenu` and is no
+            // longer shown; destroying it destroys its submenus.
+            let _destroyed = unsafe { DestroyMenu(self.menu) };
+        }
         for bitmap in self.bitmaps.drain(..) {
             delete_bitmap(bitmap);
         }
     }
 }
 
-fn build_menu(
-    menu: &Menu,
-    icons: &HashMap<ItemId, Arc<DecodedIcon>>,
-    size: u32,
-) -> Option<BuiltMenu> {
-    let mut bitmaps = Vec::new();
-    let menu = build_level(menu, None, icons, size, &mut bitmaps)?;
-    Some(BuiltMenu { menu, bitmaps })
-}
-
-fn build_level(
-    menu: &Menu,
-    parent: Option<ItemId>,
-    icons: &HashMap<ItemId, Arc<DecodedIcon>>,
-    size: u32,
-    bitmaps: &mut Vec<HBITMAP>,
-) -> Option<HMENU> {
-    // SAFETY: no arguments; the caller owns the returned menu.
-    let hmenu = unsafe { CreatePopupMenu() };
-    if hmenu.is_null() {
-        return None;
-    }
-    let mut position = 0u32;
-    for node in menu.children(parent).filter(|n| n.visible) {
-        let Some(id) = node.id.value.checked_add(1) else {
-            continue;
+impl BuiltMenu {
+    fn build(menu: &Menu, icons: &HashMap<ItemId, Arc<DecodedIcon>>, size: u32) -> Option<Self> {
+        let mut built = Self {
+            menu: std::ptr::null_mut(),
+            bitmaps: Vec::new(),
+            items: HashMap::new(),
+            size,
         };
-        // SAFETY: `MENUITEMINFOW` is plain data; all-zero is valid.
-        let mut item: MENUITEMINFOW = unsafe { std::mem::zeroed() };
-        item.cbSize = u32::try_from(size_of::<MENUITEMINFOW>()).unwrap_or(u32::MAX);
-        item.fMask = MIIM_ID | MIIM_FTYPE | MIIM_STATE;
-        item.wID = id;
-        if !node.enabled || matches!(node.kind, ItemKind::Header) {
-            item.fState |= MFS_DISABLED;
-        }
-        if node.is_default {
-            item.fState |= MFS_DEFAULT;
-        }
-        let mut text = Label::parse(&node.label).with_marker('&');
-        if let Some(shortcut) = &node.shortcut {
-            text.push('\t');
-            text.push_str(&shortcut_text(shortcut));
-        }
-        let mut text = wide(&text);
-        let mut glyph = None;
-        match node.kind {
-            ItemKind::Separator => item.fType = MFT_SEPARATOR,
-            ItemKind::Check(check) => match check.state {
-                CheckState::On => item.fState |= MFS_CHECKED,
-                CheckState::Off => {}
-                // `Mixed` (and states added later): a dash in the icon
-                // column, unless the item has an icon of its own.
-                _ => glyph = Some(mixed_glyph(size)),
-            },
-            ItemKind::Radio(radio) => {
-                item.fType = MFT_RADIOCHECK;
-                if radio.selected {
-                    item.fState |= MFS_CHECKED;
-                }
-            }
-            ItemKind::Submenu => {
-                item.fMask |= MIIM_SUBMENU;
-                item.hSubMenu = build_level(menu, Some(node.id), icons, size, bitmaps)?;
-            }
-            // Actions, headers, and kinds added to the model later.
-            _ => {}
-        }
-        if !matches!(node.kind, ItemKind::Separator) {
-            item.fType |= MFT_STRING;
-            item.fMask |= MIIM_STRING;
-            item.dwTypeData = text.as_mut_ptr();
-        }
-        let raster = icons
-            .get(&node.id)
-            .and_then(|icon| icon.raster(size))
-            .map(|r| (*r).clone())
-            .or(glyph);
-        if let Some(raster) = raster
-            && let Some(bitmap) = dib(raster.width, raster.height, &bgra(&raster, true))
-        {
-            bitmaps.push(bitmap);
-            item.fMask |= MIIM_BITMAP;
-            item.hbmpItem = bitmap;
-        }
-        // SAFETY: `item` is initialised, `text` outlives the call (the
-        // menu copies it) and `hmenu` is ours.
-        let _inserted = unsafe { InsertMenuItemW(hmenu, position, 1, &raw const item) };
-        position += 1;
+        built.menu = built.level(menu, None, icons)?;
+        Some(built)
     }
-    Some(hmenu)
+
+    fn level(
+        &mut self,
+        menu: &Menu,
+        parent: Option<ItemId>,
+        icons: &HashMap<ItemId, Arc<DecodedIcon>>,
+    ) -> Option<HMENU> {
+        // SAFETY: no arguments; the caller owns the returned menu.
+        let hmenu = unsafe { CreatePopupMenu() };
+        if hmenu.is_null() {
+            return None;
+        }
+        let mut position = 0u32;
+        for node in menu.children(parent).filter(|n| n.visible) {
+            let Some(id) = node.id.value.checked_add(1) else {
+                continue;
+            };
+            let mut look = Look::of(node, icons);
+            let mut item = menu_item_info();
+            item.fMask = MIIM_ID | MIIM_FTYPE | MIIM_STATE;
+            item.wID = id;
+            item.fType = look.ftype;
+            item.fState = look.state;
+            if !look.text.is_empty() {
+                item.fMask |= MIIM_STRING;
+                item.dwTypeData = look.text.as_mut_ptr();
+            }
+            if matches!(node.kind, ItemKind::Submenu) {
+                // A submenu that cannot be created is left out.
+                let Some(submenu) = self.level(menu, Some(node.id), icons) else {
+                    continue;
+                };
+                item.fMask |= MIIM_SUBMENU;
+                item.hSubMenu = submenu;
+            }
+            if let Some(bitmap) = self.bitmap(node.id, look.bitmap, icons) {
+                item.fMask |= MIIM_BITMAP;
+                item.hbmpItem = bitmap;
+            }
+            // SAFETY: `item` is initialised, `look.text` outlives the
+            // call (the menu copies it) and `hmenu` is ours.
+            let _inserted = unsafe { InsertMenuItemW(hmenu, position, 1, &raw const item) };
+            self.items.insert(node.id, look);
+            position += 1;
+        }
+        Some(hmenu)
+    }
+
+    /// The bitmap for `source`, owned by this menu.
+    fn bitmap(
+        &mut self,
+        id: ItemId,
+        source: Bitmap,
+        icons: &HashMap<ItemId, Arc<DecodedIcon>>,
+    ) -> Option<HBITMAP> {
+        let bitmap = match source {
+            Bitmap::None => return None,
+            Bitmap::Mixed => {
+                let glyph = mixed_glyph(self.size);
+                dib(glyph.width, glyph.height, &bgra(&glyph, true))
+            }
+            Bitmap::Icon(_) => {
+                let raster = icons.get(&id)?.raster(self.size)?;
+                dib(raster.width, raster.height, &bgra(&raster, true))
+            }
+        }?;
+        self.bitmaps.push(bitmap);
+        Some(bitmap)
+    }
+
+    /// Sets the shown items' changed properties from the model. Items
+    /// added, removed, shown or hidden since the menu opened wait for
+    /// the next open: a shown menu keeps its layout.
+    fn sync(&mut self, menu: &Menu, icons: &HashMap<ItemId, Arc<DecodedIcon>>) {
+        for node in menu.nodes() {
+            let Some(id) = node.id.value.checked_add(1) else {
+                continue;
+            };
+            let mut look = Look::of(node, icons);
+            let Some(shown) = self.items.get(&node.id) else {
+                continue;
+            };
+            let text_changed = look.text != shown.text;
+            let ftype_changed = look.ftype != shown.ftype;
+            let state_changed = look.state != shown.state;
+            let bitmap_changed = look.bitmap != shown.bitmap;
+            if !(text_changed || ftype_changed || state_changed || bitmap_changed) {
+                continue;
+            }
+            let mut item = menu_item_info();
+            if text_changed {
+                item.fMask |= MIIM_STRING;
+                item.dwTypeData = look.text.as_mut_ptr();
+            }
+            if ftype_changed {
+                item.fMask |= MIIM_FTYPE;
+                item.fType = look.ftype;
+            }
+            if state_changed {
+                item.fMask |= MIIM_STATE;
+                item.fState = look.state | (self.state(id) & MFS_HILITE);
+            }
+            if bitmap_changed {
+                item.fMask |= MIIM_BITMAP;
+                item.hbmpItem = self
+                    .bitmap(node.id, look.bitmap, icons)
+                    .unwrap_or(std::ptr::null_mut());
+            }
+            // SAFETY: `item` is initialised and `look.text` outlives the
+            // call; by command (`FALSE`) also searches the submenus.
+            let _set = unsafe { SetMenuItemInfoW(self.menu, id, 0, &raw const item) };
+            self.items.insert(node.id, look);
+        }
+    }
+
+    /// The item's state now: replacing it would drop the highlight of
+    /// the item under the pointer.
+    fn state(&self, id: u32) -> u32 {
+        let mut item = menu_item_info();
+        item.fMask = MIIM_STATE;
+        // SAFETY: `item` is initialised with its size; the call only
+        // writes `fState`.
+        let ok = unsafe { GetMenuItemInfoW(self.menu, id, 0, &raw mut item) };
+        if ok == 0 { 0 } else { item.fState }
+    }
 }
 
-/// Shows the tray's menu at the cursor and reports the choice. Runs a
-/// nested message loop: no `UI` borrow may be held.
-fn show_menu(shared: &Arc<Shared>, hwnd: HWND, tray: NativeHandleId) {
-    let size = icon_size();
+/// The menu being shown: which tray it belongs to and the window that
+/// owns it.
+struct OpenMenu {
+    tray: NativeHandleId,
+    owner: HWND,
+    built: BuiltMenu,
+}
+
+/// Applies the model to the tray's menu if it is the one being shown.
+fn sync_open_menu(shared: &Shared, tray: NativeHandleId) {
+    OPEN.with(|cell| {
+        let Ok(mut slot) = cell.try_borrow_mut() else {
+            return;
+        };
+        let Some(open) = slot.as_mut().filter(|open| open.tray == tray) else {
+            return;
+        };
+        let state = shared.lock();
+        if let Some(entry) = state.trays.get(&tray) {
+            open.built.sync(&entry.menu, &entry.item_icons);
+        }
+        drop(state);
+        repaint_menus(open.owner);
+    });
+}
+
+/// Repaints this thread's popup menu windows: a shown menu does not
+/// redraw on its own after `SetMenuItemInfoW`.
+fn repaint_menus(owner: HWND) {
+    // SAFETY: plain query; no process id wanted.
+    let thread = unsafe { GetWindowThreadProcessId(owner, std::ptr::null_mut()) };
+    // SAFETY: the callback has the `WNDENUMPROC` signature and keeps
+    // nothing past the call.
+    let _enumerated = unsafe { EnumThreadWindows(thread, Some(repaint_if_menu), 0) };
+}
+
+/// `#32768`, the class of popup menu windows.
+const MENU_CLASS: &[u16] = &[0x23, 0x33, 0x32, 0x37, 0x36, 0x38];
+
+unsafe extern "system" fn repaint_if_menu(hwnd: HWND, _: LPARAM) -> BOOL {
+    let mut class = [0u16; 8];
+    // SAFETY: `class` holds as many units as passed.
+    let len = unsafe { GetClassNameW(hwnd, class.as_mut_ptr(), 8) };
+    let class = usize::try_from(len).ok().and_then(|len| class.get(..len));
+    if class == Some(MENU_CLASS) {
+        // SAFETY: `hwnd` is a live window of this thread; a null
+        // rectangle is the whole client area.
+        let _invalidated = unsafe { InvalidateRect(hwnd, std::ptr::null(), 1) };
+    }
+    1
+}
+
+/// Shows the tray's menu at `at` (avoiding `exclude`, the icon) and
+/// reports the choice. Runs a nested message loop: no `UI` borrow may
+/// be held.
+fn show_menu(
+    shared: &Arc<Shared>,
+    hwnd: HWND,
+    tray: NativeHandleId,
+    at: POINT,
+    exclude: Option<RECT>,
+) {
+    // A click on another icon while a menu is shown.
+    if OPEN.with(|open| open.try_borrow().map_or(true, |open| open.is_some())) {
+        return;
+    }
+    let size = small_icon(monitor_dpi(monitor_at(at)));
     let built = {
         let state = shared.lock();
         let Some(entry) = state.trays.get(&tray) else {
@@ -686,34 +972,49 @@ fn show_menu(shared: &Arc<Shared>, hwnd: HWND, tray: NativeHandleId) {
         if entry.menu.is_empty() {
             return;
         }
-        let built = build_menu(&entry.menu, &entry.item_icons, size);
+        let built = BuiltMenu::build(&entry.menu, &entry.item_icons, size);
         drop(state);
         built
     };
     let Some(built) = built else {
         return;
     };
-    let mut cursor = POINT { x: 0, y: 0 };
-    // SAFETY: `cursor` is a valid out pointer.
-    let _got = unsafe { GetCursorPos(&raw mut cursor) };
+    let menu = built.menu;
+    OPEN.with(|open| {
+        *open.borrow_mut() = Some(OpenMenu {
+            tray,
+            owner: hwnd,
+            built,
+        });
+    });
     shared.emit(tray, TrayEvent::MenuOpened);
     // Without this the menu does not close on a click elsewhere.
     // SAFETY: `hwnd` is this thread's window.
     let _foreground = unsafe { SetForegroundWindow(hwnd) };
-    // SAFETY: `built.menu` is a live popup menu owned by this thread.
-    let chosen = unsafe {
-        TrackPopupMenuEx(
-            built.menu,
-            TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-            cursor.x,
-            cursor.y,
-            hwnd,
-            std::ptr::null(),
-        )
+    // SAFETY: plain query.
+    let align = if unsafe { GetSystemMetrics(SM_MENUDROPALIGNMENT) } == 0 {
+        TPM_LEFTALIGN
+    } else {
+        TPM_RIGHTALIGN
     };
+    let params = exclude.map(|rect| TPMPARAMS {
+        cbSize: u32::try_from(size_of::<TPMPARAMS>()).unwrap_or(u32::MAX),
+        rcExclude: rect,
+    });
+    let flags = TPM_RETURNCMD
+        | TPM_NONOTIFY
+        | TPM_RIGHTBUTTON
+        | align
+        | if params.is_some() { TPM_VERTICAL } else { 0 };
+    let params = params.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+    // SAFETY: `menu` is a live popup menu owned by this thread (kept in
+    // `OPEN` until the call returns); `params` is null or points at a
+    // value that outlives the call.
+    let chosen = unsafe { TrackPopupMenuEx(menu, flags, at.x, at.y, hwnd, params) };
     // SAFETY: as in `Win::post`.
     let _posted = unsafe { PostMessageW(hwnd, WM_NULL, 0, 0) };
-    drop(built);
+    let closed = OPEN.with(|open| open.borrow_mut().take());
+    drop(closed);
     shared.emit(tray, TrayEvent::MenuClosed);
     if let Some(item) = u32::try_from(chosen).ok().and_then(|id| id.checked_sub(1)) {
         shared.activate_item(tray, ItemId::from(item));
@@ -723,7 +1024,14 @@ fn show_menu(shared: &Arc<Shared>, hwnd: HWND, tray: NativeHandleId) {
 /// What a click on an icon asks for, decided with `UI` borrowed and
 /// done after the borrow ends.
 enum Click {
-    Menu(Arc<Shared>, HWND, NativeHandleId),
+    /// Show the menu at the point, avoiding the icon rectangle.
+    Menu {
+        shared: Arc<Shared>,
+        hwnd: HWND,
+        tray: NativeHandleId,
+        at: POINT,
+        exclude: Option<RECT>,
+    },
     Nothing,
 }
 
@@ -741,16 +1049,22 @@ fn on_tray(ui: &Ui, wparam: WPARAM, lparam: LPARAM) -> Click {
     let Some(shared) = ui.shared.upgrade() else {
         return Click::Nothing;
     };
+    // Version 4 puts the event's screen point in `wparam`: the icon for
+    // keyboard selection, the pointer otherwise.
+    let at = POINT {
+        x: i32::from(((wparam & 0xFFFF) as u16).cast_signed()),
+        y: i32::from((((wparam >> 16) & 0xFFFF) as u16).cast_signed()),
+    };
     let point = || {
         let anchor = ui.anchor(tray).or_else(|| {
             Some(Anchor {
                 rect: Rect {
-                    x: i32::from(((wparam & 0xFFFF) as u16).cast_signed()),
-                    y: i32::from((((wparam >> 16) & 0xFFFF) as u16).cast_signed()),
+                    x: at.x,
+                    y: at.y,
                     width: 0,
                     height: 0,
                 },
-                scale: f64::from(system_dpi()) / 96.0,
+                scale: scale(monitor_at(at)),
                 precision: AnchorPrecision::ClickPoint,
             })
         });
@@ -759,7 +1073,11 @@ fn on_tray(ui: &Ui, wparam: WPARAM, lparam: LPARAM) -> Click {
     let primary = shared.lock().trays.get(&tray).map(|t| {
         (
             t.primary,
-            t.menu.nodes().iter().find(|n| n.is_default).map(|n| n.id),
+            t.menu
+                .nodes()
+                .iter()
+                .find(|n| n.is_default && n.enabled && n.visible)
+                .map(|n| n.id),
         )
     });
     let Some((primary, default_item)) = primary else {
@@ -770,7 +1088,13 @@ fn on_tray(ui: &Ui, wparam: WPARAM, lparam: LPARAM) -> Click {
             shared.emit(tray, TrayEvent::Activate(point()));
             Click::Nothing
         }
-        NIN_SELECT | NIN_KEYSELECT | WM_CONTEXTMENU => Click::Menu(shared, ui.hwnd, tray),
+        NIN_SELECT | NIN_KEYSELECT | WM_CONTEXTMENU => Click::Menu {
+            shared,
+            hwnd: ui.hwnd,
+            tray,
+            at,
+            exclude: ui.icon_rect(tray),
+        },
         WM_LBUTTONDBLCLK => {
             shared.emit(tray, TrayEvent::DoubleClick(point()));
             if let Some(item) = default_item {
@@ -833,8 +1157,14 @@ unsafe extern "system" fn window_proc(
         }
     });
     match handled {
-        Some(Click::Menu(shared, hwnd, tray)) => {
-            show_menu(&shared, hwnd, tray);
+        Some(Click::Menu {
+            shared,
+            hwnd,
+            tray,
+            at,
+            exclude,
+        }) => {
+            show_menu(&shared, hwnd, tray, at, exclude);
             0
         }
         Some(Click::Nothing) => 0,
@@ -864,7 +1194,7 @@ const fn capabilities() -> TrayCapabilities {
             badge: Support::Unsupported,
             default_item: Support::Native,
             mnemonics: Support::Native,
-            live_while_open: Support::Unsupported,
+            live_while_open: Support::Native,
         },
         events: EventSupport {
             activate: Support::Native,
