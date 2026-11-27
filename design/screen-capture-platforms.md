@@ -366,10 +366,12 @@ can override an app's opt-out of app screen sharing.
   `IstmoProjectionService` (`foregroundServiceType="mediaProjection"`,
   `exported="false"`) is in the foreground before `getMediaProjection`;
   `MediaProjection.Callback` registered before `createVirtualDisplay`.
-- Frames: `ImageReader` with `PRIVATE` + `GPU_SAMPLED_IMAGE`
-  (or `RGBA_8888` + `CPU_READ_OFTEN` for the CPU tier — the only
-  supported combinations), `maxImages = pool_depth`,
-  `HardwareBuffer.isSupported` probed. The `Image` stays open until
+- Frames: `ImageReader` with `RGBA_8888` + `GPU_SAMPLED_IMAGE`, offered
+  only where `HardwareBuffer.isSupported(RGBA_8888, GPU_SAMPLED_IMAGE |
+  GPU_COLOR_OUTPUT)` holds at the display's size (no `PRIVATE`
+  fallback: its layout is opaque); `RGBA_8888` + `CPU_READ_OFTEN` for
+  the CPU tier (`CopyStage::GpuReadback`); `maxImages = pool_depth`;
+  each frame reports the buffer's real format. The `Image` stays open until
   Rust releases the frame (lease / ticket, see the mechanism list);
   `IllegalStateException` from `acquireNextImage` when all images are
   held = exhaustion. `Image.getFence` (33+) waited on before submit.
