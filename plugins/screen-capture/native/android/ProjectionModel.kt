@@ -6,6 +6,7 @@ import android.hardware.display.DisplayManager
 import android.os.Build
 import android.util.DisplayMetrics
 import android.view.Display
+import android.view.WindowManager
 import dev.istmo.runtime.BackendException
 
 /** The one backend this platform compiles. */
@@ -24,6 +25,9 @@ internal object Api {
 
     /** `ImageReader.newInstance(.., usage)`, playback capture, typed foreground services. */
     const val Q = 29
+
+    /** `WindowManager.getMaximumWindowMetrics`. */
+    const val R = 30
 
     /** `HardwareBuffer.getId`. */
     const val S = 31
@@ -117,8 +121,9 @@ internal class DisplayFacts(
 }
 
 /** The device's displays, through `DisplayManager`. */
-internal class Displays(context: Context) {
+internal class Displays(private val context: Context) {
     val manager: DisplayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+    private val windows: WindowManager? = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
 
     fun all(): List<DisplayFacts> = manager.displays.map(::facts)
 
@@ -130,17 +135,31 @@ internal class Displays(context: Context) {
 
     private fun facts(display: Display): DisplayFacts {
         val metrics = DisplayMetrics()
-        // `getRealMetrics` is deprecated for window sizing, not for the
-        // display's own size in its current rotation, which is what a
-        // virtual display mirroring it needs.
+        // Other displays (and releases before 30): their real metrics.
         @Suppress("DEPRECATION")
         display.getRealMetrics(metrics)
+        var width = metrics.widthPixels
+        var height = metrics.heightPixels
+        var density = metrics.densityDpi
+        val bounds = if (display.displayId == Display.DEFAULT_DISPLAY && Build.VERSION.SDK_INT >= Api.R) {
+            // The MediaProjection guide's sizing: `getRealMetrics` answers
+            // the app's bounds for a non-resizable app, the maximum window
+            // metrics the whole display in its current rotation.
+            runCatching { windows?.maximumWindowMetrics?.bounds }.getOrNull()
+        } else {
+            null
+        }
+        if (bounds != null && bounds.width() > 0 && bounds.height() > 0) {
+            width = bounds.width()
+            height = bounds.height()
+            density = context.resources.configuration.densityDpi.takeIf { it > 0 } ?: density
+        }
         return DisplayFacts(
             displayId = display.displayId,
             name = display.name ?: "Display ${display.displayId}",
-            width = metrics.widthPixels,
-            height = metrics.heightPixels,
-            densityDpi = metrics.densityDpi,
+            width = width,
+            height = height,
+            densityDpi = density,
             refreshHz = display.refreshRate,
             rotation = when (display.rotation) {
                 android.view.Surface.ROTATION_90 -> Rotation.R90

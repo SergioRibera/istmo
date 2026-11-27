@@ -27,3 +27,8 @@ open class SurfaceTexture(texName: Int) {
     fun getTransformMatrix(mtx: FloatArray) {}
     fun release() {}
 }
+
+open class Rect {
+    fun width(): Int = 0
+    fun height(): Int = 0
+}

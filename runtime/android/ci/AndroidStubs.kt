@@ -21,6 +21,7 @@ open class Context {
     companion object {
         const val MODE_PRIVATE: Int = 0
         const val DISPLAY_SERVICE: String = "display"
+        const val WINDOW_SERVICE: String = "window"
         const val MEDIA_PROJECTION_SERVICE: String = "media_projection"
         const val NOTIFICATION_SERVICE: String = "notification"
     }

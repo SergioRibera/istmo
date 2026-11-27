@@ -27,3 +27,11 @@ open class Surface(surfaceTexture: android.graphics.SurfaceTexture) {
         const val ROTATION_270: Int = 3
     }
 }
+
+open class WindowMetrics {
+    val bounds: android.graphics.Rect get() = android.graphics.Rect()
+}
+
+open class WindowManager {
+    val maximumWindowMetrics: WindowMetrics get() = WindowMetrics()
+}
