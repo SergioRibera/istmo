@@ -48,26 +48,9 @@ internal object Responses {
     /** Publishes [response] on the lane now (and its deep link). */
     fun publish(response: NotificationResponse) {
         IstmoRuntime.publishEarlyQueue(CHANNEL, CAPACITY, encode(response))
-        deepLink(response)?.let { IstmoRuntime.publishEarlyQueue(DEEPLINKS_CHANNEL, DEEPLINKS_CAPACITY, it) }
-    }
-
-    /**
-     * `DeepLink { uri, source, received_at_ms }` of [response]: only taps
-     * and buttons with a URL publish one (`Dismiss` and `More` never do).
-     * Source `notification:<id>` or `notification:<id>:<action>`.
-     */
-    fun deepLink(response: NotificationResponse): ByteArray? {
-        val url = response.url ?: return null
-        val source = when (val action = response.action) {
-            is ResponseAction.Open -> "notification:${response.id.value}"
-            is ResponseAction.Button -> "notification:${response.id.value}:${action.value.value}"
-            else -> return null
+        ResponseDeepLink.encode(response, System.currentTimeMillis())?.let {
+            IstmoRuntime.publishEarlyQueue(DEEPLINKS_CHANNEL, DEEPLINKS_CAPACITY, it)
         }
-        val out = ByteArrayOutputStream()
-        Bincode.writeString(out, url)
-        Bincode.writeOption(out, source) { sink, s -> Bincode.writeString(sink, s) }
-        Bincode.writeOption(out, System.currentTimeMillis()) { sink, ms -> Bincode.writeVarintU64(sink, ms) }
-        return out.toByteArray()
     }
 
     private fun queueFile(context: Context) = File(File(context.noBackupFilesDir, "istmo-notifications"), "responses.bin")

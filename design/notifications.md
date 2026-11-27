@@ -2253,6 +2253,9 @@ Branch `notif-fix-android`. Supersede the notes above they contradict.
   and string resources) whenever it writes Android resources: the
   backend reads them by name, which `shrinkResources` cannot see.
 - Probe commands added: `group-shrink`, `limit`, `invalid`.
+- **Empty response URL.** `ResponseDeepLink.kt` (plain Kotlin, run by the
+  JVM checks) ports `NotificationResponse::deep_link`: a response whose
+  url is empty publishes no deep link, as in Rust and Swift.
 
 ### Review fixes (Apple, branch `notif-fix-apple`)
 

@@ -2,7 +2,8 @@
 // calendar rule against `tests/schedule_vectors.tsv`, the coalescer
 // against the unit cases of `src/coalesce.rs`, trigger timing, missed
 // deliveries, the store round trip and the validation rules of
-// `src/validate.rs`. Run by `check.sh`.
+// `src/validate.rs` and the deep links of responses (`src/responses.rs`).
+// Run by `check.sh`.
 import dev.istmo.plugins.notifications.*
 import dev.istmo.plugins.notifications.CalendarRule
 import dev.istmo.plugins.notifications.CalendarRules
@@ -20,6 +21,7 @@ import dev.istmo.plugins.notifications.Style
 import dev.istmo.plugins.notifications.Trigger
 import dev.istmo.plugins.notifications.Triggers
 import dev.istmo.plugins.notifications.Weekday
+import dev.istmo.runtime.Bincode
 import java.io.File
 import java.time.Instant
 import java.util.TimeZone
@@ -317,11 +319,41 @@ private fun validate() {
     invalid(Validate.channels(listOf(channel.copy(vibration = List(33) { 1u }))), "channels[0].vibration", Problem.TooLong)
     println("validation cases: done")
 }
+
+private fun response(action: ResponseAction, url: String?) =
+    NotificationResponse(NotificationId("n"), action, null, false, null, url, false, emptyList(), null)
+
+/** `only_opening_responses_publish_their_url` in `src/responses.rs`. */
+private fun deepLinks() {
+    for ((name, action, source) in listOf(
+        Triple("open", ResponseAction.Open, "notification:n"),
+        Triple("button", ResponseAction.Button(ActionId("go")), "notification:n:go"),
+    )) {
+        val bytes = ResponseDeepLink.encode(response(action, "app://x"), 5)
+        check("deep link $name", bytes != null)
+        if (bytes == null) continue
+        val uri = Bincode.readString(bytes, 0)
+        eq("deep link $name uri", uri.value, "app://x")
+        eq("deep link $name source tag", bytes[uri.consumed], 1.toByte())
+        val src = Bincode.readString(bytes, uri.consumed + 1)
+        eq("deep link $name source", src.value, source)
+        eq("deep link $name received tag", bytes[src.consumed], 1.toByte())
+        eq("deep link $name received", Bincode.readVarintU64(bytes, src.consumed + 1).value, 5L)
+    }
+    for (action in listOf(ResponseAction.Dismiss, ResponseAction.More)) {
+        eq("deep link $action", ResponseDeepLink.encode(response(action, "app://x"), 5), null)
+    }
+    eq("deep link without url", ResponseDeepLink.encode(response(ResponseAction.Open, null), 5), null)
+    eq("deep link empty url", ResponseDeepLink.encode(response(ResponseAction.Open, ""), 5), null)
+    println("deep link cases: done")
+}
+
 fun main(args: Array<String>) {
     vectors(args[0])
     coalescer()
     schedule()
     validate()
+    deepLinks()
     if (failures.isNotEmpty()) {
         failures.forEach(System.err::println)
         exitProcess(1)

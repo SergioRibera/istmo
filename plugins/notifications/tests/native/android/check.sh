@@ -3,8 +3,8 @@
 #
 # 1. JVM: CalendarRule.kt against tests/schedule_vectors.tsv, Coalescer.kt
 #    against the unit cases of src/coalesce.rs, trigger timing, missed
-#    deliveries and the schedule store (NativeChecks.kt), with the
-#    generated Kotlin from tests/golden/app_notifications_*.
+#    deliveries, the schedule store, validation and response deep links
+#    (NativeChecks.kt), with the generated Kotlin from tests/golden/app_notifications_*.
 # 2. Android: every native/android/*.kt compiled with -Werror against
 #    android.jar (API 34, the compileSdk apps use) plus the AndroidX jars
 #    the plugin's istmo.toml declares (fetched from Google Maven once).
@@ -38,7 +38,7 @@ echo "jvm: calendar rule vectors, coalescer cases, schedule engine and store"
 # shellcheck disable=SC2086 # KOTLINC may carry its own arguments.
 $kotlinc -Werror ${cp:+-classpath "$cp"} -d "$work/jvm" \
     "$runtime/Bincode.kt" "$runtime/PluginHandler.kt" "$work/gen"/*.kt \
-    "$native/CalendarRule.kt" "$native/Coalescer.kt" "$native/ScheduleStore.kt" "$native/Validate.kt" "$here/NativeChecks.kt"
+    "$native/CalendarRule.kt" "$native/Coalescer.kt" "$native/ScheduleStore.kt" "$native/Validate.kt" "$native/ResponseDeepLink.kt" "$here/NativeChecks.kt"
 ${KOTLIN:-kotlin} -cp "$work/jvm${cp:+:$cp}" NativeChecksKt "$plugin/tests/schedule_vectors.tsv"
 
 if [ -n "${SKIP_ANDROID:-}" ]; then
