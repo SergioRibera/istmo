@@ -252,10 +252,48 @@ mod probe {
                 &format!("{other:?}"),
             ),
         }
+        let repeat = pollster::block_on(client.schedule_checked(
+            n("probe.repeat", "Repeating toast").with_body("Every 20 s"),
+            Trigger::every(Duration::from_secs(20)),
+        ));
+        report.check("schedule repeat (every 20 s)", &repeat);
+        ask(
+            "Wait ~45 s: 'Repeating toast' should pop up TWICE, once per occurrence (not four times).",
+        );
+        std::thread::sleep(Duration::from_secs(45));
+        report.check(
+            "cancel repeat",
+            &pollster::block_on(client.cancel(n("probe.repeat", "x").id)),
+        );
+
+        for id in ["probe.all.1", "probe.all.2"] {
+            report.check(
+                "show for cancel_all",
+                &pollster::block_on(client.show_checked(n(id, "Cancel all test"))),
+            );
+        }
+        report.check("cancel_all", &pollster::block_on(client.cancel_all()));
+        match pollster::block_on(client.delivered()) {
+            Ok(list) if list.is_empty() => {
+                report.line("PASS", "cancel_all emptied the history", "");
+            }
+            other => report.line(
+                "FAIL",
+                "cancel_all emptied the history",
+                &format!("{other:?}"),
+            ),
+        }
+
+        match DesktopNotifications::revoke_activator() {
+            Ok(true) => report.line("PASS", "revoke activator", ""),
+            other => report.line("FAIL", "revoke activator", &format!("{other:?}")),
+        }
+
         report.check(
             "open settings",
             &pollster::block_on(client.open_settings(None)),
         );
+
         let _ = writeln!(report.text, "== PASS {} FAIL {}", report.pass, report.fail);
         println!("\nPASS {}  FAIL {}", report.pass, report.fail);
         report.save();
