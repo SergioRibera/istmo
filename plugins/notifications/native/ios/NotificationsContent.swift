@@ -61,7 +61,9 @@ extension NotificationsCore {
     }
 
     private static func sound(_ n: Notifications.Notification) -> UNNotificationSound? {
-        if n.interruption == .critical { return .defaultCritical }
+        if n.interruption == .critical, NotificationsCore.config["Critical"] as? Bool == true {
+            return .defaultCritical
+        }
         switch n.sound {
         case nil, .default?: return .default
         case .silent?: return nil
@@ -69,8 +71,13 @@ extension NotificationsCore {
         }
     }
 
-    /// `[app.notifications] sounds` are bundled as `<name>.<ext>`.
+    /// `[app.notifications] sounds`: `IstmoNotifications.Sounds[name]` is the
+    /// file istmo-build copied to the bundle root; else a bundled
+    /// `<name>.<ext>`, else the name as given (a system or library sound).
     private static func namedSound(_ name: String) -> UNNotificationSound {
+        if let sounds = NotificationsCore.config["Sounds"] as? [String: String], let file = sounds[name] {
+            return UNNotificationSound(named: UNNotificationSoundName(rawValue: file))
+        }
         for ext in ["caf", "wav", "aiff", "aif"] where Bundle.main.url(forResource: name, withExtension: ext) != nil {
             return UNNotificationSound(named: UNNotificationSoundName(rawValue: "\(name).\(ext)"))
         }
@@ -79,12 +86,15 @@ extension NotificationsCore {
 
     @available(iOS 15.0, *)
     private static func level(_ i: Notifications.Interruption?) -> UNNotificationInterruptionLevel {
+        let timeSensitive = NotificationsCore.config["TimeSensitive"] as? Bool == true
         switch i {
         case .passive?: return .passive
-        case .urgent?: return .timeSensitive
-        // Needs the critical-alerts entitlement; without it the system
-        // shows it as time sensitive.
-        case .critical?: return .critical
+        // Each level needs its entitlement (`IstmoNotifications` flags);
+        // without it the level falls back one step.
+        case .urgent?: return timeSensitive ? .timeSensitive : .active
+        case .critical?:
+            if NotificationsCore.config["Critical"] as? Bool == true { return .critical }
+            return timeSensitive ? .timeSensitive : .active
         default: return .active
         }
     }

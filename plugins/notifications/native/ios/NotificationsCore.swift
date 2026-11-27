@@ -123,12 +123,20 @@ final class NotificationsCore: @unchecked Sendable {
 
     var store: NotificationsScheduleStore { NotificationsScheduleStore.shared }
 
-    /// `[app.notifications] apple.communication`: `NSUserActivityTypes`
-    /// lists `INSendMessageIntent` (iOS 15+).
+    /// The `IstmoNotifications` dictionary istmo-build writes into
+    /// `Info.plist` (`TimeSensitive`, `Communication`, `Critical`: Bool;
+    /// `Sounds`: name to bundled file name).
+    static let config: [String: Any] =
+        Bundle.main.object(forInfoDictionaryKey: "IstmoNotifications") as? [String: Any] ?? [:]
+
+    /// `[app.notifications] apple.communication` (iOS 15+): the flag, and
+    /// `INSendMessageIntent` in `NSUserActivityTypes` (donations fail
+    /// without it).
     let communication: Bool = {
         guard #available(iOS 15.0, *) else { return false }
         let types = Bundle.main.object(forInfoDictionaryKey: "NSUserActivityTypes") as? [String]
-        return types?.contains("INSendMessageIntent") ?? false
+        let flag = NotificationsCore.config["Communication"] as? Bool ?? false
+        return flag && (types?.contains("INSendMessageIntent") ?? false)
     }()
 
     func install() {

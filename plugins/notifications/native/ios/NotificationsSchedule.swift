@@ -161,8 +161,10 @@ final class NotificationsScheduleStore: @unchecked Sendable {
         let now = nowMs()
         let entry = Entry(notification: n, trigger: trigger, anchorMs: now)
         guard let next = Self.nextFire(entry, nowMs: now) else {
+            var field = "trigger"
+            if case .calendar(let rule) = trigger, rule.untilMs != nil { field = "trigger.until_ms" }
             throw Notifications.NotificationError.invalid(
-                Notifications.InvalidField(field: "trigger", problem: .outOfRange))
+                Notifications.InvalidField(field: field, problem: .outOfRange))
         }
         lock.guarded {
             entries[n.id.value] = entry

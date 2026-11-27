@@ -37,7 +37,7 @@ final class NotificationsCoalescer<Item> {
     /// Milli-tokens per token.
     private static var token: Int64 { 1000 }
 
-    let rate: Rate
+    private(set) var rate: Rate
     private var tokens: Int64
     private var refilledMs: Int64
     private var order: [String] = []
@@ -69,6 +69,17 @@ final class NotificationsCoalescer<Item> {
     /// Spends a token even without one; the debt is floored at `-burst`.
     private func spend() {
         tokens = max(tokens - Self.token, -rate.burst * Self.token)
+    }
+
+    /// Switches to `rate`, keeping what is queued: refill at the old rate
+    /// up to now, then clamp to the new burst (debt included).
+    func setRate(_ rate: Rate, nowMs: Int64) {
+        let rate = Rate(perSecond: max(rate.perSecond, 1), burst: max(rate.burst, 1))
+        if rate.perSecond == self.rate.perSecond && rate.burst == self.rate.burst { return }
+        refill(nowMs)
+        self.rate = rate
+        let full = rate.burst * Self.token
+        tokens = min(max(tokens, -full), full)
     }
 
     @discardableResult
