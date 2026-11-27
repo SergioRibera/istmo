@@ -20,6 +20,12 @@ targets:
         createIntermediateGroups: true
         excludes:
           - "*.fragment"
+      - path: "../../../../plugins/notifications/native/ios"
+        name: ISTMO_NOTIFICATIONS
+        type: group
+        createIntermediateGroups: true
+        excludes:
+          - "*.fragment"
     settings:
       base:
         ISTMO_LIB_NAME: "rust_mobile_demo"
