@@ -566,6 +566,9 @@ wins.
   (Android has no app-only config). `SingleApp` below 34 is
   `Unsatisfiable(Kind(Application))`.
 - Grants: single use, removed on `onStop`, stopped after 60 s unused.
+  A waiting grant is a running projection: the foreground service, its
+  notification and the status-bar chip show from the consent on, before
+  any capture. Ask for one right before using it.
 - Android never says whether the person shared the display or an app:
   with the person's choice the negotiated source starts as `picked`
   (`PickerOnly`, kind `Monitor`, not the display's id), and an

@@ -354,9 +354,11 @@ permissions. Apps that capture audio add `RECORD_AUDIO` themselves.
 - Consent: Android asks every time. `open` / `screenshot` show the
   dialog when `allow_picker` is set; `request_projection` shows it ahead
   of time and returns a `ProjectionGrant` for one later call (gone after
-  60 s or when the projection stops). Audio-only sessions take such a
-  grant: `AudioConfig` has no consent fields. From API 34 a picker
-  source lets the person share one app instead of the screen.
+  60 s or when the projection stops). While it waits the projection
+  already runs, notification and status-bar chip included: ask for it
+  right before using it. Audio-only sessions take such a grant:
+  `AudioConfig` has no consent fields. From API 34 a picker source lets
+  the person share one app instead of the screen.
 - One projection at a time: Android stops a running projection when a
   new one starts, so a call that needs a new consent while a session,
   a screenshot or a grant is live answers `BackendUnavailable`
