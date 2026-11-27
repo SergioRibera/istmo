@@ -912,6 +912,13 @@ fn sync_ios_project(project: &IosProject, sync: &IosSync<'_>) {
         sync.notification_sounds,
         sync.swift_packages,
     );
+    let info_plist = project.root().join(project.app_dir()).join("Info.plist");
+    if let Ok(source) = fs::read_to_string(&info_plist) {
+        report_notifications(
+            sync.notifications
+                .check_app_info_plist(&info_plist, &source),
+        );
+    }
     emit_ios_plist_fragments(
         project.root(),
         project.app_dir(),

@@ -645,3 +645,40 @@ fn desktop_env_lines() {
     assert!(root.join("web").join(".gitignore").is_file());
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn app_activity_types_must_list_the_intents() {
+    let notifications = parse(FULL).unwrap();
+    let path = Path::new("ios/Demo/Info.plist");
+    let plist = |inner: &str| {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>{inner}\
+             <!-- istmo:plugins:start --><key>NSUserActivityTypes</key><array>\
+             <string>INSendMessageIntent</string><string>INStartCallIntent</string></array>\
+             <!-- istmo:plugins:end --></dict></plist>"
+        )
+    };
+    // Only the managed block lists them: merged there, nothing to check.
+    assert!(notifications.check_app_info_plist(path, &plist("")).is_ok());
+    let own = plist(
+        "<key>NSUserActivityTypes</key><array><string>OrderCoffeeIntent</string>\
+         <string>INStartCallIntent</string></array>",
+    );
+    let err = notifications.check_app_info_plist(path, &own).unwrap_err();
+    assert!(!err.is_write());
+    match &err {
+        NotificationsError::ActivityTypes { missing, .. } => {
+            assert_eq!(missing, &["INSendMessageIntent"]);
+        }
+        other => panic!("unexpected {other}"),
+    }
+    assert!(err.to_string().contains("INSendMessageIntent"));
+    let complete = plist(
+        "<key>NSUserActivityTypes</key><array><string>INSendMessageIntent</string>\
+         <string>INStartCallIntent</string><string>OrderCoffeeIntent</string></array>",
+    );
+    assert!(notifications.check_app_info_plist(path, &complete).is_ok());
+    // Without communication the app's array is its own business.
+    let plain = parse("[app.notifications]\n").unwrap();
+    assert!(plain.check_app_info_plist(path, &own).is_ok());
+}

@@ -57,6 +57,11 @@ use crate::manifest::{AndroidPermission, ManifestError, expect_bool, expect_stri
 /// Plugin id of `istmo-notifications`.
 pub const PLUGIN_ID: &str = "istmo.notifications";
 
+/// `Info.plist` key of the intents communication notifications need.
+const ACTIVITY_TYPES_KEY: &str = "NSUserActivityTypes";
+/// The intents `apple.communication` lists in [`ACTIVITY_TYPES_KEY`].
+const ACTIVITY_TYPES: [&str; 2] = ["INSendMessageIntent", "INStartCallIntent"];
+
 /// Android drawable of the small icon (`drawable/` vector or
 /// `drawable-<density>/` PNGs).
 pub const ANDROID_SMALL_ICON: &str = "istmo_notification_icon";
@@ -172,6 +177,13 @@ pub enum NotificationsError {
         path: PathBuf,
         source: std::io::Error,
     },
+    /// The app's `Info.plist` defines `NSUserActivityTypes` itself
+    /// (outside the istmo block, so the plugin's value is not merged) and
+    /// it lacks intents `apple.communication` needs.
+    ActivityTypes {
+        path: PathBuf,
+        missing: Vec<&'static str>,
+    },
 }
 
 impl NotificationsError {
@@ -201,6 +213,13 @@ impl fmt::Display for NotificationsError {
                 path.display()
             ),
             Self::Write { path, source } => write!(f, "writing {}: {source}", path.display()),
+            Self::ActivityTypes { path, missing } => write!(
+                f,
+                "`[app.notifications] apple.communication` needs {} in `NSUserActivityTypes`; {} \
+                 defines that key itself (outside the istmo block), so add them to its array",
+                missing.join(", "),
+                path.display()
+            ),
         }
     }
 }
@@ -210,7 +229,7 @@ impl std::error::Error for NotificationsError {
         match self {
             Self::Read { source, .. } | Self::Write { source, .. } => Some(source),
             Self::Image { source, .. } => Some(source),
-            Self::OpaqueIcon { .. } => None,
+            Self::OpaqueIcon { .. } | Self::ActivityTypes { .. } => None,
         }
     }
 }
@@ -956,14 +975,56 @@ impl AppNotifications {
         out.insert(IOS_INFO_KEY.into(), PlistValue::Dictionary(ours));
         if apple.communication {
             out.insert(
-                "NSUserActivityTypes".into(),
-                PlistValue::Array(vec![
-                    "INSendMessageIntent".into(),
-                    "INStartCallIntent".into(),
-                ]),
+                ACTIVITY_TYPES_KEY.into(),
+                PlistValue::Array(ACTIVITY_TYPES.into_iter().map(Into::into).collect()),
             );
         }
         out
+    }
+
+    /// Checks the app's own `Info.plist` (`source`, read from `path`)
+    /// against [`Self::info_plist`]: a key the app defines outside the
+    /// istmo block wins over the plugin's, which is fine for settings but
+    /// not for `NSUserActivityTypes`, without whose intents communication
+    /// notifications fail on device. istmo-build never edits the app's
+    /// own entries, so a missing intent fails the build instead.
+    ///
+    /// # Errors
+    ///
+    /// [`NotificationsError::ActivityTypes`] naming the missing intents.
+    pub fn check_app_info_plist(
+        &self,
+        path: &Path,
+        source: &str,
+    ) -> Result<(), NotificationsError> {
+        if !self
+            .config
+            .as_ref()
+            .is_some_and(|config| config.apple.communication)
+        {
+            return Ok(());
+        }
+        let Some(own) = crate::apple_plist::app_dict_outside_block(source)
+            .and_then(|mut dict| dict.remove(ACTIVITY_TYPES_KEY))
+        else {
+            return Ok(());
+        };
+        let listed: Vec<&str> = own
+            .as_array()
+            .map(|list| list.iter().filter_map(PlistValue::as_string).collect())
+            .unwrap_or_default();
+        let missing: Vec<&'static str> = ACTIVITY_TYPES
+            .into_iter()
+            .filter(|intent| !listed.contains(intent))
+            .collect();
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(NotificationsError::ActivityTypes {
+                path: path.to_path_buf(),
+                missing,
+            })
+        }
     }
 
     /// Entitlements for the app (merged into the `istmo:plugins` block of
