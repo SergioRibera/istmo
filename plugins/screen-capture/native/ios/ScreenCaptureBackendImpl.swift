@@ -274,11 +274,18 @@ public final class ScreenCaptureBackendImpl: ScreenCaptureBackend, HandleRelease
         if request.hdr == .requireHdr { throw Self.unmet(backend, .hdr) }
         let capturer = try Self.capturer(backend)
         let feed = ScreenCaptureOneShot(backend: backend)
-        let source = try await capturer.start(
-            ScreenCaptureRequest(pixelFormat: pixelFormat, fps: .native, size: .native,
-                                 queueDepth: Int(ScreenCaptureTables.pool.minDepth), video: true, audio: nil,
-                                 appOnly: Self.appOnly(request.source)),
-            feed: feed)
+        let source: ScreenCapture.Source
+        do {
+            source = try await capturer.start(
+                ScreenCaptureRequest(pixelFormat: pixelFormat, fps: .native, size: .native,
+                                     queueDepth: Int(ScreenCaptureTables.pool.minDepth), video: true, audio: nil,
+                                     appOnly: Self.appOnly(request.source)),
+                feed: feed)
+        } catch {
+            // Whatever part of the capture started stops with it.
+            await capturer.stop()
+            throw error
+        }
         let shot = await feed.wait(timeoutNs: 10_000_000_000)
         await capturer.stop()
         let (sample, info) = try shot.get()

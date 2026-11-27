@@ -213,14 +213,22 @@ final class SckCapturer: NSObject, ScreenCapturer, SCStreamOutput, SCStreamDeleg
             self.feed = feed
         }
         let backend = self.backend
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            stream.startCapture { error in
-                if let error {
-                    continuation.resume(throwing: ScreenCaptureErrors.of(error, backend: backend, step: "start"))
-                } else {
-                    continuation.resume()
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                stream.startCapture { error in
+                    if let error {
+                        continuation.resume(throwing: ScreenCaptureErrors.of(error, backend: backend, step: "start"))
+                    } else {
+                        continuation.resume()
+                    }
                 }
             }
+        } catch {
+            // Let go of the stream (no capturer ↔ stream cycle) and stop
+            // whatever did start.
+            await stop()
+            lock.withLock { self.filter = nil }
+            throw error
         }
         observeBackground(feed: feed, style: filter.style)
         let scale = Double(filter.pointPixelScale)
