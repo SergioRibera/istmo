@@ -36,6 +36,9 @@ class IstmoProjectionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             ProjectionForeground.stopRequested()
+            // A Stop reaching a service no lease started (a new process
+            // after the old one died) has nothing to end: it goes too.
+            if (!ProjectionForeground.owns(this)) stopSelf(startId)
             return START_NOT_STICKY
         }
         try {
@@ -195,6 +198,9 @@ internal object ProjectionForeground {
         service = running
         deferred?.complete(Unit)
     }
+
+    /** Main thread: whether [candidate] is the service a lease started (or is starting). */
+    fun owns(candidate: IstmoProjectionService): Boolean = service === candidate || waiting != null
 
     /** Main thread (`onDestroy`). */
     fun onDestroyed(stopped: IstmoProjectionService) {

@@ -10,6 +10,7 @@ open class Service : android.content.Context() {
     fun startForeground(id: Int, notification: Notification) {}
     fun startForeground(id: Int, notification: Notification, foregroundServiceType: Int) {}
     fun stopSelf() {}
+    fun stopSelf(startId: Int) {}
 
     companion object {
         const val START_STICKY: Int = 1
