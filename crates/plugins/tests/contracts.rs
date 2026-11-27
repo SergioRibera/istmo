@@ -8,9 +8,8 @@ use std::path::{Path, PathBuf};
 use istmo_build::{Contract, TypeDef, extract_contract};
 use istmo_core::Plugin;
 use istmo_plugins::{
-    ADMOB_PLUGIN_ID, AdMobClient, NOTIFICATIONS_PLUGIN_ID, NotificationsClient,
-    PERMISSIONS_PLUGIN_ID, PermissionsClient, SERVICE_CONTROL_PLUGIN_ID, ServiceControlClient,
-    TASK_SCHEDULER_PLUGIN_ID, TaskSchedulerClient,
+    ADMOB_PLUGIN_ID, AdMobClient, PERMISSIONS_PLUGIN_ID, PermissionsClient,
+    SERVICE_CONTROL_PLUGIN_ID, ServiceControlClient, TASK_SCHEDULER_PLUGIN_ID, TaskSchedulerClient,
 };
 
 fn src(file: &str) -> PathBuf {
@@ -105,19 +104,6 @@ fn permissions_schema_matches_the_trait() {
 }
 
 #[test]
-fn notifications_schema_matches_the_trait() {
-    assert_same(
-        &istmo_plugins_schema::notifications(),
-        &extract(
-            &["notifications.rs"],
-            &["notifications_types.rs"],
-            "Notifications",
-        ),
-        false,
-    );
-}
-
-#[test]
 fn admob_schema_matches_the_trait() {
     assert_same(
         &istmo_plugins_schema::admob(),
@@ -132,7 +118,6 @@ fn admob_schema_matches_the_trait() {
 fn exported_plugin_ids_match_the_generated_clients() {
     let pairs = [
         (ADMOB_PLUGIN_ID, AdMobClient::PLUGIN_ID),
-        (NOTIFICATIONS_PLUGIN_ID, NotificationsClient::PLUGIN_ID),
         (PERMISSIONS_PLUGIN_ID, PermissionsClient::PLUGIN_ID),
         (SERVICE_CONTROL_PLUGIN_ID, ServiceControlClient::PLUGIN_ID),
         (TASK_SCHEDULER_PLUGIN_ID, TaskSchedulerClient::PLUGIN_ID),
@@ -146,10 +131,6 @@ fn exported_plugin_ids_match_the_generated_clients() {
     }
     for (schema, generated) in [
         (istmo_plugins_schema::admob(), ADMOB_PLUGIN_ID),
-        (
-            istmo_plugins_schema::notifications(),
-            NOTIFICATIONS_PLUGIN_ID,
-        ),
         (istmo_plugins_schema::permissions(), PERMISSIONS_PLUGIN_ID),
         (
             istmo_plugins_schema::service_control(),

@@ -14,9 +14,6 @@ import dev.istmo.runtime.AdMobDispatcher
 import dev.istmo.runtime.AdMobFactoryImpl
 import dev.istmo.runtime.IstmoHost
 import dev.istmo.runtime.IstmoRuntime
-import dev.istmo.runtime.NotificationsBackendImpl
-import dev.istmo.runtime.NotificationsCodecsImpl
-import dev.istmo.runtime.NotificationsDispatcher
 import dev.istmo.runtime.PermissionsBackendImpl
 import dev.istmo.runtime.PermissionsCodecsImpl
 import dev.istmo.runtime.PermissionsDispatcher
@@ -39,10 +36,6 @@ class RustMobileActivity : NativeActivity() {
         runtime.registerHandler(
             PermissionsDispatcher.PLUGIN_ID,
             PermissionsDispatcher(permissionsBackend, PermissionsCodecsImpl()),
-        )
-        runtime.registerHandler(
-            NotificationsDispatcher.PLUGIN_ID,
-            NotificationsDispatcher(NotificationsBackendImpl(this), NotificationsCodecsImpl()),
         )
         runtime.registerHandler(
             SignInDispatcher.PLUGIN_ID,

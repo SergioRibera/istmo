@@ -10,10 +10,6 @@ fn main() {
         &istmo_plugins_schema::permissions(),
     );
     emit(
-        &out_dir.join("notifications_types.rs"),
-        &istmo_plugins_schema::notifications(),
-    );
-    emit(
         &out_dir.join("admob_types.rs"),
         &istmo_plugins_schema::admob(),
     );

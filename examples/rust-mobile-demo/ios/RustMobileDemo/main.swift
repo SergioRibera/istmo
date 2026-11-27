@@ -13,10 +13,6 @@ IstmoApp.run(
             PermissionsDispatcher(backend: PermissionsBackendImpl(), codecs: PermissionsCodecsImpl())
         )
         runtime.registerHandler(
-            NotificationsDispatcher.PLUGIN_ID,
-            NotificationsDispatcher(backend: NotificationsBackendImpl(), codecs: NotificationsCodecsImpl())
-        )
-        runtime.registerHandler(
             SignInDispatcher.PLUGIN_ID,
             SignInDispatcher(factory: SignInFactoryImpl(), codecs: SignInCodecsImpl())
         )

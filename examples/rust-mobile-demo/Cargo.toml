@@ -16,6 +16,7 @@ crate-type = ["cdylib", "staticlib"]
 istmo = { path = "../.." }
 istmo-plugins = { workspace = true }
 istmo-google-sign-in = { workspace = true }
+istmo-notifications = { workspace = true }
 pollster = { workspace = true }
 
 [build-dependencies]

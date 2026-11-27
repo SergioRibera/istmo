@@ -14,7 +14,6 @@
 //! Calls:
 //!
 //! - [`permissions`] — request and query runtime permissions.
-//! - [`notifications`] — local user notifications.
 //! - [`activity_results`] — Android `startActivityForResult` /
 //!   `ActivityResultLauncher` equivalent.
 //! - [`admob`] — Google `AdMob` banner / interstitial / rewarded ads, plus
@@ -72,7 +71,6 @@ mod macos_power;
 pub mod network_state;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod network_state_publisher;
-pub mod notifications;
 pub mod permissions;
 pub mod power_devices;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -147,10 +145,6 @@ pub use crate::network_state::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use crate::network_state_publisher::NetworkStatePublisher;
-pub use crate::notifications::{
-    NOTIFICATIONS_PLUGIN_ID, NotificationError, NotificationHandle, NotificationImportance,
-    NotificationRequest, Notifications, NotificationsClient, NotificationsHost,
-};
 pub use crate::permissions::{
     PERMISSIONS_PLUGIN_ID, PermissionOutcome, PermissionStatus, Permissions, PermissionsClient,
     PermissionsHost,

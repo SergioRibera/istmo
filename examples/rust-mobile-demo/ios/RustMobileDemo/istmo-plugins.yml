@@ -35,6 +35,16 @@ targets:
         ISTMO_DISPLAY_NAME: "rust-mobile-demo"
         IPHONEOS_DEPLOYMENT_TARGET: "14.0"
     preBuildScripts:
+      - name: istmo minimum iOS version
+        basedOnDependencyAnalysis: false
+        script: |
+          required="14.0"
+          actual="${IPHONEOS_DEPLOYMENT_TARGET:-0}"
+          lowest=$(printf '%s\n%s\n' "$required" "$actual" | sort -t. -k1,1n -k2,2n -k3,3n | head -n1)
+          if [ "$lowest" != "$required" ]; then
+            echo "error: istmo plugin istmo.notifications requires iOS >= $required, but IPHONEOS_DEPLOYMENT_TARGET is $actual"
+            exit 1
+          fi
       - name: istmo cargo build
         basedOnDependencyAnalysis: false
         script: '"${PROJECT_DIR}/.istmo/build-rust.sh"'
