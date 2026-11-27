@@ -761,3 +761,254 @@ Lints: `unsafe_code = "deny"`, allowed only on `desktop::windows` and
 - Apple: silent replace behaviour, communication avatars on local
   notifications.
 - Android OEM promotion criteria; OEM alarm behaviour.
+
+## Implementation notes (core, as built)
+
+Branch `notifications`, steps 1 and 4 of section 8. Crate
+`plugins/notifications` (`istmo-notifications`); the old contract is gone
+from `istmo-plugins` / `istmo-plugins-schema` and `rust-mobile-demo`
+uses the new crate (its Kotlin / Swift backends were deleted; the demo
+logs the failure and carries on until the natives land).
+
+### Layout
+
+- `src/types.rs` (wire types), `src/ids.rs` (id newtypes): the extractor
+  follows `mod` files, so the wire types do not have to sit in `lib.rs`.
+- `src/builder.rs` (constructors, `with_*`, `Notification::apply`),
+  `src/client.rs` (`*_checked`, `show_simple`, `ensure_permission`,
+  `show_live`), `src/validate.rs` (limits table in its module docs),
+  `src/render.rs`, `src/coalesce.rs`, `src/schedule.rs` +
+  `schedule/{rule,engine,store}.rs`, `src/responses.rs`, `src/live.rs`,
+  `src/unavailable.rs`, `src/fake.rs` (feature `testing`),
+  `src/desktop.rs` + `desktop/{backend,images,timer,tests}.rs`
+  (`desktop.rs` + `desktop/`, the repo convention, not `desktop/mod.rs`),
+  `src/web.rs` (module boundary only).
+- `istmo.toml`: id, `client_type`, `android_package =
+  "dev.istmo.plugins.notifications"`, `auto_register = false` (no
+  `NotificationsBackendImpl` exists yet; the Android and Apple agents
+  turn it back on with their `android_backend` / registry entries),
+  `[min_versions]` android 21, ios 14.0.
+- New dependency: `jiff = "1.0"` (default features: tzdb bundled where
+  the OS has none; no serde), `features = ["js"]` on wasm32.
+  `wasm-bindgen-futures` on wasm32 for the live sender.
+
+### Deviations from sections 4 and 5
+
+- `NotificationError::InvalidField(InvalidField)` is
+  `NotificationError::Invalid(InvalidField)`: never name a variant after
+  its payload type (Kotlin nested class shadows the type).
+- `DismissReason::Unknown` is `DismissReason::Other`: a `non_exhaustive`
+  enum may not have a variant named `Unknown` (`ContractError::ReservedUnknown`).
+- `HintValue::Int(i32)` is `HintValue::Number(i32)`: a Kotlin nested
+  class `Int` shadows `kotlin.Int` inside `HintValue` (kotlinc rejected
+  the generated codec). Rule: no variant named like a Kotlin builtin
+  (`Int`, `Long`, `Float`, `Double`, `Boolean`, `String`, `Unit`).
+- Every unary trait method takes `ctx: HostCtx` (stripped from the wire,
+  invisible to Kotlin / Swift): the desktop host binds the runtime of the
+  first call, so a backend activation can publish on the responses lane.
+  `DesktopNotifications::attach(&runtime)` binds it earlier (cold start).
+- Every method that may touch the OS is `#[istmo::blocking]` (all but
+  `complete` and `events`): D-Bus, WinRT and file writes.
+- `ChatMessage::from(sender, text)` is `ChatMessage::received(sender,
+  text)` / `ChatMessage::sent(text)` (an inherent two-argument `from`
+  collides with `From::from`).
+- The generated client owns the method names, so the validated sugar is
+  `show_checked`, `schedule_checked`, `update_checked(&str, patch)`,
+  `append_message_checked(&str, msg)` (async; section 5's sync
+  `append_message("chat:42", ..)?` does not exist).
+- `Trigger::daily` / `weekly` / `after` / `at` / `every` do not validate
+  (they return `Trigger`); `schedule_checked` and the hosts do.
+- `NotificationResponses::stream()` returns its own
+  `NotificationResponseStream` (`recv` / `recv_async` / `try_recv`):
+  `istmo_plugins::EarlyStream::new` is crate-private.
+- `NotificationResponse`, `ResponseAction`, `AckToken` are
+  `#[message]`s, so natives get generated codecs for the responses lane
+  (`writeNotificationResponse`) instead of hand-encoding it.
+- `Response` (the flat view) is `#[non_exhaustive]`.
+- `FakeNotifications::respond(id, Response)` returns
+  `Result<NotificationResponse, NotificationError>` and needs a runtime
+  (`attach(&rt)`, or any call through a runtime binds it).
+- `UnavailableNotifications::request_permission` answers
+  `Ok(Unavailable)` (not an error), like `permission`.
+- Extra helpers: `Capabilities::none` / `has`, `PermissionStatus::of`,
+  `NotificationPatch::progress` / `alerting`, `Notification::normalize`
+  (keeps the last 25 messages), `CalendarRule::{daily, on, on_day,
+  in_month, in_zone, until}`, `Trigger::{first_fire, next_after, repeats}`
+  plus `*_in(.., &TimeZone)` variants for tests, `pub use` of nothing
+  from jiff (the `_in` variants take `jiff::tz::TimeZone`; jiff is a
+  public dependency of those functions only).
+- Unknown IANA zone: `InvalidField { field: "trigger.time_zone",
+  problem: OutOfRange }`.
+
+### Desktop `Backend` contract (`src/desktop/backend.rs`)
+
+The Linux, Windows and macOS agents implement `Backend` and replace
+`platform_backend` in `src/desktop.rs` with their `cfg` arms (it returns
+`Err(Unsupported(Show))` today, so `DesktopNotifications::default()`
+behaves like `UnavailableNotifications`).
+
+- `info() -> BackendInfo { capabilities, limits: RenderLimits, rate:
+  Rate, lists_delivered, timeouts }`. Called on every post: cache what
+  costs a round trip (fdo `GetCapabilities`, portal `SupportedOptions`).
+  Report only what the platform does; `desktop::overlay` adds the host's
+  simulations (Schedule / Repeat / Snooze `WhileRunning`, Missed /
+  ListPending / Channels / ProgressBar / Messaging `Simulated`,
+  InlineReply / Choices / CallStyle `Simulated` when actions exist,
+  ListDelivered / Timeout `WhileRunning` unless the flags say native).
+- `show(&Shown { notification, rendered, images, mode })`: the
+  notification is validated, normalised and has the channel defaults
+  merged (interruption, sound, lock screen). `rendered.body` already
+  carries every simulated line (subtitle when `limits.subtitle` is
+  false, style lines, progress text when `limits.progress_bar` is
+  false); `rendered.actions` are the buttons to show, each with a `key`
+  the platform action must carry and hand back. `mode` is `New` or
+  `Replace { alert }` (`alert = false` = silent update: fdo
+  `replaces_id` + `suppress-sound`, Windows data binding / SuppressPopup,
+  Apple passive re-add).
+- `remove(id)`, `permission()`, `request_permission()`,
+  `open_settings()`, `set_channels()`, `delivered()` (only when
+  `lists_delivered`), `complete(ack)` (release whatever keeps the
+  process alive for a background response) have defaults.
+- Report back through the `BackendSink` handed to the start function:
+  `activated(Activation { id, key, reply, launched_app, carried })`,
+  `dismissed(id, reason)`, `failed(id, message)`, `changed()` (server
+  restarted: `info()` is read again). `carried` holds user data / URL
+  the platform activation itself carries (Windows toast arguments,
+  portal targets) for notifications shown by an earlier process.
+- Threads: backend methods are called from blocking workers and the
+  host's timer thread, never with a host lock held; sink calls may come
+  from any thread, also from inside a backend method.
+- Keys: action id; `istmo.more`; `<action id>#<choice index>` for a
+  choice simulated as a button. `Rendered::respond` resolves them
+  (snooze keys resolve to `Resolved::Snooze`, handled by the host:
+  removed, re-scheduled with `Trigger::After`, `Snoozed` event).
+- Background actions (`opens_app = false`) get an `AckToken` from the
+  host; `complete(ack)` removes it and calls `Backend::complete`.
+
+### Host behaviour (shared by every desktop backend)
+
+- One timer thread (`istmo-notifications-timer`) for scheduled entries,
+  queued coalesced updates and host-run timeouts; it re-reads the wall
+  clock at least every 30 s (suspend, clock changes). Hosts built with
+  `manual_timer()` wait for `tick()` (tests).
+- Delivered table: latest content per id (queued updates included);
+  dismissed entries are kept (at most 256) so an alerting update can
+  show them again (`ShowMode::New`).
+- Unknown channels fail `UnknownChannel`; `with_channels` on the builder
+  takes the static ones (`[[app.notification_channel]]`, wiring left to
+  the istmo-build agent). `set_channels` keeps an existing channel's
+  settings except name and description (the Android rule everywhere).
+- Store: `<data dir>/istmo-notifications/schedule.bin`, one writer
+  (`without_store()` in forwarding processes). Writes are atomic
+  (sibling `.tmp`, `sync_all`, rename), serialised by a generation
+  counter so a slow older write never lands after a newer one; an empty
+  schedule removes the file.
+
+### Image cache rules
+
+- `<cache dir>/istmo-notifications/images/<fnv1a64 hex>-<len>.<png|jpg>`
+  for `NotificationImage::Png` / `Jpeg`; `File` paths are passed as
+  given; `Named` has no file. Slots: `Icon`, `Picture`, `Avatar(key)`
+  (conversation user, senders, caller; once per key), `Message(index)`,
+  `Action(id)`.
+- Reference counted across notifications; the file goes with its last
+  user (replaced with different images, cancelled, dismissed). Images
+  are collected again only when an update touches icon, style or actions
+  (progress updates reuse the files).
+- At start, files older than 3 days that nothing uses are removed
+  (younger ones may still back notifications an earlier process left on
+  screen).
+
+### Ports the native agents own
+
+- **Coalescer** (Kotlin `Coalescer.kt`, Swift `Coalescer.swift`):
+  `src/coalesce.rs` is the reference; its unit tests are the cases to
+  port. Integer milli-token bucket (`Rate { per_second, burst }`, refill
+  `elapsed_ms * per_second` milli-tokens, cap `burst * 1000`), latest per
+  id, FIFO of ids, regular offers queue behind queued ids, `Alert` /
+  `Finish` post at once and spend a token (debt allowed), `shown`
+  (a full show) clears dismissal and the queue entry and spends a token,
+  `dismissed` drops regular updates until an alert, `cancel` forgets the
+  id, `next_due` rounds the wait up. Rates: `Rate::ANDROID` (4, 4),
+  `APPLE` (2, 2), `WINDOWS` (20, 20), `LINUX` (10, 10), `WEB` (4, 4).
+- **Calendar rule** (Kotlin `CalendarRule.kt`; Swift only if it ever
+  evaluates rules itself instead of `UNCalendarNotificationTrigger`):
+  `src/schedule/rule.rs`, pinned by `tests/schedule_vectors.tsv`.
+  Semantics: AND of the set fields, gap = shift forward by the gap
+  (RFC 5545 / Temporal "compatible"), overlap = earlier instant once,
+  days that do not exist are skipped, `until_ms` inclusive, search
+  bounded to 401 years. `java.util.Calendar` resolves overlaps to the
+  later (standard-time) instant by default: the Kotlin port must pick
+  the earlier one explicitly.
+- **Trigger timing** (`Trigger::next_after(anchor, after)` in
+  `src/schedule.rs`): `After(d)` = anchor + d once, `At(t)` once
+  (`first_fire` delivers a past `At` at once), `Every(p)` = anchor + k*p
+  on its grid (missed periods skipped, not shifted), `Calendar` = rule
+  occurrences after the anchor.
+- **Missed deliveries** (`schedule/engine.rs`): more than
+  `LATE_AFTER_MS` (60 s) late counts as missed; lateness is measured from
+  the latest missed occurrence (a daily reminder missed for three days is
+  as late as today's); `Drop` skips, `DeliverLate(max)` delivers once
+  with `DeliveredLate` when within `max`; repeats then move to the next
+  occurrence after now.
+- **Store format** (Android `ScheduleStore`, if it mirrors it): format
+  byte `STORE_FORMAT = 1`, then the wire encoding of
+  `Vec<(Notification, Trigger, i64 anchor_ms, Option<i64> next_fire_ms)>`.
+
+### `tests/schedule_vectors.tsv`
+
+Tab separated, `#` comments, one header row. Columns: `name`, `zone`
+(rule zone or `-`), `local` (the device zone used when `zone` is `-`),
+`hour`, `minute`, `weekdays` (`mon,tue,...` or `-`), `day` (or `-`),
+`month` (or `-`), `until` (RFC 3339 UTC or `-`), `after` (RFC 3339 UTC),
+`count` (occurrences asked, each strictly after the previous),
+`expected` (comma-separated RFC 3339 UTC instants, fewer than `count`
+when the rule runs out, `none` when there is none). 31 rows: New York,
+Berlin, Sydney and Lord Howe (30-minute shift) gaps and overlaps, Samoa's
+skipped 2011-12-30, leap days (2100 skipped), the 29th / 31st, weekday
+sets, Friday the 13th, `until`, local wall clock. Runner:
+`tests/schedule_vectors.rs`.
+
+### Verification
+
+- Unit tests: ids, validation, render, coalescer, rule, trigger, engine,
+  store, images, live queue, and the desktop host end to end through a
+  runtime with a recording backend, a manual timer and a fake clock
+  (show / channel merge / image files, coalescing to the rate, dismissed
+  updates, responses + deep links + acks, choices, carried fields, snooze,
+  store restart with missed deliveries, host-run timeouts, messages,
+  capability overlay, no platform backend, live notifications).
+- Goldens: `tests/golden/notifications_*` and the app Kotlin
+  `app_notifications_*`. The app Kotlin compiles with `kotlinc 2.3
+  -Werror` against the runtime and `runtime/android/ci` stubs;
+  `runtime/ios/ci/typecheck-goldens.sh` (swiftc 5.10
+  `-warnings-as-errors`) passes with every plugin's Swift in one module;
+  `check_swift_namespaces` passes.
+- Not done: wasm32 build check of the crate (no web code yet besides the
+  live sender), any platform backend, any device run.
+
+### Left for the platform agents
+
+- **istmo-build**: `[app.notifications]` + `[[app.notification_channel]]`
+  (`crates/build/src/notifications.rs`), Android raw resource of static
+  channels, manifest permissions, Apple entitlements, desktop static
+  channels into `DesktopNotificationsBuilder::with_channels`.
+- **Android**: `NotificationsBackendImpl`, trampoline activity and
+  receivers, `ScheduleStore`, `AlarmManager` re-arming, `CalendarRule.kt`
+  and `Coalescer.kt` ports (vectors + coalescer cases), responses
+  publishing with the generated `NotificationResponse` codec, group
+  summaries, `istmo.toml` gradle / permissions / manifest fragment and
+  `android_backend`, `auto_register = true`.
+- **Apple**: iOS Swift backend and delegate (`IstmoNotifications.install`),
+  categories, communication notifications, top-up of the 60 armed
+  requests, `Coalescer.swift`; macOS Rust `Backend` in
+  `desktop/macos.rs` (`NotBundled` outside an `.app`).
+- **Windows**: `desktop/windows/` `Backend` (toast XML, data-binding
+  progress, COM activator, registry registration, scheduled toasts with
+  the 14-day window), `DesktopNotifications::install` / `unregister`.
+- **Linux**: `desktop/linux/` `Backend` for fdo (capabilities cache,
+  `replaces_id`, `value` hint, KDE inline reply, `NotificationClosed` to
+  `dismissed`), portal v1 / v2 (exported actions, `ActivateAction`),
+  kuiserver progress; app id resolution.
+- **Web**: `src/web.rs` host, a `setTimeout` `schedule::Wakeup`,
+  IndexedDB store, the service worker asset.
