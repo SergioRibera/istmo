@@ -1627,3 +1627,166 @@ the rest is `cfg(windows)`.
   fails `REGDB_E_CLASSNOTREG` (Wine has no toast classes). Nothing ran on
   real Windows: `examples/notif_win_probe.rs`
   (`~/win_probe/notifications/`) is the checklist.
+
+## Implementation notes (Android, as built)
+
+Branch `notif-android`, the Android part of step 3. Sources in
+`plugins/notifications/native/android/` (package
+`dev.istmo.plugins.notifications`, the plugin's `android_package`).
+
+### Contract with istmo-build (`[app.notifications]`)
+
+The backend reads only Android resources and the manifest; every name
+is looked up at run time with `Resources.getIdentifier`, so a missing
+one falls back instead of failing the build.
+
+| What | Resource / manifest entry | Content | Fallback |
+|---|---|---|---|
+| Static channels (`[[app.notification_channel]]`) | `res/raw/istmo_notification_channels.bin` (resource `raw/istmo_notification_channels`) | wire bytes of `Vec<ChannelSpec>` (varint length, then each `ChannelSpec` in the generated codec layout), **no format byte** | only the plugin's `default` channel |
+| `small_icon` | drawable `istmo_notification_icon` (`res/drawable*/istmo_notification_icon.{xml,png}`) | monochrome vector or alpha-only PNG | `AndroidExtras.small_icon` by name first; else the app icon |
+| `accent` | color `istmo_notification_accent` (`res/values/*.xml`) | `#RRGGBB` / `#AARRGGBB` | no color; `AndroidExtras.color` wins |
+| `sounds` | `res/raw/<name>` (`Sound::Named("ding")` = `raw/ding`) | sound file | channel default |
+| `exact_alarms = "schedule"` / `"use"` | `<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM">` / `USE_EXACT_ALARM` | | inexact alarms |
+| `full_screen = true` | `USE_FULL_SCREEN_INTENT` | | `android.full_screen` ignored, `Style::Call` simulated on 31+ |
+| `live_updates = true` | `POST_PROMOTED_NOTIFICATIONS` | | promotion requested anyway; the system refuses (`NotPromoted`) |
+
+`request_permission(exact_alarms)` opens `ACTION_REQUEST_SCHEDULE_EXACT_ALARM`
+only when `SCHEDULE_EXACT_ALARM` is in the merged manifest (read from
+`PackageInfo.requestedPermissions`). The plugin's own `istmo.toml`
+declares `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLETED`; its
+`native/android/AndroidManifest.xml` declares the components:
+`IstmoNotificationActivity` (not exported), `IstmoNotificationReceiver`
+and `IstmoNotificationAlarmReceiver` (not exported),
+`IstmoNotificationBootReceiver` (exported, `BOOT_COMPLETED`, `TIME_SET`,
+`TIMEZONE_CHANGED`, `MY_PACKAGE_REPLACED`,
+`SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED`). No `crates/build`
+change was made.
+
+### Layout
+
+- `NotificationsBackendImpl(context)`: the generated backend interface.
+  Context-bound (`android_backend_arg = "context"`, `auto_register =
+  true`), so it registers once per process and also works under a
+  `NativeActivity`; `PermissionPrompt` uses the current istmo activity
+  (`ActivityResultRegistry` on a `ComponentActivity`, re-registered on a
+  recreated one; `ActivityCompat.requestPermissions` plus "resumed after
+  being paused" otherwise).
+- `NotificationCenter` (internal object): process-wide state shared with
+  the receivers, which run without a backend when an alarm, a boot or a
+  button starts the process. Shown table (latest content per id, 256
+  dismissed kept), `Coalescer` on a `HandlerThread`, acks, channels,
+  group summaries, events (backlog 64 until the first subscriber),
+  schedule.
+- `NotificationRenderer`: `NotificationCompat` building. `Api36`: the
+  API 36 / 36 QPR1 parts by reflection. `Intents`: every
+  `PendingIntent`. `Responses`: lane publishing, deep links, file queue.
+  `Alarms`: the one alarm. `ScheduleStore.kt`: `ScheduleEngine` (port of
+  `schedule/engine.rs`) and the store. `CalendarRule.kt`:
+  `CalendarRules` + `Triggers` (ports of `rule.rs` and `Trigger`
+  timing). `Coalescer.kt`.
+- Notifications are posted with tag = id, id 0; group summaries with tag
+  `istmo.group:<group id>`. Every notification carries the extra
+  `dev.istmo.notifications.MARKER` (for `delivered` / `cancel_all`) and,
+  when its wire encoding is at most 32 KiB, `dev.istmo.notifications.WIRE`
+  so `update` / `append_message` / snooze still work after a restart.
+
+### Decisions and deviations
+
+- **androidx.core 1.13.1, not 1.17+.** 1.17 needs compileSdk 36 and
+  Kotlin 2 metadata; apps and examples are on compileSdk 34 / Kotlin
+  1.9.24. `Notification.ProgressStyle`, `setShortCriticalText`,
+  `setRequestPromotedOngoing` (36 QPR1; the extra
+  `android.requestPromotedOngoing` when the method is missing),
+  `canPostPromotedNotifications`, `FLAG_PROMOTED_ONGOING` and
+  `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` are reached by
+  reflection (`Api36`): the compat notification is built, then
+  `Notification.Builder.recoverBuilder` adds the framework parts.
+  `ProgressStyle` is used only when the style is `Plain` (it is a style
+  of its own); bar length = sum of segment lengths, else 1000.
+- **Promotion check.** One second after posting a `live` notification,
+  the active one is read back; without `FLAG_PROMOTED_ONGOING`,
+  `NotPromoted(id)`. The plugin requests promotion only when it can see
+  the eligibility rules hold (ongoing, title, not colorized, style plain /
+  big text / call).
+- **Response templates.** Each `PendingIntent` carries the encoded
+  `NotificationResponse` of its target (generated codec); the activity /
+  receiver fills `reply` (from `RemoteInput`), `launched_app` and `ack`.
+  Overflow actions travel without their icons (intent size).
+- **Cold start.** Foreground responses always go through
+  `IstmoRuntime.publishEarlyQueue` (held in memory until the runtime
+  starts, which the launch activity started right after the trampoline
+  does); `launched_app = true` when no backend was registered yet in the
+  process. Background responses with no runtime in the process go to
+  `noBackupFilesDir/istmo-notifications/responses.bin` (format byte 1,
+  wire `Vec<Vec<u8>>` of encoded responses, oldest dropped past 64),
+  drained when the backend is built, **without an ack**: app code only
+  runs with an activity, so there is nothing to keep the receiver alive
+  for. Section 3's `IstmoRuntime.ensureStarted` does not exist and was
+  not added (starting the native runtime without the app's entry point
+  runs no app code).
+- **Replies.** Native `RemoteInput` from API 24 (suggestions as
+  choices); `Select` is a `RemoteInput` with choices and no free-form
+  input from API 28 (rendered as chips); below, a reply is a button with
+  `input_requested` and each choice its own button (`<id>#<i>` keys). A
+  background reply re-posts the notification silently when the ack
+  completes or times out, which clears the reply spinner.
+- **More.** More than 3 actions: the first 2, then "More" (English
+  label, as `render::Labels`). Simulated choices expanding past the room
+  left are cut.
+- **Call style** on API 31+ only with `android.full_screen` and the
+  full-screen grant (the system refuses call-style notifications that
+  are neither a foreground service nor full-screen); otherwise a plain
+  notification with `CATEGORY_CALL` and the call buttons. Capabilities
+  say `CallStyle: Native` (it is on < 31 and with full screen).
+- **Snooze**: cancelled, rescheduled with `Trigger::After`, `Snoozed`.
+  Needs the content (table or `WIRE` extra); without it the
+  notification is only cancelled.
+- **Channels below 26**: specs kept in
+  `noBackupFilesDir/istmo-notifications/channels.bin` (format byte 1,
+  wire `Vec<ChannelSpec>`), merged into each notification (priority,
+  sound, vibration, lights). Unknown channels fail `UnknownChannel` on
+  every API (26+: neither in the store nor in the system).
+- **Coalescer** follows the core fixes: debt floored at `-burst * 1000`
+  milli-tokens; only `Open` and `Button` responses publish a deep link;
+  a trigger with no next fire is refused with `Invalid { field:
+  "trigger", problem: OutOfRange }` and not stored. Coalescer clock =
+  `elapsedRealtime`.
+- **Schedule**: `TIME_SET` / `TIMEZONE_CHANGED` recompute every future
+  delivery from now (local-zone rules follow the new zone); entries
+  already due keep their time so the missed policy applies. Every
+  backend start re-arms too (a force stop clears alarms). Alarm =
+  `RTC_WAKEUP`, `FLAG_IMMUTABLE`.
+- **`cancel_all`** removes only the plugin's notifications (marker or
+  summary tag), not other plugins' (a foreground service's stays anyway).
+- **`delivered`** on API 23+ from `getActiveNotifications` (title and
+  text from the extras, `postTime`); below 23 the own table
+  (`ListDelivered: WhileRunning`).
+- **Timeout**: `setTimeoutAfter` (26+; `Unsupported` below). No
+  `Dismissed(Timeout)` event: the delete intent is a user dismissal.
+- Permission state: `NotDetermined` on 33+ until the prompt was shown
+  once (a preference), then `Denied` while not granted.
+
+### Verification
+
+- `plugins/notifications/tests/native/android/check.sh` (just
+  `check-generated-native`, `native.yml` kotlin job):
+  - JVM: `CalendarRule.kt` against all 30 rows of
+    `tests/schedule_vectors.tsv`, the six `coalesce.rs` cases plus the
+    debt floor, trigger timing, missed deliveries (late within the hour,
+    `Drop`, `DeliverLate`, a daily reminder missed three days), store
+    round trip;
+  - Android: every `native/android/*.kt` with `-Werror -no-jdk` against
+    `android-34/android.jar` and the AndroidX jars of `istmo.toml`
+    (fetched from Google Maven), kotlinc 2.3 and 1.9.24.
+- `plugins/notifications/examples/android-probe`: device probe (see its
+  README).
+
+### Open (Android)
+
+- Device facts not verified: OEM promotion criteria, whether
+  `recoverBuilder` keeps every compat extra on all OEM builds, choice
+  chips on 28-30, whether the delete intent fires on `setTimeoutAfter`.
+- Messages with images (`ChatMessage.image`) are shown without the image
+  (needs a content URI provider).
+- Conversation shortcuts (bubbles, the conversation section) are not
+  published.
