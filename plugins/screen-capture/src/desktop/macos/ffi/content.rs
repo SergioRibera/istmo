@@ -76,6 +76,13 @@ pub(crate) struct Exclusions {
     pub(crate) windows: Vec<u32>,
 }
 
+impl Exclusions {
+    /// Whether `app` is left out (by bundle id or process id).
+    fn excludes_app(&self, app: &AppInfo) -> bool {
+        self.bundle_ids.contains(&app.bundle_id) || self.pids.contains(&app.pid)
+    }
+}
+
 /// A snapshot of what can be captured. Listing needs the Screen
 /// Recording grant; callers check it first so this never prompts.
 #[derive(Debug)]
@@ -201,12 +208,23 @@ impl Content {
     #[must_use]
     pub(crate) fn display_filter(&self, id: u32, exclude: &Exclusions) -> Option<Filter> {
         let display = self.display(id)?;
-        let apps = self.applications_matching(|app| {
-            exclude.bundle_ids.contains(&app.bundle_id) || exclude.pids.contains(&app.pid)
-        });
+        let apps = self.applications_matching(|app| exclude.excludes_app(app));
         // Windows "excepted" from an exclusion list are left out unless
-        // their application is in it: here, exactly the excluded windows.
-        let windows = self.windows_with(&exclude.windows);
+        // their application is in it, where excepting one would bring it
+        // back: only excluded windows of applications still captured.
+        let windows: Vec<Retained<SCWindow>> = self
+            .windows_raw()
+            .iter()
+            .filter(|w| {
+                // SAFETY: a getter on a listed window.
+                let id = unsafe { w.windowID() };
+                // SAFETY: as above.
+                let owner = unsafe { w.owningApplication() };
+                exclude.windows.contains(&id)
+                    && !owner.is_some_and(|app| exclude.excludes_app(&app_info(&app)))
+            })
+            .collect();
+        let windows = NSArray::from_retained_slice(&windows);
         // SAFETY: a designated initialiser with listed objects.
         let filter = unsafe {
             SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(
