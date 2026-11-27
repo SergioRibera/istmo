@@ -204,7 +204,9 @@ async fn send(client: &NotificationsClient, id: NotificationId, op: Op) {
 /// it is cancelled.
 pub struct LiveNotification {
     id: NotificationId,
-    label: Option<String>,
+    /// The bar as last sent (shown, set or patched), so
+    /// [`progress`](Self::progress) keeps its label, segments and points.
+    current: Mutex<Option<Progress>>,
     hub: Arc<Hub>,
     armed: bool,
 }
@@ -218,6 +220,19 @@ impl std::fmt::Debug for LiveNotification {
     }
 }
 
+/// `current` moved to the fraction `value`: label, segments and points
+/// stay; an indeterminate bar becomes determinate.
+fn at_fraction(current: Option<Progress>, value: f32) -> Progress {
+    let fraction = Progress::fraction(value);
+    match current {
+        Some(mut bar) => {
+            bar.value = fraction.value;
+            bar
+        }
+        None => fraction,
+    }
+}
+
 impl LiveNotification {
     /// Wraps a notification already shown through `client`.
     pub(crate) fn new(
@@ -226,7 +241,7 @@ impl LiveNotification {
     ) -> Result<Self, NotificationError> {
         Ok(Self {
             id: shown.id.clone(),
-            label: shown.progress.as_ref().and_then(|p| p.label.clone()),
+            current: Mutex::new(shown.progress.clone()),
             hub: hub_for(client)?,
             armed: true,
         })
@@ -238,22 +253,36 @@ impl LiveNotification {
         &self.id
     }
 
-    /// Sets the progress fraction (keeps the label it was shown with).
-    /// Never waits; queued values collapse to the latest.
+    /// Sets the progress fraction, keeping the rest of the bar as last
+    /// shown, set or patched (label, segments, points). Never waits;
+    /// queued values collapse to the latest.
     pub fn progress(&self, value: f32) {
-        let mut progress = Progress::fraction(value);
-        progress.label.clone_from(&self.label);
-        self.set_progress(Some(progress));
+        let progress = {
+            let mut current = istmo_core::sync::lock(&self.current);
+            let next = at_fraction(current.take(), value);
+            *current = Some(next.clone());
+            next
+        };
+        self.hub.push(&self.id, Op::Progress(Some(progress)));
     }
 
     /// Sets (or with `None` removes) the whole progress bar. Never waits.
     pub fn set_progress(&self, progress: Option<Progress>) {
+        istmo_core::sync::lock(&self.current).clone_from(&progress);
         self.hub.push(&self.id, Op::Progress(progress));
     }
 
     /// Applies `patch`, after every call made before it.
     pub async fn update(&self, patch: NotificationPatch) -> Result<(), NotificationError> {
         patch.validate()?;
+        {
+            let mut current = istmo_core::sync::lock(&self.current);
+            if patch.progress.is_some() {
+                current.clone_from(&patch.progress);
+            } else if patch.clear.contains(&crate::PatchField::Progress) {
+                *current = None;
+            }
+        }
         let (reply, answer) = oneshot::channel();
         self.hub.push(&self.id, Op::Update(Box::new(patch), reply));
         answered(answer).await
@@ -344,5 +373,27 @@ mod tests {
         let (id, op) = q.pop().unwrap();
         assert_eq!(format!("{id}:{}", label(&op)), "a:cancel");
         assert!(q.pop().is_none());
+    }
+
+    #[test]
+    fn a_fraction_keeps_the_rest_of_the_bar() {
+        let bar = Progress {
+            value: None,
+            label: Some("Report".to_owned()),
+            segments: vec![crate::ProgressSegment {
+                length: 3,
+                color: None,
+            }],
+            points: vec![crate::ProgressPoint {
+                position: 1,
+                color: Some(7),
+            }],
+        };
+        let next = at_fraction(Some(bar.clone()), 2.0);
+        assert_eq!(next.value, Some(1.0));
+        assert_eq!(next.label, bar.label);
+        assert_eq!(next.segments, bar.segments);
+        assert_eq!(next.points, bar.points);
+        assert_eq!(at_fraction(None, 0.5), Progress::fraction(0.5));
     }
 }
