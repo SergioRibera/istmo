@@ -1,6 +1,7 @@
 package dev.istmo.plugins.screencapture
 
 import android.content.Context
+import android.hardware.HardwareBuffer
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.util.DisplayMetrics
@@ -159,8 +160,34 @@ internal enum class Offer(val format: PixelFormat, val memory: BufferMemory, val
     ;
 
     companion object {
-        fun available(): List<Offer> = if (Build.VERSION.SDK_INT >= Api.Q) listOf(Gpu, Cpu) else listOf(Cpu)
+        /**
+         * Usage of the GPU offer's readers: sampled by the consumer, and
+         * rendered into by the virtual display (or the fan-out's GLES).
+         */
+        const val GPU_USAGE: Long = HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
+
+        /**
+         * The offers for [width] × [height] frames. The GPU one only where
+         * the allocator says `RGBA_8888` buffers with [GPU_USAGE] exist
+         * (API 29+): a `PRIVATE` buffer may be compressed or tiled, which
+         * no `PixelFormat` describes, so it is never offered.
+         */
+        fun available(width: Int, height: Int): List<Offer> =
+            if (gpuSupported(width, height)) listOf(Gpu, Cpu) else listOf(Cpu)
+
+        fun gpuSupported(width: Int, height: Int): Boolean =
+            Build.VERSION.SDK_INT >= Api.Q && width > 0 && height > 0 &&
+                runCatching {
+                    HardwareBuffer.isSupported(width, height, HardwareBuffer.RGBA_8888, 1, GPU_USAGE)
+                }.getOrDefault(false)
     }
+}
+
+/** The contract's name of a `HardwareBuffer` format, `null` for one no `PixelFormat` describes. */
+internal fun pixelFormatOf(hardwareBufferFormat: Int): PixelFormat? = when (hardwareBufferFormat) {
+    HardwareBuffer.RGBA_8888 -> PixelFormat.Rgba8
+    HardwareBuffer.RGBX_8888 -> PixelFormat.Rgbx8
+    else -> null
 }
 
 /** The offer a tier list settles on, and the tier's index. */
@@ -171,8 +198,8 @@ internal class Negotiated(val offer: Offer, val tier: Int)
  * makes being among those the tier allows. An empty request takes the
  * native offer, or the CPU one first when [cpuFirst] (screenshots).
  */
-internal fun negotiate(request: FormatRequest, cpuFirst: Boolean): Negotiated? {
-    val offers = Offer.available()
+internal fun negotiate(request: FormatRequest, cpuFirst: Boolean, display: DisplayFacts): Negotiated? {
+    val offers = Offer.available(display.width, display.height)
     if (request.tiers.isEmpty()) {
         return Negotiated(if (cpuFirst) Offer.Cpu else offers.first(), 0)
     }

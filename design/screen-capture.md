@@ -583,9 +583,12 @@ wins.
 **Frames.**
 - Offers: `Rgba8` / `HardwareBuffer` (API 29+, no copy) and `Rgba8` /
   `Cpu` (`GpuReadback`: the GPU-composed rows are copied into the sink).
-  Readers are `RGBA_8888` with `USAGE_GPU_SAMPLED_IMAGE`; a device that
-  refuses that combination gets `PRIVATE` (then `format` stays `Rgba8`,
-  the display composes RGBA).
+  GPU readers are `RGBA_8888` with `GPU_SAMPLED_IMAGE | GPU_COLOR_OUTPUT`,
+  offered only where `HardwareBuffer.isSupported` says so for the
+  display's size (the caps' `video` is probed). No `PRIVATE` fallback:
+  its buffers may be tiled or compressed, which no `PixelFormat`
+  describes. `format` is the buffer's own (`RGBA_8888` / `RGBX_8888`); any
+  other ends the session.
 - `HardwareBuffer` frames carry no `planes` (the Java API has no
   stride); `istmo_android::HardwareBuffer::desc()` has it. `slot` is
   the buffer's `HardwareBuffer.id` order (API 31+), `u32::MAX` below

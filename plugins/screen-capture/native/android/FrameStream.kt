@@ -239,20 +239,15 @@ internal class FrameStream(
     }
 
     private fun newReader(width: Int, height: Int): ImageReader = when (offer) {
-        Offer.Gpu ->
-            try {
-                ImageReader.newInstance(
-                    width, height, android.graphics.PixelFormat.RGBA_8888, poolDepth,
-                    HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE,
-                )
-            } catch (e: IllegalArgumentException) {
-                // RGBA_8888 with GPU usage is outside the documented
-                // combinations; PRIVATE is the documented one.
-                ImageReader.newInstance(
-                    width, height, android.graphics.ImageFormat.PRIVATE, poolDepth,
-                    HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE,
-                )
+        Offer.Gpu -> {
+            // Only offered where the allocator has this format / usage pair
+            // (`Offer.gpuSupported`); a size it refuses after a resize fails
+            // the session (no `PRIVATE` fallback: its layout is opaque).
+            if (!Offer.gpuSupported(width, height)) {
+                throw IllegalArgumentException("no RGBA_8888 GPU buffers of $width x $height")
             }
+            ImageReader.newInstance(width, height, android.graphics.PixelFormat.RGBA_8888, poolDepth, Offer.GPU_USAGE)
+        }
         Offer.Cpu -> ImageReader.newInstance(width, height, android.graphics.PixelFormat.RGBA_8888, poolDepth)
     }
 
@@ -478,11 +473,13 @@ internal class FrameStream(
             image.fence.use { fence -> if (fence.isValid) fence.await(FENCE_TIMEOUT) }
         }
         val buffer = image.hardwareBuffer ?: return null
-        val format = when (buffer.format) {
-            HardwareBuffer.RGBA_8888 -> PixelFormat.Rgba8
-            HardwareBuffer.RGBX_8888 -> PixelFormat.Rgbx8
-            // PRIVATE allocations: the display composes RGBA.
-            else -> offer.format
+        // What the allocator gave, never what was asked: a buffer no
+        // `PixelFormat` describes ends the session rather than reaching
+        // Rust mislabelled.
+        val format = pixelFormatOf(buffer.format) ?: run {
+            val raw = buffer.format
+            buffer.close()
+            throw IllegalStateException("HardwareBuffer format 0x${Integer.toHexString(raw)} has no PixelFormat")
         }
         val meta = meta(lease.owner, format, emptyList(), lease.owner.slot(buffer), ptsNs, repeat)
         val hold = lease.hold()

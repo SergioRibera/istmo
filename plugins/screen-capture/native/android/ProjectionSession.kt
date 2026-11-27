@@ -314,7 +314,7 @@ internal class ProjectionSession(
             }
             is SessionUpdate.Formats -> {
                 if (live == null) fail(CaptureError.Unsatisfiable(Unmet(PROJECTION, listOf(Requirement.Operation))))
-                val next = negotiate(update.value, cpuFirst = false)
+                val next = negotiate(update.value, cpuFirst = false, plan.display)
                     ?: fail(CaptureError.Unsatisfiable(Unmet(PROJECTION, listOf(Requirement.Formats))))
                 if (next.offer != live.offer || next.tier != live.tier) reopen(live, next.offer, next.tier, live.poolDepth)
             }

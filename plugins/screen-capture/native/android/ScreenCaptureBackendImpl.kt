@@ -121,7 +121,8 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
             },
             listing = SourceListing.Enumerable,
             consent = ConsentModel.PerSessionDialog,
-            video = Offer.available().map { FormatCaps(it.format, it.memory, emptyList(), it.copies) },
+            video = Offer.available(display?.width ?: 0, display?.height ?: 0)
+                .map { FormatCaps(it.format, it.memory, emptyList(), it.copies) },
             maxFps = display?.refreshHz?.roundToInt()?.toUInt(),
             minIntervalUs = null,
             maxSize = display?.let { Size(maxOf(it.width, it.height).toUInt(), maxOf(it.width, it.height).toUInt()) },
@@ -149,7 +150,7 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
             provenance = CapsProvenance(
                 sourceKinds = Provenance.Table,
                 listing = Provenance.Probe,
-                video = Provenance.Table,
+                video = Provenance.Probe,
                 cursor = Provenance.Table,
                 damage = Provenance.Table,
                 colour = Provenance.Table,
@@ -313,7 +314,7 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
         val unmet = ArrayList<Requirement>()
         val target = target(config.source, display, config.consent, streaming = true, unmet)
         val video = config.video
-        val format = if (frames) negotiate(video.formats, cpuFirst = false) else null
+        val format = if (frames) negotiate(video.formats, cpuFirst = false, display) else null
         if (frames && format == null) unmet += Requirement.Formats
         if (video.hdr == HdrPolicy.RequireHdr) unmet += Requirement.Hdr
         if (video.cursor.strength == Strength.Require && video.cursor.mode != CursorMode.Hidden) unmet += Requirement.Cursor
@@ -517,7 +518,7 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
         val display = displays.primary()
         val unmet = ArrayList<Requirement>()
         val target = target(request.source, display, request.consent, streaming = false, unmet)
-        val format = if (cpu) Negotiated(Offer.Cpu, 0) else negotiate(request.formats, cpuFirst = true)
+        val format = if (cpu) Negotiated(Offer.Cpu, 0) else negotiate(request.formats, cpuFirst = true, display)
         if (format == null) unmet += Requirement.Formats
         if (request.hdr == HdrPolicy.RequireHdr) unmet += Requirement.Hdr
         if (request.cursor.strength == Strength.Require && request.cursor.mode != CursorMode.Hidden) {

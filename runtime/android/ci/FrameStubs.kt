@@ -14,6 +14,9 @@ open class HardwareBuffer : AutoCloseable {
         const val RGBA_8888: Int = 1
         const val RGBX_8888: Int = 2
         const val USAGE_GPU_SAMPLED_IMAGE: Long = 256L
+        const val USAGE_GPU_COLOR_OUTPUT: Long = 512L
+
+        fun isSupported(width: Int, height: Int, format: Int, layers: Int, usage: Long): Boolean = true
     }
 }
 
