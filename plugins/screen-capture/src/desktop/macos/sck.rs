@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::policy::CapturePolicy;
 use crate::select;
 use crate::types::{
     AccessScope, AccessState, Availability, BackendCaps, BackendId, BorderState, CaptureError,
@@ -455,16 +456,20 @@ impl Backend for SckBackend {
         })
     }
 
-    fn request_access(&self, scope: AccessScope) -> Option<AccessState> {
+    fn request_access(
+        &self,
+        scope: AccessScope,
+        _policy: &CapturePolicy,
+    ) -> Option<Result<AccessState, CaptureError>> {
         if scope != AccessScope::ScreenRecording {
             return None;
         }
         if Self::granted() {
-            return Some(sck_map::screen_recording(true, false));
+            return Some(Ok(sck_map::screen_recording(true, false)));
         }
         self.requested.store(true, Ordering::Relaxed);
         let granted = ffi::request_screen_recording();
-        Some(sck_map::screen_recording(granted, true))
+        Some(Ok(sck_map::screen_recording(granted, true)))
     }
 
     fn caps(&self) -> Result<BackendCaps, CaptureError> {

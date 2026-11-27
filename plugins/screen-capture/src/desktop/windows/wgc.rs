@@ -57,16 +57,18 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::core::Interface as _;
 
 use crate::d3d11::{D3d11Frame, SharedHandle};
+use crate::policy::CapturePolicy;
 use crate::pool::{HoldError, PoolAccounting};
 use crate::select::{self, Chosen, Offer};
 use crate::types::{
-    AccessStatus, Availability, BackendCaps, BackendId, BorderState, Borderless, BufferMemory,
-    CapsProvenance, CaptureError, CaptureEvent, CompositeCaps, CompositeSupport, ConsentModel,
-    CopyStage, CursorMode, Damage, DamageSupport, Exhaustion, FormatCaps, FormatRequest, FrameMeta,
-    FrameRate, GpuIdentity, GpuPreference, HdrPolicy, NegotiatedStream, OrientationSupport,
-    Persistence, PixelFormat, PoolCaps, ProtectedContent, Provenance, Rect, RegionCrop,
-    Requirement, Scaling, SessionUpdate, Size, Source, SourceCapture, SourceKind, SourceList,
-    SourceListing, SourceSelector, Strength, WindowCaptureCaps, WindowsOptions,
+    AccessScope, AccessState, AccessStatus, Availability, BackendCaps, BackendId, BorderState,
+    Borderless, BufferMemory, CapsProvenance, CaptureError, CaptureEvent, CompositeCaps,
+    CompositeSupport, ConsentModel, CopyStage, CursorMode, Damage, DamageSupport, Exhaustion,
+    FormatCaps, FormatRequest, FrameMeta, FrameRate, GpuIdentity, GpuPreference, HdrPolicy,
+    NegotiatedStream, OrientationSupport, Persistence, PixelFormat, PoolCaps, ProtectedContent,
+    Provenance, Rect, RegionCrop, Requirement, Scaling, SessionUpdate, Size, Source, SourceCapture,
+    SourceKind, SourceList, SourceListing, SourceSelector, Strength, WindowCaptureCaps,
+    WindowsOptions,
 };
 
 use super::super::backend::{
@@ -698,6 +700,18 @@ impl Backend for WgcBackend {
     fn joins_auto(&self) -> bool {
         // Not before its checklist passed on a real Windows session.
         false
+    }
+
+    fn access(&self, scope: AccessScope) -> Option<AccessState> {
+        access::current(scope)
+    }
+
+    fn request_access(
+        &self,
+        scope: AccessScope,
+        policy: &CapturePolicy,
+    ) -> Option<Result<AccessState, CaptureError>> {
+        access::request(scope, policy)
     }
 
     fn caps(&self) -> Result<BackendCaps, CaptureError> {

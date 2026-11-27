@@ -6,6 +6,7 @@
 
 use istmo_core::NativeBuffer;
 
+use crate::policy::CapturePolicy;
 use crate::types::{
     AccessScope, AccessState, AudioCaps, AudioConfig, AudioNegotiated, Availability, BackendCaps,
     BackendId, CaptureError, ConsentConfig, CursorRequest, Exhaustion, FormatRequest, FrameMeta,
@@ -152,9 +153,13 @@ pub(crate) trait Backend: Send + Sync + 'static {
         None
     }
 
-    /// Prompt for the standing grant for `scope`; `None` when the
-    /// backend has none for it.
-    fn request_access(&self, _scope: AccessScope) -> Option<AccessState> {
+    /// Prompt for the standing grant for `scope` where `policy` lets the
+    /// app ask for it; `None` when the backend has none for it.
+    fn request_access(
+        &self,
+        _scope: AccessScope,
+        _policy: &CapturePolicy,
+    ) -> Option<Result<AccessState, CaptureError>> {
         None
     }
 

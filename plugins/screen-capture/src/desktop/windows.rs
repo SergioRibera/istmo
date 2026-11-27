@@ -6,7 +6,8 @@
 //! runs it); until then they are reachable through `Fixed`, `Ordered`
 //! and the environment override.
 
-pub(crate) mod access;
+#[cfg(feature = "windows-wgc")]
+mod access;
 #[cfg_attr(
     not(all(
         feature = "windows-wgc",

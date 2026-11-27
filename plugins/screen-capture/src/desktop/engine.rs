@@ -488,13 +488,13 @@ impl Engine {
     }
 
     /// Prompt for the standing grant for `scope` on the first backend
-    /// that has one.
-    pub(crate) fn request_access(&self, scope: AccessScope) -> AccessState {
+    /// that has one, within the app's policy.
+    pub(crate) fn request_access(&self, scope: AccessScope) -> Result<AccessState, CaptureError> {
         let state = self
             .backends
             .iter()
-            .find_map(|backend| backend.request_access(scope))
-            .unwrap_or_else(|| Self::no_access(scope));
+            .find_map(|backend| backend.request_access(scope, &self.policy))
+            .unwrap_or_else(|| Ok(Self::no_access(scope)));
         // A new grant changes what the backends can list.
         self.invalidate_probes();
         state
