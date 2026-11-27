@@ -183,10 +183,16 @@ un mismo menú funciona en todos lados.
 | Atajos mostrados | nativo | nativo | nativo | ignorado |
 | Encabezados de sección | emulado (ítem deshabilitado) | emulado | nativo en macOS 14 | ignorado |
 | Subtítulos, badges | ignorado | ignorado | nativo en macOS 14 | ignorado |
-| Ítem por defecto | ignorado | nativo (negrita, doble click) | ignorado | ignorado |
+| Ítem por defecto | ignorado | nativo (negrita, doble click) | emulado (doble click) | ignorado |
 | Título junto al ícono | depende del host (`XAyatanaLabel`) | ignorado | nativo | ignorado |
-| Cambios con el menú abierto | depende del host | próxima apertura | nativo | ignorado |
-| Eventos de scroll | nativo | ignorado | ignorado | ignorado |
+| Cambios con el menú abierto | depende del host | nativo (ítems nuevos u ocultos en la próxima apertura) | nativo | ignorado |
+| Doble click | ignorado | nativo | nativo | ignorado |
+| Eventos de scroll | nativo | ignorado | nativo | ignorado |
+
+En macOS el doble click y el ítem por defecto solo aplican con
+`PrimaryAction::Activate`: con `ShowMenu` el primer click abre el
+menú. Los deltas de scroll cuentan 120 por línea de rueda, como KDE y
+Windows.
 
 Windows 11 pone los íconos nuevos en el área de desborde; no hay API
 para fijarlos. `TraySpec::windows_guid` hace que Windows recuerde la

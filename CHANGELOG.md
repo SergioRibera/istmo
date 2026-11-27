@@ -22,14 +22,18 @@
   Linux backend: `StatusNotifierItem` + `com.canonical.dbusmenu` over
   zbus, one bus connection per item, re-registration when the watcher
   comes back. Windows backend: `Shell_NotifyIconW` (version 4) on a hidden
-  top-level window, popup menus built when they open (radio items
-  native, mixed checks drawn as a dash, default item, shortcut text),
-  icons added again on `TaskbarCreated`, optional `windows_guid`.
+  top-level window with per-monitor DPI, popup menus built when they
+  open at the shell's point, clear of the icon (radio items native,
+  mixed checks drawn as a dash, default item, shortcut text), property
+  changes shown while a menu is open, icon size following the primary
+  monitor's DPI, icons added again on `TaskbarCreated` (and retried after
+  a stale GUID), optional `windows_guid`.
   macOS backend: `NSStatusItem` + `NSMenu` driven from the main queue
   (callers never wait for the main thread), radio items with a dot
   image, section headers / subtitles / badges where macOS 14 has them,
-  template images, SF Symbol names, and `run_event_loop` for tray-only
-  apps.
+  template images, SF Symbol names, scroll events, double click and the
+  default item with `PrimaryAction::Activate`, images cached per icon
+  and size, and `run_event_loop` for tray-only apps.
   Web backend (`WebTray`): the favicon, one item per document, images
   passed to the browser as Blob URLs, animations on `setTimeout`.
   `UnavailableTray` for Android / iOS.

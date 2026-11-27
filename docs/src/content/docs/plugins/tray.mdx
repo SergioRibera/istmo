@@ -178,10 +178,15 @@ one menu works everywhere.
 | Shortcuts shown | native | native | native | ignored |
 | Section headers | emulated (disabled item) | emulated | native on macOS 14 | ignored |
 | Subtitles, badges | ignored | ignored | native on macOS 14 | ignored |
-| Default item | ignored | native (bold, double click) | ignored | ignored |
+| Default item | ignored | native (bold, double click) | emulated (double click) | ignored |
 | Title next to the icon | host dependent (`XAyatanaLabel`) | ignored | native | ignored |
-| Changes while the menu is open | host dependent | next open | native | ignored |
-| Scroll events | native | ignored | ignored | ignored |
+| Changes while the menu is open | host dependent | native (added or hidden items on the next open) | native | ignored |
+| Double click | ignored | native | native | ignored |
+| Scroll events | native | ignored | native | ignored |
+
+On macOS a double click and the default item only apply with
+`PrimaryAction::Activate`: with `ShowMenu` the first click opens the
+menu. Scroll deltas count 120 per wheel line, as KDE and Windows do.
 
 Windows 11 puts new icons in the overflow area; there is no API to pin
 them. `TraySpec::windows_guid` lets Windows remember the user's choice
