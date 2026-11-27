@@ -1570,7 +1570,8 @@ the rest is `cfg(windows)`.
   process (`OnceLock`; later calls return the first outcome): refuses
   elevated tokens (`Elevated`) and builds < 17763 (`Unsupported(Show)`,
   build from `HKLM\...\CurrentVersion\CurrentBuildNumber`); packaged =
-  `Package::Current()` ok, AUMID from `AppInfo::Current()` (else the
+  `Package::Current()` with a non-empty `Id().FullName()` (Wine answers
+  `Package::Current` for unpackaged exes), AUMID from `AppInfo::Current()` (else the
   given one), nothing written; unpackaged writes the two keys every
   start and sets the process AUMID. Both register the class object.
   CLSID = UUID v5 (hand-written SHA-1, RFC vectors in tests) of the AUMID
@@ -1621,5 +1622,8 @@ the rest is `cfg(windows)`.
   report); Windows cross clippy (fenix 1.100, x86_64-pc-windows-msvc,
   `--all-targets --all-features -D warnings`); the lib tests built with
   rust-lld + xwin and run under Wine 11.6 (76 pass; no WinRT toast call
-  runs there). Nothing ran on real Windows: `examples/notif_win_probe.rs`
+  runs there). The probe under Wine: install writes both keys and
+  registers the class object, `clean` removes them; every toast call
+  fails `REGDB_E_CLASSNOTREG` (Wine has no toast classes). Nothing ran on
+  real Windows: `examples/notif_win_probe.rs`
   (`~/win_probe/notifications/`) is the checklist.
