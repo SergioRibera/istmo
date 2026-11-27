@@ -346,6 +346,42 @@ receivers and the tap activity come from the plugin's own manifest.
   with `android.full_screen` (and the full-screen grant on 14+);
   otherwise it is a plain notification with the call buttons.
 
+### Apple
+
+**macOS needs a bundled app.** Notifications only work when the
+executable runs from `<Name>.app/Contents/MacOS/` with a
+`CFBundleIdentifier` in the bundle's `Info.plist`; anything else
+(`cargo run`, a bare binary) answers `NotificationError::NotBundled` and
+logs it once. Bundle and sign the app (ad hoc signing is enough while
+developing), and call `DesktopNotifications::attach(&runtime)` before the
+event loop so the tap that launched the app is not lost. Scheduling on
+macOS runs in-process, as on the other desktops.
+
+**iOS needs no code.** The generated plugin registry builds
+`NotificationsBackendImpl`, which installs the
+`UNUserNotificationCenter` delegate before launch finishes. An app with
+its own delegate forwards both callbacks:
+
+```swift
+if !IstmoNotifications.willPresent(notification, completion: done) { done([.banner, .list]) }
+if !IstmoNotifications.didReceive(response, completion: done) { done() }
+```
+
+iOS keeps 64 pending requests per app; the plugin stores every scheduled
+notification and arms the soonest 60, topping up at launch, on
+foreground and when a notification arrives. A calendar rule with several
+weekdays takes one request per weekday.
+
+**Entitlements** (from `[app.notifications] apple`):
+`time_sensitive` = `com.apple.developer.usernotifications.time-sensitive`;
+`critical` = `com.apple.developer.usernotifications.critical-alerts`
+(granted by Apple on request); `communication` =
+`com.apple.developer.usernotifications.communication` plus
+`INSendMessageIntent` in `NSUserActivityTypes`, which turns
+conversations into communication notifications with the sender's avatar
+(iOS 15, macOS 12). Without them the levels fall back and conversations
+show as body lines.
+
 ### Status
 
 The Rust core and the desktop host are in place; the Android, Apple,

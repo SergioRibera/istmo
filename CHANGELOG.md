@@ -77,6 +77,15 @@
   schedule re-armed on boot, clock and zone changes and app updates, a
   tap activity and receivers that publish responses (queued in a file
   while no runtime runs). Registered by the generated registry.
+
+- `istmo-notifications` Apple backends: iOS in Swift
+  (`NotificationsBackendImpl`, auto-registered; the delegate is installed
+  before launch finishes, `IstmoNotifications.willPresent` / `didReceive`
+  for apps with their own delegate), native triggers with the 64-request
+  top-up, categories built from actions, attachments, threads,
+  interruption levels, communication notifications (iOS 15); macOS in
+  Rust over objc2 (`NotBundled` outside an `.app`, communication
+  notifications on macOS 12).
 - `istmo-autostart` plugin (`istmo.autostart`, desktop only): start the
   app at login from a user action (`SMAppService.mainApp` on macOS 13+,
   a LaunchAgent before that or for bare binaries, MSIX `StartupTask` or

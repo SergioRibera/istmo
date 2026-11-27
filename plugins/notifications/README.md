@@ -216,6 +216,43 @@ fn main() {
   most 50) are also armed as scheduled toasts, so they appear while the
   app is closed.
 
+## Apple
+
+### macOS: bundle required
+
+`UNUserNotificationCenter` works only inside a bundled app: the
+executable must run from `<Name>.app/Contents/MacOS/` and the bundle's
+`Info.plist` must carry a `CFBundleIdentifier`. Run from `cargo run`, a
+bare binary or a `target/` directory, every call answers
+`NotificationError::NotBundled` (logged once at warn) and
+`capabilities()` reports nothing native. Bundle the app (for example
+with `cargo-bundle` or `nix-bundle-app`) and sign it (ad hoc is enough
+locally) to see notifications.
+
+- Call `DesktopNotifications::attach(&runtime)` before the event loop
+  starts: the delegate must be set before launch finishes, or the tap
+  that launched the app is lost.
+- Scheduling runs in-process on macOS (`WhileRunning`), like the other
+  desktop targets; missed ones follow their `MissedPolicy` at the next
+  start.
+- macOS 12+: interruption levels (time sensitive needs the
+  `com.apple.developer.usernotifications.time-sensitive` entitlement,
+  critical the critical-alerts one), relevance, and communication
+  notifications when `INSendMessageIntent` is in `NSUserActivityTypes`
+  and the app has the communication entitlement.
+
+### iOS
+
+Zero native code: the generated registry builds `NotificationsBackendImpl`
+before `UIApplicationMain`, which sets the `UNUserNotificationCenter`
+delegate. Apps with their own delegate forward
+`IstmoNotifications.willPresent(_:completion:)` and
+`IstmoNotifications.didReceive(_:completion:)`. Scheduling uses native
+triggers; the system keeps 64 pending requests per app, so the plugin
+keeps every entry and arms the soonest 60, topping up at launch, on
+foreground and in the delegate callbacks. Background actions hold the
+completion handler until `complete(ack)` (at most 25 s).
+
 ## Status
 
 The Rust core (types, validation, render fallbacks, coalescing,

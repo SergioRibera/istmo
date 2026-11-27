@@ -1793,3 +1793,150 @@ change was made. The plugin keeps `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLET
   (needs a content URI provider).
 - Conversation shortcuts (bubbles, the conversation section) are not
   published.
+
+## Implementation notes (Apple, as built)
+
+Branch `notif-apple` (from 512c1843). iOS backend in Swift
+(`native/ios/`), macOS backend in Rust (`src/desktop/macos.rs` over
+objc2, rules in `src/desktop/apple_map.rs`). Nothing ran on a Mac,
+iPhone or iPad: Swift is type-checked against stubs, macOS is
+cross-clippied without an SDK. Checklist:
+`plugins/notifications/docs/apple-checklist.es.md`.
+
+### iOS (`native/ios/`)
+
+- `NotificationsBackendImpl` (generated protocol) is thin; state lives in
+  `NotificationsCore.shared` (one `NSLock`, never held across `await`):
+  live table, channels, `NotificationsCoalescer` (`Rate.apple`), the
+  category set, held completion handlers (acks), the event hub (64-event
+  backlog for the first subscriber).
+- `init()` calls `IstmoNotifications.install()`: the registry runs before
+  `UIApplicationMain`, so the delegate is set before launch finishes.
+  Apps with their own delegate forward `willPresent` / `didReceive`
+  (both return `false` for notifications without `istmo.id`).
+- Render port (`NotificationsRender.swift`) of `src/render.rs`: Apple
+  limits = 4 actions, native subtitle and inline reply, choices as
+  buttons, "More" past the limit, call actions added, progress / styles
+  as body lines, conversation layout only for communication
+  notifications.
+- Responses resolve from the request's `userInfo` only, so a cold start
+  answers exactly like a warm one: `istmo.id`, `istmo.ud`, `istmo.url`,
+  `istmo.p` (foreground bits), `istmo.k` (key map: per key the action id,
+  choice, URL, background flag, snooze delay, simulated input; plus the
+  wire bytes of the overflow actions with icons stripped), `istmo.s`
+  (snoozed copy). Published with the generated `NotificationResponse`
+  codec; a `DeepLink` only for `Open` / `Button` with a URL.
+- `launched_app` = no `UIApplication.didBecomeActiveNotification` seen
+  yet in this process (to verify on device).
+- Background actions hold the completion handler until `complete(ack)`
+  or 25 s. Snooze re-adds the delivered content with a time-interval
+  trigger from the delegate (no Rust involved), then `Snoozed`.
+- Silent updates: no sound, `.passive` (15+), foreground bits = list
+  only (no banner while open). Alerting updates and `append_message` go
+  out at once.
+- Categories: replace-all, so the existing set (the app's own and earlier
+  processes') is read at install and kept; ids `istmo.c.<fnv1a64>` of the
+  buttons + lock-screen option; at most 128 of ours (oldest dropped).
+  Every notification gets a category with `customDismissAction`
+  (dismissals). Lock screen: `Public` shows title / subtitle when previews
+  are hidden; `HideContent` / `Hidden` use an empty placeholder.
+- Scheduling (`NotificationsSchedule.swift`): every entry in
+  `<Application Support>/istmo-notifications/schedule.bin` (format byte 1
+  + wire `Vec<(Notification, Trigger, i64 anchor)>`), soonest 60 requests
+  armed. `After` = interval, `At` = UTC calendar date, `Every` = repeating
+  interval, `Calendar` = one repeating calendar trigger per weekday
+  (`<id>#w<n>`) in the rule's zone. `until_ms` enforced at top-up only.
+  Top-up at install, foreground, `willPresent`, `didReceive`, and after
+  each change; finished one-shots leave the store. A trigger with no
+  next fire is rejected (`Invalid { field: "trigger", problem:
+  OutOfRange }`); a past `At` is shown at once. `MissedPolicy` has
+  nothing to do on Apple (the system delivers while the app is off).
+- Attachments: picture, else icon; bytes or a copy of the file written
+  to `tmp/istmo-notifications/<uuid>.<ext>` per post (the system moves
+  attachment files). `Named` images are not attachments.
+- Communication (iOS 15+, gate: `INSendMessageIntent` in
+  `NSUserActivityTypes`): `INSendMessageIntent` with `INPerson`s
+  (`INImage` from the avatar bytes), incoming `INInteraction` donated
+  (awaited), `content.updating(from:)`; on failure the conversation
+  falls back to body lines. Calls stay simulated (no `INStartCallIntent`).
+- Static channels: `istmo_notification_channels.bin` in the bundle (wire
+  `Vec<ChannelSpec>`), read at install when present.
+- Badge never set; action icons not mapped (no wire feature for them).
+- `Coalescer.swift` mirrors `src/coalesce.rs` including the debt floor
+  (`tokens >= -burst * 1000` after `Alert` / `Finish` / `shown`) from the
+  core review.
+
+### macOS (`src/desktop/macos.rs`, `src/desktop/apple_map.rs`)
+
+- Deps (macOS only): objc2 0.6, block2 0.6, objc2-foundation /
+  objc2-app-kit / objc2-user-notifications / objc2-intents 0.3. The
+  `UNNotificationContentProviding` conformance of `INSendMessageIntent`
+  is not declared by objc2-intents (it does not depend on
+  user-notifications), so `contentByUpdatingWithProvider:error:` is sent
+  with `msg_send!`.
+- Bundle check first (`NSBundle.mainBundle`: path ends in `.app`, bundle
+  id present), else `NotBundled` (warn once): calling
+  `currentNotificationCenter` unbundled throws inside the framework.
+- Host contract: the host keeps scheduling (`WhileRunning`), timeouts,
+  the delivered table, coalescing; the backend shows / replaces
+  (`ShowMode::Replace { alert: false }` = passive, no sound, foreground
+  list only), removes, lists delivered (`lists_delivered = true`), reads
+  and requests permission, opens System Settings
+  (`x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=<bundle id>`).
+  Deviation from section 2: macOS scheduling is in-process, not native
+  (native triggers would need a scheduling hook in the `Backend`
+  contract; left for later).
+- Report: 10 actions, subtitle and inline reply native, messaging /
+  avatar native only with communication set up (macOS 12+), silent update
+  and lock screen simulated, `Rate::APPLE`.
+- Completion handlers are waited for on the calling worker (5 s; the
+  permission prompt 300 s); they run on the framework's queue, never the
+  main thread. The delegate calls its completion handler at once (macOS
+  does not suspend apps), so `complete(ack)` releases nothing.
+- Activation: dismiss action → `dismissed(User)`; default action → key
+  `None`; otherwise the action identifier is the rendered key; text from
+  `UNTextInputNotificationResponse`; `carried` = user data and URL from
+  `userInfo`. `launched_app` = `didFinishLaunching` carried
+  `NSApplicationLaunchUserNotificationKey` or a non-default launch, taken
+  by the first response; missed when the host attaches after launch.
+- Attachments: hard link (else copy) of the host's cached file into
+  `$TMPDIR/istmo-notifications` per post, so the framework's move never
+  touches the host cache.
+- unsafe only in `macos.rs` (`#[allow(unsafe_code)]` with reason on the
+  module): the delegate class, `setUserInfo`, attachment creation, the
+  Intents initialisers, completion-handler pointers, the
+  `Send` impl of the category set; one op per block, `SAFETY:` on each.
+- Selectors newer than 10.15 are gated: interruption level, relevance,
+  time-sensitive / direct-message settings (12+), filter criteria (13+).
+
+### Contract with istmo-build (branch `notif-build`)
+
+- iOS `Info.plist` key `IstmoNotifications` = dict `{ TimeSensitive,
+  Communication, Critical: Bool, Sounds: { name: file name } }`. The iOS
+  backend reads it once: `Sound::Named(name)` -> `Sounds[name]` (copied
+  to the bundle root) -> `UNNotificationSound(named:)`, else a bundled
+  `<name>.caf|wav|aiff`, else the name as given; `Urgent` is time
+  sensitive only with `TimeSensitive`, `Critical` (level and
+  `defaultCritical` sound) only with `Critical`, each falling back one
+  step; communication notifications need `Communication` and
+  `INSendMessageIntent` in `NSUserActivityTypes` (istmo-build adds it and
+  `INStartCallIntent` plus the communication entitlement).
+- macOS: istmo-build passes the flags as rustc envs on the app crate
+  (`ISTMO_NOTIFICATION_APPLE`, `ISTMO_NOTIFICATION_SOUND_DIR`), which a
+  library cannot read; the macOS backend gates communication on
+  `INSendMessageIntent` in the running bundle's `NSUserActivityTypes`
+  and probes bundled sound files by extension. Packaging must write
+  those into the `.app`.
+- Static channels: desktop through `static_channels!()` +
+  `with_channels`; iOS reads `istmo_notification_channels.bin` (wire
+  `Vec<ChannelSpec>`) from the bundle when present (not written by
+  istmo-build yet: follow-up).
+
+### Open (Apple)
+
+- Every device fact: silent replace behaviour, `launched_app` on both,
+  communication avatars on local notifications, category registration
+  racing an immediate `add`, `until_ms` overshoot while the iOS app is
+  not running, 64-cap accounting with snoozes.
+- macOS native scheduling (needs a `Backend` hook); call style through
+  `INStartCallIntent`; action icons (`UNNotificationActionIcon`, iOS 15).

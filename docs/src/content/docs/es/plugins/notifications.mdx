@@ -358,6 +358,44 @@ la actividad de los toques vienen del manifest propio del plugin.
   completa en 14+); si no, es una notificación simple con los botones de
   la llamada.
 
+### Apple
+
+**macOS necesita una app empaquetada.** Las notificaciones solo
+funcionan si el ejecutable corre desde `<Nombre>.app/Contents/MacOS/`
+con un `CFBundleIdentifier` en el `Info.plist` del bundle; cualquier otra
+cosa (`cargo run`, un binario suelto) responde
+`NotificationError::NotBundled` y lo registra una vez. Empaqueta y firma
+la app (la firma ad hoc basta mientras desarrollas) y llama a
+`DesktopNotifications::attach(&runtime)` antes del bucle de eventos para
+no perder el toque que abrió la app. En macOS la programación corre en el
+proceso, como en los otros escritorios.
+
+**iOS no necesita código.** El registro de plugins generado construye
+`NotificationsBackendImpl`, que instala el delegate de
+`UNUserNotificationCenter` antes de que termine el arranque. Una app con
+su propio delegate reenvía ambos callbacks:
+
+```swift
+if !IstmoNotifications.willPresent(notification, completion: done) { done([.banner, .list]) }
+if !IstmoNotifications.didReceive(response, completion: done) { done() }
+```
+
+iOS guarda 64 solicitudes pendientes por app; el plugin guarda todas las
+notificaciones programadas y arma las 60 más próximas, y repone al
+arrancar, al volver a primer plano y cuando llega una notificación. Una
+regla de calendario con varios días de la semana ocupa una solicitud por
+día.
+
+**Entitlements** (desde `[app.notifications] apple`):
+`time_sensitive` = `com.apple.developer.usernotifications.time-sensitive`;
+`critical` = `com.apple.developer.usernotifications.critical-alerts`
+(Apple lo concede a pedido); `communication` =
+`com.apple.developer.usernotifications.communication` más
+`INSendMessageIntent` en `NSUserActivityTypes`, que convierte las
+conversaciones en notificaciones de comunicación con el avatar del
+remitente (iOS 15, macOS 12). Sin ellos los niveles bajan y las
+conversaciones se muestran como líneas del cuerpo.
+
 ### Estado
 
 El núcleo en Rust y el host de escritorio están listos; los backends de
