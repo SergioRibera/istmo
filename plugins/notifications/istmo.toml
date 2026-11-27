@@ -3,6 +3,9 @@ id = "istmo.notifications"
 client_type = "::istmo_notifications::NotificationsClient"
 android_package = "dev.istmo.plugins.notifications"
 default_deployment = "local"
+# Both shipped backends register through the generated registry. iOS:
+# `NotificationsBackendImpl()` installs the `UNUserNotificationCenter`
+# delegate before launch finishes.
 auto_register = true
 # Context-bound: built once per process with the application context, so
 # it also serves apps hosted by a `NativeActivity`; the permission prompt
