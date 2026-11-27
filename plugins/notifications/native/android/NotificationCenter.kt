@@ -521,7 +521,14 @@ internal object NotificationCenter {
         synchronized(scheduleLock) {
             val engine = ScheduleEngine(schedule.load())
             val next = engine.add(normalize(n), trigger, System.currentTimeMillis())
-                ?: error(NotificationError.Invalid(InvalidField("trigger", Problem.OutOfRange)))
+                ?: error(
+                    NotificationError.Invalid(
+                        InvalidField(
+                            if (trigger is Trigger.Calendar && trigger.value.untilMs != null) "trigger.until_ms" else "trigger",
+                            Problem.OutOfRange,
+                        ),
+                    ),
+                )
             val exact = saveAndArm(engine)
             return ScheduledInfo(exact, next)
         }

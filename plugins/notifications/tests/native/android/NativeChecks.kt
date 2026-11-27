@@ -150,6 +150,26 @@ private fun coalescer() {
         eq("floor queued", c.offer("dl", 1, Urgency.REGULAR, 0), Admit.Queued)
         eq("floor due", c.nextDue(), 1_250L)
     }
+    run {
+        val c = Coalescer<Int>(2, 2, 0)
+        for (v in 0 until 100) {
+            eq("floor2 alert $v", c.offer("a", v, Urgency.ALERT, 0), Admit.Now(v))
+            c.shown("a", 0)
+        }
+        eq("floor2 queued", c.offer("a", 7, Urgency.REGULAR, 0), Admit.Queued)
+        eq("floor2 due", c.nextDue(), 1_500L)
+        eq("floor2 poll", c.poll(1_500), listOf("a" to 7))
+    }
+    run {
+        val c = Coalescer<Int>(10, 10, 0)
+        for (v in 0 until 10) eq("rate $v", c.offer("a", v, Urgency.REGULAR, 0), Admit.Now(v))
+        eq("rate queued", c.offer("a", 10, Urgency.REGULAR, 0), Admit.Queued)
+        c.setRate(1, 1, 0)
+        eq("rate set", c.perSecond to c.burst, 1 to 1)
+        eq("rate kept", c.queued(), 1)
+        eq("rate due", c.nextDue(), 1_000L)
+        eq("rate poll", c.poll(1_000), listOf("a" to 10))
+    }
     println("coalescer cases: done")
 }
 

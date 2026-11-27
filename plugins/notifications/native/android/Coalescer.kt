@@ -24,8 +24,10 @@ class Coalescer<T>(perSecond: Int, burst: Int, nowMs: Long) {
         object Dropped : Admit<Nothing>()
     }
 
-    val perSecond: Int = if (perSecond <= 0) 1 else perSecond
-    val burst: Int = if (burst <= 0) 1 else burst
+    var perSecond: Int = if (perSecond <= 0) 1 else perSecond
+        private set
+    var burst: Int = if (burst <= 0) 1 else burst
+        private set
 
     private var tokens: Long = this.burst.toLong() * TOKEN
     private var refilledMs: Long = nowMs
@@ -56,6 +58,22 @@ class Coalescer<T>(perSecond: Int, burst: Int, nowMs: Long) {
         val item = pending.remove(id)
         order.remove(id)
         return item
+    }
+
+    /**
+     * Switches to [perSecond] / [burst] at [nowMs], keeping what is queued:
+     * the bucket refills at the old rate up to [nowMs], then is clamped to
+     * the new burst (debt included).
+     */
+    fun setRate(perSecond: Int, burst: Int, nowMs: Long) {
+        val p = if (perSecond <= 0) 1 else perSecond
+        val b = if (burst <= 0) 1 else burst
+        if (p == this.perSecond && b == this.burst) return
+        refill(nowMs)
+        this.perSecond = p
+        this.burst = b
+        val full = b.toLong() * TOKEN
+        tokens = tokens.coerceIn(-full, full)
     }
 
     /** An update for [id] at [nowMs]. */
@@ -131,6 +149,8 @@ class Coalescer<T>(perSecond: Int, burst: Int, nowMs: Long) {
     }
 
     fun queued(): Int = order.size
+
+    fun dismissedLen(): Int = dismissed.size
 
     fun isDismissed(id: String): Boolean = id in dismissed
 

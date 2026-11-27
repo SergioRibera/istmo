@@ -1750,7 +1750,9 @@ change was made. The plugin keeps `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLET
 - **Coalescer** follows the core fixes: debt floored at `-burst * 1000`
   milli-tokens; only `Open` and `Button` responses publish a deep link;
   a trigger with no next fire is refused with `Invalid { field:
-  "trigger", problem: OutOfRange }` and not stored. Coalescer clock =
+  "trigger.until_ms" }` (a calendar rule past its `until`) or `"trigger"`,
+  problem `OutOfRange`, and not stored. `Coalescer.setRate` and
+  `dismissedLen` mirror the core; the Android backend keeps one rate. Coalescer clock =
   `elapsedRealtime`.
 - **Schedule**: `TIME_SET` / `TIMEZONE_CHANGED` recompute every future
   delivery from now (local-zone rules follow the new zone); entries
@@ -1772,8 +1774,8 @@ change was made. The plugin keeps `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLET
 - `plugins/notifications/tests/native/android/check.sh` (just
   `check-generated-native`, `native.yml` kotlin job):
   - JVM: `CalendarRule.kt` against all 30 rows of
-    `tests/schedule_vectors.tsv`, the six `coalesce.rs` cases plus the
-    debt floor, trigger timing, missed deliveries (late within the hour,
+    `tests/schedule_vectors.tsv`, the eight `coalesce.rs` cases (debt floor and
+    `set_rate` included) plus a 100-alert floor case, trigger timing, missed deliveries (late within the hour,
     `Drop`, `DeliverLate`, a daily reminder missed three days), store
     round trip;
   - Android: every `native/android/*.kt` with `-Werror -no-jdk` against
