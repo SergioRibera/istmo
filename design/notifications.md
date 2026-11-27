@@ -1498,3 +1498,128 @@ imports it instead.
   `tests/web.rs`.
 - Not done: a real browser run (Chrome desktop and Android, Firefox,
   Safari).
+
+## Implementation notes (Windows, as built)
+
+Branch `notif-windows`, step 3 (Windows). `src/desktop/windows.rs` +
+`desktop/windows/{args,ident,toast_xml,notifier,activator,registration,sys}.rs`.
+`args`, `ident`, `toast_xml` and the capability report are pure and
+compile on every host under `cfg(test)` (their tests run on Linux);
+the rest is `cfg(windows)`.
+
+### Shape
+
+- Tag = notification id (ids are <= 64 chars of `[A-Za-z0-9._:-]`, the
+  tag / group limit since 15063: no hashing), group = `istmo` for every
+  toast. Removal, history and update use (tag, group, AUMID).
+- Arguments (`launch`, button `arguments`, header `arguments`):
+  `istmo1&i=<id>[&k=<key>][&u=<user data>][&l=<url>][&s=<fire ms>]`,
+  percent-encoded `%&=` and controls. They carry user data and URL for
+  activations in a later process (`Carried`).
+- Toast XML: title / subtitle / body as the three texts (subtitle is
+  native), status text as attribution when there is no bar, icon as
+  `appLogoOverride` (circle crop for the latest message sender's or the
+  caller's avatar), picture as `hero`, latest message image inline,
+  `<progress>`; inputs (text with `placeHolderContent`; selection whose
+  item ids are the choice texts, so the activation hands back the text)
+  then buttons with `hint-inputId`, `activationType` foreground /
+  background, `imageUri`, `hint-buttonStyle="Critical"` for destructive
+  actions on 22000+; `header` for groups; `displayTimestamp`.
+- Scenarios: call incoming / screening -> `incomingCall`; category
+  alarm -> `alarm`, reminder or `ongoing` -> `reminder` (both only with
+  a button, else Windows ignores them); Urgent / Critical ->
+  `urgent` on 22546+; High and above -> `duration="long"` and priority
+  High. Passive or `Sound::Silent` -> `<audio silent>`; `ms-winsoundevent:`
+  names pass through; other names play the default sound.
+- Shown toasts bind every top-level text and the bar (`{title}`,
+  `{progressValue}` ...), values in `NotificationData`. A silent update
+  (`Replace { alert: false }`) whose XML hash is unchanged is
+  `UpdateWithTagAndGroup` with the next sequence number; otherwise (or
+  `NotificationNotFound`) a full replace with `SuppressPopup`.
+- 5 KB XML budget: `build_fitting` drops carried user data from buttons,
+  then from the body, then URLs; then `Invalid(notification, TooLarge)`.
+- `timeout_ms` -> `ExpirationTime` (`timeouts: true`); `lists_delivered`
+  from `GetHistoryWithId` (title / body from data values, else the XML
+  texts; group from the header id; no delivery time).
+- Dismissed: `UserCanceled` -> `dismissed(User)`; `TimedOut` (moved to
+  the notification center) and `ApplicationHidden` ignored. Failed ->
+  `failed`. The in-process `Activated` event is never used: the COM
+  activator delivers every activation, so nothing is reported twice.
+
+### Scheduled toasts (core hook)
+
+- Additive core change: `Backend::arm(&[Upcoming])` (default no-op),
+  `Upcoming { notification, rendered, fire_ms }`, `ARM_WINDOW_MS` (14
+  days) and `ARM_CAP` (50). The host calls it from `persist` after every
+  schedule write and at the end of `load`, only when it owns the store.
+- The backend diffs against `GetScheduledToastNotifications` by a
+  16-char id (FNV-1a of tag, fire time and XML; 16 is the platform's
+  limit) and only adds / removes what changed. Scheduled toasts carry no
+  data (values in place) and only `File` images (cached bytes may be
+  gone at fire time).
+- The host still delivers each occurrence itself. On `ShowMode::New` the
+  backend removes a pending scheduled toast of that tag due within 60 s,
+  and if the history holds one of that tag whose arguments carry a fire
+  time within the last 24 h, the host's toast replaces it with
+  `SuppressPopup` (no double popup, now with images and data). Missed
+  deliveries at the next start take the same path.
+
+### Activation and registration
+
+- `DesktopNotifications::install(&WindowsApp) -> Installation`, once per
+  process (`OnceLock`; later calls return the first outcome): refuses
+  elevated tokens (`Elevated`) and builds < 17763 (`Unsupported(Show)`,
+  build from `HKLM\...\CurrentVersion\CurrentBuildNumber`); packaged =
+  `Package::Current()` ok, AUMID from `AppInfo::Current()` (else the
+  given one), nothing written; unpackaged writes the two keys every
+  start and sets the process AUMID. Both register the class object.
+  CLSID = UUID v5 (hand-written SHA-1, RFC vectors in tests) of the AUMID
+  in a fixed plugin namespace.
+- `windows_app!()` (app-side macro, reads the app crate's env):
+  `ISTMO_APP_BUNDLE_ID` else `CARGO_PKG_NAME`, `ISTMO_APP_NAME`,
+  `ISTMO_NOTIFICATION_ACCENT` (icon background). `with_icon_png(bytes)`
+  writes `<data dir>/istmo-notifications/app-icon-<fnv>.png` for `IconUri`.
+- COM: thread `istmo-notifications-com` enters the MTA and stays there
+  (parks); `CoRegisterClassObject(CLSCTX_LOCAL_SERVER,
+  REGCLS_MULTIPLEUSE)`. `Activate` copies the args and inputs and
+  returns at once. Activations before the backend starts are queued (64)
+  and replayed by a thread of their own after `start` returns (no sink
+  call inside the backend start, per the core review). The first
+  activation of a COM-launched process (`-istmo-notification` in argv)
+  has `launched_app`. `launched_by_notification()` / `app_args()` for the
+  app; `FreeConsole` when COM-launched.
+- Without `install`, the backend start fails with a `Platform` error
+  naming `install` (the host then reports no backend).
+- `complete(ack)` does nothing: COM keeps no process alive for us.
+
+### Corrections to section 1
+
+- `urgent`: Learn's app-notification content page requires build 22546;
+  the Windows App SDK `AppNotificationScenario` page says 19041. The
+  backend uses 22546.
+- `reminder` is silently ignored without a button that activates in the
+  background; `alarm` without any button.
+- `ScheduledToastNotification.Id` is limited to 16 characters.
+- Tag and group: 64 characters since 15063 (16 before).
+- `ToastDismissalReason::TimedOut` means the popup went to the
+  notification center, not that the toast left it.
+- The notification center keeps at most 20 toasts per app
+  (`max_active = 20`).
+- `ToastNotificationHistory` is not agile (no `Send`) in windows-rs; it
+  is fetched per call.
+
+### Not done / open
+
+- Snooze stays the host's simulation (re-armed as a scheduled toast, so
+  it survives closing the app) instead of the system snooze action.
+- No forwarding when COM starts a second instance of a single-instance
+  app during the primary's startup race.
+- Sound files from `[app.notifications] sounds`: packaged `ms-appx`
+  paths are not mapped yet.
+- Delivered list has no delivery time.
+- Verification: Linux unit tests (XML, arguments, ids, SHA-1/UUID,
+  report); Windows cross clippy (fenix 1.100, x86_64-pc-windows-msvc,
+  `--all-targets --all-features -D warnings`); the lib tests built with
+  rust-lld + xwin and run under Wine 11.6 (76 pass; no WinRT toast call
+  runs there). Nothing ran on real Windows: `examples/notif_win_probe.rs`
+  (`~/win_probe/notifications/`) is the checklist.

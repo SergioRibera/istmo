@@ -284,6 +284,33 @@ worker and Blob URLs on the page, revoked with their last notification.
 A page loaded later rebuilds its table from the notifications still on
 screen, without their embedded images.
 
+### Windows
+
+Call `DesktopNotifications::install(&windows_app!())` first thing in
+`main`, before the runtime starts: when a toast started the app, COM
+waits at most 60 s for the activator. `windows_app!()` reads `[app] id`
+(the AUMID, at most 128 characters), `[app] name` and
+`[app.notifications] accent`; add the icon with `.with_icon_png(..)`.
+
+- Unpackaged apps are registered in the registry only (no Start-menu
+  shortcut): `HKCU\Software\Classes\AppUserModelId\<AUMID>` and the
+  activator's `HKCU\Software\Classes\CLSID\{CLSID}\LocalServer32` =
+  `"<exe>" -istmo-notification`, rewritten on every start. Packaged
+  (MSIX) apps declare `com:ExeServer` (CLSID from
+  `WindowsApp::activator_clsid`, `Arguments="-istmo-notification"`) and
+  `desktop:ToastNotificationActivation` in the manifest.
+- A process COM starts has `-istmo-notification -Embedding` on its
+  command line: `launched_by_notification()` tells, `app_args()` strips
+  them. Its response carries `launched_app = true`.
+- `DesktopNotifications::unregister(&app)` removes toasts, scheduled
+  toasts and the keys (for uninstallers).
+- Limits: no elevated processes (`Elevated`), build 17763 or later,
+  local image files only, only `ms-winsoundevent:` sounds for unpackaged
+  apps, 5 buttons and 5 inputs, 5 KB of toast XML. Progress updates are
+  data-binding updates (no popup). Deliveries within the next 14 days
+  (at most 50) are also scheduled with Windows, so they appear while the
+  app is closed.
+
 ### Status
 
 The Rust core and the desktop host are in place; the Android, Apple,

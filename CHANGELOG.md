@@ -59,6 +59,14 @@
   taps queued by the worker in IndexedDB and drained by the page.
   `now_ms` reads `Date.now()` on `wasm32` (`SystemTime::now` panics
   there).
+
+- `istmo-notifications` Windows backend: toasts (data-binding progress
+  updates, `SuppressPopup` silent replaces, expiration, history, Dismissed
+  and Failed events), scheduled toasts for deliveries in the next 14 days,
+  a COM activator for taps and buttons on a closed app, registry-only
+  registration (`DesktopNotifications::install` / `unregister`,
+  `windows_app!()`), elevated processes refused. New `Backend::arm` hook
+  (default no-op) hands backends the upcoming deliveries.
 - `istmo-autostart` plugin (`istmo.autostart`, desktop only): start the
   app at login from a user action (`SMAppService.mainApp` on macOS 13+,
   a LaunchAgent before that or for bare binaries, MSIX `StartupTask` or

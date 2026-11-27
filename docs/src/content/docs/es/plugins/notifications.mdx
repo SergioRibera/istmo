@@ -292,6 +292,33 @@ Blob en la página, revocadas con su última notificación. Una página
 cargada después reconstruye su tabla a partir de las notificaciones que
 siguen en pantalla, sin sus imágenes incrustadas.
 
+### Windows
+
+Llama a `DesktopNotifications::install(&windows_app!())` al principio de
+`main`, antes de arrancar el runtime: si un toast arrancó la app, COM
+espera como mucho 60 s al activador. `windows_app!()` lee `[app] id` (el
+AUMID, como mucho 128 caracteres), `[app] name` y
+`[app.notifications] accent`; el icono se añade con `.with_icon_png(..)`.
+
+- Las apps sin paquete se registran solo en el registro (sin acceso
+  directo en el menú Inicio): `HKCU\Software\Classes\AppUserModelId\<AUMID>`
+  y el `HKCU\Software\Classes\CLSID\{CLSID}\LocalServer32` del activador
+  = `"<exe>" -istmo-notification`, reescritos en cada arranque. Las apps
+  empaquetadas (MSIX) declaran `com:ExeServer` (CLSID de
+  `WindowsApp::activator_clsid`, `Arguments="-istmo-notification"`) y
+  `desktop:ToastNotificationActivation` en el manifiesto.
+- Un proceso que arranca COM lleva `-istmo-notification -Embedding` en
+  la línea de comandos: `launched_by_notification()` lo dice,
+  `app_args()` los quita. Su respuesta trae `launched_app = true`.
+- `DesktopNotifications::unregister(&app)` borra los toasts, los toasts
+  programados y las claves (para desinstaladores).
+- Límites: sin procesos elevados (`Elevated`), build 17763 o posterior,
+  solo imágenes en archivos locales, solo sonidos `ms-winsoundevent:` en
+  apps sin paquete, 5 botones y 5 entradas, 5 KB de XML por toast. Las
+  actualizaciones de progreso usan data binding (sin volver a saltar).
+  Las entregas de los próximos 14 días (como mucho 50) también se
+  programan en Windows, así aparecen con la app cerrada.
+
 ### Estado
 
 El núcleo en Rust y el host de escritorio están listos; los backends de

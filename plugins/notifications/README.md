@@ -158,6 +158,59 @@ Taps are queued in IndexedDB by the worker and drained by the page, so
 each reaches one tab, also when it opened the app. Scheduled
 notifications are kept in IndexedDB and fire while the page is open.
 
+## Windows
+
+Toasts need a registration and, for taps on a closed app, a COM
+activator. Call `install` first thing in `main`, before the runtime
+starts (COM waits at most 60 s for the activator when a toast started
+the process):
+
+```rust,ignore
+fn main() {
+    #[cfg(windows)]
+    let _ = istmo_notifications::DesktopNotifications::install(
+        &istmo_notifications::windows_app!().with_icon_png(istmo::app_icon!().unwrap_or_default()),
+    );
+    // DocumentsPublisher, runtime, hosts ...
+}
+```
+
+- `windows_app!()` takes `[app] id` as the AUMID (at most 128
+  characters, no spaces), `[app] name` as the display name and
+  `[app.notifications] accent` as the icon background.
+- Unpackaged apps: `install` writes
+  `HKCU\Software\Classes\AppUserModelId\<AUMID>` (`DisplayName`,
+  `IconUri`, `IconBackgroundColor`, `CustomActivator`) and
+  `HKCU\Software\Classes\CLSID\{CLSID}\LocalServer32` =
+  `"<exe>" -istmo-notification` on every start (the exe may move), sets
+  the process AUMID, and registers the activator. No Start-menu shortcut.
+  The CLSID is a UUID v5 of the AUMID (`WindowsApp::activator_clsid`).
+- Packaged (MSIX) apps write nothing: the manifest declares
+  `com:ExeServer` with that CLSID and `Arguments="-istmo-notification"`,
+  plus `desktop:ToastNotificationActivation`.
+- When COM starts the app for a toast, the command line carries
+  `-istmo-notification -Embedding`: `launched_by_notification()` says so,
+  `app_args()` gives the arguments without them. The response arrives on
+  the responses lane with `launched_app = true` once the host is attached.
+  A console-subsystem exe detaches from the console COM gave it.
+- If another instance of a single-instance app is still starting when
+  COM launches a second one, the activation reaches the second; forward
+  it yourself (open item, see the design notes).
+- `DesktopNotifications::unregister(&app)` removes toasts, scheduled
+  toasts and both registry keys (uninstallers).
+- Limits: elevated processes are refused (`Elevated`), builds before
+  17763 (1809) answer `Unsupported`. Images are local files only (bytes
+  are written to the cache). Sounds: only `ms-winsoundevent:` names
+  (`Sound::Named("ms-winsoundevent:Notification.Reminder")`); bundled
+  sounds play the default one. At most 5 buttons and 5 inputs; the
+  toast XML at most 5 KB (carried user data is dropped from buttons
+  first). `urgent` needs build 22546; alarms and reminders need a
+  button.
+- Progress updates use data binding (`ToastNotifier.Update`): no popup,
+  the toast keeps its place. Scheduled deliveries within 14 days (at
+  most 50) are also armed as scheduled toasts, so they appear while the
+  app is closed.
+
 ## Status
 
 The Rust core (types, validation, render fallbacks, coalescing,
