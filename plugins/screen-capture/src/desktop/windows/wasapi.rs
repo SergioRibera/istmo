@@ -18,6 +18,11 @@
 //! stays continuous, as a PipeWire monitor's does. `wall_us` follows the
 //! sample count (`audio_clock`); `pts_ns` is the engine's QPC position of
 //! the chunk, in ns (the same clock as WGC / DXGI `pts_ns`).
+//!
+//! `System` follows the default render endpoint: when the person picks
+//! another output, or the endpoint goes away (`AUDCLNT_E_DEVICE_INVALIDATED`),
+//! the stream reopens on the new default at the same rate and channels,
+//! and the next chunk carries `discontinuity`.
 
 #![allow(
     unsafe_code,
@@ -30,13 +35,14 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Media::Audio::{
-    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDIOCLIENT_ACTIVATION_PARAMS,
-    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, ActivateAudioInterfaceAsync,
-    IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient,
-    IMMDeviceEnumerator, MMDeviceEnumerator, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
+    AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+    AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
+    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
+    ActivateAudioInterfaceAsync, IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient,
+    IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
     WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, eConsole, eRender,
 };
@@ -86,6 +92,11 @@ const GAP: Duration = Duration::from_millis(40);
 const SETUP_WAIT: Duration = Duration::from_secs(5);
 /// How long dropping a session waits for its thread.
 const JOIN_WAIT: Duration = Duration::from_secs(2);
+/// How often `System` loopback looks for a new default endpoint.
+const ENDPOINT_CHECK: Duration = Duration::from_millis(500);
+/// How long a lost endpoint may take to come back before the session
+/// fails.
+const REOPEN_WAIT: Duration = Duration::from_secs(5);
 /// Rate and channels when the source has no mix format (process
 /// loopback answers none).
 const DEFAULT_RATE: u32 = 48_000;
@@ -284,16 +295,42 @@ fn activate_process(pid: u32, include: bool) -> Result<IAudioClient, CaptureErro
         .map_err(|e| hr("IAudioClient", &e))
 }
 
-/// The default render endpoint's `IAudioClient` and its mix rate and
-/// channel count.
-fn activate_system() -> Result<(IAudioClient, Option<(u32, u8)>), CaptureError> {
+/// The default render endpoint.
+fn default_endpoint() -> Result<IMMDevice, CaptureError> {
     // SAFETY: COM is initialised on this thread.
     let enumerator: IMMDeviceEnumerator =
         unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
             .map_err(|e| hr("MMDeviceEnumerator", &e))?;
     // SAFETY: `enumerator` is live.
-    let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
-        .map_err(|e| hr("GetDefaultAudioEndpoint", &e))?;
+    unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+        .map_err(|e| hr("GetDefaultAudioEndpoint", &e))
+}
+
+/// An endpoint's id string.
+fn endpoint_id(device: &IMMDevice) -> Option<String> {
+    // SAFETY: `device` is live; the string is freed below.
+    let id = unsafe { device.GetId() }.ok()?;
+    // SAFETY: GetId returned a NUL-terminated string.
+    let text = unsafe { id.to_string() }.ok();
+    // SAFETY: allocated by the endpoint with CoTaskMemAlloc, freed once.
+    unsafe { CoTaskMemFree(Some(id.0.cast_const().cast())) };
+    text
+}
+
+/// The id of the default render endpoint now.
+fn default_endpoint_id() -> Option<String> {
+    default_endpoint().ok().as_ref().and_then(endpoint_id)
+}
+
+/// An activated client, its mix rate and channel count (when the
+/// source has one), and its endpoint id.
+type Client = (IAudioClient, Option<(u32, u8)>, Option<String>);
+
+/// The default render endpoint's `IAudioClient`, its mix rate and
+/// channel count, and its id.
+fn activate_system() -> Result<Client, CaptureError> {
+    let device = default_endpoint()?;
+    let id = endpoint_id(&device);
     // SAFETY: `device` is live; no activation parameters.
     let client: IAudioClient =
         unsafe { device.Activate(CLSCTX_ALL, None) }.map_err(|e| hr("IMMDevice.Activate", &e))?;
@@ -313,7 +350,7 @@ fn activate_system() -> Result<(IAudioClient, Option<(u32, u8)>), CaptureError> 
                 u8::try_from(header.nChannels).unwrap_or(DEFAULT_CHANNELS),
             )
         });
-    Ok((client, mix))
+    Ok((client, mix, id))
 }
 
 /// The extensible format for `rate` × `channels` of `format`.
@@ -351,6 +388,8 @@ fn wave_format(rate: u32, channels: u8, format: SampleFormat) -> WAVEFORMATEXTEN
 }
 
 struct Stream {
+    /// The endpoint `System` loopback runs on.
+    endpoint: Option<String>,
     client: IAudioClient,
     capture: IAudioCaptureClient,
     negotiated: AudioNegotiated,
@@ -358,9 +397,9 @@ struct Stream {
 }
 
 fn open_stream(config: &AudioConfig, target: Target) -> Result<Stream, CaptureError> {
-    let (client, mix) = match target {
+    let (client, mix, endpoint) = match target {
         Target::System => activate_system()?,
-        Target::Process { pid, include } => (activate_process(pid, include)?, None),
+        Target::Process { pid, include } => (activate_process(pid, include)?, None, None),
     };
     let (mix_rate, mix_channels) = mix.unwrap_or((DEFAULT_RATE, DEFAULT_CHANNELS));
     let rate = config.rate.unwrap_or(mix_rate);
@@ -387,6 +426,7 @@ fn open_stream(config: &AudioConfig, target: Target) -> Result<Stream, CaptureEr
     // SAFETY: as above.
     unsafe { client.Start() }.map_err(|e| hr("IAudioClient.Start", &e))?;
     Ok(Stream {
+        endpoint,
         client,
         capture,
         negotiated: AudioNegotiated {
@@ -451,12 +491,38 @@ fn deliver(
     out.deliver(meta, pcm)
 }
 
+/// Why reading packets stopped.
+enum DrainError {
+    /// The endpoint went away: reopen on the default one.
+    Invalidated,
+    Failed(CaptureError),
+}
+
+/// A failed WASAPI call while reading packets.
+fn drain_error(step: &str, err: &windows_core::Error) -> DrainError {
+    if invalidated(err.code()) {
+        DrainError::Invalidated
+    } else {
+        DrainError::Failed(hr(step, err))
+    }
+}
+
+fn invalidated(code: windows_core::HRESULT) -> bool {
+    code == AUDCLNT_E_DEVICE_INVALIDATED
+}
+
 /// Read every queued packet into `out`. `false` once the sink is gone.
-fn drain(stream: &Stream, out: &AudioOut, timeline: &mut Timeline) -> Result<bool, CaptureError> {
+/// `discontinuity` marks the first chunk (after a reopen).
+fn drain(
+    stream: &Stream,
+    out: &AudioOut,
+    timeline: &mut Timeline,
+    discontinuity: &mut bool,
+) -> Result<bool, DrainError> {
     loop {
         // SAFETY: `capture` is the started client's service.
         let next = unsafe { stream.capture.GetNextPacketSize() }
-            .map_err(|e| hr("GetNextPacketSize", &e))?;
+            .map_err(|e| drain_error("GetNextPacketSize", &e))?;
         if next == 0 {
             return Ok(true);
         }
@@ -475,7 +541,7 @@ fn drain(stream: &Stream, out: &AudioOut, timeline: &mut Timeline) -> Result<boo
                 Some(&raw mut qpc),
             )
         }
-        .map_err(|e| hr("GetBuffer", &e))?;
+        .map_err(|e| drain_error("GetBuffer", &e))?;
         let len = usize::try_from(frames).unwrap_or(0) * stream.block;
         let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0.cast_unsigned() != 0 || data.is_null();
         let pcm = if silent {
@@ -486,8 +552,10 @@ fn drain(stream: &Stream, out: &AudioOut, timeline: &mut Timeline) -> Result<boo
             unsafe { std::slice::from_raw_parts(data, len) }.to_vec()
         };
         // SAFETY: releases the packet GetBuffer handed out.
-        unsafe { stream.capture.ReleaseBuffer(frames) }.map_err(|e| hr("ReleaseBuffer", &e))?;
-        let discontinuity = flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0.cast_unsigned() != 0;
+        unsafe { stream.capture.ReleaseBuffer(frames) }
+            .map_err(|e| drain_error("ReleaseBuffer", &e))?;
+        let discontinuity = std::mem::take(discontinuity)
+            || flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0.cast_unsigned() != 0;
         let pts = if qpc == 0 {
             os::qpc_now_ns()
         } else {
@@ -508,7 +576,43 @@ fn drain(stream: &Stream, out: &AudioOut, timeline: &mut Timeline) -> Result<boo
     }
 }
 
-fn run(stream: &Stream, out: &AudioOut, stop: &AtomicBool) {
+/// Reopen the stream on the (new) default endpoint, at the rate and
+/// channels already negotiated, retrying for [`REOPEN_WAIT`].
+fn reopen(
+    config: &AudioConfig,
+    target: Target,
+    negotiated: &AudioNegotiated,
+    stop: &AtomicBool,
+) -> Result<Stream, CaptureError> {
+    let mut pinned = config.clone();
+    pinned.rate = Some(negotiated.rate);
+    pinned.channels = Some(negotiated.channels);
+    let deadline = Instant::now() + REOPEN_WAIT;
+    loop {
+        match open_stream(&pinned, target) {
+            Ok(stream) => return Ok(stream),
+            Err(err) if Instant::now() >= deadline || stop.load(Ordering::SeqCst) => {
+                return Err(err);
+            }
+            Err(_) => std::thread::sleep(ENDPOINT_CHECK),
+        }
+    }
+}
+
+/// Whether `System` loopback should move to another endpoint.
+fn endpoint_moved(current: Option<&str>, default: Option<&str>) -> bool {
+    matches!((current, default), (Some(current), Some(default)) if current != default)
+}
+
+fn run(
+    mut stream: Stream,
+    config: &AudioConfig,
+    target: Target,
+    out: &AudioOut,
+    stop: &AtomicBool,
+) {
+    let mut discontinuity = false;
+    let mut last_check = Instant::now();
     let mut timeline = Timeline {
         clock: SampleClock::default(),
         started: Instant::now(),
@@ -518,13 +622,34 @@ fn run(stream: &Stream, out: &AudioOut, stop: &AtomicBool) {
     };
     while !stop.load(Ordering::SeqCst) && !out.is_closed() {
         std::thread::sleep(POLL);
-        match drain(stream, out, &mut timeline) {
-            Ok(true) => {}
+        let mut lost = match drain(&stream, out, &mut timeline, &mut discontinuity) {
+            Ok(true) => false,
             Ok(false) => break,
-            Err(err) => {
+            Err(DrainError::Invalidated) => true,
+            Err(DrainError::Failed(err)) => {
                 out.fail(err);
                 break;
             }
+        };
+        if target == Target::System && last_check.elapsed() >= ENDPOINT_CHECK {
+            last_check = Instant::now();
+            lost |= endpoint_moved(stream.endpoint.as_deref(), default_endpoint_id().as_deref());
+        }
+        if lost {
+            // SAFETY: stops the old client before it is released.
+            let _stopped = unsafe { stream.client.Stop() };
+            match reopen(config, target, &stream.negotiated, stop) {
+                Ok(fresh) => {
+                    tracing::debug!("wasapi loopback moved to the default endpoint");
+                    stream = fresh;
+                    discontinuity = true;
+                }
+                Err(err) => {
+                    out.fail(err);
+                    return;
+                }
+            }
+            continue;
         }
         // Loopback is silent when nothing plays: no packets at all. Fill
         // the gap so the timeline (and the consumer's clock) keeps going.
@@ -538,7 +663,7 @@ fn run(stream: &Stream, out: &AudioOut, stop: &AtomicBool) {
                 pcm,
                 owed,
                 os::qpc_now_ns(),
-                false,
+                std::mem::take(&mut discontinuity),
             ) {
                 break;
             }
@@ -603,7 +728,7 @@ impl AudioBackend for Wasapi {
                     // The opener gave up waiting.
                     return;
                 }
-                run(&stream, &out, &flag);
+                run(stream, &config, target, &out, &flag);
             })
             .map_err(|e| error("spawn capture thread", e))?;
         let negotiated = match ready.recv_timeout(SETUP_WAIT) {
@@ -694,6 +819,17 @@ mod tests {
         };
         let owed = silent.owed();
         assert!((23_000..=26_000).contains(&owed), "{owed}");
+    }
+
+    #[test]
+    fn system_loopback_follows_the_default_endpoint() {
+        assert!(endpoint_moved(Some("a"), Some("b")));
+        assert!(!endpoint_moved(Some("a"), Some("a")));
+        // An unknown id (a failed query) is no reason to move.
+        assert!(!endpoint_moved(Some("a"), None));
+        assert!(!endpoint_moved(None, Some("b")));
+        assert!(invalidated(AUDCLNT_E_DEVICE_INVALIDATED));
+        assert!(!invalidated(windows::Win32::Foundation::E_FAIL));
     }
 
     #[test]
