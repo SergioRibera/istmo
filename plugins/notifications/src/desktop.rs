@@ -36,7 +36,7 @@ pub mod linux;
     unsafe_code,
     reason = "UserNotifications and Intents through objc2: the delegate class, user info, attachments, intents"
 )]
-mod macos;
+pub mod macos;
 mod timer;
 #[cfg(any(windows, test))]
 pub mod windows;

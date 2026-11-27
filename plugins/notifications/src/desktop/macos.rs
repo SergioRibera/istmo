@@ -11,28 +11,40 @@
 //! its private queue, never on the main thread. Nothing here waits for
 //! the main thread.
 //!
-//! Responses: the delegate (set when the backend starts; the app attaches
-//! the host before its event loop, so before launch finishes) hands every
-//! tap, button, reply and dismissal to the [`BackendSink`] and calls the
+//! Responses: the delegate (set when the backend starts) hands every tap,
+//! button, reply and dismissal to the [`BackendSink`] and calls the
 //! completion handler at once: macOS does not suspend the process, so a
 //! background action needs no held handler and `complete(ack)` releases
-//! nothing.
+//! nothing. The app must attach the host before `NSApplication::run`
+//! finishes launching: a tap that launched the app is delivered to the
+//! delegate set by then, and is lost otherwise (the backend warns when it
+//! starts late).
+//!
+//! The app's own `UNUserNotificationCenter` delegate:
+//!
+//! * set **before** the backend starts: kept, and everything that is not
+//!   this plugin's (no `istmo.id` in `userInfo`) is forwarded to it;
+//! * set **after**: it replaces this plugin's delegate, so it must hand
+//!   this plugin's callbacks over with [`forward_will_present`] and
+//!   [`forward_did_receive`] (both return `false` for notifications that
+//!   are not the plugin's, like the iOS `IstmoNotifications` helpers).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashSet, VecDeque};
+use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use block2::RcBlock;
+use block2::{DynBlock, RcBlock};
 use istmo_core::sync::lock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
-use objc2::{AnyThread, DefinedClass, define_class, msg_send};
+use objc2::{AnyThread, ClassType, DefinedClass, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplicationDidFinishLaunchingNotification, NSApplicationLaunchIsDefaultLaunchKey,
-    NSApplicationLaunchUserNotificationKey, NSWorkspace,
+    NSApplicationLaunchUserNotificationKey, NSRunningApplication, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSBundle, NSData, NSDictionary, NSError, NSNotification, NSNotificationCenter,
@@ -53,7 +65,7 @@ use objc2_user_notifications::{
     UNUserNotificationCenterDelegate,
 };
 
-use super::apple_map::{self, RawSettings, ResponseKind, SoundChoice, keys};
+use super::apple_map::{self, Entitlements, RawSettings, ResponseKind, SoundChoice, keys};
 use super::backend::{Activation, Backend, BackendInfo, BackendSink, Carried, ImageSlot, Shown};
 use crate::render::{self, Input, RenderLimits};
 use crate::{
@@ -63,17 +75,36 @@ use crate::{
 
 /// Longest wait for a completion handler.
 const WAIT: Duration = Duration::from_secs(5);
-/// Categories this backend keeps registered (oldest dropped first).
+/// Categories of this backend kept registered; past it the oldest one no
+/// delivered or pending notification uses is dropped.
 const MAX_CATEGORIES: usize = 128;
+/// How long a read of the registered categories stays trusted: past it
+/// the next show reads them again and registers the union when the app
+/// replaced them.
+const CATEGORIES_RECHECK: Duration = Duration::from_secs(2);
+/// How long a read authorization status stays trusted by `show`.
+const AUTHORIZATION_TTL: Duration = Duration::from_secs(2);
 /// Longest wait for the user to answer the permission prompt.
 const PROMPT_WAIT: Duration = Duration::from_secs(300);
 
 /// Logged once: the app is not bundled.
 static NOT_BUNDLED_LOGGED: AtomicBool = AtomicBool::new(false);
-/// The launch was a notification activation; the first response takes it.
-static LAUNCHED_BY_NOTIFICATION: AtomicBool = AtomicBool::new(false);
+/// Unix-epoch milliseconds of a launch a notification caused, `0` when
+/// none; the first response takes it ([`apple_map::launched_app`]).
+static LAUNCH_MARK: AtomicI64 = AtomicI64::new(0);
 /// Attachment copies, numbered per process.
 static ATTACHMENTS: AtomicU64 = AtomicU64::new(0);
+/// The plugin's delegate, leaked for the process (the center holds it
+/// weakly); null until the backend starts. Read by the forwarding API.
+static DELEGATE: AtomicPtr<Delegate> = AtomicPtr::new(std::ptr::null_mut());
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|since| i64::try_from(since.as_millis()).ok())
+        .unwrap_or(0)
+}
 
 /// Starts the macOS backend.
 pub(super) fn start(sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationError> {
@@ -91,23 +122,64 @@ pub(super) fn start(sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationE
     let os = NSProcessInfo::processInfo().operatingSystemVersion();
     let monterey = at_least(12, 0);
     let communication = monterey && lists_send_message(&bundle);
+    let entitlements = entitlements(&bundle);
 
     observe_launch();
+    if NSRunningApplication::currentApplication().isFinishedLaunching() {
+        tracing::warn!(
+            "notifications: the host attached after launch finished; a tap that launched the \
+             app is not reported (attach it before NSApplication::run)"
+        );
+    }
     let center = UNUserNotificationCenter::currentNotificationCenter();
-    let delegate = Delegate::new(sink);
+    // An app delegate set before this one keeps everything that is not
+    // the plugin's.
+    let previous = center
+        .delegate()
+        .filter(|previous| !previous.isKindOfClass(Delegate::class()));
+    let delegate = Delegate::new(sink, previous, at_least(11, 0));
     center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-    // The delegate property is weak: the delegate lives for the process.
-    std::mem::forget(delegate);
+    // The delegate property is weak: the delegate lives for the process,
+    // reachable from the forwarding API.
+    let old = DELEGATE.swap(Retained::into_raw(delegate), Ordering::AcqRel);
+    if !old.is_null() {
+        // A second start (a second host): the first delegate stays
+        // leaked, its sink keeps working for what it already showed.
+        tracing::debug!("notifications: macOS delegate replaced by a second host");
+    }
 
     Ok(Arc::new(Mac {
         os_version: format!("{}.{}", os.majorVersion, os.minorVersion),
         bundle_id,
         communication,
+        entitlements,
         monterey,
         ventura: at_least(13, 0),
         categories: Mutex::new(Categories::default()),
+        authorization: Mutex::new(None),
         attachments: std::env::temp_dir().join("istmo-notifications"),
     }))
+}
+
+/// `IstmoNotifications` `TimeSensitive` / `Critical` of the running
+/// bundle's `Info.plist` (absent = neither entitlement).
+fn entitlements(bundle: &NSBundle) -> Entitlements {
+    let Some(dict) = bundle
+        .objectForInfoDictionaryKey(&ns(apple_map::INFO_KEY))
+        .and_then(|value| value.downcast::<NSDictionary>().ok())
+    else {
+        return Entitlements::default();
+    };
+    let flag = |key: &str| {
+        let key = ns(key);
+        dict.objectForKey(key.as_ref())
+            .and_then(|value| value.downcast::<NSNumber>().ok())
+            .is_some_and(|value| value.as_bool())
+    };
+    Entitlements {
+        time_sensitive: flag("TimeSensitive"),
+        critical: flag("Critical"),
+    }
 }
 
 fn at_least(major: isize, minor: isize) -> bool {
@@ -136,9 +208,9 @@ fn lists_send_message(bundle: &NSBundle) -> bool {
 }
 
 /// Watches `NSApplicationDidFinishLaunchingNotification` for a launch
-/// that a notification caused. Registered once; misses the launch when
-/// the backend starts after it (then no response reports
-/// `launched_app`).
+/// that a notification caused and marks its time. Registered once;
+/// misses the launch when the backend starts after it (then no response
+/// reports `launched_app`).
 fn observe_launch() {
     static OBSERVING: AtomicBool = AtomicBool::new(false);
     if OBSERVING.swap(true, Ordering::AcqRel) {
@@ -161,7 +233,7 @@ fn observe_launch() {
             .and_then(|value| value.downcast::<NSNumber>().ok())
             .map(|value| value.as_bool());
         if apple_map::launched_by_notification(by_notification, is_default) {
-            LAUNCHED_BY_NOTIFICATION.store(true, Ordering::Release);
+            LAUNCH_MARK.store(now_ms().max(1), Ordering::Release);
         }
     });
     // SAFETY: AppKit's constant, initialised before any notification.
@@ -186,11 +258,15 @@ struct Mac {
     bundle_id: String,
     /// Communication notifications are set up (macOS 12+).
     communication: bool,
+    /// Interruption-level entitlements of the bundle.
+    entitlements: Entitlements,
     /// macOS 12+: interruption levels, relevance, time-sensitive setting.
     monterey: bool,
     /// macOS 13+: focus filter criteria.
     ventura: bool,
     categories: Mutex<Categories>,
+    /// The last raw `UNAuthorizationStatus` read, and when.
+    authorization: Mutex<Option<(Instant, isize)>>,
     /// Attachment copies (the framework moves attachment files away).
     attachments: PathBuf,
 }
@@ -204,15 +280,25 @@ impl std::fmt::Debug for Mac {
     }
 }
 
-/// The registered category set (`setNotificationCategories` replaces
-/// all of them, the app's own included, so the whole set is kept).
+/// This backend's categories. `setNotificationCategories` replaces the
+/// whole set, the app's own included, so every registration reads the
+/// set registered now and registers the union (all under the backend's
+/// mutex: one update at a time).
 #[derive(Default)]
 struct Categories {
-    /// Existing categories were read.
+    /// The registered set was read once (earlier processes' categories
+    /// adopted).
     seeded: bool,
-    known: HashMap<String, Retained<UNNotificationCategory>>,
     /// This backend's, oldest first.
-    ours: VecDeque<String>,
+    ours: VecDeque<(String, Retained<UNNotificationCategory>)>,
+    /// When the registered set was last read holding every one of ours.
+    checked: Option<Instant>,
+}
+
+impl Categories {
+    fn contains(&self, id: &str) -> bool {
+        self.ours.iter().any(|(known, _)| known == id)
+    }
 }
 
 #[expect(
@@ -270,13 +356,9 @@ impl Mac {
         limits
     }
 
-    /// Reads the categories already registered (the app's and earlier
-    /// processes'), once.
-    fn seed(categories: &mut Categories) {
-        if categories.seeded {
-            return;
-        }
-        categories.seeded = true;
+    /// The categories registered now (the app's, earlier processes', and
+    /// ours); `None` when the framework did not answer.
+    fn registered_categories() -> Option<Vec<Retained<UNNotificationCategory>>> {
         let (tx, wait) = waiter::<()>();
         let found: Arc<Mutex<Vec<Retained<UNNotificationCategory>>>> = Arc::default();
         let sink = Arc::clone(&found);
@@ -288,27 +370,120 @@ impl Mac {
             let _sent = tx.try_send(());
         });
         Self::center().getNotificationCategoriesWithCompletionHandler(&block);
-        if wait().is_none() {
-            tracing::warn!("notifications: existing categories not read; they may be replaced");
-        }
-        for category in lock(&found).drain(..) {
-            let id = category.identifier().to_string();
-            if id.starts_with("istmo.") {
-                categories.ours.push_back(id.clone());
-            }
-            categories.known.insert(id, category);
-        }
+        wait()?;
+        Some(std::mem::take(&mut *lock(&found)))
+    }
+
+    /// Category identifiers of the delivered and pending notifications.
+    fn categories_in_use() -> HashSet<String> {
+        let (tx, wait) = waiter::<Vec<String>>();
+        let block = RcBlock::new(move |list: NonNull<NSArray<UNNotification>>| {
+            // SAFETY: the framework passes a valid array for the duration
+            // of the completion handler.
+            let list = unsafe { list.as_ref() };
+            let ids = list
+                .iter()
+                .map(|n| n.request().content().categoryIdentifier().to_string())
+                .collect();
+            let _sent = tx.try_send(ids);
+        });
+        Self::center().getDeliveredNotificationsWithCompletionHandler(&block);
+        let mut out: HashSet<String> = wait().unwrap_or_default().into_iter().collect();
+        let (tx, wait) = waiter::<Vec<String>>();
+        let block = RcBlock::new(move |list: NonNull<NSArray<UNNotificationRequest>>| {
+            // SAFETY: as above.
+            let list = unsafe { list.as_ref() };
+            let ids = list
+                .iter()
+                .map(|r| r.content().categoryIdentifier().to_string())
+                .collect();
+            let _sent = tx.try_send(ids);
+        });
+        Self::center().getPendingNotificationRequestsWithCompletionHandler(&block);
+        out.extend(wait().unwrap_or_default());
+        out
     }
 
     /// Registers the category of `shown` and returns its identifier.
+    ///
+    /// One update at a time (the backend's mutex): the set registered now
+    /// is read and the union with ours registered, so neither the app's
+    /// categories (set before or after this backend started) nor ours are
+    /// lost. A read set stays trusted for [`CATEGORIES_RECHECK`]; when the
+    /// set cannot be read nothing is registered (registering blind would
+    /// replace the app's).
     fn category(&self, shown: &Shown<'_>, communication: bool) -> String {
         let n = shown.notification;
-        let id = apple_map::category_id(shown.rendered, n.lock_screen, communication);
+        let id = apple_map::category_id(n, shown.rendered, n.lock_screen, communication);
         let mut categories = lock(&self.categories);
-        Self::seed(&mut categories);
-        if categories.known.contains_key(&id) {
+        if categories.contains(&id)
+            && categories
+                .checked
+                .is_some_and(|at| at.elapsed() < CATEGORIES_RECHECK)
+        {
             return id;
         }
+        let Some(current) = Self::registered_categories() else {
+            tracing::warn!("notifications: registered categories not read; buttons may be missing");
+            return id;
+        };
+        let registered: HashSet<String> = current
+            .iter()
+            .map(|category| category.identifier().to_string())
+            .collect();
+        if !categories.seeded {
+            categories.seeded = true;
+            for category in &current {
+                let known = category.identifier().to_string();
+                if known.starts_with(apple_map::CATEGORY_PREFIX) && !categories.contains(&known) {
+                    categories.ours.push_back((known, category.clone()));
+                }
+            }
+        }
+        if !categories.contains(&id) {
+            let category = Self::make_category(shown, &id, communication);
+            categories.ours.push_back((id.clone(), category));
+        }
+        if categories.ours.len() > MAX_CATEGORIES {
+            let in_use = Self::categories_in_use();
+            let names: Vec<String> = categories.ours.iter().map(|(k, _)| k.clone()).collect();
+            let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+            let gone: HashSet<&str> = apple_map::evict(&refs, MAX_CATEGORIES, &id, &in_use)
+                .into_iter()
+                .collect();
+            categories.ours.retain(|(k, _)| !gone.contains(k.as_str()));
+        }
+        if categories.ours.iter().all(|(k, _)| registered.contains(k))
+            && registered
+                .iter()
+                .filter(|k| k.starts_with(apple_map::CATEGORY_PREFIX))
+                .all(|k| categories.contains(k))
+        {
+            categories.checked = Some(Instant::now());
+            return id;
+        }
+        // The app's categories as registered now, plus ours.
+        let mut all: Vec<Retained<UNNotificationCategory>> = current
+            .into_iter()
+            .filter(|category| {
+                !category
+                    .identifier()
+                    .to_string()
+                    .starts_with(apple_map::CATEGORY_PREFIX)
+            })
+            .collect();
+        all.extend(categories.ours.iter().map(|(_, category)| category.clone()));
+        Self::center().setNotificationCategories(&NSSet::from_retained_slice(&all));
+        categories.checked = Some(Instant::now());
+        id
+    }
+
+    fn make_category(
+        shown: &Shown<'_>,
+        id: &str,
+        communication: bool,
+    ) -> Retained<UNNotificationCategory> {
+        let n = shown.notification;
         let actions: Vec<Retained<UNNotificationAction>> = shown
             .rendered
             .actions
@@ -341,32 +516,21 @@ impl Mac {
         let intents = NSArray::from_retained_slice(&intents);
         let (options, placeholder) = apple_map::category_options(n.lock_screen);
         let options = UNNotificationCategoryOptions(options);
-        let category = placeholder.map_or_else(
+        placeholder.map_or_else(
             || UNNotificationCategory::categoryWithIdentifier_actions_intentIdentifiers_options(
-                &ns(&id),
+                &ns(id),
                 &actions,
                 &intents,
                 options,
             ),
             |text| UNNotificationCategory::categoryWithIdentifier_actions_intentIdentifiers_hiddenPreviewsBodyPlaceholder_options(
-                &ns(&id),
+                &ns(id),
                 &actions,
                 &intents,
                 &ns(text),
                 options,
             ),
-        );
-        categories.known.insert(id.clone(), category);
-        categories.ours.push_back(id.clone());
-        while categories.ours.len() > MAX_CATEGORIES {
-            if let Some(old) = categories.ours.pop_front() {
-                categories.known.remove(&old);
-            }
-        }
-        let all: Vec<Retained<UNNotificationCategory>> =
-            categories.known.values().cloned().collect();
-        Self::center().setNotificationCategories(&NSSet::from_retained_slice(&all));
-        id
+        )
     }
 
     /// A fresh copy of the attached image: the framework moves the file
@@ -377,10 +541,20 @@ impl Mac {
             return None;
         }
         let n = ATTACHMENTS.fetch_add(1, Ordering::Relaxed);
+        // The framework infers the type from the extension: a file
+        // without one gets it from its first bytes.
+        let sniffed = || {
+            let mut head = [0u8; 8];
+            let read = std::fs::File::open(source)
+                .and_then(|mut file| std::io::Read::read(&mut file, &mut head))
+                .unwrap_or(0);
+            apple_map::image_extension(&head[..read]).unwrap_or("png")
+        };
         let ext = source
             .extension()
             .and_then(|ext| ext.to_str())
-            .unwrap_or("png");
+            .filter(|ext| !ext.is_empty())
+            .map_or_else(|| sniffed().to_owned(), str::to_owned);
         let copy = self
             .attachments
             .join(format!("{}-{n}.{ext}", std::process::id()));
@@ -464,10 +638,10 @@ impl Mac {
             content.setThreadIdentifier(&ns(thread));
         }
         content.setCategoryIdentifier(&ns(&self.category(shown, limits.messaging)));
-        content.setSound(Self::sound(apple_map::sound(n, quiet)).as_deref());
+        content.setSound(Self::sound(apple_map::sound(n, quiet, self.entitlements)).as_deref());
         if self.monterey {
             content.setInterruptionLevel(UNNotificationInterruptionLevel(
-                apple_map::interruption_level(n.interruption, quiet),
+                apple_map::interruption_level(n.interruption, quiet, self.entitlements),
             ));
             if let Some(score) = n.apple.as_ref().and_then(|apple| apple.relevance_score) {
                 content.setRelevanceScore(f64::from(score.clamp(0.0, 1.0)));
@@ -500,7 +674,9 @@ impl Mac {
         if limits.messaging
             && let Style::Messaging(conversation) = &n.style
         {
-            if let Some(updated) = communication(&content, shown, conversation) {
+            // A silent update re-renders a conversation already donated:
+            // only alerting posts donate the interaction again.
+            if let Some(updated) = communication(&content, shown, conversation, !quiet) {
                 return updated;
             }
             // Refused: the conversation as body lines.
@@ -537,7 +713,20 @@ impl Mac {
             let _sent = tx.try_send(raw);
         });
         Self::center().getNotificationSettingsWithCompletionHandler(&block);
-        wait().ok_or_else(|| timed_out("notification settings"))
+        let raw = wait().ok_or_else(|| timed_out("notification settings"))?;
+        *lock(&self.authorization) = Some((Instant::now(), raw.authorization));
+        Ok(raw)
+    }
+
+    /// Whether the user denied notifications (read at most every
+    /// [`AUTHORIZATION_TTL`]; an unanswered read does not refuse).
+    fn denied(&self) -> bool {
+        let cached = *lock(&self.authorization);
+        let status = match cached {
+            Some((at, status)) if at.elapsed() < AUTHORIZATION_TTL => Some(status),
+            _ => self.settings().ok().map(|raw| raw.authorization),
+        };
+        status.is_some_and(apple_map::denied)
     }
 }
 
@@ -582,14 +771,40 @@ fn person(shown: &Shown<'_>, participant: &crate::Participant, is_me: bool) -> R
     }
 }
 
+/// Donates `intent` as an incoming interaction; whether it was accepted.
+fn donate_incoming(intent: &INSendMessageIntent) -> bool {
+    // SAFETY: a freshly allocated interaction around a valid intent.
+    let interaction =
+        unsafe { INInteraction::initWithIntent_response(INInteraction::alloc(), intent, None) };
+    // SAFETY: setter of a plain enum property.
+    unsafe { interaction.setDirection(INInteractionDirection::Incoming) };
+    let (tx, wait) = waiter::<Option<(i64, String)>>();
+    let block = RcBlock::new(move |error: *mut NSError| {
+        let _sent = tx.try_send(error_message(error));
+    });
+    // SAFETY: the completion block matches the method's signature.
+    unsafe { interaction.donateInteractionWithCompletion(Some(&block)) };
+    match wait() {
+        Some(None) => true,
+        Some(Some((_, message))) => {
+            tracing::debug!(%message, "notifications: interaction not donated");
+            false
+        }
+        None => false,
+    }
+}
+
 /// Builds a communication notification: the sender as an `INPerson`, an
 /// incoming `INSendMessageIntent` donated, then
 /// `contentByUpdatingWithProvider:error:`. `None` when any step fails
-/// (no entitlement, donation refused).
+/// (no entitlement, donation refused). `donate` = false for a silent
+/// update of a conversation already shown: the content is still built
+/// from the intent, the interaction is not donated again.
 fn communication(
     content: &UNMutableNotificationContent,
     shown: &Shown<'_>,
     conversation: &crate::Conversation,
+    donate: bool,
 ) -> Option<Retained<UNNotificationContent>> {
     let n = shown.notification;
     let last = conversation.messages.last()?;
@@ -638,24 +853,8 @@ fn communication(
             None,
         )
     };
-    // SAFETY: a freshly allocated interaction around a valid intent.
-    let interaction =
-        unsafe { INInteraction::initWithIntent_response(INInteraction::alloc(), &intent, None) };
-    // SAFETY: setter of a plain enum property.
-    unsafe { interaction.setDirection(INInteractionDirection::Incoming) };
-    let (tx, wait) = waiter::<Option<(i64, String)>>();
-    let block = RcBlock::new(move |error: *mut NSError| {
-        let _sent = tx.try_send(error_message(error));
-    });
-    // SAFETY: the completion block matches the method's signature.
-    unsafe { interaction.donateInteractionWithCompletion(Some(&block)) };
-    match wait() {
-        Some(None) => {}
-        Some(Some((_, message))) => {
-            tracing::debug!(%message, "notifications: interaction not donated");
-            return None;
-        }
-        None => return None,
+    if donate && !donate_incoming(&intent) {
+        return None;
     }
     // `INSendMessageIntent` conforms to `UNNotificationContentProviding`
     // (Intents, macOS 12); objc2-intents does not declare the conformance,
@@ -719,6 +918,10 @@ impl Backend for Mac {
     }
 
     fn show(&self, shown: &Shown<'_>) -> Result<(), NotificationError> {
+        // The framework accepts a request it will never show.
+        if self.denied() {
+            return Err(NotificationError::PermissionDenied);
+        }
         let quiet = matches!(shown.mode, super::ShowMode::Replace { alert: false });
         let content = self.content(shown, quiet);
         let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
@@ -793,9 +996,20 @@ fn string_value(info: &NSDictionary, key: &str) -> Option<String> {
         .map(|value| value.to_string())
 }
 
+/// Whether `notification` is one of this plugin's (`istmo.id` in its
+/// `userInfo`).
+fn is_ours(notification: &UNNotification) -> bool {
+    string_value(&notification.request().content().userInfo(), keys::ID).is_some()
+}
+
 /// What the delegate needs.
 struct DelegateIvars {
     sink: BackendSink,
+    /// The app's delegate set before this one: what is not this plugin's
+    /// goes to it.
+    previous: Option<Retained<ProtocolObject<dyn UNUserNotificationCenterDelegate>>>,
+    /// macOS 11+ (`BANNER` / `LIST` presentation options).
+    big_sur: bool,
 }
 
 define_class!(
@@ -812,42 +1026,111 @@ define_class!(
         #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
         fn will_present(
             &self,
-            _center: &UNUserNotificationCenter,
+            center: &UNUserNotificationCenter,
             notification: &UNNotification,
-            completion: &block2::DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
+            completion: &DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
         ) {
-            let info = notification.request().content().userInfo();
-            let key = ns(keys::PRESENT);
-            let bits = info
-                .objectForKey(key.as_ref())
-                .and_then(|value| value.downcast::<NSNumber>().ok())
-                .map_or(apple_map::DEFAULT_PRESENTATION, |value| value.as_u64());
-            completion.call((UNNotificationPresentationOptions(
-                usize::try_from(bits).unwrap_or_default(),
-            ),));
+            if !is_ours(notification)
+                && let Some(previous) = self.previous_for(sel!(
+                    userNotificationCenter:willPresentNotification:withCompletionHandler:
+                ))
+            {
+                previous.userNotificationCenter_willPresentNotification_withCompletionHandler(
+                    center,
+                    notification,
+                    completion,
+                );
+                return;
+            }
+            self.present(notification, completion);
         }
 
         #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
         fn did_receive(
             &self,
-            _center: &UNUserNotificationCenter,
+            center: &UNUserNotificationCenter,
             response: &UNNotificationResponse,
-            completion: &block2::DynBlock<dyn Fn()>,
+            completion: &DynBlock<dyn Fn()>,
         ) {
+            if !is_ours(&response.notification())
+                && let Some(previous) = self.previous_for(sel!(
+                    userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:
+                ))
+            {
+                previous
+                    .userNotificationCenter_didReceiveNotificationResponse_withCompletionHandler(
+                        center, response, completion,
+                    );
+                return;
+            }
             self.respond(response);
             completion.call(());
+        }
+
+        #[unsafe(method(userNotificationCenter:openSettingsForNotification:))]
+        fn open_settings_for(
+            &self,
+            center: &UNUserNotificationCenter,
+            notification: Option<&UNNotification>,
+        ) {
+            if let Some(previous) =
+                self.previous_for(sel!(userNotificationCenter:openSettingsForNotification:))
+            {
+                previous.userNotificationCenter_openSettingsForNotification(center, notification);
+            }
         }
     }
 );
 
 impl Delegate {
-    fn new(sink: BackendSink) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(DelegateIvars { sink });
+    fn new(
+        sink: BackendSink,
+        previous: Option<Retained<ProtocolObject<dyn UNUserNotificationCenterDelegate>>>,
+        big_sur: bool,
+    ) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(DelegateIvars {
+            sink,
+            previous,
+            big_sur,
+        });
         // SAFETY: `NSObject`'s `init` on a freshly allocated object.
         unsafe { msg_send![super(this), init] }
     }
 
+    /// The earlier delegate, when it implements `selector` (every method
+    /// of the protocol is optional).
+    fn previous_for(
+        &self,
+        selector: objc2::runtime::Sel,
+    ) -> Option<&ProtocolObject<dyn UNUserNotificationCenterDelegate>> {
+        self.ivars()
+            .previous
+            .as_deref()
+            .filter(|previous| previous.respondsToSelector(selector))
+    }
+
+    /// Answers the foreground presentation from the stored bits (the
+    /// default for a notification no earlier delegate took).
+    fn present(
+        &self,
+        notification: &UNNotification,
+        completion: &DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
+    ) {
+        let info = notification.request().content().userInfo();
+        let key = ns(keys::PRESENT);
+        let bits = info
+            .objectForKey(key.as_ref())
+            .and_then(|value| value.downcast::<NSNumber>().ok())
+            .map_or(apple_map::DEFAULT_PRESENTATION, |value| value.as_u64());
+        let bits = apple_map::presentation_options(bits, self.ivars().big_sur);
+        completion.call((UNNotificationPresentationOptions(
+            usize::try_from(bits).unwrap_or_default(),
+        ),));
+    }
+
     fn respond(&self, response: &UNNotificationResponse) {
+        // The launch mark belongs to the first response of the launch.
+        let mark = LAUNCH_MARK.swap(0, Ordering::AcqRel);
         let info = response.notification().request().content().userInfo();
         let Some(id) =
             string_value(&info, keys::ID).and_then(|id| NotificationId::try_from(id.as_str()).ok())
@@ -872,11 +1155,81 @@ impl Delegate {
             id,
             key,
             reply,
-            launched_app: LAUNCHED_BY_NOTIFICATION.swap(false, Ordering::AcqRel),
+            launched_app: apple_map::launched_app(mark, now_ms()),
             carried: Some(Carried {
                 user_data: string_value(&info, keys::USER_DATA),
                 url: string_value(&info, keys::URL),
             }),
         });
     }
+}
+
+/// The plugin's delegate, once the backend started.
+fn plugin_delegate() -> Option<&'static Delegate> {
+    let delegate = DELEGATE.load(Ordering::Acquire);
+    // SAFETY: a non-null pointer came from `Retained::into_raw` and is
+    // never released (leaked for the process).
+    unsafe { delegate.as_ref() }
+}
+
+/// Hands a `willPresentNotification` callback to the plugin.
+///
+/// For an app that set its own `UNUserNotificationCenter` delegate after
+/// the notifications host started. Returns `false` (and does not call
+/// `completion`) when the notification is not this plugin's or the
+/// backend has not started; the app then answers it itself.
+///
+/// # Safety
+///
+/// `notification` must point to the `UNNotification` the delegate method
+/// received and `completion` to its completion handler block
+/// (`void (^)(UNNotificationPresentationOptions)`), both valid for the
+/// duration of the call.
+#[must_use]
+pub unsafe fn forward_will_present(
+    notification: NonNull<c_void>,
+    completion: NonNull<c_void>,
+) -> bool {
+    let Some(delegate) = plugin_delegate() else {
+        return false;
+    };
+    // SAFETY: the caller passes a valid `UNNotification`.
+    let notification: &UNNotification = unsafe { notification.cast().as_ref() };
+    if !is_ours(notification) {
+        return false;
+    }
+    // SAFETY: the caller passes the method's completion block.
+    let completion: &DynBlock<dyn Fn(UNNotificationPresentationOptions)> =
+        unsafe { completion.cast().as_ref() };
+    delegate.present(notification, completion);
+    true
+}
+
+/// Hands a `didReceiveNotificationResponse` callback to the plugin.
+///
+/// For an app that set its own delegate after the notifications host
+/// started. Returns `false` (and does not call `completion`) when the response is
+/// not for one of this plugin's notifications or the backend has not
+/// started.
+///
+/// # Safety
+///
+/// `response` must point to the `UNNotificationResponse` the delegate
+/// method received and `completion` to its completion handler block
+/// (`void (^)(void)`), both valid for the duration of the call.
+#[must_use]
+pub unsafe fn forward_did_receive(response: NonNull<c_void>, completion: NonNull<c_void>) -> bool {
+    let Some(delegate) = plugin_delegate() else {
+        return false;
+    };
+    // SAFETY: the caller passes a valid `UNNotificationResponse`.
+    let response: &UNNotificationResponse = unsafe { response.cast().as_ref() };
+    if !is_ours(&response.notification()) {
+        return false;
+    }
+    // SAFETY: the caller passes the method's completion block.
+    let completion: &DynBlock<dyn Fn()> = unsafe { completion.cast().as_ref() };
+    delegate.respond(response);
+    completion.call(());
+    true
 }
