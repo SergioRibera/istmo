@@ -504,28 +504,31 @@ final class ScreenCaptureEventHub<Event>: @unchecked Sendable {
 
     struct SubscriberKey: Hashable { let value: Int }
 
+    /// Yields happen under the lock (they never block), so events reach
+    /// every subscriber in emission order, after its replay.
     func emit(_ event: Event) {
-        let live: [AsyncThrowingStream<Event, Error>.Continuation] = lock.withLock {
-            guard !ended else { return [] }
+        lock.withLock {
+            guard !ended else { return }
             backlog.append(event)
             if backlog.count > 64 { backlog.removeFirst(backlog.count - 64) }
-            return Array(subscribers.values)
+            for continuation in subscribers.values { continuation.yield(event) }
         }
-        for continuation in live { continuation.yield(event) }
     }
 
     /// `first` is replayed before the backlog (the stream as negotiated).
     func subscribe(first: Event?) -> AsyncThrowingStream<Event, Error> {
         let (stream, continuation) = AsyncThrowingStream<Event, Error>.makeStream(
             bufferingPolicy: .bufferingNewest(64))
-        let (replay, isEnded, key): ([Event], Bool, SubscriberKey) = lock.withLock {
+        // `first` and the backlog go out before the subscriber is live, in
+        // one critical section with `emit`: no live event overtakes them.
+        let (isEnded, key): (Bool, SubscriberKey) = lock.withLock {
             let key = SubscriberKey(value: nextKey)
             nextKey += 1
+            if let first { continuation.yield(first) }
+            for event in backlog { continuation.yield(event) }
             if !ended { subscribers[key] = continuation }
-            return (backlog, ended, key)
+            return (ended, key)
         }
-        if let first { continuation.yield(first) }
-        for event in replay { continuation.yield(event) }
         if isEnded {
             continuation.finish()
         } else {
