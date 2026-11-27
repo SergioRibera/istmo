@@ -631,6 +631,14 @@ chunks read straight into the sink's slots. `pts_ns` comes from
 `AudioRecord.getTimestamp(TIMEBASE_MONOTONIC)`; `wall_us` follows the
 sample count and re-anchors (with `discontinuity`) past 20 ms of drift
 or after dropped chunks.
+- Background (unverified): playback capture needs `RECORD_AUDIO`, and
+  API 30+ while-in-use rules may silence an `AudioRecord` of a
+  backgrounded app whose foreground service is typed `mediaProjection`
+  only. The service is not also typed `microphone`: that would make every
+  app declare `FOREGROUND_SERVICE_MICROPHONE` and the microphone service
+  type, screen-only apps included. Check on a device (probe `audio`
+  with the app in the background); apps that need it can declare the
+  type themselves.
 
 ## Goals
 

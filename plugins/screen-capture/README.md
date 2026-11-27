@@ -377,6 +377,8 @@ permissions. Apps that capture audio add `RECORD_AUDIO` themselves.
 - Audio: playback capture (API 29+) of media, game and unknown usages,
   one app's (`AudioSource::Application(package)`) or everything but this
   app's. Apps that opt out, or target API 28 and lower, are silent.
+  In the background (API 30+) capture may go silent: the service is
+  typed `mediaProjection` only (not yet verified on a device).
 - Stopping from the notification, the status-bar chip or the lock
   screen ends sessions with `ConsentRevoked`.
 
