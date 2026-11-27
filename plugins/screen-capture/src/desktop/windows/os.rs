@@ -14,12 +14,13 @@ use std::sync::OnceLock;
 use windows::Foundation::Metadata::ApiInformation;
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::Com::CoIncrementMTAUsage;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::UI::HiDpi::{
-    DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
-use windows_core::HSTRING;
+use windows_core::{HSTRING, s, w};
 
 use crate::types::OsVersion;
 
@@ -129,6 +130,35 @@ pub(crate) fn qpc_now_ns() -> u64 {
     qpc_ticks_to_ns(ticks)
 }
 
+/// `SetThreadDpiAwarenessContext`, looked up at run time: it exists from
+/// Windows 10 1607 on, and a static import would keep the DLL from
+/// loading on 1507 / 1511 (where GDI and DXGI still work).
+type SetThreadContext = unsafe extern "system" fn(DPI_AWARENESS_CONTEXT) -> DPI_AWARENESS_CONTEXT;
+
+fn set_thread_context() -> Option<SetThreadContext> {
+    static FUNCTION: OnceLock<Option<SetThreadContext>> = OnceLock::new();
+    *FUNCTION.get_or_init(|| {
+        // SAFETY: user32 is loaded in every GUI-capable process; a missing
+        // module answers an error.
+        let user32 = unsafe { GetModuleHandleW(w!("user32.dll")) }.ok()?;
+        // SAFETY: a live module handle and a NUL-terminated name.
+        let address = unsafe { GetProcAddress(user32, s!("SetThreadDpiAwarenessContext")) }?;
+        // SAFETY: the export has exactly this signature (winuser.h).
+        Some(unsafe {
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, SetThreadContext>(address)
+        })
+    })
+}
+
+/// Switch this thread's DPI awareness; `None` where Windows cannot.
+fn swap_context(context: DPI_AWARENESS_CONTEXT) -> Option<DPI_AWARENESS_CONTEXT> {
+    let set = set_thread_context()?;
+    // SAFETY: switching the calling thread's awareness context has no
+    // memory-safety preconditions; an unsupported context returns null.
+    let previous = unsafe { set(context) };
+    (!previous.0.is_null()).then_some(previous)
+}
+
 /// Per-monitor DPI awareness (v2) on this thread while the guard lives,
 /// so monitor and window rectangles come in physical pixels whatever the
 /// process declared in its manifest.
@@ -139,12 +169,9 @@ pub(crate) struct PhysicalPixels {
 
 impl PhysicalPixels {
     pub(crate) fn enter() -> Self {
-        // SAFETY: switching the calling thread's awareness context has no
-        // memory-safety preconditions; an unsupported context returns null.
-        let previous =
-            unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
         Self {
-            previous: (!previous.0.is_null()).then_some(previous.0 as isize),
+            previous: swap_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+                .map(|previous| previous.0 as isize),
         }
     }
 }
@@ -152,12 +179,8 @@ impl PhysicalPixels {
 impl Drop for PhysicalPixels {
     fn drop(&mut self) {
         if let Some(previous) = self.previous {
-            // SAFETY: restores the context this thread had before `enter`.
-            let _previous = unsafe {
-                SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT(
-                    previous as *mut core::ffi::c_void,
-                ))
-            };
+            // Restores the context this thread had before `enter`.
+            let _previous = swap_context(DPI_AWARENESS_CONTEXT(previous as *mut core::ffi::c_void));
         }
     }
 }
