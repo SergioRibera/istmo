@@ -77,6 +77,9 @@ internal class DisplayFacts(
 
     val pixels: Size get() = Size(width.toUInt(), height.toUInt())
 
+    /** Whether [w] × [h] is this display's size in either orientation. */
+    fun matches(w: Int, h: Int): Boolean = (w == width && h == height) || (w == height && h == width)
+
     /** Logical (dp) size, the space `RegionSpace` rects use. */
     val logical: Size
         get() = Size(toLogical(width).toUInt(), toLogical(height).toUInt())

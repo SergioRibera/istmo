@@ -567,9 +567,11 @@ wins.
   `Unsatisfiable(Kind(Application))`.
 - Grants: single use, removed on `onStop`, stopped after 60 s unused.
 - Android never says whether the person shared the display or an app:
-  a first `onCapturedContentResize` of another size than the display
-  turns the negotiated source into `Application` (`app:shared`) with a
-  `Renegotiated` event.
+  with the person's choice the negotiated source starts as `picked`
+  (`PickerOnly`, kind `Monitor`, not the display's id), and an
+  `onCapturedContentResize` matching the display in neither orientation
+  turns it into `Application` (`app:shared`) with a `Renegotiated`
+  event. A full-screen app stays `picked`.
 - `open_audio` takes a live grant from `request_projection`
   (`AudioConfig` has no consent fields); without one it is
   `ConsentRequired`.

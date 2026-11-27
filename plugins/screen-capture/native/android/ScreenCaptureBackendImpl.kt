@@ -143,7 +143,8 @@ class ScreenCaptureBackendImpl(activity: ComponentActivity) : ScreenCaptureBacke
         query.backend?.let { if (it != PROJECTION) fail(CaptureError.BackendNotCompiled(it)) }
         query.source?.let { id ->
             val known = id.backend == PROJECTION &&
-                (id.value == ProjectionSession.SHARED_APP_ID || displays.all().any { it.sourceId == id })
+                (id.value == ProjectionSession.SHARED_APP_ID || id.value == ProjectionSession.PICKED_ID ||
+                    displays.all().any { it.sourceId == id })
             if (!known) fail(CaptureError.SourceNotFound(id))
         }
         return CapabilityReport(listOf(caps()), AudioReport(audioAvailability(), audioCaps()))

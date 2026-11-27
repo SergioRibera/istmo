@@ -69,7 +69,23 @@ internal class ProjectionSession(
     private val playback: (AudioPlan, IstmoFrameSender<AudioMeta>, (CaptureError?) -> Unit) -> PlaybackAudio,
     private val onEnded: (ProjectionSession) -> Unit,
 ) : ProjectionListener, DisplayManager.DisplayListener {
-    private var source: Source = plan.display.source()
+    /**
+     * What is captured. With the person's choice (API 34+) Android never
+     * says whether they shared the display or an app, so the source is the
+     * picked one (`PickerOnly`, not the display's id) until its size proves
+     * an app; a full-screen app stays that picked source.
+     */
+    private var source: Source = plan.display.source().let { display ->
+        if (plan.mode == ProjectionMode.EntireScreen) {
+            display
+        } else {
+            display.copy(
+                id = SourceId(PROJECTION, PICKED_ID),
+                name = "Picked display or app",
+                capture = SourceCapture.PickerOnly(listOf(PROJECTION)),
+            )
+        }
+    }
     private var contentWidth = plan.display.width
     private var contentHeight = plan.display.height
     private var outWidth = 0
@@ -230,11 +246,12 @@ internal class ProjectionSession(
         handler.post {
             if (ended || width <= 0 || height <= 0) return@post
             // Android does not say whether the person shared the display
-            // or one app: a captured region of another size than the
-            // display is an app window.
+            // or one app: a captured region whose size matches the
+            // display in neither orientation (a rotation racing the
+            // display query is not an app) is an app window.
             val display = runCatching { displays.primary() }.getOrNull()
             if (plan.mode != ProjectionMode.EntireScreen && display != null &&
-                source.kind == SourceKind.Monitor && (width != display.width || height != display.height)
+                source.kind == SourceKind.Monitor && !display.matches(width, height)
             ) {
                 source = source.copy(
                     id = SourceId(PROJECTION, SHARED_APP_ID),
@@ -407,6 +424,9 @@ internal class ProjectionSession(
     companion object {
         const val VIRTUAL_DISPLAY_NAME = "istmo-screen-capture"
         const val SHARED_APP_ID = "app:shared"
+
+        /** The person's pick (display or app) before its size tells which. */
+        const val PICKED_ID = "picked"
     }
 }
 
