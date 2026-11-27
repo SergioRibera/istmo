@@ -1645,10 +1645,11 @@ one falls back instead of failing the build.
 | Static channels (`[[app.notification_channel]]`) | `res/raw/istmo_notification_channels.bin` (resource `raw/istmo_notification_channels`) | wire bytes of `Vec<ChannelSpec>` (varint length, then each `ChannelSpec` in the generated codec layout), **no format byte** | only the plugin's `default` channel |
 | `small_icon` | drawable `istmo_notification_icon` (`res/drawable*/istmo_notification_icon.{xml,png}`) | monochrome vector or alpha-only PNG | `AndroidExtras.small_icon` by name first; else the app icon |
 | `accent` | color `istmo_notification_accent` (`res/values/*.xml`) | `#RRGGBB` / `#AARRGGBB` | no color; `AndroidExtras.color` wins |
-| `sounds` | `res/raw/<name>` (`Sound::Named("ding")` = `raw/ding`) | sound file | channel default |
+| `sounds` | `res/raw/istmo_notification_sound_<name>.<ext>` (`Sound::Named("ding")` = `raw/istmo_notification_sound_ding`, then `raw/ding`) | sound file | channel default |
 | `exact_alarms = "schedule"` / `"use"` | `<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM">` / `USE_EXACT_ALARM` | | inexact alarms |
 | `full_screen = true` | `USE_FULL_SCREEN_INTENT` | | `android.full_screen` ignored, `Style::Call` simulated on 31+ |
 | `live_updates = true` | `POST_PROMOTED_NOTIFICATIONS` | | promotion requested anyway; the system refuses (`NotPromoted`) |
+| flags | `bool/istmo_notifications_full_screen`, `bool/istmo_notifications_live_updates`, `string/istmo_notifications_exact_alarms` | written by istmo-build under `android/.istmo/res` | not read: the backend checks the merged manifest (`requestedPermissions`) and the runtime grants instead |
 
 `request_permission(exact_alarms)` opens `ACTION_REQUEST_SCHEDULE_EXACT_ALARM`
 only when `SCHEDULE_EXACT_ALARM` is in the merged manifest (read from
@@ -1660,7 +1661,7 @@ and `IstmoNotificationAlarmReceiver` (not exported),
 `IstmoNotificationBootReceiver` (exported, `BOOT_COMPLETED`, `TIME_SET`,
 `TIMEZONE_CHANGED`, `MY_PACKAGE_REPLACED`,
 `SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED`). No `crates/build`
-change was made.
+change was made. The plugin keeps `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLETED` in its own `istmo.toml` (it always needs both; the build sidecar adds the same two, merged once); the opt-in ones come only from the sidecar.
 
 ### Layout
 

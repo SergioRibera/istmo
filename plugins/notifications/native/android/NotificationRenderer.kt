@@ -371,8 +371,9 @@ internal class NotificationRenderer(private val context: Context) {
         return if (color == 0) null else androidx.core.content.ContextCompat.getColor(context, color)
     }
 
+    /** `Sound::Named(name)`: the bundled `raw/istmo_notification_sound_<name>` (istmo-build), else `raw/<name>`. */
     fun soundUri(name: String): Uri? {
-        val raw = res.getIdentifier(name, "raw", pkg)
+        val raw = res.getIdentifier(SOUND_PREFIX + name, "raw", pkg).takeIf { it != 0 } ?: res.getIdentifier(name, "raw", pkg)
         return if (raw == 0) null else Uri.parse("android.resource://$pkg/$raw")
     }
 
@@ -445,6 +446,7 @@ internal class NotificationRenderer(private val context: Context) {
         /** Resource names `istmo-build` generates (see the design's Android notes). */
         const val SMALL_ICON_RESOURCE = "istmo_notification_icon"
         const val ACCENT_RESOURCE = "istmo_notification_accent"
+        const val SOUND_PREFIX = "istmo_notification_sound_"
 
         const val MORE = "istmo.more"
         private const val MORE_LABEL = "More"
