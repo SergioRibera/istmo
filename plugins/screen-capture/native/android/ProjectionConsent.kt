@@ -18,7 +18,11 @@ import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
@@ -194,11 +198,20 @@ internal class ProjectionConsent(
             ProjectionForeground.acquire(context)
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             fail(CaptureError.Protocol(BackendDetail(PROJECTION, "foreground service", "did not start within 5 s")))
+        } catch (e: CancellationException) {
+            // A `java.lang.IllegalStateException` too: the caller's
+            // cancellation, not a service failure (`acquire` gave its lease
+            // back).
+            throw e
         } catch (e: RuntimeException) {
             fail(CaptureError.Protocol(BackendDetail(PROJECTION, "foreground service", e.toString())))
         }
+        // Not cancellable: a projection the system already handed out must
+        // reach an owner that stops it.
         val projection = try {
-            withContext(Dispatchers.Main) { manager.getMediaProjection(resultCode, data) }
+            withContext(NonCancellable + Dispatchers.Main) {
+                manager.getMediaProjection(resultCode, data)?.let { Projection(context, it, mode, handler) }
+            }
         } catch (e: RuntimeException) {
             ProjectionForeground.release(context)
             fail(CaptureError.Protocol(BackendDetail(PROJECTION, "getMediaProjection", e.toString())))
@@ -207,7 +220,12 @@ internal class ProjectionConsent(
             ProjectionForeground.release(context)
             fail(CaptureError.ConsentDenied)
         }
-        return Projection(context, projection, mode, handler)
+        if (!currentCoroutineContext().isActive) {
+            // Cancelled meanwhile: nobody will use it.
+            projection.stop()
+            throw CancellationException("cancelled after the consent")
+        }
+        return projection
     }
 }
 
