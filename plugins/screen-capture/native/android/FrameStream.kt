@@ -8,6 +8,7 @@ import android.os.Handler
 import android.view.Surface
 import dev.istmo.runtime.IstmoFrameSender
 import dev.istmo.runtime.IstmoSubmitStatus
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.channels.Channel
@@ -94,6 +95,8 @@ internal class FrameStream(
     fps: FrameRate,
     private val events: (CaptureEvent) -> Unit,
     private val onSinkGone: () -> Unit,
+    /** Called once (capture thread) when a platform call threw: the session must end. */
+    private val onFailed: (String) -> Unit,
 ) {
     @Volatile
     var fps: FrameRate = fps
@@ -133,6 +136,7 @@ internal class FrameStream(
 
     private var reader: Reader? = null
     private var ended = false
+    private var failed = false
     private var seq = 0L
     private var skipped = 0
     private var exhaustedEpisode = false
@@ -141,10 +145,10 @@ internal class FrameStream(
     private var pending: Lease? = null
     private var last: Lease? = null
     private var flushScheduled = false
-    private val ticker = Runnable { tick() }
+    private val ticker = Runnable { guarded { tick() } }
     private val flusher = Runnable {
         flushScheduled = false
-        flush()
+        guarded { flush() }
     }
 
     /** The current reader's size. */
@@ -165,6 +169,13 @@ internal class FrameStream(
                 runCatching { image.close() }
                 owner.returned()
             }
+        }
+
+        /** One more holder (a sink frame), let go at most once whoever closes it. */
+        fun hold(): AutoCloseable {
+            retain()
+            val once = AtomicBoolean(false)
+            return AutoCloseable { if (once.compareAndSet(false, true)) close() }
         }
     }
 
@@ -191,9 +202,15 @@ internal class FrameStream(
                     // exhaustion episode until one comes back.
                     exhausted()
                     return
+                } catch (e: UnsupportedOperationException) {
+                    // The producer queued another format than the
+                    // reader's (before API 36): nothing more will arrive.
+                    fail(e)
+                    return
                 } ?: return
                 open.incrementAndGet()
-                arrive(Lease(image, this))
+                val lease = Lease(image, this)
+                guarded { arrive(lease) }
             }
         }
 
@@ -289,7 +306,7 @@ internal class FrameStream(
     private fun periodMs(perSecond: UInt): Long = (periodNs(perSecond) / 1_000_000L).coerceAtLeast(1)
 
     private fun arrive(lease: Lease) {
-        if (ended || lease.owner !== reader || paused) {
+        if (ended || failed || lease.owner !== reader || paused) {
             if (paused) skipped += 1
             lease.close()
             return
@@ -347,13 +364,36 @@ internal class FrameStream(
 
     /** Deliver a new image, then keep it for repeats (`Exact`) or let go of it. */
     private fun deliverFresh(lease: Lease) {
-        val delivered = deliver(lease, repeat = false)
+        val delivered = try {
+            deliver(lease, repeat = false)
+        } catch (e: Throwable) {
+            lease.close()
+            throw e
+        }
         if (delivered && fps is FrameRate.Exact) {
             last?.close()
             last = lease
         } else {
             lease.close()
         }
+    }
+
+    /** Run [block]; a platform call that threw ends the session instead of the process. */
+    private inline fun guarded(block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Throwable) {
+            fail(e)
+        }
+    }
+
+    private fun fail(e: Throwable) {
+        if (failed || ended) return
+        failed = true
+        handler.removeCallbacks(ticker)
+        handler.removeCallbacks(flusher)
+        dropHeld()
+        onFailed(e.toString())
     }
 
     private fun exhausted() {
@@ -445,9 +485,14 @@ internal class FrameStream(
             else -> offer.format
         }
         val meta = meta(lease.owner, format, emptyList(), lease.owner.slot(buffer), ptsNs, repeat)
-        lease.retain()
+        val hold = lease.hold()
         return try {
-            sender.submit(buffer, meta, lease)
+            sender.submit(buffer, meta, hold)
+        } catch (e: Throwable) {
+            // Whether the sender reached Rust is unknown: the hold lets go
+            // once, so a second close from the sender is harmless.
+            hold.close()
+            throw e
         } finally {
             buffer.close()
         }.also { status -> if (status.isTaken) onDelivered?.invoke(meta) }

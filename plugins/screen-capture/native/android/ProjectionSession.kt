@@ -112,6 +112,7 @@ internal class ProjectionSession(
                         FrameStream.poolFor(plan.poolRequest, plan.fps), plan.exhaustion, plan.fps,
                         events = hub::publish,
                         onSinkGone = { end(StopReason.Closed, null) },
+                        onFailed = { reason -> handler.post { end(StopReason.Failed, reason) } },
                     )
                     created.configure(format.offer, format.tier, created.poolDepth)
                     created.onDelivered = { onFirstFrame?.invoke() }
@@ -125,7 +126,7 @@ internal class ProjectionSession(
             }
             val renderInto = when {
                 preview != null && readerSurface != null -> {
-                    val gl = PreviewFanOut(preview, fit)
+                    val gl = PreviewFanOut(preview, fit) { reason -> handler.post { end(StopReason.Failed, reason) } }
                     fanOut = gl
                     gl.start(outWidth, outHeight, readerSurface)
                 }

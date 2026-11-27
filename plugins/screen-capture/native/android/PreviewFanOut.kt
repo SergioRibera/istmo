@@ -30,7 +30,12 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  *
  * Every GL call runs on this class's own thread.
  */
-internal class PreviewFanOut(private val preview: Surface, private val fit: PreviewFit) {
+internal class PreviewFanOut(
+    private val preview: Surface,
+    private val fit: PreviewFit,
+    /** Called once (GL thread) when a GL or `SurfaceTexture` call threw: the session must end. */
+    private val onFailed: (String) -> Unit,
+) {
     private val thread = HandlerThread("istmo-capture-fanout").apply { start() }
     private val handler = Handler(thread.looper)
 
@@ -47,6 +52,7 @@ internal class PreviewFanOut(private val preview: Surface, private val fit: Prev
     private var contentWidth = 0
     private var contentHeight = 0
     private var released = false
+    private var failed = false
     private val matrix = FloatArray(16)
 
     private val quad: FloatBuffer = floats(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
@@ -95,7 +101,7 @@ internal class PreviewFanOut(private val preview: Surface, private val fit: Prev
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
         val texture = SurfaceTexture(texture)
-        texture.setOnFrameAvailableListener({ draw() }, handler)
+        texture.setOnFrameAvailableListener({ guarded { draw() } }, handler)
         surfaceTexture = texture
         previewEgl = window(preview)
         resizeLocked(width, height, output)
@@ -108,7 +114,19 @@ internal class PreviewFanOut(private val preview: Surface, private val fit: Prev
      */
     fun resizeLater(width: Int, height: Int, output: Surface) {
         handler.post {
-            if (!released) runCatching { resizeLocked(width, height, output) }
+            if (!released) guarded { resizeLocked(width, height, output) }
+        }
+    }
+
+    /** Run [block]; a call that threw (abandoned producer, lost EGL) ends the session once. */
+    private inline fun guarded(block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Throwable) {
+            if (!failed) {
+                failed = true
+                onFailed(e.toString())
+            }
         }
     }
 
@@ -131,7 +149,7 @@ internal class PreviewFanOut(private val preview: Surface, private val fit: Prev
 
     private fun draw() {
         val texture = surfaceTexture ?: return
-        if (released) return
+        if (released || failed) return
         EGL14.eglMakeCurrent(display, idle, idle, context)
         texture.updateTexImage()
         texture.getTransformMatrix(matrix)
