@@ -35,8 +35,7 @@ class NotificationsBackendImpl(context: Context) : NotificationsBackend {
     private val prefs by lazy { app.getSharedPreferences("${app.packageName}.istmo.notifications", Context.MODE_PRIVATE) }
 
     init {
-        NotificationCenter.hostAttached = true
-        Responses.drain(app)
+        Responses.attach(app)
         // Alarms may have been lost (force stop clears them) or due.
         Thread({ runCatching { NotificationCenter.rearm(clockChanged = false) } }, "istmo-notifications-start").start()
     }
@@ -172,6 +171,7 @@ class NotificationsBackendImpl(context: Context) : NotificationsBackend {
     // ---- Channels -----------------------------------------------------
 
     override suspend fun set_channels(channels: List<ChannelSpec>) = withContext(Dispatchers.IO) {
+        check(Validate.channels(channels))
         NotificationCenter.setChannels(channels)
     }
 
@@ -182,23 +182,31 @@ class NotificationsBackendImpl(context: Context) : NotificationsBackend {
     // ---- Notifications --------------------------------------------------
 
     override suspend fun show(notification: Notification) = withContext(Dispatchers.IO) {
+        check(Validate.notification(notification))
         NotificationCenter.show(notification)
+        Unit
     }
 
     override suspend fun schedule(notification: Notification, trigger: Trigger): ScheduledInfo = withContext(Dispatchers.IO) {
+        check(Validate.notification(notification))
+        check(Validate.trigger(trigger))
         NotificationCenter.schedule(notification, trigger)
     }
 
     override suspend fun update(id: NotificationId, patch: NotificationPatch) = withContext(Dispatchers.IO) {
+        check(Validate.patch(patch))
         val urgency = if (patch.alertAgain) Coalescer.Urgency.ALERT else Coalescer.Urgency.REGULAR
-        NotificationCenter.change(id.value, urgency) { apply(it, patch) }
+        // The whole patched notification: call actions need a call style, fields depend on each other.
+        NotificationCenter.change(id.value, urgency) { apply(it, patch).also { patched -> check(Validate.notification(patched)) } }
     }
 
     override suspend fun set_progress(id: NotificationId, progress: Progress?) = withContext(Dispatchers.IO) {
+        progress?.let { check(Validate.progress(it)) }
         NotificationCenter.change(id.value, Coalescer.Urgency.REGULAR) { it.copy(progress = progress) }
     }
 
     override suspend fun append_message(id: NotificationId, message: ChatMessage) = withContext(Dispatchers.IO) {
+        check(Validate.message(message))
         NotificationCenter.change(id.value, Coalescer.Urgency.ALERT) { n ->
             val style = n.style as? Style.Messaging
                 ?: NotificationCenter.error(NotificationError.Invalid(InvalidField("style", Problem.NotAllowedHere)))
@@ -217,7 +225,7 @@ class NotificationsBackendImpl(context: Context) : NotificationsBackend {
     override suspend fun delivered(): List<DeliveredNotification> = withContext(Dispatchers.IO) { NotificationCenter.delivered() }
 
     override suspend fun complete(ack: AckToken) {
-        NotificationCenter.finishAck(ack.value.toLong())
+        if (!NotificationCenter.finishAck(ack.value.toLong())) NotificationCenter.error(NotificationError.NotFound("ack ${ack.value}"))
     }
 
     override fun events(): Flow<NotificationEvent> = NotificationCenter.events()
@@ -227,8 +235,13 @@ class NotificationsBackendImpl(context: Context) : NotificationsBackend {
         const val USE_FULL_SCREEN_INTENT = "android.permission.USE_FULL_SCREEN_INTENT"
         const val SCHEDULE_EXACT_ALARM = "android.permission.SCHEDULE_EXACT_ALARM"
 
-        /** About 50 active notifications per app before the system drops the oldest. */
-        val MAX_ACTIVE: UInt = 50u
+        /** The system refuses (silently) an app's 51st active notification; `show` answers `TooMany(50)` first. */
+        val MAX_ACTIVE: UInt = NotificationCenter.MAX_ACTIVE.toUInt()
+
+        /** An invalid field is the call's `Invalid` error, as on every host. */
+        fun check(invalid: InvalidField?) {
+            if (invalid != null) NotificationCenter.error(NotificationError.Invalid(invalid))
+        }
 
         /** `Notification::apply`: every set field replaces, `clear` removes. */
         fun apply(n: Notification, p: NotificationPatch): Notification {

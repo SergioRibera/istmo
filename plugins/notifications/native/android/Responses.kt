@@ -72,18 +72,26 @@ internal object Responses {
 
     private fun queueFile(context: Context) = File(File(context.noBackupFilesDir, "istmo-notifications"), "responses.bin")
 
-    /** Appends [response] to the file queue (oldest dropped past 64). */
-    fun enqueue(context: Context, response: NotificationResponse) = synchronized(this) {
+    /**
+     * Queues [response] in the file when no runtime runs in this process
+     * (oldest dropped past 64); false when one does (the caller publishes
+     * it with an ack). Checked under the lock [attach] takes, so a
+     * response is never queued after the drain.
+     */
+    fun enqueueIfDetached(context: Context, response: NotificationResponse): Boolean = synchronized(this) {
+        if (NotificationCenter.hostAttached) return false
         val file = queueFile(context)
         val items = ArrayList(read(file))
         items.add(encode(response))
         while (items.size > MAX_QUEUED) items.removeAt(0)
         write(file, items)
+        true
     }
 
-    /** Publishes and removes everything [enqueue] stored. */
-    fun drain(context: Context) {
+    /** The backend is registered: from now on responses go to the lane; publishes what was queued. */
+    fun attach(context: Context) {
         val items = synchronized(this) {
+            NotificationCenter.hostAttached = true
             val file = queueFile(context)
             val items = read(file)
             file.delete()

@@ -17,7 +17,8 @@ import androidx.core.app.RemoteInput
  *   start, without an ack, and the receiver finishes at once.
  * - Snooze: removed and scheduled again, then a `Snoozed` event.
  * - Dismiss (delete intent): a `Dismissed` event, later regular updates
- *   are dropped.
+ *   are dropped. A group summary's delete intent only forgets the summary
+ *   (its children report their own dismissals).
  *
  * Not exported: only the plugin's `PendingIntent`s reach it.
  */
@@ -31,10 +32,11 @@ class IstmoNotificationReceiver : BroadcastReceiver() {
                 NotificationCenter.init(context)
                 when (intent.action) {
                     Intents.ACTION_DISMISS -> NotificationCenter.dismissedByUser(id)
+                    Intents.ACTION_SUMMARY_DISMISS -> NotificationCenter.summaryDismissed(id)
                     Intents.ACTION_SNOOZE -> NotificationCenter.snooze(id, intent.getLongExtra(Intents.EXTRA_SNOOZE_MS, 0))
                     Intents.ACTION_BACKGROUND -> handedOver = background(context, intent, id, pending)
                 }
-            } catch (e: RuntimeException) {
+            } catch (e: Exception) {
                 Log.w(TAG, "notification action failed", e)
             } finally {
                 if (!handedOver) pending.finish()
@@ -53,8 +55,7 @@ class IstmoNotificationReceiver : BroadcastReceiver() {
         val isReply = intent.getBooleanExtra(Intents.EXTRA_REPLY, false)
         val reply = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Intents.REMOTE_INPUT_KEY)?.toString()
         val response = template.copy(reply = reply ?: template.reply)
-        if (!NotificationCenter.hostAttached) {
-            Responses.enqueue(context, response)
+        if (Responses.enqueueIfDetached(context, response)) {
             if (isReply) NotificationCenter.repostAfterReply(id)
             return false
         }

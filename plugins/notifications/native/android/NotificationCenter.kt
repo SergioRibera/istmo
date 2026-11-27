@@ -33,34 +33,75 @@ import kotlinx.coroutines.flow.callbackFlow
  *   needed for patches, messages and group summaries. After a restart the
  *   content comes back from the notification's own extras when it was
  *   small enough to store there ([NotificationRenderer.EXTRA_WIRE]).
+ * - Active set: what the plugin believes the system shows (id -> group,
+ *   plus the group summaries), read back from `getActiveNotifications`
+ *   at start; group summaries and the 50-per-app limit use it.
+ * - Per-id lanes: every `notify` / `cancel` of one id (and of one group
+ *   summary) runs in that id's lane, one at a time. A post checks, inside
+ *   the lane, that its content version is still the table's: a cancel or
+ *   a newer content since the post was prepared wins. Scheduled
+ *   deliveries carry a ticket ([delivering]) that a cancel revokes.
  * - [Coalescer] at `Rate::ANDROID` (4 per second, burst 4) on a
  *   `HandlerThread`, which also runs the ack timeouts and the promotion
- *   checks.
+ *   checks. Every post (summaries and reply re-posts included) is charged
+ *   to it.
  * - Schedule: [ScheduleStore] in `noBackupFilesDir`, one `AlarmManager`
  *   alarm for the soonest entry ([Alarms]).
  * - Events: subscribers of `events()`, with a backlog of 64 until the
  *   first one.
  *
- * Notifications are posted with tag = id and id 0; group summaries use
- * the tag `istmo.group:<group id>`.
+ * Notifications are posted with tag = id and id [ITEM_ID]; group
+ * summaries with tag `istmo.group:<group id>` and id [SUMMARY_ID], so no
+ * notification id can name a summary.
+ *
+ * Lock order: [scheduleLock] before [lock], a lane before [lock]; a lane
+ * and [scheduleLock] are never held together. [lock] is held across no
+ * binder call or file IO (except once, while [init] loads).
  */
 @SuppressLint("MissingPermission") // POST_NOTIFICATIONS is checked before every post.
 internal object NotificationCenter {
     private const val TAG = "istmo.notifications"
     const val DEFAULT_CHANNEL = "default"
-    private const val SUMMARY_PREFIX = "istmo.group:"
+    const val ITEM_ID = 0
+    const val SUMMARY_ID = 1
+    const val SUMMARY_PREFIX = "istmo.group:"
     private const val BACKLOG = 64
     private const val ACK_TIMEOUT_MS = 9_000L
     private const val PROMOTION_CHECK_MS = 1_000L
     private const val MAX_DISMISSED = 256
+    private const val MAX_ACKS = 256
+
+    /** `NotificationManagerService.MAX_PACKAGE_NOTIFICATIONS`: the 51st post is refused, silently. */
+    const val MAX_ACTIVE = 50
+
+    /** A dismissal this close to `postedAt + timeoutMs` counts as the timeout. */
+    private const val TIMEOUT_SLACK_MS = 1_000L
+
+    /** Lane / coalescer key of a group summary: ids cannot contain NUL. */
+    private const val SUMMARY_KEY = "\u0000group:"
 
     /** `res/raw/istmo_notification_channels.bin` written by istmo-build. */
     private const val STATIC_CHANNELS_RESOURCE = "istmo_notification_channels"
-    private const val CHANNELS_FORMAT = 1
+    private const val CHANNELS_FORMAT = 2
 
-    private class Live(var notification: Notification, var dismissed: Boolean = false)
+    private class Live(
+        var notification: Notification,
+        var version: Long,
+        var dismissed: Boolean = false,
+        /** `elapsedRealtime` of the last post (the timeout counts from it). */
+        var postedAtMs: Long = 0,
+        /** Whether promotion was asked by the last checked post; `null` = never checked. */
+        var promotable: Boolean? = null,
+    )
 
     private class Ack(val id: String, val result: BroadcastReceiver.PendingResult, val reply: Boolean, val timeout: Runnable)
+
+    private class Lane {
+        var users = 0
+    }
+
+    /** A posted group summary; [signature] `null` when found at start (content unknown). */
+    private class Summary(var signature: List<String>?)
 
     @Volatile
     private var appContext: Context? = null
@@ -69,7 +110,7 @@ internal object NotificationCenter {
     private lateinit var schedule: ScheduleStore
     private val codecs = Responses.codecs
 
-    /** Set once a backend is registered: the runtime runs in this process. */
+    /** Set once a backend is registered: the runtime runs in this process ([Responses.attach]). */
     @Volatile
     var hostAttached = false
 
@@ -78,10 +119,25 @@ internal object NotificationCenter {
     private val dismissedOrder = ArrayDeque<String>()
     private lateinit var coalescer: Coalescer<Notification>
     private var pollArmed = false
+    private var nextVersion = 1L
 
-    /** Channels the plugin knows (static + dynamic): defaults below API 26, the unknown-channel check. */
+    /** What the system shows: notification id -> its group id. */
+    private val active = HashMap<String, String?>()
+    private val summaries = HashMap<String, Summary>()
+    private val lanes = HashMap<String, Lane>()
+
+    /** Scheduled deliveries taken from the engine, not shown yet: id -> (ticket, group). */
+    private val delivering = HashMap<String, Pair<Long, String?>>()
+    private var nextTicket = 1L
+
+    /** Channels the plugin knows (default + static + dynamic): defaults below API 26, the unknown-channel check. */
     private val channels = LinkedHashMap<String, ChannelSpec>()
-    private val acks = HashMap<Long, Ack>()
+    private val staticChannels = HashSet<String>()
+    private val dynamicChannels = LinkedHashMap<String, ChannelSpec>()
+
+    /** System channels the plugin created (deleted when neither static nor dynamic any more). */
+    private val ownedChannels = LinkedHashSet<String>()
+    private val acks = LinkedHashMap<Long, Ack>()
     private var nextAck = 1L
 
     private val subscribers = ArrayList<SendChannel<NotificationEvent>>()
@@ -101,7 +157,9 @@ internal object NotificationCenter {
             handler = Handler(HandlerThread("istmo-notifications").apply { start() }.looper)
             schedule = ScheduleStore(File(File(app.noBackupFilesDir, "istmo-notifications"), "schedule.bin"), codecs)
             coalescer = Coalescer(Coalescer.ANDROID_PER_SECOND, Coalescer.ANDROID_BURST, SystemClock.elapsedRealtime())
+            // Still under the lock: no caller sees a half-loaded state.
             loadChannels(app)
+            readActive(app)
             appContext = app
             return app
         }
@@ -110,6 +168,57 @@ internal object NotificationCenter {
     private val context: Context get() = appContext ?: throw IllegalStateException("NotificationCenter.init not called")
 
     private fun manager(): NotificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+    /** Runs [block] on the handler thread; a throw is logged, never kills the thread. */
+    private fun later(delayMs: Long, block: () -> Unit): Runnable {
+        val r = Runnable {
+            try {
+                block()
+            } catch (e: Exception) {
+                Log.w(TAG, "notification task failed", e)
+            }
+        }
+        handler.postDelayed(r, delayMs)
+        return r
+    }
+
+    /** The active set after a restart: the plugin's notifications and summaries the system still shows. */
+    private fun readActive(app: Context) {
+        if (Build.VERSION.SDK_INT < 23) return
+        val list = try {
+            (app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).activeNotifications
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "active notifications not readable", e)
+            return
+        }
+        synchronized(lock) {
+            for (sbn in list) {
+                val tag = sbn.tag ?: continue
+                if (sbn.id == SUMMARY_ID && tag.startsWith(SUMMARY_PREFIX)) {
+                    summaries.getOrPut(tag.removePrefix(SUMMARY_PREFIX)) { Summary(null) }
+                } else if (sbn.id == ITEM_ID && sbn.notification.extras.getBoolean(NotificationRenderer.EXTRA_MARKER)) {
+                    if (!active.containsKey(tag)) active[tag] = sbn.notification.group
+                }
+            }
+        }
+    }
+
+    // ---- Lanes -----------------------------------------------------------
+
+    /** Runs [block] in [key]'s lane: one at a time per key, in arrival order of the monitor. */
+    private inline fun <T> inLane(key: String, block: () -> T): T {
+        val lane = synchronized(lock) { lanes.getOrPut(key) { Lane() }.also { it.users++ } }
+        try {
+            return synchronized(lane) { block() }
+        } finally {
+            synchronized(lock) {
+                lane.users--
+                if (lane.users == 0) lanes.remove(key)
+            }
+        }
+    }
+
+    private fun summaryLane(group: String) = SUMMARY_KEY + group
 
     // ---- Permission ----------------------------------------------------
 
@@ -124,44 +233,97 @@ internal object NotificationCenter {
 
     // ---- Channels ------------------------------------------------------
 
-    private fun dynamicChannelsFile(context: Context) = File(File(context.noBackupFilesDir, "istmo-notifications"), "channels.bin")
+    private fun channelsFile(context: Context) = File(File(context.noBackupFilesDir, "istmo-notifications"), "channels.bin")
 
+    /**
+     * Static channels (the raw resource, owned by `istmo.toml`), then the
+     * dynamic ones (`set_channels`, persisted), then `default`. On API 26+
+     * every one is created at each start (creating an existing channel
+     * only updates its name and description), and system channels the
+     * plugin created earlier that are neither static nor dynamic any more
+     * (a channel removed from `istmo.toml`) are deleted.
+     */
     private fun loadChannels(app: Context) {
-        val specs = ArrayList<ChannelSpec>()
+        val statics = ArrayList<ChannelSpec>()
         val raw = app.resources.getIdentifier(STATIC_CHANNELS_RESOURCE, "raw", app.packageName)
         if (raw != 0) {
             try {
                 val bytes = app.resources.openRawResource(raw).use { it.readBytes() }
-                specs.addAll(Bincode.readVec(bytes, 0) { b, o -> codecs.readChannelSpec(b, o) }.value)
-            } catch (e: RuntimeException) {
+                statics.addAll(Bincode.readVec(bytes, 0) { b, o -> codecs.readChannelSpec(b, o) }.value)
+            } catch (e: Exception) {
                 Log.w(TAG, "static channels not readable", e)
             }
         }
-        specs.addAll(readDynamicChannels(app))
-        for (spec in specs) channels[spec.id.value] = spec
-        if (!channels.containsKey(DEFAULT_CHANNEL)) {
-            channels[DEFAULT_CHANNEL] = ChannelSpec(
-                id = ChannelId(DEFAULT_CHANNEL), name = "General", description = null,
-                importance = Interruption.Normal, sound = null, vibration = null, lightColor = null,
-                showBadge = true, lockScreen = null, bypassDnd = false, group = null,
-            )
+        val (dynamics, owned) = readChannelsFile(app)
+        val stale: List<String>
+        synchronized(lock) {
+            for (spec in statics) {
+                channels[spec.id.value] = spec
+                staticChannels.add(spec.id.value)
+            }
+            for (spec in dynamics) {
+                if (spec.id.value in staticChannels) continue
+                channels[spec.id.value] = spec
+                dynamicChannels[spec.id.value] = spec
+            }
+            if (!channels.containsKey(DEFAULT_CHANNEL)) {
+                channels[DEFAULT_CHANNEL] = ChannelSpec(
+                    id = ChannelId(DEFAULT_CHANNEL), name = "General", description = null,
+                    importance = Interruption.Normal, sound = null, vibration = null, lightColor = null,
+                    showBadge = true, lockScreen = null, bypassDnd = false, group = null,
+                )
+            }
+            stale = owned.filter { it !in channels }
+            ownedChannels.clear()
+            ownedChannels.addAll(channels.keys)
         }
-        // Static channels are created at every start (creating an existing
-        // channel only updates its name and description).
-        if (Build.VERSION.SDK_INT >= 26) for (spec in channels.values) createChannel(app, spec)
+        if (Build.VERSION.SDK_INT >= 26) {
+            val manager = app.getSystemService(NotificationManager::class.java)
+            for (id in stale) {
+                try {
+                    manager.deleteNotificationChannel(id)
+                } catch (e: RuntimeException) {
+                    Log.w(TAG, "stale channel $id not deleted", e)
+                }
+            }
+            for (spec in synchronized(lock) { channels.values.toList() }) createChannel(app, spec)
+        }
+        if (stale.isNotEmpty() || owned.toSet() != synchronized(lock) { ownedChannels.toSet() }) {
+            synchronized(lock) { saveChannels(app) }
+        }
     }
 
-    private fun readDynamicChannels(app: Context): List<ChannelSpec> {
+    /** Format byte [CHANNELS_FORMAT], wire `Vec<ChannelSpec>` (dynamic), wire `Vec<String>` (owned). */
+    private fun readChannelsFile(app: Context): Pair<List<ChannelSpec>, List<String>> {
         val bytes = try {
-            dynamicChannelsFile(app).readBytes()
+            channelsFile(app).readBytes()
         } catch (_: java.io.IOException) {
-            return emptyList()
+            return emptyList<ChannelSpec>() to emptyList()
         }
-        if (bytes.isEmpty() || bytes[0].toInt() != CHANNELS_FORMAT) return emptyList()
+        if (bytes.isEmpty() || bytes[0].toInt() != CHANNELS_FORMAT) return emptyList<ChannelSpec>() to emptyList()
         return try {
-            Bincode.readVec(bytes, 1) { b, o -> codecs.readChannelSpec(b, o) }.value
+            val specs = Bincode.readVec(bytes, 1) { b, o -> codecs.readChannelSpec(b, o) }
+            val owned = Bincode.readVec(bytes, 1 + specs.consumed) { b, o -> Bincode.readString(b, o) }
+            specs.value to owned.value
         } catch (_: IllegalArgumentException) {
-            emptyList()
+            emptyList<ChannelSpec>() to emptyList()
+        }
+    }
+
+    /** Caller holds [lock]. Only the dynamic channels and the owned ids: statics come from the resource. */
+    private fun saveChannels(app: Context) {
+        val out = IstmoBytesOut(256)
+        out.write(CHANNELS_FORMAT)
+        Bincode.writeVec(out, dynamicChannels.values.toList()) { o, c -> codecs.writeChannelSpec(o, c) }
+        Bincode.writeVec(out, ownedChannels.toList()) { o, s -> Bincode.writeString(o, s) }
+        val file = channelsFile(app)
+        try {
+            file.parentFile?.mkdirs()
+            val tmp = File(file.path + ".tmp")
+            tmp.writeBytes(out.toExactArray())
+            if (!tmp.renameTo(file)) tmp.delete()
+        } catch (e: java.io.IOException) {
+            Log.w(TAG, "channels not saved", e)
         }
     }
 
@@ -199,36 +361,32 @@ internal object NotificationCenter {
 
     fun setChannels(specs: List<ChannelSpec>) {
         val app = context
+        val created = ArrayList<ChannelSpec>(specs.size)
         synchronized(lock) {
             for (spec in specs) {
+                val id = spec.id.value
                 // An existing channel keeps its settings except name and description.
-                val merged = channels[spec.id.value]?.copy(name = spec.name, description = spec.description) ?: spec
-                channels[spec.id.value] = merged
+                val merged = channels[id]?.copy(name = spec.name, description = spec.description) ?: spec
+                channels[id] = merged
+                // A static id stays owned by istmo.toml: the next start shows its configured name again.
+                if (id !in staticChannels) dynamicChannels[id] = merged
+                ownedChannels.add(id)
+                created.add(merged)
             }
-            saveDynamicChannels(app)
+            saveChannels(app)
         }
-        for (spec in specs) createChannel(app, spec)
+        for (spec in created) createChannel(app, spec)
     }
 
     fun deleteChannel(id: String) {
         val app = context
         synchronized(lock) {
             channels.remove(id)
-            saveDynamicChannels(app)
+            dynamicChannels.remove(id)
+            ownedChannels.remove(id)
+            saveChannels(app)
         }
         if (Build.VERSION.SDK_INT >= 26) app.getSystemService(NotificationManager::class.java).deleteNotificationChannel(id)
-    }
-
-    /** Caller holds [lock]. Static channels are stored too: harmless, read back at start. */
-    private fun saveDynamicChannels(app: Context) {
-        val out = IstmoBytesOut(256)
-        out.write(CHANNELS_FORMAT)
-        Bincode.writeVec(out, channels.values.toList()) { o, c -> codecs.writeChannelSpec(o, c) }
-        val file = dynamicChannelsFile(app)
-        file.parentFile?.mkdirs()
-        val tmp = File(file.path + ".tmp")
-        tmp.writeBytes(out.toExactArray())
-        if (!tmp.renameTo(file)) tmp.delete()
     }
 
     private fun channelOf(n: Notification): Pair<String, ChannelSpec?> {
@@ -250,33 +408,108 @@ internal object NotificationCenter {
         return if (out.size() <= NotificationRenderer.MAX_WIRE_EXTRA) out.toExactArray() else null
     }
 
-    /** Posts [n] now; [alert] false keeps it silent. Caller does not hold [lock]. */
-    private fun post(n: Notification, alert: Boolean) {
+    /** Caller holds [lock]. */
+    private fun bump(): Long = nextVersion++
+
+    /** Plugin notifications the system shows (estimated below API 23 from the active set). */
+    private fun activeCount(): Int {
+        if (Build.VERSION.SDK_INT < 23) return synchronized(lock) { active.size + summaries.size }
+        return try {
+            manager().activeNotifications.size
+        } catch (_: RuntimeException) {
+            0
+        }
+    }
+
+    /**
+     * Posts version [version] of [n]; [alert] false keeps it silent.
+     * Skipped (false) when the table moved on: [n] was cancelled, or
+     * newer content was set (which is posted, queued or dropped on its
+     * own). Caller holds no lock.
+     */
+    private fun post(n: Notification, version: Long, alert: Boolean): Boolean {
+        val id = n.id.value
         val (channelId, spec) = channelOf(n)
         if (!notificationsAllowed()) error(NotificationError.PermissionDenied)
         val built = renderer.build(n, channelId, spec, alert, encodeWire(n))
-        try {
-            manager().notify(n.id.value, 0, built)
-        } catch (e: SecurityException) {
-            error(NotificationError.PermissionDenied)
-        } catch (e: RuntimeException) {
-            error(NotificationError.Platform(PlatformError(0, e.toString())))
+        val group = n.group?.id?.value
+        val posted = inLane(id) {
+            val (current, isNew, needsSummary) = synchronized(lock) {
+                val live = shown[id]
+                if (live == null || live.version != version) return@inLane false
+                val isNew = !active.containsKey(id)
+                val members = if (group == null) 0 else active.count { it.value == group && it.key != id }
+                Triple(live, isNew, group != null && members >= 1 && !summaries.containsKey(group))
+            }
+            if (isNew) {
+                // The system refuses the 51st notification of an app without telling it.
+                val needed = 1 + if (needsSummary) 1 else 0
+                if (activeCount() + needed > MAX_ACTIVE) error(NotificationError.TooMany(MAX_ACTIVE.toUInt()))
+            }
+            try {
+                manager().notify(id, ITEM_ID, built)
+            } catch (e: SecurityException) {
+                error(NotificationError.PermissionDenied)
+            } catch (e: RuntimeException) {
+                error(NotificationError.Platform(PlatformError(0, e.toString())))
+            }
+            synchronized(lock) {
+                active[id] = group
+                current.postedAtMs = SystemClock.elapsedRealtime()
+            }
+            true
         }
-        n.group?.let { refreshGroup(it, channelId) }
-        if (n.live && Api36.promotionSupported) checkPromotion(n.id.value)
+        if (!posted) return false
+        n.group?.let { refreshGroup(it.id.value, channelId) }
+        if (Api36.promotionSupported) {
+            val promotable = Api36.promotable(n)
+            val check = synchronized(lock) {
+                val live = shown[id]
+                val changed = live != null && (alert || live.promotable != promotable)
+                if (live != null) live.promotable = promotable
+                changed && promotable
+            }
+            if (check) checkPromotion(id)
+        }
+        return true
     }
 
-    /** A full show (new or replacing, alerting). */
-    fun show(n: Notification) {
+    /**
+     * A full show (new or replacing, alerting). [ticket] is the delivery
+     * ticket of a scheduled entry: a cancel since it was taken skips it.
+     */
+    fun show(n: Notification, ticket: Long? = null): Boolean {
         val normalized = normalize(n)
         val id = normalized.id.value
-        synchronized(lock) {
+        val (live, previous) = synchronized(lock) {
+            if (ticket != null) {
+                if (delivering[id]?.first != ticket) return false
+                delivering.remove(id)
+            }
             coalescer.shown(id, SystemClock.elapsedRealtime())
             dismissedOrder.remove(id)
-            shown[id] = Live(normalized)
+            val live = Live(normalized, bump())
+            live to shown.put(id, live)
         }
-        post(normalized, alert = true)
+        val posted = try {
+            post(normalized, live.version, alert = true)
+        } catch (e: BackendException) {
+            // Nothing new reached the system: the table goes back to what it showed.
+            synchronized(lock) {
+                if (shown[id] === live) {
+                    if (previous != null) shown[id] = previous else shown.remove(id)
+                }
+            }
+            throw e
+        }
+        if (!posted) return false
+        // A replacement in another group leaves the old one a member short.
+        val oldGroup = previous?.notification?.group?.id?.value
+        if (oldGroup != null && oldGroup != normalized.group?.id?.value) {
+            refreshGroup(oldGroup, previous.notification.channel?.value ?: DEFAULT_CHANNEL)
+        }
         emit(NotificationEvent.Delivered(normalized.id))
+        return true
     }
 
     private fun normalize(n: Notification): Notification {
@@ -291,21 +524,28 @@ internal object NotificationCenter {
     private fun content(id: String): Notification? {
         synchronized(lock) { shown[id]?.let { return it.notification } }
         if (Build.VERSION.SDK_INT < 23) return null
-        val active = manager().activeNotifications.firstOrNull { it.tag == id && it.id == 0 } ?: return null
-        val wire = active.notification.extras.getByteArray(NotificationRenderer.EXTRA_WIRE) ?: return null
+        val sbn = try {
+            manager().activeNotifications.firstOrNull { it.tag == id && it.id == ITEM_ID }
+        } catch (_: RuntimeException) {
+            null
+        } ?: return null
+        val wire = sbn.notification.extras.getByteArray(NotificationRenderer.EXTRA_WIRE) ?: return null
         val n = try {
             codecs.readNotification(wire, 0).value
         } catch (_: IllegalArgumentException) {
             return null
         }
-        synchronized(lock) { shown.getOrPut(id) { Live(n) } }
-        return n
+        return synchronized(lock) {
+            if (!active.containsKey(id)) active[id] = n.group?.id?.value
+            shown.getOrPut(id) { Live(n, bump()) }.notification
+        }
     }
 
     /**
      * Changes the shown [id] through the coalescer. A notification only
      * scheduled is changed in the store instead. [NotificationError.NotFound]
-     * when it is neither.
+     * when it is neither. [transform] may throw (a validation error):
+     * nothing changes then.
      */
     fun change(id: String, urgency: Coalescer.Urgency, transform: (Notification) -> Notification) {
         val current = content(id)
@@ -314,17 +554,35 @@ internal object NotificationCenter {
             error(NotificationError.NotFound(id))
         }
         val next = normalize(transform(current))
-        val admit = synchronized(lock) {
-            val live = shown.getOrPut(id) { Live(next) }
+        val (admit, version) = synchronized(lock) {
+            val live = shown.getOrPut(id) { Live(next, 0) }
             live.notification = next
+            live.version = bump()
             if (urgency != Coalescer.Urgency.REGULAR) {
                 live.dismissed = false
                 dismissedOrder.remove(id)
             }
-            coalescer.offer(id, next, urgency, SystemClock.elapsedRealtime())
+            coalescer.offer(id, next, urgency, SystemClock.elapsedRealtime()) to live.version
         }
         when (admit) {
-            is Coalescer.Admit.Now -> post(admit.item, alert = urgency != Coalescer.Urgency.REGULAR)
+            is Coalescer.Admit.Now -> post(admit.item, version, alert = urgency != Coalescer.Urgency.REGULAR)
+            is Coalescer.Admit.Queued -> armPoll()
+            is Coalescer.Admit.Dropped -> {}
+        }
+    }
+
+    /** Posts the table's content of [id] again, silently, through the coalescer (clears a reply spinner). */
+    private fun repost(id: String) {
+        val (admit, version) = synchronized(lock) {
+            val live = shown[id]?.takeIf { !it.dismissed && active.containsKey(id) } ?: return
+            coalescer.offer(id, live.notification, Coalescer.Urgency.REGULAR, SystemClock.elapsedRealtime()) to live.version
+        }
+        when (admit) {
+            is Coalescer.Admit.Now -> try {
+                post(admit.item, version, alert = false)
+            } catch (e: BackendException) {
+                Log.w(TAG, "re-post of $id failed: ${e.error}")
+            }
             is Coalescer.Admit.Queued -> armPoll()
             is Coalescer.Admit.Dropped -> {}
         }
@@ -338,185 +596,266 @@ internal object NotificationCenter {
             due
         }
         // The coalescer runs on `elapsedRealtime`; handlers on `uptimeMillis`.
-        handler.postDelayed(::pollQueued, maxOf(0L, due - SystemClock.elapsedRealtime()))
+        later(maxOf(0L, due - SystemClock.elapsedRealtime()), ::pollQueued)
     }
 
     private fun pollQueued() {
         val ready = synchronized(lock) {
             pollArmed = false
-            coalescer.poll(SystemClock.elapsedRealtime())
-        }
-        for ((_, n) in ready) {
-            try {
-                post(n, alert = false)
-            } catch (e: BackendException) {
-                emit(NotificationEvent.Failed(Failure(n.id, "update not posted: ${e.error}")))
+            coalescer.poll(SystemClock.elapsedRealtime()).mapNotNull { (id, n) ->
+                // Queued content is the table's latest (or it was cancelled meanwhile).
+                shown[id]?.takeIf { it.notification === n }?.let { n to it.version }
             }
         }
-        armPoll()
+        try {
+            for ((n, version) in ready) {
+                try {
+                    post(n, version, alert = false)
+                } catch (e: BackendException) {
+                    emit(NotificationEvent.Failed(Failure(n.id, "update not posted: ${e.error}")))
+                }
+            }
+        } finally {
+            armPoll()
+        }
     }
 
     private fun checkPromotion(id: String) {
-        handler.postDelayed({
+        later(PROMOTION_CHECK_MS) {
             val flag = Api36.flagPromotedOngoing
-            val active = try {
-                manager().activeNotifications.firstOrNull { it.tag == id && it.id == 0 }
+            val sbn = try {
+                manager().activeNotifications.firstOrNull { it.tag == id && it.id == ITEM_ID }
             } catch (_: RuntimeException) {
                 null
-            } ?: return@postDelayed
-            if (active.notification.flags and flag == 0) emit(NotificationEvent.NotPromoted(NotificationId(id)))
-        }, PROMOTION_CHECK_MS)
+            } ?: return@later
+            if (sbn.notification.flags and flag == 0) emit(NotificationEvent.NotPromoted(NotificationId(id)))
+        }
     }
 
     // ---- Groups --------------------------------------------------------
 
     private fun summaryTag(group: String) = SUMMARY_PREFIX + group
 
-    /** Posts or removes the summary of [group]: present while it has 2+ members. */
-    private fun refreshGroup(group: Group, channelId: String) {
-        val gid = group.id.value
-        val members = synchronized(lock) {
-            shown.values.filter { !it.dismissed && it.notification.group?.id?.value == gid }.map { it.notification }
-        }
-        if (members.size >= 2) {
-            val summary = renderer.summary(group, channelId, members.asReversed().map { it.title }, members.last())
+    /**
+     * Posts, keeps or removes the summary of [group]. Posted once the
+     * group has 2 members, then kept while it has any: removing a summary
+     * makes the system cancel the group's children with it. Re-posted
+     * only when the members or their titles change.
+     */
+    private fun refreshGroup(group: String, channelId: String) {
+        inLane(summaryLane(group)) {
+            val (known, count, posted) = synchronized(lock) {
+                val ids = active.entries.filter { it.value == group }.map { it.key }
+                // Members shown before a restart without their content still count.
+                Triple(ids.mapNotNull { shown[it]?.notification }, ids.size, summaries[group])
+            }
+            if (count == 0) {
+                if (posted != null) cancelSummary(group)
+                return@inLane
+            }
+            if (posted == null && count < 2) return@inLane
+            val latest = known.lastOrNull() ?: return@inLane
+            val info = latest.group ?: return@inLane
+            val signature = buildList {
+                add(info.title.orEmpty())
+                add(info.summary.orEmpty())
+                for (m in known) {
+                    add(m.id.value)
+                    add(m.title)
+                }
+            }
+            if (posted?.signature == signature) return@inLane
+            synchronized(lock) { coalescer.shown(summaryLane(group), SystemClock.elapsedRealtime()) }
+            val summary = renderer.summary(info, channelId, known.asReversed().map { it.title }, latest)
             try {
-                manager().notify(summaryTag(gid), 0, summary)
+                manager().notify(summaryTag(group), SUMMARY_ID, summary)
+                synchronized(lock) { summaries.getOrPut(group) { Summary(null) }.signature = signature }
             } catch (e: RuntimeException) {
                 Log.w(TAG, "group summary not posted", e)
             }
-        } else {
-            manager().cancel(summaryTag(gid), 0)
         }
     }
 
-    private fun refreshGroupOf(n: Notification?) {
-        val group = n?.group ?: return
-        val channel = n.channel?.value ?: DEFAULT_CHANNEL
-        refreshGroup(group, channel)
+    /** Caller is in [group]'s summary lane. */
+    private fun cancelSummary(group: String) {
+        synchronized(lock) { summaries.remove(group) }
+        try {
+            manager().cancel(summaryTag(group), SUMMARY_ID)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "group summary not removed", e)
+        }
+    }
+
+    /** The person dismissed the summary of [group] (its children go with it, each with its delete intent). */
+    fun summaryDismissed(group: String) {
+        inLane(summaryLane(group)) { synchronized(lock) { summaries.remove(group) } }
     }
 
     // ---- Cancel / dismiss ----------------------------------------------
 
-    fun cancel(id: String) {
+    /**
+     * Removes [id]: the queued update, the table entry, a delivery in
+     * flight (revoked under [scheduleLock], so a due entry taken before
+     * the cancel is never shown), then the system notification inside
+     * its lane (after a post in flight: cancel wins).
+     */
+    private fun remove(id: String, unschedule: Boolean, refresh: Boolean = true): Notification? {
+        synchronized(scheduleLock) {
+            if (unschedule) {
+                val engine = ScheduleEngine(schedule.load())
+                if (engine.remove(id)) saveAndArm(engine, strict = true)
+            }
+            synchronized(lock) { delivering.remove(id) }
+        }
         val removed = synchronized(lock) {
             coalescer.cancel(id)
             dismissedOrder.remove(id)
             shown.remove(id)?.notification
         }
-        manager().cancel(id, 0)
-        refreshGroupOf(removed)
-        unschedule(id)
+        val group = inLane(id) {
+            val group = synchronized(lock) { active.remove(id) }
+            manager().cancel(id, ITEM_ID)
+            group
+        } ?: removed?.group?.id?.value
+        // Its group is a member short (also when its content was never read after a restart).
+        if (refresh && group != null) refreshGroup(group, removed?.channel?.value ?: DEFAULT_CHANNEL)
+        return removed
+    }
+
+    fun cancel(id: String) {
+        remove(id, unschedule = true)
     }
 
     fun cancelGroup(group: String) {
-        val ids = synchronized(lock) {
-            shown.values.filter { it.notification.group?.id?.value == group }.map { it.notification.id.value }
-        }.toMutableSet()
-        if (Build.VERSION.SDK_INT >= 23) {
-            for (active in manager().activeNotifications) {
-                val tag = active.tag ?: continue
-                if (active.notification.group == group && !tag.startsWith(SUMMARY_PREFIX)) ids.add(tag)
-            }
-        }
-        for (id in ids) {
-            synchronized(lock) {
-                coalescer.cancel(id)
-                shown.remove(id)
-            }
-            manager().cancel(id, 0)
-        }
-        manager().cancel(summaryTag(group), 0)
         synchronized(scheduleLock) {
             val engine = ScheduleEngine(schedule.load())
-            if (engine.removeGroup(group).isNotEmpty()) saveAndArm(engine)
+            if (engine.removeGroup(group).isNotEmpty()) saveAndArm(engine, strict = true)
+            synchronized(lock) { delivering.entries.removeAll { it.value.second == group } }
         }
-    }
-
-    fun cancelAll() {
         val ids = synchronized(lock) {
-            coalescer.clear()
-            dismissedOrder.clear()
-            val ids = shown.keys.toMutableSet()
-            shown.clear()
+            val ids = shown.values.filter { it.notification.group?.id?.value == group }.map { it.notification.id.value }.toMutableSet()
+            ids.addAll(active.filterValues { it == group }.keys)
             ids
         }
         if (Build.VERSION.SDK_INT >= 23) {
-            for (active in manager().activeNotifications) {
-                if (active.notification.extras.getBoolean(NotificationRenderer.EXTRA_MARKER) ||
-                    active.tag?.startsWith(SUMMARY_PREFIX) == true
-                ) {
-                    active.tag?.let { ids.add(it) }
+            for (sbn in manager().activeNotifications) {
+                val tag = sbn.tag ?: continue
+                if (sbn.id == ITEM_ID && sbn.notification.group == group) ids.add(tag)
+            }
+        }
+        for (id in ids) remove(id, unschedule = false, refresh = false)
+        inLane(summaryLane(group)) { cancelSummary(group) }
+    }
+
+    fun cancelAll() {
+        synchronized(scheduleLock) {
+            saveAndArm(ScheduleEngine(), strict = true)
+            synchronized(lock) { delivering.clear() }
+        }
+        val (ids, groups) = synchronized(lock) {
+            coalescer.clear()
+            dismissedOrder.clear()
+            val ids = shown.keys.toMutableSet()
+            ids.addAll(active.keys)
+            shown.clear()
+            ids to summaries.keys.toMutableSet()
+        }
+        if (Build.VERSION.SDK_INT >= 23) {
+            for (sbn in manager().activeNotifications) {
+                val tag = sbn.tag ?: continue
+                if (sbn.id == SUMMARY_ID && tag.startsWith(SUMMARY_PREFIX)) {
+                    groups.add(tag.removePrefix(SUMMARY_PREFIX))
+                } else if (sbn.id == ITEM_ID && sbn.notification.extras.getBoolean(NotificationRenderer.EXTRA_MARKER)) {
+                    ids.add(tag)
                 }
             }
         }
-        for (id in ids) manager().cancel(id, 0)
-        synchronized(scheduleLock) { saveAndArm(ScheduleEngine()) }
+        for (id in ids) remove(id, unschedule = false, refresh = false)
+        for (group in groups) inLane(summaryLane(group)) { cancelSummary(group) }
     }
 
-    /** An action that opened the app removed [id] (the schedule keeps its entry). */
+    /** A tap or an action that opened the app removed [id] (the schedule keeps its entry). */
     fun removeShown(id: String) {
-        val removed = synchronized(lock) {
-            coalescer.cancel(id)
-            shown.remove(id)?.notification
-        }
-        manager().cancel(id, 0)
-        refreshGroupOf(removed)
+        remove(id, unschedule = false)
     }
 
-    /** The delete intent fired: the person dismissed [id]. */
+    /**
+     * The delete intent fired: the person dismissed [id], or its
+     * `timeoutMs` ran out. Android does not say which; a dismissal within
+     * [TIMEOUT_SLACK_MS] of the deadline counts as the timeout (the
+     * notification then leaves the table like a removal).
+     */
     fun dismissedByUser(id: String) {
+        val now = SystemClock.elapsedRealtime()
+        var timedOut = false
+        var group: String? = null
         val n = synchronized(lock) {
-            val live = shown[id] ?: return@synchronized null
+            group = active.remove(id)
+            val live = shown[id]
+            if (live == null) {
+                // Shown before a restart: later regular updates are still dropped, within the bound.
+                if (!coalescer.isDismissed(id)) {
+                    coalescer.dismissed(id)
+                    dismissedOrder.addLast(id)
+                    evictDismissed()
+                }
+                return@synchronized null
+            }
             if (live.dismissed) return
-            live.dismissed = true
-            coalescer.dismissed(id)
-            dismissedOrder.addLast(id)
-            while (dismissedOrder.size > MAX_DISMISSED) {
-                val old = dismissedOrder.removeFirst()
-                shown.remove(old)
-                coalescer.cancel(old)
+            val timeout = live.notification.timeoutMs
+            if (timeout != null && timeout <= Long.MAX_VALUE.toULong() && now >= live.postedAtMs + timeout.toLong() - TIMEOUT_SLACK_MS) {
+                timedOut = true
+                shown.remove(id)
+                coalescer.cancel(id)
+                dismissedOrder.remove(id)
+            } else {
+                live.dismissed = true
+                coalescer.dismissed(id)
+                dismissedOrder.addLast(id)
+                evictDismissed()
             }
             live.notification
         }
-        if (n == null) synchronized(lock) { coalescer.dismissed(id) }
-        refreshGroupOf(n)
-        emit(NotificationEvent.Dismissed(Dismissal(NotificationId(id), DismissReason.User)))
+        (n?.group?.id?.value ?: group)?.let { refreshGroup(it, n?.channel?.value ?: DEFAULT_CHANNEL) }
+        emit(NotificationEvent.Dismissed(Dismissal(NotificationId(id), if (timedOut) DismissReason.Timeout else DismissReason.User)))
+    }
+
+    /** Caller holds [lock]. At most [MAX_DISMISSED] dismissals kept (the core bound). */
+    private fun evictDismissed() {
+        while (dismissedOrder.size > MAX_DISMISSED) {
+            val old = dismissedOrder.removeFirst()
+            if (shown[old]?.dismissed == true) shown.remove(old)
+            coalescer.cancel(old)
+        }
     }
 
     fun delivered(): List<DeliveredNotification> {
         if (Build.VERSION.SDK_INT < 23) {
             return synchronized(lock) {
-                shown.values.filter { !it.dismissed }.map { live ->
+                shown.values.filter { !it.dismissed && active.containsKey(it.notification.id.value) }.map { live ->
                     val n = live.notification
                     DeliveredNotification(n.id, n.title, n.body, n.group?.id, null)
                 }
             }
         }
-        return manager().activeNotifications.mapNotNull { active ->
-            val tag = active.tag ?: return@mapNotNull null
-            val extras = active.notification.extras
-            if (!extras.getBoolean(NotificationRenderer.EXTRA_MARKER) || tag.startsWith(SUMMARY_PREFIX)) return@mapNotNull null
+        return manager().activeNotifications.mapNotNull { sbn ->
+            val tag = sbn.tag ?: return@mapNotNull null
+            val extras = sbn.notification.extras
+            if (sbn.id != ITEM_ID || !extras.getBoolean(NotificationRenderer.EXTRA_MARKER)) return@mapNotNull null
             DeliveredNotification(
                 id = NotificationId(tag),
                 title = extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString(),
                 body = extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString(),
-                group = active.notification.group?.let(::GroupId),
-                deliveredMs = active.postTime,
+                group = sbn.notification.group?.let(::GroupId),
+                deliveredMs = sbn.postTime,
             )
         }
     }
 
     // ---- Schedule ------------------------------------------------------
 
-    /** Schedules [n]; `exact` tells whether the alarm is exact. */
+    /** Schedules [n] (validated by the caller); `exact` tells whether the alarm is exact. */
     fun schedule(n: Notification, trigger: Trigger): ScheduledInfo {
-        if (trigger is Trigger.Calendar) {
-            val zone = trigger.value.timeZone
-            if (zone != null && !CalendarRules.knownZone(zone)) {
-                error(NotificationError.Invalid(InvalidField("trigger.time_zone", Problem.OutOfRange)))
-            }
-        }
         channelOf(n)
         synchronized(scheduleLock) {
             val engine = ScheduleEngine(schedule.load())
@@ -529,7 +868,7 @@ internal object NotificationCenter {
                         ),
                     ),
                 )
-            val exact = saveAndArm(engine)
+            val exact = saveAndArm(engine, strict = true)
             return ScheduledInfo(exact, next)
         }
     }
@@ -538,54 +877,82 @@ internal object NotificationCenter {
         ScheduleEngine(schedule.load()).entries().map { PendingNotification(it.notification, it.trigger, it.nextFireMs) }
     }
 
-    private fun unschedule(id: String) = synchronized(scheduleLock) {
-        val engine = ScheduleEngine(schedule.load())
-        if (engine.remove(id)) saveAndArm(engine)
-    }
-
     private fun changeScheduled(id: String, transform: (Notification) -> Notification): Boolean = synchronized(scheduleLock) {
-        val entries = schedule.load()
+        val engine = ScheduleEngine(schedule.load())
+        val entries = engine.entries()
         val entry = entries.firstOrNull { it.notification.id.value == id } ?: return false
         val changed = entries.map { if (it === entry) it.copy(notification = normalize(transform(it.notification))) else it }
-        saveAndArm(ScheduleEngine(changed))
+        saveAndArm(ScheduleEngine(changed), strict = true)
         true
     }
 
-    /** Caller holds [scheduleLock]. Returns whether the armed alarm is exact. */
-    private fun saveAndArm(engine: ScheduleEngine): Boolean {
+    /**
+     * Caller holds [scheduleLock]. Returns whether the armed alarm is
+     * exact. [strict]: a failed save is the caller's error; otherwise
+     * (alarms, boot, background threads) it is logged and the alarm is
+     * still armed from memory.
+     */
+    private fun saveAndArm(engine: ScheduleEngine, strict: Boolean): Boolean {
         val entries = engine.entries()
         try {
             schedule.save(entries)
         } catch (e: java.io.IOException) {
-            error(NotificationError.Platform(PlatformError(0, "schedule not saved: $e")))
+            if (strict) error(NotificationError.Platform(PlatformError(0, "schedule not saved: $e")))
+            Log.w(TAG, "schedule not saved", e)
         }
-        return Alarms.arm(context, engine.nextDeadline())
+        return try {
+            Alarms.arm(context, engine.nextDeadline())
+        } catch (e: RuntimeException) {
+            if (strict) error(NotificationError.Platform(PlatformError(0, "alarm not armed: $e")))
+            Log.w(TAG, "alarm not armed", e)
+            false
+        }
     }
 
-    /** The alarm fired (or the process restarted): delivers what is due, re-arms. */
+    /** The alarm fired (or the process restarted): delivers what is due, re-arms. Never throws. */
     fun fireDue() {
-        val due = synchronized(scheduleLock) {
-            val engine = ScheduleEngine(schedule.load())
-            val due = engine.due(System.currentTimeMillis())
-            saveAndArm(engine)
-            due
+        val due = try {
+            synchronized(scheduleLock) {
+                val engine = ScheduleEngine(schedule.load())
+                val due = engine.due(System.currentTimeMillis())
+                saveAndArm(engine, strict = false)
+                // Tickets are taken under the schedule lock: a cancel revokes them there.
+                synchronized(lock) {
+                    due.map { d ->
+                        val ticket = nextTicket++
+                        delivering[d.notification.id.value] = ticket to d.notification.group?.id?.value
+                        d to ticket
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "schedule not read", e)
+            return
         }
-        for (d in due) {
+        for ((d, ticket) in due) {
             try {
-                show(d.notification)
-                if (d.late) emit(NotificationEvent.DeliveredLate(d.notification.id))
+                if (show(d.notification, ticket) && d.late) emit(NotificationEvent.DeliveredLate(d.notification.id))
             } catch (e: BackendException) {
                 emit(NotificationEvent.Failed(Failure(d.notification.id, "scheduled notification not shown: ${e.error}")))
+            } catch (e: Exception) {
+                Log.w(TAG, "scheduled notification failed", e)
+                emit(NotificationEvent.Failed(Failure(d.notification.id, "scheduled notification not shown: $e")))
+            } finally {
+                synchronized(lock) { if (delivering[d.notification.id.value]?.first == ticket) delivering.remove(d.notification.id.value) }
             }
         }
     }
 
-    /** Boot, clock or zone change, app update, exact-alarm grant: recompute and re-arm. */
+    /** Boot, clock or zone change, app update, exact-alarm grant: recompute and re-arm. Never throws. */
     fun rearm(clockChanged: Boolean) {
-        synchronized(scheduleLock) {
-            val engine = ScheduleEngine(schedule.load())
-            if (clockChanged) engine.recompute(System.currentTimeMillis())
-            saveAndArm(engine)
+        try {
+            synchronized(scheduleLock) {
+                val engine = ScheduleEngine(schedule.load())
+                if (clockChanged) engine.recompute(System.currentTimeMillis())
+                saveAndArm(engine, strict = false)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "schedule not re-armed", e)
         }
         fireDue()
     }
@@ -593,12 +960,7 @@ internal object NotificationCenter {
     /** A snooze button: removes [id] and shows it again after [delayMs]. */
     fun snooze(id: String, delayMs: Long) {
         val n = content(id)
-        synchronized(lock) {
-            coalescer.cancel(id)
-            shown.remove(id)
-        }
-        manager().cancel(id, 0)
-        refreshGroupOf(n)
+        remove(id, unschedule = false)
         if (n != null) {
             try {
                 schedule(n, Trigger.After(delayMs.coerceAtLeast(0).toULong()))
@@ -612,38 +974,42 @@ internal object NotificationCenter {
 
     // ---- Background responses --------------------------------------------
 
-    /** Holds [result] until `complete(ack)` or 9 s. */
+    /** Holds [result] until `complete(ack)` or 9 s; at most [MAX_ACKS] held (the oldest finished). */
     fun holdAck(id: String, result: BroadcastReceiver.PendingResult, reply: Boolean): AckToken {
         val token = synchronized(lock) { nextAck++ }
-        val timeout = Runnable { finishAck(token) }
-        synchronized(lock) { acks[token] = Ack(id, result, reply, timeout) }
+        val timeout = Runnable {
+            try {
+                finishAck(token)
+            } catch (e: Exception) {
+                Log.w(TAG, "ack timeout failed", e)
+            }
+        }
+        val evicted = synchronized(lock) {
+            acks[token] = Ack(id, result, reply, timeout)
+            if (acks.size > MAX_ACKS) acks.keys.first() else null
+        }
+        evicted?.let { finishAck(it) }
         handler.postDelayed(timeout, ACK_TIMEOUT_MS)
         return AckToken(token.toULong())
     }
 
-    fun finishAck(token: Long) {
-        val ack = synchronized(lock) { acks.remove(token) } ?: return
+    /** Finishes the ack [token]; false when it is unknown (completed, timed out or never issued). */
+    fun finishAck(token: Long): Boolean {
+        val ack = synchronized(lock) { acks.remove(token) } ?: return false
         handler.removeCallbacks(ack.timeout)
-        // A reply leaves a spinner until the notification is posted again.
-        if (ack.reply) {
-            val n = synchronized(lock) { shown[ack.id]?.takeIf { !it.dismissed }?.notification }
-            if (n != null) {
-                try {
-                    post(n, alert = false)
-                } catch (_: BackendException) {
-                }
-            }
+        try {
+            // A reply leaves a spinner until the notification is posted again.
+            if (ack.reply) repost(ack.id)
+        } finally {
+            ack.result.finish()
         }
-        ack.result.finish()
+        return true
     }
 
     /** A reply received with no runtime to answer: clears the spinner at once. */
     fun repostAfterReply(id: String) {
-        val n = content(id) ?: return
-        try {
-            post(n, alert = false)
-        } catch (_: BackendException) {
-        }
+        content(id) ?: return
+        repost(id)
     }
 
     // ---- Events --------------------------------------------------------

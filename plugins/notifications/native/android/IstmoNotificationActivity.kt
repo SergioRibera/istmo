@@ -40,8 +40,17 @@ class IstmoNotificationActivity : Activity() {
         val reply = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Intents.REMOTE_INPUT_KEY)?.toString()
         Responses.publish(template.copy(reply = reply ?: template.reply, launchedApp = !NotificationCenter.hostAttached))
         if (intent.getBooleanExtra(Intents.EXTRA_CANCEL, false)) {
-            NotificationCenter.init(this)
-            NotificationCenter.removeShown(id)
+            // The plugin cancels a tapped notification itself (never auto-cancel:
+            // that sends no delete intent), off the main thread.
+            val app = applicationContext
+            Thread({
+                try {
+                    NotificationCenter.init(app)
+                    NotificationCenter.removeShown(id)
+                } catch (e: Exception) {
+                    android.util.Log.w("istmo.notifications", "tapped notification not removed", e)
+                }
+            }, "istmo-notifications-tap").start()
         }
     }
 }

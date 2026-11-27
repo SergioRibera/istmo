@@ -13,6 +13,8 @@ class IstmoNotificationAlarmReceiver : BroadcastReceiver() {
             try {
                 NotificationCenter.init(context)
                 NotificationCenter.fireDue()
+            } catch (e: Exception) {
+                android.util.Log.w("istmo.notifications", "schedule work failed", e)
             } finally {
                 pending.finish()
             }
