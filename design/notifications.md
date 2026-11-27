@@ -847,8 +847,8 @@ The Linux, Windows and macOS agents implement `Backend` and replace
 behaves like `UnavailableNotifications`).
 
 - `info() -> BackendInfo { capabilities, limits: RenderLimits, rate:
-  Rate, lists_delivered, timeouts }`. Called on every post: cache what
-  costs a round trip (fdo `GetCapabilities`, portal `SupportedOptions`).
+  Rate, lists_delivered, timeouts }`. Read once after the start and again
+  after `BackendSink::changed()` (see "Review fixes").
   Report only what the platform does; `desktop::overlay` adds the host's
   simulations (Schedule / Repeat / Snooze `WhileRunning`, Missed /
   ListPending / Channels / ProgressBar / Messaging `Simulated`,
@@ -925,7 +925,8 @@ behaves like `UnavailableNotifications`).
   port. Integer milli-token bucket (`Rate { per_second, burst }`, refill
   `elapsed_ms * per_second` milli-tokens, cap `burst * 1000`), latest per
   id, FIFO of ids, regular offers queue behind queued ids, `Alert` /
-  `Finish` post at once and spend a token (debt allowed), `shown`
+  `Finish` post at once and spend a token (debt allowed, floored at
+  `-burst` tokens), `shown`
   (a full show) clears dismissal and the queue entry and spends a token,
   `dismissed` drops regular updates until an alert, `cancel` forgets the
   id, `next_due` rounds the wait up. Rates: `Rate::ANDROID` (4, 4),
@@ -1012,3 +1013,69 @@ sets, Friday the 13th, `until`, local wall clock. Runner:
   kuiserver progress; app id resolution.
 - **Web**: `src/web.rs` host, a `setTimeout` `schedule::Wakeup`,
   IndexedDB store, the service worker asset.
+
+### Review fixes (core)
+
+Fixes of the adversarial review of the core, before the platform
+branches merge. Supersede anything above they contradict.
+
+- **Per-id lanes.** Every backend call for one id (`show`, `remove`)
+  runs inside that id's lane (`State.lanes` + a condvar): one at a time,
+  in the order issued; the post is prepared from the state the previous
+  call left. A cancel waits for the post in flight and lands after it
+  (cancel wins). Scheduled deliveries taken from the engine carry a
+  ticket (`State.delivering`); a cancel in between revokes it, so a due
+  entry cancelled before its show is never shown.
+- **Images.** A full `show` (and `LiveNotification::finish`) always
+  collects fresh images; the replaced record's files are released.
+  Updates reuse the shown files unless they touched icon, style,
+  actions or message images. Each post owns its file uses (a reused set
+  is retained), so no release is doubled. Image IO and rendering run
+  outside the state lock.
+- **Reports.** `BackendSink` methods only queue; one report worker
+  thread (`istmo-notifications-reports`, started on the first report)
+  handles them in order. Sink calls from inside the start function or a
+  backend method never re-enter the host, and a snooze's `remove` runs
+  on the worker, never on the backend's dispatch thread.
+  `DesktopNotifications::settle()` (new) waits until earlier reports are
+  handled (tests, backends that need the effect).
+- **Load.** Every host call waits until the store is loaded (`OnceLock`);
+  `persist()` writes nothing before the load. The backend's rate is
+  applied as soon as its info is first read.
+- **Backend info.** Cached (`HostInfo`: info, limits with labels,
+  overlaid capabilities); re-read only after `changed()`, which also
+  applies a new rate at once (`Coalescer::set_rate`, queue kept).
+- **Hot path.** `Live.notification` is an `Arc`; `set_progress` checks
+  only the bar (`Progress::validate`, new) and copies nothing. `update`
+  still validates the whole patched notification (call actions are
+  checked there: `NotificationPatch::validate` only refuses them when the
+  patch sets a non-call style). Image bytes stay inline (no wire change).
+- **Engine.** Entries are `Arc`ed; `persist` snapshots them under the
+  lock and encodes outside (borrowed tuples, same bytes). Triggers that
+  never fire are refused by `schedule` (`Invalid`, field
+  `trigger.until_ms` when the rule has an end, else `trigger`,
+  `OutOfRange`; also the fake host), never stored (`Engine::add` keeps
+  nothing, `with_entries` drops them). Lateness: a backward doubling
+  search finds the latest occurrence before the forward walk (which stays
+  capped). The device zone is re-read at each timer wake (≤ 30 s) and
+  each tick; floating rules move to their next occurrence in a new zone
+  (`Engine::set_local`).
+- **Coalescer.** Debt floored at `-burst` tokens; `set_rate` keeps the
+  queue. Ports (Kotlin `Coalescer.kt`, Swift `Coalescer.swift`) must
+  mirror both; cases `debt_has_a_floor_of_one_burst`,
+  `a_new_rate_keeps_the_queue`.
+- **Acks.** Tokens are a keyed hash (per-host `RandomState`) of a
+  counter, at most 256 kept (oldest dropped). The coalescer's dismissed
+  set is bounded by the host table (256).
+- **Responses.** `deep_link` only for `Open` and `Button`; native ports
+  publishing deep links must do the same.
+- **Live.** `LiveNotification::progress` keeps the bar's label, segments
+  and points as last shown, set or patched.
+- **Store.** File `0600` on Unix, directory synced after rename/removal.
+
+Contract changes for backend agents: `info()` is no longer called per
+post; `show`/`remove` for one id never overlap; sink reports are
+asynchronous (tests that report and then assert call `settle()`).
+API additions: `DesktopNotifications::settle`, `Progress::validate`,
+`Coalescer::{set_rate, dismissed_len}`, `Engine::{merge, local,
+set_local, snapshot}`. `Engine::add` no longer stores dead entries.
