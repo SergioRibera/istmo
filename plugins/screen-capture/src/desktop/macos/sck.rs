@@ -302,10 +302,17 @@ impl SckBackend {
         let scale = sck_map::permille(info.scale);
         source.scale_permille = Some(scale);
         source.geometry = info.content_rect.rounded();
-        let native = info
-            .content_rect
-            .covering(info.scale)
-            .map_or_else(|| Size::new(1920, 1080), Rect::size);
+        let native = info.content_rect.covering(info.scale).map_or_else(
+            || {
+                // The picker needs 14, which has the filter's rect: an
+                // empty one is unexpected, so say which size was guessed.
+                tracing::warn!(
+                    "screen-capture: the picked filter has no content rect; capturing at 1920x1080"
+                );
+                Size::new(1920, 1080)
+            },
+            Rect::size,
+        );
         source.physical_size = Some(native);
         (source, native)
     }
