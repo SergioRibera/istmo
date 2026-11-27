@@ -788,7 +788,7 @@ internal object NotificationCenter {
     fun dismissedByUser(id: String) {
         val now = SystemClock.elapsedRealtime()
         var timedOut = false
-        var group: String? = null
+        val group: String?
         val n = synchronized(lock) {
             group = active.remove(id)
             val live = shown[id]
@@ -803,7 +803,8 @@ internal object NotificationCenter {
             }
             if (live.dismissed) return
             val timeout = live.notification.timeoutMs
-            if (timeout != null && timeout <= Long.MAX_VALUE.toULong() && now >= live.postedAtMs + timeout.toLong() - TIMEOUT_SLACK_MS) {
+            val shownFor = now - live.postedAtMs
+            if (timeout != null && live.postedAtMs > 0 && timeout <= Long.MAX_VALUE.toULong() && shownFor >= timeout.toLong() - TIMEOUT_SLACK_MS) {
                 timedOut = true
                 shown.remove(id)
                 coalescer.cancel(id)
