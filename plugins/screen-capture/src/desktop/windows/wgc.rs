@@ -1024,15 +1024,9 @@ impl std::fmt::Debug for Session {
 }
 
 impl BackendSession for Session {
-    fn update(&mut self, update: &SessionUpdate) -> Result<NegotiatedStream, CaptureError> {
+    fn update(&mut self, _update: &SessionUpdate) -> Result<NegotiatedStream, CaptureError> {
         // The cursor, the tier and the pool are fixed at `StartCapture`
         // here: a change is a new session.
-        let _negotiated = self
-            .shared
-            .negotiated
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let _ = update;
         Err(CaptureError::unsatisfiable(
             Some(ID),
             Requirement::Operation,
