@@ -77,14 +77,15 @@ impl NotificationResponse {
 
     /// The deep link this response publishes: only a tap on the
     /// notification or a button opens a URL; a dismissal or a "More"
-    /// never does.
+    /// never does. An empty URL (a native side that carried none) opens
+    /// nothing either.
     #[must_use]
     pub fn deep_link(&self, received_at_ms: Option<u64>) -> Option<DeepLink> {
         let opens = match self.action {
             ResponseAction::Open | ResponseAction::Button(_) => true,
             ResponseAction::Dismiss | ResponseAction::More => false,
         };
-        let url = self.url.as_ref().filter(|_| opens)?;
+        let url = self.url.as_ref().filter(|url| opens && !url.is_empty())?;
         Some(DeepLink {
             uri: url.clone(),
             source: Some(response_source(self)),
@@ -233,5 +234,8 @@ mod tests {
         for action in [ResponseAction::Dismiss, ResponseAction::More] {
             assert_eq!(response(action).deep_link(None), None);
         }
+        let mut empty = response(ResponseAction::Open);
+        empty.url = Some(String::new());
+        assert_eq!(empty.deep_link(None), None);
     }
 }
