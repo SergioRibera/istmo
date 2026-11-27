@@ -77,7 +77,9 @@ use super::super::backend::{
 use super::super::output::{Delivery, FrameOut};
 use super::super::watch::SourceFeed;
 use super::access;
-use super::common::{FrameFacts, StreamFacts, damage_of, frame_meta, negotiated, owed_damage};
+use super::common::{
+    FrameFacts, StreamFacts, damage_of, frame_meta, hold_or_stall, negotiated, owed_damage, period,
+};
 use super::d3d::{self, Gpu, LateCopies, Readback};
 use super::listing::{self, Target as WinTarget};
 use super::os;
@@ -1322,15 +1324,23 @@ impl Worker {
                             .find(|s| !self.pool.is_held(*s))
                             .unwrap_or(0)
                     };
-                    let lease = match self.pool.hold(slot) {
+                    let held = hold_or_stall(
+                        &self.pool,
+                        || slot,
+                        self.exhaustion,
+                        period(self.out.fps(), self.source.refresh_mhz),
+                        |exhausted| {
+                            self.out
+                                .exhausted(exhausted, self.pool_depth, self.exhaustion);
+                        },
+                    );
+                    let lease = match held {
                         Ok(lease) => lease,
                         Err(err @ HoldError::SlotOutOfRange { .. }) => {
                             let _closed = frame.Close();
                             return Err(wgc_err("pool", err));
                         }
-                        Err(HoldError::Exhausted(exhausted)) => {
-                            self.out
-                                .exhausted(exhausted, self.pool_depth, self.exhaustion);
+                        Err(HoldError::Exhausted(_)) => {
                             *skipped = skipped.saturating_add(1);
                             break 'deliver match self.exhaustion {
                                 // WGC frames are released at once.

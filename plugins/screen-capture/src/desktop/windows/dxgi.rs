@@ -47,7 +47,7 @@ use windows::core::Interface as _;
 
 use crate::d3d11::{D3d11Frame, SharedHandle};
 use crate::pixels::OrientationMap;
-use crate::pool::{HoldError, PoolAccounting};
+use crate::pool::{HoldError, PoolAccounting, SlotLease};
 use crate::select::{self, Chosen, Offer};
 use crate::types::{
     Availability, BackendCaps, BackendId, BorderState, BufferMemory, CapsProvenance, CaptureError,
@@ -65,7 +65,7 @@ use super::super::backend::{
 use super::super::output::{Delivery, FrameOut};
 use super::super::watch::SourceFeed;
 use super::common::{
-    FrameFacts, StreamFacts, damage_of, frame_meta, negotiated, owed_damage, period,
+    FrameFacts, StreamFacts, damage_of, frame_meta, hold_or_stall, negotiated, owed_damage, period,
 };
 use super::d3d::{self, Gpu, LateCopies, Readback};
 use super::listing::{self, Target as WinTarget};
@@ -1174,6 +1174,23 @@ impl Worker {
         Ok((texture, handle))
     }
 
+    /// A free pool slot, waiting one period under `Exhaustion::Stall`.
+    fn hold(&self) -> Result<SlotLease, HoldError> {
+        let pool = &self.pool;
+        let depth = self.pool_depth;
+        hold_or_stall(
+            pool,
+            || {
+                (0..u32::from(depth))
+                    .find(|s| !pool.is_held(*s))
+                    .unwrap_or(0)
+            },
+            self.exhaustion,
+            self.period(),
+            |exhausted| self.out.exhausted(exhausted, depth, self.exhaustion),
+        )
+    }
+
     fn deliver(
         &mut self,
         frame: &Acquired,
@@ -1202,19 +1219,15 @@ impl Worker {
             meta.skipped_before = std::mem::take(skipped);
             return Ok(self.push(meta, NativeBuffer::from_bytes(image.bytes), cursor_mode));
         }
-        let slot = (0..u32::from(self.pool_depth))
-            .find(|s| !self.pool.is_held(*s))
-            .unwrap_or(0);
-        let lease = match self.pool.hold(slot) {
+        let lease = match self.hold() {
             Ok(lease) => lease,
             Err(err @ HoldError::SlotOutOfRange { .. }) => return Err(dxgi_err("pool", err)),
-            Err(HoldError::Exhausted(exhausted)) => {
-                self.out
-                    .exhausted(exhausted, self.pool_depth, self.exhaustion);
+            Err(HoldError::Exhausted(_)) => {
                 *skipped = skipped.saturating_add(1);
                 return match self.exhaustion {
-                    // The frame is released at once; its damage goes to
-                    // the next one (`owed_damage`).
+                    // The frame is released at once (a stall waited one
+                    // period in vain); its damage goes to the next one
+                    // (`owed_damage`).
                     Exhaustion::Stall | Exhaustion::DropNewest => Ok(Delivery::Dropped),
                     Exhaustion::CopyToCpu => {
                         let image = self.readback.read(ID, &self.dup.gpu, &texture)?;

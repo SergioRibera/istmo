@@ -3,6 +3,8 @@
 
 use std::time::Duration;
 
+use crate::pool::{Exhausted, HoldError, PoolAccounting, SlotLease};
+
 use super::super::output::Delivery;
 
 use crate::types::{
@@ -162,6 +164,30 @@ pub(crate) fn damage_of(rects: impl IntoIterator<Item = Rect>, size: Size) -> Da
     Damage::clipped(rects, size)
 }
 
+/// Hold the slot `slot` names. An exhausted pool is reported once; under
+/// `Exhaustion::Stall` the producer then waits (at most `wait`, one
+/// frame period) for the consumer to return a buffer and tries again, so
+/// `Stall` holds the frame back instead of dropping it.
+pub(crate) fn hold_or_stall(
+    pool: &PoolAccounting,
+    slot: impl Fn() -> u32,
+    exhaustion: Exhaustion,
+    wait: Duration,
+    report: impl FnOnce(Exhausted),
+) -> Result<SlotLease, HoldError> {
+    match pool.hold(slot()) {
+        Err(HoldError::Exhausted(exhausted)) => {
+            report(exhausted);
+            if exhaustion != Exhaustion::Stall {
+                return Err(HoldError::Exhausted(exhausted));
+            }
+            let _released = pool.released().recv_timeout(wait);
+            pool.hold(slot())
+        }
+        held => held,
+    }
+}
+
 /// What a frame's damage leaves owed after its delivery: a dropped frame
 /// (pool exhausted, paused, paced away) hands its damage on to the next
 /// one, or damage-driven consumers miss what it changed.
@@ -185,6 +211,26 @@ mod tests {
         );
         assert_eq!(period(FrameRate::Native, None), Duration::from_secs(1) / 60);
         assert_eq!(period(FrameRate::Max(0), None), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_stall_waits_for_a_returned_buffer() {
+        let pool = PoolAccounting::new(2);
+        let held = pool.hold(0).expect("room");
+        let wait = Duration::from_millis(500);
+        // Dropped at once without a stall, reported once.
+        let mut reports = 0;
+        let dropped = hold_or_stall(&pool, || 1, Exhaustion::DropNewest, wait, |_| reports += 1);
+        assert!(matches!(dropped, Err(HoldError::Exhausted(_))));
+        assert_eq!(reports, 1);
+        // Under a stall, a buffer coming back in time lets the frame through.
+        let returner = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            drop(held);
+        });
+        let stalled = hold_or_stall(&pool, || 1, Exhaustion::Stall, wait, |_| {});
+        returner.join().expect("returner");
+        assert!(stalled.is_ok());
     }
 
     #[test]
