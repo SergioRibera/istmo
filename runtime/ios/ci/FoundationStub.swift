@@ -123,7 +123,7 @@ open class NSNumber: NSValue {
 
 open class NSDictionary: NSObject {}
 
-open class NSError: NSObject, Error {
+open class NSError: NSObject, @unchecked Sendable, Error {
     public var domain: String { "" }
     public var code: Int { 0 }
     public var localizedDescription: String { "" }
