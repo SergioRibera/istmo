@@ -177,14 +177,19 @@ pollster = { workspace = true }
 objc2 = { version = "0.6", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication"] }
 
-[[test]]
-name = "macos_picker"
-harness = false
-
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # The live PipeWire test asks niri's Mutter ScreenCast API for a stream
 # directly (no portal dialog); same zbus and runtime as ashpd.
 zbus = { version = "6.5", default-features = false, features = ["default-rt", "proxy"] }
+
+[[test]]
+name = "macos_picker"
+harness = false
+
+# The Windows checklist needs the Windows bindings (`D3d11Frame`).
+[[example]]
+name = "win_probe"
+required-features = ["windows-common"]
 
 [lints.rust]
 # The workspace lints, except `unsafe_code`: denied crate-wide and
