@@ -117,21 +117,29 @@ fn hr(step: &str, err: &windows_core::Error) -> CaptureError {
 }
 
 /// Initialises COM (MTA) on this thread for its lifetime.
-struct Com;
+struct Com {
+    /// `CoInitializeEx` succeeded (`S_OK` or `S_FALSE`), so it needs its
+    /// `CoUninitialize`; a failure (`RPC_E_CHANGED_MODE`) does not.
+    initialised: bool,
+}
 
 impl Com {
     fn init() -> Self {
-        // SAFETY: balanced by CoUninitialize in drop, on this thread. An
-        // already-initialised thread (S_FALSE) is balanced the same way.
-        let _initialised = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        Self
+        // SAFETY: a successful call is balanced by CoUninitialize in drop,
+        // on this thread.
+        let result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        Self {
+            initialised: result.is_ok(),
+        }
     }
 }
 
 impl Drop for Com {
     fn drop(&mut self) {
-        // SAFETY: balances `init` on the same thread.
-        unsafe { CoUninitialize() };
+        if self.initialised {
+            // SAFETY: balances the successful `init` on the same thread.
+            unsafe { CoUninitialize() };
+        }
     }
 }
 
