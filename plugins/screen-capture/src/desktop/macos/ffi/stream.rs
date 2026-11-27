@@ -183,8 +183,10 @@ define_class!(
             };
             let sample = Sample::retain(sample);
             // Never unwind into the framework's queue.
-            let delivered =
-                catch_unwind(AssertUnwindSafe(|| self.ivars().sink.sample(kind, sample)));
+            let delivered = catch_unwind(AssertUnwindSafe(|| {
+                let _marked = InCallback::enter();
+                self.ivars().sink.sample(kind, sample);
+            }));
             if delivered.is_err() {
                 tracing::error!("screen-capture: a ScreenCaptureKit sample handler panicked");
             }
@@ -195,13 +197,42 @@ define_class!(
         #[unsafe(method(stream:didStopWithError:))]
         fn stream_did_stop(&self, _stream: &SCStream, error: &NSError) {
             let error = error_of(error, "stream");
-            let reported = catch_unwind(AssertUnwindSafe(|| self.ivars().sink.stopped(error)));
+            let reported = catch_unwind(AssertUnwindSafe(|| {
+                let _marked = InCallback::enter();
+                self.ivars().sink.stopped(error);
+            }));
             if reported.is_err() {
                 tracing::error!("screen-capture: a ScreenCaptureKit stop handler panicked");
             }
         }
     }
 );
+
+thread_local! {
+    /// Set while a stream callback runs on this thread.
+    static IN_CALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks this thread as running a stream callback until dropped (also
+/// on unwind), so a `Stream` dropped inside one is caught: its `Drop`
+/// blocks on the queue the callback holds.
+struct InCallback {
+    outer: bool,
+}
+
+impl InCallback {
+    fn enter() -> Self {
+        Self {
+            outer: IN_CALLBACK.replace(true),
+        }
+    }
+}
+
+impl Drop for InCallback {
+    fn drop(&mut self) {
+        IN_CALLBACK.set(self.outer);
+    }
+}
 
 impl StreamOutput {
     fn new(sink: Arc<dyn Sink>) -> Retained<Self> {
@@ -343,6 +374,13 @@ impl Stream {
 
 impl Drop for Stream {
     fn drop(&mut self) {
+        // The stop below waits up to five seconds and the drain blocks on
+        // the sample queue: never from one of its own callbacks (the host
+        // drops sessions on its own threads).
+        debug_assert!(
+            !IN_CALLBACK.get(),
+            "a ScreenCaptureKit stream dropped inside its own callback"
+        );
         let (block, rx) = done_block("stop");
         // SAFETY: a valid completion handler on a started stream.
         unsafe { self.capture.stopCaptureWithCompletionHandler(Some(&block)) };
