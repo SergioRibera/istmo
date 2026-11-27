@@ -503,10 +503,15 @@ fn without_a_platform_backend_everything_is_unsupported() {
         pollster::block_on(client.permission()).unwrap().state,
         PermissionState::Unavailable
     );
-    assert_eq!(
-        pollster::block_on(client.show_checked(n("a"))),
-        Err(NotificationError::Unsupported(Feature::Show))
+    let shown = pollster::block_on(client.show_checked(n("a")));
+    // Windows has a backend; it refuses to start until `install` ran.
+    #[cfg(windows)]
+    assert!(
+        matches!(shown, Err(NotificationError::Platform(_))),
+        "{shown:?}"
     );
+    #[cfg(not(windows))]
+    assert_eq!(shown, Err(NotificationError::Unsupported(Feature::Show)));
 }
 
 #[test]

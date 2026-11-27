@@ -87,9 +87,16 @@ fn platform_backend(sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationE
 
 /// The platform backend of this target. Platform modules add their arm;
 /// targets without one answer like `UnavailableNotifications`.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn platform_backend(_sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationError> {
     Err(NotificationError::Unsupported(Feature::Show))
+}
+
+/// Windows: toasts through the registration made by
+/// [`DesktopNotifications::install`].
+#[cfg(windows)]
+fn platform_backend(sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationError> {
+    windows::start(sink)
 }
 
 /// A shown notification as the host keeps it.

@@ -52,6 +52,28 @@ wasm-bindgen = "0.2"
 js-sys = "0.3"
 send_wrapper = "0.6"
 
+# Toasts (WinRT), the COM activator, the process AUMID and the elevation
+# check; registry keys without unsafe.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "ApplicationModel",
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    "Win32_UI_Notifications",
+    "Win32_UI_Shell",
+] }
+# `#[implement]` of the class factory and the activator.
+windows-core = "0.62"
+# `IVectorView` / `IMap` (history, scheduled toasts, data values).
+windows-collections = "0.3"
+windows-registry = "0.6"
+
 [build-dependencies]
 istmo-build = { workspace = true }
 
