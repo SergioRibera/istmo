@@ -273,9 +273,12 @@ fn area_of(source: &Source) -> Result<Area, CaptureError> {
     }
 }
 
-/// The cursor now: its image, top-left position and hotspot.
+/// The cursor now: its image, the screen position of its hotspot
+/// (`CURSORINFO.ptScreenPos`) and the hotspot within the image.
 struct Cursor {
     icon: HICON,
+    /// Where the hotspot is on the screen; the image's top-left is this
+    /// minus `hotspot`.
     position: Point,
     hotspot: Point,
 }
