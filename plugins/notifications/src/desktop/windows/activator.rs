@@ -5,8 +5,10 @@
 //! `-Embedding`).
 //!
 //! The class object is registered (`CLSCTX_LOCAL_SERVER`,
-//! `REGCLS_MULTIPLEUSE`) on a dedicated MTA thread that never leaves the
-//! apartment. Activations route to the host's sink; those that arrive
+//! `REGCLS_MULTIPLEUSE`) on a dedicated MTA thread that stays in the
+//! apartment until [`revoke`] (a forwarding instance of a single-instance
+//! app hands activations back to COM, which then routes them to the
+//! primary's class object). Activations route to the host's sink; those that arrive
 //! before the backend started (cold start: COM calls in as soon as the
 //! class object exists) wait in a small queue and are replayed from a
 //! thread of their own once the backend started, so no sink call runs
@@ -30,7 +32,7 @@ use istmo_core::sync::lock;
 use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_POINTER};
 use windows::Win32::System::Com::{
     CLSCTX_LOCAL_SERVER, COINIT_MULTITHREADED, CoInitializeEx, CoRegisterClassObject,
-    IClassFactory, IClassFactory_Impl, REGCLS_MULTIPLEUSE,
+    CoRevokeClassObject, CoUninitialize, IClassFactory, IClassFactory_Impl, REGCLS_MULTIPLEUSE,
 };
 use windows::Win32::UI::Notifications::{
     INotificationActivationCallback, INotificationActivationCallback_Impl,
@@ -173,35 +175,70 @@ impl IClassFactory_Impl for Factory_Impl {
     }
 }
 
+/// Asks the COM thread to revoke the class object; answered once done.
+type Revoke = flume::Sender<windows_core::Result<()>>;
+
+/// The COM thread's mailbox while the class object is registered.
+static SERVING: Mutex<Option<flume::Sender<Revoke>>> = Mutex::new(None);
+
 /// Registers the class object of `clsid` on a thread that stays in the
-/// MTA for the life of the process.
+/// MTA until [`revoke`] (else for the life of the process).
 pub(super) fn serve(clsid: GUID) -> windows_core::Result<()> {
     let (tx, rx) = flume::bounded(1);
+    let (revoke_tx, revoke_rx) = flume::bounded::<Revoke>(1);
     std::thread::Builder::new()
         .name("istmo-notifications-com".to_owned())
         .spawn(move || {
-            let registered = register(&clsid);
-            let ok = registered.is_ok();
-            let _sent = tx.send(registered);
-            // The apartment (and with it the registration) lives while
-            // this thread does.
-            if ok {
-                loop {
-                    std::thread::park();
+            let cookie = match register(&clsid) {
+                Ok(cookie) => cookie,
+                Err(err) => {
+                    let _sent = tx.send(Err(err));
+                    return;
                 }
+            };
+            let _sent = tx.send(Ok(()));
+            // The apartment (and with it the registration) lives while
+            // this thread waits: for a revoke, else for the life of the
+            // process (the sender stays in `SERVING`).
+
+            if let Ok(done) = revoke_rx.recv() {
+                // SAFETY: `cookie` came from `CoRegisterClassObject` on
+                // this thread and is revoked once.
+                let revoked = unsafe { CoRevokeClassObject(cookie) };
+                // SAFETY: pairs the `CoInitializeEx` of `register` on
+                // this thread; nothing COM is used here afterwards.
+                unsafe { CoUninitialize() };
+                let _answered = done.send(revoked);
             }
         })
         .map_err(|err| windows_core::Error::new(windows_core::HRESULT(-1), err.to_string()))?;
     rx.recv()
-        .map_err(|_| windows_core::Error::from_hresult(windows_core::HRESULT(-1)))?
+        .map_err(|_| windows_core::Error::from_hresult(windows_core::HRESULT(-1)))??;
+    *lock(&SERVING) = Some(revoke_tx);
+    Ok(())
 }
 
-fn register(clsid: &GUID) -> windows_core::Result<()> {
+/// Revokes the class object [`serve`] registered: COM stops routing
+/// activations to this process. `false` when none was registered (or it
+/// was revoked already).
+pub(super) fn revoke() -> windows_core::Result<bool> {
+    let Some(mailbox) = lock(&SERVING).take() else {
+        return Ok(false);
+    };
+    let (tx, rx) = flume::bounded(1);
+    if mailbox.send(tx).is_err() {
+        return Ok(false);
+    }
+    rx.recv()
+        .map_err(|_| windows_core::Error::from_hresult(windows_core::HRESULT(-1)))??;
+    Ok(true)
+}
+
+/// Joins the MTA and registers the class object; its cookie.
+fn register(clsid: &GUID) -> windows_core::Result<u32> {
     // SAFETY: first COM call on this new thread; it joins the MTA.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok()?;
     let factory: IClassFactory = Factory.into();
     // SAFETY: `clsid` outlives the call; COM AddRefs `factory`.
-    let _cookie =
-        unsafe { CoRegisterClassObject(clsid, &factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE) }?;
-    Ok(())
+    unsafe { CoRegisterClassObject(clsid, &factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE) }
 }

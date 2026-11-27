@@ -328,6 +328,22 @@ impl DesktopNotifications {
         REGISTERED.get_or_init(|| install_once(app)).clone()
     }
 
+    /// Windows: stops this process from receiving toast activations (the
+    /// class object [`install`](Self::install) registered is revoked).
+    ///
+    /// Single-instance apps: every instance calls `install` first thing
+    /// in `main` (COM gives a process it started for a toast 60 s to
+    /// register), then the one that finds a primary already running and
+    /// forwards to it calls this as soon as it knows, before it exits.
+    /// Otherwise COM may keep routing taps to the forwarding instance's
+    /// class object, where nothing handles them. Toasts keep showing; the
+    /// activation that started a COM-launched process still reaches its
+    /// host (forward it with the rest of the launch). Returns `false` when
+    /// nothing was registered (no install, or already revoked).
+    pub fn revoke_activator() -> Result<bool, NotificationError> {
+        activator::revoke().map_err(|err| platform(&err))
+    }
+
     /// Windows: removes this app's toasts, scheduled toasts and registry
     /// keys (for uninstallers). Packaged apps only lose their toasts.
     pub fn unregister(app: &WindowsApp) -> Result<(), NotificationError> {
