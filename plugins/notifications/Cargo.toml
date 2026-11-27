@@ -34,6 +34,11 @@ jiff = "1.0"
 # The live-update sender blocks on its one call in flight.
 pollster = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# freedesktop Notifications, the notification portal and kuiserver on the
+# session bus; blocking API, no tokio.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The live-update sender runs as a local task; `js` gives jiff the
 # browser's time zone.
@@ -46,6 +51,10 @@ istmo-build = { workspace = true }
 [dev-dependencies]
 istmo-build = { workspace = true }
 pollster = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# A fake notification server on a private bus (tests/linux_dbus.rs).
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 
 [lints.rust]
 # The workspace lints, except `unsafe_code`: denied crate-wide so the

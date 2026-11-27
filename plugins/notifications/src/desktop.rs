@@ -25,6 +25,8 @@
 
 mod backend;
 mod images;
+#[cfg(target_os = "linux")]
+pub mod linux;
 mod timer;
 
 #[cfg(test)]
@@ -74,8 +76,16 @@ const MAX_ACKS: usize = 256;
 pub type StartBackend =
     Box<dyn Fn(BackendSink) -> Result<Arc<dyn Backend>, NotificationError> + Send + Sync>;
 
-/// The platform backend of this target. None is built in yet: platform
-/// modules replace this.
+/// The platform backend of this target. Platform modules add their arm;
+/// targets without one answer like `UnavailableNotifications`.
+#[cfg(target_os = "linux")]
+fn platform_backend(sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationError> {
+    linux::platform_backend(sink)
+}
+
+/// The platform backend of this target. Platform modules add their arm;
+/// targets without one answer like `UnavailableNotifications`.
+#[cfg(not(target_os = "linux"))]
 fn platform_backend(_sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationError> {
     Err(NotificationError::Unsupported(Feature::Show))
 }

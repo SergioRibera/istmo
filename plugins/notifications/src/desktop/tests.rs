@@ -487,10 +487,14 @@ fn capabilities_add_the_host_simulations() {
 
 #[test]
 fn without_a_platform_backend_everything_is_unsupported() {
-    let host = DesktopNotifications::builder(Box::new(platform_backend))
-        .without_store()
-        .manual_timer()
-        .build();
+    // A backend that fails to start (what targets without one get); the
+    // real platform backend would talk to the session.
+    let host = DesktopNotifications::builder(Box::new(|_sink| {
+        Err(NotificationError::Unsupported(Feature::Show))
+    }))
+    .without_store()
+    .manual_timer()
+    .build();
     let rt = Runtime::mock().host(NotificationsHost::new(host)).runtime;
     let client = NotificationsClient::from_runtime(&rt).unwrap();
     let caps = pollster::block_on(client.capabilities()).unwrap();
