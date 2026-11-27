@@ -9,7 +9,9 @@
 //! * A token bucket (rate per second, burst) limits posts per app.
 //! * [`Urgency::Alert`] (`alert_again`) and [`Urgency::Finish`] jump the
 //!   queue: posted at once, they still spend a token, so the bucket may
-//!   go into debt and regular updates wait longer.
+//!   go into debt and regular updates wait longer. The debt is floored at
+//!   `burst` tokens: a storm of alerts delays regular updates by at most
+//!   `2 * burst / per_second` seconds, never without bound.
 //! * [`Coalescer::cancel`] drops what is queued for an id.
 //! * An update for a notification the user dismissed is dropped, unless
 //!   it alerts (which shows it again). A finish is a new show and always
@@ -89,7 +91,8 @@ pub enum Admit<T> {
 #[derive(Debug)]
 pub struct Coalescer<T> {
     rate: Rate,
-    /// Milli-tokens; negative after bypasses.
+    /// Milli-tokens; negative after bypasses, never below `-burst`
+    /// tokens.
     tokens: i64,
     /// Clock of the last refill.
     refilled_ms: i64,
@@ -126,6 +129,26 @@ impl<T> Coalescer<T> {
         // Milli-tokens per millisecond = tokens per second.
         let gained = elapsed.saturating_mul(i64::from(self.rate.per_second));
         self.tokens = self.tokens.saturating_add(gained).min(full);
+    }
+
+    /// Spends a token even when none is left (alerts, finishes, full
+    /// shows), down to the debt floor.
+    fn spend(&mut self) {
+        let floor = -i64::from(self.rate.burst) * TOKEN;
+        self.tokens = (self.tokens - TOKEN).max(floor);
+    }
+
+    /// Switches to `rate` at `now_ms`, keeping what is queued: the
+    /// bucket refills at the old rate up to `now_ms`, then is clamped to
+    /// the new burst (debt included).
+    pub fn set_rate(&mut self, rate: Rate, now_ms: i64) {
+        if rate == self.rate {
+            return;
+        }
+        self.refill(now_ms);
+        self.rate = rate;
+        let full = i64::from(rate.burst) * TOKEN;
+        self.tokens = self.tokens.clamp(-full, full);
     }
 
     const fn take(&mut self) -> bool {
@@ -174,7 +197,7 @@ impl<T> Coalescer<T> {
             Urgency::Alert | Urgency::Finish => {
                 self.dismissed.remove(id);
                 self.unqueue(id);
-                self.tokens -= TOKEN;
+                self.spend();
                 Admit::Now(item)
             }
         }
@@ -186,7 +209,7 @@ impl<T> Coalescer<T> {
         self.refill(now_ms);
         self.dismissed.remove(id);
         self.unqueue(id);
-        self.tokens -= TOKEN;
+        self.spend();
     }
 
     /// The user dismissed `id`: its queued update is dropped and later
@@ -241,6 +264,12 @@ impl<T> Coalescer<T> {
     #[must_use]
     pub fn queued(&self) -> usize {
         self.order.len()
+    }
+
+    /// Number of ids remembered as dismissed.
+    #[must_use]
+    pub fn dismissed_len(&self) -> usize {
+        self.dismissed.len()
     }
 
     /// Whether `id` was dismissed by the user.
@@ -358,5 +387,35 @@ mod tests {
         // A clock that goes back never adds tokens.
         assert_eq!(c.poll(5_000), Vec::new());
         assert_eq!(c.next_due(), Some(10_250));
+    }
+
+    #[test]
+    fn debt_has_a_floor_of_one_burst() {
+        let mut c = Coalescer::new(Rate::new(2, 2), 0);
+        let a = id("a");
+        // A storm of alerts and full shows: the bucket stops at -2 tokens.
+        for value in 0..100 {
+            assert_eq!(c.offer(&a, value, Urgency::Alert, 0), Admit::Now(value));
+            c.shown(&a, 0);
+        }
+        assert_eq!(c.offer(&a, 7, Urgency::Regular, 0), Admit::Queued);
+        // Three tokens to earn at 2 per second: 1.5 s, not 100 s.
+        assert_eq!(c.next_due(), Some(1_500));
+        assert_eq!(c.poll(1_500), vec![(a, 7)]);
+    }
+
+    #[test]
+    fn a_new_rate_keeps_the_queue() {
+        let mut c = Coalescer::new(Rate::new(10, 10), 0);
+        let a = id("a");
+        for value in 0..10 {
+            assert_eq!(c.offer(&a, value, Urgency::Regular, 0), Admit::Now(value));
+        }
+        assert_eq!(c.offer(&a, 10, Urgency::Regular, 0), Admit::Queued);
+        c.set_rate(Rate::new(1, 1), 0);
+        assert_eq!(c.rate(), Rate::new(1, 1));
+        assert_eq!(c.queued(), 1);
+        assert_eq!(c.next_due(), Some(1_000));
+        assert_eq!(c.poll(1_000), vec![(a, 10)]);
     }
 }
