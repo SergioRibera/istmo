@@ -26,9 +26,6 @@ targets:
         createIntermediateGroups: true
         excludes:
           - "*.fragment"
-      - path: "../.istmo/Assets"
-        type: folder
-        buildPhase: resources
     settings:
       base:
         ISTMO_LIB_NAME: "rust_mobile_demo"
