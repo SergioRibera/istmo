@@ -23,10 +23,18 @@
     reason = "state guards live in short blocks that end right after their last use; the lint asks for explicit drops there"
 )]
 
+#[cfg(any(target_os = "macos", test))]
+mod apple_map;
 mod backend;
 mod images;
 #[cfg(target_os = "linux")]
 pub mod linux;
+#[cfg(target_os = "macos")]
+#[allow(
+    unsafe_code,
+    reason = "UserNotifications and Intents through objc2: the delegate class, user info, attachments, intents"
+)]
+mod macos;
 mod timer;
 #[cfg(any(windows, test))]
 pub mod windows;
@@ -87,7 +95,15 @@ fn platform_backend(sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationE
 
 /// The platform backend of this target. Platform modules add their arm;
 /// targets without one answer like `UnavailableNotifications`.
-#[cfg(not(any(target_os = "linux", windows)))]
+/// macOS: `UNUserNotificationCenter` (needs an app bundle).
+#[cfg(target_os = "macos")]
+fn platform_backend(sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationError> {
+    macos::start(sink)
+}
+
+/// The platform backend of this target. Platform modules add their arm;
+/// targets without one answer like `UnavailableNotifications`.
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn platform_backend(_sink: BackendSink) -> Result<Arc<dyn Backend>, NotificationError> {
     Err(NotificationError::Unsupported(Feature::Show))
 }
