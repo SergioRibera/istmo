@@ -110,7 +110,10 @@ ISTMO_SC_TEST_MACOS_AUDIO=1 cargo test -p istmo-screen-capture --test macos_live
 ### 7. Otros puntos sólo verificables en el Mac
 
 - Desenchufar la pantalla capturada → `SourceLost`; detener la captura
-  desde el menú del sistema → `ConsentRevoked`.
+  desde el menú del sistema → `ConsentRevoked`. Anota el código
+  `SCStreamErrorDomain` de cada caso (y del permiso denegado): la tabla
+  de `sck_map::code` (-3801, -3813…-3817, -3821) sale de las cabeceras
+  del SDK, no de la documentación.
 - `watch_sources`: enchufar/desenchufar pantallas, abrir/cerrar ventanas
   (sondeo cada 1 s).
 - HDR (15+, pantalla XDR): `PreferHdr` con `Ar30`; mira si los

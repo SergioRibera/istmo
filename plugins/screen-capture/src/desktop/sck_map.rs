@@ -586,7 +586,11 @@ pub(crate) fn output_size(requested: OutputSize, native: Size) -> Size {
     }
 }
 
-/// `SCStreamErrorDomain` codes the plugin tells apart.
+/// `SCStreamErrorDomain` codes the plugin tells apart: the
+/// `SCStreamError.Code` raw values of the macOS SDK headers. Apple's
+/// documentation pages do not list the numbers, so the Mac checklist
+/// confirms them (deny the grant, stop from the menu bar, unplug the
+/// captured display) before anything keys on them beyond these names.
 pub(crate) mod code {
     pub(crate) const USER_DECLINED: i64 = -3801;
     pub(crate) const NO_WINDOW_LIST: i64 = -3813;
