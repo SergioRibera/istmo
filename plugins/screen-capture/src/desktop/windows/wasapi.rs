@@ -239,6 +239,20 @@ mod activation {
 
 use activation::Activated;
 
+/// Learn gives process loopback two floors: build 20348
+/// (`AUDIOCLIENT_ACTIVATION_PARAMS`) and 20438
+/// (`ActivateAudioInterfaceAsync`). The caps use the lower one; a build
+/// between them whose activation fails is answered as too old.
+const BUILD_PROCESS_LOOPBACK_SURE: u32 = 20_438;
+
+fn activation_failure(build: u32, step: &str, err: &windows_core::Error) -> CaptureError {
+    if build < BUILD_PROCESS_LOOPBACK_SURE {
+        CaptureError::OsTooOld(os::version())
+    } else {
+        hr(step, err)
+    }
+}
+
 /// An `IAudioClient` for process loopback of `pid`'s tree.
 fn activate_process(pid: u32, include: bool) -> Result<IAudioClient, CaptureError> {
     // Boxed: an activation that overruns its wait may still read them, so
@@ -286,7 +300,7 @@ fn activate_process(pid: u32, include: bool) -> Result<IAudioClient, CaptureErro
             &handler,
         )
     }
-    .map_err(|e| hr("ActivateAudioInterfaceAsync", &e))?;
+    .map_err(|e| activation_failure(os::build(), "ActivateAudioInterfaceAsync", &e))?;
     if rx.recv_timeout(SETUP_WAIT).is_err() {
         // The pending activation may still read them.
         std::mem::forget(variant);
@@ -303,7 +317,7 @@ fn activate_process(pid: u32, include: bool) -> Result<IAudioClient, CaptureErro
         .map_err(|e| hr("GetActivateResult", &e))?;
     result
         .ok()
-        .map_err(|e| hr("process loopback activation", &e))?;
+        .map_err(|e| activation_failure(os::build(), "process loopback activation", &e))?;
     unknown
         .ok_or_else(|| error("process loopback activation", "no interface"))?
         .cast::<IAudioClient>()
@@ -862,6 +876,19 @@ mod tests {
         assert!(!endpoint_moved(None, Some("b")));
         assert!(invalidated(AUDCLNT_E_DEVICE_INVALIDATED));
         assert!(!invalidated(windows::Win32::Foundation::E_FAIL));
+    }
+
+    #[test]
+    fn a_failed_activation_below_the_upper_floor_is_an_old_os() {
+        let err = windows_core::Error::from(windows::Win32::Foundation::E_NOTIMPL);
+        assert!(matches!(
+            activation_failure(20_348, "activation", &err),
+            CaptureError::OsTooOld(_)
+        ));
+        assert!(matches!(
+            activation_failure(22_631, "activation", &err),
+            CaptureError::Protocol(_)
+        ));
     }
 
     #[test]
