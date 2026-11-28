@@ -6,7 +6,7 @@ Tapping **Sign in**:
 
 1. requests `POST_NOTIFICATIONS` via the `istmo.permissions` plugin;
 2. runs the Google Sign-In flow via the `istmo.google_sign_in` plugin;
-3. posts a welcome notification via the `istmo.notifications` plugin.
+3. posts a welcome notification via `istmo-notifications`.
 
 A second card loads and shows AdMob interstitial and rewarded ads
 (`istmo.admob`, Google test ad units), and a feed hosts banner slots
@@ -24,7 +24,7 @@ control flow, the RAII lifetime of the returned Google credential (via
 examples/rust-mobile-demo/
 ├── Cargo.toml             — cdylib + staticlib crate
 ├── istmo.toml             — [app] identity, auto_register = false, min versions
-├── build.rs               — istmo_build::emit_with(extra_contracts: permissions, notifications, admob)
+├── build.rs               — istmo_build::emit_with(extra_contracts: permissions, admob)
 ├── src/
 │   ├── lib.rs             — istmo::runtime!(plugins: [...])
 │   └── app.rs             — #[istmo::mobile_app] entry + eframe app (mobile only)
@@ -93,7 +93,7 @@ just rust-mobile-ios            # bootstrap if needed, then run
    declarations from `istmo::runtime!` in `src/lib.rs`.
 3. Because `istmo.toml` sets `auto_register = false` (the backends need
    this activity's permission and activity-result callbacks), the
-   activity registers the Permissions, Notifications, SignIn and AdMob
+   activity registers the Permissions, SignIn and AdMob
    dispatchers itself, then calls `super.onCreate(...)`. On iOS,
    `main.swift` does the same inside `IstmoApp.run(registerPlugins:)`.
 4. `NativeActivity` starts `android_main`, emitted by
@@ -112,5 +112,6 @@ just rust-mobile-ios            # bootstrap if needed, then run
 - The Android sign-in backend's `revoke()` calls
   `GoogleSignInClient.revokeAccess()` from the device; apps with a
   backend usually revoke the grant there too.
-- The demo's notification backends are app-local reference code, not
-  a published plugin.
+- `istmo-notifications` ships no Kotlin or Swift backend yet, so the
+  welcome notification fails with a "no handler" error on both platforms
+  until those backends land; the demo shows the error and carries on.

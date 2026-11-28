@@ -30,6 +30,7 @@ use crate::manifest::{
     expect_table, parse_android_permissions,
 };
 use crate::min_versions::{MinVersions, OsVersion};
+use crate::notifications::AppNotifications;
 use crate::url_schemes::UrlSchemes;
 
 const KNOWN_APP_KEYS: &[&str] = &[
@@ -54,6 +55,8 @@ const KNOWN_APP_KEYS: &[&str] = &[
     "launcher_action",
     "single_instance",
     "autostart",
+    "notifications",
+    "notification_channel",
 ];
 
 const KNOWN_APP_PLUGIN_KEYS: &[&str] = &["id", "type", "role", "platforms", "auto_register"];
@@ -200,6 +203,9 @@ pub struct AppConfig {
     /// `[app.autostart]`: login-start marker and MSIX task id for the
     /// `istmo-autostart` plugin.
     pub autostart: AutostartConfig,
+    /// `[app.notifications]` and `[[app.notification_channel]]` for the
+    /// `istmo-notifications` plugin (paths relative to the crate).
+    pub notifications: AppNotifications,
 }
 
 impl AppConfig {
@@ -311,6 +317,10 @@ impl AppConfig {
                 .map(AutostartConfig::parse)
                 .transpose()?
                 .unwrap_or_default(),
+            notifications: AppNotifications::parse(
+                table.get("notifications"),
+                table.get("notification_channel"),
+            )?,
         })
     }
 }

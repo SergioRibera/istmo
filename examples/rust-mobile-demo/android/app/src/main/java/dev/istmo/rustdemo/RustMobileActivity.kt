@@ -9,14 +9,14 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import dev.istmo.plugins.googlesignin.SignInCodecsImpl
 import dev.istmo.plugins.googlesignin.SignInDispatcher
+import dev.istmo.plugins.notifications.NotificationsBackendImpl
+import dev.istmo.plugins.notifications.NotificationsCodecsImpl
+import dev.istmo.plugins.notifications.NotificationsDispatcher
 import dev.istmo.runtime.AdMobCodecsImpl
 import dev.istmo.runtime.AdMobDispatcher
 import dev.istmo.runtime.AdMobFactoryImpl
 import dev.istmo.runtime.IstmoHost
 import dev.istmo.runtime.IstmoRuntime
-import dev.istmo.runtime.NotificationsBackendImpl
-import dev.istmo.runtime.NotificationsCodecsImpl
-import dev.istmo.runtime.NotificationsDispatcher
 import dev.istmo.runtime.PermissionsBackendImpl
 import dev.istmo.runtime.PermissionsCodecsImpl
 import dev.istmo.runtime.PermissionsDispatcher
@@ -41,16 +41,17 @@ class RustMobileActivity : NativeActivity() {
             PermissionsDispatcher(permissionsBackend, PermissionsCodecsImpl()),
         )
         runtime.registerHandler(
-            NotificationsDispatcher.PLUGIN_ID,
-            NotificationsDispatcher(NotificationsBackendImpl(this), NotificationsCodecsImpl()),
-        )
-        runtime.registerHandler(
             SignInDispatcher.PLUGIN_ID,
             SignInDispatcher(signInFactory, SignInCodecsImpl()),
         )
         runtime.registerHandler(
             AdMobDispatcher.PLUGIN_ID,
             AdMobDispatcher(AdMobFactoryImpl(this), AdMobCodecsImpl()),
+        )
+        // istmo-notifications ships its own Android backend (context-bound).
+        runtime.registerHandler(
+            NotificationsDispatcher.PLUGIN_ID,
+            NotificationsDispatcher(NotificationsBackendImpl(applicationContext), NotificationsCodecsImpl()),
         )
 
         super.onCreate(savedInstanceState)

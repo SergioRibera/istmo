@@ -1,0 +1,4 @@
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>

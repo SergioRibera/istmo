@@ -110,7 +110,6 @@ fn main() {
     istmo_build::emit_with(AppOpts {
         extra_contracts: vec![
             plugin_contract::permissions(),
-            plugin_contract::notifications(),
             plugin_contract::admob(),
         ],
         ..AppOpts::default()

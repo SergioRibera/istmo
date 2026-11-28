@@ -1,6 +1,6 @@
 ---
 title: Plugins integrados
-description: Los plugins que vienen con istmo — ciclo de vida, deep links, documentos, área segura, estado del sistema y del dispositivo, permisos, notificaciones, anuncios, resultados de actividades y tareas programadas.
+description: Los plugins que vienen con istmo — ciclo de vida, deep links, documentos, área segura, estado del sistema y del dispositivo, permisos, anuncios, resultados de actividades y tareas programadas.
 sidebar:
   order: 0
 ---
@@ -33,7 +33,6 @@ Tienen dos formas:
 | `StorageInfoClient` | `istmo.storage_info` | último valor | observadores del runtime; `StorageInfoPublisher` en escritorio |
 | `CapabilitiesClient` | `istmo.capabilities` | último valor | observadores del runtime; `CapabilitiesPublisher` en escritorio |
 | `PermissionsClient` | `istmo.permissions` | llamadas | backend nativo de la app |
-| `NotificationsClient` | `istmo.notifications` | llamadas | backend nativo de la app |
 | `AdMobClient` | `istmo.admob` | llamadas (con estado) | backend nativo de la app |
 | `ActivityResultsClient` | `istmo.activity_results` | llamadas | backend nativo de la app |
 | `TaskSchedulerClient` | `istmo.task_scheduler` | llamadas | backend nativo de la app |
@@ -312,7 +311,7 @@ volumen del directorio de trabajo y deja `external` en `None`.
 
 ## Llamadas
 
-Permisos, notificaciones, AdMob, tareas programadas y control de
+Permisos, AdMob, tareas programadas y control de
 servicios no tienen implementación nativa en el runtime de istmo: el
 backend lo pone la app. Sus contratos están en `istmo-plugins-schema`;
 pásalos a `istmo-build` para generar los dispatchers Kotlin / Swift y la
@@ -320,6 +319,8 @@ interfaz `<T>Backend`, y luego implementa `<T>BackendImpl` (`AdMob` tiene
 estado: `AdMobFactoryImpl`). Ver la
 [visión general de emit](/istmo/es/build-scripts/emit-overview/) y
 [plugins hospedados en nativo](/istmo/es/writing-plugins/native-hosted/).
+Las notificaciones son un plugin aparte:
+[istmo-notifications](/istmo/es/plugins/notifications/).
 
 ```rust
 // build.rs — con istmo-build e istmo-plugins-schema en [build-dependencies]
@@ -327,7 +328,6 @@ fn main() {
     istmo_build::emit_with(istmo_build::AppOpts {
         extra_contracts: vec![
             istmo_plugins_schema::permissions(),
-            istmo_plugins_schema::notifications(),
         ],
         ..istmo_build::AppOpts::default()
     });
@@ -372,38 +372,6 @@ use istmo::plugins::{PermissionStatus, PermissionsClient};
 let permissions = PermissionsClient::acquire()?;
 if permissions.check("android.permission.CAMERA".into()).await? != PermissionStatus::Granted {
     permissions.request(vec!["android.permission.CAMERA".into()]).await?;
-}
-```
-
-### Notificaciones
-
-`NotificationsClient`:
-
-- `is_authorized() -> bool`
-- `request_authorization() -> bool`
-- `schedule(request: NotificationRequest) -> NotificationHandle`
-- `cancel(id: u32)`
-
-`NotificationRequest { title, body, channel_id, importance,
-delay_seconds, tag }`, con `importance` igual a `Min`, `Low`, `Default`
-o `High`. `NotificationHandle { id }`. Errores: `NotificationError`
-(`PermissionDenied`, `InvalidChannel(String)`, `Scheduler(String)`).
-
-```rust
-use istmo::plugins::{NotificationImportance, NotificationRequest, NotificationsClient};
-
-let notifications = NotificationsClient::acquire()?;
-if notifications.request_authorization().await? {
-    let handle = notifications
-        .schedule(NotificationRequest {
-            title: "Copia terminada".into(),
-            body: "42 archivos subidos".into(),
-            channel_id: "backups".into(),
-            importance: NotificationImportance::Default,
-            delay_seconds: None,
-            tag: None,
-        })
-        .await?;
 }
 ```
 

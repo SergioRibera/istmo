@@ -70,7 +70,7 @@ if [ -z "${SKIP_SWIFT:-}" ]; then
     # The Apple frameworks plugin natives import, in dependency order
     # (each stub imports only the ones before it).
     for framework in CoreGraphics IOSurface CoreVideo CoreMedia QuartzCore AVFoundation \
-        ReplayKit ScreenCaptureKit UIKit; do
+        ReplayKit ScreenCaptureKit UIKit UserNotifications Intents; do
         module "$framework" "$ci/${framework}Stub.swift"
     done
     # With CoreVideo, IOSurface and CoreMedia present, the runtime's Apple

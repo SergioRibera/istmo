@@ -260,6 +260,15 @@ fn merge_value(
 /// then proceeds and Xcode reports any duplicate itself.
 #[must_use]
 pub fn app_keys_outside_block(source: &str) -> Vec<String> {
+    app_dict_outside_block(source)
+        .map(|dict| dict.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// The top-level dictionary of `source` without the istmo-managed block:
+/// what the app itself defines. `None` when the file cannot be parsed.
+#[must_use]
+pub fn app_dict_outside_block(source: &str) -> Option<Dictionary> {
     let without_block = match (
         source.find(PLUGINS_MARK_START),
         source.find(PLUGINS_MARK_END),
@@ -274,8 +283,8 @@ pub fn app_keys_outside_block(source: &str) -> Vec<String> {
         _ => source.to_owned(),
     };
     match Value::from_reader_xml(without_block.as_bytes()) {
-        Ok(Value::Dictionary(dict)) => dict.keys().cloned().collect(),
-        _ => Vec::new(),
+        Ok(Value::Dictionary(dict)) => Some(dict),
+        _ => None,
     }
 }
 

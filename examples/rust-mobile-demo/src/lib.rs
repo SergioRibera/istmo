@@ -1,4 +1,5 @@
-use istmo::plugins::{NotificationsClient, PermissionsClient, SafeArea};
+use istmo::plugins::{PermissionsClient, SafeArea};
+use istmo_notifications::NotificationsClient;
 use istmo_plugins::admob::AdMobClient;
 
 istmo::runtime!(

@@ -166,3 +166,98 @@ public final class Bundle {
 
 /// libc's `free` (Foundation re-exports Darwin).
 public func free(_ ptr: UnsafeMutableRawPointer?) {}
+
+// Files, dates and timers, for the notifications native backend.
+public extension Error {
+    var localizedDescription: String { "" }
+}
+
+public struct URL: Hashable, Sendable {
+    public let path: String
+    public init(fileURLWithPath path: String) { self.path = path }
+    public init?(string: String) { path = string }
+    public func appendingPathComponent(_ component: String) -> URL { URL(fileURLWithPath: path + "/" + component) }
+    public func appendingPathComponent(_ component: String, isDirectory: Bool) -> URL {
+        appendingPathComponent(component)
+    }
+    public func deletingLastPathComponent() -> URL { self }
+    public var pathExtension: String { "" }
+}
+
+public extension Data {
+    struct WritingOptions: OptionSet, Sendable {
+        public let rawValue: UInt
+        public init(rawValue: UInt) { self.rawValue = rawValue }
+        public static let atomic = WritingOptions(rawValue: 1)
+    }
+    init(contentsOf url: URL) throws { self.init() }
+    func write(to url: URL, options: WritingOptions = []) throws {}
+}
+
+public final class FileManager: @unchecked Sendable {
+    public enum SearchPathDirectory { case applicationSupportDirectory, cachesDirectory }
+    public struct SearchPathDomainMask: OptionSet, Sendable {
+        public let rawValue: UInt
+        public init(rawValue: UInt) { self.rawValue = rawValue }
+        public static let userDomainMask = SearchPathDomainMask(rawValue: 1)
+    }
+    public static let `default` = FileManager()
+    public var temporaryDirectory: URL { URL(fileURLWithPath: "/tmp") }
+    public func urls(for directory: SearchPathDirectory, in domainMask: SearchPathDomainMask) -> [URL] { [] }
+    public func createDirectory(at url: URL, withIntermediateDirectories: Bool,
+                                attributes: [String: Any]?) throws {}
+    public func copyItem(at srcURL: URL, to dstURL: URL) throws {}
+    public func removeItem(at url: URL) throws {}
+}
+
+public struct UUID: Hashable, Sendable {
+    public init() {}
+    public var uuidString: String { "" }
+}
+
+public extension Date {
+    init(timeIntervalSince1970: TimeInterval) { self.init() }
+}
+
+public struct TimeZone: Hashable, Sendable {
+    public init?(identifier: String) {}
+    public static var current: TimeZone { TimeZone(identifier: "UTC")! }
+    public func secondsFromGMT(for date: Date) -> Int { 0 }
+}
+
+public struct DateComponents: Hashable, Sendable {
+    public var timeZone: TimeZone?
+    public var year: Int?
+    public var month: Int?
+    public var day: Int?
+    public var hour: Int?
+    public var minute: Int?
+    public var second: Int?
+    public var weekday: Int?
+    public init() {}
+}
+
+public struct Calendar: Hashable, Sendable {
+    public enum Identifier: Sendable { case gregorian }
+    public enum Component: Hashable, Sendable { case year, month, day, hour, minute, second, weekday }
+    public var timeZone: TimeZone
+    public init(identifier: Identifier) { timeZone = TimeZone(identifier: "UTC")! }
+    public func dateComponents(_ components: Set<Component>, from date: Date) -> DateComponents { DateComponents() }
+}
+
+public struct DispatchTime: Sendable {
+    public static func now() -> DispatchTime { DispatchTime() }
+    public static func + (time: DispatchTime, seconds: Double) -> DispatchTime { time }
+}
+
+public extension DispatchQueue {
+    func asyncAfter(deadline: DispatchTime, execute work: @escaping @Sendable () -> Void) {}
+}
+
+public extension Bundle {
+    func url(forResource name: String?, withExtension ext: String?) -> URL? { nil }
+}
+
+public struct PersonNameComponents: Hashable, Sendable {
+    public init() {}
+}

@@ -11,13 +11,13 @@ use istmo::IstmoError;
 ))]
 use istmo::plugins::safe_area::SafeAreaPublisher;
 use istmo::plugins::{
-    BannerSlot, EdgeInsets, NotificationError, NotificationImportance, NotificationRequest,
-    NotificationsClient, PermissionsClient, SafeArea, SafeAreaInsets, SlotTarget,
+    BannerSlot, EdgeInsets, PermissionsClient, SafeArea, SafeAreaInsets, SlotTarget,
     banner_rect_from_logical,
 };
 use istmo_google_sign_in::{
     OwnedSignInAccount, SignInClient, SignInConfig, SignInError, SignInMode,
 };
+use istmo_notifications::{InvalidField, Notification, NotificationsClient};
 use istmo_plugins::admob::{
     AdError, AdMobClient, AdMobConfig, InterstitialOutcome, RewardedOutcome,
 };
@@ -748,10 +748,11 @@ async fn run_sign_in_flow(
     );
     let notifications =
         NotificationsClient::acquire().map_err(|e| format!("notifications: {e}"))?;
-    notifications
-        .schedule(welcome_notification(&account))
-        .await
-        .map_err(|e| format!("notifications: {}", render_notification_error(&e)))?;
+    let welcome = welcome_notification(&account).map_err(|e| format!("notifications: {e}"))?;
+    // A missing notification is not worth failing the sign-in over.
+    if let Err(err) = notifications.show_checked(welcome).await {
+        log::warn!("welcome notification not shown: {err}");
+    }
 
     Ok(view)
 }
@@ -862,31 +863,12 @@ fn render_sign_in_error(err: &IstmoError) -> String {
     err.to_string()
 }
 
-fn render_notification_error(err: &IstmoError) -> String {
-    if let IstmoError::PluginError { bytes } = err {
-        return match istmo::codec::decode::<NotificationError>(bytes) {
-            Ok((decoded, _)) => format!("{decoded}"),
-            Err(codec_err) => format!(
-                "undecodable domain error ({} bytes): {codec_err}",
-                bytes.len(),
-            ),
-        };
-    }
-    err.to_string()
-}
-
-fn welcome_notification(account: &OwnedSignInAccount) -> NotificationRequest {
+fn welcome_notification(account: &OwnedSignInAccount) -> Result<Notification, InvalidField> {
     let who = account
         .display_name
         .as_deref()
         .or(account.email.as_deref())
         .unwrap_or(&account.id);
-    NotificationRequest {
-        title: "Signed in".to_owned(),
-        body: format!("Welcome back, {who}!"),
-        channel_id: "auth".to_owned(),
-        importance: NotificationImportance::Default,
-        delay_seconds: None,
-        tag: Some("sign-in-welcome".to_owned()),
-    }
+    Ok(Notification::new("sign-in-welcome", "Signed in")?
+        .with_body(format!("Welcome back, {who}!")))
 }

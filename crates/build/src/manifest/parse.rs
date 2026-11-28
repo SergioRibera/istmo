@@ -25,7 +25,7 @@ const KNOWN_KEYS: &[&str] = &[
     "assets",
 ];
 
-const KNOWN_ASSET_KEYS: &[&str] = &["path"];
+const KNOWN_ASSET_KEYS: &[&str] = &["path", "targets"];
 
 const KNOWN_MIN_VERSION_KEYS: &[&str] = &["android", "ios", "macos", "windows"];
 
@@ -302,16 +302,15 @@ fn parse_plugin_entry(
         ios_backend: optional_string("ios_backend", "plugin.ios_backend")?,
         android_permissions,
         android_queries,
-        targets: parse_targets(table)?,
+        targets: parse_targets(table, "plugin.targets")?,
     })
 }
 
 /// `targets = ["android", "ios", "desktop", "web"]`: a non-empty list,
 /// each target at most once. Every target when absent.
-fn parse_targets(table: &Table) -> Result<PluginTargets, ManifestError> {
-    const KEY: &str = "plugin.targets";
+fn parse_targets(table: &Table, key: &'static str) -> Result<PluginTargets, ManifestError> {
     let mismatch = || ManifestError::TypeMismatch {
-        key: KEY.to_owned(),
+        key: key.to_owned(),
         expected: "non-empty array of `android`, `ios`, `desktop`, `web`",
     };
     let Some(item) = table.get("targets") else {
@@ -339,7 +338,7 @@ fn parse_targets(table: &Table) -> Result<PluginTargets, ManifestError> {
             "web" => &mut targets.web,
             _ => {
                 return Err(ManifestError::InvalidValue {
-                    key: KEY.to_owned(),
+                    key: key.to_owned(),
                     value: literal.clone(),
                     expected: "`android`, `ios`, `desktop` or `web`",
                 });
@@ -347,7 +346,7 @@ fn parse_targets(table: &Table) -> Result<PluginTargets, ManifestError> {
         };
         if *slot {
             return Err(ManifestError::InvalidValue {
-                key: KEY.to_owned(),
+                key: key.to_owned(),
                 value: literal.clone(),
                 expected: "each target listed once",
             });
@@ -636,7 +635,10 @@ fn parse_asset_entry(table: &Table, context: &'static str) -> Result<AssetEntry,
             expected: "a non-empty path, directory or glob",
         });
     }
-    Ok(AssetEntry { path })
+    Ok(AssetEntry {
+        path,
+        targets: parse_targets(table, "assets.targets")?,
+    })
 }
 
 fn parse_remote_override(table: &Table) -> Result<RemoteOverride, ManifestError> {

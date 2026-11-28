@@ -69,6 +69,8 @@
 //!   merged into the host app.
 //! - [`min_versions`] — `[min_versions]` parsing and the app-floor
 //!   check run from [`emit`].
+//! - [`notifications`] — `[app.notifications]` and
+//!   `[[app.notification_channel]]` for the `istmo-notifications` plugin.
 
 #![doc(html_root_url = "https://docs.rs/istmo-build")]
 
@@ -102,6 +104,7 @@ pub mod launcher_actions;
 pub mod manifest;
 pub mod min_versions;
 pub mod native_deps;
+pub mod notifications;
 pub mod plugin_registry;
 pub mod rust;
 pub mod service;

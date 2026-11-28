@@ -1,0 +1,53 @@
+# CalendarRule vectors: every implementation of the rule (Rust
+# `CalendarRule::next_after`, Kotlin `CalendarRule.kt`, anything else)
+# must produce `expected` for every row.
+#
+# Columns, tab separated:
+#   name        unique row name
+#   zone        rule `time_zone` (IANA name), `-` for None (local wall clock)
+#   local       the zone standing in for the device's when `zone` is `-`
+#   hour        rule hour, 0..=23
+#   minute      rule minute, 0..=59
+#   weekdays    comma-separated `mon,tue,wed,thu,fri,sat,sun`, `-` for every day
+#   day         rule `day_of_month` 1..=31, `-` for None
+#   month       rule `month` 1..=12, `-` for None
+#   until       rule `until_ms` as an RFC 3339 UTC instant, `-` for None
+#   after       the instant to search after, RFC 3339 UTC
+#   count       how many occurrences to ask for (each strictly after the previous)
+#   expected    comma-separated RFC 3339 UTC instants, fewer than `count` when
+#               the rule runs out; `none` when there is no occurrence at all
+#
+# Semantics: a wall time in a DST gap moves forward by the gap; a wall
+# time in an overlap is the earlier instant and fires once; a day that
+# does not match every set field is skipped.
+name	zone	local	hour	minute	weekdays	day	month	until	after	count	expected
+daily_utc	UTC	UTC	8	0	-	-	-	-	2026-01-10T10:00:00Z	2	2026-01-11T08:00:00Z,2026-01-12T08:00:00Z
+exactly_at_occurrence	UTC	UTC	8	0	-	-	-	-	2026-01-10T08:00:00Z	1	2026-01-11T08:00:00Z
+just_before_occurrence	Europe/Madrid	UTC	8	0	-	-	-	-	2026-01-10T06:59:59Z	1	2026-01-10T07:00:00Z
+year_end_midnight	UTC	UTC	0	0	-	-	-	-	2026-12-31T00:00:00Z	1	2027-01-01T00:00:00Z
+local_wall_clock	-	Asia/Tokyo	9	30	-	-	-	-	2026-03-01T00:00:00Z	1	2026-03-01T00:30:00Z
+half_hour_zone	Asia/Kolkata	UTC	9	0	-	-	-	-	2026-05-01T00:00:00Z	2	2026-05-01T03:30:00Z,2026-05-02T03:30:00Z
+new_york_gap	America/New_York	UTC	2	30	-	-	-	-	2026-03-07T12:00:00Z	2	2026-03-08T07:30:00Z,2026-03-09T06:30:00Z
+new_york_gap_local	-	America/New_York	2	30	-	-	-	-	2026-03-07T12:00:00Z	2	2026-03-08T07:30:00Z,2026-03-09T06:30:00Z
+new_york_overlap	America/New_York	UTC	1	30	-	-	-	-	2026-10-31T12:00:00Z	2	2026-11-01T05:30:00Z,2026-11-02T06:30:00Z
+new_york_overlap_fires_once	America/New_York	UTC	1	30	-	-	-	-	2026-11-01T05:30:00Z	1	2026-11-02T06:30:00Z
+new_york_weekly_gap	America/New_York	UTC	2	30	sun	-	-	-	2026-03-01T12:00:00Z	2	2026-03-08T07:30:00Z,2026-03-15T06:30:00Z
+berlin_gap	Europe/Berlin	UTC	2	15	-	-	-	-	2026-03-28T12:00:00Z	2	2026-03-29T01:15:00Z,2026-03-30T00:15:00Z
+berlin_overlap	Europe/Berlin	UTC	2	30	-	-	-	-	2026-10-24T12:00:00Z	2	2026-10-25T00:30:00Z,2026-10-26T01:30:00Z
+sydney_gap	Australia/Sydney	UTC	2	30	-	-	-	-	2026-10-03T00:00:00Z	2	2026-10-03T16:30:00Z,2026-10-04T15:30:00Z
+sydney_overlap	Australia/Sydney	UTC	2	30	-	-	-	-	2026-04-04T00:00:00Z	2	2026-04-04T15:30:00Z,2026-04-05T16:30:00Z
+lord_howe_half_hour_gap	Australia/Lord_Howe	UTC	2	15	-	-	-	-	2026-10-03T00:00:00Z	2	2026-10-03T15:45:00Z,2026-10-04T15:15:00Z
+lord_howe_half_hour_overlap	Australia/Lord_Howe	UTC	1	45	-	-	-	-	2026-04-04T00:00:00Z	2	2026-04-04T14:45:00Z,2026-04-05T15:15:00Z
+apia_skipped_day	Pacific/Apia	UTC	9	0	-	-	-	-	2011-12-29T00:00:00Z	3	2011-12-29T19:00:00Z,2011-12-30T19:00:00Z,2011-12-31T19:00:00Z
+leap_day	UTC	UTC	12	0	-	29	2	-	2026-03-01T00:00:00Z	2	2028-02-29T12:00:00Z,2032-02-29T12:00:00Z
+leap_day_skips_2100	UTC	UTC	12	0	-	29	2	-	2097-01-01T00:00:00Z	1	2104-02-29T12:00:00Z
+day_29_skips_short_february	UTC	UTC	12	0	-	29	-	-	2027-01-30T00:00:00Z	2	2027-03-29T12:00:00Z,2027-04-29T12:00:00Z
+month_end_31	UTC	UTC	9	0	-	31	-	-	2026-04-01T00:00:00Z	3	2026-05-31T09:00:00Z,2026-07-31T09:00:00Z,2026-08-31T09:00:00Z
+day_31_in_april_never	UTC	UTC	9	0	-	31	4	-	2026-01-01T00:00:00Z	1	none
+christmas_london	Europe/London	UTC	9	0	-	25	12	-	2026-06-01T00:00:00Z	2	2026-12-25T09:00:00Z,2027-12-25T09:00:00Z
+summer_month_london	Europe/London	UTC	9	0	-	1	7	-	2026-01-01T00:00:00Z	1	2026-07-01T08:00:00Z
+weekday_set	Europe/Madrid	UTC	8	0	mon,wed,fri	-	-	-	2026-01-01T00:00:00Z	3	2026-01-02T07:00:00Z,2026-01-05T07:00:00Z,2026-01-07T07:00:00Z
+weekend	UTC	UTC	10	0	sat,sun	-	-	-	2026-01-05T00:00:00Z	3	2026-01-10T10:00:00Z,2026-01-11T10:00:00Z,2026-01-17T10:00:00Z
+friday_13th	UTC	UTC	10	0	fri	13	-	-	2026-01-01T00:00:00Z	3	2026-02-13T10:00:00Z,2026-03-13T10:00:00Z,2026-11-13T10:00:00Z
+until_inclusive	UTC	UTC	7	0	-	-	-	2026-01-12T07:00:00Z	2026-01-10T00:00:00Z	5	2026-01-10T07:00:00Z,2026-01-11T07:00:00Z,2026-01-12T07:00:00Z
+until_passed	UTC	UTC	7	0	-	-	-	2026-01-01T00:00:00Z	2026-01-10T00:00:00Z	1	none

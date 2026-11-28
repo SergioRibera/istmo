@@ -1,0 +1,2361 @@
+# `istmo-notifications`
+
+Local notifications on every istmo target, with live updates. Replaces
+the built-in `istmo.notifications` contract in `istmo-plugins` (four
+methods, no shipped backend, natives only inside `rust-mobile-demo`).
+Same plugin id, no compatibility shim (nothing has shipped).
+
+Goal: one model that works everywhere. When a platform has a feature, use
+it. When it does not, the plugin simulates it (and says so in
+`capabilities`). Only refuse when there is no honest way to do it.
+
+Push (APNs / FCM / Web Push) is a separate plugin
+(`istmo-push`, later): it needs servers, entitlements and service
+extensions. This plugin is what a push handler calls to show something.
+
+## 1. What each platform offers
+
+### Android (NotificationCompat, API 21+; minSdk of istmo)
+
+- Channels (26+): importance, sound, vibration pattern, lights, badge,
+  lock-screen visibility, bypass DND; immutable after creation except
+  name / description. Channel groups. Per-channel blocked state.
+- Styles: BigText, BigPicture, Inbox, Messaging (conversations,
+  `Person`, shortcuts for bubbles), Call (31+), Media (out of scope),
+  ProgressStyle (36: segments, points, tracker icon).
+- Live Updates (Android 16 QPR1+): `setRequestPromotedOngoing`, ongoing,
+  title, style in {BigText, Call, Progress, Metric}, manifest permission
+  `POST_PROMOTED_NOTIFICATIONS` (normal permission); status bar chip text
+  `setShortCriticalText`.
+- Updates in place: same id + tag; `setOnlyAlertOnce` keeps them silent.
+  The system drops updates above about 5 per second per app.
+- Progress `setProgress(max, value, indeterminate)` on any style.
+- Actions (max 3 shown), `RemoteInput` inline reply with `setChoices`
+  (smart choices), semantic action, `setAuthenticationRequired` (31+).
+- Groups + summary (the app must post the summary; the system
+  auto-groups at 4+).
+- `setTimeoutAfter`, `setOngoing`, `setWhen` / `showWhen`,
+  `setUsesChronometer` + `setChronometerCountDown` (24+), `setNumber`
+  (launcher badge count), `setColor`, `setColorized`, category,
+  `setVisibility` + `setPublicVersion`, full-screen intent (14+ needs
+  `USE_FULL_SCREEN_INTENT` grant), delete intent (dismissal).
+- Listing: `getActiveNotifications` (23+). No listing of scheduled ones
+  (there is no OS scheduler for notifications).
+- Scheduling: none native. `AlarmManager` (`setExactAndAllowWhileIdle`
+  needs `SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM`; inexact otherwise),
+  alarms lost on reboot and app update (`BOOT_COMPLETED`,
+  `TIME_SET`, `TIMEZONE_CHANGED`), OEM caps on alarm count (Samsung 500); 14+: `SCHEDULE_EXACT_ALARM` denied by default, `USE_EXACT_ALARM` Play-policy gated.
+- Permission: `POST_NOTIFICATIONS` runtime (33+);
+  `areNotificationsEnabled`; `currentInterruptionFilter` (DND state).
+- Settings: `ACTION_APP_NOTIFICATION_SETTINGS`,
+  `ACTION_CHANNEL_NOTIFICATION_SETTINGS`.
+
+### iOS / iPadOS (UserNotifications)
+
+- Content: title, subtitle, body, badge, sound (default, named bundle
+  sound, critical with entitlement), attachments (image / audio / video
+  file URLs, copied by the system), `threadIdentifier` (grouping),
+  `summaryArgument`, `relevanceScore` (15+), `interruptionLevel` (15+:
+  passive, active, timeSensitive (entitlement), critical (entitlement)),
+  `targetContentIdentifier`, `userInfo`.
+- Categories with actions (registered up front with
+  `setNotificationCategories`): button / `UNTextInputNotificationAction`,
+  options foreground / destructive / authenticationRequired, action
+  icons (15+), hidden-preview placeholder, custom dismiss action
+  (needed to hear about dismissals).
+- Triggers: time interval (repeat >= 60 s), calendar (`DateComponents`,
+  repeats), location (needs location permission; out of v1).
+- 64 pending requests per app, the rest silently dropped.
+- Update: adding a request with an existing identifier replaces it,
+  delivered or pending. It alerts again (no "only alert once"); with no
+  sound and `.passive` it updates the list quietly (to verify on device).
+- Listing: pending and delivered requests, remove by identifier.
+- Foreground: nothing shows unless the delegate's `willPresent` returns
+  options. Responses (tap, action, reply) only through the delegate,
+  which must be set before launch finishes (cold start).
+- Communication notifications (`INSendMessageIntent`, entitlement),
+  Live Activities (the `istmo-live-activity` plugin), notification
+  service / content extensions (push only).
+- Badge: `setBadgeCount` (16+), else `applicationIconBadgeNumber`.
+- Settings: `openNotificationSettingsURLString` (16+), else app settings.
+
+### macOS (UserNotifications, 10.14+)
+
+Same API as iOS (no Live Activities, no critical without entitlement,
+time-sensitive needs entitlement). Only works from a bundled, signed
+`.app` with a bundle id: an unbundled binary throws or crashes inside
+`UNUserNotificationCenter.current()`. Responses relaunch the app
+(Apple Event + delegate). Deprecated `NSUserNotification` is not a way
+out (same bundle requirement, removed APIs).
+
+### Windows 10 1809+ / 11 (WinRT `Windows.UI.Notifications`)
+
+- Toast XML: text lines, app logo override (circle crop), hero image,
+  inline images, attribution text, custom timestamp, header (groups
+  toasts in Action Center), up to 5 buttons, text input boxes, selection
+  boxes (choices), context menu items, system snooze / dismiss actions,
+  audio (`ms-winsoundevent:` built-ins, loop; `ms-appx` custom audio only for
+  packaged apps), scenarios (`reminder`, `alarm`, `incomingCall`,
+  `urgent` (11)), duration long/short.
+- Progress bar with data binding (title, value, value string override,
+  status); updated in place with `ToastNotifier.Update(NotificationData,
+  tag, group)` and a sequence number: no re-popup, cheapest live update
+  of any platform.
+- Tag + group identify a toast; `SuppressPopup` posts straight to Action
+  Center; `ExpirationTime`; `ExpiresOnReboot`; priority High.
+- `ScheduledToastNotification` (fires while the app is closed; no
+  repeats); `GetScheduledToastNotifications` / remove.
+- History: `ToastNotificationHistory` get / remove (tag, group) / clear.
+- Events while running: Activated, Dismissed (UserCanceled,
+  ApplicationHidden, TimedOut), Failed.
+- Activation when closed: COM activator implementing
+  `INotificationActivationCallback`, registered under HKCU
+  `Software\Classes\AppUserModelId\<AUMID>` (`DisplayName`, `IconUri`,
+  `CustomActivator`) plus `Software\Classes\CLSID\{clsid}\LocalServer32`.
+  Older guidance also asks for a Start-menu shortcut carrying the AUMID
+  and the activator CLSID. Packaged (MSIX): manifest
+  `com:Extension` / `desktop:ToastNotificationActivation`.
+- Permission: `ToastNotifier.Setting` (Enabled, DisabledForApplication,
+  DisabledForUser, DisabledByGroupPolicy, DisabledByManifest). No prompt.
+- Badge: packaged only (`BadgeUpdateManager`); not this plugin.
+- Settings: `ms-settings:notifications`.
+
+### Linux: `org.freedesktop.Notifications` (spec 1.2)
+
+- `Notify(app_name, replaces_id, app_icon, summary, body, actions,
+  hints, expire_timeout)`: `replaces_id` = update in place.
+- Hints: `urgency` (low/normal/critical), `category`, `image-data` /
+  `image-path`, `sound-file` / `sound-name` / `suppress-sound`,
+  `resident`, `transient`, `action-icons`, `desktop-entry`,
+  `x-kde-*`, `value` (0-100 progress, de-facto: dunst, mako, swaync, xfce4-notifyd; not Plasma, not GNOME).
+- `GetCapabilities`: `actions`, `body`, `body-markup`, `body-images`,
+  `icon-static`, `persistence`, `sound`, `inline-reply` (KDE),
+  `x-kde-urls`, ... Feature support depends on the running server.
+- Signals: `ActionInvoked`, `NotificationClosed(reason)`,
+  `ActivationToken` (focus stealing), `NotificationReplied` (KDE inline
+  reply). Only while the app is running: the server never starts it.
+- No scheduling, no listing, no permission.
+- KDE progress jobs: bus name `org.kde.kuiserver`, interface `org.kde.JobViewServerV2` (real progress UI with
+  speed, cancel / suspend); better than the `value` hint on Plasma.
+
+### Linux: portal `org.freedesktop.portal.Notification` (Flatpak, Snap, host apps that register)
+
+- v1: title, body, icon, priority (low/normal/high/urgent),
+  default-action + target, buttons (label, action, target).
+  `AddNotification(id, dict)` with the same id replaces.
+  `ActionInvoked(id, action, parameter)`; the portal can activate the
+  app through D-Bus activation when it is not running (needs
+  `DBusActivatable=true` and the `org.freedesktop.Application`
+  interface).
+- v2: markup-body, sound (default / silent / file / bytes), icon as
+  themed name or file descriptor, buttons with `purpose` (e.g. call
+  accept/decline; exact purpose names to verify), `display-hint`
+  (transient, tray, persistent, hide-on-lock-screen,
+  hide-content-on-lock-screen, show-as-new), `category`
+  (`im.received`, `call.incoming`, `call.ongoing`, `call.unanswered`, `alarm.ringing`, `os.battery.low`, ...). Supported
+  options read from `SupportedOptions`.
+- No closed signal, no listing, no scheduling. Host (non-sandboxed) apps
+  must register an app id (`org.freedesktop.host.portal.Registry`).
+
+### Web (Notification API + Service Worker)
+
+- Page `new Notification(title, opts)`: body, icon, tag (replace),
+  `renotify`, `silent`, `requireInteraction`, `data`, `lang`, `dir`,
+  `timestamp`, vibrate (mobile). Click / close / error / show events.
+- Service worker `registration.showNotification`: also `actions`
+  (`Notification.maxActions`, 2 on Chrome), `image`, `badge`;
+  `getNotifications({ tag })` lists shown ones; `notificationclick`
+  works with the page closed.
+- `Notification.requestPermission()` needs a user gesture.
+- No scheduling (Notification Triggers was abandoned), no progress, no
+  input (except Chrome's `type: "text"` action, non-standard).
+
+
+### Corrections from review (supersede anything above)
+
+- Portal v2 has native inline reply: button `purpose = "im.reply-with-text"`
+  (category `im.received`), text arrives in the `parameter` of the
+  activation. Call purposes: `call.accept`, `call.decline`,
+  `call.hang-up`, `call.enable-speakerphone`, `call.disable-speakerphone`.
+  Buttons with a purpose omit the label; supported purposes, categories
+  and options come from `SupportedOptions`.
+- Portal actions: only actions named `app.<name>` are "exported"; the
+  portal calls `org.freedesktop.Application.ActivateAction("<name>",
+  [target], platform_data)` on the app's bus name (D-Bus activating it if
+  needed: `.service` file + `DBusActivatable=true`) and does **not** emit
+  `ActionInvoked` for them. Non-exported actions only emit
+  `ActionInvoked` (app running).
+- KDE inline reply (fdo): capability `inline-reply`, an action whose key
+  is `inline-reply`, hints `x-kde-reply-placeholder-text` /
+  `x-kde-reply-submit-button-text`, signal `NotificationReplied(u, s)`.
+  swaync implements it too.
+- Android Live Updates (16 QPR1+): styles Standard / BigText / Call /
+  Progress / Metric; must be ongoing, have a title, no `RemoteViews`, not a
+  group summary, not colorized, channel not `IMPORTANCE_MIN`.
+  `NotificationManager.canPostPromotedNotifications()`,
+  `Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS`,
+  `Notification.FLAG_PROMOTED_ONGOING` tell whether it was promoted. OEMs
+  may add criteria.
+- Android rate limit is per package (about 5 enqueues per second), not
+  per notification; about 50 active notifications per app.
+- Android 12+: every `PendingIntent` `FLAG_IMMUTABLE` except the reply
+  action (`FLAG_MUTABLE` + explicit intent, 14 refuses implicit mutable
+  ones); foreground actions use `getActivity` directly (notification
+  trampoline restriction).
+- Apple communication notifications work for local notifications without
+  a service extension (iOS 15 / macOS 12): capability
+  `com.apple.developer.usernotifications.communication`,
+  `INSendMessageIntent` in the app's `NSUserActivityTypes`, `INPerson`
+  with `INPersonHandle` + `INImage`, stable `conversationIdentifier`,
+  `INInteraction(direction: .incoming)` donated (wait for success), then
+  `content.updating(from: intent)`. Calls: `INStartCallIntent`.
+  Device check: a forum thread reports missing avatars on local ones.
+- Apple `setNotificationCategories` replaces the whole set.
+  `willPresent` never runs in the background.
+- Web: on Chrome Android `new Notification()` throws: mobile web needs
+  the service worker even to show. Firefox / Safari: no `actions`,
+  `image`, `badge`. iOS Safari only from home-screen web apps (16.4+).
+  Gesture requirement for permission: Firefox and Safari.
+- Windows (research 2026-11-27, see section 6): registry-only
+  registration (no Start-menu shortcut) is what Windows App SDK,
+  Community Toolkit 7 and Firefox ship; minimum supported build 17763
+  (1809). Unpackaged images: local absolute paths only. Custom audio:
+  only `ms-appx` / `ms-resource` (packaged), so unpackaged apps get
+  `ms-winsoundevent:` sounds or silence. Max 5 buttons (context menu
+  items included), 5 inputs. Elevated processes are unsupported.
+
+## 2. Feature matrix
+
+`N` native, `S` simulated by the plugin, `R` only while the app process
+runs (simulated), `-` unsupported (the capability says so; the field is
+ignored, never an error unless the method exists only for it).
+
+| Feature | Android | iOS | macOS | Windows | Linux fdo | Linux portal | Web |
+|---|---|---|---|---|---|---|---|
+| show now | N | N | N (bundle) | N | N | N | N (SW on mobile) |
+| update in place | N | N (re-add) | N (re-add) | N | N (`replaces_id`) | N (same id) | N (tag) |
+| silent update | N (alert once) | S (passive, no sound) | S | N (binding / SuppressPopup) | N | N | N (`renotify=false`) |
+| progress bar | N (ProgressStyle 36+, else `setProgress`) | S (text) | S (text) | N (bar) | N (`value` on dunst/mako/swaync/xfce) / N (KDE job) / S (text) | S (text) | S (text) |
+| live update promotion | N (16 QPR1+, eligibility) | - (see live-activity) | - | - | - | - | - |
+| schedule at / after | N (AlarmManager, one alarm armed) | N | R | N (ScheduledToast) | R | R | R |
+| repeat daily / weekly / interval | N (Kotlin rule eval) | N (64 cap, top-up) | R | S (window re-armed) | R | R | R |
+| missed while off | S (boot / time change re-arm) | N | S | N | S (catch-up policy at start) | S | S |
+| actions | N (3) | N (4) | N (10) | N (5) | N if `actions` cap | N | N (SW, maxActions; not FF/Safari) |
+| more actions than max | S (`More`) | S | S | S | S | S | S |
+| inline reply | N | N | N | N | N (`inline-reply` cap) else S | N (v2 purpose) else S | S |
+| choices | N (`setChoices`) | S (buttons) | S | N (selection) | S | S | S |
+| snooze | S | S | R | N (system) | R | R | R |
+| avatar / large icon | N (`Person.setIcon`, large icon) | N (communication capability) else S (attachment) | same as iOS | N (`appLogoOverride` circle) | N (`image-path`) | N (icon fd / bytes) | N (`icon`) |
+| picture | N (BigPicture) | N (attachment) | N | N (hero) | N (`image-path`) | - | N (`image`, Chromium) |
+| big text / inbox | N | S (body) | S | S (lines) | S (body) | S | S |
+| messaging style | N | N (capability) else S (body) | same | S (lines) | S (body) | S (`im.received`) | S |
+| call style | N (CallStyle) | N (capability, `INStartCallIntent`) else S | same | N (`incomingCall`) | S (critical + buttons) | N (`call.incoming` + purposes) | S |
+| groups / threads | N (+ S summary) | N (thread) | N | N (group + header) | - | - | - |
+| channels | N | S (defaults) | S | S | S | S | S |
+| sound default / silent / named | N (channel) | N | N | N system names only | N (`sound-name`) | N (v2) | silent only |
+| interruption level | N (importance) | N (15+) | N | S (scenario) | N (urgency) | N (priority) | S (`requireInteraction`) |
+| ongoing / persistent | N | - | - | S (`reminder` scenario) | N (`resident`) | N (`persistent`) | N (`requireInteraction`) |
+| timeout | N (26+), - below | R | R | N (expiration) | R | R | R |
+| lock-screen privacy | N | S (category placeholder) | S | - | - | N (v2 hints) | - |
+| timestamp / chronometer | N | - | - | N (timestamp) | - | - | N (timestamp) |
+| list delivered | N | N | N | N (history) | R (own table) | R | N (SW) |
+| list scheduled | N (own store) | N | S | N | R | R | R |
+| dismissal event | N (delete intent) | N (custom dismiss) | N | R | R | - | N |
+| tap when app closed | N | N | N | N (COM activator) | - | N (exported actions) | N (SW) |
+| background reply / action | N (receiver + `goAsync`) | N (completion handler) | N | N (COM, process started) | R | N (D-Bus activation) | N (SW) |
+| permission request | N (33+) | N | N | - (read only) | - | - | N (gesture on FF/Safari) |
+| exact alarms permission | N (12+) | - | - | - | - | - | - |
+| DND state | N | - | - | - | - | - | - |
+| open settings | N (app / channel / exact alarm / promoted) | N | N | N | - | - | - |
+
+As built (2026-11-27), the matrix follows what `capabilities()`
+reports: macOS schedules through the desktop host's in-process engine
+(`WhileRunning`), so schedule, repeat, missed and the pending list are
+host-run there; a snooze on macOS, Linux and
+the web is a host re-schedule that only fires while the app runs
+(`WhileRunning`); fdo servers do not expire notifications reliably, so
+the host times them out (`WhileRunning`); Android has no timeout below
+API 26 (`setTimeoutAfter`). Earlier cells of this table were the plan.
+
+### Simulations, precisely
+
+- **Progress as text**: `<label> 42%` (or `<label>` when indeterminate)
+  appended as the last body line; updates take the silent path.
+- **Live update coalescing** (one `Coalescer`, Rust on desktop/web, a
+  Kotlin and a Swift port on mobile): per id the latest pending update
+  wins; a per-app token bucket limits posts (Android 4/s with burst 4,
+  Apple 2/s, Windows binding 20/s, Linux 10/s, web 4/s). Alerting updates
+  (`alert_again`) and the final `finish` jump the queue. `cancel` drops
+  queued updates for that id. An update for a notification the user
+  dismissed is dropped (dismissals tracked from delete intents / custom
+  dismiss / `NotificationClosed` / Windows `Dismissed`) unless
+  `alert_again`.
+- **Scheduling engine**:
+  - Rule math lives in `CalendarRule::next_after(instant, tz)` (Rust,
+    `jiff`) and its Kotlin port (`java.util.Calendar` + `TimeZone`, no
+    desugaring, minSdk 21). Both pinned by
+    `tests/schedule_vectors.tsv` (DST gaps and overlaps, leap days,
+    month-end, weekday sets, `until`), like the webview rule vectors.
+    `time_zone: None` = local wall clock, follows DST.
+  - Android: Kotlin `ScheduleStore` (file in `noBackupFilesDir`, format
+    byte, entries are generated-codec bytes of `(Notification,
+    Trigger)`), exactly one `AlarmManager` alarm armed for the soonest
+    entry (`setExactAndAllowWhileIdle` with the grant, else
+    `setAndAllowWhileIdle`: `ScheduledInfo.exact` says which), re-armed on
+    fire, `BOOT_COMPLETED`, `TIME_SET`, `TIMEZONE_CHANGED`,
+    `MY_PACKAGE_REPLACED`, `SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED`.
+    No Rust needed at fire time.
+  - Apple: native triggers (`UNCalendarNotificationTrigger` repeats,
+    interval >= 60 s). All requests also kept in the plugin store; the
+    soonest 60 are armed; top-up on launch, on foreground and in the
+    delegate callbacks.
+  - Windows: `ScheduledToastNotification` for one-shots; repeats armed
+    as the next occurrences in a 14-day window (cap 50), re-armed on every
+    start.
+  - Linux / web: in-process engine, one timer for the soonest entry (one
+    shared timer thread on desktop, `setTimeout` on web), store in the
+    plugin data dir (desktop: format byte + wincode, atomic
+    `fsx`-style write, only the `LocalEndpoint` owner writes; web:
+    IndexedDB). `MissedPolicy` applied at start. `Support::WhileRunning`.
+- **More actions than the platform shows**: the first `max - 1` stay,
+  the rest become a `More` action that opens the app with
+  `ResponseAction::More` and `overflow_actions`.
+- **Reply / choices where missing**: a button that opens the app with
+  `input_requested = true`.
+- **Snooze**: `ActionKind::Snooze(ms)`, handled without the app's code
+  (Android receiver, Apple background action, Windows system snooze,
+  desktop in-process), then a `Snoozed` event.
+- **Android group summary**: posted by the plugin while a group has 2+
+  members; removed with the last one.
+- **Channels off Android**: defaults merged into each notification.
+- **Delivered list where the OS has none**: the plugin's own table.
+
+Rejected (do not re-propose): drawing progress into images (plugin never
+draws); per-notification sound on Android through derived channels;
+decoding / scaling images in Rust (no `image` crate: bytes pass through,
+size-capped, natives scale); `osascript` for unbundled macOS (user
+decision: bundle required, README says so); a Start-menu shortcut on
+Windows (registry-only route, 1809+); Windows builds before 17763.
+
+## 3. Responses
+
+```rust
+#[non_exhaustive]
+pub enum ResponseAction { Open, Button(ActionId), Dismiss, More }
+
+pub struct NotificationResponse {
+    pub id: NotificationId,
+    pub action: ResponseAction,
+    pub reply: Option<String>,          // inline reply text or chosen choice
+    pub input_requested: bool,          // reply/choices simulated: app shows its field
+    pub user_data: Option<String>,
+    pub url: Option<String>,            // action url, else notification url
+    pub launched_app: bool,             // this response started the process
+    pub overflow_actions: Vec<Action>,
+    pub ack: Option<AckToken>,          // background action: call `complete(ack)` when done
+}
+```
+
+- Published on the early queue `istmo.notifications.responses`
+  (`PreMainQueue`, capacity 64) and, when `url` is set, also on
+  `istmo.deeplinks` with `source = notification:<id>[:<action>]`.
+- Reader `NotificationResponses` (hand-written like `DeepLinks`):
+  `acquire()` / `from_runtime`, `stream()` with `recv` / `recv_async` /
+  `try_recv`; `NotificationResponse::kind()` gives a flat
+  `Response::{Open, Action(&str), Reply(&str), Dismissed, More}` view.
+- Dismissals are `NotificationEvent::Dismissed` (with a `DismissReason`)
+  on `events()`, on every platform that reports them; they are not
+  responses. `ResponseAction::Dismiss` (and `Response::Dismissed`) stays
+  reserved for a platform that delivers a dismissal as a response (an
+  Android delete intent while the app is closed is the candidate); no
+  shipped backend publishes it, and none has to (as built 2026-11-27).
+- Background actions (`opens_app = false`): the OS keeps the process
+  alive only briefly. Android: `IstmoNotificationReceiver` uses
+  `goAsync()`, starts the runtime if needed (`IstmoRuntime.ensureStarted`
+  from the receiver context), publishes, and finishes when the app calls
+  `complete(ack)` or after 9 s. Apple: the delegate holds the completion
+  handler until `complete(ack)` or 25 s. Windows: COM `Activate` returns
+  at once; the process stays until the app is done. Linux portal: D-Bus
+  activation starts the app. `ack` is `None` for foreground responses.
+- Cold start per platform:
+
+| Platform | Closed | Running |
+|---|---|---|
+| Android | `IstmoNotificationActivity` (not exported, `getActivity`, foreground) / `IstmoNotificationReceiver` (background, snooze, dismiss): queued in a native file, drained into the lane when the runtime starts | same, published directly |
+| iOS | delegate installed by the generated registry (`IstmoNotifications.install()`); apps with their own delegate forward `IstmoNotifications.didReceive(_:completion:)` and `willPresent(_:completion:)` | delegate |
+| macOS | delegate installed at `applicationWillFinishLaunching` (observer, like autostart) | delegate |
+| Windows | COM activator (`-istmo-notification -Embedding`); if another instance owns the `LocalEndpoint`, forward and exit | COM `Activate` in the primary |
+| Linux portal | exported actions + D-Bus activation when the plugin can own `org.freedesktop.Application` for the app id; else non-exported actions (running only) | `ActivateAction` / `ActionInvoked` |
+| Linux fdo | lost (`Support::Unsupported` for tap-when-closed) | `ActionInvoked` / `NotificationReplied` |
+| Web | service worker focuses / opens the page and posts the response | `click` / SW message |
+
+`user_data` <= 3 KiB (Windows `arguments`, Android extras, Apple
+`userInfo` all carry it).
+
+## 4. Wire types
+
+Rules: named-field structs; enum variants carry one unnamed payload; no
+variant named after its payload type; `#[non_exhaustive]` only on enums
+that are outputs (an `Unknown` mid-struct would break every later
+field); Kotlin top-level names avoid `Person`, `Message`, `Channel`,
+`Image` (androidx / coroutines clashes). Swift lives in the
+`Notifications` namespace (no reserved-name clash).
+
+```rust
+pub struct NotificationId { pub value: String }   // 1..=64 [A-Za-z0-9._:-]; TryFrom<&str>
+pub struct ChannelId { pub value: String }        // same rule
+pub struct ActionId { pub value: String }          // same rule; `istmo.` prefix reserved
+pub struct GroupId { pub value: String }           // same rule
+
+pub struct Notification {
+    pub id: NotificationId,
+    pub channel: Option<ChannelId>,                // None = "default" channel
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub body: Option<String>,
+    pub style: Style,
+    pub icon: Option<NotificationImage>,           // large icon / avatar / appLogoOverride
+    pub actions: Vec<Action>,
+    pub url: Option<String>,
+    pub user_data: Option<String>,
+    pub group: Option<Group>,
+    pub category: Option<Category>,
+    pub interruption: Option<Interruption>,        // None = channel's
+    pub sound: Option<Sound>,                      // None = channel's
+    pub progress: Option<Progress>,
+    pub ongoing: bool,
+    pub live: bool,                                // ask for promotion (Android 16 QPR1+)
+    pub status_text: Option<String>,               // Android chip, Windows progress status
+    pub timeout_ms: Option<u64>,
+    pub timestamp_ms: Option<i64>,
+    pub chronometer: Option<Chronometer>,
+    pub count: Option<u32>,                        // Android setNumber; NOT the app badge
+    pub lock_screen: Option<LockScreen>,
+    pub hide_in_foreground: bool,                  // default false: Apple shows while open
+    pub missed: MissedPolicy,                      // scheduled only
+    pub android: Option<AndroidExtras>,
+    pub apple: Option<AppleExtras>,
+    pub linux_hints: Vec<LinuxHint>,               // raw fdo hints escape hatch
+}
+
+pub struct AndroidExtras {
+    pub small_icon: Option<String>,   // drawable name; default from [app.notifications] small_icon
+    pub color: Option<u32>,           // ARGB accent
+    pub colorized: bool,
+    pub full_screen: bool,            // full-screen intent (needs grant on 14+)
+    pub keep_on_tap: bool,            // !autoCancel
+    pub sort_key: Option<String>,
+    pub local_only: bool,
+}
+pub struct AppleExtras {
+    pub relevance_score: Option<f32>,
+    pub target_content_id: Option<String>,
+    pub foreground: Option<ForegroundOptions>,     // None = banner + list + sound
+    pub filter_criteria: Option<String>,
+}
+pub struct ForegroundOptions { pub banner: bool, pub list: bool, pub sound: bool, pub badge: bool }
+pub struct LinuxHint { pub key: String, pub value: HintValue }
+pub enum HintValue { Bool(bool), Int(i32), Text(String), Bytes(Vec<u8>) }
+
+pub enum Style {
+    Plain,
+    BigText(String),
+    Inbox(Vec<String>),
+    Picture(NotificationImage),
+    Messaging(Conversation),
+    Call(CallInfo),
+}
+pub enum NotificationImage { Png(Vec<u8>), Jpeg(Vec<u8>), File(String), Named(String) }
+// bytes <= 2 MiB, refused above (InvalidField TooLarge); never decoded in Rust.
+// Paths the OS needs are written to the plugin cache dir, named by content hash,
+// removed when no live notification uses them.
+
+pub struct Participant { pub key: String, pub name: String, pub avatar: Option<NotificationImage>,
+                         pub is_bot: bool, pub important: bool }
+pub struct ChatMessage { pub text: String, pub timestamp_ms: i64,
+                         pub sender: Option<Participant>,   // None = the user
+                         pub image: Option<NotificationImage> }
+pub struct Conversation { pub user: Participant, pub title: Option<String>,
+                          pub is_group: bool, pub messages: Vec<ChatMessage> }   // plugin keeps <= 25
+pub struct CallInfo { pub caller: Participant, pub kind: CallKind, pub video: bool }
+pub enum CallKind { Incoming, Ongoing, Screening }
+// Call actions have reserved ids istmo.call.answer / istmo.call.decline / istmo.call.hang_up.
+
+pub struct Action {
+    pub id: ActionId,
+    pub title: String,
+    pub kind: ActionKind,
+    pub opens_app: bool,           // false = background (ack token)
+    pub destructive: bool,
+    pub requires_unlock: bool,
+    pub url: Option<String>,
+    pub icon: Option<NotificationImage>,
+}
+pub enum ActionKind { Button, Reply(ReplyOptions), Select(Vec<String>), Snooze(u64) }
+pub struct ReplyOptions { pub placeholder: Option<String>, pub submit_title: Option<String>,
+                          pub suggestions: Vec<String> }
+
+pub struct Group { pub id: GroupId, pub title: Option<String>, pub summary: Option<String> }
+pub enum Category { Message, Call, Alarm, Reminder, Event, Transfer, Social, Error, Status, System, Promo }
+pub enum Interruption { Passive, Normal, High, Urgent, Critical }   // Critical needs the Apple entitlement, else Urgent
+pub enum Sound { Default, Silent, Named(String) }  // bundled ([app.notifications] sounds) or system names
+pub enum LockScreen { Public, HideContent, Hidden }
+pub struct Progress { pub value: Option<f32>,      // None = indeterminate, else 0.0..=1.0
+                      pub label: Option<String>,
+                      pub segments: Vec<ProgressSegment>, pub points: Vec<ProgressPoint> }  // Android 16
+pub struct ProgressSegment { pub length: u32, pub color: Option<u32> }
+pub struct ProgressPoint { pub position: u32, pub color: Option<u32> }
+pub struct Chronometer { pub base_ms: i64, pub count_down: bool }
+pub enum MissedPolicy { Drop, DeliverLate(u64) }   // max lateness ms; default DeliverLate(1 h)
+
+pub enum Trigger { After(u64), At(i64), Every(u64), Calendar(CalendarRule) }   // ms; Every >= 60 000
+pub struct CalendarRule { pub hour: u8, pub minute: u8, pub weekdays: Vec<Weekday>,   // empty = every day
+                          pub day_of_month: Option<u8>, pub month: Option<u8>,
+                          pub time_zone: Option<String>,   // IANA; None = local wall clock
+                          pub until_ms: Option<i64> }
+pub enum Weekday { Mon, Tue, Wed, Thu, Fri, Sat, Sun }
+
+pub struct NotificationPatch {          // every Some replaces; `clear` removes optional fields
+    pub title: Option<String>, pub subtitle: Option<String>, pub body: Option<String>,
+    pub style: Option<Style>, pub icon: Option<NotificationImage>, pub actions: Option<Vec<Action>>,
+    pub progress: Option<Progress>, pub status_text: Option<String>, pub count: Option<u32>,
+    pub ongoing: Option<bool>, pub url: Option<String>, pub user_data: Option<String>,
+    pub clear: Vec<PatchField>, pub alert_again: bool,
+}
+pub enum PatchField { Subtitle, Body, Icon, Progress, StatusText, Count, Url, UserData, Actions }
+
+pub struct ChannelSpec { pub id: ChannelId, pub name: String, pub description: Option<String>,
+                         pub importance: Interruption, pub sound: Option<Sound>,
+                         pub vibration: Option<Vec<u32>>, pub light_color: Option<u32>,
+                         pub show_badge: bool, pub lock_screen: Option<LockScreen>,
+                         pub bypass_dnd: bool, pub group: Option<String> }
+
+#[non_exhaustive] pub enum Feature { Show, Update, SilentUpdate, ProgressBar, LivePromotion, Schedule,
+    Repeat, Missed, Actions, InlineReply, Choices, Snooze, Avatar, Picture, Messaging, CallStyle,
+    Groups, Channels, CustomSound, Interruption, Ongoing, Timeout, LockScreen, Chronometer,
+    ListDelivered, ListPending, Dismissal, TapWhenClosed, BackgroundAction, PermissionRequest,
+    ExactAlarms, DoNotDisturb, OpenSettings }
+#[non_exhaustive] pub enum Support { Native, Simulated, WhileRunning, Unsupported }
+pub struct FeatureSupport { pub feature: Feature, pub support: Support }
+pub struct Capabilities { pub backend: String,        // "android", "fdo:mako 1.9", "portal:2", "windows:22631", ...
+                          pub features: Vec<FeatureSupport>,
+                          pub max_actions: u32, pub max_pending: Option<u32>, pub max_active: Option<u32> }
+// Rust sugar: Capabilities::support(Feature) -> Support.
+
+pub struct PermissionRequest { pub alerts: bool, pub sound: bool, pub badge: bool, pub provisional: bool,
+                               pub critical: bool, pub exact_alarms: bool, pub full_screen: bool,
+                               pub promoted: bool }
+#[non_exhaustive] pub enum PermissionState { Granted, Denied, NotDetermined, Provisional, Ephemeral,
+                                             NotRequired, Unavailable }
+pub struct PermissionStatus { pub state: PermissionState, pub alerts: bool, pub sound: bool, pub badge: bool,
+                              pub exact_alarms: Option<bool>, pub full_screen: Option<bool>,
+                              pub promoted: Option<bool>, pub time_sensitive: Option<bool>,
+                              pub communication: Option<bool>, pub do_not_disturb: Option<bool> }
+
+pub struct ScheduledInfo { pub exact: bool, pub next_fire_ms: Option<i64> }
+pub struct PendingNotification { pub notification: Notification, pub trigger: Trigger, pub next_fire_ms: Option<i64> }
+pub struct DeliveredNotification { pub id: NotificationId, pub title: Option<String>, pub body: Option<String>,
+                                   pub group: Option<GroupId>, pub delivered_ms: Option<i64> }
+pub struct AckToken { pub value: u64 }
+
+#[non_exhaustive] pub enum NotificationEvent { Delivered(NotificationId), DeliveredLate(NotificationId),
+    Dismissed(Dismissal), Snoozed(NotificationId), Failed(Failure), NotPromoted(NotificationId) }
+pub struct Dismissal { pub id: NotificationId, pub reason: DismissReason }
+#[non_exhaustive] pub enum DismissReason { User, Timeout, App, Unknown }
+pub struct Failure { pub id: Option<NotificationId>, pub message: String }
+
+#[non_exhaustive] pub enum NotificationError { Unsupported(Feature), PermissionDenied, NotBundled, Elevated,
+    InvalidField(InvalidField), TooMany(u32), UnknownChannel(String), NotFound(String), Platform(PlatformError) }
+pub struct InvalidField { pub field: String, pub problem: Problem }
+#[non_exhaustive] pub enum Problem { Empty, TooLong, BadCharset, Duplicate, BadUrl, TooLarge, OutOfRange,
+                                     Reserved, NotAllowedHere }
+pub struct PlatformError { pub code: i64, pub message: String }
+```
+
+## 5. Trait
+
+```rust
+#[plugin(name = "istmo.notifications", remote = false)]
+pub trait Notifications {
+    async fn capabilities(&self) -> Capabilities;
+    async fn permission(&self) -> PermissionStatus;
+    async fn request_permission(&self, request: PermissionRequest) -> Result<PermissionStatus, NotificationError>;
+    async fn open_settings(&self, channel: Option<ChannelId>) -> Result<(), NotificationError>;
+    async fn set_channels(&self, channels: Vec<ChannelSpec>) -> Result<(), NotificationError>;
+    async fn delete_channel(&self, id: ChannelId) -> Result<(), NotificationError>;
+    async fn show(&self, notification: Notification) -> Result<(), NotificationError>;
+    async fn schedule(&self, notification: Notification, trigger: Trigger) -> Result<ScheduledInfo, NotificationError>;
+    async fn update(&self, id: NotificationId, patch: NotificationPatch) -> Result<(), NotificationError>;
+    async fn set_progress(&self, id: NotificationId, progress: Option<Progress>) -> Result<(), NotificationError>;
+    async fn append_message(&self, id: NotificationId, message: ChatMessage) -> Result<(), NotificationError>;
+    async fn cancel(&self, id: NotificationId) -> Result<(), NotificationError>;
+    async fn cancel_group(&self, group: GroupId) -> Result<(), NotificationError>;
+    async fn cancel_all(&self) -> Result<(), NotificationError>;
+    async fn pending(&self) -> Result<Vec<PendingNotification>, NotificationError>;
+    async fn delivered(&self) -> Result<Vec<DeliveredNotification>, NotificationError>;
+    async fn complete(&self, ack: AckToken) -> Result<(), NotificationError>;
+    #[stream]
+    fn events(&self) -> NotificationEvent;
+}
+```
+
+`remote = false`: responses are delivered in the main process (the
+trampoline / delegate / activator run there). `Notification::validate`
+and `NotificationPatch::validate` run on the Rust client before the call
+and again in the Rust desktop host; natives re-check platform limits.
+
+### Rust sugar (client side, no wire impact)
+
+```rust
+let n = Notification::new("dl:42", "Downloading report.pdf")?   // id validated here
+    .with_body("3.1 of 8 MB")
+    .with_channel("downloads")?
+    .with_progress(Progress::fraction(0.38))
+    .with_action(Action::button("pause", "Pause")?)
+    .with_action(Action::button("cancel", "Cancel")?.destructive())
+    .ongoing();
+
+let live = client.show_live(n).await?;     // LiveNotification
+live.progress(0.4);                         // sync, coalesced, never awaits
+live.finish(Notification::new("dl:42", "Done")?.with_url("app://files/42")).await?;
+// dropped without finish: cancel (opt-out: live.detach())
+
+client.show_simple("hello", "Title", "Body").await?;
+client.schedule(n, Trigger::daily(8, 0)).await?;          // Trigger::after(Duration), ::at(SystemTime), ::weekly(..)
+client.ensure_permission(PermissionRequest::default()).await?;   // asks only when NotDetermined
+client.append_message("chat:42", ChatMessage::from(ana.clone(), "On my way"))?;
+Image: NotificationImage::png(bytes), ::jpeg(bytes), ::file(path), ::named("ic_chat");
+Participant::new("ana", "Ana").with_avatar(NotificationImage::png(avatar));
+
+let responses = NotificationResponses::acquire()?.stream();
+while let Ok(r) = responses.recv_async().await {
+    match r.kind() {
+        Response::Reply(text) => chat.send(&r.id, text).await,
+        Response::Action("mark_read") => chat.mark_read(&r.id).await,
+        Response::Open => router.open(&r.id),
+        _ => {}
+    }
+    if let Some(ack) = r.ack { client.complete(ack).await?; }
+}
+```
+
+`LiveNotification` uses one shared sender per client (no thread per
+notification): `progress` stores the latest value in a slot and wakes
+the sender, which keeps one call in flight. `CalendarRule::next_occurrences(from, n)`
+is public so apps can test DST themselves. `FakeNotifications` (feature
+`testing`) implements the trait, records calls, takes
+`with_capabilities` / `with_permission`, and `respond(id, Response)`
+feeds the responses lane.
+
+App badge: owned by `istmo-launcher-actions::set_badge`. `count` is only
+the per-notification number; Apple `content.badge` is never set by this
+plugin.
+
+## 6. Configuration (`istmo.toml`) and platform setup
+
+```toml
+[app.notifications]
+small_icon   = "assets/notif.xml"   # Android: .xml vector or alpha-only .png (build rejects opaque colour); default: [app.icon.android] monochrome
+accent       = "#E0662B"
+sounds       = ["assets/ding.wav"]  # Android res/raw, Apple bundle (caf/wav/aiff <= 30 s), Linux next to the exe data; Sound::Named("ding")
+exact_alarms = "none"               # "schedule" -> SCHEDULE_EXACT_ALARM, "use" -> USE_EXACT_ALARM (alarm / calendar apps only)
+full_screen  = false                # USE_FULL_SCREEN_INTENT
+live_updates = false                # POST_PROMOTED_NOTIFICATIONS
+apple = { time_sensitive = false, communication = false, critical = false }  # entitlements + NSUserActivityTypes
+web_service_worker = true           # stage istmo-notifications-sw.js
+
+[[app.notification_channel]]
+id = "messages"
+name = "Messages"
+description = "New messages"
+importance = "high"
+sound = "ding"
+```
+
+- Static channels are created by the native backend at start (Android
+  reads a generated `res/raw/istmo_notification_channels.bin`, wire bytes
+  of `Vec<ChannelSpec>`); `set_channels` adds dynamic ones (one per chat).
+- Android manifest (plugin fragment, merged by the Gradle plugin):
+  `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`, receivers and the
+  trampoline activity; the opt-in permissions above come from the app
+  table.
+- Windows: AUMID = `[app] id` (<= 128 chars), display name `[app] name`,
+  icon = the desktop icon from `[app.icon]` written next to the exe.
+  `DesktopNotifications::install()` (called from the desktop runtime
+  setup, like `DocumentsPublisher`) does, on every start:
+  1. refuse elevated processes (`Elevated`), builds < 17763 (`Unsupported`);
+  2. packaged (`GetCurrentApplicationUserModelId` ok) → no registry, the
+     manifest's `com:ExeServer` + `desktop:ToastNotificationActivation`
+     (written by packaging) carry activation;
+  3. unpackaged → `SetCurrentProcessExplicitAppUserModelID(aumid)`, write
+     `HKCU\Software\Classes\AppUserModelId\<aumid>` (`DisplayName`,
+     `IconUri`, `IconBackgroundColor`, `CustomActivator = {clsid}`) and
+     `HKCU\Software\Classes\CLSID\{clsid}\LocalServer32` = `"<exe>"
+     -istmo-notification` (COM appends `-Embedding`); CLSID = UUID v5 of
+     the AUMID;
+  4. register the COM class (`CoRegisterClassObject`, `CLSCTX_LOCAL_SERVER`,
+     `REGCLS_MULTIPLEUSE`) on a dedicated MTA thread, early (COM waits at
+     most 60 s); strip `-istmo-notification` / `-Embedding` from argv; a
+     COM-launched process that is not the `LocalEndpoint` owner forwards
+     the activation and exits; console-subsystem exes call `FreeConsole`
+     when COM-launched.
+  `DesktopNotifications::unregister()` clears history, scheduled toasts
+  and both keys (for uninstallers). History / remove / clear always pass
+  the AUMID.
+- Linux: app id = `FLATPAK_ID`, else `with_app_id`, else the exe stem
+  (same rule as launcher-actions). Portal when sandboxed or when the
+  host registry accepts the app id; fdo otherwise. For exported portal
+  actions the plugin owns `<app id>` and serves
+  `org.freedesktop.Application` on the derived path only when the name
+  is free (a GApplication app owns it already: then non-exported actions);
+  packaging writes the D-Bus `.service` file and `DBusActivatable=true`.
+- macOS: bundle required; `NotBundled` everywhere otherwise, logged once
+  at warn; README and `istmo doctor` say so.
+- iOS: zero native code by default; the generated registry installs the
+  delegate.
+- Web: `importScripts("istmo-notifications-sw.js")` for apps with their
+  own service worker; otherwise the plugin registers its own.
+
+## 7. Crate layout
+
+```
+plugins/notifications/
+  istmo.toml           id istmo.notifications, android_package dev.istmo.plugins.notifications,
+                       gradle androidx.core, android permissions, manifest fragment
+  src/lib.rs           wire types, trait, UnavailableNotifications
+  src/ids.rs           id newtypes + validation
+  src/builder.rs       Notification / Action / Participant / Trigger sugar
+  src/validate.rs      Notification::validate, NotificationPatch::validate (limits table)
+  src/render.rs        fallbacks: progress text, styles to body lines, overflow, choices
+  src/coalesce.rs      per-id latest + per-app token bucket
+  src/schedule/        CalendarRule math (jiff), store, timer engine, missed policy
+  src/responses.rs     NotificationResponses lane reader, deep-link publishing
+  src/live.rs          LiveNotification + shared sender
+  src/fake.rs          FakeNotifications (feature testing)
+  src/desktop/linux/   fdo.rs, portal.rs, kde_job.rs, app_activation.rs
+  src/desktop/windows/ toast_xml.rs, notifier.rs, activator.rs, registration.rs   (allow unsafe_code)
+  src/desktop/macos.rs UNUserNotificationCenter + Intents (allow unsafe_code)
+  src/web.rs           Notification API / service worker bridge
+  native/android/      NotificationsBackendImpl, IstmoNotificationActivity, IstmoNotificationReceiver,
+                       AlarmReceiver, BootReceiver, ScheduleStore, CalendarRule.kt, Coalescer.kt, AndroidManifest.xml
+  native/ios/          NotificationsBackendImpl, IstmoNotifications (delegate, install), Categories,
+                       Communication (Intents), ScheduleStore, Coalescer
+  assets/web/          istmo-notifications-sw.js
+  tests/               validation, builder, render, coalescer, schedule vectors (Rust), fdo + portal +
+                       kuiserver against a private dbus-daemon, toast XML goldens, codegen goldens,
+                       native wire check
+crates/build/src/notifications.rs   [app.notifications] + [[app.notification_channel]]
+```
+
+Lints: `unsafe_code = "deny"`, allowed only on `desktop::windows` and
+`desktop::macos` (reason per module).
+
+## 8. Implementation order
+
+1. Core crate: wire types, ids, builders, validation, render, coalescer,
+   schedule math + vectors, responses lane, live handle, fake, desktop host
+   skeleton with the in-process scheduler, `UnavailableNotifications`,
+   codegen goldens.
+2. `istmo-build` config + Android resources / manifest / Apple
+   entitlements.
+3. In parallel: Linux; Android; Apple (iOS Swift + macOS Rust); Windows;
+   Web.
+4. Remove the old `istmo.notifications` contract (istmo-plugins,
+   istmo-plugins-schema, tests, rust-mobile-demo backends) in the same
+   change that ports the demo; docs en/es, README, CHANGELOG.
+5. Review: one adversarial review per platform + one cross-platform
+   behaviour review.
+
+## Open
+
+- Hardware: everything native (Android, iOS, macOS, Windows). Windows:
+  registry-only on 1809 and current 11, Action Center persistence,
+  COM cold start race with the single-instance claim, `ToastNotifier.Update`
+  and history without the private FrameworkUdk step, same AUMID from two
+  exe paths.
+- Apple: silent replace behaviour, communication avatars on local
+  notifications.
+- Android OEM promotion criteria; OEM alarm behaviour.
+
+## Implementation notes (core, as built)
+
+Branch `notifications`, steps 1 and 4 of section 8. Crate
+`plugins/notifications` (`istmo-notifications`); the old contract is gone
+from `istmo-plugins` / `istmo-plugins-schema` and `rust-mobile-demo`
+uses the new crate (its Kotlin / Swift backends were deleted; the demo
+logs the failure and carries on until the natives land).
+
+### Layout
+
+- `src/types.rs` (wire types), `src/ids.rs` (id newtypes): the extractor
+  follows `mod` files, so the wire types do not have to sit in `lib.rs`.
+- `src/builder.rs` (constructors, `with_*`, `Notification::apply`),
+  `src/client.rs` (`*_checked`, `show_simple`, `ensure_permission`,
+  `show_live`), `src/validate.rs` (limits table in its module docs),
+  `src/render.rs`, `src/coalesce.rs`, `src/schedule.rs` +
+  `schedule/{rule,engine,store}.rs`, `src/responses.rs`, `src/live.rs`,
+  `src/unavailable.rs`, `src/fake.rs` (feature `testing`),
+  `src/desktop.rs` + `desktop/{backend,images,timer,tests}.rs`
+  (`desktop.rs` + `desktop/`, the repo convention, not `desktop/mod.rs`),
+  `src/web.rs` (module boundary only).
+- `istmo.toml`: id, `client_type`, `android_package =
+  "dev.istmo.plugins.notifications"`, `auto_register = false` (no
+  `NotificationsBackendImpl` exists yet; the Android and Apple agents
+  turn it back on with their `android_backend` / registry entries),
+  `[min_versions]` android 21, ios 14.0.
+- New dependency: `jiff = "1.0"` (default features: tzdb bundled where
+  the OS has none; no serde), `features = ["js"]` on wasm32.
+  `wasm-bindgen-futures` on wasm32 for the live sender.
+
+### Deviations from sections 4 and 5
+
+- `NotificationError::InvalidField(InvalidField)` is
+  `NotificationError::Invalid(InvalidField)`: never name a variant after
+  its payload type (Kotlin nested class shadows the type).
+- `DismissReason::Unknown` is `DismissReason::Other`: a `non_exhaustive`
+  enum may not have a variant named `Unknown` (`ContractError::ReservedUnknown`).
+- `HintValue::Int(i32)` is `HintValue::Number(i32)`: a Kotlin nested
+  class `Int` shadows `kotlin.Int` inside `HintValue` (kotlinc rejected
+  the generated codec). Rule: no variant named like a Kotlin builtin
+  (`Int`, `Long`, `Float`, `Double`, `Boolean`, `String`, `Unit`).
+- Every unary trait method takes `ctx: HostCtx` (stripped from the wire,
+  invisible to Kotlin / Swift): the desktop host binds the runtime of the
+  first call, so a backend activation can publish on the responses lane.
+  `DesktopNotifications::attach(&runtime)` binds it earlier (cold start).
+- Every method that may touch the OS is `#[istmo::blocking]` (all but
+  `complete` and `events`): D-Bus, WinRT and file writes.
+- `ChatMessage::from(sender, text)` is `ChatMessage::received(sender,
+  text)` / `ChatMessage::sent(text)` (an inherent two-argument `from`
+  collides with `From::from`).
+- The generated client owns the method names, so the validated sugar is
+  `show_checked`, `schedule_checked`, `update_checked(&str, patch)`,
+  `append_message_checked(&str, msg)` (async; section 5's sync
+  `append_message("chat:42", ..)?` does not exist).
+- `Trigger::daily` / `weekly` / `after` / `at` / `every` do not validate
+  (they return `Trigger`); `schedule_checked` and the hosts do.
+- `NotificationResponses::stream()` returns its own
+  `NotificationResponseStream` (`recv` / `recv_async` / `try_recv`):
+  `istmo_plugins::EarlyStream::new` is crate-private.
+- `NotificationResponse`, `ResponseAction`, `AckToken` are
+  `#[message]`s, so natives get generated codecs for the responses lane
+  (`writeNotificationResponse`) instead of hand-encoding it.
+- `Response` (the flat view) is `#[non_exhaustive]`.
+- `FakeNotifications::respond(id, Response)` returns
+  `Result<NotificationResponse, NotificationError>` and needs a runtime
+  (`attach(&rt)`, or any call through a runtime binds it).
+- `UnavailableNotifications::request_permission` answers
+  `Ok(Unavailable)` (not an error), like `permission`.
+- Extra helpers: `Capabilities::none` / `has`, `PermissionStatus::of`,
+  `NotificationPatch::progress` / `alerting`, `Notification::normalize`
+  (keeps the last 25 messages), `CalendarRule::{daily, on, on_day,
+  in_month, in_zone, until}`, `Trigger::{first_fire, next_after, repeats}`
+  plus `*_in(.., &jiff::tz::TimeZone)` variants that stand in for the
+  device zone (tests); jiff is a public dependency of those functions.
+- Unknown IANA zone: `InvalidField { field: "trigger.time_zone",
+  problem: OutOfRange }`.
+
+### Desktop `Backend` contract (`src/desktop/backend.rs`)
+
+The Linux, Windows and macOS agents implement `Backend` and replace
+`platform_backend` in `src/desktop.rs` with their `cfg` arms (it returns
+`Err(Unsupported(Show))` today, so `DesktopNotifications::default()`
+behaves like `UnavailableNotifications`).
+
+- `info() -> BackendInfo { capabilities, limits: RenderLimits, rate:
+  Rate, lists_delivered, timeouts }`. Read once after the start and again
+  after `BackendSink::changed()` (see "Review fixes").
+  Report only what the platform does; `desktop::overlay` adds the host's
+  simulations (Schedule / Repeat / Snooze `WhileRunning`, Missed /
+  ListPending / Channels / ProgressBar / Messaging `Simulated`,
+  InlineReply / Choices / CallStyle `Simulated` when actions exist,
+  ListDelivered / Timeout `WhileRunning` unless the flags say native).
+- `show(&Shown { notification, rendered, images, mode })`: the
+  notification is validated, normalised and has the channel defaults
+  merged (interruption, sound, lock screen). `rendered.body` already
+  carries every simulated line (subtitle when `limits.subtitle` is
+  false, style lines, progress text when `limits.progress_bar` is
+  false); `rendered.actions` are the buttons to show, each with a `key`
+  the platform action must carry and hand back. `mode` is `New` or
+  `Replace { alert }` (`alert = false` = silent update: fdo
+  `replaces_id` + `suppress-sound`, Windows data binding / SuppressPopup,
+  Apple passive re-add).
+- `remove(id)`, `permission()`, `request_permission()`,
+  `open_settings()`, `set_channels()`, `delivered()` (only when
+  `lists_delivered`), `complete(ack)` (release whatever keeps the
+  process alive for a background response) have defaults.
+- Report back through the `BackendSink` handed to the start function:
+  `activated(Activation { id, key, reply, launched_app, carried })`,
+  `dismissed(id, reason)`, `failed(id, message)`, `changed()` (server
+  restarted: `info()` is read again). `carried` holds user data / URL
+  the platform activation itself carries (Windows toast arguments,
+  portal targets) for notifications shown by an earlier process.
+- Threads: backend methods are called from blocking workers and the
+  host's timer thread, never with a host lock held; sink calls may come
+  from any thread, also from inside a backend method.
+- Keys: action id; `istmo.more`; `<action id>#<choice index>` for a
+  choice simulated as a button. `Rendered::respond` resolves them
+  (snooze keys resolve to `Resolved::Snooze`, handled by the host:
+  removed, re-scheduled with `Trigger::After`, `Snoozed` event).
+- Background actions (`opens_app = false`) get an `AckToken` from the
+  host; `complete(ack)` removes it and calls `Backend::complete`.
+
+### Host behaviour (shared by every desktop backend)
+
+- One timer thread (`istmo-notifications-timer`) for scheduled entries,
+  queued coalesced updates and host-run timeouts; it re-reads the wall
+  clock at least every 30 s (suspend, clock changes). Hosts built with
+  `manual_timer()` wait for `tick()` (tests).
+- Delivered table: latest content per id (queued updates included);
+  dismissed entries are kept (at most 256) so an alerting update can
+  show them again (`ShowMode::New`).
+- Unknown channels fail `UnknownChannel`; `with_channels` on the builder
+  takes the static ones (`[[app.notification_channel]]`, wiring left to
+  the istmo-build agent). `set_channels` keeps an existing channel's
+  settings except name and description (the Android rule everywhere).
+- Store: `<data dir>/istmo-notifications/schedule.bin`, one writer
+  (`without_store()` in forwarding processes). Writes are atomic
+  (sibling `.tmp`, `sync_all`, rename), serialised by a generation
+  counter so a slow older write never lands after a newer one; an empty
+  schedule removes the file.
+
+### Image cache rules
+
+- `<cache dir>/istmo-notifications/images/<fnv1a64 hex>-<len>.<png|jpg>`
+  for `NotificationImage::Png` / `Jpeg`; `File` paths are passed as
+  given; `Named` has no file. Slots: `Icon`, `Picture`, `Avatar(key)`
+  (conversation user, senders, caller; once per key), `Message(index)`,
+  `Action(id)`.
+- Reference counted across notifications; the file goes with its last
+  user (replaced with different images, cancelled, dismissed). Images
+  are collected again only when an update touches icon, style or actions
+  (progress updates reuse the files).
+- At start, files older than 3 days that nothing uses are removed
+  (younger ones may still back notifications an earlier process left on
+  screen).
+
+### Ports the native agents own
+
+- **Coalescer** (Kotlin `Coalescer.kt`, Swift `Coalescer.swift`):
+  `src/coalesce.rs` is the reference; its unit tests are the cases to
+  port. Integer milli-token bucket (`Rate { per_second, burst }`, refill
+  `elapsed_ms * per_second` milli-tokens, cap `burst * 1000`), latest per
+  id, FIFO of ids, regular offers queue behind queued ids, `Alert` /
+  `Finish` post at once and spend a token (debt allowed, floored at
+  `-burst` tokens), `shown`
+  (a full show) clears dismissal and the queue entry and spends a token,
+  `dismissed` drops regular updates until an alert, `cancel` forgets the
+  id, `next_due` rounds the wait up. Rates: `Rate::ANDROID` (4, 4),
+  `APPLE` (2, 2), `WINDOWS` (20, 20), `LINUX` (10, 10), `WEB` (4, 4).
+- **Calendar rule** (Kotlin `CalendarRule.kt`; Swift only if it ever
+  evaluates rules itself instead of `UNCalendarNotificationTrigger`):
+  `src/schedule/rule.rs`, pinned by `tests/schedule_vectors.tsv`.
+  Semantics: AND of the set fields, gap = shift forward by the gap
+  (RFC 5545 / Temporal "compatible"), overlap = earlier instant once,
+  days that do not exist are skipped, `until_ms` inclusive, search
+  bounded to 401 years. `java.util.Calendar` resolves overlaps to the
+  later (standard-time) instant by default: the Kotlin port must pick
+  the earlier one explicitly.
+- **Trigger timing** (`Trigger::next_after(anchor, after)` in
+  `src/schedule.rs`): `After(d)` = anchor + d once, `At(t)` once
+  (`first_fire` delivers a past `At` at once), `Every(p)` = anchor + k*p
+  on its grid (missed periods skipped, not shifted), `Calendar` = rule
+  occurrences after the anchor.
+- **Missed deliveries** (`schedule/engine.rs`): more than
+  `LATE_AFTER_MS` (60 s) late counts as missed; lateness is measured from
+  the latest missed occurrence (a daily reminder missed for three days is
+  as late as today's); `Drop` skips, `DeliverLate(max)` delivers once
+  with `DeliveredLate` when within `max`; repeats then move to the next
+  occurrence after now.
+- **Store format** (Android `ScheduleStore`, if it mirrors it): format
+  byte `STORE_FORMAT = 1`, then the wire encoding of
+  `Vec<(Notification, Trigger, i64 anchor_ms, Option<i64> next_fire_ms)>`.
+
+### `tests/schedule_vectors.tsv`
+
+Tab separated, `#` comments, one header row. Columns: `name`, `zone`
+(rule zone or `-`), `local` (the device zone used when `zone` is `-`),
+`hour`, `minute`, `weekdays` (`mon,tue,...` or `-`), `day` (or `-`),
+`month` (or `-`), `until` (RFC 3339 UTC or `-`), `after` (RFC 3339 UTC),
+`count` (occurrences asked, each strictly after the previous),
+`expected` (comma-separated RFC 3339 UTC instants, fewer than `count`
+when the rule runs out, `none` when there is none). 31 rows: New York,
+Berlin, Sydney and Lord Howe (30-minute shift) gaps and overlaps, Samoa's
+skipped 2011-12-30, leap days (2100 skipped), the 29th / 31st, weekday
+sets, Friday the 13th, `until`, local wall clock. Runner:
+`tests/schedule_vectors.rs`.
+
+### Verification
+
+- Unit tests: ids, validation, render, coalescer, rule, trigger, engine,
+  store, images, live queue, and the desktop host end to end through a
+  runtime with a recording backend, a manual timer and a fake clock
+  (show / channel merge / image files, coalescing to the rate, dismissed
+  updates, responses + deep links + acks, choices, carried fields, snooze,
+  store restart with missed deliveries, host-run timeouts, messages,
+  capability overlay, no platform backend, live notifications).
+- Goldens: `tests/golden/notifications_*` and the app Kotlin
+  `app_notifications_*`. The app Kotlin compiles with `kotlinc 2.3
+  -Werror` against the runtime and `runtime/android/ci` stubs;
+  `runtime/ios/ci/typecheck-goldens.sh` (swiftc 5.10
+  `-warnings-as-errors`) passes with every plugin's Swift in one module;
+  `check_swift_namespaces` passes.
+- `cargo check --target wasm32-unknown-unknown` passes (fenix stable
+  combine with the wasm32 std); clippy 1.100 is clean on the crate.
+- Not done: any platform backend, any device run.
+
+### Left for the platform agents
+
+- **istmo-build**: `[app.notifications]` + `[[app.notification_channel]]`
+  (`crates/build/src/notifications.rs`), Android raw resource of static
+  channels, manifest permissions, Apple entitlements, desktop static
+  channels into `DesktopNotificationsBuilder::with_channels`.
+- **Android**: `NotificationsBackendImpl`, trampoline activity and
+  receivers, `ScheduleStore`, `AlarmManager` re-arming, `CalendarRule.kt`
+  and `Coalescer.kt` ports (vectors + coalescer cases), responses
+  publishing with the generated `NotificationResponse` codec, group
+  summaries, `istmo.toml` gradle / permissions / manifest fragment and
+  `android_backend`, `auto_register = true`.
+- **Apple**: iOS Swift backend and delegate (`IstmoNotifications.install`),
+  categories, communication notifications, top-up of the 60 armed
+  requests, `Coalescer.swift`; macOS Rust `Backend` in
+  `desktop/macos.rs` (`NotBundled` outside an `.app`).
+- **Windows**: `desktop/windows/` `Backend` (toast XML, data-binding
+  progress, COM activator, registry registration, scheduled toasts with
+  the 14-day window), `DesktopNotifications::install` / `unregister`.
+- **Linux**: `desktop/linux/` `Backend` for fdo (capabilities cache,
+  `replaces_id`, `value` hint, KDE inline reply, `NotificationClosed` to
+  `dismissed`), portal v1 / v2 (exported actions, `ActivateAction`),
+  kuiserver progress; app id resolution.
+- **Web**: `src/web.rs` host, a `setTimeout` `schedule::Wakeup`,
+  IndexedDB store, the service worker asset.
+
+### Review fixes (core)
+
+Fixes of the adversarial review of the core, before the platform
+branches merge. Supersede anything above they contradict.
+
+- **Per-id lanes.** Every backend call for one id (`show`, `remove`)
+  runs inside that id's lane (`State.lanes` + a condvar): one at a time,
+  in the order issued; the post is prepared from the state the previous
+  call left. A cancel waits for the post in flight and lands after it
+  (cancel wins). Scheduled deliveries taken from the engine carry a
+  ticket (`State.delivering`); a cancel in between revokes it, so a due
+  entry cancelled before its show is never shown.
+- **Images.** A full `show` (and `LiveNotification::finish`) always
+  collects fresh images; the replaced record's files are released.
+  Updates reuse the shown files unless they touched icon, style,
+  actions or message images. Each post owns its file uses (a reused set
+  is retained), so no release is doubled. Image IO and rendering run
+  outside the state lock.
+- **Reports.** `BackendSink` methods only queue; one report worker
+  thread (`istmo-notifications-reports`, started on the first report)
+  handles them in order. Sink calls from inside the start function or a
+  backend method never re-enter the host, and a snooze's `remove` runs
+  on the worker, never on the backend's dispatch thread.
+  `DesktopNotifications::settle()` (new) waits until earlier reports are
+  handled (tests, backends that need the effect).
+- **Load.** Every host call waits until the store is loaded (`OnceLock`);
+  `persist()` writes nothing before the load. The backend's rate is
+  applied as soon as its info is first read.
+- **Backend info.** Cached (`HostInfo`: info, limits with labels,
+  overlaid capabilities); re-read only after `changed()`, which also
+  applies a new rate at once (`Coalescer::set_rate`, queue kept).
+- **Hot path.** `Live.notification` is an `Arc`; `set_progress` checks
+  only the bar (`Progress::validate`, new) and copies nothing. `update`
+  still validates the whole patched notification (call actions are
+  checked there: `NotificationPatch::validate` only refuses them when the
+  patch sets a non-call style). Image bytes stay inline (no wire change).
+- **Engine.** Entries are `Arc`ed; `persist` snapshots them under the
+  lock and encodes outside (borrowed tuples, same bytes). Triggers that
+  never fire are refused by `schedule` (`Invalid`, field
+  `trigger.until_ms` when the rule has an end, else `trigger`,
+  `OutOfRange`; also the fake host), never stored (`Engine::add` keeps
+  nothing, `with_entries` drops them). Lateness: a backward doubling
+  search finds the latest occurrence before the forward walk (which stays
+  capped). The device zone is re-read at each timer wake (≤ 30 s) and
+  each tick; floating rules move to their next occurrence in a new zone
+  (`Engine::set_local`).
+- **Coalescer.** Debt floored at `-burst` tokens; `set_rate` keeps the
+  queue. Ports (Kotlin `Coalescer.kt`, Swift `Coalescer.swift`) must
+  mirror both; cases `debt_has_a_floor_of_one_burst`,
+  `a_new_rate_keeps_the_queue`.
+- **Acks.** Tokens are a keyed hash (per-host `RandomState`) of a
+  counter, at most 256 kept (oldest dropped). The coalescer's dismissed
+  set is bounded by the host table (256).
+- **Responses.** `deep_link` only for `Open` and `Button`; native ports
+  publishing deep links must do the same.
+- **Live.** `LiveNotification::progress` keeps the bar's label, segments
+  and points as last shown, set or patched.
+- **Store.** File `0600` on Unix, directory synced after rename/removal.
+
+Contract changes for backend agents: `info()` is no longer called per
+post; `show`/`remove` for one id never overlap; sink reports are
+asynchronous (tests that report and then assert call `settle()`).
+API additions: `DesktopNotifications::settle`, `Progress::validate`,
+`Coalescer::{set_rate, dismissed_len}`, `Engine::{merge, local,
+set_local, snapshot}`. `Engine::add` no longer stores dead entries.
+
+## Implementation notes (istmo-build, as built)
+
+Branch `notif-build`, step 2 of section 8: `crates/build/src/notifications.rs`
+(`istmo_build::notifications`), wired into `emit_app`. Everything below
+is the contract the platform agents build against; names are constants
+in that module.
+
+### Parsing (`AppConfig.notifications: AppNotifications`)
+
+- `[app.notifications]` keys: `small_icon` (`.xml` / `.png`), `accent`
+  (`#RRGGBB` = opaque, `#AARRGGBB`), `sounds` (array of paths),
+  `exact_alarms` (`none` default / `schedule` / `use`), `full_screen`,
+  `live_updates` (default false), `apple = { time_sensitive,
+  communication, critical }` (default false), `web_service_worker`
+  (default **true**). Unknown keys fail, also inside `apple`.
+- Sound name = file stem, `[a-z][a-z0-9_]*`, <= 64 (an Android resource
+  name). Extensions: `wav ogg mp3` play on Android, `wav caf aif aiff` on
+  Apple; per name at most one Android-playable and one Apple-playable
+  file (`ding.caf` + `ding.ogg` is fine, `ding.wav` + `ding.ogg` is not).
+  Duration is not checked (needs decoding).
+- `[[app.notification_channel]]` (or one `[app.notification_channel]`
+  table), keys = `ChannelSpec` fields: `id` and `name` required;
+  `importance` `passive|normal|high|urgent|critical` (default `normal`);
+  `sound` `default|silent|<name in sounds>` (system names are not
+  accepted for static channels); `vibration` <= 32 u32;
+  `light_color` like `accent`; `show_badge` (default **true**);
+  `lock_screen` `public|hide_content|hidden`; `bypass_dnd` (default
+  false); `group` non-blank <= 128 chars. Limits mirror `ids.rs` /
+  `ChannelSpec::validate` (the build also refuses a blank `group`, which
+  the plugin allows). Duplicate ids fail.
+- `StaticChannel` mirrors `ChannelSpec` field for field with wincode
+  derives (`id: String` encodes like `ChannelId { value }`; enum variant
+  order = wire tags). `plugins/notifications/tests/static_channels.rs`
+  decodes istmo-build's bytes as `Vec<ChannelSpec>`; keep both in step
+  when `ChannelSpec` changes.
+
+### Android (written into `android/.istmo/res` when compiling for Android)
+
+| Resource | Content |
+|---|---|
+| `drawable/istmo_notification_icon.xml` | `small_icon` vector, copied |
+| `drawable-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/istmo_notification_icon.png` | `small_icon` PNG as white + source alpha, 24/36/48/72/96 px; a PNG with no transparent pixel fails the build |
+| (fallback) | no `small_icon`: `[app.icon.android] monochrome` (PNG: central 2/3 cropped; XML: copied as is) |
+| `values/istmo_notifications.xml` | `color/istmo_notification_accent` (`#AARRGGBB`), only when `accent` (the flag bools / string were removed 2026-11-27: nothing read them; Kotlin checks the requested permissions) |
+| `raw/istmo_notification_channels.bin` | wire bytes of `Vec<ChannelSpec>` (no header, istmo codec = bincode 2 standard), only when channels exist |
+| `raw/istmo_notification_sound_<name>.<ext>` | Android-playable sounds; `Sound::Named("ding")` = `R.raw.istmo_notification_sound_ding`, URI `android.resource://<pkg>/raw/istmo_notification_sound_ding` |
+| `raw/istmo_notifications_keep.xml` | `tools:keep` of every resource above (the backend reads them by name), written with any of them; never packaged |
+
+- The Kotlin backend resolves these with `resources.getIdentifier(name,
+  type, context.packageName)` (the R class is the app's, not the
+  plugin's); 0 = not configured (no small icon: fall back to the app
+  icon; no channels file: no static channels). No manifest meta-data:
+  the resources need no `AndroidManifest.xml` markers.
+- Read the channels with the generated codec: varint count, then
+  `readChannelSpec` per entry. Create them in `NotificationManagerCompat`
+  at backend start (create is idempotent; existing ones keep their
+  settings).
+- Stale `istmo_notification*` files under `.istmo/res` are removed when
+  the configuration changes. `istmo.json` `app.generated_res` is true
+  whenever either table exists: **no Gradle plugin change**.
+- Permissions (sidecar `android/.istmo/istmo-permissions.xml`), whenever
+  either table exists and the app links `istmo.notifications` (a dep
+  manifest lists it; since 2026-11-27): `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`;
+  `exact_alarms = "schedule"` -> `SCHEDULE_EXACT_ALARM`; `"use"` ->
+  `USE_EXACT_ALARM` + `SCHEDULE_EXACT_ALARM maxSdkVersion=32`;
+  `full_screen` -> `USE_FULL_SCREEN_INTENT`; `live_updates` ->
+  `POST_PROMOTED_NOTIFICATIONS`. The Android agent still declares the
+  base two (plus receivers, trampoline) in the plugin's own manifest so
+  apps without the tables work; the sidecar deduplicates.
+
+### Apple (iOS project generator; macOS is packaging's job)
+
+- Merged as app keys (`istmo.toml [app]` owner) into the `istmo:plugins`
+  blocks of `<App>/Info.plist` and `<App>/*.entitlements` (sidecars
+  `Info.plist.plugins.xml` / `*.entitlements.plugins.xml`); arrays
+  concatenate with plugin fragments.
+- `Info.plist`, whenever `[app.notifications]` exists:
+  `IstmoNotifications` = dict `{ TimeSensitive: bool, Communication:
+  bool, Critical: bool, Sounds: { <name>: "<bundle file>" } }`; with
+  `communication`: `NSUserActivityTypes` += `INSendMessageIntent`,
+  `INStartCallIntent`. The Swift backend reads
+  `Bundle.main.object(forInfoDictionaryKey: "IstmoNotifications")`:
+  `Critical` false -> map `Interruption::Critical` to time sensitive,
+  `TimeSensitive` false -> `Urgent` to active; `Sounds[name]` is the
+  `UNNotificationSoundName` (an unknown name: treat as a system / bundle
+  name as given).
+- Entitlements: `com.apple.developer.usernotifications.time-sensitive`,
+  `...communication`, `...critical-alerts` = true for the set flags.
+- Sounds: Apple-playable files copied to
+  `ios/.istmo/NotificationSounds/istmo_notification_sound_<name>.<ext>`
+  and listed in `istmo-plugins.yml` as a `type: group`,
+  `buildPhase: resources` source: they land in the bundle root.
+  Hand-made Xcode projects add that directory's files to Copy Bundle
+  Resources.
+- Static channels for iOS: the same wire `Vec<ChannelSpec>` bytes as
+  Android's `res/raw` file, staged next to the sounds as
+  `istmo_notification_channels.bin` (bundle root; added at integration).
+- The keys and sounds go away when the table is removed; an emptied
+  merge now also clears the `istmo:plugins` block (it used to keep the
+  last keys).
+
+### Desktop and web (rustc envs of the app crate, non-mobile targets)
+
+| Env | Value |
+|---|---|
+| `ISTMO_NOTIFICATION_CHANNELS` | upper-case hex of the same wire bytes; only with channels |
+| `ISTMO_NOTIFICATION_ACCENT` | `AARRGGBB` (8 hex digits, no `#`), only with `accent` (Windows `IconBackgroundColor`) |
+| `ISTMO_NOTIFICATION_SOUND_DIR` | `OUT_DIR/istmo-notification-sounds`, every sound as `<name>.<ext>`; read by `bundled_sounds!()` into `DesktopNotificationsBuilder::with_sound_dir`: on Linux the host rewrites `Sound::Named(name)` to the `<name>.oga` / `.ogg` / `.wav` path, which fdo sends as `sound-file`. Windows: unpackaged apps cannot play bundled sounds (only `ms-winsoundevent:`), packaged ones use `ms-appx:`; macOS: bundle `Library/Sounds` (packaging) |
+| `ISTMO_NOTIFICATION_SERVICE_WORKER` | wasm32 with `web_service_worker` (default true, also without a table): `OUT_DIR/istmo-notifications-web/istmo-notifications-sw.js`; also copied to `<crate>/.istmo/web/istmo-notifications-sw.js` (`WEB_DIR`, git-ignored) for the bundler |
+| `ISTMO_APP_NAME` | `[app] name` (else the package), every app (Windows AUMID `DisplayName`); `ISTMO_APP_BUNDLE_ID` and `ISTMO_APP_ICON_PNG` (`istmo::app_icon!()`) already existed |
+
+- Plugin side (this branch): `istmo_notifications::static_channels!()`
+  expands in the app to `channels_from_build(option_env!(
+  "ISTMO_NOTIFICATION_CHANNELS"))` (unreadable value: warn, no
+  channels); `DesktopNotifications::platform()` is the builder
+  `Default` uses, so apps write
+  `DesktopNotifications::platform().with_channels(static_channels!()).build()`.
+  Backends that want the other envs read them the same way (a macro in
+  the plugin crate, expanded in the app); none is wired yet.
+- Web (reconciled with `notif-web`): the worker is
+  `plugins/notifications/web/istmo-notifications-sw.js` (also
+  `istmo_notifications::web_assets::SERVICE_WORKER_JS`). istmo-build
+  finds it in the plugin's `DEP_*_ISTMO_ASSETS` payload by file name, so
+  at integration `plugins/notifications/istmo.toml` needs
+  `[[assets]] path = "web/istmo-notifications-sw.js"` (until then a
+  wasm32 build with the plugin linked warns and stages nothing; the
+  asset also lands in the mobile asset trees, a few KB). It is copied to
+  `OUT_DIR/istmo-notifications-web/istmo-notifications-sw.js`
+  (`ISTMO_NOTIFICATION_SERVICE_WORKER`). Serving it is the app's bundler
+  step: as `istmo-notifications-sw.js` next to `index.html`, same
+  origin, `text/javascript`. The web host registers it unless another
+  worker is registered; apps with their own worker `importScripts` it
+  and pass `ServiceWorker::Existing`. `web_service_worker = false` only
+  skips the staging (apps that write `SERVICE_WORKER_JS` themselves).
+- Linux needs nothing beyond the static channels (app id override:
+  `LinuxOptions::with_app_id` through `DesktopNotifications::builder`).
+
+### Not done / open
+
+- No device or Xcode / Gradle run; the outputs are checked by unit and
+  integration tests (`crates/build/src/notifications/tests.rs`,
+  `crates/build/tests/notifications.rs`, goldens
+  `crates/build/tests/golden/notifications_{values,info_plist,entitlements}.xml.expected`).
+- Sound length (30 s Apple limit) and Android vector validity are not
+  checked. A monochrome XML fallback keeps its 108 dp viewport (glyph
+  looks small).
+- `istmo doctor` does not report missing notification entitlements in
+  provisioning profiles.
+
+## Implementation notes (Linux, as built)
+
+Branch `notif-linux`, step 3 (Linux part). `src/desktop/linux.rs` +
+`desktop/linux/{fdo,portal,kde_job,app_activation}.rs`; zbus 5 blocking
+(`blocking-api` + `async-io`, no tokio, no serde of our own), the
+tray / launcher-actions setup. No `unsafe`.
+
+### Shape
+
+- Public `desktop::linux::{LinuxOptions, LinuxRoute, take_activation_token}`.
+  `LinuxOptions::new().with_app_id(..).with_route(..).start()` is a
+  `StartBackend` for `DesktopNotifications::builder`, so the shared
+  builder has no Linux-only method (`with_app_id` of section 6 lives
+  here). `platform_backend` gained a `cfg(target_os = "linux")` arm.
+- Route `Auto`: sandboxed (`/.flatpak-info`, `container=flatpak`,
+  `SNAP`) or `org.freedesktop.host.portal.Registry.Register(app_id)`
+  accepted on the host -> portal (when its `version` property reads),
+  else fdo. `Server` / `Portal` force one. The `container` variable of
+  toolbox / podman is not a sandbox signal: those share the host bus.
+- One session connection per backend. Signals are read on named threads
+  (`istmo-notif-fdo`, `-owner`, `-kjob`, `-portal`) holding the backend
+  weakly; no backend lock is held across a sink call or a D-Bus call. No
+  sink call happens inside the start function.
+- Signals are accepted only from the current owner of
+  `org.freedesktop.Notifications` / `org.freedesktop.portal.Desktop`
+  (cached unique name, re-asked on a mismatch); a spoofed
+  `ActionInvoked` is dropped (tested).
+
+### fdo
+
+- `GetCapabilities` + `GetServerInformation` read once, cached as the
+  `BackendInfo`; `NameOwnerChanged` with an old owner (server gone or
+  restarted) drops the cache, reports every shown notification
+  `Dismissed(Other)` (the new server has none; a silent update would
+  otherwise pop a new one) and calls `sink.changed()`. A first owner
+  (D-Bus activation by our `Notify`) is not a restart.
+- Ids: `NotificationId` <-> `u32` both ways; `replaces_id` whenever a
+  mapping exists (also for `ShowMode::New` after a dismissal the server
+  did not report). A close that arrives before `Notify` returned is kept
+  in a 16-entry ring and applied when the mapping lands.
+- Actions: `default` first (empty label), then `rendered.actions`
+  keys; the first `Input::Reply` becomes `inline-reply` when the server
+  lists it, with `x-kde-reply-placeholder-text` /
+  `x-kde-reply-submit-button-text` from `ReplyOptions`;
+  `NotificationReplied` -> that action's key + text. `max_actions` 3
+  (the spec has no limit; GNOME and Plasma show three), 0 without the
+  `actions` capability.
+- Closes: reason 1 Timeout, 2 User, 3 App, else Other; after an
+  `ActionInvoked` on that id the close is reported as `Other` (servers
+  close a notification once an action ran; it is no dismissal).
+  Decision: the host has no "removed without event" sink call, so the
+  close still goes through `dismissed`.
+- Hints: `urgency` (Passive 0, Normal / High 1, Urgent / Critical 2),
+  `category` (calls `call.incoming` / `call`, messaging and
+  `Category::Message` `im.received`, `Transfer` `transfer`, nothing for
+  the rest), `desktop-entry` = app id, one image as `image-path` (a
+  `file://` URI, or the icon name for `Named`): picture, else icon,
+  else the caller / last sender's avatar; `x-kde-urls` with the picture
+  where listed. `suppress-sound` for `Sound::Silent` and silent updates,
+  `sound-name` (or `sound-file` for a path). `resident` for ongoing
+  (expire 0); `transient` when a timeout is set (the plugin removes it
+  then anyway). `linux_hints` last, overriding. Body escaped when the
+  server lists `body-markup`. `expire_timeout` = `timeout_ms` or -1;
+  `timeouts: false`, so the host still removes it (GNOME ignores the
+  value).
+- `image-data` is never sent: it needs decoded pixels and the plugin
+  never decodes images (section 2 rejected list).
+- `value`: only to servers whose name contains dunst, mako, swaync /
+  SwayNotificationCenter or xfce; then `limits.progress_bar` and the
+  progress label is appended as a body line by the backend (render
+  drops it when the bar is native).
+
+### KDE job views
+
+- When the server is `Plasma` and `org.kde.JobViewServer` has an owner,
+  a notification with progress becomes a job view
+  (`/JobViewServer` `org.kde.JobViewServerV2.requestView(app id, 1
+  (killable), {immediate, transient, title, infoMessage, percent})`,
+  then `org.kde.JobViewV3.update`, both `NoReply`-safe: `update` /
+  `terminate` are sent without waiting). `infoMessage` = progress label,
+  else the rendered body. Progress removed (finish) -> `terminate(0, "",
+  {})` and a plain `Notify`; cancel -> `terminate`.
+- `cancelRequested`: the first destructive rendered action's key as an
+  activation (the app answers it and ends the job), else `Dismissed(User)`
+  and the job ends. Suspend / resume are not offered (capability 1 only).
+- Not verified on Plasma (no KDE session here): only the bus contract
+  as read from plasma-workspace's XML and kjobwidgets.
+
+### Portal
+
+- Action name `istmo-notification` for every button and the default
+  action; target = `a{sv}` {`istmo-id`, `istmo-key`, `istmo-user-data`,
+  `istmo-url`} -> `Activation.carried`. Exported (`app.istmo-notification`)
+  when the connection can own the app id (`DoNotQueue`) and serve
+  `org.freedesktop.Application` at the GApplication path
+  (`/org/example/App_1`); otherwise plain actions (`ActionInvoked`, running
+  only). `launched_app` = the id was not posted by this process.
+- Parameters are parsed by shape, not position: the dict with
+  `istmo-id` is the target, a dict with `activation-token` the platform
+  data, a string the reply (`im.reply-with-text`). The spec puts the
+  reply second for exported actions and third for `ActionInvoked`; both
+  work.
+- v2: `purpose` on reply buttons and the plugin's call buttons
+  (`call.accept` / `call.decline` / `call.hang-up`) only when
+  `SupportedOptions.button-purpose` lists it; `category` (`call.incoming`,
+  `call.ongoing`, `im.received` also for any notification with a reply
+  button, `alarm.ringing`) only when listed; `display-hint` persistent
+  (ongoing), transient (timeout), hide-on-lock-screen /
+  hide-content-on-lock-screen, show-as-new (alerting update); `sound`
+  `silent` / `default`. `CallStyle` is reported native when
+  `call.incoming` + `call.accept` are supported, but `limits.call` stays
+  false so render still adds the call buttons the purposes go on.
+- Icons as `("bytes", ay)` (read from the cached file, 2 MiB cap) or
+  `("themed", [name])`. Deviation: v2 deprecates `bytes` in favour of a
+  sealed memfd `file-descriptor`; sealing needs `memfd_create` (unsafe or
+  a new dependency) and the live portal accepted bytes. Named sounds are
+  not sent (same memfd requirement).
+- No picture, no dismissal events (the portal has no closed signal), no
+  native timeouts.
+
+### Verification
+
+- Unit tests: app id order, `file://` escaping, close reasons, markup
+  escaping, percent, capability mapping (fdo and portal), app paths.
+- `tests/linux_dbus.rs`: private `dbus-daemon`, child re-exec with the
+  bus address. Fake fdo server: Notify arguments (actions, hints,
+  escaped body + label, expire), silent `replaces_id` update, action
+  invoke + activation token, inline reply, default action, close
+  reasons (user, timeout, after action), `CloseNotification` on cancel,
+  spoofed signals ignored, restart with other capabilities (dismissals,
+  capability re-read, text progress, no actions). Fake portal (v2):
+  `AddNotification` dict (default action, category, purposes, target),
+  exported `ActivateAction` with reply + token, non-exported
+  `ActionInvoked`, `RemoveNotification`.
+- Live (`ISTMO_NOTIF_TEST_LIVE=1`, `=portal`), run once on niri with
+  Quickshell as notification server and xdg-desktop-portal (GNOME
+  backend): fdo route shows, updates and cancels (`fdo:quickshell`,
+  inline reply listed); forced portal route (`portal:2`, exported
+  actions owned) shows, updates and removes. Taps were not clicked by
+  hand.
+- Not verified: Plasma (job views, inline reply), GNOME Shell, dunst /
+  mako / swaync drawing `value`, a real Flatpak (sandbox detection,
+  D-Bus activation of exported actions, host registry acceptance), the
+  portal's handling of `display-hint` / `sound` on a real backend.
+
+### Open (Linux)
+
+- memfd `file-descriptor` icons and sounds for portal v2.
+- Suspend / resume of KDE jobs; `descriptionLabel` fields.
+- `image-data` stays out (decoding); servers without `image-path`
+  support show no image.
+
+## Implementation notes (web, as built)
+
+Branch `notif-web`, the web part of step 3 of section 8.
+
+### Layout
+
+- `src/web.rs` + `src/web/`: `caps.rs` (detected `Browser` to
+  `Capabilities` / `RenderLimits`), `images.rs` (which images a
+  notification shows, FNV keys, `data:` URLs), `payload.rs` (the
+  options and `data` handed to the browser, records), `state.rs` (the
+  host's state machine) are pure and unit-tested natively (`mod web` is
+  compiled for `cfg(test)` too). `host.rs`, `js.rs`, `idb.rs`,
+  `timer.rs` are `wasm32` only.
+- `src/web_assets.rs` (every target): `SERVICE_WORKER_JS`
+  (`include_str!` of `web/istmo-notifications-sw.js`),
+  `SERVICE_WORKER_FILE`, `DB_NAME`, `DB_VERSION`; a unit test checks the
+  script names the same database, version and data version. `/web` is in
+  the crate's `include`. The asset sits at `web/`, not `assets/web/`.
+- New wasm32 dependencies: `wasm-bindgen`, `js-sys`, `send_wrapper`
+  (camera precedent). No `web-sys`: every browser API is reached through
+  `js_sys::Reflect` on `globalThis` at call time, so the host runs and is
+  tested in Node with stubs. Dev-dependency `wasm-bindgen-test`.
+- Fixed in the core: `builder::now_ms` reads `js_sys::Date::now()` on
+  `wasm32` (`SystemTime::now` panics there; responses and
+  `ChatMessage::received` hit it).
+
+### Decisions
+
+- **Separate host, not the desktop one**: the desktop host is threads +
+  files and is cfg'd out on wasm; `web/state.rs` repeats its rules
+  (channels, coalescer at `Rate::WEB`, engine, delivered table with
+  dismissed entries, acks, snooze, host-run timeouts, event backlog of
+  64) as a pure state machine. Keep the two in step.
+- **One serial browser task** (`Op::Show` / `Op::Close` over a flume
+  channel): `showNotification` resolves after its images load, so two
+  concurrent calls could land out of order. The state records a post
+  when it is queued; a failed show removes it again.
+- **Trait futures are `Send`**: JS work that awaits runs through
+  `js::local` (spawn_local + oneshot), JS objects live in one
+  `SendWrapper<RefCell<JsState>>`, Rust state behind mutexes.
+- **Records in `data`**: each notification carries its wire bytes with
+  embedded image bytes removed (`payload::strip`). A later page adopts
+  what `getNotifications()` lists, and responses, updates and snoozes of
+  notifications an earlier page showed resolve against the record (an
+  update after a reload drops embedded images unless it sets them).
+- **Taps go through IndexedDB, always**: the worker queues
+  `{kind, id, action, launched, record, time}` in store `responses`,
+  then focuses a window (or `openWindow(data.open || scope)`) and posts
+  `{istmo: "istmo.notifications", kind: "drain"}` to every window. The
+  page drains in one readwrite transaction (`getAll` + `clear`) on load
+  and on each message: exactly one tab gets each entry, also the one
+  `openWindow` started. Background buttons (`data.background`) do not
+  focus or open. `launched` = no window existed and it was not a
+  background button. The worker closes the notification on click; the
+  host keeps it as dismissed without a `Dismissed` event (an alerting
+  update shows it again).
+- **Images**: `data:` URLs for the worker (self-contained, survive the
+  page; base64 in Rust), Blob URLs on the page; both cached by
+  `(fnv1a64, len, mime, blob)` and reference counted per notification;
+  Blob URLs revoked with their last user. `NotificationImage::File` is a
+  URL on the web (validation already accepts `/path`); `Named` is
+  ignored. Icon fallback: the last sender's avatar, the conversation
+  user's, the caller's. No badge (the model has no badge image).
+- **Options**: `requireInteraction` for ongoing, Urgent, Critical;
+  `silent` for `Sound::Silent` / Passive, and for silent replaces where
+  `renotify` is missing; `renotify` only for alerting replaces;
+  `timestamp` from `timestamp_ms`, else the chronometer base. Page
+  notifications never get `actions` or `image` (Chrome throws).
+- **Service worker choice** (`ServiceWorker`): `Register(url)` (default
+  `istmo-notifications-sw.js`) registers unless the page's scope already
+  has a registration for another script, which is then used (never
+  replaced; it must `importScripts` ours); `Existing` uses
+  `getRegistration()`; `None` = page only. `ready` is raced against 10 s;
+  a worker that activates later is adopted then.
+- **Chrome Android**: `new Notification` throwing a `TypeError` with
+  permission granted sets `page_refused`; capabilities drop to
+  `web:none` and `show` answers `Unsupported(Show)` until a worker is
+  active. There is no way to know before trying.
+- **Timer**: one `setTimeout` with one reused closure, re-armed only
+  when the deadline changes, each wait capped at 30 s (sleep, throttled
+  background tabs).
+- **Store**: IndexedDB store `schedule`, key `entries`, the core store
+  format bytes (`Store::encode` / `decode`). Writes are spawned tasks
+  that create their transaction before the first await, so they land in
+  order; a generation counter skips unchanged writes. Missing IndexedDB
+  (private modes, Node) = in-memory schedule, no worker queue.
+- **Permission**: `Notification.permission` maps granted / denied /
+  default to Granted / Denied / NotDetermined; no `Notification` =
+  Unavailable. `request_permission` awaits `requestPermission()`;
+  Firefox and Safari need a user gesture (documented).
+- Following the core review: schedules whose trigger never fires are
+  refused (`Invalid { field: "trigger", problem: OutOfRange }`); image
+  bytes are read through `&[u8]` coercion so an `Arc<[u8]>` payload type
+  still compiles.
+
+### Asset contract for istmo-build (`web_service_worker`)
+
+Copy `web/istmo-notifications-sw.js` (or write `SERVICE_WORKER_JS`) to
+the web output next to the app's `index.html`, under that exact name,
+served same-origin as `text/javascript`. Nothing else is needed; the
+host registers it at the relative URL. An app with its own worker
+imports it instead.
+
+### Verification
+
+- Native unit tests: `web::{caps,images,payload,state}` (24) and the
+  `web_assets` script check.
+- `tests/web.rs` (wasm-bindgen-test, Node 24, wasm-bindgen-cli 0.2.130):
+  page show / click (response on the lane) / close (Dismissed),
+  page refusal (`Unsupported(Show)`, `web:none`), a scheduled
+  notification firing from `setTimeout`, and the worker path against a
+  stubbed registration (two buttons + "More", progress as text, silent
+  update replacing by tag without `renotify`, `delivered()` from
+  `getNotifications`, cancel closing it). IndexedDB is not available in
+  Node: the store and the worker's queue are untested by automation.
+- The service worker script passes `node --check`; it never ran in a
+  browser here (no headless Chromium run).
+- `.github/workflows/wasm.yml` gained the crate's wasm32 clippy and
+  `tests/web.rs`.
+- Not done: a real browser run (Chrome desktop and Android, Firefox,
+  Safari).
+
+## Implementation notes (Windows, as built)
+
+Branch `notif-windows`, step 3 (Windows). `src/desktop/windows.rs` +
+`desktop/windows/{args,ident,toast_xml,notifier,activator,registration,sys}.rs`.
+`args`, `ident`, `toast_xml` and the capability report are pure and
+compile on every host under `cfg(test)` (their tests run on Linux);
+the rest is `cfg(windows)`.
+
+### Shape
+
+- Tag = notification id (ids are <= 64 chars of `[A-Za-z0-9._:-]`, the
+  tag / group limit since 15063: no hashing), group = `istmo` for every
+  toast. Removal, history and update use (tag, group, AUMID).
+- Arguments (`launch`, button `arguments`, header `arguments`):
+  `istmo1&i=<id>[&k=<key>][&u=<user data>][&l=<url>][&s=<fire ms>]`,
+  percent-encoded `%&=` and controls. They carry user data and URL for
+  activations in a later process (`Carried`).
+- Toast XML: title / subtitle / body as the three texts (subtitle is
+  native), status text as attribution when there is no bar, icon as
+  `appLogoOverride` (circle crop for the latest message sender's or the
+  caller's avatar), picture as `hero`, latest message image inline,
+  `<progress>`; inputs (text with `placeHolderContent`; selection whose
+  item ids are the choice texts, so the activation hands back the text)
+  then buttons with `hint-inputId`, `activationType` foreground /
+  background, `imageUri`, `hint-buttonStyle="Critical"` for destructive
+  actions on 22000+; `header` for groups; `displayTimestamp`.
+- Scenarios: call incoming / screening -> `incomingCall`; category
+  alarm -> `alarm`, reminder or `ongoing` -> `reminder` (both only with
+  a button, else Windows ignores them); Urgent / Critical ->
+  `urgent` on 22546+; High and above -> `duration="long"` and priority
+  High. Passive or `Sound::Silent` -> `<audio silent>`; `ms-winsoundevent:`
+  names pass through; other names play the default sound.
+- Shown toasts bind every top-level text and the bar (`{title}`,
+  `{progressValue}` ...), values in `NotificationData`. A silent update
+  (`Replace { alert: false }`) whose XML hash is unchanged is
+  `UpdateWithTagAndGroup` with the next sequence number; otherwise (or
+  `NotificationNotFound`) a full replace with `SuppressPopup`.
+- 5 KB XML budget: `build_fitting` drops carried user data from buttons,
+  then from the body, then URLs; then `Invalid(notification, TooLarge)`.
+- `timeout_ms` -> `ExpirationTime` (`timeouts: true`); `lists_delivered`
+  from `GetHistoryWithId` (title / body from data values, else the XML
+  texts; group from the header id; no delivery time).
+- Dismissed: `UserCanceled` -> `dismissed(User)`; `TimedOut` (moved to
+  the notification center) and `ApplicationHidden` ignored. Failed ->
+  `failed`. The in-process `Activated` event is never used: the COM
+  activator delivers every activation, so nothing is reported twice.
+
+### Scheduled toasts (core hook)
+
+- Additive core change: `Backend::arm(&[Upcoming])` (default no-op),
+  `Upcoming { notification, rendered, fire_ms }`, `ARM_WINDOW_MS` (14
+  days) and `ARM_CAP` (50). The host calls it from `persist` after every
+  schedule write and at the end of `load`, only when it owns the store.
+- The backend diffs against `GetScheduledToastNotifications` by a
+  16-char id (FNV-1a of tag, fire time and XML; 16 is the platform's
+  limit) and only adds / removes what changed. Scheduled toasts carry no
+  data (values in place) and only `File` images (cached bytes may be
+  gone at fire time).
+- The host still delivers each occurrence itself. On `ShowMode::New` the
+  backend removes a pending scheduled toast of that tag due within 60 s,
+  and if the history holds one of that tag whose arguments carry a fire
+  time within the last 24 h, the host's toast replaces it with
+  `SuppressPopup` (no double popup, now with images and data). Missed
+  deliveries at the next start take the same path.
+
+### Activation and registration
+
+- `DesktopNotifications::install(&WindowsApp) -> Installation`, once per
+  process (`OnceLock`; later calls return the first outcome): refuses
+  elevated tokens (`Elevated`) and builds < 17763 (`Unsupported(Show)`,
+  build from `HKLM\...\CurrentVersion\CurrentBuildNumber`); packaged =
+  `Package::Current()` with a non-empty `Id().FullName()` (Wine answers
+  `Package::Current` for unpackaged exes), AUMID from `AppInfo::Current()` (else the
+  given one), nothing written; unpackaged writes the two keys every
+  start and sets the process AUMID. Both register the class object.
+  CLSID = UUID v5 (hand-written SHA-1, RFC vectors in tests) of the AUMID
+  in a fixed plugin namespace.
+- `windows_app!()` (app-side macro, reads the app crate's env):
+  `ISTMO_APP_BUNDLE_ID` else `CARGO_PKG_NAME`, `ISTMO_APP_NAME`,
+  `ISTMO_NOTIFICATION_ACCENT` (icon background). `with_icon_png(bytes)`
+  writes `<data dir>/istmo-notifications/app-icon-<fnv>.png` for `IconUri`.
+- COM: thread `istmo-notifications-com` enters the MTA and stays there
+  (parks); `CoRegisterClassObject(CLSCTX_LOCAL_SERVER,
+  REGCLS_MULTIPLEUSE)`. `Activate` copies the args and inputs and
+  returns at once. Activations before the backend starts are queued (64)
+  and replayed by a thread of their own after `start` returns (no sink
+  call inside the backend start, per the core review). The first
+  activation of a COM-launched process (`-istmo-notification` in argv)
+  has `launched_app`. `launched_by_notification()` / `app_args()` for the
+  app; `FreeConsole` when COM-launched.
+- Without `install`, the backend start fails with a `Platform` error
+  naming `install` (the host then reports no backend).
+- `complete(ack)` does nothing: COM keeps no process alive for us.
+
+### Corrections to section 1
+
+- `urgent`: Learn's app-notification content page requires build 22546;
+  the Windows App SDK `AppNotificationScenario` page says 19041. The
+  backend uses 22546.
+- `reminder` is silently ignored without a button that activates in the
+  background; `alarm` without any button.
+- `ScheduledToastNotification.Id` is limited to 16 characters.
+- Tag and group: 64 characters since 15063 (16 before).
+- `ToastDismissalReason::TimedOut` means the popup went to the
+  notification center, not that the toast left it.
+- The notification center keeps at most 20 toasts per app
+  (`max_active = 20`).
+- `ToastNotificationHistory` is not agile (no `Send`) in windows-rs; it
+  is fetched per call.
+
+### Not done / open
+
+- Snooze stays the host's simulation (re-armed as a scheduled toast, so
+  it survives closing the app) instead of the system snooze action.
+- No forwarding when COM starts a second instance of a single-instance
+  app during the primary's startup race.
+- Sound files from `[app.notifications] sounds`: packaged `ms-appx`
+  paths are not mapped yet.
+- Delivered list has no delivery time.
+- Verification: Linux unit tests (XML, arguments, ids, SHA-1/UUID,
+  report); Windows cross clippy (fenix 1.100, x86_64-pc-windows-msvc,
+  `--all-targets --all-features -D warnings`); the lib tests built with
+  rust-lld + xwin and run under Wine 11.6 (76 pass; no WinRT toast call
+  runs there). The probe under Wine: install writes both keys and
+  registers the class object, `clean` removes them; every toast call
+  fails `REGDB_E_CLASSNOTREG` (Wine has no toast classes). Nothing ran on
+  real Windows: `examples/notif_win_probe.rs`
+  (`~/win_probe/notifications/`) is the checklist.
+
+## Implementation notes (Android, as built)
+
+Branch `notif-android`, the Android part of step 3. Sources in
+`plugins/notifications/native/android/` (package
+`dev.istmo.plugins.notifications`, the plugin's `android_package`).
+
+### Contract with istmo-build (`[app.notifications]`)
+
+The backend reads only Android resources and the manifest; every name
+is looked up at run time with `Resources.getIdentifier`, so a missing
+one falls back instead of failing the build.
+
+| What | Resource / manifest entry | Content | Fallback |
+|---|---|---|---|
+| Static channels (`[[app.notification_channel]]`) | `res/raw/istmo_notification_channels.bin` (resource `raw/istmo_notification_channels`) | wire bytes of `Vec<ChannelSpec>` (varint length, then each `ChannelSpec` in the generated codec layout), **no format byte** | only the plugin's `default` channel |
+| `small_icon` | drawable `istmo_notification_icon` (`res/drawable*/istmo_notification_icon.{xml,png}`) | monochrome vector or alpha-only PNG | `AndroidExtras.small_icon` by name first; else the app icon |
+| `accent` | color `istmo_notification_accent` (`res/values/*.xml`) | `#RRGGBB` / `#AARRGGBB` | no color; `AndroidExtras.color` wins |
+| `sounds` | `res/raw/istmo_notification_sound_<name>.<ext>` (`Sound::Named("ding")` = `raw/istmo_notification_sound_ding`, then `raw/ding`) | sound file | channel default |
+| `exact_alarms = "schedule"` / `"use"` | `<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM">` / `USE_EXACT_ALARM` | | inexact alarms |
+| `full_screen = true` | `USE_FULL_SCREEN_INTENT` | | `android.full_screen` ignored, `Style::Call` simulated on 31+ |
+| `live_updates = true` | `POST_PROMOTED_NOTIFICATIONS` | | promotion requested anyway; the system refuses (`NotPromoted`) |
+| flags | none (the `bool/` / `string/` resources were removed 2026-11-27) | | the backend checks the merged manifest (`requestedPermissions`) and the runtime grants |
+
+`request_permission(exact_alarms)` opens `ACTION_REQUEST_SCHEDULE_EXACT_ALARM`
+only when `SCHEDULE_EXACT_ALARM` is in the merged manifest (read from
+`PackageInfo.requestedPermissions`). The plugin's own `istmo.toml`
+declares `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLETED`; its
+`native/android/AndroidManifest.xml` declares the components:
+`IstmoNotificationActivity` (not exported), `IstmoNotificationReceiver`
+and `IstmoNotificationAlarmReceiver` (not exported),
+`IstmoNotificationBootReceiver` (exported, `BOOT_COMPLETED`, `TIME_SET`,
+`TIMEZONE_CHANGED`, `MY_PACKAGE_REPLACED`,
+`SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED`). No `crates/build`
+change was made. The plugin keeps `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLETED` in its own `istmo.toml` (it always needs both; the build sidecar adds the same two, merged once); the opt-in ones come only from the sidecar.
+
+### Layout
+
+- `NotificationsBackendImpl(context)`: the generated backend interface.
+  Context-bound (`android_backend_arg = "context"`, `auto_register =
+  true`), so it registers once per process and also works under a
+  `NativeActivity`; `PermissionPrompt` uses the current istmo activity
+  (`ActivityResultRegistry` on a `ComponentActivity`, re-registered on a
+  recreated one; `ActivityCompat.requestPermissions` plus "resumed after
+  being paused" otherwise).
+- `NotificationCenter` (internal object): process-wide state shared with
+  the receivers, which run without a backend when an alarm, a boot or a
+  button starts the process. Shown table (latest content per id, 256
+  dismissed kept), `Coalescer` on a `HandlerThread`, acks, channels,
+  group summaries, events (backlog 64 until the first subscriber),
+  schedule.
+- `NotificationRenderer`: `NotificationCompat` building. `Api36`: the
+  API 36 / 36 QPR1 parts by reflection. `Intents`: every
+  `PendingIntent`. `Responses`: lane publishing, deep links, file queue.
+  `Alarms`: the one alarm. `ScheduleStore.kt`: `ScheduleEngine` (port of
+  `schedule/engine.rs`) and the store. `CalendarRule.kt`:
+  `CalendarRules` + `Triggers` (ports of `rule.rs` and `Trigger`
+  timing). `Coalescer.kt`.
+- Notifications are posted with tag = id, id 0; group summaries with tag
+  `istmo.group:<group id>` and id 1 (see "Review fixes (Android)"). Every notification carries the extra
+  `dev.istmo.notifications.MARKER` (for `delivered` / `cancel_all`) and,
+  when its wire encoding is at most 32 KiB, `dev.istmo.notifications.WIRE`
+  so `update` / `append_message` / snooze still work after a restart.
+
+### Decisions and deviations
+
+- **androidx.core 1.13.1, not 1.17+.** 1.17 needs compileSdk 36 and
+  Kotlin 2 metadata; apps and examples are on compileSdk 34 / Kotlin
+  1.9.24. `Notification.ProgressStyle`, `setShortCriticalText`,
+  `setRequestPromotedOngoing` (36 QPR1; the extra
+  `android.requestPromotedOngoing` when the method is missing),
+  `canPostPromotedNotifications`, `FLAG_PROMOTED_ONGOING` and
+  `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` are reached by
+  reflection (`Api36`): the compat notification is built, then
+  `Notification.Builder.recoverBuilder` adds the framework parts.
+  `ProgressStyle` is used only when the style is `Plain` (it is a style
+  of its own); bar length = sum of segment lengths, else 1000.
+- **Promotion check.** One second after posting a `live` notification,
+  the active one is read back; without `FLAG_PROMOTED_ONGOING`,
+  `NotPromoted(id)`. The plugin requests promotion only when it can see
+  the eligibility rules hold (ongoing, title, not colorized, style plain /
+  big text / call).
+- **Response templates.** Each `PendingIntent` carries the encoded
+  `NotificationResponse` of its target (generated codec); the activity /
+  receiver fills `reply` (from `RemoteInput`), `launched_app` and `ack`.
+  Overflow actions travel without their icons (intent size).
+- **Cold start.** Foreground responses always go through
+  `IstmoRuntime.publishEarlyQueue` (held in memory until the runtime
+  starts, which the launch activity started right after the trampoline
+  does); `launched_app = true` when no backend was registered yet in the
+  process. Background responses with no runtime in the process go to
+  `noBackupFilesDir/istmo-notifications/responses.bin` (format byte 1,
+  wire `Vec<Vec<u8>>` of encoded responses, oldest dropped past 64),
+  drained when the backend is built, **without an ack**: app code only
+  runs with an activity, so there is nothing to keep the receiver alive
+  for. Section 3's `IstmoRuntime.ensureStarted` does not exist and was
+  not added (starting the native runtime without the app's entry point
+  runs no app code).
+- **Replies.** Native `RemoteInput` from API 24 (suggestions as
+  choices); `Select` is a `RemoteInput` with choices and no free-form
+  input from API 28 (rendered as chips); below, a reply is a button with
+  `input_requested` and each choice its own button (`<id>#<i>` keys). A
+  background reply re-posts the notification silently when the ack
+  completes or times out, which clears the reply spinner.
+- **More.** More than 3 actions: the first 2, then "More" (English
+  label, as `render::Labels`). Simulated choices expanding past the room
+  left are cut.
+- **Call style** on API 31+ only with `android.full_screen` and the
+  full-screen grant (the system refuses call-style notifications that
+  are neither a foreground service nor full-screen); otherwise a plain
+  notification with `CATEGORY_CALL` and the call buttons. Capabilities
+  say `CallStyle: Native` (it is on < 31 and with full screen).
+- **Snooze**: cancelled, rescheduled with `Trigger::After`, `Snoozed`.
+  Needs the content (table or `WIRE` extra); without it the
+  notification is only cancelled.
+- **Channels below 26**: specs kept in
+  `noBackupFilesDir/istmo-notifications/channels.bin` (format byte 1,
+  wire `Vec<ChannelSpec>`), merged into each notification (priority,
+  sound, vibration, lights). Unknown channels fail `UnknownChannel` on
+  every API (26+: neither in the store nor in the system).
+- **Coalescer** follows the core fixes: debt floored at `-burst * 1000`
+  milli-tokens; only `Open` and `Button` responses publish a deep link;
+  a trigger with no next fire is refused with `Invalid { field:
+  "trigger.until_ms" }` (a calendar rule past its `until`) or `"trigger"`,
+  problem `OutOfRange`, and not stored. `Coalescer.setRate` and
+  `dismissedLen` mirror the core; the Android backend keeps one rate. Coalescer clock =
+  `elapsedRealtime`.
+- **Schedule**: `TIME_SET` / `TIMEZONE_CHANGED` recompute every future
+  delivery from now (local-zone rules follow the new zone); entries
+  already due keep their time so the missed policy applies. Every
+  backend start re-arms too (a force stop clears alarms). Alarm =
+  `RTC_WAKEUP`, `FLAG_IMMUTABLE`.
+- **`cancel_all`** removes only the plugin's notifications (marker or
+  summary tag), not other plugins' (a foreground service's stays anyway).
+- **`delivered`** on API 23+ from `getActiveNotifications` (title and
+  text from the extras, `postTime`); below 23 the own table
+  (`ListDelivered: WhileRunning`).
+- **Timeout**: `setTimeoutAfter` (26+; `Unsupported` below). No
+  `Dismissed(Timeout)` event: the delete intent is a user dismissal.
+- Permission state: `NotDetermined` on 33+ until the prompt was shown
+  once (a preference), then `Denied` while not granted.
+
+### Verification
+
+- `plugins/notifications/tests/native/android/check.sh` (just
+  `check-generated-native`, `native.yml` kotlin job):
+  - JVM: `CalendarRule.kt` against all 30 rows of
+    `tests/schedule_vectors.tsv`, the eight `coalesce.rs` cases (debt floor and
+    `set_rate` included) plus a 100-alert floor case, trigger timing, missed deliveries (late within the hour,
+    `Drop`, `DeliverLate`, a daily reminder missed three days, twenty
+    years asleep, a per-minute repeat after three days off, dead entries
+    dropped), store round trip, every `validate.rs` test case;
+  - Android: every `native/android/*.kt` with `-Werror -no-jdk` against
+    `android-34/android.jar` and the AndroidX jars of `istmo.toml`
+    (fetched from Google Maven), kotlinc 2.3 and 1.9.24.
+- `plugins/notifications/examples/android-probe`: device probe (see its
+  README).
+
+### Open (Android)
+
+- Device facts not verified: OEM promotion criteria, whether
+  `recoverBuilder` keeps every compat extra on all OEM builds, choice
+  chips on 28-30, whether the delete intent fires on `setTimeoutAfter`.
+- Messages with images (`ChatMessage.image`) are shown without the image
+  (needs a content URI provider).
+- Conversation shortcuts (bubbles, the conversation section) are not
+  published.
+
+## Implementation notes (Apple, as built)
+
+Branch `notif-apple` (from 512c1843). iOS backend in Swift
+(`native/ios/`), macOS backend in Rust (`src/desktop/macos.rs` over
+objc2, rules in `src/desktop/apple_map.rs`). Nothing ran on a Mac,
+iPhone or iPad: Swift is type-checked against stubs, macOS is
+cross-clippied without an SDK. Checklist:
+`plugins/notifications/docs/apple-checklist.es.md`.
+
+### iOS (`native/ios/`)
+
+- `NotificationsBackendImpl` (generated protocol) is thin; state lives in
+  `NotificationsCore.shared` (one `NSLock`, never held across `await`):
+  live table, channels, `NotificationsCoalescer` (`Rate.apple`), the
+  category set, held completion handlers (acks), the event hub (64-event
+  backlog for the first subscriber).
+- `init()` calls `IstmoNotifications.install()`: the registry runs before
+  `UIApplicationMain`, so the delegate is set before launch finishes.
+  Apps with their own delegate forward `willPresent` / `didReceive`
+  (both return `false` for notifications without `istmo.id`).
+- Render port (`NotificationsRender.swift`) of `src/render.rs`: Apple
+  limits = 4 actions, native subtitle and inline reply, choices as
+  buttons, "More" past the limit, call actions added, progress / styles
+  as body lines, conversation layout only for communication
+  notifications.
+- Responses resolve from the request's `userInfo` only, so a cold start
+  answers exactly like a warm one: `istmo.id`, `istmo.ud`, `istmo.url`,
+  `istmo.p` (foreground bits), `istmo.k` (key map: per key the action id,
+  choice, URL, background flag, snooze delay, simulated input; plus the
+  wire bytes of the overflow actions with icons stripped), `istmo.s`
+  (snoozed copy). Published with the generated `NotificationResponse`
+  codec; a `DeepLink` only for `Open` / `Button` with a URL.
+- `launched_app` = no `UIApplication.didBecomeActiveNotification` seen
+  yet in this process (to verify on device).
+- Background actions hold the completion handler until `complete(ack)`
+  or 25 s. Snooze re-adds the delivered content with a time-interval
+  trigger from the delegate (no Rust involved), then `Snoozed`.
+- Silent updates: no sound, `.passive` (15+), foreground bits = list
+  only (no banner while open). Alerting updates and `append_message` go
+  out at once.
+- Categories: replace-all, so the existing set (the app's own and earlier
+  processes') is read at install and kept; ids `istmo.c.<fnv1a64>` of the
+  buttons + lock-screen option; at most 128 of ours (oldest dropped).
+  Every notification gets a category with `customDismissAction`
+  (dismissals). Lock screen: `Public` shows title / subtitle when previews
+  are hidden; `HideContent` / `Hidden` use an empty placeholder.
+- Scheduling (`NotificationsSchedule.swift`): every entry in
+  `<Application Support>/istmo-notifications/schedule.bin` (format byte 1
+  + wire `Vec<(Notification, Trigger, i64 anchor)>`), soonest 60 requests
+  armed. `After` = interval, `At` = UTC calendar date, `Every` = repeating
+  interval, `Calendar` = one repeating calendar trigger per weekday
+  (`<id>#w<n>`) in the rule's zone. `until_ms` enforced at top-up only.
+  Top-up at install, foreground, `willPresent`, `didReceive`, and after
+  each change; finished one-shots leave the store. A trigger with no
+  next fire is rejected (`Invalid { field: "trigger", problem:
+  OutOfRange }`); a past `At` is shown at once. `MissedPolicy` has
+  nothing to do on Apple (the system delivers while the app is off).
+- Attachments: picture, else icon; bytes or a copy of the file written
+  to `tmp/istmo-notifications/<uuid>.<ext>` per post (the system moves
+  attachment files). `Named` images are not attachments.
+- Communication (iOS 15+, gate: `INSendMessageIntent` in
+  `NSUserActivityTypes`): `INSendMessageIntent` with `INPerson`s
+  (`INImage` from the avatar bytes), incoming `INInteraction` donated
+  (awaited), `content.updating(from:)`; on failure the conversation
+  falls back to body lines. Calls stay simulated (no `INStartCallIntent`).
+- Static channels: `istmo_notification_channels.bin` in the bundle (wire
+  `Vec<ChannelSpec>`), read at install when present.
+- Badge never set; action icons not mapped (no wire feature for them).
+- `Coalescer.swift` mirrors `src/coalesce.rs` including the debt floor
+  (`tokens >= -burst * 1000` after `Alert` / `Finish` / `shown`) from the
+  core review.
+
+### macOS (`src/desktop/macos.rs`, `src/desktop/apple_map.rs`)
+
+- Deps (macOS only): objc2 0.6, block2 0.6, objc2-foundation /
+  objc2-app-kit / objc2-user-notifications / objc2-intents 0.3. The
+  `UNNotificationContentProviding` conformance of `INSendMessageIntent`
+  is not declared by objc2-intents (it does not depend on
+  user-notifications), so `contentByUpdatingWithProvider:error:` is sent
+  with `msg_send!`.
+- Bundle check first (`NSBundle.mainBundle`: path ends in `.app`, bundle
+  id present), else `NotBundled` (warn once): calling
+  `currentNotificationCenter` unbundled throws inside the framework.
+- Host contract: the host keeps scheduling (`WhileRunning`), timeouts,
+  the delivered table, coalescing; the backend shows / replaces
+  (`ShowMode::Replace { alert: false }` = passive, no sound, foreground
+  list only), removes, lists delivered (`lists_delivered = true`), reads
+  and requests permission, opens System Settings
+  (`x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=<bundle id>`).
+  Deviation from section 2: macOS scheduling is in-process, not native
+  (native triggers would need a scheduling hook in the `Backend`
+  contract; left for later).
+- Report: 10 actions, subtitle and inline reply native, messaging /
+  avatar native only with communication set up (macOS 12+), silent update
+  and lock screen simulated, `Rate::APPLE`.
+- Completion handlers are waited for on the calling worker (5 s; the
+  permission prompt 300 s); they run on the framework's queue, never the
+  main thread. The delegate calls its completion handler at once (macOS
+  does not suspend apps), so `complete(ack)` releases nothing.
+- Activation: dismiss action → `dismissed(User)`; default action → key
+  `None`; otherwise the action identifier is the rendered key; text from
+  `UNTextInputNotificationResponse`; `carried` = user data and URL from
+  `userInfo`. `launched_app` = `didFinishLaunching` carried
+  `NSApplicationLaunchUserNotificationKey` or a non-default launch, taken
+  by the first response; missed when the host attaches after launch.
+- Attachments: hard link (else copy) of the host's cached file into
+  `$TMPDIR/istmo-notifications` per post, so the framework's move never
+  touches the host cache.
+- unsafe only in `macos.rs` (`#[allow(unsafe_code)]` with reason on the
+  module): the delegate class, `setUserInfo`, attachment creation, the
+  Intents initialisers, completion-handler pointers, the
+  `Send` impl of the category set; one op per block, `SAFETY:` on each.
+- Selectors newer than 10.15 are gated: interruption level, relevance,
+  time-sensitive / direct-message settings (12+), filter criteria (13+).
+
+### Contract with istmo-build (branch `notif-build`)
+
+- iOS `Info.plist` key `IstmoNotifications` = dict `{ TimeSensitive,
+  Communication, Critical: Bool, Sounds: { name: file name } }`. The iOS
+  backend reads it once: `Sound::Named(name)` -> `Sounds[name]` (copied
+  to the bundle root) -> `UNNotificationSound(named:)`, else a bundled
+  `<name>.caf|wav|aiff`, else the name as given; `Urgent` is time
+  sensitive only with `TimeSensitive`, `Critical` (level and
+  `defaultCritical` sound) only with `Critical`, each falling back one
+  step; communication notifications need `Communication` and
+  `INSendMessageIntent` in `NSUserActivityTypes` (istmo-build adds it and
+  `INStartCallIntent` plus the communication entitlement).
+- macOS: istmo-build passes no Apple flags to desktop builds (the
+  `ISTMO_NOTIFICATION_APPLE` env was removed 2026-11-27: a library
+  cannot read the app crate's rustc env, and nothing did); the macOS backend gates communication on
+  `INSendMessageIntent` in the running bundle's `NSUserActivityTypes`
+  and probes bundled sound files by extension. Packaging must write
+  those into the `.app`.
+- Static channels: desktop through `static_channels!()` +
+  `with_channels`; iOS reads `istmo_notification_channels.bin` (wire
+  `Vec<ChannelSpec>`) from the bundle when present; istmo-build stages
+  it next to the sounds (integration).
+
+### Open (Apple)
+
+- Every device fact: silent replace behaviour, `launched_app` on both,
+  communication avatars on local notifications, category registration
+  racing an immediate `add`, `until_ms` overshoot while the iOS app is
+  not running, 64-cap accounting with snoozes.
+- macOS native scheduling (needs a `Backend` hook); call style through
+  `INStartCallIntent`; action icons (`UNNotificationActionIcon`, iOS 15).
+
+## Review fixes (platform branches)
+
+### Review fixes (desktop: host, Linux, Windows)
+
+Branch `notif-fix-desktop`. Supersede the host, Linux and Windows notes
+they contradict.
+
+- **Images without file IO under the state lock.** `Live.images` is an
+  `Arc<ImageFiles>`; one `Arc` = one use of the cached files. A post
+  that reuses the shown files clones the `Arc` under the state lock (no
+  image-cache lock, no `retain`); `Inner::release` takes the cache lock
+  only when `Arc::into_inner` hands back the last use. A progress update
+  therefore copies no `ImageFiles` and takes the image cache zero times
+  (was: one `Vec` clone and two cache locks, the first inside the state
+  lock while `collect` might be writing files). The cache is never
+  locked while the state lock is held.
+- **Cancels reach earlier processes.** `remove_ids` calls
+  `Backend::remove` also for ids the table does not know (a missing
+  backend is then not an error); dismissed ids the host knows are still
+  skipped. New `Backend::remove_all` (default no-op) runs after
+  `cancel_all`'s per-id removals; Windows removes the whole `istmo`
+  toast group from the history. fdo cannot map unknown ids (no-op), the
+  portal removes by id.
+- **Arm window rolls forward.** `arm_native` records `State.arm_at` =
+  the earliest `next occurrence - ARM_WINDOW_MS` among entries whose next
+  occurrence lies past the window; it is part of the timer deadline and
+  `run_due` arms again when it passes. Occurrences cut by `ARM_CAP` need
+  no wake: the deliveries before them change the engine, which arms.
+  Only the store's owner sets it.
+- **Windows: scheduled occurrences tracked per tag** (`windows/marks.rs`,
+  pure, tested on Linux), replacing the `armed` flag. Marks = fire times
+  of scheduled toasts this process added or kept, plus, at backend
+  start, the pending scheduled toasts and the history toasts whose
+  arguments carry a fire time within 24 h (an earlier process). Before
+  every alerting show (`New` and `Replace { alert: true }`, so a repeat
+  replacing the previous occurrence is covered) `take_due(tag, now)`
+  picks the latest mark in `[now - 24 h, now + 60 s]` and forgets it and
+  older ones; no mark = no `WinRT` call. With a mark: due scheduled
+  toasts of the tag are removed; if the one for that fire time was still
+  pending the host's toast pops normally, else the history is checked
+  for exactly that fire time (was: any fire time within 24 h, which also
+  matched the previous occurrence of a repeat). `arm` unmarks future
+  toasts it removes; marks due within 60 s stay for the history check
+  (the arm in `run_due`'s `persist` used to run before the show and
+  cleared the flag, so the last scheduled entry popped twice).
+- **Windows shown table bounded.** `ShownTable` (insertion order, at
+  most `2 * MAX_ACTIVE` = 40, oldest evicted and unhooked); the
+  `Dismissed(UserCanceled)` and `Failed` handlers forget their own toast
+  (checked by `ToastNotification` identity, not unhooked from inside its
+  event). Forgetting one early only turns the next silent update into a
+  full replace with `SuppressPopup`.
+- **Windows activator revoke.** `DesktopNotifications::revoke_activator()`
+  (`CoRevokeClassObject` on the COM thread, which then leaves the MTA).
+  Decision: `install` keeps registering the class object at once (a
+  COM-started process has 60 s); a forwarding instance of a
+  single-instance app revokes as soon as it knows it is not the primary.
+  Rejected: an explicit `serve_activations()` the primary calls (the
+  cold-start process does not know yet that it will be primary, and
+  apps without single-instance logic would need a second call).
+  Supersedes the "No forwarding" open item for user-started instances;
+  an activation already routed into a forwarding instance stays the
+  app's to forward.
+- **Toast XML.** `escape` drops what XML 1.0 cannot carry (controls but
+  tab / LF / CR, U+FFFE, U+FFFF; Rust strings hold no lone surrogates);
+  bound values are filtered the same way. `build_fitting` counts the
+  escaped length of the bound values toward the 5 KB (conservative:
+  placeholders count too). `file_uri` maps `\\?\UNC\server\share\..` to
+  `file://server/share/..` and keeps `\\?\C:\..` as before.
+- **Not done (measured):** skipping the XML build on the data-binding
+  path. `build_fitting` takes about 0.9 µs for a progress toast with an
+  icon and two buttons (release, 9950X3D); the `WinRT` update it guards
+  is a cross-process call, so the template hash stays computed from the
+  full XML.
+- **Linux fdo.** A server restart drops job views too (Plasma serves
+  both) and reports them `Dismissed(Other)`; a job server
+  (`org.kde.JobViewServer`) losing its owner does the same for its views
+  (watched once job views are used). `cancelRequested` is accepted only
+  from the job server's owner (`Owner`, like the fdo signals). `info()`
+  that fails while a first owner appears reports `changed()` itself
+  (`State.appeared` generation; the flag used to be set after the
+  appearance had already looked at it). Unknown closes are kept as early
+  closes only while a `Notify` is in flight (`State.notifying`), and the
+  ring is cleared when the last one returns: our own
+  `CloseNotification`'s echo no longer lingers. `Notify` hints are
+  allocated with room for the usual set.
+- **Linux portal.** The posted set is insertion-ordered and bounded
+  (512, oldest forgotten: the portal has no closed signal); an update of
+  a known id clones nothing.
+- Tests: host (`progress_updates_reuse_images_without_the_image_cache`,
+  `cancels_reach_the_backend_for_ids_of_an_earlier_process`,
+  `the_arm_window_rolls_forward_while_the_app_runs`), marks, toast XML
+  characters and size, verbatim UNC URIs, posted bound, and
+  `tests/linux_dbus.rs` `kde_job_views_follow_their_server` (fake job
+  server: spoofed cancel ignored, owner's cancel dismisses, job server
+  gone dismisses). The Windows parts beyond the pure modules are
+  cross-clippy only; the probe gained repeat, `cancel_all` and revoke
+  steps.
+
+### Review fixes (istmo-build, 2026-11-27, branch `notif-fix-web`)
+
+Supersede the parts of the sections above they contradict.
+
+- Outputs without a consumer are gone: `ISTMO_NOTIFICATION_APPLE` (see
+  the Apple notes) and the Android `bool/` / `string/` flag resources
+  (`values/istmo_notifications.xml` holds only the accent and is
+  written only with one). `ISTMO_NOTIFICATION_SOUND_DIR` now has a
+  reader: `bundled_sounds!()` + `with_sound_dir` (Linux only; the host
+  rewrites the name to a path, and fdo already sent names holding `/`
+  as `sound-file`, so the fdo backend is unchanged).
+- Desktop / web envs and the Android notification permissions are only
+  emitted when the app links the plugin (a dep manifest lists
+  `istmo.notifications`). A table without the plugin still warns.
+- `web_service_worker` defaults to true also without an
+  `[app.notifications]` table (`AppNotifications::web_service_worker`).
+- A wasm32 `cdylib` without a binary counts as an app for `emit()`
+  (desktop icon, runtime env, assets, notification envs); before, a web
+  app built by trunk / wasm-pack from a `lib.rs` got nothing.
+- The worker is also copied to `<crate>/.istmo/web/` (stable path,
+  `.gitignore` `*`): `OUT_DIR` is unknowable to a bundler. The docs give
+  a trunk `post_build` hook and the wasm-pack copy. Rejected: copying
+  into a dist directory (no repo convention; trunk and wasm-pack own
+  their output directories).
+- `[[assets]] targets = [...]` (same values and checks as `[plugin]
+  targets`, default all): `ResolvedAsset.targets`; the asset trees
+  filter by it (Android, iOS, desktop; the host tree is `web` on
+  wasm32). A file named by two entries ships to the union. The
+  notifications worker is `targets = ["web"]`.
+- `notification_channel = [{ ... }]` (inline array inside `[app]`) is
+  accepted besides `[[app.notification_channel]]` and one table.
+- The facade test `tests/notifications_hosts.rs` (path-only dev-dep on
+  the plugin, stripped on publish) compiles the documented
+  `hosts: [Notifications => ...]` line; the docs used
+  `NotificationsClient =>`, which does not compile. Rejected: wiring the
+  whole notifications page into `doc_pages` (its snippets are partial;
+  hidden `#` lines would show on the site).
+
+### Review fixes (web, 2026-11-27, branch `notif-fix-web`)
+
+Supersede "Store", "Taps go through IndexedDB", "Service worker
+choice" and "Chrome Android" above where they differ.
+
+- **One tab runs the schedule.** Each tab used to run its own engine
+  and overwrite the whole `entries` key: duplicates, delivered
+  one-shots coming back, lost schedules, the missed policy applied per
+  tab. Now:
+  - Election: `navigator.locks.request(LOCK_NAME, {mode: "exclusive"})`,
+    held for the tab's life (the callback returns a promise that never
+    settles). Without Web Locks (or when the request rejects): a lease
+    over `BroadcastChannel` (`web/lease.rs`, pure, tested natively:
+    beat every 1 s, expiry 3.5 s, claim window 0.5 s, lowest tab id
+    wins, `pagehide` resigns). It can overlap for a few seconds (a
+    delivery may repeat); documented. Neither: every tab leads alone
+    (logged). No store (`without_store`, no IndexedDB): leads alone, as
+    before.
+  - Store layout v2 (`DB_VERSION` 2, no migration, pre-release): store
+    `scheduled`, one record per notification id, value = a one-entry
+    core store. The upgrade drops the old `schedule` store. Writes put /
+    delete only the ids a tab changed (`State::take_writes`, ids
+    "touched" by schedule, snooze, remove (also ids the mirror does not
+    hold: another tab may have scheduled them), the leader's due entries
+    and zone moves).
+  - Every tab keeps the engine as a mirror (`pending()`); after a write
+    it posts `{kind: "changed"}` on `BroadcastChannel` `CHANNEL_NAME`,
+    and every other tab reloads (`getAll`). Reloads run one at a time; a
+    reload keeps the local state of ids changed after it started
+    (`edit_mark` / `replace_entries`), so a read that predates a local
+    write does not undo it.
+  - Only the leader takes due entries, applies `MissedPolicy`, re-reads
+    the zone (`TimeZone::system()` on each wake; jiff caches it) and
+    arms the engine deadline; followers still run their coalescer and
+    timeouts. A newly elected tab reloads before it leads.
+- **Taps**: the worker tells only the window it focused or opened
+  (`focus()` result, `openWindow` result) to drain; a close tells the
+  focused or visible window; every window only when there is none.
+  Windows are filtered to the registration's scope, and the one whose
+  URL is the notification's `open` URL is preferred (it used to focus
+  any same-origin page).
+- **Registration**: `register()` is awaited; a rejection (404, MIME,
+  scope) falls back to page notifications at once, logged with the URL
+  (no 10 s `ready` wait). `ServiceWorker::Existing` without a
+  registration listens for `controllerchange` and adopts the app's
+  worker when it takes control (it used to look once).
+- **IndexedDB**: `blocked` is not a failure (it leaked the connection
+  that opened later); an open still pending after 5 s goes on in
+  memory and a late success is closed. Both page and worker close
+  their connection on `versionchange`. The queue is drained after the
+  open also when no worker was found yet (a tap queued while the
+  database was not open was never drained).
+- **Chrome Android up front**: `navigator.userAgentData` (`mobile` and
+  platform Android), else `ontouchstart` + an Android Chromium user
+  agent (not Firefox), set `page_refused` from the start
+  (`caps::refuses_page_notifications`, tested natively); the
+  `TypeError` fallback stays.
+- **Permission**: `requestPermission(callback)` and the promise form
+  both settle the request (old Safari returns `undefined`).
+- Tests: `tests/web.rs` (Node 24, wasm-bindgen-cli 0.2.130) gained a
+  failed registration (page fallback within 2 s) and a callback-only
+  permission request. The election, the store and the worker still
+  have no browser run (Node has no IndexedDB); their logic is in the
+  native tests of `web::{state,lease,caps}`. `node --check` passes on
+  the worker.
+
+### Review fixes (Android)
+
+Branch `notif-fix-android`. Supersede the notes above they contradict.
+
+- **Validation.** `Validate.kt` is the port of `src/validate.rs` (same
+  limits, field paths and problems; characters counted as scalar values,
+  controls = category Cc). The backend runs it like the desktop host:
+  `show` / `schedule` (notification + trigger), `update` (patch, then the
+  whole patched notification), `set_progress` (the bar), `append_message`
+  (the message), `set_channels` (`channels[i].<field>`). An
+  `Every` under 60 s is `Invalid(trigger.every)` (was a 1 ms repeat).
+  The Rust tests are mirrored in `NativeChecks.kt`.
+- **Per-id lanes.** Every `notify` / `cancel` of one id runs in its lane
+  (a monitor per id, refcounted under the state lock); each post carries
+  the content version it was built from and is skipped inside the lane
+  when the table moved on (cancelled, or newer content set, which posts
+  on its own). A cancel lands after a post in flight: cancel wins.
+  Scheduled deliveries take tickets under the schedule lock
+  (`delivering`); a cancel revokes them there, so a due entry cancelled
+  before its show is never shown. Lock order: schedule lock before state
+  lock, lane before state lock, never a lane with the schedule lock.
+- **Group summaries.** Tag `istmo.group:<group>` with notification id 1
+  (items use id 0): no notification id can name a summary, so the
+  `istmo.` id prefix stays allowed (no cross-platform rule change).
+  Posted once a group has 2 members, then **kept until it has none**
+  (removing a summary makes the system cancel its children). Re-posted
+  only when the member set, the titles or the group texts change; every
+  summary post is charged to the coalescer. Summaries are not
+  auto-cancel and carry a delete intent that only forgets them (their
+  children report their own dismissals). Group membership is the
+  plugin's active set (id -> group), read back from
+  `getActiveNotifications` at start, so members shown before a restart
+  keep their summary.
+- **Taps.** Items are never auto-cancel (a system auto-cancel sends no
+  delete intent and the id stayed in the table: a later `set_progress`
+  resurrected it). The tap intent carries `cancel = !keep_on_tap` and the
+  trampoline removes the notification itself (off the main thread).
+- **Coalescer.** Reply re-posts (`complete` and the cold-process path)
+  go through it as regular updates; summaries spend a token. Dismissals
+  of ids the table does not hold (shown before a restart) join the
+  bounded dismissed list (256, as the core).
+- **50 per app.** The system silently refuses an app's 51st active
+  notification. A post of an id not active checks
+  `getActiveNotifications().size` (plus one when it would add a summary)
+  and fails `TooMany(50)` instead; `show` then restores the table and
+  emits no `Delivered`. Chosen over evicting the oldest for parity
+  (Apple / Windows refuse too). Below API 23 the count is the active set.
+- **Sounds.** `android.resource://<pkg>/raw/<entry>`, never the integer
+  id: channel sounds are fixed once created and ids move between builds.
+- **Channels.** The channels file (format 2: wire `Vec<ChannelSpec>` of
+  the *dynamic* channels, then wire `Vec<String>` of the system channels
+  the plugin created) no longer stores static ones, so the raw resource
+  stays authoritative. `set_channels` creates the merged spec (existing:
+  only name and description change). At start, channels the plugin
+  created that are neither static, dynamic nor `default` (a channel
+  removed from `istmo.toml`) are deleted. `set_channels` on a static id
+  renames it until the next start; `delete_channel` on a static id lasts
+  until the next start too.
+- **Schedule.** `ScheduleEngine` drops dead entries when built from the
+  store and finds the latest missed occurrence with the core's backward
+  doubling search (`FIRST_PROBE_MS`, then the capped walk). A failed save
+  or arm on the alarm / boot / start threads is logged, never thrown.
+- **Robustness.** Handler-thread tasks (coalesced posts, ack timeouts,
+  promotion checks) and the receiver threads catch `Exception`.
+  `Api36.finish` catches `Exception` (reflection throws checked ones) and
+  returns `null`; the renderer then builds the compat notification again
+  with the compat progress bar. Promotion is checked (one binder call a
+  second later) only after an alerting post or when the promotion
+  request changed.
+- **Cold start.** `Responses.attach` sets `hostAttached` and drains the
+  queue under the lock `enqueueIfDetached` takes: a background response
+  is never queued after the drain.
+- **Actions.** "More" cuts on whole actions like `render::render` (the
+  actions whose buttons fit in 2 stay; the first that does not goes with
+  every action after it). A simulated call (API 31+ without full screen)
+  shows the call buttons and then the app's own actions
+  (`render::effective_actions`).
+- **`complete`** of an unknown ack is `NotFound("ack <n>")`; at most 256
+  acks are held (the oldest finished).
+- **Timeout.** Android gives the delete intent no reason. A dismissal
+  within 1 s of `posted + timeout_ms` (the timeout restarts at each post)
+  is reported `Dismissed(Timeout)` and the id leaves the table; earlier
+  ones are `User`. A heuristic: a person dismissing in that last second
+  is reported as the timeout. Whether the delete intent fires on a
+  timeout at all is still unverified on a device.
+- **Shrinking.** istmo-build writes `res/raw/istmo_notifications_keep.xml`
+  (`tools:keep` of the `istmo_notification*` raw, drawable, color, bool
+  and string resources) whenever it writes Android resources: the
+  backend reads them by name, which `shrinkResources` cannot see.
+- Probe commands added: `group-shrink`, `limit`, `invalid`.
+- **Empty response URL.** `ResponseDeepLink.kt` (plain Kotlin, run by the
+  JVM checks) ports `NotificationResponse::deep_link`: a response whose
+  url is empty publishes no deep link, as in Rust and Swift.
+
+### Review fixes (Apple, branch `notif-fix-apple`)
+
+Supersedes the iOS bullets on scheduling, categories, `launched_app`,
+snooze and attachments above, and the macOS ones on activation,
+categories and levels.
+
+- **iOS validation**: `NotificationsValidate.swift` ports
+  `src/validate.rs` (Notification, NotificationPatch, Trigger /
+  CalendarRule, Progress, ChatMessage, ChannelSpec as `channels[i].*`);
+  `show` / `schedule` / `update` (patch, then the patched notification
+  whole) / `set_progress` / `append_message` / `set_channels` answer the
+  same `Invalid { field, problem }` as desktop. `Every(< 60 s)` is
+  `trigger.every` (was clamped); an unknown zone is `trigger.time_zone`
+  (was a silent fall back). Shows normalise to 25 messages.
+- **iOS scheduling** (`NotificationsSchedule.swift`, pure parts in
+  `NotificationsCalendar.swift`): `CalendarRule` / trigger timing /
+  lateness ported (`NotificationsCalendar`, `NotificationsTiming`,
+  `NotificationsPlan`). Every armed request is one occurrence, a
+  non-repeating `UNCalendarNotificationTrigger` at the computed instant
+  (UTC components, seconds rounded up): DST gaps resolve like Rust (02:30
+  -> 03:30, not UN's 03:00), `Every` stays on its anchor's grid,
+  `until_ms` is exact. Ids `<id>` (one-shot), `<id>@<fire ms>`
+  (repeat), `<id>#s` (snooze). Soonest occurrences across all entries,
+  at most 60 and at most 64 minus snoozes. Store format 2 adds
+  `next_fire_ms` and `armed_through_ms`; overdue occurrences up to
+  `armed_through` were the system's, later ones go through
+  `MissedPolicy` (60 s, latest missed occurrence, `DeliveredLate`).
+  Every store change and top-up runs in one serial lane
+  (`NotificationsSerial`); a top-up removes every pending request of
+  ours that is not wanted (no store entry included). Trade-off: a repeat
+  keeps firing while the app is away only for the occurrences it got
+  slots for (a minutely `Every` alone covers an hour), instead of a
+  repeating trigger that drifted and ignored DST / `until_ms`.
+- **Snooze** re-adds under `<id>#s` (a repeat's requests stay), inside
+  the store lane, freeing an armed slot first; more than 64 snoozes =
+  `TooMany(64)`. Cancel removes it.
+- **iOS lanes**: show / update / flush / timeout removal / cancel go
+  through a per-id `NotificationsSerial`; cancel forgets the live state
+  first, so a flush queued behind it finds nothing (no resurrection).
+  Timeouts carry the show's generation. `cancel_all` / `cancel_group`
+  remove only requests and delivered notifications with `istmo.id`;
+  delivered ones are matched by `istmo.id`, so scheduled occurrences and
+  snoozed copies go too. A past `At` removes the stored entry before it
+  shows.
+- **Permission**: posts (show, updates, due-now scheduled ones) fail
+  with `PermissionDenied` while the status is denied (cached 2 s) on iOS
+  and macOS.
+- **Categories** (iOS and macOS): one serialized registration that
+  reads the registered set and registers the union of the app's ones and
+  ours; a read trusted for 2 s, so categories the app sets later are
+  merged back on the next show. Past 128, only ours that no delivered or
+  pending notification uses go. macOS never registers blind (an
+  unanswered read skips registration). Category ids hash reply
+  placeholder and submit title on macOS too.
+- **`launched_app`**: per launch, consumed by the first response, at
+  most 10 s after the launch (iOS: `install()`, which the registry runs
+  before `UIApplicationMain`; macOS: `didFinishLaunching` that carried
+  the notification key or a non-default launch). Remaining guess: a
+  response within 10 s of an unrelated launch reports `true`.
+- **macOS delegate**: an existing delegate is kept and gets everything
+  without `istmo.id` (and `openSettingsForNotification`); a delegate set
+  later forwards with `desktop::macos::forward_will_present` /
+  `forward_did_receive` (`unsafe`, raw `UNNotification*` / block
+  pointers). A start after `finishedLaunching` logs a warning.
+- **macOS presentation / levels**: 10.15 gets `.alert` instead of
+  `LIST | BANNER` (silent updates: nothing in the foreground). Levels and
+  the critical sound read `IstmoNotifications.TimeSensitive` /
+  `Critical` from the bundle's `Info.plist` (packaging writes the iOS
+  keys) and fall back one step like iOS.
+- **Attachments**: a file without extension is typed by its first bytes
+  (PNG / JPEG / GIF); a copy the system refused, or whose add failed, is
+  deleted. iOS avatars from files are `INImage(imageData:)`.
+- **Donations**: silent updates and occurrences armed ahead of time
+  build the communication content without donating the interaction
+  again (macOS: silent updates).
+- **Messaging body** with a communication layout is `n.body`, as
+  `render.rs` (was the last message; `updating(from:)` sets the content
+  from the intent anyway).
+- **Deep links**: an empty URL publishes none (Rust
+  `NotificationResponse::deep_link` too).
+- **istmo-build**: `apple.communication` with an app `Info.plist` that
+  defines `NSUserActivityTypes` outside the istmo block and lacks
+  `INSendMessageIntent` / `INStartCallIntent` fails the build
+  (`NotificationsError::ActivityTypes`); istmo-build never edits the
+  app's own entries.
+- **Stubs**: delegate methods and `add(_:withCompletionHandler:)` carry
+  `@Sendable` completion handlers as in current SDKs (the plugin's
+  witnesses match them exactly); `UNTimeIntervalNotificationTrigger`
+  answers `nextTriggerDate()`; the calendar trigger's stays nil (the
+  plugin computes fire times itself). `TimeZone.current` /
+  `secondsFromGMT(for:)` added.
+- **Checks**: `tests/native/ios/check.sh` builds the pure Swift
+  (`NotificationsCalendar`, `NotificationsValidate`) with the generated
+  types and real swift-corelibs-foundation and runs the schedule
+  vectors (30 rows), timing, missed deliveries, the arming plan and the
+  validation cases of `src/validate.rs`. corelibs reads zones only from
+  `/usr/share/zoneinfo`: on NixOS run it with `SWIFT_RUN="bwrap
+  --dev-bind / / --tmpfs /usr --ro-bind /usr/bin /usr/bin --ro-bind
+  $TZDIR /usr/share/zoneinfo"` inside `nix-shell -p swift
+  swiftPackages.Foundation swiftPackages.Dispatch tzdata`.
+- Still open: every device fact above; whether `updating(from:)`
+  without a fresh donation keeps the communication look.

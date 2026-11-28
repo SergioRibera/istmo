@@ -238,6 +238,7 @@ check-generated-native:
     runtime/android/ci/compile-goldens.sh
     runtime/ios/ci/typecheck-goldens.sh
     scripts/check-plugin-native.sh screen-capture dev.istmo.plugins.screencapture screen_capture
+    plugins/notifications/tests/native/android/check.sh
 
 # ---- Docs -----------------------------------------------------------
 #
@@ -263,7 +264,8 @@ docs-types:
         webview=plugins/webview/src/lib.rs \
         web-auth=plugins/web-auth/src/lib.rs \
         tray=plugins/tray/src/lib.rs \
-        autostart=plugins/autostart/src/lib.rs
+        autostart=plugins/autostart/src/lib.rs \
+        notifications=plugins/notifications/src/lib.rs
 
 # Gen default keystore default
 # keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"

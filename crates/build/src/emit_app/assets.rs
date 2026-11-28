@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::assets::{AssetsPayload, ResolvedAsset, resolve_assets};
 use crate::handover::collect_dep_assets;
 use crate::ios_project::IosProject;
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, PluginTargets};
 
 /// Stage every dependency + app-declared asset into the platform trees
 /// so the runtime backends can serve them at read time.
@@ -45,6 +45,7 @@ pub(super) fn sync_assets(
             android_root.join("app/src/main/assets"),
             state_dir,
             "android",
+            |t| t.android,
         );
         tree.install_app(&app_assets);
         tree.install_plugins(&dep_assets);
@@ -53,7 +54,7 @@ pub(super) fn sync_assets(
 
     if let Some((ios_root, app_dir)) = ios {
         let project = IosProject::new(ios_root, app_dir);
-        let mut tree = AssetTree::new(project.asset_folder_path(), state_dir, "ios");
+        let mut tree = AssetTree::new(project.asset_folder_path(), state_dir, "ios", |t| t.ios);
         tree.install_app(&app_assets);
         tree.install_plugins(&dep_assets);
         tree.finish();
@@ -93,7 +94,11 @@ fn stage_desktop_assets(
         return None;
     }
     let staging = out_dir?.join("istmo_assets");
-    let mut tree = AssetTree::new(staging.clone(), out_dir, "desktop");
+    // A wasm32 build stages for the web, every other host build for the
+    // desktop.
+    let web = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|arch| arch == "wasm32");
+    let wants: fn(PluginTargets) -> bool = if web { |t| t.web } else { |t| t.desktop };
+    let mut tree = AssetTree::new(staging.clone(), out_dir, "desktop", wants);
     tree.install_app(app_assets);
     tree.install_plugins(dep_assets);
     tree.finish();
@@ -116,6 +121,8 @@ struct AssetTree {
     state_file: Option<PathBuf>,
     /// Paths installed by this run, relative to `root`, with their source.
     installed: BTreeMap<String, PathBuf>,
+    /// Whether an asset with these targets belongs in this tree.
+    wants: fn(PluginTargets) -> bool,
 }
 
 /// State file recording what the tree `name` installed.
@@ -124,24 +131,32 @@ fn state_file_name(name: &str) -> String {
 }
 
 impl AssetTree {
-    fn new(root: PathBuf, state_dir: Option<&Path>, name: &str) -> Self {
+    fn new(
+        root: PathBuf,
+        state_dir: Option<&Path>,
+        name: &str,
+        wants: fn(PluginTargets) -> bool,
+    ) -> Self {
         Self {
             root,
             state_file: state_dir.map(|dir| dir.join(state_file_name(name))),
             installed: BTreeMap::new(),
+            wants,
         }
     }
 
     fn install_app(&mut self, assets: &[ResolvedAsset]) {
-        for asset in assets {
+        let wants = self.wants;
+        for asset in assets.iter().filter(|a| wants(a.targets)) {
             self.install(asset.source(), asset.bundle_path.clone());
         }
     }
 
     fn install_plugins(&mut self, payloads: &[(String, AssetsPayload)]) {
+        let wants = self.wants;
         for (_links, payload) in payloads {
             for id in &payload.plugin_ids {
-                for asset in &payload.resolved {
+                for asset in payload.resolved.iter().filter(|a| wants(a.targets)) {
                     let rel = format!("{}/{}", plugin_asset_dir(id), asset.bundle_path);
                     self.install(asset.source(), rel);
                 }
@@ -271,6 +286,7 @@ mod tests {
                 ResolvedAsset {
                     bundle_path: rel.to_owned(),
                     source_abs: source.display().to_string(),
+                    targets: PluginTargets::default(),
                 }
             })
             .collect();
@@ -285,7 +301,7 @@ mod tests {
     fn asset_tree_reinstall_keeps_targets_untouched() {
         let (dir, assets) = asset_fixture("idempotent");
         let stage = |assets: &[ResolvedAsset]| {
-            let mut tree = AssetTree::new(dir.join("out"), Some(&dir), "test");
+            let mut tree = AssetTree::new(dir.join("out"), Some(&dir), "test", |_| true);
             tree.install_app(assets);
             tree.finish();
         };
@@ -302,7 +318,7 @@ mod tests {
     fn asset_tree_prunes_assets_no_longer_declared() {
         let (dir, assets) = asset_fixture("prune");
         let stage = |assets: &[ResolvedAsset]| {
-            let mut tree = AssetTree::new(dir.join("out"), Some(&dir), "test");
+            let mut tree = AssetTree::new(dir.join("out"), Some(&dir), "test", |_| true);
             tree.install_app(assets);
             tree.finish();
         };
@@ -315,7 +331,7 @@ mod tests {
     #[test]
     fn plugin_assets_use_a_windows_safe_dir() {
         let (dir, assets) = asset_fixture("plugin");
-        let mut tree = AssetTree::new(dir.join("out"), None, "test");
+        let mut tree = AssetTree::new(dir.join("out"), None, "test", |_| true);
         tree.install_plugins(&[(
             "DEMO".to_owned(),
             AssetsPayload {
@@ -325,5 +341,30 @@ mod tests {
         )]);
         tree.finish();
         assert!(dir.join("out/plugin-istmo.demo/a.txt").exists());
+    }
+
+    #[test]
+    fn web_only_assets_stay_out_of_other_trees() {
+        let (dir, mut assets) = asset_fixture("targets");
+        assets[0].targets = PluginTargets {
+            android: false,
+            ios: false,
+            desktop: false,
+            web: true,
+        };
+        let payload = [(
+            "DEMO".to_owned(),
+            AssetsPayload {
+                plugin_ids: vec!["istmo.demo".to_owned()],
+                resolved: assets,
+            },
+        )];
+        let mut android = AssetTree::new(dir.join("android"), None, "android", |t| t.android);
+        android.install_plugins(&payload);
+        let mut web = AssetTree::new(dir.join("web"), None, "web", |t| t.web);
+        web.install_plugins(&payload);
+        assert!(!dir.join("android/plugin-istmo.demo/a.txt").exists());
+        assert!(dir.join("android/plugin-istmo.demo/sub/b.txt").exists());
+        assert!(dir.join("web/plugin-istmo.demo/a.txt").exists());
     }
 }

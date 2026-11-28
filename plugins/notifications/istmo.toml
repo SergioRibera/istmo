@@ -1,0 +1,49 @@
+[plugin]
+id = "istmo.notifications"
+client_type = "::istmo_notifications::NotificationsClient"
+android_package = "dev.istmo.plugins.notifications"
+default_deployment = "local"
+# Both shipped backends register through the generated registry. iOS:
+# `NotificationsBackendImpl()` installs the `UNUserNotificationCenter`
+# delegate before launch finishes.
+auto_register = true
+# Context-bound: built once per process with the application context, so
+# it also serves apps hosted by a `NativeActivity`; the permission prompt
+# goes through whichever istmo activity is current.
+android_backend = "dev.istmo.plugins.notifications.NotificationsBackendImpl"
+android_backend_arg = "context"
+# The trampoline activity and the receivers (actions, alarm, re-arming)
+# are in `native/android/AndroidManifest.xml`. The opt-in permissions
+# (`SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM`, `USE_FULL_SCREEN_INTENT`,
+# `POST_PROMOTED_NOTIFICATIONS`) come from the app's `[app.notifications]`.
+android_permissions = [
+    "android.permission.POST_NOTIFICATIONS",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
+]
+
+# NotificationCompat, Person, IconCompat, RemoteInput. 1.13 is the last
+# line that builds with compileSdk 34; API 36 parts go through reflection.
+[[gradle]]
+group = "androidx.core"
+artifact = "core"
+version = "1.13.1"
+
+# `ComponentActivity.activityResultRegistry` for the permission prompt.
+[[gradle]]
+group = "androidx.activity"
+artifact = "activity"
+version = "1.8.1"
+
+[min_versions]
+# NotificationCompat covers API 21; newer features (channels 26, promoted
+# ongoing 36) are gated at run time and reported in `capabilities`.
+android = 21
+ios = "14.0"
+
+# The web service worker. istmo-build finds it among the handed-over
+# assets and stages it for `[app.notifications] web_service_worker`
+# (`ISTMO_NOTIFICATION_SERVICE_WORKER` and `.istmo/web/` on wasm32).
+# Web bundles only: mobile and desktop asset trees do not get it.
+[[assets]]
+path = "web/istmo-notifications-sw.js"
+targets = ["web"]

@@ -4,6 +4,99 @@
 
 ### Added
 
+- `istmo-notifications` plugin (`istmo.notifications`, local only), core
+  and desktop host: one notification model for every target, with what a
+  platform lacks simulated and reported per feature in `capabilities()`.
+  Styles (big text, inbox, picture, conversation, call), actions with
+  inline replies, choices and snoozes (a "More" action past the
+  platform's maximum), groups, channels, progress, sounds, interruption
+  levels, timeouts. `LiveNotification` streams progress through one
+  shared sender per runtime; the host coalesces updates per id under a
+  per-app token bucket (alerts and finishes jump the queue, dismissed
+  notifications drop silent updates). Scheduling once, on an interval or
+  on a `CalendarRule` (IANA zones, DST gaps and overlaps, `until`) with a
+  `MissedPolicy`; `tests/schedule_vectors.tsv` pins the rule for every
+  port. Responses (tap, action, reply, with an ack token for background
+  actions) on the `istmo.notifications.responses` early queue, and as a
+  `DeepLink` when they carry a URL. `DesktopNotifications` runs
+  validation, render fallbacks, coalescing, the in-process scheduler and
+  its store, image files and events over a platform `Backend`;
+  `UnavailableNotifications`, `FakeNotifications` (feature `testing`).
+- `istmo.toml` `[app.notifications]` (`small_icon`, `accent`, `sounds`,
+  `exact_alarms`, `full_screen`, `live_updates`, `apple`,
+  `web_service_worker`) and `[[app.notification_channel]]`, checked with
+  the plugin's limits (unknown keys, bad values, duplicate channel ids
+  and unknown channel sounds fail the build). Android gets the small
+  icon (a PNG becomes a white mask per density, opaque PNGs are refused,
+  `[app.icon.android] monochrome` is the fallback), the accent
+  in `values/istmo_notifications.xml`, the channels as wire bytes in
+  `raw/istmo_notification_channels.bin` and the sounds in `raw/`, all in
+  `android/.istmo/res`, plus the permissions in the sidecar. iOS gets an
+  `IstmoNotifications` `Info.plist` dictionary, `NSUserActivityTypes`
+  and the time-sensitive / communication / critical-alerts entitlements
+  in the `istmo:plugins` blocks, and the sounds as bundle resources from
+  `ios/.istmo/NotificationSounds`. Desktop and web builds get
+  `ISTMO_NOTIFICATION_*` rustc envs; `istmo_notifications::static_channels!()`
+  decodes the channels for `DesktopNotifications::platform().with_channels(..)`.
+- `ISTMO_APP_NAME` rustc env (`[app] name`) for every app crate.
+- `[[assets]] targets = [...]` (`android`, `ios`, `desktop`, `web`):
+  the asset trees an entry is staged into, every target by default.
+- `istmo_notifications::bundled_sounds!()` and
+  `DesktopNotificationsBuilder::with_sound_dir`: Linux plays bundled
+  `[app.notifications] sounds` by path. A wasm32 app also gets the
+  service worker at `.istmo/web/istmo-notifications-sw.js`.
+- `istmo-notifications` Linux backend: `org.freedesktop.Notifications`
+  (updates through `replaces_id`, the `value` progress hint on dunst,
+  mako, swaync and xfce4-notifyd, KDE inline replies, close reasons as
+  dismissals while running), KDE Plasma job views for progress, and the
+  notification portal v1 / v2 in Flatpak, Snap and registered host apps
+  (reply and call purposes, exported actions through
+  `org.freedesktop.Application.ActivateAction`). `LinuxOptions` sets the
+  app id and the route; `take_activation_token()` hands back the XDG
+  activation token of the latest activation.
+- `istmo-notifications` web host (`WebNotifications`, `wasm32`): the
+  plugin's service worker (`web/istmo-notifications-sw.js`, also
+  `web_assets::SERVICE_WORKER_JS`) for buttons, pictures, taps while the
+  page is closed and the delivered list, page notifications without it;
+  capabilities from feature detection; schedules from a `setTimeout`
+  while a page runs, stored in IndexedDB one record per notification,
+  run by one elected tab (Web Locks, else a `BroadcastChannel` lease);
+  taps queued by the worker in IndexedDB and drained by the page.
+  `now_ms` reads `Date.now()` on `wasm32` (`SystemTime::now` panics
+  there).
+
+- `istmo-notifications` Windows backend: toasts (data-binding progress
+  updates, `SuppressPopup` silent replaces, expiration, history, Dismissed
+  and Failed events), scheduled toasts for deliveries in the next 14 days,
+  a COM activator for taps and buttons on a closed app, registry-only
+  registration (`DesktopNotifications::install` / `unregister`,
+  `windows_app!()`), elevated processes refused. New `Backend::arm` hook
+  (default no-op) hands backends the upcoming deliveries, re-armed when
+  an entry enters the 14-day window. `DesktopNotifications::revoke_activator`
+  for forwarding instances of single-instance apps. New
+  `Backend::remove_all` hook (default no-op, Windows clears the toast
+  group) for `cancel_all`; `remove` is now also called for ids the host
+  has no record of (shown by an earlier process).
+
+
+- `istmo-notifications` Android backend (Kotlin, API 21+):
+  `NotificationCompat` styles, inline replies and choices, call style,
+  groups with plugin-posted summaries, channels (static ones from
+  `res/raw/istmo_notification_channels.bin`), `ProgressStyle` and Live
+  Updates promotion on API 36 (reflection, apps keep compileSdk 34),
+  coalesced updates at 4 per second, one `AlarmManager` alarm for the
+  schedule re-armed on boot, clock and zone changes and app updates, a
+  tap activity and receivers that publish responses (queued in a file
+  while no runtime runs). Registered by the generated registry.
+
+- `istmo-notifications` Apple backends: iOS in Swift
+  (`NotificationsBackendImpl`, auto-registered; the delegate is installed
+  before launch finishes, `IstmoNotifications.willPresent` / `didReceive`
+  for apps with their own delegate), native triggers with the 64-request
+  top-up, categories built from actions, attachments, threads,
+  interruption levels, communication notifications (iOS 15); macOS in
+  Rust over objc2 (`NotBundled` outside an `.app`, communication
+  notifications on macOS 12).
 - `istmo-autostart` plugin (`istmo.autostart`, desktop only): start the
   app at login from a user action (`SMAppService.mainApp` on macOS 13+,
   a LaunchAgent before that or for bare binaries, MSIX `StartupTask` or
@@ -207,6 +300,15 @@
 
 ### Changed (breaking)
 
+- The `istmo:plugins` blocks of `Info.plist` and the entitlements are
+  emptied once no plugin fragment or app key is left; they used to keep
+  the last merged keys.
+- **The built-in `istmo.notifications` contract is gone** from
+  `istmo-plugins` (`NotificationsClient`, `NotificationRequest`, ...)
+  and `istmo-plugins-schema` (`notifications()`); `istmo-notifications`
+  takes the same plugin id. Apps passing
+  `istmo_plugins_schema::notifications()` to `extra_contracts` drop it;
+  the plugin crate hands its contract over itself.
 - **iOS apps refer to plugin types as `<Plugin>.<Type>`.** Each plugin's
   generated Swift message types are nested in a `public enum <Plugin>`
   namespace (`Camera.SessionConfig`, `ScreenCapture.SessionConfig`,
