@@ -525,7 +525,7 @@ fn fdo_backend_against_a_fake_server() {
         panic!("expected Notify");
     };
     assert_eq!(body, "25%");
-    assert!(actions.is_empty());
+    assert_eq!(actions, Vec::<String>::new());
     assert_eq!(int(&hints, "value"), None);
 }
 

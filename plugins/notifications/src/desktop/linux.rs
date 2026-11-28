@@ -82,7 +82,7 @@ impl LinuxOptions {
     }
 
     /// The start function for [`super::DesktopNotifications::builder`].
-    #[must_use]
+    #[must_use = "the backend only starts when the builder calls the returned function"]
     pub fn start(self) -> StartBackend {
         Box::new(move |sink| self.open(sink))
     }
@@ -293,7 +293,7 @@ mod tests {
     fn app_id_prefers_flatpak_then_configured_then_exe() {
         assert_eq!(app_id(Some("org.x.App"), Some("dev.y")), "org.x.App");
         assert_eq!(app_id(Some(""), Some("dev.y.desktop")), "dev.y");
-        assert!(!app_id(None, None).is_empty());
+        assert_ne!(app_id(None, None), "");
     }
 
     #[test]

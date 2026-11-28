@@ -178,7 +178,7 @@ fn ios_keys_entitlements_and_sounds() {
     assert!(!sounds.join("istmo_notification_sound_ding.ogg").exists());
     // The static channels ship in the bundle root next to the sounds.
     let channels = fs::read(sounds.join("istmo_notification_channels.bin")).unwrap();
-    assert!(!channels.is_empty());
+    assert_ne!(channels, Vec::<u8>::new());
     let fragment = fs::read_to_string(app.join("istmo-plugins.yml")).unwrap();
     assert!(fragment.contains("NotificationSounds"), "{fragment}");
 
